@@ -13,28 +13,44 @@ use std::os::raw::c_char;
 use purrdf_validate::{SarifOptions, entail_to_ntriples_string, validate_to_sarif_string};
 
 use crate::buffer::PurrdfBuffer;
-use crate::cstr_to_str;
 use crate::error::PurrdfError;
 use crate::status::PurrdfStatus;
+use crate::{cstr_to_str, opt_cstr_to_str};
 
 /// Validate `data_nt` (N-Triples) against `shapes_ttl` (Turtle) and render the
 /// report to SARIF 2.1.0 bytes. Native-testable, pointer-free core.
 ///
 /// The validate→SARIF sequence lives in [`validate_to_sarif_string`]; this only
 /// adds the C-ABI byte framing.
-fn validate_to_sarif_bytes(shapes_ttl: &str, data_nt: &str) -> Result<Vec<u8>, String> {
-    Ok(validate_to_sarif_string(shapes_ttl, data_nt, &SarifOptions::default())?.into_bytes())
+fn validate_to_sarif_bytes(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+) -> Result<Vec<u8>, String> {
+    Ok(
+        validate_to_sarif_string(shapes_ttl, shapes_base, data_nt, &SarifOptions::default())?
+            .into_bytes(),
+    )
 }
 
 /// Validate a data graph (N-Triples) against a shapes graph (Turtle) and write
 /// the SARIF 2.1.0 report bytes to `*out_buffer` (free with `purrdf_buffer_free`).
 ///
+/// `shapes_base_iri` is the base IRI the SHAPES document's relative IRI references
+/// resolve against, and may be NULL. It is a real parameter and is read: a C host was
+/// handed a string and has no retrieval IRI, so PurRDF will not invent one, and NULL
+/// leaves a relative reference a hard `iri-relative-no-base` rather than a silent
+/// mis-parse. `data_nt` needs no counterpart — N-Triples admits no relative IRI by
+/// grammar, so a base there could only be ignored.
+///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+/// `shapes_base_iri` must be null or a NUL-terminated C string;
 /// `out_buffer` must be a writable pointer; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
     shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
     data_nt: *const c_char,
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -48,8 +64,9 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
                 ));
             }
             let shapes = cstr_to_str(shapes_ttl)?;
+            let base = opt_cstr_to_str(shapes_base_iri)?;
             let data = cstr_to_str(data_nt)?;
-            let bytes = validate_to_sarif_bytes(shapes, data)
+            let bytes = validate_to_sarif_bytes(shapes, base, data)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_buffer = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)
@@ -63,13 +80,21 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
 ///
 /// The parse→entail→serialize sequence lives in [`entail_to_ntriples_string`];
 /// this only adds the C-ABI byte framing.
-fn entail_to_ntriples_bytes(shapes_ttl: &str, data_nt: &str) -> Result<Vec<u8>, String> {
-    Ok(entail_to_ntriples_string(shapes_ttl, data_nt)?.into_bytes())
+fn entail_to_ntriples_bytes(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    data_nt: &str,
+) -> Result<Vec<u8>, String> {
+    Ok(entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt)?.into_bytes())
 }
 
 /// Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the
 /// materialized dataset (base graph plus every inferred triple) as canonical
 /// N-Triples bytes to `*out_buffer` (free with `purrdf_buffer_free`).
+///
+/// `shapes_base_iri` carries the same meaning it does on
+/// `purrdf_shacl_validate_to_sarif`: the shapes document's own base IRI, nullable,
+/// and read rather than accepted-and-dropped.
 ///
 /// Nothing is dropped on the way out: the underlying writer is the graph-carrying
 /// canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
@@ -77,10 +102,12 @@ fn entail_to_ntriples_bytes(shapes_ttl: &str, data_nt: &str) -> Result<Vec<u8>, 
 ///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+/// `shapes_base_iri` must be null or a NUL-terminated C string;
 /// `out_buffer` must be a writable pointer; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
     data_nt: *const c_char,
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -94,8 +121,9 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
                 ));
             }
             let shapes = cstr_to_str(shapes_ttl)?;
+            let base = opt_cstr_to_str(shapes_base_iri)?;
             let data = cstr_to_str(data_nt)?;
-            let bytes = entail_to_ntriples_bytes(shapes, data)
+            let bytes = entail_to_ntriples_bytes(shapes, base, data)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
             *out_buffer = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)
@@ -119,7 +147,7 @@ mod tests {
 
     #[test]
     fn validate_emits_sarif_bytes() {
-        let bytes = validate_to_sarif_bytes(SHAPES, DATA).expect("sarif produced");
+        let bytes = validate_to_sarif_bytes(SHAPES, None, DATA).expect("sarif produced");
         let text = String::from_utf8(bytes).expect("utf8");
         assert!(text.contains("\"version\": \"2.1.0\""));
         assert!(text.contains("\"level\": \"error\""));
@@ -127,7 +155,7 @@ mod tests {
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(validate_to_sarif_bytes("@@@ not turtle", DATA).is_err());
+        assert!(validate_to_sarif_bytes("@@@ not turtle", None, DATA).is_err());
     }
 
     // A shapes graph with a `sh:TripleRule` typing every `ex:Person` an `ex:adult`.
@@ -142,7 +170,8 @@ mod tests {
 
     #[test]
     fn entail_emits_materialized_ntriples() {
-        let bytes = entail_to_ntriples_bytes(RULE_SHAPES, RULE_DATA).expect("entailment produced");
+        let bytes =
+            entail_to_ntriples_bytes(RULE_SHAPES, None, RULE_DATA).expect("entailment produced");
         let text = String::from_utf8(bytes).expect("utf8");
         assert!(text.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
@@ -154,6 +183,6 @@ mod tests {
 
     #[test]
     fn entail_malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_bytes("@@@ not turtle", RULE_DATA).is_err());
+        assert!(entail_to_ntriples_bytes("@@@ not turtle", None, RULE_DATA).is_err());
     }
 }

@@ -81,7 +81,7 @@ fn golden_ns() -> Namespaces {
 /// Compile [`GOLDEN_SHAPES`] through the real production entry point.
 fn compile_golden() -> CompiledSchema {
     let ttl = format!("{PREFIXES}{GOLDEN_SHAPES}");
-    let dataset = parse_turtle_to_dataset(&ttl).expect("golden fixture Turtle parses");
+    let dataset = parse_turtle_to_dataset(&ttl, None).expect("golden fixture Turtle parses");
     let shapes = from_dataset(&dataset).expect("golden fixture shape parse");
     compile(&shapes, &golden_ns())
 }

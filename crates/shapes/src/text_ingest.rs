@@ -74,24 +74,40 @@ fn scan_prefixes(text: &str) -> impl Iterator<Item = (String, String)> + '_ {
     })
 }
 
-/// Parse a Turtle document into a frozen [`RdfDataset`] via the native codecs.
+/// Parse a Turtle document into a frozen [`RdfDataset`] via the native codecs,
+/// resolving relative IRI references against `base`.
+///
+/// `base` is the document's base IRI (RFC-3986 §5.1.2, the caller-supplied base) and is
+/// threaded verbatim into [`parse_dataset`] — the SAME `Option<&str>` parameter every
+/// other PurRDF ingress takes, so a Turtle shapes graph resolves exactly like the same
+/// bytes read through any other seam. `None` means *no base is in scope*: an in-document
+/// `@base` can still establish one, and failing that a relative reference is a hard
+/// `iri-relative-no-base` rather than a silently-interned non-IRI term.
 ///
 /// On a clean parse the dataset is returned. On a syntax error the document is
 /// re-parsed one top-level statement at a time so EVERY independently-malformed
 /// statement is reported; the returned `Err` is the list of per-statement error
 /// strings.
-pub fn parse_turtle_to_dataset(ttl: &str) -> Result<Arc<RdfDataset>, Vec<String>> {
+pub fn parse_turtle_to_dataset(
+    ttl: &str,
+    base: Option<&str>,
+) -> Result<Arc<RdfDataset>, Vec<String>> {
     if ttl.is_empty() {
         return Ok(empty_dataset());
     }
-    match parse_dataset(ttl.as_bytes(), "text/turtle", None) {
+    match parse_dataset(ttl.as_bytes(), "text/turtle", base) {
         Ok(dataset) => Ok(dataset),
-        Err(_) => Err(turtle_statement_errors(ttl)),
+        Err(_) => Err(turtle_statement_errors(ttl, base)),
     }
 }
 
 /// Parse an N-Triples document into a frozen [`RdfDataset`] via the native codecs,
 /// accumulating every malformed line as its own error.
+///
+/// N-Triples admits **no** relative IRI reference by grammar (RDF 1.2 N-Triples §2.3),
+/// so this ingress takes no base: there is nothing a base could resolve, and accepting
+/// one would imply it might rescue a document the grammar rejects. A relative reference
+/// here is `iri-not-absolute-by-grammar`, which no base can fix.
 pub fn parse_ntriples_to_dataset(data_nt: &str) -> Result<Arc<RdfDataset>, Vec<String>> {
     if data_nt.is_empty() {
         return Ok(empty_dataset());
@@ -112,7 +128,12 @@ fn empty_dataset() -> Arc<RdfDataset> {
 /// Enumerate per-statement Turtle parse errors by re-parsing each top-level
 /// statement (terminated by `.`) with the document's prefix directives prepended,
 /// so each malformed statement surfaces independently.
-fn turtle_statement_errors(ttl: &str) -> Vec<String> {
+///
+/// `base` is the SAME base the whole-document parse ran under. Threading it here is not
+/// cosmetic: without it every statement holding a relative IRI would re-fail with
+/// `iri-relative-no-base` during recovery, so a document whose only real defect was
+/// elsewhere would report a list of fabricated base errors instead of the one true one.
+fn turtle_statement_errors(ttl: &str, base: Option<&str>) -> Vec<String> {
     // The prefix/base directives every statement needs to resolve prefixed names.
     let header: String = ttl
         .lines()
@@ -135,7 +156,7 @@ fn turtle_statement_errors(ttl: &str) -> Vec<String> {
             continue;
         }
         let candidate = format!("{header}\n{trimmed}\n");
-        if let Err(e) = parse_dataset(candidate.as_bytes(), "text/turtle", None) {
+        if let Err(e) = parse_dataset(candidate.as_bytes(), "text/turtle", base) {
             errors.push(format!("Turtle parse error: {e}"));
         }
     }
@@ -143,7 +164,7 @@ fn turtle_statement_errors(ttl: &str) -> Vec<String> {
         // The whole-document parse failed but no individual statement did (e.g. a
         // lexer-level break that consumes to EOF): re-surface the document error
         // as a single entry rather than swallowing it.
-        if let Err(e) = parse_dataset(ttl.as_bytes(), "text/turtle", None) {
+        if let Err(e) = parse_dataset(ttl.as_bytes(), "text/turtle", base) {
             errors.push(format!("Turtle parse error: {e}"));
         }
     }
@@ -162,7 +183,15 @@ fn is_directive(statement: &str) -> bool {
 }
 
 /// Split Turtle source into top-level statements on the `.` terminator, ignoring
-/// `.`s inside IRIs (`<...>`) and string literals (`"..."`, `'...'`).
+/// `.`s inside IRIs (`<...>`), string literals (`"..."`, `'...'`) and `#` comments.
+///
+/// The comment arm matters as much as the other two. A `#` comment runs to end of line
+/// (Turtle §6.2) and may contain anything, including a prose `.` — and this splitter
+/// feeds the RECOVERY path, whose whole job is to name the document's real defects. A
+/// splitter that terminated a statement on a comment's full stop would hand the parser
+/// half a sentence of English and report an invented syntax error, burying the actual
+/// one. `#` is only a comment outside an IRI and outside a string, since it is also the
+/// fragment delimiter of every `<http://…#…>` IRI in a SHACL document.
 fn split_turtle_statements(ttl: &str) -> Vec<String> {
     let mut statements: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -186,6 +215,16 @@ fn split_turtle_statements(ttl: &str) -> Vec<String> {
                 '<' if !in_iri => in_iri = true,
                 '>' if in_iri => in_iri = false,
                 '"' | '\'' if !in_iri => string_delim = Some(c),
+                // A comment: copy it through verbatim to end of line so the statement
+                // keeps its original text, but let none of its bytes be interpreted.
+                '#' if !in_iri => {
+                    for next in chars.by_ref() {
+                        current.push(next);
+                        if next == '\n' {
+                            break;
+                        }
+                    }
+                }
                 '.' if !in_iri => {
                     statements.push(std::mem::take(&mut current));
                 }
@@ -253,7 +292,7 @@ mod tests {
     #[test]
     fn parse_turtle_clean_input_succeeds() {
         let ttl = "@prefix ex: <http://example.org/ns#> .\nex:a ex:p ex:b .\n";
-        let dataset = parse_turtle_to_dataset(ttl).expect("clean Turtle parses");
+        let dataset = parse_turtle_to_dataset(ttl, None).expect("clean Turtle parses");
         assert_eq!(dataset.quad_refs().count(), 1);
     }
 
@@ -265,7 +304,7 @@ mod tests {
             "ex:b ex:q ex:c .\n",           // valid
             "ex:d ex:r ex:s ex:t ex:u .\n", // too many terms → error
         );
-        let Err(errors) = parse_turtle_to_dataset(bad) else {
+        let Err(errors) = parse_turtle_to_dataset(bad, None) else {
             panic!("malformed Turtle must error")
         };
         assert!(
@@ -305,5 +344,102 @@ mod tests {
         let statements = split_turtle_statements(ttl);
         let non_empty = statements.iter().filter(|s| !s.trim().is_empty()).count();
         assert_eq!(non_empty, 2, "two statements: {statements:?}");
+    }
+
+    #[test]
+    fn split_turtle_ignores_dots_inside_comments() {
+        // A `#` comment runs to end of line and may contain prose with a full stop.
+        // Terminating a statement there would hand the parser half an English sentence
+        // and report an invented syntax error over the document's real one.
+        let ttl = concat!(
+            "# The subject below is relative. It resolves against the base.\n",
+            "ex:a ex:p ex:b .\n",
+        );
+        let statements = split_turtle_statements(ttl);
+        let non_empty = statements.iter().filter(|s| !s.trim().is_empty()).count();
+        assert_eq!(
+            non_empty, 1,
+            "the comment is not a statement boundary: {statements:?}"
+        );
+    }
+
+    #[test]
+    fn split_turtle_does_not_treat_an_iri_fragment_as_a_comment() {
+        // `#` is also the fragment delimiter of every `<http://…#…>` IRI a SHACL
+        // document uses, so it only starts a comment OUTSIDE an IRI.
+        let ttl = "<http://example.org/ns#a> <http://example.org/ns#p> \"v\" .";
+        let statements = split_turtle_statements(ttl);
+        let non_empty = statements.iter().filter(|s| !s.trim().is_empty()).count();
+        assert_eq!(non_empty, 1, "one statement: {statements:?}");
+    }
+
+    #[test]
+    fn a_comment_containing_a_full_stop_does_not_fabricate_an_error() {
+        // End-to-end over the recovery path: the document's ONLY defect is the missing
+        // object, and that is the only error reported. Before the splitter understood
+        // comments, the prose full stop produced extra bogus entries alongside it.
+        let bad = concat!(
+            "@prefix ex: <http://example.org/ns#> .\n",
+            "# This graph is deliberately broken. See the next line.\n",
+            "ex:a ex:p .\n",
+        );
+        let Err(errors) = parse_turtle_to_dataset(bad, None) else {
+            panic!("malformed Turtle must error")
+        };
+        assert_eq!(
+            errors.len(),
+            1,
+            "exactly one real defect must be reported: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn parse_turtle_resolves_relative_iris_against_the_base() {
+        let ttl = "<rel> <http://example.org/p> <http://example.org/o> .\n";
+        let dataset = parse_turtle_to_dataset(ttl, Some("http://example.org/dir/doc.ttl"))
+            .expect("a based document parses");
+        let nt = ::purrdf::canonical_flat_nquads(dataset.as_ref()).expect("serialize");
+        assert!(
+            nt.contains("<http://example.org/dir/rel>"),
+            "the relative subject must resolve against the base: {nt}"
+        );
+    }
+
+    #[test]
+    fn parse_turtle_without_a_base_refuses_a_relative_iri() {
+        let ttl = "<rel> <http://example.org/p> <http://example.org/o> .\n";
+        let Err(errors) = parse_turtle_to_dataset(ttl, None) else {
+            panic!("a relative IRI with no base must be refused")
+        };
+        assert!(
+            errors.iter().any(|e| e.contains("iri-relative-no-base")),
+            "the refusal must name the actionable condition: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_recovery_path_does_not_report_fabricated_base_errors() {
+        // A document with BOTH a relative IRI (legitimate under the base) and one real
+        // syntax error. Recovery re-parses statement by statement; without the base
+        // threaded through, every relative-IRI statement would re-fail with
+        // `iri-relative-no-base` and bury the one defect the author must fix.
+        let bad = concat!(
+            "@prefix ex: <http://example.org/ns#> .\n",
+            "<rel-a> ex:p ex:b .\n",
+            "<rel-b> ex:q .\n", // the only real error: missing object
+            "<rel-c> ex:r ex:d .\n",
+        );
+        let Err(errors) = parse_turtle_to_dataset(bad, Some("http://example.org/doc")) else {
+            panic!("the malformed statement must error")
+        };
+        assert!(
+            !errors.iter().any(|e| e.contains("iri-relative-no-base")),
+            "no base error may be fabricated during recovery: {errors:?}"
+        );
+        assert_eq!(
+            errors.len(),
+            1,
+            "only the genuinely malformed statement is reported: {errors:?}"
+        );
     }
 }

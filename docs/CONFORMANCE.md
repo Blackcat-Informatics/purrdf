@@ -42,7 +42,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 | 0 | GREEN |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
 | RDF 1.2 canonicalization profile | purrdf-rdfc12 v1 (first-party) | 5 | 0 | 0 | 0 | GREEN |
-| Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 250 | 0 | 0 | 0 | GREEN |
+| Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 862 | 5 | 5 | 0 | GREEN |
 | SPARQL CONSTRUCT (first-party corpus) | purrdf-construct (first-party) | 29 | 0 | 0 | 0 | GREEN |
 | SPARQL DESCRIBE (first-party corpus) | purrdf-describe (first-party) | 16 | 0 | 0 | 0 | GREEN |
@@ -53,10 +53,10 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SHACL (first-party corpus) | first-party frozen reports | 70 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 17 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
-| ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 9 | 0 | 0 | 0 | GREEN |
+| ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 10 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
-| rdflib LSP drop-in gate | rdflib 7.6 own tests | 85 | 1 | 1 | 0 | GREEN |
-| Python binding suite | first-party (incl. compat differential vs rdflib) | 701 | 4 | 4 | 0 | GREEN |
+| rdflib LSP drop-in gate | rdflib 7.6 own tests | 81 | 5 | 5 | 0 | GREEN |
+| Python binding suite | first-party (incl. compat differential vs rdflib) | 736 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The `Budget` column is the ledger ratchet's committed ceiling (see
@@ -79,7 +79,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL | W3C data-shapes, `core/` + `sparql/` + `af/` | **126 / 126** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **70 / 70** frozen expected reports |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
-| Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **250 / 250** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 60, turtle 103) · 0 gaps |
+| Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **264 / 264** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 67, turtle 110) · 0 gaps. The RDF 1.2 `syntax/` + `eval/` sub-suites, plus the `iri/` sub-suite: the `IRI-resolution-01/02/07/08`, `IRIREF_datatype` and `IRI_with_*_numeric_escape` cases, which exist only in the RDF 1.1 Turtle/TriG suites upstream because RDF 1.2 publishes no base-resolution eval tests — this is the end-to-end half of the base-IRI contract `crates/iri/tests/` pins unit-by-unit against RFC 3986 §5.4 |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC + first-party RDF 1.2 vectors | **73 / 73** applicable toRDF · **13 / 13** exact compaction · 0 gaps; frozen provenance and checksums |
 | CSVW | W3C CSVW manifests, `crates/rdf/tests/fixtures/csvw-w3c/` | **270 / 270** RDF cases · **282 / 282** validation cases · 0 xfail; production output also accepted by locked `csvw==4.1.0` |
 | OBO Graphs view | official OBO Graphs 0.3.2 JSON Schema | production advanced-object fixture accepted; deliberate node/chain corruptions rejected |
@@ -93,8 +93,8 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | Entailment rule tables | `purrdf-entail` `rules()` / `implemented()` | `OWL-RL` **78 / 78** (OWL 2 Profiles §4.3 Tables 4–9) · `RDFS` **18 / 18** · `RDF` **3 / 3** · `D` **5 / 5** (§4.3 Table 8). This is **rule-table coverage, not entailment conformance** — the two are measured separately, and the row above is the second one: on this vendored W3C corpus, the OWL 2 RL entailment tests score 27 of 27 positive and 23 of 23 negative. Neither column counts an **extension** — the one rule the `OWL-RL` lane fires that no specification table states (`ext-eq-diff-sym`, symmetry of `owl:differentFrom`) is `extensions(Regime::OwlRl)`, is in neither `rules()` nor `implemented()`, and is rendered on its own `extension` line in every report. Every materializable regime is rule-complete; the four existential rules (`rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a`) fire through the restricted chase and their surrogate blank nodes are withheld at the materialization boundary rather than answered. Per-rule detail is generated and drift-guarded: [`docs/book/src/entailment-rules.md`](book/src/entailment-rules.md) |
 | SPARQL execution governors | first-party frozen corpus, `vectors/sparql-governors/` | **50 / 50** pinned cases · 0 ledgered. **42 of them are band cases**, and the enumeration is exactly this: a **zero**, a **boundary** (the ceiling IS the measured cost, and must be admitted) and an **over-bound** (the measured cost minus one, and must trip) for each of the five caller-settable numeric dimensions (fuel, answer rows, intermediate cells, scratch bytes, remote requests) = 15; the same three for a deterministic injected deadline signal = 3; the same three for the two property-function charge points taken **together** = 3; a boundary and an over-bound each for the two RDF 1.2 reifier lanes (fuel, answer rows) = 4, plus all three for the CONSTRUCTed reification layer = 3; a boundary and an over-bound each for the three lanes that take the property-function pair **apart** = 6 — one isolating `property-function-invocation` (twelve invocations of a relation that emits nothing, so the band carries zero row charges), one isolating `property-function-row` (one invocation emitting twelve rows), and one driving 1200 rows, above the evaluator's fork threshold, where the metered measurement runs on the sequential chunk driver and the band on the parallel one, so the boundary itself is the parity claim; a boundary and an over-bound each for the two lanes that take the **aggregate** pair apart = 4 — one isolating `aggregate-invocation` (twelve aggregate expressions folding one implicit group whose input matches nothing, so the band carries zero accumulation charges) and one isolating `aggregate-accumulation` (one aggregate expression folding twelve rows into one implicit group, so the band carries exactly one invocation charge); and a boundary and an over-bound each for the two lanes that exercise a **registered custom aggregate** rather than a built-in = 4 — `aggregate-custom-fuel-*` folds the identical group shape `aggregate-accumulation-*` does through the custom path instead, so the two lanes' fuel is directly comparable (and is, byte for byte: 45 either way), and `aggregate-custom-scratch-bytes-*` drives 1200 rows into one implicit group, above the within-group chunk threshold, banding the custom accumulator's declared `ScratchBytes` state bound — the one dimension no built-in aggregate ever charges, and the one whose within-group chunk plan is now a pure function of the group's row count rather than of the host's thread count. The isolating lanes carry no `zero` member on purpose: a zero fuel ceiling trips before any relation or aggregate expression is resolved, so a zero band would pin a case in which the seam never fires. Numeric boundaries are derived from `QueryGovernors::METERED`; deadline boundaries are derived from the complete run's stop-poll count; every boundary is re-derived on each run, never authored. The remaining 8 cases name seams rather than bands: the federated `SERVICE` transport seam (3), the property-function relation seam's deaf/cooperating pair (2), a fuel ceiling that lands **between** an invocation and its first row — host code entered, one row pulled, that row refused at admission (1), a real wall-deadline smoke case that pins only that a trip happened and named the deadline, which is the whole of what a time-dependent trip guarantees (1), and `exists-inner-counters` — an authored, generous fuel ceiling naming the `EXISTS`/`NOT EXISTS` evidence seam, exercising all three counters (`exists-probe-answered`, `exists-definition-answered`, `exists-inner-solutions-consumed`) at once with its `.charges` decomposition read straight off `explain_query`'s ledger, the same way the two aggregate-isolating lanes are (1). Each deterministic case pins its outcome discriminant, its certified rows and certificate class, and — recorded **separately**, so a schedule change that cut in the same place is still visible — what it spent; each relation case, the two aggregate-isolating cases, AND the two custom-aggregate lanes additionally pin the metered fuel decomposed **per charge point**, which is what makes the isolating lanes isolating rather than merely differently shaped. The two custom-aggregate lanes reach that decomposition through `NativeSparqlEngine::explain_query_with_options` (with `QueryOptions::aggregates` populated) — the injected-seam explain entry a REGISTERED custom aggregate needs, the exact counterpart the same entry (with `QueryOptions::property_functions` populated instead) is for a scripted relation |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
-| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **85** pass · 1 strict-xfail (ledgered) |
-| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **701** pass · 4 strict-xfail (ledgered). The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
+| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | **81** pass · 5 strict-xfail (ledgered) |
+| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **736** pass · 4 strict-xfail (ledgered). The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
 | GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 1 ledgered divergence. `12-conflicting-reifier` binds one reifier id to two triples and carries no quoted-triple term; `rdf:reifies` is not a functional property, so both bindings are legitimate and this reader keeps both without complaint (two rows, no diagnostic) where the committed expectation still states the superseded single-binding reading (one row plus a `ConflictingReifier` diagnostic). The expectation encodes a premise the reader has shed, and the corpus is governed upstream in [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and never regenerated here, so the disagreement stands until it is corrected there. It is held to XPASS discipline in both directions: the ledgered vector must STILL disagree, and no unlisted vector may start disagreeing |
 
 ## Where the suites live
@@ -238,9 +238,19 @@ reason):
 - `bindings/python/tests/xfail_ledger.toml` — the first-party
   `purrdf.compat` parity ledger (**4** strict xfails).
 - `bindings/python/tests/rdflib_suite/xfail_ledger.toml` — the rdflib
-  drop-in (LSP) gate ledger governing rdflib's own vendored tests (**1** strict
-  xfail). Both are applied as **strict** xfails, so an XPASS or a stale key
+  drop-in (LSP) gate ledger governing rdflib's own vendored tests (**5** strict
+  xfails). Both are applied as **strict** xfails, so an XPASS or a stale key
   fails the run.
+
+  All five rdflib entries are PurRDF being **stricter** than rdflib, not PurRDF
+  gaps. One is an upstream test typo that projects a non-group-key variable under
+  `GROUP BY`. The other four are `BatchAddGraph` tests that name terms with bare
+  relative `URIRef`s: rdflib's `URIRef` is an unvalidated `str` subclass, while
+  the PurRDF IR carries no base, so a relative reference has no knowable identity
+  there and is refused with `iri-relative-no-base`. Closing them would mean either
+  inventing a base — which would differ per machine and leak local paths into
+  published RDF — or admitting unrepresentable terms into the store, so unlike
+  every other ledger entry these four are **not** expected to shrink.
 - The Rust harnesses embed their ledgers in-code (e.g. the SHACL `w3c_conformance`
   xfail table, the SPARQL `purrdf-sparql-conformance` `xfail` module, the codec
   allowlist) and assert each entry still fails.

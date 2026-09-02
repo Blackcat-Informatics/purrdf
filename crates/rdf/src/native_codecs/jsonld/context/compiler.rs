@@ -1198,9 +1198,7 @@ impl Compiler<'_> {
         if document_relative {
             return resolve_reference(value, active.base_iri.as_deref(), "IRI");
         }
-        Err(context_error(format!(
-            "relative IRI `{value}` has no applicable @vocab or @base"
-        )))
+        Err(no_vocab_expansion(value))
     }
 
     #[allow(
@@ -1525,30 +1523,76 @@ fn is_extension_control(value: &str) -> bool {
     EXTENSION_CONTROLS.contains(&value)
 }
 
+/// Resolve a document-relative JSON-LD reference against the base currently in force.
+///
+/// EVERY reference goes through the workspace's shared [`purrdf_iri::BaseScope`] — the
+/// absolute ones included. That layer now returns an absolute reference verbatim whether
+/// or not a base is in scope (RDF Concepts §3.2 forbids syntax-based normalization, and
+/// the W3C JSON-LD vectors pin `<http://a/bb/ccc/../d;p?y>` unchanged), so the local
+/// "has a scheme? hand it straight back" passthrough this function used to run in front
+/// of the scope became a second copy of a rule the shared layer already enforces. Copies
+/// of a rule are how the rule comes to be enforced two different ways, so it is gone.
+///
+/// Routing everything through the scope also gives the "relative reference with no base
+/// in scope" condition the SAME `iri-relative-no-base` code (and the same remedy text)
+/// that Turtle, TriG, RDF/XML, SPARQL and ShEx report — it stops being a JSON-LD-local
+/// spelling of a condition every other syntax already names. Genuinely JSON-LD-specific
+/// context failures keep `jsonld-context-invalid`.
 fn resolve_reference(
     reference: &str,
     base: Option<&str>,
     description: &str,
 ) -> Result<String, RdfDiagnostic> {
-    if let Ok(parsed) = purrdf_iri::parse(reference)
-        && parsed.has_scheme()
-    {
-        return Ok(reference.to_owned());
-    }
-    let base = base.ok_or_else(|| {
-        context_error(format!(
-            "relative {description} `{reference}` requires an absolute base IRI"
-        ))
-    })?;
-    let base = purrdf_iri::parse(base)
-        .map_err(|source| context_error(format!("invalid base IRI `{base}`: {source}")))?;
-    base.resolve(reference)
+    // The absent base is NOT decided here. `BaseScope::empty()` already owns "a relative
+    // reference with no base in scope is `IriError::NoBase`", so re-deriving that
+    // decision locally would be a second copy of it free to drift — and it is the drift,
+    // not the wording, that let the identical mistake answer to `jsonld-context-invalid`
+    // here and `iri-relative-no-base` everywhere else, so a caller grepping for the
+    // shared code believed JSON-LD had no such failure mode.
+    //
+    // Routing the empty case through the scope also keeps its ordering: the reference is
+    // parsed FIRST, so a MALFORMED relative reference reports its own syntax error rather
+    // than being misreported as "no base", which would send the author off to add a
+    // `@base` that cannot help.
+    let scope = match base {
+        None => purrdf_iri::BaseScope::empty(),
+        Some(base) => {
+            let base = purrdf_iri::BaseIri::parse(base)
+                .map_err(|source| context_error(format!("invalid base IRI `{base}`: {source}")))?;
+            purrdf_iri::BaseScope::rooted(base, purrdf_iri::BaseOrigin::Caller)
+        }
+    };
+    scope
+        .resolve(reference)
         .map(|resolved| resolved.as_str().to_owned())
         .map_err(|source| {
-            context_error(format!(
-                "cannot resolve {description} `{reference}` against `{base}`: {source}"
-            ))
+            RdfDiagnostic::error(
+                source.diagnostic_code(),
+                format!("cannot resolve {description}: {source}"),
+            )
         })
+}
+
+/// The ONE remaining vocabulary-position failure: a value that is not a keyword, not a
+/// defined term, not a compact IRI, and not absolute, in a position JSON-LD expands with
+/// `vocab` but NOT `documentRelative` (a term definition's `@id`, `@reverse`, `@index`, or
+/// `@type` coercion).
+///
+/// It deliberately does NOT mention `@base`. The old wording — "relative IRI `x` has no
+/// applicable @vocab or @base" — was an eighth private spelling of "this relative IRI could
+/// not be resolved", and in this position it was actively misleading twice over: it named a
+/// `@base` the algorithm never consults here, sending an author off to add a base that
+/// cannot help, and it hid the fact that the document-relative positions had the same
+/// wording while resolving through an entirely different path. Every position that DOES
+/// consult the base now routes through [`resolve_reference`] and therefore reports the
+/// workspace-shared `iri-relative-no-base`; what is left over is a genuinely JSON-LD-local
+/// context failure with a genuinely JSON-LD-local remedy, and it says so.
+fn no_vocab_expansion(value: &str) -> RdfDiagnostic {
+    context_error(format!(
+        "`{value}` is not a keyword, a defined term, a compact IRI, or an absolute IRI, and \
+         this position expands against @vocab only; define a term, add an @vocab, or write \
+         the IRI in absolute form (a @base does not apply here)"
+    ))
 }
 
 fn build_inverse_context(active: &ActiveContext) -> InverseContext {
@@ -1735,9 +1779,7 @@ pub(super) fn expand_iri(
     if document_relative {
         return resolve_reference(value, active.base_iri.as_deref(), "IRI").map(Some);
     }
-    Err(context_error(format!(
-        "relative IRI `{value}` has no applicable @vocab or @base"
-    )))
+    Err(no_vocab_expansion(value))
 }
 
 pub(super) fn compact_iri(
@@ -1875,10 +1917,37 @@ fn reject_iri_confused_with_prefix(active: &ActiveContext, iri: &str) -> Result<
     Ok(())
 }
 
+/// Spell `iri` as a reference relative to `base` for a document-position `@id`.
+///
+/// This is a SELECTION layer, not a resolver — the sixth hand-rolled resolver this
+/// workspace deliberately does not have. It performs ZERO reference-resolution
+/// arithmetic: every candidate spelling is either read straight off RFC-3986 components
+/// already parsed out of the target, or produced by [`purrdf_iri::BaseIri::relativize`],
+/// the one relativization algorithm in the workspace. Merge and dot-segment arithmetic
+/// live in `purrdf-iri` and nowhere else.
+///
+/// The JSON-LD 1.1 §4.1.4 candidate spellings are all constructed — the same-document
+/// reference, the fragment-only and query-only spellings, the absolute path, and the
+/// shared layer's canonical relative path — and EVERY one is then verified by
+/// re-resolving it with [`purrdf_iri::BaseIri::resolve`] and comparing byte for byte
+/// against the target. A candidate that does not reproduce the target is discarded rather
+/// than emitted, so a spelling can never denote a different resource than the IRI it
+/// replaces.
+///
+/// The survivor is chosen by SHORTEST-then-lexical, deliberately not by construction
+/// order. The absolute-path candidate always verifies, so an order-of-enumeration choice
+/// would hand it the win every time and no relative path could ever be selected — which
+/// is the whole point of §4.1.4. Length-then-lexical is also total and construction-order
+/// independent, so the emitted bytes cannot drift if a candidate is ever added.
+///
+/// `None` means no relative spelling round-trips (a different scheme or authority, or a
+/// target outside the base's dot-normalized image); the caller then emits the absolute
+/// IRI. It never means "failed".
 fn remove_base(base: &str, iri: &str) -> Option<String> {
-    let base_iri = purrdf_iri::parse(base).ok()?;
+    let base_iri = purrdf_iri::BaseIri::parse(base).ok()?;
+    let base_parts = base_iri.as_iri();
     let target = purrdf_iri::parse(iri).ok()?;
-    if base_iri.scheme() != target.scheme() || base_iri.authority() != target.authority() {
+    if base_parts.scheme() != target.scheme() || base_parts.authority() != target.authority() {
         return None;
     }
 
@@ -1886,13 +1955,13 @@ fn remove_base(base: &str, iri: &str) -> Option<String> {
     if base == iri {
         candidates.push(String::new());
     }
-    if base_iri.path() == target.path()
-        && base_iri.query() == target.query()
+    if base_parts.path() == target.path()
+        && base_parts.query() == target.query()
         && let Some(fragment) = target.fragment()
     {
         candidates.push(format!("#{fragment}"));
     }
-    if base_iri.path() == target.path()
+    if base_parts.path() == target.path()
         && let Some(query) = target.query()
     {
         let mut candidate = format!("?{query}");
@@ -1914,38 +1983,12 @@ fn remove_base(base: &str, iri: &str) -> Option<String> {
     }
     candidates.push(absolute_path);
 
-    let base_directory = base_iri
-        .path()
-        .rsplit_once('/')
-        .map_or("", |(directory, _)| directory);
-    let base_segments: Vec<&str> = base_directory
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    let target_segments: Vec<&str> = target
-        .path()
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    let shared = base_segments
-        .iter()
-        .zip(&target_segments)
-        .take_while(|(left, right)| left == right)
-        .count();
-    let mut relative = "../".repeat(base_segments.len().saturating_sub(shared));
-    relative.push_str(&target_segments[shared..].join("/"));
-    if relative.is_empty() {
-        relative.push_str("./");
-    }
-    if let Some(query) = target.query() {
-        relative.push('?');
-        relative.push_str(query);
-    }
-    if let Some(fragment) = target.fragment() {
-        relative.push('#');
-        relative.push_str(fragment);
-    }
-    candidates.push(relative);
+    // The shared layer's canonical relative spelling. It is already round-trip verified
+    // internally and carries the two RFC-3986 §4.2 spelling hazards — a first segment
+    // containing `:` needs a `./` prefix or it re-parses as a scheme, and a leading `//`
+    // needs a `/.` prefix or it re-parses as an authority — which the old local
+    // arithmetic emitted unguarded and then silently dropped at verification.
+    candidates.extend(base_iri.relativize(&target));
 
     candidates.retain(|candidate| {
         base_iri

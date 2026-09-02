@@ -25,6 +25,7 @@ use crate::ast::{
 };
 use crate::error::{ParseError, Result};
 use crate::lexer::{Spanned, Token, tokenize};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -170,9 +171,24 @@ pub struct ParserOptions {
 /// Parse-time configuration (the extension-function namespace set) is passed per
 /// call via [`SparqlParser::parse_query_with`] / [`SparqlParser::parse_update_with`];
 /// the plain `parse_*` entries use [`ParserOptions::default`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SparqlParser {
-    base_iri: Option<String>,
+    /// The caller-supplied base scope, or the failure that supplying it caused.
+    ///
+    /// [`SparqlParser::with_base_iri`] takes an arbitrary string and returns
+    /// `Self`, so it has nowhere to report an unusable base. Recording the typed
+    /// failure here and replaying it from the first fallible entry point
+    /// ([`SparqlParser::parse_query_with`]/[`SparqlParser::parse_update_with`])
+    /// keeps the hard-fail doctrine without silently dropping the base.
+    base: core::result::Result<BaseScope, ParseError>,
+}
+
+impl Default for SparqlParser {
+    fn default() -> Self {
+        Self {
+            base: Ok(BaseScope::empty()),
+        }
+    }
 }
 
 impl SparqlParser {
@@ -182,7 +198,13 @@ impl SparqlParser {
     }
 
     /// Set an implicit base IRI used to resolve relative IRI references that
-    /// appear before any in-query `BASE` declaration.
+    /// appear before any in-query `BASE` declaration, and against which a
+    /// relative in-query `BASE` itself resolves (SPARQL 1.1 §4.1.1 → RFC-3986
+    /// §5.1.1).
+    ///
+    /// The base must be absolute. Because this builder returns `Self`, a base
+    /// that is not is reported by the subsequent `parse_query`/`parse_update`
+    /// call as [`ParseError::Iri`] rather than being ignored.
     ///
     /// # Examples
     ///
@@ -199,7 +221,10 @@ impl SparqlParser {
     /// ```
     #[must_use]
     pub fn with_base_iri(mut self, base_iri: impl Into<String>) -> Self {
-        self.base_iri = Some(base_iri.into());
+        let base_iri = base_iri.into();
+        self.base = BaseIri::parse(&base_iri)
+            .map(|base| BaseScope::rooted(base, BaseOrigin::Caller))
+            .map_err(|e| iri_error(&base_iri, &e));
         self
     }
 
@@ -270,13 +295,15 @@ impl SparqlParser {
         text: &'a str,
         options: &'o ParserOptions,
     ) -> Result<Parser<'a, 'o>> {
+        let base = self.base.clone()?;
         let tokens = tokenize(text)?.into_iter().map(Some).collect();
         Ok(Parser {
             tokens,
             pos: 0,
+            src: text,
             end: text.len(),
             prefixes: HashMap::new(),
-            base: self.base_iri.clone(),
+            base,
             version: None,
             agg_counter: 0,
             anon_counter: 0,
@@ -298,9 +325,16 @@ impl SparqlParser {
 struct Parser<'a, 'o> {
     tokens: Vec<Option<Spanned<'a>>>,
     pos: usize,
+    /// The original request text, kept only so a `BASE` directive can record the
+    /// 1-based source position it was written at ([`Parser::directive_origin`]).
+    /// The line table is built on that path alone, never on the happy path.
+    src: &'a str,
     end: usize,
     prefixes: HashMap<String, String>,
-    base: Option<String>,
+    /// The base IRIs in scope: the caller-supplied base (if any) at the bottom,
+    /// rebound in place by every prologue `BASE` directive. Resolution itself is
+    /// [`BaseScope`]'s — this parser owns no RFC-3986 arithmetic.
+    base: BaseScope,
     /// The most recently parsed prologue `VERSION` declaration (last-wins across
     /// repeated declarations — see [`SparqlVersion`]).
     version: Option<SparqlVersion>,
@@ -440,6 +474,7 @@ impl<'a> Parser<'a, '_> {
         Self {
             tokens: self.tokens[self.pos..end_idx].to_vec(),
             pos: 0,
+            src: self.src,
             end: self.end,
             prefixes: self.prefixes.clone(),
             base: self.base.clone(),
@@ -785,7 +820,7 @@ impl<'a> Parser<'a, '_> {
 
     fn parse_query(&mut self) -> Result<Query> {
         self.parse_prologue()?;
-        let base_iri = self.base.clone().map(NamedNode::new).transpose()?;
+        let base_iri = self.base_named_node();
         if self.peek_kw("SELECT") {
             self.parse_select(base_iri)
         } else if self.peek_kw("CONSTRUCT") {
@@ -805,8 +840,53 @@ impl<'a> Parser<'a, '_> {
     fn parse_prologue(&mut self) -> Result<()> {
         loop {
             if self.eat_kw("BASE") {
-                let iri = self.expect_iriref()?;
-                self.base = Some(iri);
+                let at = self.span();
+                // The directive is NOT resolved as an ordinary IRIREF, and the
+                // chaining below is NOT Turtle's rule imported by analogy — it is
+                // what SPARQL's own normative reference requires. The chain is:
+                //
+                //   1. `BaseDecl ::= 'BASE' IRIREF` takes the general IRI
+                //      *reference* production — the same one that spells the
+                //      relative `<book1>` in the specification's own example —
+                //      not an `absolute-IRI`. A relative operand is therefore
+                //      well-formed, and the only open question is its meaning.
+                //   2. SPARQL 1.2 Query §4.1.1.2 "Relative IRIs" (word-for-word
+                //      SPARQL 1.1 §4.1.1.1): "The BASE keyword defines the Base
+                //      IRI used to resolve relative IRIs per [RFC3986] section
+                //      5.1.1, 'Base URI Embedded in Content'." SPARQL states no
+                //      rule of its own; it delegates to RFC 3986.
+                //   3. RFC 3986 §5.1 "Establishing a Base URI" — the section
+                //      §5.1.1 is a subsection OF, so its requirements bind here:
+                //      "A base URI must conform to the <absolute-URI> syntax rule
+                //      (Section 4.3). If the base URI is obtained from a URI
+                //      reference, then that reference must be converted to
+                //      absolute form and stripped of any fragment component prior
+                //      to its use as a base URI."
+                //
+                // A `BASE` operand is precisely "a base URI obtained from a URI
+                // reference", so RFC 3986 requires it be *converted* to absolute
+                // form — that conversion is §5.2 resolution against the base
+                // already established — rather than refused; and the
+                // `<absolute-URI>` requirement binds the RESULT of that
+                // conversion. `BaseScope::rebind` is exactly that operation, so
+                // `BASE <http://example.org/a/> BASE <b/>` yields
+                // `http://example.org/a/`.
+                //
+                // The requirement on the result is what keeps a lone relative
+                // directive an error: with no base established there is nothing
+                // to convert against, so no `<absolute-URI>` can be produced and
+                // `rebind` hard-fails with `iri-non-absolute-base` rather than
+                // storing a base that would silently mis-resolve every reference
+                // after it. The vendored W3C corpora contain no `BASE <relative>`
+                // case in either direction (every `BASE` in
+                // `crates/sparql-conformance/suite/w3c-sparql11` and
+                // `w3c-sparql12` is absolute), so the suite neither licenses nor
+                // forbids this; clause 3 above decides it.
+                let directive = self.expect_raw_iriref()?;
+                let origin = self.directive_origin(at);
+                self.base
+                    .rebind(&directive, origin)
+                    .map_err(|e| iri_error(&directive, &e))?;
             } else if self.eat_kw("PREFIX") {
                 let (prefix, _) = self.expect_pname_ns()?;
                 let iri = self.expect_iriref()?;
@@ -839,13 +919,45 @@ impl<'a> Parser<'a, '_> {
     }
 
     fn expect_iriref(&mut self) -> Result<String> {
+        let raw = self.expect_raw_iriref()?;
+        self.resolve_iri(&raw)
+    }
+
+    /// Take the next token as an IRIREF *lexeme*, without resolving it.
+    ///
+    /// Only the `BASE` directive wants this: it resolves itself, against the base
+    /// already in force rather than as an ordinary reference under it.
+    fn expect_raw_iriref(&mut self) -> Result<String> {
         match self.bump() {
-            Some(Token::Iri(s)) => self.resolve_iri(&s),
+            Some(Token::Iri(s)) => Ok(s.into_owned()),
             other => Err(ParseError::syntax(
                 format!("expected IRIREF, found {other:?}"),
                 self.span(),
             )),
         }
+    }
+
+    /// The provenance to record for a `BASE` directive whose IRIREF starts at
+    /// byte offset `at`.
+    ///
+    /// The line table is built here, on the directive path, for the same reason
+    /// [`ParseError::locate`] builds one on the error path: the happy path keeps
+    /// a bare byte offset and pays nothing.
+    fn directive_origin(&self, at: usize) -> BaseOrigin {
+        let position = LineIndex::new(self.src).locate(self.src, at);
+        BaseOrigin::Directive {
+            line: position.line,
+            column: position.column,
+        }
+    }
+
+    /// The base currently in force as a [`NamedNode`], for the algebra's
+    /// `base_iri` field. [`BaseIri`] already guarantees a valid absolute IRI, so
+    /// there is nothing left here to validate or to fail on.
+    fn base_named_node(&self) -> Option<NamedNode> {
+        self.base
+            .current()
+            .map(|scoped| NamedNode::new_unchecked(scoped.iri().as_str()))
     }
 
     /// Expect a `prefix:` namespace token (PNAME_NS), i.e. an empty local part.
@@ -865,25 +977,17 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
-    /// Resolve a lexical IRIREF against the in-scope `BASE` (relative refs only).
-    /// Propagates a typed [`ParseError::Iri`] when the base or the resolution is
-    /// malformed instead of silently falling back to the raw string.
+    /// Resolve a lexical IRIREF against the base in force, through the workspace's
+    /// single resolution layer ([`BaseScope::resolve`]).
+    ///
+    /// A relative reference with NO base in scope is a typed [`ParseError::Iri`]
+    /// carrying [`IriError`]'s shared diagnostic code — never a raw relative
+    /// string handed onward, and never a base fabricated from somewhere else.
     fn resolve_iri(&self, s: &str) -> Result<String> {
-        match &self.base {
-            Some(base) if !is_absolute_iri(s) => {
-                let base_iri = purrdf_iri::parse(base).map_err(|e| ParseError::Iri {
-                    lexical: base.clone(),
-                    reason: e.to_string(),
-                })?;
-                let resolved =
-                    purrdf_iri::Iri::resolve(&base_iri, s).map_err(|e| ParseError::Iri {
-                        lexical: s.to_owned(),
-                        reason: e.to_string(),
-                    })?;
-                Ok(resolved.as_str().to_owned())
-            }
-            _ => Ok(s.to_owned()),
-        }
+        self.base
+            .resolve(s)
+            .map(|iri| iri.as_str().to_owned())
+            .map_err(|e| iri_error(s, &e))
     }
 
     fn resolve_prefixed(&self, prefix: &str, local: &str) -> Result<NamedNode> {
@@ -1607,7 +1711,7 @@ impl<'a> Parser<'a, '_> {
     /// is valid, and a trailing `;` is allowed.
     fn parse_update(&mut self) -> Result<Update> {
         self.parse_prologue()?;
-        let base_iri = self.base.clone().map(NamedNode::new).transpose()?;
+        let base_iri = self.base_named_node();
 
         let mut operations = Vec::new();
         // §4.1.1 + grammar note: a blank node label in `INSERT DATA` ground data
@@ -5241,22 +5345,16 @@ fn reject_blank_in_term_pattern(t: &TermPattern, at: usize) -> Result<()> {
     }
 }
 
-fn is_absolute_iri(s: &str) -> bool {
-    // A scheme followed by ':' — RFC-3986 §3.1 (cheap prefix test).
-    let mut chars = s.char_indices();
-    match chars.next() {
-        Some((_, c)) if c.is_ascii_alphabetic() => {}
-        _ => return false,
+/// Render an [`IriError`] as a typed [`ParseError::Iri`].
+///
+/// The reason leads with [`IriError::diagnostic_code`] so that "a relative IRI
+/// reference with no base in scope" reads as the SAME condition here as in every
+/// other codec, rather than as an eighth independently-worded spelling of it.
+fn iri_error(lexical: &str, error: &IriError) -> ParseError {
+    ParseError::Iri {
+        lexical: lexical.to_owned(),
+        reason: format!("{}: {error}", error.diagnostic_code()),
     }
-    for (_, c) in chars {
-        if c == ':' {
-            return true;
-        }
-        if !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
-            return false;
-        }
-    }
-    false
 }
 
 /// Split a lang tag into the language and an optional RDF 1.2 base direction
@@ -7423,6 +7521,149 @@ mod tests {
             data[0].triple.subject,
             TermPattern::NamedNode(NamedNode::new_unchecked("http://base/s"))
         );
+    }
+
+    /// The subject IRI the parser resolved the first `INSERT DATA` quad to —
+    /// the shortest route from "a prologue plus one IRIREF" to "the IRI that
+    /// reached the algebra".
+    fn inserted_subject(request: &str) -> String {
+        let update = SparqlParser::new()
+            .parse_update(request)
+            .unwrap_or_else(|e| panic!("{request:?} must parse: {e}"));
+        let GraphUpdateOperation::InsertData { data } = &update.operations[0] else {
+            panic!("expected InsertData");
+        };
+        match &data[0].triple.subject {
+            TermPattern::NamedNode(n) => n.as_str().to_owned(),
+            other => panic!("expected a named-node subject, got {other:?}"),
+        }
+    }
+
+    /// A relative `BASE` resolves against the base already in force, so a chain
+    /// of directives composes left to right instead of the later one being taken
+    /// verbatim.
+    ///
+    /// This is NOT Turtle §6.1's permission carried across by analogy. SPARQL
+    /// states no relative-`BASE` rule of its own; it delegates, and the clause it
+    /// delegates to settles the question:
+    ///
+    /// > **SPARQL 1.2 Query §4.1.1.2, "Relative IRIs"** (word-for-word SPARQL 1.1
+    /// > §4.1.1.1): "The `BASE` keyword defines the Base IRI used to resolve
+    /// > relative IRIs per \[RFC3986\] section 5.1.1, 'Base URI Embedded in
+    /// > Content'."
+    ///
+    /// > **RFC 3986 §5.1, "Establishing a Base URI"** — the section §5.1.1 is a
+    /// > subsection of, so its requirements govern the delegated case: "A base
+    /// > URI must conform to the `<absolute-URI>` syntax rule (Section 4.3). If
+    /// > the base URI is obtained from a URI reference, then that reference must
+    /// > be converted to absolute form and stripped of any fragment component
+    /// > prior to its use as a base URI."
+    ///
+    /// `BaseDecl ::= 'BASE' IRIREF` takes the general IRI *reference* production,
+    /// so a `BASE` operand is exactly "a base URI obtained from a URI reference":
+    /// RFC 3986 requires it be **converted** to absolute form — §5.2 resolution
+    /// against the base already established — not refused, and applies the
+    /// `<absolute-URI>` requirement to the result of that conversion. Chaining is
+    /// therefore mandated, not merely permitted.
+    ///
+    /// Corpus evidence, for completeness: the vendored W3C suites carry no
+    /// `BASE <relative>` case at all — every `BASE` declaration under
+    /// `crates/sparql-conformance/suite/w3c-sparql11` and `w3c-sparql12` is
+    /// absolute — so no positive or negative syntax test bears on this and the
+    /// clauses above are the whole authority. See
+    /// `relative_base_directive_with_no_base_in_scope_is_an_error` for the other
+    /// half of the same clause.
+    #[test]
+    fn base_directive_chains_against_the_base_in_force() {
+        assert_eq!(
+            inserted_subject(
+                "BASE <http://example.org/a/> BASE <b/> \
+                 INSERT DATA { <s> <http://example.org/p> <http://example.org/o> }"
+            ),
+            "http://example.org/a/b/s"
+        );
+    }
+
+    /// The other half of RFC 3986 §5.1: "A base URI must conform to the
+    /// `<absolute-URI>` syntax rule (Section 4.3). If the base URI is obtained
+    /// from a URI reference, then that reference must be converted to absolute
+    /// form … prior to its use as a base URI." With no base established there is
+    /// nothing to convert against, so no `<absolute-URI>` can be produced and the
+    /// directive is refused outright rather than stored as a base that would
+    /// silently mis-resolve every reference after it. That the requirement binds
+    /// the *converted* result — not the operand as written — is exactly why
+    /// `base_directive_chains_against_the_base_in_force` is the correct reading
+    /// of the same clause, and why this case is the only one that errors.
+    #[test]
+    fn relative_base_directive_with_no_base_in_scope_is_an_error() {
+        let err = SparqlParser::new()
+            .parse_update(
+                "BASE <b/> INSERT DATA { <s> <http://example.org/p> <http://example.org/o> }",
+            )
+            .expect_err("a relative BASE with no base in scope has nothing to resolve against");
+        assert!(matches!(err, ParseError::Iri { .. }), "got {err:?}");
+        assert!(
+            err.to_string().contains("iri-non-absolute-base"),
+            "the shared diagnostic code must reach the SPARQL message: {err}"
+        );
+    }
+
+    /// The RFC-3986 §5.2 same-document corners, driven through a SPARQL `BASE`:
+    /// `<>` keeps the base's query and drops its fragment, `<#x>` replaces only
+    /// the fragment, and `<?y=2>` replaces the query and drops the fragment.
+    #[test]
+    fn same_document_references_follow_rfc_3986_under_a_sparql_base() {
+        for (reference, expected) in [
+            ("<>", "http://example.org/d?q=1"),
+            ("<#x>", "http://example.org/d?q=1#x"),
+            ("<?y=2>", "http://example.org/d?y=2"),
+        ] {
+            let request = format!(
+                "BASE <http://example.org/d?q=1#frag> \
+                 INSERT DATA {{ {reference} <http://example.org/p> <http://example.org/o> }}"
+            );
+            assert_eq!(inserted_subject(&request), expected, "for {reference}");
+        }
+    }
+
+    /// A network-path reference (RFC-3986 §4.2) replaces the authority but
+    /// inherits the base's scheme.
+    #[test]
+    fn network_path_reference_inherits_the_base_scheme() {
+        assert_eq!(
+            inserted_subject(
+                "BASE <http://example.org/a/b> \
+                 INSERT DATA { <//example.org/x> <http://example.org/p> <http://example.org/o> }"
+            ),
+            "http://example.org/x"
+        );
+    }
+
+    /// PurRDF never fabricates a base, so a relative reference with none in
+    /// scope is a hard, typed failure carrying the shared diagnostic code.
+    #[test]
+    fn relative_iri_with_no_base_is_a_parse_error() {
+        let err = SparqlParser::new()
+            .parse_query("SELECT ?o WHERE { <cats> <http://example.org/p> ?o }")
+            .expect_err("no base is in scope");
+        assert!(matches!(err, ParseError::Iri { .. }), "got {err:?}");
+        assert!(
+            err.to_string().contains("iri-relative-no-base"),
+            "the shared diagnostic code must reach the SPARQL message: {err}"
+        );
+    }
+
+    /// A caller-supplied base that is not absolute cannot resolve anything, and
+    /// `with_base_iri` returns `Self` — so the failure surfaces at the parse
+    /// call rather than being silently dropped.
+    #[test]
+    fn a_non_absolute_caller_base_is_reported_at_parse_time() {
+        let err = SparqlParser::new()
+            .with_base_iri("not/absolute/")
+            .parse_query("SELECT ?o WHERE { <cats> <http://example.org/p> ?o }")
+            .expect_err("a scheme-less caller base is unusable");
+        assert!(matches!(err, ParseError::Iri { .. }), "got {err:?}");
+        assert!(err.to_string().contains("iri-non-absolute-base"), "{err}");
     }
 
     #[test]

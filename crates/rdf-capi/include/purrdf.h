@@ -23,6 +23,24 @@
  * ABI major version. `0` signals the surface is still **beta** — the freeze
  * discipline (append-only status enum, drift-gated header) is in place, but the
  * version stays pre-1.0 until a real C consumer + the rdflib shim exercise it.
+ *
+ * # The bump rule this triple obeys
+ *
+ * The project's pre-1.0 policy — `docs/book/src/project/releases.md`, the
+ * "Pre-1.0 semver policy" section — is: while the version is `0.x`, a **minor**
+ * bump (`0.x` → `0.(x+1)`) may include breaking changes, and a **patch** bump
+ * (`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible. So while MAJOR is
+ * `0`, **an incompatible C-ABI change rides the MINOR component**; MAJOR does
+ * not move, because moving it would declare the 1.0 stability this surface has
+ * explicitly not earned yet (the paragraph above).
+ *
+ * A change is incompatible — and therefore MUST bump MINOR — when a host built
+ * against the previous header would mis-execute against the new library:
+ * removing an exported function, renaming one, retyping or reordering its
+ * parameters, inserting a parameter anywhere but the end, changing its return
+ * type, or renumbering a status discriminant. `tests/abi_signatures.rs` pins
+ * the complete exported prototype list to this triple, so such a change cannot
+ * reach a release without an author deliberately touching these constants.
  */
 #define PURRDF_ABI_MAJOR 0
 
@@ -35,11 +53,34 @@
  * linking against an unknown build reads back from `purrdf_abi_version` to decide
  * whether the header it compiled against and the library it loaded agree, so it must
  * never stand still across a signature change.
+ *
+ * `0.6.0` → `0.7.0` carries four incompatible signature changes, deliberately
+ * bundled into one unreleased bump rather than split across four:
+ *
+ * 1. `purrdf_shacl_validate_to_sarif` and 2. `purrdf_shacl_entail_to_ntriples` each
+ *    gained a `shapes_base_iri` parameter **in the middle** of their existing
+ *    parameter list, between `shapes_ttl` and `data_nt`. For a host compiled against
+ *    `0.6.0` that is a silent, unguardable break: it passes `data_nt` into the
+ *    `shapes_base_iri` slot and its `PurrdfBuffer **` out-pointer into `data_nt`,
+ *    which the boundary then reads as a NUL-terminated C string. The parameter is
+ *    deliberately positional rather than appended — it belongs immediately beside the
+ *    document it qualifies, and one declared break beats a permanently confusing
+ *    argument order — so the version, not the signature, absorbs the incompatibility.
+ * 3. `purrdf_serialize_jsonld_configured` gained `base_iri` after `media_type`, the
+ *    slot it occupies on `purrdf_serialize`.
+ * 4. `purrdf_serialize` gained `out_directional_literals_dropped` and
+ *    `out_named_graph_rows_dropped` **before** `out_error`, so a `0.6.0` host passes
+ *    its `PurrdfError **` into a `size_t *` slot.
+ *
+ * `0.7.0` is unreleased, so a consumer recompiles against this header exactly once
+ * for all four; splitting them would break the same consumer four times for one
+ * reason. A FIFTH incompatible change made after `0.7.0` ships must bump again — the
+ * ledger here is what makes that judgement possible.
  */
 #define PURRDF_ABI_MINOR 7
 
 /**
- * ABI patch version.
+ * ABI patch version. Reset to `0` by the MINOR bump documented above.
  */
 #define PURRDF_ABI_PATCH 0
 
@@ -2264,14 +2305,42 @@ void purrdf_jsonld_context_free(PurrdfJsonLdContext *context);
  * reusable compiled context. `yaml_schema_url` may be null and overrides the
  * options document for YAML-LD when supplied.
  *
+ * # `base_iri` — the EGRESS base, in the same slot and with the same contract it has on
+ * `purrdf_serialize`
+ *
+ * `base_iri` is the document base the output is *written under*, sits immediately after
+ * `media_type` exactly as it does on `purrdf_serialize`, and may be null. It is not
+ * advisory and it is not discarded:
+ *
+ * - **JSON-LD and YAML-LD express a base, so they emit it and relativize against it.**
+ *   Both carry `emits_base` in the format registry: serializing under
+ *   `"http://example.org/dir/"` writes `"@base": "http://example.org/dir/"` into the
+ *   emitted `@context` (`'@base': …` for YAML-LD) and spells
+ *   `http://example.org/dir/a` as `a`. A caller context composes with it rather than
+ *   being dropped — the base joins as a later context member, which is JSON-LD 1.1's own
+ *   composition.
+ * - **A context that already declares `@base` keeps it.** The document's own base wins
+ *   over the caller-supplied one, matching the precedence the parse leg applies to an
+ *   in-document `@context.@base`.
+ * - **A malformed base is a hard failure.** A `base_iri` that is not an absolute IRI
+ *   returns `PURRDF_STATUS_SERIALIZE_ERROR` carrying the shared `iri-*` diagnostic code,
+ *   rather than being absorbed into plausible-looking output.
+ * - **Null means absolute output**, not "guess a base": PurRDF never invents a retrieval
+ *   IRI a C host did not supply.
+ *
+ * This parameter exists so a C host is not the one surface that can express an egress
+ * base for Turtle but not for the JSON-LD family. There is no base-less variant of this
+ * entry point.
+ *
  * # Safety
  * `dataset` and `media_type` must be live/non-null. If `options_json` is not
  * null it points to `options_len` readable bytes and `context` must be null; if
  * `options_json` is null, `options_len` must be zero and `context` must be live.
- * Output pointers must be writable.
+ * `base_iri` must be null or a NUL-terminated C string. Output pointers must be writable.
  */
 int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset,
                                            const char *media_type,
+                                           const char *base_iri,
                                            const uint8_t *options_json,
                                            size_t options_len,
                                            const PurrdfJsonLdContext *context,
@@ -2306,6 +2375,28 @@ int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset,
  * (Turtle, N-Triples) reports `out_statement_rows_dropped == 0` while discarding every
  * named graph it was handed, and a direction-carrying star-incapable target reports
  * nothing about a dropped base direction — each silent unless its own count is read.
+ *
+ *
+ * # `base_iri` — the EGRESS base, read rather than accepted-and-dropped
+ *
+ * `base_iri` is the document base the output is *written under*, and may be
+ * null. It is not advisory and it is not discarded:
+ *
+ * - **A syntax that can express a base emits it and relativizes against it.**
+ *   Serializing to `"text/turtle"` or `"application/trig"` under
+ *   `"http://example.org/dir/"` writes a leading `@base <http://example.org/dir/> .`
+ *   and spells `http://example.org/dir/a` as `<a>`.
+ * - **A syntax that cannot express one emits absolute IRIs.** N-Triples,
+ *   N-Quads, TriX and HexTuples admit no relative IRI by grammar, so passing a
+ *   base changes nothing in their bytes. That is the only output those grammars
+ *   admit — decided once from the format registry, not swallowed per codec.
+ * - **A malformed base is a hard failure, for every format.** A `base_iri` that
+ *   is not an absolute IRI returns `PURRDF_STATUS_SERIALIZE_ERROR` with the
+ *   shared `iri-*` diagnostic code, even for a format that would not have
+ *   applied it. The caller is told their base is wrong instead of having the
+ *   mistake absorbed into plausible-looking output.
+ * - **Null means absolute output**, not "guess a base": PurRDF never invents a
+ *   retrieval IRI a C host did not supply.
  *
  * # This lane FLATTENS and COUNTS; it never refuses
  *
@@ -2345,11 +2436,20 @@ int32_t purrdf_serialize(const PurrdfDataset *dataset,
  * Validate a data graph (N-Triples) against a shapes graph (Turtle) and write
  * the SARIF 2.1.0 report bytes to `*out_buffer` (free with `purrdf_buffer_free`).
  *
+ * `shapes_base_iri` is the base IRI the SHAPES document's relative IRI references
+ * resolve against, and may be NULL. It is a real parameter and is read: a C host was
+ * handed a string and has no retrieval IRI, so PurRDF will not invent one, and NULL
+ * leaves a relative reference a hard `iri-relative-no-base` rather than a silent
+ * mis-parse. `data_nt` needs no counterpart — N-Triples admits no relative IRI by
+ * grammar, so a base there could only be ignored.
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+ * `shapes_base_iri` must be null or a NUL-terminated C string;
  * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
+                                       const char *shapes_base_iri,
                                        const char *data_nt,
                                        PurrdfBuffer **out_buffer,
                                        PurrdfError **out_error);
@@ -2359,15 +2459,21 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
  * materialized dataset (base graph plus every inferred triple) as canonical
  * N-Triples bytes to `*out_buffer` (free with `purrdf_buffer_free`).
  *
+ * `shapes_base_iri` carries the same meaning it does on
+ * `purrdf_shacl_validate_to_sarif`: the shapes document's own base IRI, nullable,
+ * and read rather than accepted-and-dropped.
+ *
  * Nothing is dropped on the way out: the underlying writer is the graph-carrying
  * canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
  * are single-graph syntaxes, not because a graph slot was discarded.
  *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
+ * `shapes_base_iri` must be null or a NUL-terminated C string;
  * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
+                                        const char *shapes_base_iri,
                                         const char *data_nt,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfError **out_error);

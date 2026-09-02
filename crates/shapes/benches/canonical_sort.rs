@@ -88,7 +88,7 @@ fn bench_canonical_sort(c: &mut Criterion) {
     ));
     group.bench_function("violations_4000_unsorted_focus", |b| {
         b.iter(|| {
-            let report = validate_graphs(black_box(&data_nt), black_box(&shapes_ttl))
+            let report = validate_graphs(black_box(&data_nt), black_box(&shapes_ttl), None)
                 .expect("large_violation_inputs: validation must not error");
             // Every node lacks ex:requiredLabel, so every focus node must
             // produce exactly one violation — otherwise the fixture isn't

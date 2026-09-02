@@ -41,10 +41,13 @@ impl RdfCodec for TriXCodec {
     fn parse(
         &self,
         text: &str,
-        _base_iri: Option<&str>,
+        // TriX has no base directive, so the scope is left EXACTLY as handed in: the base
+        // in force at the end of a TriX document is the caller's, and this codec says so
+        // by touching nothing.
+        base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        super::parse::catch_codec_panic(NativeRdfFormat::TriX, || parse_trix_to_dataset(text))
+        super::parse::catch_codec_panic(NativeRdfFormat::TriX, || parse_trix_to_dataset(text, base))
     }
 
     fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
@@ -84,7 +87,10 @@ enum TrixTerm {
 }
 
 /// Parse TriX `text` into a frozen [`RdfDataset`].
-pub(super) fn parse_trix_to_dataset(text: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+pub(super) fn parse_trix_to_dataset(
+    text: &str,
+    base: &purrdf_iri::BaseScope,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     // TriX's own shape is flat, but `roxmltree`'s tokenizer recursion is not: it aborts the
     // process on a deeply nested document before this function sees a tree.
     guard_xml_nesting(text).map_err(|depth| {
@@ -112,7 +118,7 @@ pub(super) fn parse_trix_to_dataset(text: &str) -> Result<Arc<RdfDataset>, RdfDi
         for child in element_children(graph) {
             if is_trix(child, "triple") {
                 seen_triple = true;
-                let (subject, predicate, object) = parse_triple(child)?;
+                let (subject, predicate, object) = parse_triple(child, base)?;
                 rows.push((subject, predicate, object, graph_name.clone()));
             } else if matches!(local_of(child), Some("uri" | "id")) {
                 if seen_triple || graph_name.is_some() {
@@ -120,7 +126,7 @@ pub(super) fn parse_trix_to_dataset(text: &str) -> Result<Arc<RdfDataset>, RdfDi
                         "a <graph> name (<uri>/<id>) must precede its <triple> elements",
                     ));
                 }
-                graph_name = Some(node_term(child)?);
+                graph_name = Some(node_term(child, base)?);
             } else {
                 return Err(parse_err(format!(
                     "unexpected element <{}> under <graph>",
@@ -134,7 +140,10 @@ pub(super) fn parse_trix_to_dataset(text: &str) -> Result<Arc<RdfDataset>, RdfDi
 }
 
 /// Parse a `<triple>` element's three term children.
-fn parse_triple(element: Node<'_, '_>) -> Result<(TrixTerm, String, TrixTerm), RdfDiagnostic> {
+fn parse_triple(
+    element: Node<'_, '_>,
+    base: &purrdf_iri::BaseScope,
+) -> Result<(TrixTerm, String, TrixTerm), RdfDiagnostic> {
     let terms: Vec<Node<'_, '_>> = element_children(element).collect();
     if terms.len() != 3 {
         return Err(parse_err(format!(
@@ -142,28 +151,34 @@ fn parse_triple(element: Node<'_, '_>) -> Result<(TrixTerm, String, TrixTerm), R
             terms.len()
         )));
     }
-    let subject = node_term(terms[0])?;
-    let TrixTerm::Iri(predicate) = term_element(terms[1])? else {
+    let subject = node_term(terms[0], base)?;
+    let TrixTerm::Iri(predicate) = term_element(terms[1], base)? else {
         return Err(parse_err("a predicate must be a <uri>"));
     };
-    let object = term_element(terms[2])?;
+    let object = term_element(terms[2], base)?;
     Ok((subject, predicate, object))
 }
 
 /// A subject / graph-name node term: only `<uri>` or `<id>` are valid here.
-fn node_term(element: Node<'_, '_>) -> Result<TrixTerm, RdfDiagnostic> {
-    match term_element(element)? {
+fn node_term(
+    element: Node<'_, '_>,
+    base: &purrdf_iri::BaseScope,
+) -> Result<TrixTerm, RdfDiagnostic> {
+    match term_element(element, base)? {
         term @ (TrixTerm::Iri(_) | TrixTerm::Blank(_)) => Ok(term),
         TrixTerm::Literal(_) => Err(parse_err("a subject or graph name must be a <uri> or <id>")),
     }
 }
 
 /// Map a TriX term element to a [`TrixTerm`].
-fn term_element(element: Node<'_, '_>) -> Result<TrixTerm, RdfDiagnostic> {
+fn term_element(
+    element: Node<'_, '_>,
+    base: &purrdf_iri::BaseScope,
+) -> Result<TrixTerm, RdfDiagnostic> {
     match local_of(element) {
         Some("uri") => {
             let iri = trimmed_text(element);
-            validate_iri(&iri)?;
+            validate_iri(&iri, base)?;
             Ok(TrixTerm::Iri(iri))
         }
         Some("id") => {
@@ -186,7 +201,7 @@ fn term_element(element: Node<'_, '_>) -> Result<TrixTerm, RdfDiagnostic> {
         Some("typedLiteral") => {
             let datatype = attr_local(element, "datatype")
                 .ok_or_else(|| parse_err("<typedLiteral> requires a datatype attribute"))?;
-            validate_iri(datatype)?;
+            validate_iri(datatype, base)?;
             Ok(TrixTerm::Literal(RdfLiteral::typed(
                 element_text(element),
                 datatype,
@@ -296,17 +311,27 @@ fn attr_xml_lang<'a>(element: Node<'a, '_>) -> Option<&'a str> {
         .map(|attr| attr.value())
 }
 
-/// Minimal syntactic IRI validation (mirrors the `rdfxml` codec's contract).
-fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
-    if value.is_empty()
-        || !value.contains(':')
-        || value
-            .chars()
-            .any(|ch| ch.is_ascii_control() || ch.is_ascii_whitespace() || ch == '<' || ch == '>')
-    {
-        return Err(parse_err(format!("invalid IRI {value:?}")));
-    }
-    Ok(())
+/// Validate a `<uri>` against the shared IRI layer.
+///
+/// TriX's row in `FORMATS` sets `admits_relative_iri: false`, so this routes through
+/// [`BaseScope::resolve_absolute_only`](purrdf_iri::BaseScope::resolve_absolute_only):
+/// a relative reference reports `iri-not-absolute-by-grammar` — the code that says
+/// "supplying a base will not help" — and no base is ever applied, because none may be.
+///
+/// This replaces a hand-rolled check that tested only for the PRESENCE of a `:`, which
+/// admitted a `path-noscheme` reference whose first segment merely contained one (RFC-3986
+/// §4.2) as though it were absolute, and reported everything else as a generic parse
+/// error. That is the same defect the RDF/XML codec carried, deleted the same way.
+///
+/// The scope handed in is the CALLER'S, not a locally minted empty one. It is still never
+/// applied — `resolve_absolute_only` refuses a relative reference whatever is in scope —
+/// but the refusal can now name the base in scope and say it is deliberately not applied
+/// here. The empty stand-in could only say "no base IRI is in scope", which was false for
+/// anyone who had passed `--base`.
+fn validate_iri(value: &str, base: &purrdf_iri::BaseScope) -> Result<(), RdfDiagnostic> {
+    base.resolve_absolute_only(value)
+        .map(|_| ())
+        .map_err(|error| RdfDiagnostic::error(error.diagnostic_code(), format!("TriX: {error}")))
 }
 
 /// Blank-node label contract for `<id>` element text: the same

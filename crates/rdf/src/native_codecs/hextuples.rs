@@ -41,11 +41,14 @@ impl RdfCodec for HexTuplesCodec {
     fn parse(
         &self,
         text: &str,
-        _base_iri: Option<&str>,
+        // HexTuples has no base directive, so the scope is left EXACTLY as handed in: the
+        // base in force at the end of a HexTuples document is the caller's, and this codec
+        // says so by touching nothing.
+        base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
         super::parse::catch_codec_panic(NativeRdfFormat::HexTuples, || {
-            parse_hextuples_to_dataset(text)
+            parse_hextuples_to_dataset(text, base)
         })
     }
 
@@ -99,8 +102,11 @@ enum HexTerm {
 type HexRow = (HexTerm, String, HexTerm, Option<HexTerm>);
 
 /// Parse HexTuples `text` into a frozen [`RdfDataset`].
-pub(super) fn parse_hextuples_to_dataset(text: &str) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let mut parser = HexTuplesStreamParser::new();
+pub(super) fn parse_hextuples_to_dataset(
+    text: &str,
+    base: &purrdf_iri::BaseScope,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let mut parser = HexTuplesStreamParser::new(base.clone());
     for line in text.lines() {
         parser.push_line(line)?;
     }
@@ -113,7 +119,11 @@ pub(super) fn parse_hextuples_to_dataset(text: &str) -> Result<Arc<RdfDataset>, 
 /// holds the whole document) and [`HexTuplesStreamParser`] (which never does) call it
 /// with the same 1-based `lineno`, so a malformed line produces the same diagnostic
 /// whichever way the document arrived.
-fn parse_hextuples_line(line: &str, lineno: usize) -> Result<Option<HexRow>, RdfDiagnostic> {
+fn parse_hextuples_line(
+    line: &str,
+    lineno: usize,
+    base: &purrdf_iri::BaseScope,
+) -> Result<Option<HexRow>, RdfDiagnostic> {
     if line.trim().is_empty() {
         return Ok(None);
     }
@@ -127,13 +137,13 @@ fn parse_hextuples_line(line: &str, lineno: usize) -> Result<Option<HexRow>, Rdf
     }
     let [subject, predicate, value, datatype, language, graph] =
         <[String; 6]>::try_from(fields).map_err(|_| parse_err("internal: field count mismatch"))?;
-    let subject = node_term(&subject)?;
-    validate_iri(&predicate)?;
-    let object = object_term(&value, &datatype, &language)?;
+    let subject = node_term(&subject, base)?;
+    validate_iri(&predicate, base)?;
+    let object = object_term(&value, &datatype, &language, base)?;
     let graph = if graph.is_empty() {
         None
     } else {
-        Some(node_term(&graph)?)
+        Some(node_term(&graph, base)?)
     };
     Ok(Some((subject, predicate, object, graph)))
 }
@@ -149,19 +159,22 @@ pub(super) struct HexTuplesStreamParser {
     rows: Vec<HexRow>,
     /// The 1-based document line number of the NEXT line to be pushed.
     lineno: usize,
+    /// The base in scope, carried for the DIAGNOSTIC only — see [`validate_iri`].
+    base: purrdf_iri::BaseScope,
 }
 
 impl HexTuplesStreamParser {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(base: purrdf_iri::BaseScope) -> Self {
         Self {
             rows: Vec::new(),
             lineno: 1,
+            base,
         }
     }
 
     /// Feed the next physical line, in document order (without its terminator).
     pub(super) fn push_line(&mut self, line: &str) -> Result<(), RdfDiagnostic> {
-        if let Some(row) = parse_hextuples_line(line, self.lineno)? {
+        if let Some(row) = parse_hextuples_line(line, self.lineno, &self.base)? {
             self.rows.push(row);
         }
         self.lineno += 1;
@@ -175,21 +188,26 @@ impl HexTuplesStreamParser {
 }
 
 /// A subject / graph node: an IRI or a `_:`-prefixed blank node.
-fn node_term(value: &str) -> Result<HexTerm, RdfDiagnostic> {
+fn node_term(value: &str, base: &purrdf_iri::BaseScope) -> Result<HexTerm, RdfDiagnostic> {
     if let Some(label) = value.strip_prefix("_:") {
         validate_blank_label(label)?;
         Ok(HexTerm::Blank(label.to_owned()))
     } else {
-        validate_iri(value)?;
+        validate_iri(value, base)?;
         Ok(HexTerm::Iri(value.to_owned()))
     }
 }
 
 /// The object term, keyed by the `datatype` sentinel / IRI and the language field.
-fn object_term(value: &str, datatype: &str, language: &str) -> Result<HexTerm, RdfDiagnostic> {
+fn object_term(
+    value: &str,
+    datatype: &str,
+    language: &str,
+    base: &purrdf_iri::BaseScope,
+) -> Result<HexTerm, RdfDiagnostic> {
     match datatype {
         GLOBAL_ID => {
-            validate_iri(value)?;
+            validate_iri(value, base)?;
             Ok(HexTerm::Iri(value.to_owned()))
         }
         LOCAL_ID => {
@@ -205,7 +223,7 @@ fn object_term(value: &str, datatype: &str, language: &str) -> Result<HexTerm, R
         })),
         "" | XSD_STRING => Ok(HexTerm::Literal(RdfLiteral::simple(value.to_owned()))),
         datatype => {
-            validate_iri(datatype)?;
+            validate_iri(datatype, base)?;
             Ok(HexTerm::Literal(RdfLiteral::typed(value, datatype)))
         }
     }
@@ -258,16 +276,30 @@ fn intern_term(builder: &mut RdfDatasetBuilder, term: &HexTerm) -> Result<TermId
     }
 }
 
-fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
-    if value.is_empty()
-        || !value.contains(':')
-        || value
-            .chars()
-            .any(|ch| ch.is_ascii_control() || ch.is_ascii_whitespace() || ch == '<' || ch == '>')
-    {
-        return Err(parse_err(format!("invalid IRI {value:?}")));
-    }
-    Ok(())
+/// Validate an IRI-position cell against the shared IRI layer.
+///
+/// HexTuples' row in `FORMATS` sets `admits_relative_iri: false`, so this routes through
+/// [`BaseScope::resolve_absolute_only`](purrdf_iri::BaseScope::resolve_absolute_only):
+/// a relative reference reports `iri-not-absolute-by-grammar` — the code that says
+/// "supplying a base will not help" — and no base is ever applied, because none may be.
+///
+/// This replaces a hand-rolled check that tested only for the PRESENCE of a `:`, which
+/// admitted a `path-noscheme` reference whose first segment merely contained one (RFC-3986
+/// §4.2) as though it were absolute, and reported everything else as a generic parse
+/// error. TriX and RDF/XML carried the byte-identical check; all three are gone.
+///
+/// The scope handed in is the CALLER'S, not a locally minted empty one. It is still never
+/// applied — `resolve_absolute_only` refuses a relative reference whatever is in scope —
+/// but the refusal can now say WHICH base is in scope and that it is deliberately not
+/// applied here. The empty stand-in could only say "no base IRI is in scope", which was
+/// false for anyone who had passed `--base`, and sent them looking for a dropped
+/// parameter instead of at their document.
+fn validate_iri(value: &str, base: &purrdf_iri::BaseScope) -> Result<(), RdfDiagnostic> {
+    base.resolve_absolute_only(value)
+        .map(|_| ())
+        .map_err(|error| {
+            RdfDiagnostic::error(error.diagnostic_code(), format!("HexTuples: {error}"))
+        })
 }
 
 /// Blank-node label contract for a `_:`-prefixed HexTuples identifier: the same

@@ -1358,6 +1358,40 @@ mod tests {
         );
     }
 
+    /// `rdf_type` is an IRI-valued configuration field, so a relative or malformed value is a
+    /// hard configuration failure carrying the workspace's shared `purrdf_iri` code — never a
+    /// predicate the projection would go on to compare source statements against and silently
+    /// match nothing.
+    #[test]
+    fn the_rdf_type_predicate_is_gated_by_the_shared_iri_layer() {
+        let build = |rdf_type: &str| {
+            LpgConfig::new(
+                rdf_type,
+                LpgScope::all(),
+                limits(),
+                LpgExecutionLimits::new(1_000, 1_000, 1_000, 1_000).expect("execution limits"),
+            )
+        };
+        assert!(build("http://example.org/type").is_ok());
+        assert!(build("http://www.w3.org/1999/02/22-rdf-syntax-ns#type").is_ok());
+
+        for bad in ["type", "types/rdf-type"] {
+            let error = build(bad)
+                .expect_err("a relative predicate is refused")
+                .to_string();
+            assert!(error.contains("iri-non-absolute-base"), "{bad:?}: {error}");
+            assert!(error.contains("LPG rdf_type predicate"), "{bad:?}: {error}");
+        }
+        let empty = build("")
+            .expect_err("an empty predicate is refused")
+            .to_string();
+        assert!(empty.contains("iri-empty"), "{empty}");
+        let malformed = build("ht tp://example.org/type")
+            .expect_err("a malformed predicate is refused")
+            .to_string();
+        assert!(malformed.contains("iri-bad-scheme"), "{malformed}");
+    }
+
     #[test]
     fn literal_atoms_are_deterministic_and_exact_sideband_independent() {
         let integer = ProjectionTerm::Literal {

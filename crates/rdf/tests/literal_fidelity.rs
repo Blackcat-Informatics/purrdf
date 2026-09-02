@@ -167,7 +167,9 @@ fn jsonld_preserves_literal_value_space() {
             "JSON-LD: @value must carry the verbatim lexical form {expected_value}, got:\n{json}"
         );
 
-        let after = parse_jsonld(json.as_bytes()).expect("native JSON-LD parse");
+        // No base: this re-parses the JSON `serialize_dataset_to_jsonld` emitted one
+        // statement above, and the fixture carries literals under absolute IRIs only.
+        let after = parse_jsonld(json.as_bytes(), None).expect("native JSON-LD parse");
         assert!(
             after
                 .term_id_by_value(&TermValue::Literal {
@@ -211,7 +213,7 @@ fn jsonld_statement_metadata_downcast_requires_caller_vocab() {
     }"#;
 
     // Unconfigured + star features = hard error, never a fabricated namespace.
-    let err = jsonld_to_statement_metadata_nquads(star_json.as_bytes(), None)
+    let err = jsonld_to_statement_metadata_nquads(star_json.as_bytes(), None, None)
         .expect_err("star downcast without a vocab must fail closed");
     assert!(
         err.to_string()
@@ -227,7 +229,7 @@ fn jsonld_statement_metadata_downcast_requires_caller_vocab() {
         q_object: "https://example.org/meta/qObject",
         q_object_literal: "https://example.org/meta/qObjectLiteral",
     };
-    let nq = jsonld_to_statement_metadata_nquads(star_json.as_bytes(), Some(&vocab))
+    let nq = jsonld_to_statement_metadata_nquads(star_json.as_bytes(), None, Some(&vocab))
         .expect("star downcast with an explicit vocab");
     assert!(nq.contains("https://example.org/meta/StatementMetadata"));
     assert!(nq.contains("https://example.org/meta/qSubject"));
@@ -242,7 +244,7 @@ fn jsonld_statement_metadata_downcast_requires_caller_vocab() {
         { "@id": "https://e/s", "https://e/p": { "@id": "https://e/o" } }
       ]
     }"#;
-    let nq = jsonld_to_statement_metadata_nquads(plain_json.as_bytes(), None)
+    let nq = jsonld_to_statement_metadata_nquads(plain_json.as_bytes(), None, None)
         .expect("star-free downcast must work unconfigured");
     assert!(nq.contains("<https://e/s> <https://e/p> <https://e/o> ."));
 }

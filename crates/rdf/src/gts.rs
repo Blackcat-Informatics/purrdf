@@ -99,6 +99,10 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
         quads: g.quads.clone(),
         reifiers,
         annotations: g.annotations.clone(),
+        // A GTS container stores fully-resolved absolute terms and carries no document
+        // base, so the graph it bridges into has none either. This is an INGRESS bridge
+        // in any case: the graph is folded into the IR, never written out from here.
+        base: None,
     })
 }
 

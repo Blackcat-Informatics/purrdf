@@ -104,10 +104,54 @@ executes that example against the generated shared library and committed header.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
   additive. The current ABI is **0.7.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
-  shim exercise it. `purrdf_abi_version` reports it. The minor number tracks the
-  exported signatures: any change to a parameter list, a return contract, or the
-  documented behaviour of an exported symbol bumps it, additive changes included,
-  because an additive parameter is still a recompile for every C consumer.
+  shim exercise it. `purrdf_abi_version` reports it.
+- **An incompatible change is declared, not smuggled.** Pre-1.0 the project
+  policy (`docs/book/src/project/releases.md`, "Pre-1.0 semver policy") puts
+  breaking changes on the **minor** component, so removing, renaming, retyping,
+  reordering, or mid-list-inserting a parameter on an exported function bumps
+  `PURRDF_ABI_MINOR`. `tests/abi_signatures.rs` snapshots the complete exported
+  prototype list against the version triple in
+  [`tests/abi_signatures.snapshot`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/tests/abi_signatures.snapshot),
+  so a signature edit fails the ordinary `cargo test` gate until the version and
+  the snapshot are both updated on purpose. (`make capi-check` only proves the
+  header agrees with the source; it cannot see that the contract *moved*.)
+  The minor number therefore tracks the exported signatures: any change to a
+  parameter list, a return contract, or the documented behaviour of an exported
+  symbol bumps it, **additive changes included**, because an additive parameter is
+  still a recompile for every C consumer.
+  `0.6.0` → `0.7.0` carries exactly four such breaks, bundled into one bump so a
+  consumer recompiles once rather than four times for the same reason:
+  `purrdf_shacl_validate_to_sarif` and `purrdf_shacl_entail_to_ntriples` gained a
+  `shapes_base_iri` parameter between `shapes_ttl` and `data_nt`,
+  `purrdf_serialize_jsonld_configured` gained `base_iri` after `media_type` — the
+  slot it already occupies on `purrdf_serialize` — and `purrdf_serialize` itself
+  gained `out_directional_literals_dropped` and `out_named_graph_rows_dropped`
+  before `out_error`. Recompile against the new header; there is no `_v2` alias,
+  because two entry points for one job is the duplication this library exists to
+  avoid.
+
+## Base IRIs across the surface
+
+Every entry point that reads or writes an RDF **syntax admitting a relative IRI**
+takes a nullable base, in the slot beside the document it qualifies:
+`purrdf_parse`, `purrdf_serialize`, `purrdf_serialize_jsonld_configured`, the
+SHACL pair's `shapes_base_iri`, and the SPARQL request base on `purrdf_query`,
+`purrdf_query_json`, `purrdf_query_governed`,
+`purrdf_query_entailment_governed`, and `purrdf_update_governed`.
+
+The entry points that take none take none *because the grammar admits none*, not
+because the parameter was dropped. The `purrdf_entail_*` and `purrdf_reasoner_*`
+documents are parsed as N-Quads (which accepts N-Triples); `purrdf_term_to_ntriples`
+emits N-Triples. Both rows carry `admits_relative_iri: false` / `emits_base: false`
+in the format registry, so a base could only be ignored. A C host holding Turtle or
+RDF/XML reaches those services through `purrdf_parse`, which does take a base.
+`purrdf_to_gts` / `purrdf_from_gts` move a binary CBOR container whose terms are
+already absolute, and the `purrdf_graph_*` mutators take structured term views
+whose IRIs are absolute by contract.
+
+Passing a base to a syntax that cannot express one changes nothing in the bytes;
+passing one that is not an absolute IRI is a hard `PURRDF_STATUS_SERIALIZE_ERROR`
+for **every** format, including those that would not have applied it.
 
 ### Status codes
 

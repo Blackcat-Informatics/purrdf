@@ -381,8 +381,9 @@ fn base_resolves_relative_iris_piped_via_stdin() {
         child.wait_with_output().expect("wait for purrdf")
     };
 
-    // Without `--base`, a relative IRI has no scheme to be absolute with — the negative
-    // control that keeps the assertion below from passing by accident.
+    // Without `--base`, a relative IRI has no base to resolve against — the negative
+    // control that keeps the assertion below from passing by accident. stdin carries no
+    // retrieval IRI, so no base can be derived for it and the refusal is the whole point.
     let unbased = pipe(&["consistency", "--from", "turtle", "-"]);
     assert_eq!(
         code(&unbased),
@@ -391,8 +392,13 @@ fn base_resolves_relative_iris_piped_via_stdin() {
         stderr(&unbased)
     );
     assert!(
-        stderr(&unbased).contains("absolute"),
-        "the refusal names what a relative IRI is missing: {}",
+        stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal carries the code for the condition a base fixes: {}",
+        stderr(&unbased)
+    );
+    assert!(
+        stderr(&unbased).contains("@base"),
+        "the refusal names the remedy: {}",
         stderr(&unbased)
     );
 
@@ -466,6 +472,36 @@ fn base_with_pack_from_is_refused_by_name() {
     assert!(
         stderr(&out).contains("--base"),
         "the refusal names the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--base` with an N-TRIPLES input is refused for the same reason a pack input is: this
+/// command answers with a verdict rather than a document, so the input parse is the only leg
+/// a base could reach — and N-Triples' grammar admits no relative IRI reference, so nothing
+/// on that leg would ever resolve against it.
+#[test]
+fn base_with_a_relative_incapable_input_is_refused_by_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "a.nt",
+        concat!(
+            "<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://www.w3.org/2002/07/owl#Class> .\n",
+        ),
+    );
+
+    let out = run(&["consistency", "--base", "http://example.org/base/", &input]);
+    assert_eq!(code(&out), 2, "a usage error: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("--base has no effect"),
+        "the refusal names the flag: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("the --from source"),
+        "the refusal names the leg that would have consumed it: {}",
         stderr(&out)
     );
 }
