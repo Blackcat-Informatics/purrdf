@@ -399,6 +399,22 @@ called out below with what a consumer must do.
 
 ### Features
 
+- **shapes:** New `ValidationReport::to_dataset()` returns the report graph as a frozen
+  `Arc<RdfDataset>` — the report's PRIMAL RDF form. Rendering a report in any syntax other
+  than N-Triples previously forced a `to_ntriples()` → `parse_dataset()` round-trip; that
+  parse was pure waste, because the report was already being materialized as IR quads and
+  the N-Triples text was only ever a serialization of them. `to_ntriples()` is now defined
+  as "serialize `to_dataset()`", so the two are the same graph by construction rather than
+  by coincidence, and the direct path carries every RDF 1.2 term the report holds (a
+  triple-term focus node or `sh:value`, and blank-node labels the text grammar can only
+  carry escaped) instead of whatever survives a text grammar and a parser's relabelling.
+  Equivalence is proven canonically (RDFC-1.0) over a report spanning all four severity
+  kinds, IRI/blank/triple-term focus nodes, a complex `sh:path` shared by two results, and
+  typed/language-tagged/blank/triple-term values. Rust surface only: no Python, JS/wasm, or
+  C ABI equivalent is added.
+- **cli:** `purrdf validate --format <rdf-syntax>` no longer serializes the report to
+  N-Triples and re-parses that text; it hands the report's own dataset to the shared sink.
+  Identical output, one fewer full parse of the report per invocation.
 - **cdt:** New crate `purrdf-cdt` implementing SEP-0009 SPARQL Composite Datatypes
   (`cdt:List` / `cdt:Map`) as a closed leaf over `purrdf-iri` + `purrdf-xsd` only. The
   function library is the spec's fifteen — `cdt:List`, `concat`, `contains`, `get`, `head`,

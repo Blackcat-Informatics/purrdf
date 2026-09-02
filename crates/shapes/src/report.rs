@@ -4,11 +4,15 @@
 //! SHACL validation report types and serialization.
 //!
 //! [`ValidationReport`] is the in-memory representation of a SHACL report
-//! graph. `to_ntriples()` emits a canonical N-Triples serialization using
-//! oxigraph's own serializer (avoiding hand-rolled literal escaping).
+//! graph. `to_dataset()` materializes that graph as a frozen PurRDF
+//! [`RdfDataset`] — the report's PRIMAL RDF form — and `to_ntriples()` is a
+//! serialization of exactly that dataset. A caller who wants any other syntax
+//! takes `to_dataset()` straight to `serialize_dataset`, with no N-Triples
+//! parse round-trip in between.
 //! `tuples_from_ntriples()` round-trips back to the same tuple set for testing.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use ::purrdf::FastSet;
 use ::purrdf::RdfDatasetBuilder;
@@ -170,15 +174,32 @@ pub type ResultTuple = (
 );
 
 impl ValidationReport {
-    /// Emit the report as N-Triples text using the native purrdf codec.
+    /// Materialize the report graph as a frozen PurRDF [`RdfDataset`].
     ///
-    /// The report is built into an in-memory `Store` as quads in the default
-    /// graph, folded back to the IR (`dataset_from_store`), then serialised via
-    /// the native codec. This avoids hand-rolling literal escaping and carries no
-    /// oxigraph `io` dependency. The `DefaultGraph` selection on the
-    /// `application/n-quads` codec emits graphless rows (i.e. N-Triples) and is
-    /// byte-lenient on language tags, matching the legacy oxigraph serializer.
-    pub fn to_ntriples(&self) -> String {
+    /// This is the report's primal RDF form: the quads are built straight from
+    /// the report's own [`Term`] values into an [`RdfDatasetBuilder`] and frozen.
+    /// [`ValidationReport::to_ntriples`] is a *serialization of this dataset*, so
+    /// rendering a report in any other syntax is
+    ///
+    /// ```no_run
+    /// # use purrdf_shapes::report::ValidationReport;
+    /// # use purrdf::{SerializeGraph, serialize_dataset};
+    /// # fn f(report: &ValidationReport) -> Result<Vec<u8>, purrdf::RdfDiagnostic> {
+    /// serialize_dataset(&report.to_dataset(), "text/turtle", SerializeGraph::DefaultGraph)
+    /// # }
+    /// ```
+    ///
+    /// rather than a `to_ntriples()` → `parse_dataset()` round-trip. Avoiding
+    /// that round-trip is not merely a speed-up: the direct path carries every
+    /// RDF 1.2 term the report holds (a triple-term focus node or value included)
+    /// with the report's own blank-node labels, instead of whatever survives a
+    /// text grammar and gets relabelled by a parser.
+    ///
+    /// Everything the report can express lives in the default graph; the returned
+    /// dataset declares no named graphs and populates no reifier/annotation side
+    /// table.
+    #[must_use]
+    pub fn to_dataset(&self) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         // Complex-path structure roots already emitted (keyed by root label).
         let mut emitted_paths: FastSet<String> = FastSet::default();
@@ -299,8 +320,22 @@ impl ValidationReport {
         // this builder can produce: every quad above is pushed with a fixed IRI
         // predicate and a well-formed subject/object built from validated report
         // data. Blank-node LABEL content is never checked here; it is opaque to
-        // the IR and is escaped, never rejected, at codec egress (see below).
-        let dataset = builder.freeze().expect("report quads freeze into the IR");
+        // the IR and is escaped, never rejected, at codec egress (see
+        // `to_ntriples`).
+        builder.freeze().expect("report quads freeze into the IR")
+    }
+
+    /// Emit the report as N-Triples text using the native purrdf codec.
+    ///
+    /// The report graph is materialized by [`ValidationReport::to_dataset`] and
+    /// serialized from there, so the text and the dataset are the same graph by
+    /// construction. This avoids hand-rolling literal escaping and carries no
+    /// oxigraph `io` dependency. The `DefaultGraph` selection on the
+    /// `application/n-quads` codec emits graphless rows (i.e. N-Triples) and is
+    /// byte-lenient on language tags, matching the legacy oxigraph serializer.
+    #[must_use]
+    pub fn to_ntriples(&self) -> String {
+        let dataset = self.to_dataset();
         // `serialize_dataset` is `Result` for two reasons that both provably do
         // not apply here: (1) `classify(media_type)` can reject an unknown media
         // type, but `"application/n-quads"` is a constant, always-valid literal;
@@ -516,7 +551,7 @@ pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
 
 /// Parse a SHACL report N-Triples string into a query-able frozen [`RdfDataset`]
 /// via the native purrdf codec — no oxigraph.
-fn dataset_from_ntriples(nt: &str) -> Result<std::sync::Arc<RdfDataset>, String> {
+fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
     ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
         .map_err(|e| format!("N-Triples parse error: {e}"))
 }
@@ -719,6 +754,219 @@ mod tests {
             parsed,
             report.result_tuples(),
             "round-trip tuples must match original tuples even with hostile blank labels"
+        );
+    }
+
+    /// Every [`::purrdf::TermId`] in `dataset`'s dense term table.
+    fn term_ids(dataset: &RdfDataset) -> impl Iterator<Item = ::purrdf::TermId> {
+        let count = u32::try_from(dataset.term_count()).expect("report term table fits in u32");
+        (0..count).map(::purrdf::TermId::from_index)
+    }
+
+    /// A deliberately hostile report for the `to_dataset()` ≡ `to_ntriples()`
+    /// equivalence proof: five results spanning all four severity kinds
+    /// (including a caller-minted `Severity::Other` IRI), an IRI / a blank node /
+    /// an RDF 1.2 triple term in focus position, a plain-IRI path and a COMPLEX
+    /// path (whose structure blank nodes are emitted once and SHARED by two
+    /// results), typed / language-tagged / blank-node / triple-term values, and
+    /// results with and without messages.
+    fn hostile_report() -> ValidationReport {
+        let ex = |local: &str| NamedNode::new_unchecked(format!("http://example.org/{local}"));
+        let component =
+            NamedNode::new_unchecked("http://www.w3.org/ns/shacl#MinCountConstraintComponent");
+        // A complex path shared by two results: [ sh:alternativePath ( ex:a [ sh:inversePath ex:b ] ) ].
+        let complex = crate::shapes::Path::Alternative(vec![
+            crate::shapes::Path::Predicate(ex("a")),
+            crate::shapes::Path::Inverse(Box::new(crate::shapes::Path::Predicate(ex("b")))),
+        ]);
+        // The quoted triple that appears both as a focus node and as a value.
+        let quoted = Term::Triple(Box::new(crate::term::Triple::new(
+            Term::NamedNode(ex("s")),
+            ex("p"),
+            Term::Literal(Literal::new_simple_literal("quoted object")),
+        )));
+
+        let base = ValidationResult {
+            focus_node: Term::NamedNode(ex("focusA")),
+            result_path: Some(Term::NamedNode(ex("predP"))),
+            path_structure: None,
+            value: None,
+            source_constraint_component: component,
+            source_shape: Term::NamedNode(ex("ShapeA")),
+            severity: Severity::Violation,
+            message: None,
+            source_box_roles: vec![],
+            path_box_roles: vec![],
+            result_box_roles: vec![],
+            attributions: vec![],
+        };
+
+        let mut results = Vec::new();
+
+        // 1. IRI focus, plain predicate path, typed literal value, message.
+        let mut r = base.clone();
+        r.value = Some(Term::Literal(Literal::new_typed_literal("-3", ex("Count"))));
+        r.message = Some("must have at least one value".to_owned());
+        results.push(r);
+
+        // 2. Blank-node focus, complex path (structure emitted), warning,
+        //    language-tagged value.
+        let mut r = base.clone();
+        r.focus_node = Term::blank("focusB");
+        r.result_path = Some(Term::blank("path0"));
+        r.path_structure = Some(complex.clone());
+        r.severity = Severity::Warning;
+        r.value = Some(Term::Literal(
+            Literal::new_language_tagged_literal_unchecked("valeur", "fr"),
+        ));
+        r.message = Some("langue".to_owned());
+        results.push(r);
+
+        // 3. The SAME complex path on a second result — the structure must be
+        //    emitted exactly once and shared, on both the direct and text paths.
+        let mut r = base.clone();
+        r.focus_node = Term::blank("focusC");
+        r.result_path = Some(Term::blank("path0"));
+        r.path_structure = Some(complex);
+        r.severity = Severity::Info;
+        r.value = Some(Term::blank("valueC"));
+        results.push(r);
+
+        // 4. RDF 1.2: a triple term in BOTH focus and value position.
+        let mut r = base.clone();
+        r.focus_node = quoted.clone();
+        r.result_path = None;
+        r.value = Some(quoted);
+        r.severity = Severity::Other(ex("Advisory"));
+        r.message = Some("statement-level result".to_owned());
+        results.push(r);
+
+        // 5. No path, no value, no message — the minimal result.
+        let mut r = base;
+        r.focus_node = Term::NamedNode(ex("focusE"));
+        r.result_path = None;
+        results.push(r);
+
+        ValidationReport {
+            conforms: false,
+            results,
+        }
+    }
+
+    /// `to_dataset()` must be the report's primal RDF form — the graph a caller
+    /// gets from it is EXACTLY the graph they would have got by serializing to
+    /// N-Triples and parsing that text back, minus the round-trip.
+    ///
+    /// The comparison is RDFC-1.0 canonical, not naive triple-set equality:
+    /// blank-node labelling is precisely where a "direct" construction can
+    /// silently diverge from a parse (the direct path keeps the report's own
+    /// `_:r0` / `_:path0-1` labels; the parser mints its own), so only an
+    /// isomorphism-invariant comparison proves the two describe the same graph.
+    #[test]
+    fn to_dataset_matches_the_ntriples_round_trip_canonically() {
+        let report = hostile_report();
+
+        let direct = report.to_dataset();
+        let round_tripped = dataset_from_ntriples(&report.to_ntriples())
+            .expect("the report's own N-Triples must parse");
+
+        assert_eq!(
+            direct.quad_count(),
+            round_tripped.quad_count(),
+            "the direct dataset must carry exactly the quads the text does"
+        );
+        assert_eq!(
+            ::purrdf::canonicalize(&direct).nquads,
+            ::purrdf::canonicalize(&round_tripped).nquads,
+            "to_dataset() and parse(to_ntriples()) must be the same graph"
+        );
+    }
+
+    /// The equivalence assertion above is only worth anything if the fixture it
+    /// runs on actually exercises the hard cases. This pins that: the direct
+    /// dataset carries all five results, the shared complex path's structure
+    /// emitted ONCE, and a real RDF 1.2 triple term.
+    #[test]
+    fn to_dataset_carries_rdf12_triple_terms_and_shared_path_structure() {
+        let report = hostile_report();
+        let nt = report.to_ntriples();
+
+        assert_eq!(
+            nt.matches("<http://www.w3.org/ns/shacl#result>").count(),
+            5,
+            "all five results must reach the graph"
+        );
+        // The shared complex path emits its `sh:alternativePath` root once, not
+        // once per referencing result.
+        assert_eq!(
+            nt.matches("<http://www.w3.org/ns/shacl#alternativePath>")
+                .count(),
+            1,
+            "a complex path shared by two results is emitted once"
+        );
+        // RDF 1.2 triple term, in the syntax's own quoted-triple form.
+        assert!(
+            nt.contains("<<("),
+            "the triple-term focus node/value must survive as a quoted triple, got:\n{nt}"
+        );
+
+        // And the direct dataset holds it as a real triple term, not as text.
+        let direct = report.to_dataset();
+        assert!(
+            term_ids(&direct)
+                .any(|id| matches!(direct.resolve(id), ::purrdf::TermRef::Triple { .. })),
+            "to_dataset() must materialize the quoted triple as an IR triple term"
+        );
+    }
+
+    /// The `sh:conforms` boolean and the report node itself survive the direct
+    /// path for a CONFORMING report too — the empty-results case is the one a
+    /// naive "build from results" implementation drops on the floor.
+    #[test]
+    fn to_dataset_of_a_conforming_report_matches_the_round_trip() {
+        let report = ValidationReport {
+            conforms: true,
+            results: vec![],
+        };
+
+        let direct = report.to_dataset();
+        let round_tripped = dataset_from_ntriples(&report.to_ntriples()).expect("must parse");
+
+        assert_eq!(
+            ::purrdf::canonicalize(&direct).nquads,
+            ::purrdf::canonicalize(&round_tripped).nquads
+        );
+        assert_eq!(conforms_from_dataset(&direct), Some(true));
+        assert!(tuples_from_dataset(&direct).is_empty());
+    }
+
+    /// Hostile blank labels (`a×b`, a C0 control) are escaped at codec egress but
+    /// are NOT escaped in the IR. The direct dataset therefore keeps the label
+    /// verbatim where the text round-trip cannot — the two graphs stay isomorphic
+    /// (same shape, same everything else), which is what `to_dataset()` promises,
+    /// while the direct path additionally preserves the caller's own label.
+    #[test]
+    fn to_dataset_keeps_hostile_blank_labels_the_text_path_must_escape() {
+        let mut report = hostile_report();
+        report.results[1].focus_node = Term::blank("a\u{d7}b");
+
+        let direct = report.to_dataset();
+        let round_tripped =
+            dataset_from_ntriples(&report.to_ntriples()).expect("escaped text must parse");
+
+        // Same graph up to blank labelling…
+        assert_eq!(
+            ::purrdf::canonicalize(&direct).nquads,
+            ::purrdf::canonicalize(&round_tripped).nquads,
+            "escaping a blank label must not change the graph"
+        );
+        // …and the direct path still holds the caller's label unescaped.
+        assert!(
+            term_ids(&direct).any(|id| matches!(
+                direct.resolve(id),
+                ::purrdf::TermRef::Blank { label, .. } if label == "a\u{d7}b"
+            )),
+            "to_dataset() must carry the hostile blank label verbatim"
         );
     }
 
