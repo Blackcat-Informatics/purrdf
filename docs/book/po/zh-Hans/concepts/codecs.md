@@ -166,8 +166,8 @@ profile 见
 
 ## 一致性
 
-编解码器由 W3C `rdf-tests` 语法语料把关，该语料随库固化并冻结在仓库内——撰写本文时，
-N-Quads、N-Triples、RDF/XML、TriG 与 Turtle 共 250/250 个往返用例。实时记分板是
+编解码器由 W3C `rdf-tests` 语法语料把关，该语料随库固化并冻结在仓库内——
+N-Quads、N-Triples、RDF/XML、TriG 与 Turtle 共 264/264 个往返用例。实时记分板是
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)。
 
 ## 相关

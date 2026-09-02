@@ -38,9 +38,9 @@ quads = purrdf.parse(
 crate）保持同构——绝不直接经由内部的 `purrdf_native` 扩展模块：
 
 ```python
-from purrdf import shacl, shex
+from purrdf import shapes, shex
 
-report = shacl.validate(shapes_ttl=my_shapes, data_nt=my_data)
+report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 
 results = shex.validate(my_schema_shexc, my_data_ttl,
