@@ -9,6 +9,7 @@ members = [
     "crates/columnar",
     "crates/datalog",
     "crates/entail",
+    "crates/geo",
     "crates/gts",
     "crates/iri",
     "crates/purrdf",
@@ -30,6 +31,11 @@ members = [
 ]
 exclude = [
     "crates/gts/fuzz",
+    # The wasm32 half of purrdf-geo's cross-target determinism check: a
+    # one-function cdylib a Node harness calls so the native and wasm
+    # digests can be compared. Never published, depended on by nothing,
+    # and built only by scripts/check-geo-determinism.sh.
+    "crates/geo/determinism",
 ]
 
 [workspace.package]
@@ -53,6 +59,7 @@ purrdf-core = { path = "crates/rdf-core", version = "0.12.0" }
 purrdf-datalog = { path = "crates/datalog", version = "0.12.0" }
 purrdf-entail = { path = "crates/entail", version = "0.12.0" }
 purrdf-events = { path = "crates/rdf-events", version = "0.12.0" }
+purrdf-geo = { path = "crates/geo", version = "0.12.0" }
 purrdf-gts = { path = "crates/gts", version = "0.12.0" }
 purrdf-iri = { path = "crates/iri", version = "0.12.0" }
 purrdf-rdf = { path = "crates/rdf", version = "0.12.0" }

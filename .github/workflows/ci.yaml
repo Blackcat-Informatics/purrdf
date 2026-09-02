@@ -153,7 +153,7 @@ jobs:
         with:
           toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 19 publishable crates with rustdoc lints promoted
+      # Document exactly the 20 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -237,10 +237,17 @@ jobs:
             -p purrdf-shapes \
             -p purrdf-shex \
             -p purrdf-entail \
+            -p purrdf-geo \
             -p purrdf-text \
             -p purrdf-validate \
             -p purrdf \
             -p purrdf-wasm
+
+      - name: Prove purrdf-geo's native and wasm32 answers are byte-identical
+        # purrdf-geo claims that every geometric answer is the same on both
+        # targets because every computation is integer arithmetic. This RUNS the
+        # same digest on both and compares, rather than trusting the argument.
+        run: make geo-determinism
 
       - name: Build the optimized wasm package
         # Builds the +simd128 release artifact, runs wasm-bindgen + wasm-opt -Oz,
@@ -304,6 +311,7 @@ jobs:
           cargo bench -p purrdf-sparql-eval --no-run --locked
           cargo bench -p purrdf-shapes --bench validate --no-run --locked
           cargo bench -p purrdf-entail --no-run --locked
+          cargo bench -p purrdf-geo --no-run --locked
           cargo bench -p purrdf-text --bench search --no-run --locked
           cargo bench -p purrdf-wasm --bench query_engine_reuse --no-run --locked
 
@@ -316,6 +324,7 @@ jobs:
           cargo bench -p purrdf-sparql-eval --locked
           cargo bench -p purrdf-shapes --bench validate --locked
           cargo bench -p purrdf-entail --locked
+          cargo bench -p purrdf-geo --locked
           cargo bench -p purrdf-text --bench search --locked
           cargo bench -p purrdf-wasm --bench query_engine_reuse --locked
 
