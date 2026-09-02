@@ -23,7 +23,7 @@ RDF 1.2 允许三元组本身作为**宾语位置**上的一个词项——即 R
   JSON-LD star）可往返三元组项；投影到不具 star 能力的格式时会发生什么，见
   [编解码器与确定性](codecs.md)。
 - SPARQL 1.2 的引用三元组语法由 `purrdf-sparql-algebra` 解析并原生求值——W3C
-  SPARQL 1.2 的三元组项表面在一致性测试框架中通过
+  SPARQL 1.2 的三元组项支持在一致性测试框架中通过
   （[一致性与测试](../project/conformance.md)）。
 - 在 JavaScript 中，`DataFactory.quotedTriple(...)` 产出同一种词项
   （[JavaScript 中的 RDF/JS](../interop/rdfjs.md)）。
@@ -31,14 +31,14 @@ RDF 1.2 允许三元组本身作为**宾语位置**上的一个词项——即 R
 ## 具体化节点与注解
 
 RDF 1.2 用**具体化节点**（reifier）取代了旧式具体化：它是为三元组的某一*出现*命名的
-词项（`rdf:reifies`），使得可以在不断言任何怪异内容的情况下为一条陈述附加元数据。在
-PurRDF 中，具体化节点绑定与注解存放在数据集上专门的**侧表**中，而不是被涂抹进
+词项（`rdf:reifies`），使得无需引入额外断言即可为一条陈述附加元数据。在
+PurRDF 中，具体化节点绑定与注解存放在数据集上专门的**侧表**（side table）中，而不是混入
 四元组表。
 
 具体化节点绑定与注解在每一种具 star 能力的编解码器往返中都得以保留；投影到不具 star
-能力的格式时，它们会被*大声地*丢弃，实际丢弃的数量交给损失台账（参见
+能力的格式时，它们会被*显式*丢弃并报告，实际丢弃的数量交给损失台账（参见
 [切片、映射与溯源](../slices.md)）。对具体化陈述进行验证的 SHACL 支持——草案中的
-`sh:reifierShape` / `sh:reificationRequired` 表面——见 [SHACL](../validation/shacl.md)。
+`sh:reifierShape` / `sh:reificationRequired` 接口——见 [SHACL](../validation/shacl.md)。
 
 ## 基础方向字面量
 
@@ -66,7 +66,7 @@ SHACL 1.2 一致性），其范围都被明确陈述并由测试把关——绝�
 | 特性 | IR | 编解码器 | SPARQL | SHACL | RDF/JS | GTS |
 | --- | --- | --- | --- | --- | --- | --- |
 | 三元组项（宾语位置） | 驻留词项 | 具 star 能力的格式 | `<<( s p o )>>` | 经由路径/值 | `quotedTriple` | 按规范映射 |
-| 具体化节点 / 注解 | 侧表 | 具 star 能力的格式 | 具体化节点表面 | `sh:reifierShape`（草案） | — | `rdf:reifies` 映射 |
+| 具体化节点 / 注解 | 侧表 | 具 star 能力的格式 | 具体化节点支持 | `sh:reifierShape`（草案） | — | `rdf:reifies` 映射 |
 | 基础方向字面量 | 字面量种类 | 可往返 | 可匹配/可产出 | 值节点 | `directionalLiteral` | 可承载 |
 
 三元组项与 `rdf:reifies` 的 GTS 映射在

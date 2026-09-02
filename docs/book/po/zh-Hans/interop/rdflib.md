@@ -24,7 +24,7 @@ g.parse(data="<https://example.org/a> <https://example.org/b> <https://example.o
         format="turtle")
 ```
 
-对于想在 PurRDF 引擎上使用 rdflib 形态 API 的新代码，这是推荐路径：导入名是诚实的，
+对于想在 PurRDF 引擎上使用 rdflib 形态 API 的新代码，这是推荐路径：导入名名副其实，
 并且它能与真正安装的 `rdflib` 共存。
 
 ## 第二层：`purrdf[rdflib]` 影子分发包
@@ -35,21 +35,21 @@ g.parse(data="<https://example.org/a> <https://example.org/b> <https://example.o
 pip install purrdf[rdflib]
 ```
 
-这会拉入独立发行的 `purrdf-rdflib` 分发包，其顶层 `rdflib` 包重新导出兼容层的表面，
+这会拉入独立发行的 `purrdf-rdflib` 分发包，其顶层 `rdflib` 包重新导出兼容层的 API，
 于是现有第三方代码中的 `import rdflib` / `from rdflib.namespace import RDF` 便透明地
 运行在 `purrdf` 之上。**注意：**该影子包占用了 `rdflib` 这一导入名，绝不可与真正的
 [`rdflib`](https://pypi.org/project/rdflib/) 同时安装——二者无法共存于同一环境。
 它被刻意做成独立分发包（从不打进主 `purrdf` wheel），正是为了让需要真实 rdflib 的环境
 直接不装它即可。
 
-## 兼容性如何保持诚实
+## 兼容性如何得到保证
 
 兼容层不是「尽力而为」——它作为单一一致性矩阵的一部分在 CI 中把关
 （[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)）：
 
-- **rdflib 直接替换（LSP）门禁**用 rdflib 7.6 **自带的、随库固化的测试套件**来跑
+- **rdflib 直接替换（LSP）门禁**用 rdflib 7.6 **自带的、随库固化（vendored）的测试套件**来跑
   `purrdf` 直接替换包。
-- **一致性套件**用 `purrdf.compat` 对真实的 rdflib 7.6 运行第一方的差分测试。
+- **对等性测试套件（parity suite）**用 `purrdf.compat` 对真实的 rdflib 7.6 运行第一方的差分测试。
 
 二者都使用严格的预期失败台账：每一处已知分歧都带着逐测试的原因列出，一次意外失败会
 打断构建，而一处被静默修复的分歧同样会打断构建，直到台账相应缩减为止。台账中的残余

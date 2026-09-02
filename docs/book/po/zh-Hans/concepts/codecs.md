@@ -24,7 +24,7 @@ PurRDF 为九种格式提供**第一方**的解析器与序列化器——没有
 | YAML-LD | `application/ld+yaml` | 是 |
 
 它们位于内核之上一层的 [`purrdf-rdf`](https://docs.rs/purrdf-rdf) 中，并可经由门面
-crate（umbrella crate）抵达：
+crate（umbrella crate）访问：
 
 ```rust,ignore
 use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
@@ -46,7 +46,7 @@ let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
 ## Open Knowledge Format 包
 
 原生的 OKF 编解码器把由调用方指定 profile 的 RDF 1.2 数据集映射为面向智能体的、带
-YAML frontmatter 的 Markdown 文件，并经由 RDF 事件接缝把它们提升回来。OKF 是一个
+YAML frontmatter 的 Markdown 文件，并经由 RDF 事件接缝（seam）把它们提升回来。OKF 是一个
 内存中的包（bundle）API，而不是又一种媒体类型：文件如何存放由调用方决定，因此同一份
 代码保持确定性且 wasm 干净。
 
@@ -54,7 +54,7 @@ YAML frontmatter 的 Markdown 文件，并经由 RDF 事件接缝把它们提升
 没有内置的本体或命名空间。用 `lift_okf_bundle` 驱动一个 `RdfEventSink`，或用
 `write_okf_bundle`（由 `OkfWriter`——一个 `RdfDatasetVisitor`——支撑）投影一个冻结的
 数据集。两个方向都总是返回一份损失台账。无损的 profile 得到空台账；写出时，命名图、
-非 profile/OWL 行，以及无关的具体化节点或注解行都会被逐一明确指出。
+非 profile/OWL 行，以及无关的具体化节点（reifier）或注解行都会被逐一明确指出。
 
 ## 字节级确定性
 
@@ -75,10 +75,10 @@ YAML frontmatter 的 Markdown 文件，并经由 RDF 事件接缝把它们提升
 [`purrdf-validate`](https://docs.rs/purrdf-validate) 把它们渲染为字节级确定的
 SARIF 2.1.0（参见 [SHACL](../validation/shacl.md#sarif-output)）。
 
-## 有损投影必须出声
+## 有损投影必须显式报告
 
 RDF 1.2 的陈述级数据（三元组项、具体化节点绑定、注解）在每一次具 star 能力的往返中
-都得以保留。序列化到不具 star 能力的投影时，这一层会被*大声地*丢弃：实际丢弃的数量
+都得以保留。序列化到不具 star 能力的投影时，这一层会被*显式*丢弃：实际丢弃的数量
 交给机器可读的损失台账
 （[`generated/rdf-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/rdf-loss-matrix.json)），
 而不是凭空消失。同一纪律也适用于 SPARQL 结果边界（[结果格式](../sparql/results.md)）
@@ -89,7 +89,7 @@ RDF 1.2 的陈述级数据（三元组项、具体化节点绑定、注解）在
 在上述文本编解码器之外，`purrdf-core` 还附带一个用途不同的**二进制**编解码器：面向
 大规模参考包的整数据集只读、直接查询压缩形态的编码，而不是带媒体类型的交换格式。
 `PackBuilder::build_bytes(&dataset)` 把一个自包含、字节级确定的 pack——一个值字典、
-按图分区的简洁位图三元组，以及 RDF 1.2 侧表（具体化节点绑定、陈述注解）——写入一个
+按图分区的简洁位图三元组，以及 RDF 1.2 侧表（side table，即具体化节点绑定与陈述注解）——写入一个
 `Vec<u8>`。`PackView::from_bytes(&[u8])` 在借来的切片上零拷贝地打开它，并直接对
 打包后的字节回答模式查询，无需先解压或物化。
 
@@ -166,7 +166,7 @@ profile 见
 
 ## 一致性
 
-编解码器由 W3C `rdf-tests` 语法语料把关，该语料随库固化并冻结在仓库内——
+编解码器由 W3C `rdf-tests` 语法语料把关，该语料随库固化（vendored）并冻结在仓库内——
 N-Quads、N-Triples、RDF/XML、TriG 与 Turtle 共 264/264 个往返用例。实时记分板是
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)。
 

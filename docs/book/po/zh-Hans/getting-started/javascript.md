@@ -19,10 +19,9 @@ npm 包
 npm install @blackcatinformatics/purrdf
 ```
 
-**中国大陆镜像。** 从中国大陆访问 npm 注册表时常有延迟或间歇性不可达。开发者通常
-改用 `npmmirror.com`（即原 cnpm/淘宝源），它镜像整个注册表：
-`npm config set registry https://registry.npmmirror.com`。本包会自动同步到镜像，
-PurRDF 这一侧无需任何操作；镜像的配置属于读者自己的环境，本文不代为脚本化。
+**译注：中国大陆镜像。**从中国大陆访问 npm 注册表时常有延迟或间歇性不可达。常用的镜像是
+`npmmirror.com`（原 cnpm/淘宝源）：`npm config set registry https://registry.npmmirror.com`。
+具体配置请参考各镜像站的说明，本文不再重复。
 
 想在安装任何东西之前先试一试？
 [RDF-1.2 演练场](https://blackcat-informatics.github.io/purrdf/playground/)
@@ -51,7 +50,7 @@ const engine = new QueryEngine();
 const ask = engine.ask(reparsed, "ASK { <https://ex/s> <https://ex/says> ?msg }");
 ```
 
-## RDF 1.2 这块楔子
+## RDF 1.2：其他库尚未覆盖之处
 
 没有哪个现存的 RDF/JS 库承载 RDF 1.2 的**引用三元组项**（quoted-triple term）或
 **方向字面量**（directional literal）。PurRDF 的 `DataFactory` 两者都提供：
@@ -68,7 +67,7 @@ const quoted = f.quotedTriple(
 const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 ```
 
-## API 表面
+## API 接口
 
 - **`ready(bytesOrUrl?)`**——在做任何事之前 await 一次。
 - **`DataFactory`**——`namedNode`、`blankNode`、
@@ -83,11 +82,11 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 - **图同一性**——`Dataset.canonicalize()` 返回该图在 RDFC-1.0 下的规范、扁平
   N-Quads；`Dataset.isomorphic(other)` 在空节点重命名下判定 RDF 图相等（一个由
   完整 RDFC-1.0 规范化支撑的精确判定器）。
-- **图/表格/研究对象载体**——`Dataset.project(profile, configJson)` 返回规范的
+- **图/表格/ Research Object（RO）载体**——`Dataset.project(profile, configJson)` 返回规范的
   USTAR 字节与损失台账 JSON；`Dataset.projectWithAssets("ro-crate-1.3",
   configJson, payloadArchive)` 加入有界的、随附的 RO-Crate 载荷；
   `liftProjection(...)` 为各双向 profile 重建 RDF。参见
-  [图、表格与研究对象投影](../concepts/projections.md)。
+  [图、表格与 Research Object 投影](../concepts/projections.md)。
 - **SPARQL**——`QueryEngine` 在多次调用之间保持原生计划缓存存活，并暴露带类型的
   `select` / `ask` / `construct` / `describe`、原子的 `update`，以及
   `queryRaw` 序列化。`Dataset.query(...)` 仍作为兼容用的裸字符串辅助方法保留。
@@ -103,10 +102,9 @@ RDF/JS 映射的更多内容见 [JavaScript 中的 RDF/JS](../interop/rdfjs.md)�
 
 - **仅限内存。** SPARQL 查询在内存数据集上运行；本包不提供网络解析器，因此远程
   `SERVICE` 与 `LOAD` 会显式失败。
-- **各格式的三元组项。**`serialize` 是写入器原生通道：它发出目标写入器有表面承载的一切，并拒绝其没有的。
-  因此宾语位置的引用三元组项与 RDF 1.2 陈述层在 Turtle、N-Triples、N-Quads 与 TriG
+- **各格式的三元组项。**`serialize` 是写入器原生通道：宾语位置的引用三元组项与 RDF 1.2 陈述层在 Turtle、N-Triples、N-Quads 与 TriG
   （写作 `<<( … )>>`）、RDF/XML（写作 `rdf:parseType="Triple"`）以及 JSON-LD /
-  YAML-LD（写作 `@triple`）中都得以保留。TriX 与 HexTuples 没有三元组项表面，因此把
+  YAML-LD（写作 `@triple`）中都得以保留。TriX 与 HexTuples 不支持三元组项，因此把
   携带三元组项的数据集序列化到二者之一会**抛出异常**，而不是静默丢弃该层。单图目标
   （Turtle、N-Triples、RDF/XML）只发出默认图。
 

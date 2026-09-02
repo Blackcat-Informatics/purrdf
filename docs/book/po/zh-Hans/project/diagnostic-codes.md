@@ -13,7 +13,7 @@ PurRDF 报告的每一次失败都在其 `RdfDiagnostic`（`severity`、`code`�
 `detail`、`location`）上携带一个稳定的、机器可读的 `code`。代码是契约：测试、SARIF
 发射器、CLI、Python 的 `ValueError` 文本与下游匹配器都以它为键，而 `message` 是
 可能改变措辞的自由文本。本页按家族列出各代码、每个代码所指的失败，以及调用方能做
-什么。这个集合是从源码树中的构造位置枚举出来的，不是凭记忆写下的；若你看到的某个
+什么。这个集合是从源码树中的构造位置枚举出来的，不是凭记忆写下的；若发现某个
 代码不在此处，以源码为准，本页已过期。
 
 代码为 kebab-case，以拥有它的家族作前缀。它们永不翻译，调用方应比较整个字符串而非
@@ -53,13 +53,13 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 | `native-codec-direction-without-language` | 在没有语言标签的字面量上给出了基础方向。 | 添加语言标签，或去掉方向。 |
 | `native-codec-invalid-direction` | 给出了 `ltr` 或 `rtl` 之外的字面量基础方向。 | 使用 `ltr` 或 `rtl`。 |
 | `native-codec-iri-missing-value` | 某个 IRI 词项事件携带了空值。 | 提供该 IRI。 |
-| `native-codec-missing-reifier-binding` | 某三元组项引用了一个没有绑定的具体化节点。 | 先绑定具体化节点，再引用它。 |
+| `native-codec-missing-reifier-binding` | 某三元组项引用了一个没有绑定的具体化节点（reifier）。 | 先绑定具体化节点，再引用它。 |
 | `native-codec-predicate-not-iri` | 只允许 IRI 的位置（谓词）上的词项不是 IRI。 | 使用 IRI 谓词。 |
 | `native-codec-reifier-not-triple` | 某具体化节点绑定的不是三元组项。 | 把具体化节点绑定到三元组项。 |
 | `native-codec-term-out-of-range` | 事件流中的某个词项 id 超出了该流所引入的范围。 | 产生该流的一方不一致；重新生成。 |
 | `native-codec-unbound-triple-term` | 某三元组项既未命名其组成部分，也未命名具体化节点。 | 为该三元组项给出组成部分或具体化节点。 |
 
-后九个出现在编解码器通道消费的是词项事件而非文本时——即一个 GTS 图经由编解码器表面
+后九个出现在编解码器通道消费的是词项事件而非文本时——即一个 GTS 图经由编解码器接口
 被解析——它们与下文的 `gts-*` 和 `rdf-ir-*` 代码相互对应。
 
 ## `native-jsonld-*` 与 `jsonld-*`——JSON-LD 与 YAML-LD
@@ -138,13 +138,13 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 | `native-sparql-query-parse` | 查询文本在 SPARQL 1.1/1.2 语法（含强制的 `VERSION` 声明）下无法解析。 | 在报告的位置修正查询。 |
 | `native-sparql-update-parse` | 更新请求无法解析。 | 在报告的位置修正更新语句。 |
 | `native-sparql-query-explain` | `--explain` 下的求值失败；求值器的错误在消息中给出。 | 处理底层的求值错误。 |
-| `native-sparql-property-function` | 属性函数接缝拒绝了该查询：已声明命名空间下的某谓词没有注册、调用位置的元数与关系不匹配、没有任何全序能服务某条链，或者一个已准备的计划正在与其准备时不同的注册表下求值。 | 注册该关系、更正元数，或在同一注册表下准备并求值。 |
+| `native-sparql-property-function` | 属性函数接缝（seam）拒绝了该查询：已声明命名空间下的某谓词没有注册、调用位置的元数与关系不匹配、没有任何全序能服务某条链，或者一个已准备的计划正在与其准备时不同的注册表下求值。 | 注册该关系、更正元数，或在同一注册表下准备并求值。 |
 | `native-sparql-aggregate-function` | 自定义聚合接缝拒绝了该查询：`AGG(<iri>, …)` 指名了未注册的聚合，或者一个已准备的计划正在不同的聚合注册表下求值。 | 注册该聚合，或在同一注册表下准备并求值。 |
 | `native-sparql-custom-function` | 某函数或聚合 IRI 未解析到任何已注册的自定义函数、原生函数或 XSD 构造器。 | 在该 IRI 下注册函数，或使用原生函数。 |
-| `native-sparql-quoted-triple-term-variable` | 在基本图模式或属性路径中，变量占据了引用三元组项的某个组成部分；结构性的三元组项匹配不在范围内。 | 把三元组项作为整体绑定，或经由具体化节点表面匹配其组成部分。 |
+| `native-sparql-quoted-triple-term-variable` | 在基本图模式或属性路径中，变量占据了引用三元组项的某个组成部分；结构性的三元组项匹配不在范围内。 | 把三元组项作为整体绑定，或经由具体化节点匹配其组成部分。 |
 | `native-sparql-heldin-unconfigured` | 调用 `heldIn` 时没有调用方提供的立场谓词（standpoint predicate）配置。 | 使用 `heldIn` 之前先配置立场谓词。 |
 | `native-sparql-graph-pattern-depth-exceeded` | 手工构造的图模式嵌套深度超过了解析器的安全上限。 | 展平该模式。 |
-| `native-sparql-bnode-mint-prefix` | 选项中提供的空节点铸造前缀无效。 | 提供合法的前缀。 |
+| `native-sparql-bnode-mint-prefix` | 选项中提供的空节点生成前缀无效。 | 提供合法的前缀。 |
 | `native-sparql-load-no-resolver` | 请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主接缝。 | 注入一个解析器，或去掉 `LOAD`。 |
 | `native-sparql-update-bad-destination` | `ADD`/`MOVE`/`COPY`/`LOAD` 的目标是 `NAMED` 或 `ALL`；目标必须是 `DEFAULT` 或单个命名 `GRAPH`。 | 指名单个目标图。 |
 | `native-sparql-subst-iri` | 某代换值不是合法的 IRI。 | 提供合法的 IRI。 |
@@ -154,7 +154,7 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 
 | 代码 | 含义 | 补救 |
 | --- | --- | --- |
-| `reasoning-closure-relation-witness` | 从推理闭包派生的属性函数关系不能与一次受限 chase 铸造了存在性见证的 OWL 直接语义运行相结合：遍历闭包的关系可能返回一个该蕴涵机制的作用域图并不包含的、铸造出来的空节点。 | 在不铸造见证的蕴涵机制（`rdf`、`rdfs`、`owl-rl`、`d`、`rif`、`simple`）下查询，或从本次调用中去掉由数据集派生的关系。 |
+| `reasoning-closure-relation-witness` | 从推理闭包派生的属性函数关系不能与一次受限 chase 生成了存在性见证的 OWL 直接语义运行相结合：遍历闭包的关系可能返回一个该蕴涵机制的作用域图并不包含的、新生成的空节点。 | 在不生成见证的蕴涵机制（`rdf`、`rdfs`、`owl-rl`、`d`、`rif`、`simple`）下查询，或从本次调用中去掉由数据集派生的关系。 |
 | `reasoning-closure-relation-rebuild` | 在推理闭包上重建属性函数关系失败。 | 关系构建器自身的错误在消息中给出。 |
 
 ## `statements-*`——陈述元数据摄入（`purrdf-rdf`）
@@ -176,7 +176,7 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 | `sssom-tsv-parse` | SSSOM TSV 文档格式错误：表头行缺失或不可读、`curie_map` 条目或集合注释格式错误、某行格式错误，或 confidence 非数值；位置给出行号。 | 在报告的行修正该 TSV。 |
 | `content-id-scheme` | 某内容 id 的 scheme 前缀无效：为空、非 ASCII，或以十六进制数字结尾（那会使它与 64 个十六进制字符的尾部产生歧义）。 | 选择非空、ASCII 且不以 `0-9`、`a-f` 或 `A-F` 结尾的前缀。 |
 
-## 代码从哪里到达你
+## 代码的到达路径
 
 - **Rust**——返回错误上的 `RdfDiagnostic::code`；其 `Display` 形式为
   `<severity> <code>: <message>`。

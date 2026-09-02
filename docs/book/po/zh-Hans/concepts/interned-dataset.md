@@ -66,7 +66,7 @@ assert_eq!(ds.quad_count(), 1);
   边界在 [`purrdf-validate`](https://docs.rs/purrdf-validate)）。
 - **RDFC-1.0** 规范化、数据集 diff 与同构判定——参见
   [规范化与 Diff](canonicalization.md)。
-- **存储与引擎接缝**——狭窄的解析器入口、序列化器出口以及 `SparqlEngine` trait，由
+- **存储与引擎接缝（seam）**——狭窄的解析器入口、序列化器出口以及 `SparqlEngine` trait，由
   兄弟 crate 中的适配器实现。
 - **溯源与损失台账**——一个通用的溯源附件（sidecar）与机器可读的 RDF↔GTS 损失矩阵，
   外加原生的 FnO 与 SSSOM 编解码器

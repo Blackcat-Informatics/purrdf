@@ -4,7 +4,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 # PurRDF for Python（简体中文）
 
-> 本文是 [`README.md`](./README.md) 的简体中文译本。PyPI 只渲染英文 README；本译本与
+> 译注：本文是 [`README.md`](./README.md) 的简体中文译本。PyPI 只渲染英文 README；本译本与
 > 仓库和《PurRDF 之书》同行。代码块、标识符与数字与英文原文逐字相同。
 
 <p>
@@ -16,7 +16,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 PurRDF 是一个从零实现、依赖极简的 [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/)
 引擎——解析器与序列化器、SPARQL、SHACL、ShEx、RDFC-1.0 规范化，以及 GTS 图传输
 容器——以 Rust 编写，并原样带入 Python、JavaScript 与 C。`purrdf` 包是这同一个引擎
-的 Python 表面：在每种语言中都是同样的、字节级一致的语义，包括大多数现有库尚未承载
+的 Python 接口：在每种语言中都是同样的、字节级一致的语义，包括大多数现有库尚未承载
 的三元组项、具体化节点（reifier）与基础方向字面量。
 
 ## 安装
@@ -27,10 +27,10 @@ pip install purrdf
 
 需要 Python 3.13+。wheel 内置原生扩展；不需要 Rust 工具链。
 
-**中国大陆镜像。** 从中国大陆访问 PyPI 时常有延迟或间歇性不可达。开发者通常改用
-清华大学 TUNA、中国科学技术大学 USTC 或阿里云的 PyPI 镜像，例如
-`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple purrdf`。wheel 会自动同步到
-各镜像；镜像的配置属于读者自己的环境，本文不代为脚本化。
+**译注：中国大陆镜像。**从中国大陆访问 PyPI 时常有延迟或间歇性不可达。常用的 PyPI 镜像有
+清华大学 TUNA（`https://pypi.tuna.tsinghua.edu.cn/simple`）、中国科学技术大学 USTC 与阿里云，
+例如 `pip install -i https://pypi.tuna.tsinghua.edu.cn/simple purrdf`。具体配置请参考各镜像站
+的说明，本文不再重复。
 
 ## 解析 RDF
 
@@ -72,9 +72,9 @@ jsonld = purrdf.serialize_jsonld(
 `expanded`、`context` 与确定性的数据集 IRI `derived` 三种模式都是显式的。PurRDF 从不
 推断调用方的词汇表，也从不拉取远程上下文。
 
-## 投影图、表格与研究对象载体
+## 投影图、表格与 Research Object（RO）载体
 
-`purrdf.project` 与 `purrdf.lift` 是对其他每个表面所用的同一个 Rust 投影引擎的薄调用。
+`purrdf.project` 与 `purrdf.lift` 是对其他每种语言接口所用的同一个 Rust 投影引擎的薄调用。
 配置是必填的严格 JSON：PurRDF 不提供任何词汇表、身份 IRI 或资源上限的默认值。
 
 ```python
@@ -117,7 +117,7 @@ print([(loss.code, loss.location) for loss in package.losses])
 `ro-crate-1.3`、`datacite-4.6`、`dcat-3`、`dcat-rdf`、`void` 与
 `frictionless-data-package-1`。精选的 CSVW/OKF terms、OBO Graphs、SKOS、原生
 DCAT RDF 与 VoID 是刻意设计为只写的、入台账的视图。返回的归档是规范的、确定性的
-USTAR 字节，每个结果都携带其总会计算出的结构化损失记录。研究对象的上下文、词汇表、
+USTAR 字节，每个结果都携带其总会计算出的结构化损失记录。 Research Object 的上下文、词汇表、
 身份与 profile 全部是调用方必须提供的配置。
 
 原生的 RDF 数据集描述使用同一个调用。完整的 JSON 指明输出语法，以及一个映射式/CONSTRUCT
@@ -201,7 +201,7 @@ print(closure.to_nquads())
 print(report)
 ```
 
-对于手握文档而非已解析数据集的调用方，`entail.materialize_nt(text, regime, program)`
+对于持有文档而非已解析数据集的调用方，`entail.materialize_nt(text, regime, program)`
 接受 N-Triples/N-Quads 并返回 `(canonical_nquads, report)`。二者都接受以普通字符串
 （`"simple"`、`"rdf"`、`"rdfs"`、`"owl-rl"`、`"owl-direct"`、`"rif"`、`"d"`）或
 `entail.Regime.RDFS` 给出的蕴涵机制。
@@ -216,16 +216,16 @@ closure, report = entail.materialize(dataset, "rif", my_rif_xml)
 ```
 
 `"owl-direct"` 同样不接受 program，而这是一项声明而非疏漏：它的额外输入是*查询*的
-类表达式，而这一表面是对数据集求闭包而非回答查询——因此它所运行的是与查询无关的
-tableau 增强（分类、实现、蕴涵的角色断言，以及 tableau 对本体自身命名词项所判定的
+类表达式，而这一接口是对数据集求闭包而非回答查询——因此它所运行的是与查询无关的
+tableau 增强（分类、实现（realization）、蕴涵的角色断言，以及 tableau 对本体自身命名词项所判定的
 `owl:sameAs` 同一性）。
 
 **推理报告是第二个返回值，且永远不可省略。**它是一份字节稳定的渲染，说明哪些规则触发
 了、触发了多少次，哪些规范规则*没有*触发，本次运行把哪些构造留在了边界处，消耗了求值
-器固定上限中的多少，以及所运行演算的契约哈希——这样，一个在不同规则集下铸造的缓存
+器固定上限中的多少，以及所运行演算的契约哈希——这样，一个在不同规则集下生成的缓存
 闭包就可以被拒绝，而不是被信任。
 
-规则表可以直接读取，因此覆盖率是你能测量的东西，而不是凭信念接受的东西：
+规则表可以直接读取，因此覆盖率是可以测量的，而不是凭信念接受的：
 
 ```python
 defined = entail.rules("owl-rl")             # 78 — OWL 2 Profiles §4.3 Tables 4–9
@@ -244,17 +244,17 @@ added = entail.extensions("owl-rl")          # ['ext-eq-diff-sym']
 报告说的是同一件事，且二者不可能分歧。
 
 `rdfD1`、`rdfD1a`、`rdfs14` 与 `rdfs14a` 在那个已触发的集合中，且每一条都对一个
-*新鲜的*空节点作结论。受限的 chase 铸造一个以前沿寻址的 Skolem 见证并在其下求闭包，
-因此这些规则确实运行了——但当闭包被物化回去时，每一条提及见证的结论都被扣留，因为
-SPARQL 蕴涵机制从作用域图中取答案，而一个铸造出来的空节点不在其中。报告以一行
-`boundary surrogate` 而不是一条缺失的规则来陈述这一点，并且 `completeness` 读作
+*新鲜的*空节点作结论。受限的 chase 生成一个以前沿寻址的 Skolem 见证并在其下求闭包，
+因此这些规则确实运行了——但当闭包被物化回去时，每一条提及见证的结论都不予输出，因为
+SPARQL 蕴涵机制从作用域图中取答案，而一个新生成的空节点不在其中。报告以一行
+`boundary surrogate` 而不是一条缺失的规则来陈述这一点，并且 `completeness` 取值为
 `exact-within-boundaries` 而不是 `exact`。
 
 **78 / 78 是规则表覆盖率，而规则表覆盖率不是蕴涵一致性。**二者分开度量，只陈述前者
 正是推理报告存在的目的所要防止的过度声称：在这份随库固化的 W3C OWL 2 RL 蕴涵测试
 语料上，本 chase 达到了 27 个已发布正例蕴涵中的 27 个，并在 23 个负例中的 23 个上与
 W3C 一致——其中 3 个被*反驳*（判定为非蕴涵），20 个被*承认*（闭包已算出并观察到不含
-该非结论）。负例数字应读作「未发现不可靠之处」，而永远不是「证明了 23 个非蕴涵」。
+该非结论）。负例数字应理解为「未发现不可靠之处」，而永远不是「证明了 23 个非蕴涵」。
 两个数字都是真的。完整记分板、带类型的分歧台账以及其余每个套件都在
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)。
 
@@ -267,14 +267,14 @@ W3C 一致——其中 3 个被*反驳*（判定为非蕴涵），20 个被*承�
 
 物化是 chase。OWL 2 直接语义*推理机*是同一模块上的第二条通道——一个 SHOIQ(D)
 hypertableau——它的每一项服务都在 `purrdf.entail` 上。每项服务接受一份 N-Triples
-（或 N-Quads）文档并以元组形式返回 `(answer, certificate)`，因此调用方是解包证据，
-而不是可以选择不要它：
+（或 N-Quads）文档并以元组形式返回 `(answer, certificate)`，因此调用方必须显式解包证据，
+无法选择忽略它：
 
 | 服务 | 调用 | 答案 |
 | --- | --- | --- |
 | 一致性 | `entail.consistency(data)` | `consistency true` / `false` / `unknown`——`unknown` 表示 tableau 达到了步数上限，且绝不会被折叠为 `false` |
 | 分类 | `entail.classify(data)` | `equivalent`、`subclass`（传递闭包）、`direct`（其约简）与 `unsatisfiable` 各行 |
-| 实现 | `entail.realize(data)` | 命名个体的 `type` 行，随后是最具体的 `direct-type` 行 |
+| 实现（realization） | `entail.realize(data)` | 命名个体的 `type` 行，随后是最具体的 `direct-type` 行 |
 | 实例检索 | `entail.instances(data, class_)` | `instance <term>` 行；`class_` 是**一个** N-Triples 词项，含尖括号 |
 | 公理蕴涵 | `entail.entails(data, axiom)` | `entails true` / `false` / `unknown`，随后是该公理被*读入*后的形态，以便看出其谓词选择了哪一类 |
 | Profile 认证 | `entail.profile(data)` | `certified <profile>` 行，最严格者在前（`EL`、`QL`、`RL`、`DL`、`Full`） |
@@ -304,7 +304,7 @@ hypertableau——它的每一项服务都在 `purrdf.entail` 上。每项服务
 
 `check_proof` 中没有任何东西信任产出方：本体从 `data` 解析，问题从 `service` 与
 `argument` 重新推导，声称从 `answer` 自身的语法中读回，检查上下文来自该调用自己执行
-的反向映射。针对不同本体、不同问题或不同答案的证明会被拒绝——读作
+的反向映射。针对不同本体、不同问题或不同答案的证明会被拒绝——内容为
 `availability not-recorded` 的文档同样会被拒绝，因为一个无人要求记录的答案绝不能被
 呈现为已验证的答案。
 
@@ -332,7 +332,7 @@ OWL 2 RDF 映射中的一条*公理*，而 `entail.graph_entails` 向蕴涵机�
 机制所判定的构造，而行所取自的闭包两者都不包含。
 
 **不含** `?name` 的模式是一个结论*图*，因此 `certain_answers` 与 `graph_entails` 问的是
-同一个问题，并通过同一次折叠作答：mechanism 是实际抵达它的那一个，关系没有列——
+同一个问题，并通过同一次折叠作答：mechanism 是实际得出它的那一个，关系没有列——
 `yes` 是一行裸 `row`，`no` 则一行也没有。当有东西需要投影时，规则表之外的五种机制不会
 运行，因为对它们中任何一个所判定的内容做投影变量是另一个问题；「本该需要其中某一个」
 会以一行指明该通道的 `limit` 到达，绝不会是一个穷尽式的空答案。
@@ -345,17 +345,17 @@ OWL 2 RDF 映射中的一条*公理*，而 `entail.graph_entails` 向蕴涵机�
 单一机制就已足够。
 
 `entailment not-entailed` 是一个**证明**——过程对这个前提是完备的，因此映射的缺失就是
-蕴涵的缺失——而 `undecided` 是不完备的过程有权改说的话。把后者读作前者，会把本库的
-一个局限变成关于你的本体的一个错误陈述。
+蕴涵的缺失——而 `undecided` 是不完备的过程有权改说的话。把后者当作前者，会把本库的
+一个局限变成关于所用本体的一个错误陈述。
 
 ### `imports`——前提自称并非全部的那些文档
 
 `imports` 是一个有序的 `(ontology_iri, document)` 对序列，其中 `document` 是与前提
 完全一样的 N-Quads（或 N-Triples）文本。带有 `owl:imports` 的本体声明其公理是自身的
 *加上*它所命名的那些文档的，因此只在前提上作答会回答另一个问题——那些文档就放在这里，
-而你的 `owl:imports` 三元组保持在你写下它的位置不动。
+而原有的 `owl:imports` 三元组保持在原处不动。
 
-**PurRDF 不拉取任何东西。**你没有提供的本体 IRI 会抛出指明该文档的 `ValueError`，
+**PurRDF 不拉取任何东西。**未提供的本体 IRI 会抛出指明该文档的 `ValueError`，
 绝不会有网络访问，也绝不会有静默为空的导入。`[]` 是普通的*什么也不导入*情形；该参数
 是必填而非默认的，并在全部四个宿主上处于同一位置，因此同一种调用形态在 Python、
 JavaScript、C 与 Rust 中都可用。解析是传递到不动点的，因此所提供文档自身的
@@ -420,7 +420,7 @@ assert answer.splitlines()[0] == "certified EL"
 `instances` 与 `entails` 渲染一个 `purrdf-dl-certificate 1` 块，携带 DL 通道自身的
 完备性——`decided`、`decided-within-boundaries`（某条公理从未成为 DL 子句，每个此类
 构造都被点名）或 `budget-exhausted`。这与 chase 报告的概念*不同*——后者是两张规则表
-相减——并且渲染在不同的横幅之下，因此二者不可能被互相误解析。`profile` 完全不报告
+相减——并且渲染在不同的标头之下，因此二者不可能被互相误解析。`profile` 完全不报告
 搜索——它纯粹是语法性的——因此它渲染一个以 `one-directional true` 结尾的
 `purrdf-owl-profile-certificate 1` 块：认证证明成员资格，违反并不证明非成员资格。
 `extract_module` 渲染 `purrdf-module-extraction 1`，其 `conservative` 行说明模块是最小
@@ -490,14 +490,14 @@ rows = store.query(
 store.query(query, relations_from_graph={f"{EX}rel/memberOf": (purrdf.NamedNode(f"{EX}memberTable"), 1, 1)})
 ```
 
-已注册的 IRI 在谓词位置上被**精确**识别，因此抵达它不需要命名空间声明。传入
+已注册的 IRI 在谓词位置上被**精确**识别，因此调用它不需要命名空间声明。传入
 `property_fn_namespaces=[f"{EX}rel/"]` 则要求更严格的读法：该前缀之下的每个谓词都
 成为一次调用，而*未注册*的谓词是硬错误，不会变成一个悄悄匹配不到任何东西的三元组
-模式。重复的 IRI、参差不齐的表、断裂的列表或指向空无的头节点，会在其提供之处抛出
+模式。重复的 IRI、参差不齐的表、断裂的列表或指向不存在节点的头节点，会在其提供之处抛出
 `ValueError`。
 
 第三种写法根本不是表。`path_relations` 在存储自身的边上注册一次**路径见证**（path
-witness）遍历：一次调用读作 `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`，
+witness）遍历：一次调用写作 `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`，
 每一跳发出一行，`?edge` 绑定到作为 RDF 1.2 三元组项的被遍历陈述，因此 `GROUP BY ?pathId`
 配合 `ORDER BY ?step` 就能在查询内部重组一整条游走。规格中的每个字段都是必填的——
 PurRDF 不发明关系 IRI，也不发明遍历包络：
@@ -553,7 +553,7 @@ pip install purrdf[rdflib]
 
 这会拉入独立发行的
 [`purrdf-rdflib`](https://github.com/Blackcat-Informatics/purrdf/tree/main/bindings/python-rdflib-shadow)
-分发包，其顶层 `rdflib` 包重新导出兼容层的表面，于是现有第三方代码中的
+分发包，其顶层 `rdflib` 包重新导出兼容层的 API，于是现有第三方代码中的
 `import rdflib` / `from rdflib.namespace import RDF` 便透明地运行在 `purrdf` 之上。
 **注意：**该影子包占用了 `rdflib` 这一导入名，绝不可与真正的
 [`rdflib`](https://pypi.org/project/rdflib/) 同时安装——二者无法共存于同一环境。
