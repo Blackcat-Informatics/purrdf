@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check book book-samples check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -233,6 +233,32 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	else \
 		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
+	fi
+
+wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
+	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they
+	@# ANSWER the same way there, and for the embedding kNN surface — which ranks by
+	@# binary64 arithmetic — that is the claim that matters: a reassociated sum or a
+	@# fused multiply-add changes a last bit, two near-tied neighbours swap, and the
+	@# browser returns a different ANSWER than the host. So this lane compiles the
+	@# tagged test to wasm32 and runs it in Node, against the same pinned expectations
+	@# the native `cargo test` run asserts.
+	@#
+	@# wasm-bindgen-test-runner ships in the same pinned wasm-bindgen-cli archive the
+	@# wasm lane already installs, so there is no second version to keep in step.
+	@if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
+		if [ -n "$${CI:-}" ]; then echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; fi; \
+		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
+	elif ! command -v wasm-bindgen-test-runner >/dev/null 2>&1; then \
+		if [ -n "$${CI:-}" ]; then echo "FAIL: wasm-bindgen-test-runner absent in CI"; exit 1; fi; \
+		echo "SKIP: wasm-bindgen-test-runner not on PATH — install wasm-bindgen-cli $$(grep -oE 'wasm-bindgen = \"=[0-9.]+' Cargo.toml | cut -d= -f3) to enable"; \
+	elif ! command -v node >/dev/null 2>&1; then \
+		if [ -n "$${CI:-}" ]; then echo "FAIL: node absent in CI"; exit 1; fi; \
+		echo "SKIP: node not on PATH — the wasm test harness runs the module in Node"; \
+	else \
+		CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-sparql-eval --test knn_wasm_determinism; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
