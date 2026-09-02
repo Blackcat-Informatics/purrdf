@@ -86,11 +86,13 @@ impl QuadHandle {
     /// quad sequence before or without a frozen `RdfDataset` being available.
     /// Within `purrdf` itself only the builder mints handles in deduplicated
     /// push order.
+    #[inline]
     pub fn from_index(index: u32) -> Self {
         Self(index)
     }
 
     /// The dense quad ordinal this handle addresses.
+    #[inline]
     pub fn index(self) -> usize {
         self.0 as usize
     }
@@ -1780,16 +1782,16 @@ impl RdfDataset {
             std::collections::HashSet::default();
         visited.insert(start);
         let mut result = Vec::new();
-        let mut stack: Vec<TermId> = self.predecessors(start).to_vec();
-        stack.reverse(); // pop() takes from the back; reverse so we visit in sorted order.
+        // pop() takes from the back; push each predecessor list reversed so the
+        // walk visits it in sorted order. The reversal is done by the iterator,
+        // not through a temporary `Vec` per visited node.
+        let mut stack: Vec<TermId> = self.predecessors(start).iter().rev().copied().collect();
         while let Some(node) = stack.pop() {
             if !visited.insert(node) {
                 continue;
             }
             result.push(node);
-            let mut next: Vec<TermId> = self.predecessors(node).to_vec();
-            next.reverse();
-            stack.extend(next);
+            stack.extend(self.predecessors(node).iter().rev().copied());
         }
         result
     }
