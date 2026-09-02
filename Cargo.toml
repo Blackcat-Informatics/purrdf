@@ -152,6 +152,14 @@ visual-hashing = "0.1.3"
 # the library version byte-for-byte or it refuses to run. `make wasm-pkg` and
 # the CI Node lane install `wasm-bindgen-cli@0.2.125` to match this.
 wasm-bindgen = "=0.2.125"
+# The wasm32 test harness. Dev-only, and pulled ONLY on wasm32 targets, so a
+# native build never sees it. It exists so a determinism claim about
+# `wasm32-unknown-unknown` can be an executed test rather than an argument:
+# `make wasm-test` compiles the tagged tests to wasm and runs them in Node
+# through `wasm-bindgen-test-runner`, which ships in the same pinned
+# wasm-bindgen-cli archive the wasm lane already installs. Resolves to the
+# 0.3.x release paired with the exact wasm-bindgen pin above.
+wasm-bindgen-test = "0.3"
 
 [workspace.lints.rust]
 missing_docs = "warn"

@@ -8,7 +8,7 @@ use core::mem::size_of;
 use crate::ContentDigest;
 
 use super::contract::{
-    PrefixPostprocessing, TlvEntryRef, TlvWireType, VectorDtype, canonical_tlv,
+    DistanceMetric, PrefixPostprocessing, TlvEntryRef, TlvWireType, VectorDtype, canonical_tlv,
     validate_sha256_field,
 };
 use super::error::{DigestKind, EmbeddingError};
@@ -185,6 +185,57 @@ impl<'a> FamilyView<'a> {
     pub fn dtype(self) -> Result<VectorDtype, EmbeddingError> {
         let entry = required_tlv(self.contract, 11, TlvWireType::U32, "contract dtype")?;
         VectorDtype::try_from(tlv_u32(entry)?)
+    }
+
+    /// The **declared distance metric** this family's vectors are to be compared
+    /// under, decoded from the canonical contract.
+    ///
+    /// The metric is a property of the *family contract* — one declaration covering
+    /// every vector space derived from it — and it is identity-significant: two
+    /// otherwise-identical contracts that name different metrics derive different
+    /// [`FamilyId`]s. It is therefore read from the contract bytes rather than
+    /// carried in the fixed-width family record, which is also why this is fallible
+    /// where [`Self::stored_dimension`] is not.
+    ///
+    /// A reader needs this because the metric *defines comparison semantics* —
+    /// which of two vectors ranks first — and nothing in the stored bytes implies
+    /// it. A consumer that guessed cosine for an artifact that declared squared
+    /// Euclidean would return a confidently wrong ordering, which is exactly the
+    /// failure the declaration exists to prevent.
+    ///
+    /// # Errors
+    ///
+    /// [`EmbeddingError`] if the metric block is missing, malformed, or names a
+    /// code this version does not define. Structural validation already accepted
+    /// the artifact, so a failure here is a reader/writer disagreement rather than
+    /// untrusted input — it is still reported rather than papered over, because a
+    /// metric nobody can decode is not a metric anyone may rank by.
+    pub fn metric(self) -> Result<DistanceMetric, EmbeddingError> {
+        let block = required_tlv(self.contract, 14, TlvWireType::Block, "metric")?.value;
+        let code = tlv_u32(required_tlv(block, 1, TlvWireType::U32, "metric code")?)?;
+        match code {
+            1 => Ok(DistanceMetric::Cosine),
+            2 => Ok(DistanceMetric::NegativeDot),
+            3 => Ok(DistanceMetric::SquaredEuclidean),
+            0x8000_0000 => Ok(DistanceMetric::Extension {
+                identifier: require_nonempty_tlv(block, 2, TlvWireType::Utf8, "metric identifier")?
+                    .to_owned(),
+                parameter_encoding: require_nonempty_tlv(
+                    block,
+                    3,
+                    TlvWireType::Utf8,
+                    "metric parameter encoding",
+                )?
+                .to_owned(),
+                parameters: required_tlv(block, 4, TlvWireType::Bytes, "metric parameters")?
+                    .value
+                    .to_vec(),
+            }),
+            value => Err(EmbeddingError::UnsupportedCode {
+                field: "distance metric",
+                value,
+            }),
+        }
     }
 
     /// Exact canonical chunking-stage block used for `ChunkingContractId`.

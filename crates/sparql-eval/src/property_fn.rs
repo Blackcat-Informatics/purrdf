@@ -234,6 +234,53 @@ pub trait PfCursor {
     /// the query rather than silently truncating the row stream — a short stream
     /// offered as complete is exactly the wrong answer the doctrine forbids.
     fn next(&mut self) -> Result<Option<PfRow>, EvalError>;
+
+    /// The **internal work** this cursor has performed since this method last returned,
+    /// *taken* — the count resets to zero, so consecutive calls partition the work rather
+    /// than re-report it.
+    ///
+    /// This is the seam's answer to a question the engine cannot answer for itself: what
+    /// did that call actually cost? The two quantities the engine can see — invocations
+    /// driven and rows accepted — describe the *answer*, and for a generator relation the
+    /// answer is not where the work is. A nearest-neighbour search that examines a million
+    /// vectors to return the five closest emits five rows, and priced by rows it is
+    /// indistinguishable from a five-row table. Reporting the million is what makes a
+    /// caller's budget a bound on the execution rather than on the result set.
+    ///
+    /// The engine charges [`ChargePoint::PropertyFunctionWork`](crate::governor::ChargePoint::PropertyFunctionWork)
+    /// once per reported unit, after every [`Self::next`] — including the terminating call
+    /// that returns `None`, so a cursor that searches lazily on its first pull and one
+    /// that searched eagerly in [`PropertyFunction::open`] are charged the same total. A
+    /// cursor that reports work it has not yet done is not wrong, merely early.
+    ///
+    /// # What a unit is
+    ///
+    /// Whatever the implementing relation's own documentation says it is: one candidate
+    /// examined, one posting decoded, one row of an external table read. The engine cannot
+    /// define the unit for host code and does not try; it prices each reported unit at one
+    /// and requires the relation to say what it counted. A relation whose work is
+    /// genuinely proportional to the rows it emits has nothing to add here and keeps the
+    /// default.
+    ///
+    /// # Why over-reporting is not a hazard, and under-reporting is not a hole
+    ///
+    /// The count is *spent*, not merely recorded, so a relation that inflates it exhausts
+    /// its own caller's budget — an incentive pointing the right way. A relation that
+    /// under-reports (or, by default, reports nothing) makes its query cheaper than it
+    /// should be, but every other ceiling stays in force unchanged: the invocation point,
+    /// the row point, the intermediate-cell peak, the answer cap and the wall deadline all
+    /// bound it exactly as they did before this method existed. Under-reporting can
+    /// therefore cost a caller precision in a receipt; it can never cost them soundness,
+    /// and no engine-side measure can see inside host code to do better.
+    ///
+    /// # Default
+    ///
+    /// Zero. Every relation written before this method existed reports no work and charges
+    /// nothing, which is what makes a budget sized against the previous profile version
+    /// buy the same execution.
+    fn take_work(&mut self) -> u64 {
+        0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +447,26 @@ pub fn next_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<Option<PfR
         Ok(row) => row,
         Err(_) => Err(EvalError::function(format!(
             "property function <{iri}> panicked while producing a row"
+        ))),
+    }
+}
+
+/// Take `cursor`'s reported work with the host call contained.
+///
+/// The third member of the [`open_contained`]/[`next_contained`] family, for the third
+/// thing a cursor can be asked. [`PfCursor::take_work`] is host code exactly as `next`
+/// is — a counter that overflows an index, an assertion left in by mistake — and its
+/// answer is *spent* against the caller's fuel, so it crosses the same boundary. A panic
+/// becomes a clean, payload-free [`EvalError::Function`] rather than aborting a worker.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the reported count.
+pub fn take_work_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<u64, EvalError> {
+    match catch_unwind(AssertUnwindSafe(|| cursor.take_work())) {
+        Ok(units) => Ok(units),
+        Err(_) => Err(EvalError::function(format!(
+            "property function <{iri}> panicked while reporting its work"
         ))),
     }
 }
@@ -1346,6 +1413,10 @@ mod tests {
         fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
             panic!("relation exploded in next")
         }
+
+        fn take_work(&mut self) -> u64 {
+            panic!("relation exploded in take_work")
+        }
     }
 
     /// Run `body` with the default panic hook suppressed, so an *expected*, caught
@@ -1394,6 +1465,50 @@ mod tests {
         });
         assert!(
             error.to_string().contains("panicked while producing a row"),
+            "got {error}"
+        );
+        assert!(
+            !error.to_string().contains("exploded"),
+            "the payload must not leak into the deterministic message: {error}"
+        );
+    }
+
+    #[test]
+    fn take_work_defaults_to_zero_and_is_not_a_charge_a_relation_must_opt_out_of() {
+        // The default is what makes the work channel additive rather than breaking: every
+        // relation written before it existed reports nothing and is charged nothing.
+        let relation = table();
+        let subject = [None];
+        let object = [None];
+        let args = PfArgs::new(&subject, &object);
+        let mut cursor = relation.open(&args, None).expect("open");
+        assert_eq!(cursor.take_work(), 0);
+        assert!(cursor.next().expect("no error").is_some());
+        assert_eq!(
+            cursor.take_work(),
+            0,
+            "an in-memory scan's cost IS its rows, so it has nothing to add"
+        );
+    }
+
+    #[test]
+    fn a_panic_in_take_work_is_a_clean_payload_free_error() {
+        // `take_work` is host code exactly as `next` is, and its answer is SPENT against
+        // the caller's fuel, so it crosses the same containment boundary.
+        let relation = PanickingRelation::new(false);
+        let subject_value = iri(EX_A);
+        let subject = [Some(&subject_value)];
+        let object = [None];
+        let args = PfArgs::new(&subject, &object);
+        let mut cursor = open_contained(&relation, EX_SPLIT, &args, None).expect("open");
+        let error = without_panic_output(|| {
+            take_work_contained(&mut *cursor, EX_SPLIT)
+                .expect_err("a panicking take_work must not escape")
+        });
+        assert!(
+            error
+                .to_string()
+                .contains("panicked while reporting its work"),
             "got {error}"
         );
         assert!(

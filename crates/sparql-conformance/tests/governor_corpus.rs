@@ -2413,7 +2413,16 @@ fn pinned_row_count(case: &Case) -> usize {
         .count()
 }
 
-/// The two property-function charge points are banded **separately**, not only jointly.
+/// The two *engine-observed* property-function charge points are banded **separately**,
+/// not only jointly.
+///
+/// The schedule carries three property-function points. Two of them —
+/// `property-function-invocation` and `property-function-row` — are counted by the
+/// evaluator itself and are what these lanes take apart. The third,
+/// `property-function-work`, is *reported* by the relation through `PfCursor::take_work`,
+/// and every relation in this corpus is a scripted fixture with no internal work to
+/// report, so it contributes `0` to each decomposition below. Banding it here would band
+/// a zero; the surface that reports it non-zero bands it in its own tests.
 ///
 /// `property-function-invocation` and `property-function-row` both denominate fuel, so a
 /// band on the aggregate is satisfied by any schedule whose total lands in the same place —

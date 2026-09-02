@@ -87,18 +87,34 @@ getrandom = { workspace = true }
 js-sys = { workspace = true }
 
 [dev-dependencies]
-# Colored line-diffs on assert_eq! failure (repo convention).
+# Colored line-diffs on assert_eq! failure (repo convention). Pure Rust, and the one
+# dev-dependency that compiles on every target this crate is tested on.
 pretty_assertions = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Property-based generation for the governor differential harness
 # (`tests/governor_correctness.rs`): every governed run is checked against the SAME
 # query and data run UNGOVERNED, over generated (dataset, query, budget) triples.
 # Already a workspace dev-dependency of seven sibling crates; version lives in the root
 # `[workspace.dependencies]`.
+#
+# Native-only, together with criterion below, because `make wasm-test` builds ONE test
+# target of this crate for wasm32 and cargo builds every declared dev-dependency for
+# any test target. Neither of these two is wasm32-clean (both reach for processes,
+# terminals and wall-clock timing), and neither is wanted there: proptest drives a
+# native-only harness and criterion drives benches, which the wasm lane never runs.
 proptest = { workspace = true }
 # Criterion for the EXISTS-decorrelation perf bench. Defaults off
 # (no plotters/rayon) like the sibling crates, so `make bench` stays lean and no
 # oxigraph-family edge enters the dev tree (gated by `make rdf-core-hygiene`).
 criterion = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# The wasm32 test harness, for `tests/knn_wasm_determinism.rs` — the one test in this
+# crate that must EXECUTE on wasm32-unknown-unknown rather than merely compile for it,
+# because the embedding kNN surface ranks by binary64 arithmetic and "the same answer on
+# every target" is a claim two runs on one target cannot check. Run by `make wasm-test`.
+wasm-bindgen-test = { workspace = true }
 
 [[bench]]
 # `EXISTS` decorrelation: naive per-row inner re-eval vs cached inner, measured

@@ -97,6 +97,9 @@ mod expr;
 mod fallible;
 mod governed;
 pub mod governor;
+/// Nearest-neighbour retrieval over a PURREMB embedding space, reachable from SPARQL
+/// through the property-function seam under caller-supplied IRIs.
+pub mod knn;
 mod list_fn;
 mod modifier;
 pub(crate) mod parallel;
@@ -168,6 +171,7 @@ pub use purrdf_sparql_algebra::ParserOptions;
 // row / arity types its calls speak in, the registry evaluation resolves a predicate
 // IRI against, and the in-memory reference relation. Re-exported so a host wires a
 // relation into the engine without naming the module path.
+pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
 pub use property_fn::{
     MemoryRelation, PfArgs, PfArity, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
     PropertyFunctionRegistry,

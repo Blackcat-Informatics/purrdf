@@ -91,7 +91,9 @@ use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Truncation};
-use crate::property_fn::{PfArgs, PfArity, PropertyFunction, next_contained, open_contained};
+use crate::property_fn::{
+    PfArgs, PfArity, PropertyFunction, next_contained, open_contained, take_work_contained,
+};
 use crate::row_ingest::{GovernedRowIngest, RowAdmission};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
@@ -504,7 +506,20 @@ fn eval_call_over<D: DatasetView + Sync>(
             if ceiling.is_some_and(|ceiling| rows.len() >= ceiling) {
                 break 'input;
             }
-            let Some(emitted) = next_contained(&mut *cursor, &call.iri)? else {
+            let pulled = next_contained(&mut *cursor, &call.iri)?;
+            // The `property-function-work` charge point. Read after EVERY pull, the
+            // terminating one included, so a cursor that searches lazily on its first
+            // `next` and one that searched eagerly inside `open` are charged the same
+            // total — and so a relation whose last unit of work produced no row still
+            // pays for it. `take_work` resets, so successive reads partition the work
+            // rather than re-charging it, and a relation that never overrides it reports
+            // zero and short-circuits without touching the governor.
+            let work = take_work_contained(&mut *cursor, &call.iri)?;
+            if let Err(governor) = ctx.charge_occurrences(ChargePoint::PropertyFunctionWork, work) {
+                tripped = Some(governor);
+                break 'input;
+            }
+            let Some(emitted) = pulled else {
                 break;
             };
             if emitted.len() != declared.total() {
