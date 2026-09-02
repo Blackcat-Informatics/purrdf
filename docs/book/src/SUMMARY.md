@@ -29,6 +29,9 @@ SPDX-License-Identifier: CC-BY-4.0
 
 - [Querying](sparql/querying.md)
 - [Result Formats](sparql/results.md)
+- [Full-Text Search](sparql/full-text.md)
+- [GeoSPARQL](sparql/geosparql.md)
+- [Embedding Nearest Neighbours](sparql/embedding-knn.md)
 
 # Validation
 

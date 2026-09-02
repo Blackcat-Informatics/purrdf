@@ -24,10 +24,17 @@ the build if the three version sources disagree.
 ## MSRV policy
 
 The supported minimum Rust is `rust-version` in the root `Cargo.toml` —
-currently **1.96** — pinned to the **stable** toolchain (the workspace is
-nightly-free by policy) and enforced by a dedicated CI MSRV job. Raising the
-MSRV is a notable change recorded in the changelog and, pre-1.0, rides a
-minor bump.
+currently **1.96** — on the **stable** channel, enforced by a dedicated CI
+MSRV job that sets `RUSTUP_TOOLCHAIN` explicitly and asserts the compiler it
+measured really is 1.96. Raising the MSRV is a notable change recorded in the
+changelog and, pre-1.0, rides a minor bump.
+
+The MSRV is a promise to consumers; the development toolchain is a tool
+choice, and the two are orthogonal. `rust-toolchain.toml` pins a **dated
+nightly** for local work and the CI gates, because nightly clippy and rustdoc
+carry lints stable lacks — but the source is nightly-free by policy (zero
+`#![feature(...)]` attributes, which the MSRV job proves on every change), and
+the release lanes build every published artifact on stable.
 
 ## Tag-driven trusted publishing
 

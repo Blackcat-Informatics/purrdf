@@ -63,6 +63,13 @@ engines behind one seam; `NativeSparqlEngine` is the shipped implementation.
 - **Update** — `INSERT DATA`/`DELETE DATA`, the `DELETE`/`INSERT … WHERE`
   family (`WITH`/`USING`, `DELETE WHERE`), `LOAD`, and
   `CLEAR`/`DROP`/`CREATE`/`ADD`/`MOVE`/`COPY`.
+- **Beyond the grammar** — everything else arrives through the caller-keyed
+  extension seams described further down this page, never as new syntax:
+  [path witnesses](#path-witnesses-binding-the-derivation-not-the-endpoints),
+  [full-text search](full-text.md), [GeoSPARQL](geosparql.md) and
+  [embedding nearest neighbours](embedding-knn.md) are each a property function
+  (or, for the `geof:` family, a scalar function) registered under an IRI the
+  caller supplies.
 
 Anything outside this surface — and every malformed query — is a typed
 `ParseError`, never a silently degraded parse.

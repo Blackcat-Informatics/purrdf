@@ -7,7 +7,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 
-# `purrdf-shapes` — Rust SHACL Core Validator
+# `purrdf-shapes` — Rust SHACL Validator
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-shapes.svg)](https://crates.io/crates/purrdf-shapes)
 [![docs.rs](https://docs.rs/purrdf-shapes/badge.svg)](https://docs.rs/purrdf-shapes)
@@ -17,8 +17,14 @@
 > **An LLM output is a claim, not a truth.**
 
 `purrdf-shapes` is the native SHACL validator of the PurRDF toolkit — the
-complete SHACL Core feature set plus SHACL-SPARQL constraints and targets,
-running entirely on PurRDF's own interned IR and native SPARQL engine. It
+complete SHACL Core feature set, SHACL-SPARQL constraints and targets, and the
+SHACL-AF surface (node expressions, expression constraints, user-defined SPARQL
+functions and target types, and SHACL Rules materialized as a new dataset),
+running entirely on PurRDF's own interned IR and native SPARQL engine. The
+SHACL-AF surface is aligned with the SHACL 1.2 Node Expressions (`shnex:`),
+SPARQL Extensions and SPARQL 1.2 RL Working Drafts: both spellings of a node
+expression parse to one representation, and rules execute as `sh:order` strata.
+Every IRI it implements is defined by a W3C document; it mints none. It
 validates an RDF 1.2 data graph against a SHACL shapes graph without general
 RDFS or OWL entailment. SHACL class membership follows asserted
 `rdfs:subClassOf` edges transitively, and the native and SHACL-SPARQL paths see
@@ -46,9 +52,11 @@ This crate is gated by a SHACL conformance corpus.
 
 ## Build
 
-> **Toolchain:** stable Rust (the repo ships a `rust-toolchain.toml` at the
-> root pinning `stable`; the MSRV floor is `rust-version` in the workspace
-> `Cargo.toml`). `cargo` and `rustup` pick this up automatically.
+> **Toolchain:** the MSRV floor is `rust-version` in the workspace `Cargo.toml`
+> (currently 1.96, stable channel), and the source is nightly-free. The repo's
+> `rust-toolchain.toml` pins a *dated nightly* for development and CI lints;
+> `cargo` and `rustup` pick it up automatically, and building on stable 1.96
+> works exactly as the MSRV job proves.
 
 ```bash
 cargo build -p purrdf-shapes

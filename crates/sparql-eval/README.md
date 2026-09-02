@@ -35,14 +35,29 @@ Design pillars:
 - **Query features** — aggregates, `EXISTS`/`NOT EXISTS` answered by a
   memoized existence probe where a prepare-time proof licenses it and by the
   per-row definition otherwise, cost-based BGP planning (with an
-  `explain_query` introspection API), SPARQL UPDATE, and a host-injectable
-  `SERVICE` transport so federation stays wasm-portable.
+  `explain_query` introspection API), SPARQL UPDATE, the SEP-0009 composite
+  datatypes (`FOLD`/`UNFOLD` and the `cdt:` function library), and a
+  host-injectable `SERVICE` resolver so federation stays wasm-portable.
+- **Caller-keyed extension seams** — scalar functions (`UserFunctionRegistry`,
+  whose native bodies carry SPARQL's expression-error channel so a per-solution
+  domain error drops the row under `FILTER` or leaves the variable unbound
+  under `BIND` rather than aborting the query), property functions
+  (`PropertyFunctionRegistry`, with the path-witness relations and the
+  embedding-kNN relation over a PURREMB space shipped in-crate), custom
+  aggregates (`AggregateRegistry`, plus a namespace-keyed statistical set), and
+  per-service `SERVICE` context (`ServiceCatalog`/`ServiceProfile`: headers,
+  credentials, timeouts, capabilities, deny by default). Every seam is keyed by
+  IRIs the caller supplies; the crate mints none.
+- **Governed execution** — every entry point has a governed twin under
+  caller-set ceilings (fuel, answer rows, intermediate cells, scratch bytes,
+  remote requests, deadline) that trips with certified rows, never a wrong
+  answer.
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
-The engine is gated by the W3C SPARQL 1.1 conformance suite (run through the
-workspace harness), carries zero oxigraph-family dependencies, and builds for
-`wasm32-unknown-unknown`.
+The engine is gated by the W3C SPARQL 1.1 and 1.2 conformance suites (run
+through the workspace harness), carries zero oxigraph-family dependencies, and
+builds for `wasm32-unknown-unknown`.
 
 ## Usage
 

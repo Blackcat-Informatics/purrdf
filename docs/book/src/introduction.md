@@ -39,6 +39,9 @@ reimplemented per language.
 - **Native codecs** — first-party parsers/serializers for Turtle, TriG,
   N-Triples, N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD,
   with byte-deterministic output. See [Codecs & Determinism](concepts/codecs.md).
+  Every syntax resolves relative IRI references through one RFC 3986 layer,
+  and a relative reference with no base in scope is a hard error.
+  See [Base IRIs & Relative References](concepts/base-iris.md).
 - **Canonicalization** — W3C RDFC-1.0 plus dataset diff and isomorphism.
   See [Canonicalization & Diff](concepts/canonicalization.md).
 - **Projections & carriers** — deterministic LPG, CSVW, OBO Graphs,
@@ -49,12 +52,21 @@ reimplemented per language.
   Update, SEP-0002 temporal arithmetic, `LATERAL` (SEP-0006), the SEP-0008
   SHA-3 hash builtins (`SHA3-224`/`256`/`384`/`512`), quad templates that
   `CONSTRUCT` into named graphs (a first-party extension, not a SPARQL 1.2
-  feature), caller-registered
-  aggregates and property functions, governed execution with per-node explain
-  receipts, and `SERVICE` federation through a host-injected transport, gated
-  by the W3C conformance suites. See [SPARQL](sparql/querying.md).
-- **SHACL and ShEx** — native validators for both shape languages.
-  See [Validation](validation/shacl.md).
+  feature), the SEP-0009 composite datatypes (`cdt:List`/`cdt:Map`, `FOLD`,
+  `UNFOLD`), caller-registered aggregates and property functions (including
+  path witnesses that bind a traversal hop by hop), governed execution with
+  per-node explain receipts, and `SERVICE` federation through a host-injected
+  resolver carrying per-service context, gated by the W3C conformance suites.
+  See [SPARQL](sparql/querying.md).
+- **Out-of-core SPARQL extensions** — deterministic full-text search with
+  exact fixed-point BM25 ([Full-Text Search](sparql/full-text.md)), exact and
+  float-free GeoSPARQL 1.1 ([GeoSPARQL](sparql/geosparql.md)), and
+  nearest-neighbour search over a PURREMB embedding space
+  ([Embedding Nearest Neighbours](sparql/embedding-knn.md)) — each a consumer
+  of the extension seams, registered under IRIs the caller supplies.
+- **SHACL and ShEx** — native validators for both shape languages; the SHACL
+  engine covers Core, SHACL-SPARQL and SHACL-AF, aligned with the SHACL 1.2
+  node-expression and rule-layering drafts. See [Validation](validation/shacl.md).
 - **Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL
   rules implemented — rule-table coverage, distinct from entailment
   conformance, where the OWL 2 RL entailment tests score 27 of 27 positive and

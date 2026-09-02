@@ -543,8 +543,48 @@ and an *unregistered* one is a hard error rather than a triple pattern that quie
 matches nothing. A duplicate IRI, a ragged table, a torn list, or a head naming
 nothing raises `ValueError` where it is supplied.
 
+The third spelling is not a table at all. `path_relations` registers a
+**path-witness** traversal over the store's own edges: a call reads
+`?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )` and emits one row per
+hop, with `?edge` bound to the traversed statement as an RDF 1.2 triple term, so
+`GROUP BY ?pathId` with `ORDER BY ?step` reassembles a whole walk inside the
+query. Every field of the specification is mandatory — PurRDF invents no
+relation IRI and no traversal envelope:
+
+```python
+store.query(
+    "SELECT ?end ?step ?node WHERE { <http://example.org/a> "
+    "<http://example.org/pf#walk> ( ?end ?pathId ?len ?step ?node ?edge ) } "
+    "ORDER BY ?len ?step",
+    path_relations={
+        "http://example.org/pf#walk": (
+            [(purrdf.NamedNode("http://example.org/p"), "forward")],  # steps
+            1, 4,          # min_hops, max_hops
+            1024, 100000,  # max_paths_per_seed, max_expansions_per_invocation
+            "walk",        # "walk" (every simple-prefix witness) | "shortest"
+        )
+    },
+)
+```
+
 Registration is per call and carries no callable, so the whole evaluation still
-runs with the GIL released.
+runs with the GIL released. The property functions that are arbitrary host
+closures on the Rust side — the full-text index, the GeoSPARQL relations, the
+embedding kNN relation — do not cross this boundary; only these three
+data-shaped registrations do.
+
+## Base IRIs
+
+A document that spells a relative IRI needs a base. Every parse entry point
+takes an optional `base=` keyword (`purrdf.parse(text, format, base=...)`,
+`RdfDataset(text, format, base=...)`, the `Store` loaders, and the JSON-LD and
+RDF/XML converters), and `shapes.validate` / `shapes.entail` take
+`shapes_base=` for the shapes document. An in-document directive (`@base`,
+`BASE`, `xml:base`, `@context.@base`) wins over the keyword. With neither in
+scope a relative reference raises `ValueError` with the code
+`iri-relative-no-base` — PurRDF has no retrieval IRI for text handed to it as a
+string and will not invent one. N-Triples and N-Quads admit no relative
+reference by grammar, so they need no base.
 
 ## rdflib compatibility layer
 

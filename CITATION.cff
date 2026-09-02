@@ -6,13 +6,20 @@ abstract: >-
   engine — and one behavior — into Rust, Python, WebAssembly/JavaScript, and C. It
   provides an immutable, value-interned RDF 1.2 dataset IR (triple terms, reifiers,
   base-direction literals); first-party codecs for Turtle, TriG, N-Triples, N-Quads,
-  RDF/XML, JSON-LD, and YAML-LD; W3C RDFC-1.0 dataset canonicalization; a native
-  SPARQL 1.1/1.2 parser, algebra, and multiset evaluator with SPARQL Results
-  JSON/XML/CSV/TSV; a SHACL Core validation engine; and the GTS single-file,
-  content-addressed, append-only graph transport. The workspace deliberately exposes
-  no optional Cargo features — as a data carrier it guarantees byte-identical
-  semantics for every consumer — and its behavior is gated by W3C SPARQL, SHACL,
-  RDFC-1.0, and frozen cross-language GTS conformance corpora.
+  RDF/XML, TriX, HexTuples, JSON-LD, and YAML-LD with one RFC 3986 base-resolution
+  layer; W3C RDFC-1.0 dataset canonicalization; a native SPARQL 1.1/1.2 parser,
+  algebra, and multiset evaluator with governed execution, SEP-0009 composite
+  datatypes, and SPARQL Results JSON/XML/CSV/TSV; SHACL validation (Core,
+  SHACL-SPARQL, and SHACL-AF including SHACL Rules); ShEx 2.1 validation;
+  entailment regimes (RDF, RDFS, OWL 2 RL, D, an OWL 2 Direct-Semantics
+  tableau, and RIF-Core) that return a reasoning report with every closure;
+  deterministic full-text search with exact fixed-point BM25 ranking; exact,
+  float-free GeoSPARQL 1.1; embedding nearest-neighbour search over the PURREMB
+  companion format; and the GTS single-file, content-addressed, append-only graph
+  transport. The workspace deliberately exposes no optional Cargo features — as a
+  data carrier it guarantees byte-identical semantics for every consumer — and
+  its behavior is gated by W3C SPARQL, SHACL, shexTest, OWL 2, RDFC-1.0, and
+  frozen cross-language GTS conformance corpora.
 type: software
 doi: "10.67342/pkg8gpp4no/v1"
 authors:
@@ -32,7 +39,12 @@ keywords:
   - rdf
   - rdf-1.2
   - sparql
+  - sparql-1.2
   - shacl
+  - shex
+  - owl
+  - geosparql
+  - full-text-search
   - json-ld
   - turtle
   - knowledge-graph
