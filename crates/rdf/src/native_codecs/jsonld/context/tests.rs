@@ -316,15 +316,176 @@ fn base_and_vocab_resolution_round_trip_exactly() {
     );
 }
 
+// ── egress: spelling an absolute IRI relative to the base (JSON-LD 1.1 §4.1.4) ──
+//
+// Base removal is a SELECTION layer over candidate spellings, not a resolver. The
+// property that makes it safe is not which candidate it likes but that whatever it emits
+// re-resolves to exactly the IRI it replaced — so a compacted document can never denote a
+// different resource than the expanded one it came from.
+//
+// These drive `compact_iri`, the seam the behaviour is actually reported at, rather than
+// the private selector beneath it: a spelling nobody can observe is not a contract.
+
+/// Compact `iri` for a document-position `@id` under a context whose only setting is
+/// `@base`, so nothing but base removal can be responsible for the answer.
+fn compact_under_base(base: &str, iri: &str) -> String {
+    CompiledJsonLdContext::compile(&json!({ "@base": base }), None)
+        .expect("a base-only context")
+        .compact_iri(iri, false)
+        .expect("document-position compaction")
+}
+
+/// Representative `(base, target)` pairs spanning every candidate shape §4.1.4
+/// constructs, plus the two pairs that must have no relative spelling at all.
+const RELATIVIZATION_PAIRS: &[(&str, &str)] = &[
+    // Same-document, fragment-only and query-only spellings.
+    ("http://example.org/dir/doc", "http://example.org/dir/doc"),
+    ("http://example.org/dir/", "http://example.org/dir/"),
+    (
+        "http://example.org/dir/doc",
+        "http://example.org/dir/doc#frag",
+    ),
+    (
+        "http://example.org/dir/doc",
+        "http://example.org/dir/doc?q=1",
+    ),
+    (
+        "http://example.org/dir/doc?q=1",
+        "http://example.org/dir/doc?q=2",
+    ),
+    (
+        "http://example.org/dir/doc?q=1",
+        "http://example.org/dir/doc?q=2#frag",
+    ),
+    // Sibling, ancestor and descendant paths.
+    ("http://example.org/dir/doc", "http://example.org/dir/other"),
+    ("http://example.org/a/b/c", "http://example.org/a/x"),
+    ("http://example.org/a/b/c", "http://example.org/y"),
+    ("http://example.org/a/b/c", "http://example.org/a/b/d/e"),
+    // The two RFC-3986 §4.2 spelling hazards.
+    ("http://example.org/a/b", "http://example.org/a/x:y"),
+    ("http://example.org/a/b", "http://example.org//x"),
+    // No relative spelling exists: a different authority, and a different scheme.
+    ("http://example.org/a/b", "http://other.example/x"),
+    ("http://example.org/a/b", "https://example.org/a/x"),
+];
+
+/// The contract: whatever spelling compaction emits re-resolves, under the one resolution
+/// algorithm in the workspace, to byte-exactly the IRI it replaced.
+///
+/// The property is stated over the EMITTED string rather than over the relative candidate
+/// alone, so it covers the absolute fallback too and holds for every pair without the
+/// test having to know which arm each one takes. It is asserted independently of the
+/// re-resolution filter inside the selector, so it survives someone deleting that filter —
+/// the failure mode that would silently repoint compacted `@id`s at other resources.
+#[test]
+fn every_emitted_spelling_re_resolves_to_its_target() {
+    for &(base, target) in RELATIVIZATION_PAIRS {
+        let emitted = compact_under_base(base, target);
+        let resolved = purrdf_iri::BaseIri::parse(base)
+            .expect("an absolute base")
+            .resolve(&emitted)
+            .unwrap_or_else(|error| panic!("`{emitted}` against `{base}` must resolve: {error}"));
+        assert_eq!(
+            resolved.as_str(),
+            target,
+            "`{emitted}` against `{base}` must re-resolve to the IRI it replaced"
+        );
+    }
+}
+
+/// The base itself is the empty reference — JSON-LD's `"@id": ""`, and Turtle's `<>`.
+#[test]
+fn a_target_identical_to_the_base_is_the_empty_reference() {
+    assert_eq!(
+        compact_under_base("http://example.org/dir/doc", "http://example.org/dir/doc"),
+        ""
+    );
+    assert_eq!(
+        compact_under_base("http://example.org/dir/", "http://example.org/dir/"),
+        ""
+    );
+}
+
+/// A relative reference can never cross authorities, so a target that shares none with
+/// the base has no relative spelling and is emitted ABSOLUTE.
+///
+/// That is the semantic "no spelling exists", not a failure: the IRI is emitted whole
+/// rather than dropped or reported.
+#[test]
+fn a_target_under_a_different_authority_is_emitted_absolute() {
+    assert_eq!(
+        compact_under_base("http://example.org/a/b", "http://other.example/x"),
+        "http://other.example/x"
+    );
+    // A differing SCHEME is equally unspellable, even with the authority shared.
+    assert_eq!(
+        compact_under_base("http://example.org/a/b", "https://example.org/a/x"),
+        "https://example.org/a/x"
+    );
+}
+
+/// RFC-3986 §4.2 `path-noscheme`: a relative reference whose FIRST segment contains a
+/// `:` would re-parse as a scheme, so the emitted spelling carries a `./` prefix.
+///
+/// The bare `x:y` is not merely ugly, it denotes a different resource — it is itself an
+/// absolute IRI with scheme `x`. It is also SHORTER than the guarded form, so nothing but
+/// the guard and the re-resolution check keep it out.
+#[test]
+fn a_spelling_whose_first_segment_has_a_colon_is_dot_prefixed() {
+    let emitted = compact_under_base("http://example.org/a/b", "http://example.org/a/x:y");
+    assert_eq!(emitted, "./x:y");
+}
+
+/// A reference beginning `//` re-parses as a network-path reference — a new AUTHORITY —
+/// so it can never be emitted bare.
+///
+/// Here the shortest candidate is the absolute path `//x`, which resolves to `http://x`:
+/// a different host entirely. It must lose to the longer `..//x`, the only spelling that
+/// reproduces the target — which is why selection cannot be by length alone without the
+/// re-resolution filter in front of it.
+#[test]
+fn a_spelling_that_would_re_parse_as_an_authority_is_never_emitted() {
+    let emitted = compact_under_base("http://example.org/a/b", "http://example.org//x");
+    assert!(
+        !emitted.starts_with("//"),
+        "a bare network-path reference would repoint the IRI at another host: {emitted}"
+    );
+    assert_eq!(emitted, "..//x");
+}
+
+/// `"@base": null` erases the base, and the document URL must not be silently
+/// resurrected in its place.
+///
+/// The refusal is asserted by its diagnostic CODE rather than by its prose. The
+/// condition — a relative reference with no base in scope — is the WORKSPACE-SHARED one,
+/// reported with the same `iri-relative-no-base` code Turtle, TriG, RDF/XML, SPARQL and
+/// ShEx report rather than a JSON-LD-local spelling of it, so a consumer switching on the
+/// code sees one condition rather than five. Pinning the code keeps this test on the
+/// contract rather than on a sentence; the two message assertions pin only the parts a
+/// user acts on — the reference named verbatim, and the remedy.
 #[test]
 fn null_base_is_not_resurrected_from_the_document_url() {
-    for relative_setting in [json!({"@base": "later"}), json!({"@vocab": "later/"})] {
+    for (relative_setting, reference) in [
+        (json!({"@base": "later"}), "later"),
+        (json!({"@vocab": "later/"}), "later/"),
+    ] {
         let error = CompiledJsonLdContext::compile(
             &json!([{"@base": null}, relative_setting]),
             Some("https://example.org/document"),
         )
         .expect_err("relative setting after null @base");
-        assert!(error.message.contains("requires an absolute base IRI"));
+        assert_eq!(error.code, "iri-relative-no-base");
+        assert!(
+            error.message.contains(&format!("{reference:?}")),
+            "message must name the reference verbatim: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("@base"),
+            "message must point at the remedy: {}",
+            error.message
+        );
     }
 
     let error = CompiledJsonLdContext::compile(
@@ -332,7 +493,12 @@ fn null_base_is_not_resurrected_from_the_document_url() {
         Some("https://example.org/document"),
     )
     .expect_err("relative term after null @base");
-    assert!(error.message.contains("requires an absolute base IRI"));
+    assert_eq!(error.code, "iri-relative-no-base");
+    assert!(
+        error.message.contains("\"path/item\""),
+        "message must name the reference verbatim: {}",
+        error.message
+    );
 }
 
 #[test]

@@ -139,17 +139,80 @@ pub enum DcatRdfSource {
 }
 
 /// Mandatory output syntax and source policy for the `dcat-rdf` profile.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Deserialize` is hand-written rather than derived, and that is load-bearing: a derived
+/// one reads `document_base_iri` straight into the field and never calls
+/// [`DcatRdfConfig::with_document_base_iri`], so the only IRI check this type has would run
+/// for a Rust caller using the builder and never for the configuration DOCUMENT `purrdf
+/// project --config` hands it. `VoidConfig` and `SkosConfig` route their raw mirror through
+/// the same builder for exactly this reason; this type did not, and was the one
+/// `document_base_iri` in the workspace a config file could set to anything at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DcatRdfConfig {
     format: NativeRdfFormat,
     source: DcatRdfSource,
+    /// The IRI the emitted DCAT document is published at, when the caller named one.
+    #[serde(default)]
+    document_base_iri: Option<String>,
+}
+
+/// The deserialization mirror of [`DcatRdfConfig`], routed through its validating builder.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDcatRdfConfig {
+    format: NativeRdfFormat,
+    source: DcatRdfSource,
+    #[serde(default)]
+    document_base_iri: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for DcatRdfConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawDcatRdfConfig::deserialize(deserializer)?;
+        Self::new(raw.format, raw.source)
+            .with_document_base_iri(raw.document_base_iri)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl DcatRdfConfig {
     /// Construct a native DCAT RDF policy with no inferred syntax or mapping.
     pub const fn new(format: NativeRdfFormat, source: DcatRdfSource) -> Self {
-        Self { format, source }
+        Self {
+            format,
+            source,
+            document_base_iri: None,
+        }
+    }
+
+    /// Name the IRI the emitted DCAT document is published at.
+    ///
+    /// Turtle, TriG, RDF/XML, JSON-LD and YAML-LD declare it and relativize against it;
+    /// a syntax that cannot express a base emits absolute IRIs, decided once by the
+    /// format registry. Caller-owned with no fabricated default: unset, the document
+    /// declares no base, exactly as before.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a base that is not an absolute IRI.
+    pub fn with_document_base_iri(
+        mut self,
+        document_base_iri: Option<String>,
+    ) -> Result<Self, ProjectionError> {
+        if let Some(base) = &document_base_iri {
+            validate_absolute_iri(base, "DCAT RDF document base IRI")?;
+        }
+        self.document_base_iri = document_base_iri;
+        Ok(self)
+    }
+
+    /// The IRI the emitted document is published at, when the caller named one.
+    pub fn document_base_iri(&self) -> Option<&str> {
+        self.document_base_iri.as_deref()
     }
 
     /// Selected registered RDF syntax.
@@ -196,6 +259,7 @@ pub fn project_dcat_rdf<D: DatasetView + Sync>(
                 projection.loss_ledger,
                 config.format(),
                 "dcat",
+                config.document_base_iri(),
                 config.limits(),
             )
         }
@@ -206,6 +270,7 @@ pub fn project_dcat_rdf<D: DatasetView + Sync>(
                 LossLedger::new(),
                 config.format(),
                 "dcat",
+                config.document_base_iri(),
                 config.limits(),
             )
         }

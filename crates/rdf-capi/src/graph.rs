@@ -88,7 +88,15 @@ pub unsafe extern "C" fn purrdf_graph_insert(
                 ));
             }
             let quad = quad_from_views(s, p, o, g)?;
-            let changed = (*graph).0.insert(quad);
+            // A relative IRI is refused HERE, at the call that supplied it. This
+            // surface is handed terms, never a document, so there is no base in scope
+            // to resolve one against and none is invented.
+            let changed = (*graph).0.insert(quad).map_err(|e| {
+                PurrdfError::new(
+                    PurrdfStatus::InvalidArgument,
+                    format!("{}: {e}", e.diagnostic_code()),
+                )
+            })?;
             if !out_changed.is_null() {
                 *out_changed = u8::from(changed);
             }

@@ -1401,7 +1401,19 @@ impl QueryEngine {
             SparqlResult::Graph(graph) => Dataset {
                 inner: MutableDataset::new(graph),
             }
-            .serialize_with_options(format, options),
+            // WHICH BASE: none. `base` above is the SPARQL *query* base — it resolves
+            // relative IRI references inside the query TEXT. The trailing argument here
+            // is the *document* base a result is WRITTEN under. They are different
+            // things, and a query that happened to need a base to parse is no evidence
+            // about how its answer should be spelled, so forwarding it would silently
+            // relativize the result against the query's base.
+            //
+            // This stays `None` even though the core seam can now express a document
+            // base together with a graph selection and the statement layer: the blocker
+            // was never the seam, it is that this function has no document base to pass.
+            // Giving the caller one would mean a NEW parameter on `queryRawConfigured`,
+            // not reusing this one.
+            .serialize_with_options(format, options, None),
             other => Err(kind_mismatch(
                 "CONSTRUCT/DESCRIBE graph for configured JSON-LD serialization",
                 &other,
@@ -1810,6 +1822,15 @@ fn uncarriable_named_graphs(
     Some(named_graph_refusal(&names, token, QUAD_CAPABLE_REMEDY))
 }
 
+/// Serialize a CONSTRUCT/DESCRIBE answer graph.
+///
+/// WHICH BASE: none, and that is not an oversight. The only base anywhere near this
+/// call is the SPARQL *query* base, which resolves relative IRI references inside the
+/// query TEXT — a different thing from the *document* base an answer is written under.
+/// This helper is handed no document base by any caller, so it emits absolute IRIs.
+/// Giving callers one means a new parameter on the `queryRaw`/`queryGraph` surface, not
+/// reusing the query base. `serialize_dataset` applies `StatementLayer::Emit`, so an
+/// answer graph carrying RDF 1.2 statement rows keeps them.
 fn serialize_graph_result(
     graph: &Arc<purrdf::RdfDataset>,
     format: &str,
@@ -1894,7 +1915,9 @@ mod tests {
                 None,
             )
             .expect("quad-template CONSTRUCT evaluates");
-        let nquads = constructed.serialize("nquads").expect("N-Quads serializes");
+        let nquads = constructed
+            .serialize("nquads", None)
+            .expect("N-Quads serializes");
         assert_eq!(
             nquads.trim(),
             "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
@@ -2050,7 +2073,9 @@ mod tests {
         let described = QueryEngine::new()
             .describe(&source, "DESCRIBE <https://example.org/s>", None)
             .expect("DESCRIBE evaluates");
-        let nquads = described.serialize("nquads").expect("N-Quads serializes");
+        let nquads = described
+            .serialize("nquads", None)
+            .expect("N-Quads serializes");
         for row in [
             "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
              <https://example.org/g> .",

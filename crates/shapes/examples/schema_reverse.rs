@@ -54,7 +54,7 @@ fn import_config() -> Result<SchemaImportConfig, Box<dyn Error>> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let config = import_config()?;
-    let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(SOURCE_SHAPES)
+    let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(SOURCE_SHAPES, None)
         .map_err(|errors| std::io::Error::other(errors.join("\n")))?;
     let source_shapes = purrdf_shapes::shapes::from_dataset(&dataset)?;
     let compiled = purrdf_shapes::json_schema::compile(&source_shapes, config.namespaces());

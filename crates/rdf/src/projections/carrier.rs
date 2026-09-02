@@ -71,6 +71,33 @@ pub enum ProjectionProfile {
 }
 
 impl ProjectionProfile {
+    /// Every projection profile, in declaration order.
+    ///
+    /// The closed list a total sweep iterates. A caller that must do something for EVERY
+    /// profile — enumerate them for `--help`, gate every configuration's IRI fields, build a
+    /// coverage census — needs the list itself, and re-deriving it by hand at each such site
+    /// is how a profile comes to be silently skipped by one of them. Adding a variant makes
+    /// [`Self::as_str`] fail to compile, and the length assertion below fails until this array
+    /// gains the same variant, so the two cannot drift apart.
+    pub const ALL: &'static [Self] = &[
+        Self::LpgCsv,
+        Self::Neo4jCsv,
+        Self::OpenCypher,
+        Self::Graphml,
+        Self::CsvwExact,
+        Self::CsvwTerms,
+        Self::OkfTerms,
+        Self::OboGraphs,
+        Self::Skos,
+        Self::Croissant11,
+        Self::RoCrate13,
+        Self::DataCite46,
+        Self::Dcat3,
+        Self::DcatRdf,
+        Self::Void,
+        Self::FrictionlessDataPackage1,
+    ];
+
     /// Stable command/config spelling.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -631,6 +658,77 @@ mod tests {
 
     use super::*;
     use crate::{CsvwContext, CsvwMode, CsvwVocabulary};
+
+    /// A distinct bit per profile, assigned by an EXHAUSTIVE match.
+    ///
+    /// Adding a variant fails to compile here, which is what makes
+    /// [`the_profile_list_names_every_profile_exactly_once`] a totality check rather than a
+    /// restatement of whatever `ALL` happens to contain.
+    const fn profile_bit(profile: ProjectionProfile) -> u32 {
+        match profile {
+            ProjectionProfile::LpgCsv => 1 << 0,
+            ProjectionProfile::Neo4jCsv => 1 << 1,
+            ProjectionProfile::OpenCypher => 1 << 2,
+            ProjectionProfile::Graphml => 1 << 3,
+            ProjectionProfile::CsvwExact => 1 << 4,
+            ProjectionProfile::CsvwTerms => 1 << 5,
+            ProjectionProfile::OkfTerms => 1 << 6,
+            ProjectionProfile::OboGraphs => 1 << 7,
+            ProjectionProfile::Skos => 1 << 8,
+            ProjectionProfile::Croissant11 => 1 << 9,
+            ProjectionProfile::RoCrate13 => 1 << 10,
+            ProjectionProfile::DataCite46 => 1 << 11,
+            ProjectionProfile::Dcat3 => 1 << 12,
+            ProjectionProfile::DcatRdf => 1 << 13,
+            ProjectionProfile::Void => 1 << 14,
+            ProjectionProfile::FrictionlessDataPackage1 => 1 << 15,
+        }
+    }
+
+    /// The union of every bit `profile_bit` can return. A seventeenth profile must widen it.
+    const EVERY_PROFILE_BIT: u32 = (1 << 16) - 1;
+
+    /// [`ProjectionProfile::ALL`] is the WHOLE closed list, each profile once.
+    ///
+    /// Every total sweep over the profiles iterates that array, so a profile missing from it
+    /// is a profile nothing checks — silently. `profile_bit`'s exhaustive match makes adding a
+    /// variant a compile error; this makes forgetting to LIST it a test failure.
+    #[test]
+    fn the_profile_list_names_every_profile_exactly_once() {
+        let mut seen = 0_u32;
+        for profile in ProjectionProfile::ALL {
+            let bit = profile_bit(*profile);
+            assert_eq!(
+                seen & bit,
+                0,
+                "{profile} appears twice in ProjectionProfile::ALL"
+            );
+            seen |= bit;
+        }
+        assert_eq!(
+            seen, EVERY_PROFILE_BIT,
+            "ProjectionProfile::ALL is missing a profile; every sweep that iterates it is \
+             skipping one"
+        );
+        assert_eq!(ProjectionProfile::ALL.len(), 16);
+    }
+
+    /// Every profile round-trips through its stable spelling.
+    ///
+    /// `as_str` is what a configuration document and a `--profile` flag carry, and `from_str`
+    /// is what reads them back; a variant whose two halves disagree is a profile a caller can
+    /// write and never select.
+    #[test]
+    fn every_profile_round_trips_through_its_stable_spelling() {
+        for profile in ProjectionProfile::ALL {
+            let spelled = profile.as_str();
+            assert_eq!(
+                ProjectionProfile::from_str(spelled).ok(),
+                Some(*profile),
+                "`{spelled}` does not read back as {profile}"
+            );
+        }
+    }
 
     const RESEARCH_SOURCE: &[u8] =
         include_bytes!("../../tests/fixtures/research-objects/carrier/shared.ttl");

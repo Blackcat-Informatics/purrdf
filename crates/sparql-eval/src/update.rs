@@ -132,6 +132,20 @@ impl From<RdfDiagnostic> for UpdateAbort {
     }
 }
 
+/// Refuse a mutation whose quad carries a non-absolute IRI, reporting the workspace's
+/// shared [`purrdf_core::IriError::diagnostic_code`] spelling.
+///
+/// A SPARQL IRI is resolved against `BASE` while the request is parsed, so a
+/// well-formed request cannot reach this. It is still checked rather than assumed:
+/// `INSERT DATA` is a genuine ingress into the store, and the absoluteness invariant
+/// is enforced where terms ENTER the store, not where we believe they came from.
+fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
+    UpdateAbort::Failed(RdfDiagnostic::error(
+        err.diagnostic_code(),
+        format!("UPDATE cannot insert a quad carrying a non-absolute IRI: {err}"),
+    ))
+}
+
 /// The engine-level WHERE-evaluation config threaded into UPDATE, mirroring the
 /// query path's `EvalCtx` build (order cache + standpoint predicate table) so a
 /// `DELETE/INSERT … WHERE` evaluates identically to a `SELECT`.
@@ -432,7 +446,7 @@ fn insert_data(
             // quad is skipped rather than inserted (§16.2), and fuel counts what the store
             // actually did.
             charge_mutations(governors, 1)?;
-            m.insert(q);
+            m.insert(q).map_err(|e| iri_abort(&e))?;
         }
     }
     Ok(())
@@ -625,7 +639,7 @@ fn delete_insert(
         m.remove(q);
     }
     for q in to_insert {
-        m.insert(q);
+        m.insert(q).map_err(|e| iri_abort(&e))?;
     }
     Ok(())
 }
@@ -796,7 +810,8 @@ fn load(
     // charged before a single quad of it lands.
     charge_mutations(governors, quads.len())?;
     for q in quads {
-        m.insert(rekey_graph(q, dest.as_ref()));
+        m.insert(rekey_graph(q, dest.as_ref()))
+            .map_err(|e| iri_abort(&e))?;
     }
     Ok(())
 }
@@ -839,7 +854,8 @@ fn graph_op_add(
     let dest = graph_target_value(destination)?;
     charge_mutations(governors, src.len())?;
     for q in src {
-        m.insert(rekey_graph(q, dest.as_ref()));
+        m.insert(rekey_graph(q, dest.as_ref()))
+            .map_err(|e| iri_abort(&e))?;
     }
     Ok(())
 }
@@ -861,7 +877,8 @@ fn graph_op_copy(
     clear_target(destination, m, governors)?;
     charge_mutations(governors, src.len())?;
     for q in src {
-        m.insert(rekey_graph(q, dest.as_ref()));
+        m.insert(rekey_graph(q, dest.as_ref()))
+            .map_err(|e| iri_abort(&e))?;
     }
     Ok(())
 }
@@ -889,7 +906,8 @@ fn graph_op_move(
     clear_target(destination, m, governors)?;
     charge_mutations(governors, src.len().saturating_mul(2))?;
     for q in &src {
-        m.insert(rekey_graph(q.clone(), dest.as_ref()));
+        m.insert(rekey_graph(q.clone(), dest.as_ref()))
+            .map_err(|e| iri_abort(&e))?;
     }
     for q in &src {
         m.remove(q);

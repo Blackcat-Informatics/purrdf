@@ -59,10 +59,10 @@ impl RdfCodec for RdfXmlCodec {
     fn parse(
         &self,
         text: &str,
-        base_iri: Option<&str>,
+        base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        super::parse::parse_rdfxml_without_panicking(text, base_iri)
+        super::parse::parse_rdfxml_without_panicking(text, base)
     }
 
     fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
@@ -174,9 +174,14 @@ struct XmlRow {
 /// reification as plain quads, and RDF-1.2 reifiers as `rdf:reifies` rows — then interns
 /// each into a [`RdfDatasetBuilder`] and folds them through the shared
 /// [`fold_statement_layer`], identically to the line/Turtle-family path.
+///
+/// `base` is `&mut`: `xml:base` on the ROOT element establishes the document base, so on
+/// return the scope holds the base in force at the end of the document. `xml:base` deeper
+/// in the tree is subtree-scoped and has popped by then, which is exactly right — a base
+/// that governed one element never governed the document.
 pub(super) fn parse_rdfxml_to_dataset(
     text: &str,
-    base_iri: Option<&str>,
+    base: &mut purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     // `roxmltree`'s tokenizer recurses once per element and aborts the process on a deeply
     // nested document, so the nesting is measured on the SOURCE and refused here. This is
@@ -194,16 +199,18 @@ pub(super) fn parse_rdfxml_to_dataset(
         collection_counter: 0,
     };
     let context = ParseContext {
-        base_iri: base_iri.map(str::to_string),
+        base: base.clone(),
         ..Default::default()
     };
-    parser.parse_document(document.root_element(), &context)?;
+    *base = parser.parse_document(document.root_element(), &context)?;
     parser.freeze()
 }
 
 #[derive(Clone, Debug, Default)]
 struct ParseContext {
-    base_iri: Option<String>,
+    /// The base IRIs in scope for this element. `xml:base` on an element rebinds it
+    /// for that element's subtree only, which falls out of the per-child clone.
+    base: purrdf_iri::BaseScope,
     language: Option<String>,
     direction: Option<BaseDirection>,
     /// `rdf:version="1.2"` declared on this element or an ancestor: gates the RDF 1.2
@@ -224,10 +231,13 @@ impl ParseContext {
             next.its_version = true;
         }
         if let Some(base) = attr_xml(element, XML_BASE) {
-            next.base_iri = Some(match &self.base_iri {
-                Some(parent) => resolve_relative_iri(parent, base),
-                None => base.to_string(),
-            });
+            // XML Base: the attribute may itself be relative, in which case it resolves
+            // against the base in force on the parent element (RFC-3986 5.1.1).
+            next.base
+                .rebind(base, purrdf_iri::BaseOrigin::Enclosing)
+                .map_err(|e| {
+                    RdfDiagnostic::error(e.diagnostic_code(), format!("invalid xml:base: {e}"))
+                })?;
         }
         if let Some(language) = attr_xml(element, XML_LANG) {
             next.language = (!language.is_empty()).then(|| language.to_string());
@@ -280,11 +290,14 @@ impl RdfXmlParser {
         builder.freeze()
     }
 
+    /// Returns the base scope the ROOT element left in force — the document base, after
+    /// any `xml:base` the root itself carries. Child elements get their own cloned
+    /// context, so a subtree's `xml:base` never reaches this answer.
     fn parse_document(
         &mut self,
         root: Node<'_, '_>,
         context: &ParseContext,
-    ) -> Result<(), RdfDiagnostic> {
+    ) -> Result<purrdf_iri::BaseScope, RdfDiagnostic> {
         let context = context.for_child(root)?;
         if is_rdf(root, "RDF") {
             for child in element_children(root) {
@@ -293,7 +306,7 @@ impl RdfXmlParser {
         } else {
             self.parse_node_element(root, &context)?;
         }
-        Ok(())
+        Ok(context.base)
     }
 
     fn parse_node_element(
@@ -308,7 +321,7 @@ impl RdfXmlParser {
             self.insert_statement(
                 subject.clone().into(),
                 rdf_iri(RDF_TYPE)?,
-                XmlTerm::Iri(element_iri(element)?),
+                XmlTerm::Iri(element_iri(element, &context.base)?),
                 None,
                 None,
             )?;
@@ -324,7 +337,7 @@ impl RdfXmlParser {
         }
 
         for attr in property_attrs(element) {
-            let predicate = name_iri(attr.namespace(), attr.name())?;
+            let predicate = name_iri(attr.namespace(), attr.name(), &context.base)?;
             let literal = self.context_literal(attr.value(), None, &context)?;
             self.insert_statement(
                 subject.clone().into(),
@@ -348,7 +361,7 @@ impl RdfXmlParser {
         parent_context: &ParseContext,
     ) -> Result<(), RdfDiagnostic> {
         let context = parent_context.for_child(element)?;
-        let predicate = element_iri(element)?;
+        let predicate = element_iri(element, &context.base)?;
         let reifier = attr_rdf(element, RDF_ID)
             .map(|id| self.rdf_id_iri(id, &context).map(XmlNode::Iri))
             .transpose()?;
@@ -512,7 +525,7 @@ impl RdfXmlParser {
             let literal = self.context_literal(attr.value(), None, context)?;
             self.insert_statement(
                 subject.clone().into(),
-                name_iri(attr.namespace(), attr.name())?,
+                name_iri(attr.namespace(), attr.name(), &context.base)?,
                 XmlTerm::Literal(literal),
                 None,
                 None,
@@ -594,12 +607,12 @@ impl RdfXmlParser {
             )
         } else if let Some(attr) = prop_attrs.first() {
             (
-                name_iri(attr.namespace(), attr.name())?,
+                name_iri(attr.namespace(), attr.name(), &node_ctx.base)?,
                 XmlTerm::Literal(self.context_literal(attr.value(), None, &node_ctx)?),
             )
         } else {
             (
-                element_iri(child_props[0])?,
+                element_iri(child_props[0], &node_ctx.base)?,
                 self.triple_object(child_props[0], context)?,
             )
         };
@@ -761,33 +774,32 @@ impl RdfXmlParser {
         Ok(RdfLiteral::simple(lexical))
     }
 
+    /// Resolve an `rdf:about` / `rdf:resource` reference against the base in force.
+    ///
+    /// RDF/XML admits relative references, so this is `BaseScope::resolve`. There is no
+    /// "no base, keep the raw text" fallthrough: that is what let an unresolved relative
+    /// IRI reach the frozen IR.
     fn iri_ref(&self, value: &str, context: &ParseContext) -> Result<String, RdfDiagnostic> {
-        let iri = if has_iri_scheme(value) {
-            value.to_string()
-        } else if let Some(base) = &context.base_iri {
-            resolve_relative_iri(base, value)
-        } else {
-            value.to_string()
-        };
-        validate_iri(&iri)?;
-        Ok(iri)
+        context
+            .base
+            .resolve(value)
+            .map(|iri| iri.as_str().to_owned())
+            .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
     }
 
     fn rdf_id_iri(&self, value: &str, context: &ParseContext) -> Result<String, RdfDiagnostic> {
         if value.is_empty() {
             return Err(parse_err("empty rdf:ID"));
         }
-        let iri = match &context.base_iri {
-            None => format!("#{value}"),
-            Some(base) => {
-                let base_without_fragment = base
-                    .split_once('#')
-                    .map_or(base.as_str(), |(before, _)| before);
-                format!("{base_without_fragment}#{value}")
-            }
-        };
-        validate_iri(&iri)?;
-        Ok(iri)
+        // `rdf:ID="x"` denotes the same-document reference `#x`, which RFC-3986 5.2
+        // resolves against the base (dropping the base's own fragment). With no base in
+        // scope there is nothing to resolve against, so this hard-fails rather than
+        // interning the bare `#x` as if it were an IRI.
+        context
+            .base
+            .resolve(&format!("#{value}"))
+            .map(|iri| iri.as_str().to_owned())
+            .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
     }
 
     fn fresh_bnode(&mut self) -> Result<XmlNode, RdfDiagnostic> {
@@ -848,13 +860,24 @@ fn is_rdf(element: Node<'_, '_>, local: &str) -> bool {
 }
 
 /// The IRI of a node element / property element: `namespace + local`.
-fn element_iri(element: Node<'_, '_>) -> Result<String, RdfDiagnostic> {
-    name_iri(element.tag_name().namespace(), element.tag_name().name())
+fn element_iri(
+    element: Node<'_, '_>,
+    base: &purrdf_iri::BaseScope,
+) -> Result<String, RdfDiagnostic> {
+    name_iri(
+        element.tag_name().namespace(),
+        element.tag_name().name(),
+        base,
+    )
 }
 
-fn name_iri(namespace: Option<&str>, local: &str) -> Result<String, RdfDiagnostic> {
+fn name_iri(
+    namespace: Option<&str>,
+    local: &str,
+    base: &purrdf_iri::BaseScope,
+) -> Result<String, RdfDiagnostic> {
     let iri = format!("{}{local}", namespace.unwrap_or_default());
-    validate_iri(&iri)?;
+    validate_iri(&iri, base)?;
     Ok(iri)
 }
 
@@ -921,7 +944,11 @@ fn element_text(element: Node<'_, '_>) -> String {
 
 fn rdf_iri(local: &str) -> Result<String, RdfDiagnostic> {
     let iri = format!("{RDF_NS}{local}");
-    validate_iri(&iri)?;
+    // The one IRI position with no document text in it at all: both halves are crate
+    // constants, so no caller base could bear on it and the empty scope is the literal
+    // truth rather than a stand-in for a scope that was thrown away. The check stays
+    // because a constant can be mistyped; it cannot fire on user input.
+    validate_iri(&iri, &purrdf_iri::BaseScope::empty())?;
     Ok(iri)
 }
 
@@ -931,19 +958,35 @@ fn blank_label(label: &str) -> Result<String, RdfDiagnostic> {
     Ok(label.to_owned())
 }
 
-/// The minimal syntactic IRI contract the prior purrdf-gts `Iri::new` enforced for
-/// generated and imported rows: non-empty, a scheme separator (`:`), and no ASCII
-/// whitespace / control characters (nor `<` / `>`). A failing IRI hard-fails the parse.
-fn validate_iri(value: &str) -> Result<(), RdfDiagnostic> {
-    if value.is_empty()
-        || !value.contains(':')
-        || value
-            .chars()
-            .any(|ch| ch.is_ascii_control() || ch.is_ascii_whitespace() || ch == '<' || ch == '>')
-    {
-        return Err(parse_err(format!("invalid IRI {value:?}")));
-    }
-    Ok(())
+/// Validate an IRI built from an XML qualified NAME (`namespace + local`), which is the
+/// one IRI position in this codec that is not a reference and so never resolves.
+///
+/// A `rdf:about` / `rdf:resource` / `rdf:ID` value goes through the base scope instead
+/// (see [`iri_ref`](RdfXmlParser::iri_ref)); this is only for element and attribute
+/// names, whose namespace comes from an `xmlns:` declaration.
+///
+/// The check is the shared RFC-3987 grammar plus the absoluteness requirement, NOT the
+/// bare "contains a `:`" test this used to apply. That test admitted a relative
+/// reference whose first segment merely contained a colon — a `urn`-shaped namespace
+/// like `xmlns:ex="urn"` composed to `urnLocal`, which has no colon and was rejected for
+/// the right reason by accident, while `xmlns:ex="a:b"` composed to `a:bLocal` and was
+/// accepted as "absolute" when it is a `path-noscheme` relative reference.
+///
+/// The scope handed in is the CALLER'S, not a locally minted empty one. It is still never
+/// applied — an `xmlns:` namespace is not a reference and resolves against nothing — but
+/// the refusal can now name the base in scope and say it does not apply here. The empty
+/// stand-in could only say "no base IRI is in scope", which was false for anyone who had
+/// passed `--base` and sent them hunting for a dropped parameter rather than at the
+/// relative `xmlns:` declaration that actually caused it.
+fn validate_iri(value: &str, base: &purrdf_iri::BaseScope) -> Result<(), RdfDiagnostic> {
+    base.resolve_absolute_only(value)
+        .map(|_| ())
+        .map_err(|error| {
+            RdfDiagnostic::error(
+                error.diagnostic_code(),
+                format!("invalid IRI from an XML qualified name: {error}"),
+            )
+        })
 }
 
 /// The blank-node label contract for an `rdf:nodeID` / `rdf:annotationNodeID`
@@ -1148,6 +1191,19 @@ enum PropertyItem {
 /// drops the statement layer (star-incapable RDF/XML egress), `graph.reifiers` carries
 /// only self-reifier sentinels (skipped) and `graph.annotations` is empty, so only the
 /// base quads render. Named graphs are rejected (RDF/XML is a single-graph syntax).
+///
+/// # The base
+///
+/// RDF/XML's row in the format registry sets `emits_base`, so a base reaching this graph
+/// is declared as `xml:base` on the `rdf:RDF` root and every `rdf:about` / `rdf:resource`
+/// reference is spelled against it. Those are precisely the two attributes the parser
+/// resolves through the base scope, so the document reads back to the same terms. Element
+/// and attribute NAMES are built from namespace IRIs, which are not references and never
+/// resolve against a base, so they stay absolute — as does the `rdf:nodeID` label, which
+/// is not an IRI at all.
+///
+/// Subject GROUPING keys ([`subject_key`]) stay on the absolute IRI, so the emitted
+/// element order is the same whether or not a base is in force.
 pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
     let named = graph.quads.iter().any(|(_, _, _, g)| g.is_some())
         || graph.reifiers.iter().any(|(_, _, g)| g.is_some())
@@ -1201,6 +1257,12 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
         if prefix != "rdf" && prefix != "xsd" {
             let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(namespace));
         }
+    }
+    // The document base, when one is in force: `xml:base` on the root scopes it to the
+    // whole document, which is what every relativized `rdf:about` / `rdf:resource` below
+    // resolves against on re-read.
+    if let Some(base) = graph.base() {
+        let _ = write!(out, " xml:base=\"{}\"", escape_xml_attr(base.as_str()));
     }
     // Declare RDF 1.2 so a round-trip preserves triple terms and base direction (their
     // parse is gated on `rdf:version="1.2"`).
@@ -1260,6 +1322,9 @@ fn subject_key(graph: &SerGraph, tid: usize) -> Result<String, RdfDiagnostic> {
 }
 
 /// Write the `rdf:about` / `rdf:nodeID` attribute for a subject node term.
+///
+/// `rdf:about` is an IRI REFERENCE, so it is spelled against the document base declared
+/// as `xml:base` on the root; `rdf:nodeID` is a blank-node label and is not.
 fn write_node_attribute(
     out: &mut String,
     graph: &SerGraph,
@@ -1268,7 +1333,11 @@ fn write_node_attribute(
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => {
-            let _ = write!(out, " rdf:about=\"{}\"", escape_xml_attr(ser_value(term)?));
+            let _ = write!(
+                out,
+                " rdf:about=\"{}\"",
+                escape_xml_attr(&iri_reference(graph, ser_value(term)?))
+            );
         }
         SerTermKind::Bnode => {
             let _ = write!(out, " rdf:nodeID=\"{}\"", escape_xml_attr(ser_value(term)?));
@@ -1334,10 +1403,12 @@ fn write_property(
     let term = ser_term(graph, object)?;
     match term.kind {
         SerTermKind::Iri => {
+            // `rdf:resource` is an IRI reference and resolves against `xml:base`, so it
+            // is spelled against the document base exactly as `rdf:about` is.
             let _ = writeln!(
                 out,
                 "{indent}<{name} rdf:resource=\"{}\"/>",
-                escape_xml_attr(ser_value(term)?)
+                escape_xml_attr(&iri_reference(graph, ser_value(term)?))
             );
         }
         SerTermKind::Bnode => {
@@ -1392,6 +1463,16 @@ fn write_triple_node(
     Ok(())
 }
 
+/// Spell an IRI that will be written into an attribute the RDF/XML grammar treats as a
+/// REFERENCE (`rdf:about`, `rdf:resource`), relative to the document base when one is in
+/// force.
+///
+/// Delegates to [`ser_model::spell_iri`], which is the one relativization seam in this
+/// crate; this codec performs no reference arithmetic of its own.
+fn iri_reference<'a>(graph: &SerGraph, iri: &'a str) -> std::borrow::Cow<'a, str> {
+    super::ser_model::spell_iri(iri, graph.base())
+}
+
 /// Borrow a [`SerTerm`] by id, hard-failing on an out-of-range id.
 fn ser_term(graph: &SerGraph, tid: usize) -> Result<&SerTerm, RdfDiagnostic> {
     graph.terms.get(tid).ok_or_else(|| {
@@ -1444,131 +1525,19 @@ fn is_xml_name_char(ch: char) -> bool {
     is_xml_name_start(ch) || ch.is_numeric() || matches!(ch, '-' | '.')
 }
 
-// ── Relative-IRI resolution (mirrors the prior purrdf-gts rdf_xml resolver) ───────
-
-fn has_iri_scheme(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() {
-        return false;
-    }
-    for ch in chars {
-        if ch == ':' {
-            return true;
-        }
-        if !(ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')) {
-            return false;
-        }
-    }
-    false
-}
-
-fn remove_dot_segments(path: &str) -> String {
-    let absolute = path.starts_with('/');
-    let keep_trailing_slash = path.ends_with('/')
-        || path.ends_with("/.")
-        || path.ends_with("/..")
-        || path == "."
-        || path == "..";
-    let mut segments = Vec::new();
-    for segment in path.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => {
-                segments.pop();
-            }
-            segment => segments.push(segment),
-        }
-    }
-
-    let mut normalized = String::new();
-    if absolute {
-        normalized.push('/');
-    }
-    normalized.push_str(&segments.join("/"));
-    if keep_trailing_slash && !normalized.ends_with('/') {
-        normalized.push('/');
-    }
-    if normalized.is_empty() && absolute {
-        normalized.push('/');
-    }
-    normalized
-}
-
-fn split_raw_path_suffix(raw: &str) -> (&str, &str) {
-    let split = raw.find(['?', '#']).unwrap_or(raw.len());
-    (&raw[..split], &raw[split..])
-}
-
-fn split_base_for_path(base: &str) -> (String, &str) {
-    let Some(scheme_end) = base.find(':') else {
-        return (String::new(), base);
-    };
-    let scheme_prefix = &base[..=scheme_end];
-    let rest = &base[scheme_end + 1..];
-    if let Some(after_slashes) = rest.strip_prefix("//") {
-        let authority_end = after_slashes.find('/').unwrap_or(after_slashes.len());
-        let authority = &after_slashes[..authority_end];
-        let path = &after_slashes[authority_end..];
-        (format!("{scheme_prefix}//{authority}"), path)
-    } else {
-        (scheme_prefix.to_string(), rest)
-    }
-}
-
-fn resolve_relative_iri(base: &str, raw: &str) -> String {
-    if has_iri_scheme(raw) {
-        return raw.to_string();
-    }
-
-    let base_without_fragment = base.split_once('#').map_or(base, |(before, _)| before);
-    if raw.is_empty() {
-        return base_without_fragment.to_string();
-    }
-    if raw.starts_with('#') {
-        return format!("{base_without_fragment}{raw}");
-    }
-
-    let base_without_query = base_without_fragment
-        .split_once('?')
-        .map_or(base_without_fragment, |(before, _)| before);
-    if raw.starts_with('?') {
-        return format!("{base_without_query}{raw}");
-    }
-
-    if raw.starts_with("//") {
-        if let Some(scheme_end) = base.find(':') {
-            return format!("{}:{raw}", &base[..scheme_end]);
-        }
-        return raw.to_string();
-    }
-
-    let (prefix, base_path) = split_base_for_path(base_without_query);
-    let (raw_path, suffix) = split_raw_path_suffix(raw);
-    let merged_path = if raw_path.starts_with('/') {
-        raw_path.to_string()
-    } else {
-        let base_dir = if base_path.is_empty() {
-            "/"
-        } else {
-            base_path
-                .rfind('/')
-                .map_or("", |index| &base_path[..=index])
-        };
-        format!("{base_dir}{raw_path}")
-    };
-    format!("{prefix}{}{}", remove_dot_segments(&merged_path), suffix)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The in-scope base a caller-supplied base string produces, matching what the
+    /// public `parse_dataset` entry point builds.
+    fn scope(base: Option<&str>) -> purrdf_iri::BaseScope {
+        super::super::parse::base_scope_for(base).expect("fixture base is absolute")
+    }
+
     /// Parse RDF/XML straight into a frozen dataset, for assertions over quads.
     fn parse(text: &str, base: Option<&str>) -> Arc<RdfDataset> {
-        parse_rdfxml_to_dataset(text, base).expect("parse rdf/xml")
+        parse_rdfxml_to_dataset(text, &mut scope(base)).expect("parse rdf/xml")
     }
 
     /// A DEEP DOCUMENT IS A DIAGNOSTIC, NOT A DEAD PROCESS.
@@ -1603,7 +1572,7 @@ mod tests {
         );
 
         for (name, text) in [("node striping", &striped), ("XML literal", &xml_literal)] {
-            let error = parse_rdfxml_to_dataset(text, None)
+            let error = parse_rdfxml_to_dataset(text, &mut scope(None))
                 .err()
                 .unwrap_or_else(|| panic!("{name}: a 20 000-deep document must be refused"));
             assert!(
@@ -1637,16 +1606,22 @@ mod tests {
         );
     }
 
-    /// Serialize a frozen dataset to RDF/XML through the native base-only egress (the
-    /// star layer is declared loss for RDF/XML), matching the production arm.
+    /// Serialize a frozen dataset to RDF/XML with the RDF 1.2 statement layer PROJECTED
+    /// away (declared loss for RDF/XML under the transcode contract), matching the
+    /// production arm `serialize_dataset_to_format` takes for this format.
     fn serialize(dataset: &RdfDataset) -> String {
-        let bytes = crate::native_codecs::serialize_dataset_base_only(
+        crate::native_codecs::serialize_dataset_with(
             dataset,
-            "application/rdf+xml",
-            crate::SerializeGraph::Dataset,
+            crate::NativeRdfFormat::RdfXml,
+            None,
+            &crate::native_codecs::SerializeOptions {
+                selection: crate::SerializeGraph::Dataset,
+                statement_layer: crate::native_codecs::StatementLayer::Project,
+                jsonld_options: None,
+            },
         )
-        .expect("serialize rdf/xml");
-        String::from_utf8(bytes).expect("utf8")
+        .map(|outcome| String::from_utf8(outcome.bytes).expect("utf8"))
+        .expect("serialize rdf/xml")
     }
 
     #[test]

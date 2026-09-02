@@ -28,7 +28,7 @@ below), the whole vendored suite runs in a **subprocess** (`rdflib_suite/runner.
 whose `import rdflib` resolves to the top-level rdflib shadow; the parent oracle env is never
 mutated. Every gap is a strict xfail in `rdflib_suite/xfail_ledger.toml` with a
 concrete reason — an XPASS or a stale ledger key turns the gate RED, so the ledger
-only shrinks. Scoreboard: **85 passed / 1 xfailed**. See
+only shrinks. Scoreboard: **81 passed / 5 xfailed**. See
 `rdflib_suite/vendor/PROVENANCE.md` for the exact version, sha, file list, and the
 explicit (never silent) exclusions.
 

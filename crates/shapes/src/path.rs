@@ -362,7 +362,7 @@ mod tests {
     // module's own `use`), so the test helpers below construct terms directly.
 
     fn load_data(ttl: &str) -> Arc<RdfDataset> {
-        crate::text_ingest::parse_turtle_to_dataset(ttl).expect("turtle parse")
+        crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("turtle parse")
     }
 
     const DATA: &str = r"

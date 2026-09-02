@@ -543,14 +543,27 @@ mod tests {
         encode_solution_set(&["x".to_owned()], &[vec![Some(term)]], false).expect("encode")
     }
 
+    /// `xsd:string`-shaped stand-in datatypes for the boundary fixtures below. They
+    /// are ABSOLUTE because the IR admits no other kind of IRI term (see
+    /// `purrdf_core::ir::absolute`), datatypes included.
+    const DT_B: &str = "http://example.org/b";
+    const DT_X: &str = "http://example.org/x";
+
+    /// Two structurally distinct literals must never fold onto one canonical form.
+    ///
+    /// The *datatype* leg of this hazard is now closed by construction rather than by
+    /// assertion: a datatype is an IRI term, the IR admits only absolute IRIs, and
+    /// every byte an encoder might reach for as a field delimiter (`|`, `"`, `^`,
+    /// `<`, `>`) is outside the RFC-3987 grammar — so no datatype can carry one. What
+    /// stays reachable is the LEXICAL form, which may legally contain the entire
+    /// `"lex"^^<iri>` framing verbatim, and that is what this pins.
     #[test]
     fn literal_field_boundaries_do_not_collide() {
-        // Two structurally distinct literals whose lexical form / datatype
-        // share a `|` byte across the split must still encode differently.
         assert_ne!(
-            one(lit("a|b", "dt")),
-            one(lit("a", "b|dt")),
-            "literals with | in different fields must encode differently"
+            one(lit("a", DT_B)),
+            one(lit(&format!("a\"^^<{DT_B}>"), DT_X)),
+            "a lexical form that spells the datatype framing must not encode as that \
+             framing"
         );
     }
 
@@ -558,7 +571,7 @@ mod tests {
     fn iri_cannot_collide_with_literal() {
         assert_ne!(
             one(TermValue::Iri("L:something".to_owned())),
-            one(lit("something", "dt")),
+            one(lit("something", DT_X)),
             "IRI and Literal encodings must stay distinct"
         );
     }

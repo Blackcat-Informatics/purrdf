@@ -89,7 +89,7 @@ struct Suite {
     dir: &'static str,
     /// Media type for action files in this suite.
     media_type: &'static str,
-    /// Sub-manifests to read (`syntax`, `eval`); RDF-XML has only `eval`.
+    /// Sub-manifests to read (`syntax`, `eval`, `iri`); RDF-XML has only `eval`.
     submanifests: &'static [&'static str],
 }
 
@@ -97,12 +97,12 @@ const SUITES: &[Suite] = &[
     Suite {
         dir: "turtle",
         media_type: "text/turtle",
-        submanifests: &["syntax", "eval"],
+        submanifests: &["syntax", "eval", "iri"],
     },
     Suite {
         dir: "trig",
         media_type: "application/trig",
-        submanifests: &["syntax", "eval"],
+        submanifests: &["syntax", "eval", "iri"],
     },
     Suite {
         dir: "ntriples",

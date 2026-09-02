@@ -330,8 +330,9 @@ mod tests {
         }
         let bytes =
             std::fs::read(&module).unwrap_or_else(|e| panic!("read {}: {e}", module.display()));
-        let ds = Dataset::parse_turtle(&bytes, &module.display().to_string())
-            .expect("module.ttl parses");
+        // The committed module is a file on disk, so it parses under its own retrieval
+        // IRI (RFC-3986 §5.1.3), exactly as the catalog reads it.
+        let ds = Dataset::parse_file(&bytes, &module).expect("module.ttl parses");
 
         let decomposes = format!("{GMEOW}decomposesToAxis");
         for d in DECOMPOSITIONS {
