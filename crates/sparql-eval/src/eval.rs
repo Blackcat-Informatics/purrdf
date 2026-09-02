@@ -535,7 +535,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
-    pub(crate) remote: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
+    pub(crate) remote: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
     /// The shared, dataset-aware BGP join-order cache, if one is injected. `None` for
     /// a directly-built context (e.g. a unit test): planning then runs every BGP, which
     /// is semantically identical — just not memoised. The engine injects its own cache
@@ -1015,10 +1015,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// Attach a `SERVICE` federation source for this evaluation. The borrow shares
     /// the dataset lifetime `'d`; the engine's default path leaves it `None`.
     #[must_use]
-    pub fn with_remote(
-        mut self,
-        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
-    ) -> Self {
+    pub fn with_remote(mut self, source: &'d (dyn crate::remote::ServiceResolver + Sync)) -> Self {
         self.remote = Some(source);
         self
     }

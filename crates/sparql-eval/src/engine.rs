@@ -622,7 +622,7 @@ impl NativeSparqlEngine {
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
         options: QueryOptions<'d>,
-        source: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
+        source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         state: &Arc<GovernorState>,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         check_plan_matches_relations(prepared, options)?;
@@ -656,7 +656,7 @@ impl NativeSparqlEngine {
     }
 
     /// [`Self::query_governed`] with a
-    /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected, so `SERVICE`
+    /// [`ServiceResolver`](crate::remote::ServiceResolver) injected, so `SERVICE`
     /// clauses resolve through it.
     ///
     /// The governed sibling of [`Self::query_with_source`], and the entry a federated
@@ -674,7 +674,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
-        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        source: &(dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'_>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
@@ -692,7 +692,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
@@ -830,7 +830,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
@@ -848,7 +848,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: Option<&'d (dyn crate::remote::RemoteQuerySource + Sync)>,
+        source: Option<&'d (dyn crate::remote::ServiceResolver + Sync)>,
         options: QueryOptions<'d>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
@@ -1560,7 +1560,7 @@ impl NativeSparqlEngine {
     }
 
     /// Like [`SparqlEngine::query`], but with a
-    /// [`RemoteQuerySource`](crate::remote::RemoteQuerySource) injected so
+    /// [`ServiceResolver`](crate::remote::ServiceResolver) injected so
     /// `SERVICE` clauses resolve through it. Without this, the default
     /// [`SparqlEngine::query`] path has no source and a non-silent `SERVICE`
     /// hard-fails. This is the public entry the conformance harness and
@@ -1577,7 +1577,7 @@ impl NativeSparqlEngine {
     /// query's OUTER pattern resolves against `options.property_functions` exactly
     /// as [`Self::query_with_options_view`] resolves it; a call node inside the
     /// `SERVICE` body itself is refused at forwarding regardless (see
-    /// [`crate::remote::RemoteQuerySource`]).
+    /// [`crate::remote::ServiceResolver`]).
     ///
     /// # Errors
     ///
@@ -1586,7 +1586,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &Arc<RdfDataset>,
         request: SparqlRequest<'_>,
-        source: &(dyn crate::remote::RemoteQuerySource + Sync),
+        source: &(dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'_>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         self.query_with_source_view(&**dataset, request, source, options)
@@ -1602,7 +1602,7 @@ impl NativeSparqlEngine {
         &'d self,
         dataset: &'d D,
         request: SparqlRequest<'_>,
-        source: &'d (dyn crate::remote::RemoteQuerySource + Sync),
+        source: &'d (dyn crate::remote::ServiceResolver + Sync),
         options: QueryOptions<'d>,
     ) -> Result<SparqlResult, RdfDiagnostic> {
         let prepared = self.prepare_for(
