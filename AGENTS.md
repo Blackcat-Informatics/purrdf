@@ -49,6 +49,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-slice` (`crates/slice`) | Slice catalog, artifacts, ownership analysis |
 | `purrdf-datalog` (`crates/datalog`) | Deterministic semi-naive Datalog substrate beneath every rule-driven engine |
 | `purrdf-entail` (`crates/entail`) | Entailment regimes: RDF/RDFS/OWL 2 RL/D materialization, OWL-Direct, RIF |
+| `purrdf-geo` (`crates/geo`) | GeoSPARQL 1.1: exact float-free WKT/GeoJSON geometry and the `geof:` family over both extension seams |
 | `purrdf-text` (`crates/text`) | Deterministic full-text search over literals: exact fixed-point BM25, ranked rows through the property-function seam |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
@@ -67,7 +68,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
   `purrdf-iri`, `purrdf-xsd`, and `purrdf-events` must keep **zero runtime
   dependencies**.
-* **Everything is wasm-able.** Every release crate (all 20 published crates,
+* **Everything is wasm-able.** Every release crate (all 21 published crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -172,7 +173,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (20 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (21 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Four members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`, and

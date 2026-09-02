@@ -261,6 +261,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-shapes`](./crates/shapes/) | SHACL validation engine (full Core + SHACL-SPARQL). |
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1: ShExC/ShExJ schemas and validation. |
 | [`purrdf-entail`](./crates/entail/) | Entailment regimes: the RDF/RDFS/OWL-RL/D chase, an OWL-Direct tableau, and RIF-Core rules — each closure returned with a reasoning report. |
+| [`purrdf-geo`](./crates/geo/) | GeoSPARQL 1.1: exact, float-free WKT and GeoJSON geometry, the `geof:` function family over the scalar seam, and feature-level query rewrite over the property-function seam — all under caller-supplied IRIs. |
 | [`purrdf-datalog`](./crates/datalog/) | The fixpoint substrate beneath the chase: a columnar relation store and a deterministic semi-naive evaluator over the DL-clause IR. Not re-exported by the umbrella. |
 | [`purrdf-text`](./crates/text/) | Deterministic full-text search over RDF 1.2 literals: an in-memory inverted index and exact fixed-point BM25 ranking, reached from SPARQL through caller-supplied property-function IRIs. |
 | [`purrdf-validate`](./crates/validate/) | The shared host boundary: SARIF 2.1.0 diagnostics and the entailment-regime string surface the Python/wasm/C bindings call. |

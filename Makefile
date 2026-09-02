@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check book book-samples check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check geo-determinism book book-samples check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -137,7 +137,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-doc: ## Build docs for the 19 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 20 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -162,7 +162,7 @@ book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/b
 	mdbook build docs/book
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
@@ -228,13 +228,16 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
-			-p purrdf-text \
+			-p purrdf-geo -p purrdf-text \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	else \
 		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 	fi
+
+geo-determinism: ## Prove purrdf-geo's native and wasm32 answers are byte-identical (own gate, NOT part of `check`).
+	bash scripts/check-geo-determinism.sh
 
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they

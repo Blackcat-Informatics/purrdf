@@ -1320,6 +1320,7 @@ dependencies = [
  "purrdf-datalog",
  "purrdf-entail",
  "purrdf-events",
+ "purrdf-geo",
  "purrdf-gts",
  "purrdf-iri",
  "purrdf-rdf",
@@ -1445,6 +1446,21 @@ dependencies = [
 [[package]]
 name = "purrdf-events"
 version = "0.12.0"
+
+[[package]]
+name = "purrdf-geo"
+version = "0.12.0"
+dependencies = [
+ "criterion",
+ "purrdf-core",
+ "purrdf-iri",
+ "purrdf-rdf",
+ "purrdf-shapes",
+ "purrdf-sparql-algebra",
+ "purrdf-sparql-eval",
+ "purrdf-xsd",
+ "smallvec",
+]
 
 [[package]]
 name = "purrdf-gts"
