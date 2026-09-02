@@ -1420,20 +1420,6 @@ fn exists<D: DatasetView + Sync>(
             ),
         };
 
-    // The outer-bound variables (a concrete binding in the current row).
-    let outer_bound: DetHashSet<Variable> = schema
-        .vars()
-        .iter()
-        .enumerate()
-        .filter_map(|(i, v)| {
-            if row[i].is_some() {
-                Some(v.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-
     // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
     // `VALUES` column inside this `EXISTS` body that collides with a variable
     // THIS row actually binds has no defined answer under either evaluation
@@ -1467,17 +1453,38 @@ fn exists<D: DatasetView + Sync>(
     // in `crate::exists_admission_gate` (the W3C `exists04`/`exists05`
     // shape — nested `FILTER EXISTS`/`FILTER NOT EXISTS`, correlated only
     // through the DEFINITION path).
-    if !ctx.in_substituted_exists
-        && let Some((var, intro)) =
+    if !ctx.in_substituted_exists {
+        // The outer-bound variables (a concrete binding in the current row), built
+        // only for this check: it is the one consumer that needs the set itself.
+        let outer_bound: DetHashSet<Variable> = schema
+            .vars()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| {
+                if row[i].is_some() {
+                    Some(v.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if let Some((var, intro)) =
             crate::governor::soundness::exists_row_collision(normalized, &outer_bound)
-    {
-        return Err(EvalError::exists_scope_collision(
-            var.as_str().to_owned(),
-            intro.as_str(),
-        ));
+        {
+            return Err(EvalError::exists_scope_collision(
+                var.as_str().to_owned(),
+                intro.as_str(),
+            ));
+        }
     }
 
-    let correlated = free_vars.iter().any(|v| outer_bound.contains(v));
+    // Correlated iff some free variable of the inner is bound in THIS row. Probed
+    // directly through the schema's O(1) column index — `outer_bound.contains(v)` is
+    // exactly "`v` has a column `i` and `row[i]` is bound" (`VarSchema` dedups, so the
+    // column is unique) — instead of cloning every bound variable into a per-row set.
+    let correlated = free_vars
+        .iter()
+        .any(|v| schema.index_of(v).is_some_and(|i| row[i].is_some()));
 
     if exists_use_probe(correlated, stateful, normalized, analysis, schema) {
         // ---- Memoized probe path ----
@@ -3112,16 +3119,21 @@ fn eval_function<D: DatasetView + Sync>(
         },
         Function::UCase => map_string(ctx, &vals, str::to_uppercase),
         Function::LCase => map_string(ctx, &vals, str::to_lowercase),
-        Function::Contains => string_pred(ctx, &vals, |h, n| h.contains(n)),
-        Function::StrStarts => string_pred(ctx, &vals, |h, n| h.starts_with(n)),
-        Function::StrEnds => string_pred(ctx, &vals, |h, n| h.ends_with(n)),
+        // Dispatched by the early `return` at the top of this function, BEFORE the
+        // eager argument evaluation above (their `_expr` forms avoid minting nested
+        // `STR`/`LANG` terms), so no value-space arm exists for them here.
+        Function::Contains
+        | Function::StrStarts
+        | Function::StrEnds
+        | Function::Regex
+        | Function::LangMatches => {
+            unreachable!("string predicates dispatch before eager argument evaluation")
+        }
         Function::Concat => eval_concat(ctx, &vals),
         Function::SubStr => eval_substr(ctx, &vals),
         Function::StrBefore => eval_str_before_after(ctx, &vals, true),
         Function::StrAfter => eval_str_before_after(ctx, &vals, false),
         Function::Replace => eval_replace(ctx, &vals),
-        Function::Regex => eval_regex(ctx, &vals),
-        Function::LangMatches => eval_lang_matches(ctx, &vals),
 
         // ---- term constructors --------------------------------------------
         Function::Iri | Function::Uri => match arg(&vals, 0) {
@@ -3800,11 +3812,23 @@ fn eval_lang_matches_expr<D: DatasetView + Sync>(
         ) else {
             return Ok(None);
         };
-        let tag = tag.to_ascii_lowercase();
-        let range = range.to_ascii_lowercase();
-        range == "*" || tag == range || tag.starts_with(&(range + "-"))
+        lang_matches(&tag, &range)
     };
     Ok(Some(bool_term(ctx, result)))
+}
+
+/// RFC 4647 basic filtering as `LANGMATCHES` applies it: `range` is `*`, or equals
+/// `tag` ASCII-case-insensitively, or is a `-`-terminated prefix of it.
+///
+/// Compares bytes with `eq_ignore_ascii_case` instead of building three lowercased
+/// `String`s per row: `to_ascii_lowercase` only folds `A-Z`, which is exactly the
+/// folding `eq_ignore_ascii_case` performs, and non-ASCII bytes pass through both
+/// untouched, so the answer is identical with zero allocations.
+fn lang_matches(tag: &str, range: &str) -> bool {
+    let (t, r) = (tag.as_bytes(), range.as_bytes());
+    range == "*"
+        || t.eq_ignore_ascii_case(r)
+        || (t.len() > r.len() && t[r.len()] == b'-' && t[..r.len()].eq_ignore_ascii_case(r))
 }
 
 fn eval_string_arg_expr<D: DatasetView + Sync>(
@@ -3836,8 +3860,8 @@ fn eval_string_arg_expr<D: DatasetView + Sync>(
             let Some(term) = eval_expr(expr, row, schema, ctx)? else {
                 return Ok(None);
             };
-            let value = value_of(ctx, term);
-            Ok(string_arg_value(&value).map(|(s, l, _)| (s, l)))
+            // `value` is an owned temporary: move its strings out rather than clone them.
+            Ok(string_arg_value_owned(value_of(ctx, term)).map(|(s, l, _)| (s, l)))
         }
     }
 }
@@ -4003,6 +4027,28 @@ fn string_arg_value(
     }
 }
 
+/// By-value twin of [`string_arg_value`]: the same datatype guard, but MOVES the
+/// lexical form and language out of an owned `TermValue` the caller is about to drop,
+/// saving the two `String` clones per evaluated string argument.
+fn string_arg_value_owned(
+    value: TermValue,
+) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
+    match value {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } if datatype == XSD_STRING
+            || datatype == RDF_LANG_STRING
+            || datatype == RDF_DIR_LANG_STRING =>
+        {
+            Some((lexical_form, language, direction))
+        }
+        _ => None,
+    }
+}
+
 /// Apply a pure string transform to a single string argument, preserving its
 /// language tag.
 fn map_string<D: DatasetView + Sync>(
@@ -4013,18 +4059,6 @@ fn map_string<D: DatasetView + Sync>(
     match string_arg(vals, 0) {
         Some((s, lang)) => Ok(Some(make_string(ctx, f(&s), lang))),
         None => Ok(None),
-    }
-}
-
-/// A two-string boolean predicate (CONTAINS/STRSTARTS/STRENDS).
-fn string_pred<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    vals: &[Option<TermValue>],
-    f: impl Fn(&str, &str) -> bool,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match (string_arg(vals, 0), string_arg(vals, 1)) {
-        (Some((h, _)), Some((n, _))) => Ok(Some(bool_term(ctx, f(&h, &n)))),
-        _ => Ok(None),
     }
 }
 
@@ -4199,24 +4233,6 @@ fn eval_replace<D: DatasetView + Sync>(
     Ok(Some(make_string(ctx, replaced, lang)))
 }
 
-/// `REGEX(text, pattern[, flags])`.
-fn eval_regex<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    vals: &[Option<TermValue>],
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some((text, _)) = string_arg(vals, 0) else {
-        return Ok(None);
-    };
-    let Some((pattern, _)) = string_arg(vals, 1) else {
-        return Ok(None);
-    };
-    let flags = string_arg(vals, 2).map(|(f, _)| f).unwrap_or_default();
-    match cached_regex(ctx, &pattern, &flags) {
-        Some(re) => Ok(Some(bool_term(ctx, re.is_match(&text)))),
-        None => Ok(None),
-    }
-}
-
 /// The compiled regex for `(pattern, flags)`, from the per-query cache.
 ///
 /// The hit path probes with the **borrowed** strings (the two-level map avoids
@@ -4257,24 +4273,6 @@ fn build_regex(pattern: &str, flags: &str) -> Option<regex::Regex> {
         };
     }
     builder.build().ok()
-}
-
-/// `langMatches(tag, range)` — RFC 4647 basic filtering (`*` matches any tag).
-fn eval_lang_matches<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    vals: &[Option<TermValue>],
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some((tag, _)), Some((range, _))) = (string_arg(vals, 0), string_arg(vals, 1)) else {
-        return Ok(None);
-    };
-    let tag = tag.to_ascii_lowercase();
-    let range = range.to_ascii_lowercase();
-    let matches = if range == "*" {
-        !tag.is_empty()
-    } else {
-        tag == range || tag.starts_with(&format!("{range}-"))
-    };
-    Ok(Some(bool_term(ctx, matches)))
 }
 
 /// `STRLANG(lexical, lang)`.
@@ -4861,6 +4859,79 @@ mod tests {
             1,
             "only the boolean result is minted"
         );
+    }
+
+    /// `lang_matches` must answer exactly as the former three-`String`
+    /// `to_ascii_lowercase` comparison did, over every shape RFC 4647 basic
+    /// filtering distinguishes.
+    #[test]
+    fn lang_matches_byte_comparison_matches_lowercased_semantics() {
+        // The reference: what the allocation-based implementation computed.
+        fn reference(tag: &str, range: &str) -> bool {
+            let tag = tag.to_ascii_lowercase();
+            let range = range.to_ascii_lowercase();
+            range == "*" || tag == range || tag.starts_with(&(range + "-"))
+        }
+        let cases: &[(&str, &str, bool)] = &[
+            // exact
+            ("en", "en", true),
+            ("en-US", "en-US", true),
+            // prefix with '-'
+            ("en-US", "en", true),
+            ("en-Latn-US", "en-Latn", true),
+            // prefix WITHOUT '-' must be false
+            ("english", "en", false),
+            ("en", "en-US", false),
+            ("enUS", "en", false),
+            // case differences (ASCII only)
+            ("EN-us", "en-US", true),
+            ("en-gb", "EN", true),
+            ("FR", "fr", true),
+            // non-ASCII bytes are compared verbatim (never case-folded)
+            ("ünd", "ünd", true),
+            ("Ünd", "ünd", false),
+            ("ünd-x", "ünd", true),
+            ("ündx", "ünd", false),
+            // range "*" matches any tag, including the empty one (the live path's rule)
+            ("en", "*", true),
+            ("", "*", true),
+            // empty tag / empty range
+            ("", "", true),
+            ("en", "", false),
+            ("-en", "", true),
+            ("", "en", false),
+            // tag shorter than range never matches by prefix
+            ("e", "en", false),
+            ("de", "de-CH", false),
+        ];
+        for &(tag, range, expected) in cases {
+            assert_eq!(
+                lang_matches(tag, range),
+                expected,
+                "lang_matches({tag:?}, {range:?})"
+            );
+            assert_eq!(
+                lang_matches(tag, range),
+                reference(tag, range),
+                "lang_matches({tag:?}, {range:?}) diverges from the lowercased reference"
+            );
+        }
+    }
+
+    /// The same predicate through the live `LANGMATCHES` dispatch (`eval_lang_matches_expr`).
+    #[test]
+    fn langmatches_function_dispatch_end_to_end() {
+        let ds = empty_ds();
+        let lm = |tag: &str, range: &str| {
+            Expression::FunctionCall(Function::LangMatches, vec![lit(tag), lit(range)])
+        };
+        assert_eq!(ebv(&ds, &lm("en-US", "en")), Some(true));
+        assert_eq!(ebv(&ds, &lm("EN", "en")), Some(true));
+        assert_eq!(ebv(&ds, &lm("english", "en")), Some(false));
+        assert_eq!(ebv(&ds, &lm("de", "*")), Some(true));
+        assert_eq!(ebv(&ds, &lm("", "*")), Some(true));
+        assert_eq!(ebv(&ds, &lm("", "en")), Some(false));
+        assert_eq!(ebv(&ds, &lm("ünd-x", "ünd")), Some(true));
     }
 
     #[test]

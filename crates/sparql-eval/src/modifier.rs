@@ -419,7 +419,10 @@ fn eval_graph_var<D: DatasetView + Sync>(
         .collect();
 
     let saved = ctx.active_graph;
-    let mut out_schema: Option<Arc<VarSchema>> = None;
+    // Held as a plain `VarSchema` across the per-graph loop and wrapped in `Arc` ONCE
+    // after it (the last graph's schema wins either way): one allocation, not one per
+    // named graph.
+    let mut out_schema: Option<VarSchema> = None;
     let mut rows = Vec::new();
     let mut truncated = false;
     for g in graphs {
@@ -468,7 +471,7 @@ fn eval_graph_var<D: DatasetView + Sync>(
                 }
             }
         }
-        out_schema = Some(Arc::new(sch));
+        out_schema = Some(sch);
     }
     ctx.active_graph = saved;
 
@@ -477,7 +480,7 @@ fn eval_graph_var<D: DatasetView + Sync>(
     // (that would be a fresh scan after the budget is spent), so the schema is taken
     // from the partial result instead.
     let schema = match out_schema {
-        Some(s) => s,
+        Some(s) => Arc::new(s),
         None if truncated => lift.absorbed_schema().map_or_else(
             || {
                 let mut schema = (*crate::eval::syntactic_schema(inner)).clone();
@@ -999,9 +1002,9 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
             || ctx.fork_for_worker(),
             |child, acc, (_, key, idxs)| {
                 let mut row = smallvec::smallvec![None; out_width];
-                for (i, _) in variables.iter().enumerate() {
-                    row[i] = key[i];
-                }
+                // `key` was built from `key_cols` (one cell per GROUP BY variable), so
+                // `key.len() == var_count`: one memcpy replaces the indexed loop.
+                row[..var_count].copy_from_slice(key);
                 for (j, (_, agg)) in aggregates.iter().enumerate() {
                     row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, child)?;
                 }
@@ -1017,9 +1020,8 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         let mut rows = Vec::with_capacity(groups.len());
         for (_, key, idxs) in &groups {
             let mut row = smallvec::smallvec![None; out_width];
-            for (i, _) in variables.iter().enumerate() {
-                row[i] = key[i];
-            }
+            // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
+            row[..var_count].copy_from_slice(key);
             for (j, (_, agg)) in aggregates.iter().enumerate() {
                 row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, ctx)?;
             }
@@ -1170,7 +1172,11 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // zero survivors (the SAME answer a genuinely empty group already gives)
     // instead of trusting the invariant with an `unreachable!()`.
     let mut seen: Option<DetHashSet<SolutionTerm<D::Id>>> = agg.distinct.then(DetHashSet::default);
-    let mut survivors: Vec<TermValue> = Vec::new();
+    // Without `DISTINCT` every bound row survives, so `idxs.len()` is the exact upper
+    // bound: one allocation instead of doubling growth. `DISTINCT` starts empty since
+    // its survivor count is unknowable up front.
+    let mut survivors: Vec<TermValue> =
+        Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
     if let Some(first_arg) = agg.args().first() {
         // Phase 1: evaluate every row's argument expression against `ctx`, charge
         // `AggregateAccumulation` for each one, apply `DISTINCT`, and charge
@@ -1390,7 +1396,10 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // proportional to the group's cardinality.
     let mut seen: Option<DetHashSet<Vec<TermValue>>> = agg.distinct.then(DetHashSet::default);
     let mut tuple: Vec<TermValue> = Vec::with_capacity(agg.args().len());
-    let mut survivors: Vec<Vec<TermValue>> = Vec::new();
+    // As in `eval_aggregate`'s phase 1: `idxs.len()` is the exact upper bound on
+    // survivors without `DISTINCT`, so reserve it once instead of growing by doubling.
+    let mut survivors: Vec<Vec<TermValue>> =
+        Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
     for &i in idxs {
         tuple.clear();
         let mut every_position_bound = true;
