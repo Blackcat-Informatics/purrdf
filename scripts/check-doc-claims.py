@@ -4039,8 +4039,12 @@ def outstanding_bootstrap_claim(crates: list[str]) -> list[str]:
         return problems + [f"{rel}: the outstanding-bootstrap section has no body"]
     prose = body.group(1)
     spelled = _SPELLED.get(len(named))
+    # `[A-Za-z-]+`, not `[A-Za-z]+`: the release set is 21 crates, and the
+    # spellings past twenty are hyphenated (`twenty-one`, `twenty-first`). A
+    # class that stopped at the hyphen would simply not match, and this claim
+    # would report "no count stated" for a document that states one correctly.
     stated = re.search(
-        _flow(r"(?P<count>[A-Za-z]+) crates are in the release set above"), prose
+        _flow(r"(?P<count>[A-Za-z-]+) crates are in the release set above"), prose
     )
     if not stated:
         problems.append(
@@ -4059,8 +4063,20 @@ def outstanding_bootstrap_claim(crates: list[str]) -> list[str]:
         if crate not in ordinal:
             continue
         want = _ordinal(ordinal[crate])
+        if want is None:
+            # An ordinal this table cannot spell is a position this claim cannot
+            # check, and silently skipping it would leave the number ungated while
+            # the run still printed OK. Fail, naming the table to extend.
+            problems.append(
+                f"{rel}: `{crate}` is at position {ordinal[crate]} in the release "
+                f"set, which _ordinal() cannot spell; extend _SPELLED / "
+                f"_IRREGULAR_ORDINAL in scripts/check-doc-claims.py rather than "
+                f"leaving this crate's ordinal unchecked"
+            )
+            continue
         found = re.search(
-            _flow(rf"`{re.escape(crate)}` (?:is )?the \*\*(?P<ord>[a-z]+)\*\*"), prose
+            _flow(rf"`{re.escape(crate)}` (?:is )?the \*\*(?P<ord>[a-z-]+)\*\*"),
+            prose,
         )
         if not found:
             problems.append(
@@ -4070,7 +4086,7 @@ def outstanding_bootstrap_claim(crates: list[str]) -> list[str]:
                 f"gets before it fails"
             )
             continue
-        if want and found.group("ord") != want:
+        if found.group("ord") != want:
             problems.append(
                 f"{rel}: says `{crate}` is the {found.group('ord')} crate in publish "
                 f"order, but scripts/release-crates.sh puts it at position "

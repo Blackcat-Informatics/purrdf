@@ -109,12 +109,18 @@ Three crates are in the release set above but **have no crates.io record**
 (`https://crates.io/api/v1/crates/<name>` answers 404 for each while every
 sibling answers 200). `purrdf-cdt` is the **fourth** crate in publish order,
 `purrdf-geo` the **thirteenth** and `purrdf-text` the **fourteenth**; all three
-are new crates whose records have never been created. A `rust-v*` tag pushed
-before they are bootstrapped would irreversibly publish the three crates ahead of
-`purrdf-cdt` and then fail; `cargo publish` cannot be undone. `purrdf-cdt` moved
-that failure point EARLIER than any previous new crate did: it is a leaf over
-`purrdf-iri` + `purrdf-xsd`, so it sorts near the front of the dependency order,
-and a release now stops after three crates rather than after six.
+are new crates whose records have never been created.
+
+**What that would cost without the preflight, and why the preflight exists.**
+`cargo publish` cannot be undone, and this lane publishes one crate at a time in
+dependency order — so a `rust-v*` tag would irreversibly publish the three crates
+ahead of `purrdf-cdt` and only then fail. `purrdf-cdt` moved that failure point
+EARLIER than any previous new crate did: it is a leaf over `purrdf-iri` +
+`purrdf-xsd`, so it sorts near the front of the dependency order, and the damage
+would stop after three crates rather than after six. **That is the counterfactual,
+not current behaviour**: the preflight described below runs before any packaging
+or publishing, so today a tag pushed in this state costs a red job and publishes
+nothing at all.
 
 This list previously also named `purrdf-datalog`, which has had a crates.io
 record since 2026-07-31 and answers 200. That was a stale entry, not a missing
@@ -128,7 +134,7 @@ that gate cannot decide is *membership* — whether a record exists is a fact ab
 crates.io, not about this tree — which is what the preflight below measures, and
 why this list must never be read in place of running it.
 
-That is now a refusal instead of a partial publish. The release job runs
+The mechanism that makes it a refusal rather than a partial publish: the release job runs
 [`scripts/check-crates-io-records.sh`](../scripts/check-crates-io-records.sh)
 **before any packaging or publishing**; it queries `/api/v1/crates/<name>` for
 every crate in the release set and fails the job naming the missing crate and
