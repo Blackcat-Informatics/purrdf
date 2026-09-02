@@ -4,11 +4,15 @@
 //! SHACL validation report types and serialization.
 //!
 //! [`ValidationReport`] is the in-memory representation of a SHACL report
-//! graph. `to_ntriples()` emits a canonical N-Triples serialization using
-//! oxigraph's own serializer (avoiding hand-rolled literal escaping).
+//! graph. `to_dataset()` materializes that graph as a frozen PurRDF
+//! [`RdfDataset`] — the report's PRIMAL RDF form — and `to_ntriples()` is a
+//! serialization of exactly that dataset. A caller who wants any other syntax
+//! takes `to_dataset()` straight to `serialize_dataset`, with no N-Triples
+//! parse round-trip in between.
 //! `tuples_from_ntriples()` round-trips back to the same tuple set for testing.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use ::purrdf::FastSet;
 use ::purrdf::RdfDatasetBuilder;
@@ -170,20 +174,48 @@ pub type ResultTuple = (
 );
 
 impl ValidationReport {
-    /// Emit the report as N-Triples text using the native purrdf codec.
+    /// Materialize the report graph as a frozen PurRDF [`RdfDataset`].
     ///
-    /// The report is built into an in-memory `Store` as quads in the default
-    /// graph, folded back to the IR (`dataset_from_store`), then serialised via
-    /// the native codec. This avoids hand-rolling literal escaping and carries no
-    /// oxigraph `io` dependency. The `DefaultGraph` selection on the
-    /// `application/n-quads` codec emits graphless rows (i.e. N-Triples) and is
-    /// byte-lenient on language tags, matching the legacy oxigraph serializer.
-    pub fn to_ntriples(&self) -> String {
+    /// This is the report's primal RDF form: the quads are built straight from
+    /// the report's own [`Term`] values into an [`RdfDatasetBuilder`] and frozen.
+    /// [`ValidationReport::to_ntriples`] is a *serialization of this dataset*, so
+    /// rendering a report in any other syntax is
+    ///
+    /// ```no_run
+    /// # use purrdf_shapes::report::ValidationReport;
+    /// # use purrdf::{SerializeGraph, serialize_dataset};
+    /// # fn f(report: &ValidationReport) -> Result<Vec<u8>, purrdf::RdfDiagnostic> {
+    /// serialize_dataset(&report.to_dataset(), "text/turtle", SerializeGraph::DefaultGraph)
+    /// # }
+    /// ```
+    ///
+    /// rather than a `to_ntriples()` → `parse_dataset()` round-trip. Avoiding
+    /// that round-trip is not merely a speed-up: the direct path carries every
+    /// RDF 1.2 term the report holds (a triple-term focus node or value included)
+    /// with the report's own blank-node labels, instead of whatever survives a
+    /// text grammar and gets relabelled by a parser.
+    ///
+    /// Everything the report can express lives in the default graph; the returned
+    /// dataset declares no named graphs and populates no reifier/annotation side
+    /// table.
+    ///
+    /// The blank nodes the report MINTS (the report node, one per result, and the
+    /// interior nodes of a complex `sh:path`) are guaranteed distinct from every
+    /// blank node the report CARRIES: a data graph is free to contain `_:r0`, and
+    /// the minted nodes step into a reserved label namespace when it does.
+    #[must_use]
+    pub fn to_dataset(&self) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         // Complex-path structure roots already emitted (keyed by root label).
         let mut emitted_paths: FastSet<String> = FastSet::default();
 
-        let report_subj = RdfTerm::blank_node("report");
+        // Reserve a label namespace for the nodes this function invents, so a
+        // data graph that happens to use `_:report` or `_:r0` cannot be fused
+        // with the report's own structure. Empty (and so byte-identical to a
+        // report with no such data) unless the report really does carry a
+        // colliding label.
+        let mint = mint_prefix(self);
+        let report_subj = RdfTerm::blank_node(format!("{mint}report"));
 
         // _:report rdf:type sh:ValidationReport
         push_triple(
@@ -205,7 +237,7 @@ impl ValidationReport {
         );
 
         for (i, r) in self.results.iter().enumerate() {
-            let result_subj = RdfTerm::blank_node(format!("r{i}"));
+            let result_subj = RdfTerm::blank_node(format!("{mint}r{i}"));
 
             // _:report sh:result _:r{i}
             push_triple(
@@ -255,20 +287,27 @@ impl ValidationReport {
                 r.source_shape.to_rdf_term(),
             );
 
-            // sh:resultPath (optional). A complex path is a blank node; its
-            // full SHACL path structure is emitted once per distinct root label
-            // (two results sharing a path share the structure bnodes).
+            // sh:resultPath (optional). A complex path is a blank node the report
+            // MINTS (see `path::path_to_term`), so it carries the mint prefix
+            // like every other minted node; its full SHACL path structure is
+            // emitted once per distinct root label (two results sharing a path
+            // share the structure bnodes).
             if let Some(path) = &r.result_path {
+                let root = match (path, &r.path_structure) {
+                    (Term::BlankNode(label), Some(_)) => Some(format!("{mint}{label}")),
+                    _ => None,
+                };
                 push_triple(
                     &mut builder,
                     result_subj.clone(),
                     sh::RESULT_PATH,
-                    path.to_rdf_term(),
+                    root.clone()
+                        .map_or_else(|| path.to_rdf_term(), RdfTerm::blank_node),
                 );
-                if let (Term::BlankNode(label), Some(structure)) = (path, &r.path_structure)
-                    && emitted_paths.insert(label.clone())
+                if let (Some(root), Some(structure)) = (root, &r.path_structure)
+                    && emitted_paths.insert(root.clone())
                 {
-                    emit_path_structure(&mut builder, label, structure);
+                    emit_path_structure(&mut builder, &root, structure);
                 }
             }
 
@@ -299,8 +338,22 @@ impl ValidationReport {
         // this builder can produce: every quad above is pushed with a fixed IRI
         // predicate and a well-formed subject/object built from validated report
         // data. Blank-node LABEL content is never checked here; it is opaque to
-        // the IR and is escaped, never rejected, at codec egress (see below).
-        let dataset = builder.freeze().expect("report quads freeze into the IR");
+        // the IR and is escaped, never rejected, at codec egress (see
+        // `to_ntriples`).
+        builder.freeze().expect("report quads freeze into the IR")
+    }
+
+    /// Emit the report as N-Triples text using the native purrdf codec.
+    ///
+    /// The report graph is materialized by [`ValidationReport::to_dataset`] and
+    /// serialized from there, so the text and the dataset are the same graph by
+    /// construction. This avoids hand-rolling literal escaping and carries no
+    /// oxigraph `io` dependency. The `DefaultGraph` selection on the
+    /// `application/n-quads` codec emits graphless rows (i.e. N-Triples) and is
+    /// byte-lenient on language tags, matching the legacy oxigraph serializer.
+    #[must_use]
+    pub fn to_ntriples(&self) -> String {
+        let dataset = self.to_dataset();
         // `serialize_dataset` is `Result` for two reasons that both provably do
         // not apply here: (1) `classify(media_type)` can reject an unknown media
         // type, but `"application/n-quads"` is a constant, always-valid literal;
@@ -338,6 +391,136 @@ impl ValidationReport {
             })
             .collect()
     }
+}
+
+// ── Minted blank-node labels ──────────────────────────────────────────────────
+
+/// The prefix every blank node the report MINTS carries, so a minted node can
+/// never be the same node as one the report CARRIES.
+///
+/// # The bug this closes
+///
+/// The report invents `_:report`, `_:r0`, `_:r1`, … and the interior nodes of a
+/// complex `sh:path`. Blank-node labels reaching the report from the data or
+/// shapes graph are ordinary opaque strings — a data graph is entirely free to
+/// contain `_:r0` — and a blank label at [`::purrdf::BlankScope::DEFAULT`] passes
+/// through the IR verbatim. Validating such a graph used to emit
+///
+/// ```text
+/// _:r0 a sh:ValidationResult ; sh:focusNode _:r0 .
+/// ```
+///
+/// fusing the validation result with the node it is reporting on: the report
+/// asserted that a `sh:ValidationResult` was an instance of the data's class, and
+/// a consumer following `sh:focusNode` landed back on the result. Nothing was
+/// dropped and nothing failed — two distinct nodes silently became one.
+///
+/// # The rule
+///
+/// Return `""` when no carried label collides with a minted one, which is the
+/// overwhelmingly common case and keeps the emitted bytes byte-identical to
+/// before. Otherwise return the shortest `_`-run that NO carried label starts
+/// with; prefixing every minted label with it puts the minted nodes in a label
+/// namespace the carried labels provably do not reach. `_` is `PN_CHARS_U`, so
+/// the marked label is a legal `BLANK_NODE_LABEL` as written and the text codecs
+/// never have to escape it.
+///
+/// The search is bounded, not merely terminating: only a carried label at least
+/// `k` bytes long can start with a `k`-long run, so a run one byte longer than
+/// the longest carried label is always free.
+///
+/// Linear in the report: the complex-path roots are collected once, and each
+/// carried label is then checked with a constant number of hash lookups.
+fn mint_prefix(report: &ValidationReport) -> String {
+    let carried = carried_blank_labels(report);
+    let roots = minted_path_roots(report);
+    if !carried
+        .iter()
+        .any(|label| collides_with_minted(label, report.results.len(), &roots))
+    {
+        return String::new();
+    }
+    let ceiling = carried.iter().map(|label| label.len()).max().unwrap_or(0) + 1;
+    // `1..` starts past the empty prefix just rejected; `ceiling` is free by
+    // construction, so `find` always succeeds.
+    (1..=ceiling)
+        .map(|k| "_".repeat(k))
+        .find(|mark| !carried.iter().any(|label| label.starts_with(mark.as_str())))
+        .expect("a run longer than every carried label is always free")
+}
+
+/// Every blank-node label the report CARRIES — the ones that arrive from the data
+/// or shapes graph rather than being invented here.
+///
+/// A complex path's root label is excluded: it is minted by
+/// [`crate::path::path_to_term`], not carried, and it takes the mint prefix along
+/// with everything else minted (see [`minted_path_roots`]).
+fn carried_blank_labels(report: &ValidationReport) -> FastSet<&str> {
+    let mut labels = FastSet::default();
+    for r in &report.results {
+        collect_blank_labels(&r.focus_node, &mut labels);
+        collect_blank_labels(&r.source_shape, &mut labels);
+        if let Some(value) = &r.value {
+            collect_blank_labels(value, &mut labels);
+        }
+        // A blank `result_path` with no `path_structure` is not a minted complex
+        // path root (see `ValidationResult::result_path`), so it is carried.
+        if let (Some(path), None) = (&r.result_path, &r.path_structure) {
+            collect_blank_labels(path, &mut labels);
+        }
+    }
+    labels
+}
+
+/// The root labels of the report's complex paths — blank nodes the report MINTS
+/// (a blank `result_path` paired with a `path_structure`), collected once so the
+/// collision check is a hash lookup per carried label rather than a rescan of
+/// every result.
+fn minted_path_roots(report: &ValidationReport) -> FastSet<&str> {
+    report
+        .results
+        .iter()
+        .filter_map(|r| match (&r.result_path, &r.path_structure) {
+            (Some(Term::BlankNode(root)), Some(_)) => Some(root.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Add every blank-node label reachable from `term`, descending through RDF 1.2
+/// triple terms (a quoted triple's own subject/object are carried nodes too).
+fn collect_blank_labels<'a>(term: &'a Term, labels: &mut FastSet<&'a str>) {
+    match term {
+        Term::BlankNode(label) => {
+            labels.insert(label.as_str());
+        }
+        Term::Triple(t) => {
+            collect_blank_labels(&t.subject, labels);
+            collect_blank_labels(&t.object, labels);
+        }
+        Term::NamedNode(_) | Term::Literal(_) => {}
+    }
+}
+
+/// Whether `label` is one of the labels the report would mint under the EMPTY
+/// prefix: the report node, one of the `result_count` result nodes, a complex
+/// path's root, or an interior node of one of the report's complex paths
+/// (`{root}-{n}`, `n` a decimal counter — see [`next_path_label`]).
+fn collides_with_minted(label: &str, result_count: usize, roots: &FastSet<&str>) -> bool {
+    if label == "report" || roots.contains(label) {
+        return true;
+    }
+    if let Some(index) = label.strip_prefix('r')
+        && let Ok(index) = index.parse::<usize>()
+        && index < result_count
+    {
+        return true;
+    }
+    // An interior node is `{root}-{n}`; the counter carries no `-`, so the LAST
+    // `-` is the one that separates it from the root.
+    label
+        .rsplit_once('-')
+        .is_some_and(|(stem, counter)| counter.parse::<usize>().is_ok() && roots.contains(stem))
 }
 
 // ── Builder helpers ───────────────────────────────────────────────────────────
@@ -516,7 +699,7 @@ pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
 
 /// Parse a SHACL report N-Triples string into a query-able frozen [`RdfDataset`]
 /// via the native purrdf codec — no oxigraph.
-fn dataset_from_ntriples(nt: &str) -> Result<std::sync::Arc<RdfDataset>, String> {
+fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
     ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
         .map_err(|e| format!("N-Triples parse error: {e}"))
 }
@@ -719,6 +902,329 @@ mod tests {
             parsed,
             report.result_tuples(),
             "round-trip tuples must match original tuples even with hostile blank labels"
+        );
+    }
+
+    /// Every [`::purrdf::TermId`] in `dataset`'s dense term table.
+    fn term_ids(dataset: &RdfDataset) -> impl Iterator<Item = ::purrdf::TermId> {
+        let count = u32::try_from(dataset.term_count()).expect("report term table fits in u32");
+        (0..count).map(::purrdf::TermId::from_index)
+    }
+
+    /// A deliberately hostile report for the `to_dataset()` ≡ `to_ntriples()`
+    /// equivalence proof: five results spanning all four severity kinds
+    /// (including a caller-minted `Severity::Other` IRI), an IRI / a blank node /
+    /// an RDF 1.2 triple term in focus position, a plain-IRI path and a COMPLEX
+    /// path (whose structure blank nodes are emitted once and SHARED by two
+    /// results), typed / language-tagged / blank-node / triple-term values, and
+    /// results with and without messages.
+    fn hostile_report() -> ValidationReport {
+        let ex = |local: &str| NamedNode::new_unchecked(format!("http://example.org/{local}"));
+        let component =
+            NamedNode::new_unchecked("http://www.w3.org/ns/shacl#MinCountConstraintComponent");
+        // A complex path shared by two results: [ sh:alternativePath ( ex:a [ sh:inversePath ex:b ] ) ].
+        let complex = crate::shapes::Path::Alternative(vec![
+            crate::shapes::Path::Predicate(ex("a")),
+            crate::shapes::Path::Inverse(Box::new(crate::shapes::Path::Predicate(ex("b")))),
+        ]);
+        // The quoted triple that appears both as a focus node and as a value.
+        let quoted = Term::Triple(Box::new(crate::term::Triple::new(
+            Term::NamedNode(ex("s")),
+            ex("p"),
+            Term::Literal(Literal::new_simple_literal("quoted object")),
+        )));
+
+        let base = ValidationResult {
+            focus_node: Term::NamedNode(ex("focusA")),
+            result_path: Some(Term::NamedNode(ex("predP"))),
+            path_structure: None,
+            value: None,
+            source_constraint_component: component,
+            source_shape: Term::NamedNode(ex("ShapeA")),
+            severity: Severity::Violation,
+            message: None,
+            source_box_roles: vec![],
+            path_box_roles: vec![],
+            result_box_roles: vec![],
+            attributions: vec![],
+        };
+
+        let mut results = Vec::new();
+
+        // 1. IRI focus, plain predicate path, typed literal value, message.
+        let mut r = base.clone();
+        r.value = Some(Term::Literal(Literal::new_typed_literal("-3", ex("Count"))));
+        r.message = Some("must have at least one value".to_owned());
+        results.push(r);
+
+        // 2. Blank-node focus, complex path (structure emitted), warning,
+        //    language-tagged value.
+        let mut r = base.clone();
+        r.focus_node = Term::blank("focusB");
+        r.result_path = Some(Term::blank("path0"));
+        r.path_structure = Some(complex.clone());
+        r.severity = Severity::Warning;
+        r.value = Some(Term::Literal(
+            Literal::new_language_tagged_literal_unchecked("valeur", "fr"),
+        ));
+        r.message = Some("langue".to_owned());
+        results.push(r);
+
+        // 3. The SAME complex path on a second result — the structure must be
+        //    emitted exactly once and shared, on both the direct and text paths.
+        let mut r = base.clone();
+        r.focus_node = Term::blank("focusC");
+        r.result_path = Some(Term::blank("path0"));
+        r.path_structure = Some(complex);
+        r.severity = Severity::Info;
+        r.value = Some(Term::blank("valueC"));
+        results.push(r);
+
+        // 4. RDF 1.2: a triple term in BOTH focus and value position.
+        let mut r = base.clone();
+        r.focus_node = quoted.clone();
+        r.result_path = None;
+        r.value = Some(quoted);
+        r.severity = Severity::Other(ex("Advisory"));
+        r.message = Some("statement-level result".to_owned());
+        results.push(r);
+
+        // 5. No path, no value, no message — the minimal result.
+        let mut r = base;
+        r.focus_node = Term::NamedNode(ex("focusE"));
+        r.result_path = None;
+        results.push(r);
+
+        ValidationReport {
+            conforms: false,
+            results,
+        }
+    }
+
+    /// `to_dataset()` must be the report's primal RDF form — the graph a caller
+    /// gets from it is EXACTLY the graph they would have got by serializing to
+    /// N-Triples and parsing that text back, minus the round-trip.
+    ///
+    /// The comparison is RDFC-1.0 canonical, not naive triple-set equality:
+    /// blank-node labelling is precisely where a "direct" construction can
+    /// silently diverge from a parse (the direct path keeps the report's own
+    /// `_:r0` / `_:path0-1` labels; the parser mints its own), so only an
+    /// isomorphism-invariant comparison proves the two describe the same graph.
+    #[test]
+    fn to_dataset_matches_the_ntriples_round_trip_canonically() {
+        let report = hostile_report();
+
+        let direct = report.to_dataset();
+        let round_tripped = dataset_from_ntriples(&report.to_ntriples())
+            .expect("the report's own N-Triples must parse");
+
+        assert_eq!(
+            direct.quad_count(),
+            round_tripped.quad_count(),
+            "the direct dataset must carry exactly the quads the text does"
+        );
+        assert_eq!(
+            ::purrdf::canonicalize(&direct).nquads,
+            ::purrdf::canonicalize(&round_tripped).nquads,
+            "to_dataset() and parse(to_ntriples()) must be the same graph"
+        );
+    }
+
+    /// The equivalence assertion above is only worth anything if the fixture it
+    /// runs on actually exercises the hard cases. This pins that: the direct
+    /// dataset carries all five results, the shared complex path's structure
+    /// emitted ONCE, and a real RDF 1.2 triple term.
+    #[test]
+    fn to_dataset_carries_rdf12_triple_terms_and_shared_path_structure() {
+        let report = hostile_report();
+        let nt = report.to_ntriples();
+
+        assert_eq!(
+            nt.matches("<http://www.w3.org/ns/shacl#result>").count(),
+            5,
+            "all five results must reach the graph"
+        );
+        // The shared complex path emits its `sh:alternativePath` root once, not
+        // once per referencing result.
+        assert_eq!(
+            nt.matches("<http://www.w3.org/ns/shacl#alternativePath>")
+                .count(),
+            1,
+            "a complex path shared by two results is emitted once"
+        );
+        // RDF 1.2 triple term, in the syntax's own quoted-triple form.
+        assert!(
+            nt.contains("<<("),
+            "the triple-term focus node/value must survive as a quoted triple, got:\n{nt}"
+        );
+
+        // And the direct dataset holds it as a real triple term, not as text.
+        let direct = report.to_dataset();
+        assert!(
+            term_ids(&direct)
+                .any(|id| matches!(direct.resolve(id), ::purrdf::TermRef::Triple { .. })),
+            "to_dataset() must materialize the quoted triple as an IR triple term"
+        );
+    }
+
+    /// The `sh:conforms` boolean and the report node itself survive the direct
+    /// path for a CONFORMING report too — the empty-results case is the one a
+    /// naive "build from results" implementation drops on the floor.
+    #[test]
+    fn to_dataset_of_a_conforming_report_matches_the_round_trip() {
+        let report = ValidationReport {
+            conforms: true,
+            results: vec![],
+        };
+
+        let direct = report.to_dataset();
+        let round_tripped = dataset_from_ntriples(&report.to_ntriples()).expect("must parse");
+
+        assert_eq!(
+            ::purrdf::canonicalize(&direct).nquads,
+            ::purrdf::canonicalize(&round_tripped).nquads
+        );
+        assert_eq!(conforms_from_dataset(&direct), Some(true));
+        assert!(tuples_from_dataset(&direct).is_empty());
+    }
+
+    /// Hostile blank labels (`a×b`, a C0 control) are escaped at codec egress but
+    /// are NOT escaped in the IR. The direct dataset therefore keeps the label
+    /// verbatim where the text round-trip cannot — the two graphs stay isomorphic
+    /// (same shape, same everything else), which is what `to_dataset()` promises,
+    /// while the direct path additionally preserves the caller's own label.
+    #[test]
+    fn to_dataset_keeps_hostile_blank_labels_the_text_path_must_escape() {
+        let mut report = hostile_report();
+        report.results[1].focus_node = Term::blank("a\u{d7}b");
+
+        let direct = report.to_dataset();
+        let round_tripped =
+            dataset_from_ntriples(&report.to_ntriples()).expect("escaped text must parse");
+
+        // Same graph up to blank labelling…
+        assert_eq!(
+            ::purrdf::canonicalize(&direct).nquads,
+            ::purrdf::canonicalize(&round_tripped).nquads,
+            "escaping a blank label must not change the graph"
+        );
+        // …and the direct path still holds the caller's label unescaped.
+        assert!(
+            term_ids(&direct).any(|id| matches!(
+                direct.resolve(id),
+                ::purrdf::TermRef::Blank { label, .. } if label == "a\u{d7}b"
+            )),
+            "to_dataset() must carry the hostile blank label verbatim"
+        );
+    }
+
+    /// Regression: a data graph is free to contain a blank node labelled `r0` or
+    /// `report`, and those labels pass through the IR verbatim. The report used
+    /// to mint the SAME labels for its own structure, emitting
+    /// `_:r0 a sh:ValidationResult ; sh:focusNode _:r0` — the result fused with
+    /// the node it reports on. Nothing was dropped and nothing failed; two
+    /// distinct nodes silently became one.
+    #[test]
+    fn minted_blank_nodes_never_fuse_with_carried_ones() {
+        for hostile in ["r0", "report"] {
+            let mut report = ValidationReport {
+                conforms: false,
+                results: vec![make_result()],
+            };
+            report.results[0].focus_node = Term::blank(hostile);
+
+            let dataset = report.to_dataset();
+            let focus = object_string(&dataset, &Term::blank(hostile), sh::FOCUS_NODE);
+            assert!(
+                focus.is_none(),
+                "_:{hostile} is the DATA's node; it must not also be a result node"
+            );
+
+            // The focus node still denotes the caller's node, verbatim.
+            let results = subjects_typed(&dataset, sh::VALIDATION_RESULT);
+            assert_eq!(results.len(), 1, "exactly one result node");
+            assert_eq!(
+                object_string(&dataset, &results[0], sh::FOCUS_NODE).as_deref(),
+                Some(&*format!("_:{hostile}")),
+                "the result must still point at the caller's focus node"
+            );
+            assert_ne!(
+                results[0],
+                Term::blank(hostile),
+                "the result node must be a DIFFERENT node from the focus node"
+            );
+
+            // And the report node is likewise distinct from the data's.
+            let reports = subjects_typed(&dataset, sh::VALIDATION_REPORT);
+            assert_eq!(reports.len(), 1);
+            assert_ne!(reports[0], Term::blank(hostile));
+
+            // The mark is grammar-legal: the minted labels reach the text
+            // verbatim, never through the codec's escape envelope.
+            let nt = report.to_ntriples();
+            assert!(
+                nt.contains("_:_report ") && nt.contains("_:_r0 "),
+                "minted labels must be written as-is under a `_` mark:\n{nt}"
+            );
+            assert!(
+                !nt.contains("purrdfesc"),
+                "a `_`-marked label never needs escaping:\n{nt}"
+            );
+        }
+    }
+
+    /// The mirror of the test above, per the over-refusal discipline: a report
+    /// whose carried labels do NOT collide must keep minting the plain
+    /// `_:report` / `_:r0` labels, so the emitted bytes — and the 70 byte-frozen
+    /// corpus reports — are unchanged.
+    #[test]
+    fn a_non_colliding_report_keeps_its_plain_minted_labels() {
+        let mut report = ValidationReport {
+            conforms: false,
+            results: vec![make_result()],
+        };
+        // `r1` is one past the last result index, and `reports` is not `report`:
+        // neither is a label this report mints.
+        report.results[0].focus_node = Term::blank("r1");
+        report.results[0].value = Some(Term::blank("reports"));
+
+        assert_eq!(mint_prefix(&report), "", "no collision means no prefix");
+        let nt = report.to_ntriples();
+        assert!(
+            nt.contains("_:report "),
+            "plain report label retained:\n{nt}"
+        );
+        assert!(nt.contains("_:r0 "), "plain result label retained:\n{nt}");
+    }
+
+    /// A complex path's root and interior nodes are minted too, so a data graph
+    /// carrying the root label must not fuse with the path structure either.
+    #[test]
+    fn minted_path_structure_never_fuses_with_carried_labels() {
+        let mut report = hostile_report();
+        // `path0` is the complex path's root; `path0-1` one of its interiors.
+        report.results[0].focus_node = Term::blank("path0");
+        report.results[4].focus_node = Term::blank("path0-1");
+
+        let mint = mint_prefix(&report);
+        assert_ne!(mint, "", "a carried root label must force a mint prefix");
+
+        let dataset = report.to_dataset();
+        // The carried nodes are still only focus nodes — never path structure.
+        for carried in ["path0", "path0-1"] {
+            assert!(
+                object_string(&dataset, &Term::blank(carried), sh::ALTERNATIVE_PATH).is_none()
+                    && object_string(&dataset, &Term::blank(carried), rdf::FIRST).is_none(),
+                "_:{carried} is a carried data node, not part of the path structure"
+            );
+        }
+        // …and the graph is still the same one the text path produces.
+        assert_eq!(
+            ::purrdf::canonicalize(&dataset).nquads,
+            ::purrdf::canonicalize(
+                &dataset_from_ntriples(&report.to_ntriples()).expect("must parse")
+            )
+            .nquads
         );
     }
 

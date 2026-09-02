@@ -18,9 +18,19 @@
 # it answers 404 for every crate on a normal release and can never notice that
 # the crate itself does not exist.
 #
+# It ALSO holds `PURRDF_UNBOOTSTRAPPED_CRATES` (the committed ledger of crates
+# known to lack a record) to the registry in both directions when run over the
+# whole release set: a missing crate the ledger does not name is a new,
+# undocumented bootstrap requirement, and a ledgered crate that now HAS a
+# record is a stale entry — the ledger named `purrdf-datalog` for a full cycle
+# after that crate was published, because nothing checked that direction.
+# Either disagreement is a failure on its own, independent of the publish
+# verdict, so the ledger docs/RELEASE.md derives its prose from cannot rot.
+#
 # Usage:
 #   scripts/check-crates-io-records.sh                # the whole release set
 #   scripts/check-crates-io-records.sh purrdf-core …  # an explicit list
+#                                                     # (no ledger check)
 #
 # Environment:
 #   PURRDF_RELEASE_VERSION  version string put in the User-Agent (cosmetic).
@@ -32,12 +42,16 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="${PURRDF_RELEASE_VERSION:-preflight}"
 user_agent="purrdf-release/${version} (paudley@blackcatinformatics.ca)"
 
+ledger=()
+check_ledger=false
 if [[ "$#" -gt 0 ]]; then
   crates=("$@")
 else
   # shellcheck source=scripts/release-crates.sh
   source "${repo}/scripts/release-crates.sh"
   crates=("${PURRDF_RELEASE_CRATES[@]}")
+  ledger=("${PURRDF_UNBOOTSTRAPPED_CRATES[@]}")
+  check_ledger=true
 fi
 
 body="$(mktemp)"
@@ -83,12 +97,16 @@ crate_record_state() {
 }
 
 missing=()
+present=()
 errors=()
 
 for crate in "${crates[@]}"; do
   state="$(crate_record_state "$crate")"
   case "$state" in
-    present) printf 'ok       %s\n' "$crate" ;;
+    present)
+      printf 'ok       %s\n' "$crate"
+      present+=("$crate")
+      ;;
     missing)
       printf 'MISSING  %s\n' "$crate"
       missing+=("$crate")
@@ -112,6 +130,43 @@ must not start: cargo publish is irreversible, so an unknown answer is treated
 as a stop, never as "probably fine".
 EOF
   exit 1
+fi
+
+# The ledger check, before the verdict: it must fail even on a run where every
+# crate is present (a ledger still naming a bootstrapped crate) and even on a
+# run that is going to refuse anyway (a missing crate the ledger does not name).
+if [[ "$check_ledger" == "true" ]]; then
+  ledger_problems=()
+  for crate in "${missing[@]}"; do
+    listed=false
+    for entry in "${ledger[@]}"; do [[ "$entry" == "$crate" ]] && listed=true; done
+    if [[ "$listed" == "false" ]]; then
+      ledger_problems+=("${crate} has no crates.io record but is NOT in PURRDF_UNBOOTSTRAPPED_CRATES")
+    fi
+  done
+  for entry in "${ledger[@]}"; do
+    for crate in "${present[@]}"; do
+      if [[ "$entry" == "$crate" ]]; then
+        ledger_problems+=("${entry} is in PURRDF_UNBOOTSTRAPPED_CRATES but crates.io HAS a record for it (stale ledger entry)")
+      fi
+    done
+  done
+  if [[ "${#ledger_problems[@]}" -gt 0 ]]; then
+    {
+      echo
+      echo "PURRDF_UNBOOTSTRAPPED_CRATES in scripts/release-crates.sh disagrees with crates.io:"
+      for problem in "${ledger_problems[@]}"; do echo "  - ${problem}"; done
+      cat <<EOF
+
+That array is the ledger docs/RELEASE.md's bootstrap section is derived from
+(scripts/check-doc-claims.py holds the prose to it), so a wrong entry there is
+wrong documentation about what a release tag will do. Fix the array to match
+the registry — it is a record of crates.io state, not a wish — then re-run.
+EOF
+    } >&2
+    exit 1
+  fi
+  printf 'ledger   PURRDF_UNBOOTSTRAPPED_CRATES agrees with crates.io (%d unbootstrapped)\n' "${#ledger[@]}"
 fi
 
 if [[ "${#missing[@]}" -gt 0 ]]; then

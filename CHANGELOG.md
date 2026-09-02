@@ -42,6 +42,16 @@ called out below with what a consumer must do.
   travels. A caller that needs the refusal itself — with its message and kind intact, which a
   SPARQL expression error by construction cannot carry — calls the new `functions::compute`,
   which answers in `Result<TermValue, GeoError>`.
+- **shapes:** A SHACL validation report no longer FUSES a blank node it mints with one it
+  carries. The report invents `_:report`, `_:r0`, `_:r1`, … and the interior nodes of a
+  complex `sh:path`; blank-node labels arriving from the data or shapes graph are opaque
+  strings that pass through the IR verbatim, so a data graph containing `_:r0` produced
+  `_:r0 a sh:ValidationResult ; sh:focusNode _:r0` — the validation result and the node it
+  reports on silently became ONE node, with the report asserting that a
+  `sh:ValidationResult` was an instance of the data's own class. Nothing was dropped and no
+  error was raised. The minted nodes now take a reserved label prefix whenever, and only
+  whenever, the report actually carries a colliding label, so a report with no collision is
+  byte-identical to before (the byte-frozen first-party corpus reports are unchanged).
 - **entail:** OWL-Direct now DECIDES the `SHOIQ` nominal / inverse-role / qualified-number-restriction
   corner. Both decision cores implement the nominal-introduction rule — Horrocks & Sattler's `NN`-rule
   in the `cfg(test)` concept-tree reference and Motik–Shearer–Horrocks' Table 5 `NI`-rule in the
@@ -399,6 +409,22 @@ called out below with what a consumer must do.
 
 ### Features
 
+- **shapes:** New `ValidationReport::to_dataset()` returns the report graph as a frozen
+  `Arc<RdfDataset>` — the report's PRIMAL RDF form. Rendering a report in any syntax other
+  than N-Triples previously forced a `to_ntriples()` → `parse_dataset()` round-trip; that
+  parse was pure waste, because the report was already being materialized as IR quads and
+  the N-Triples text was only ever a serialization of them. `to_ntriples()` is now defined
+  as "serialize `to_dataset()`", so the two are the same graph by construction rather than
+  by coincidence, and the direct path carries every RDF 1.2 term the report holds (a
+  triple-term focus node or `sh:value`, and blank-node labels the text grammar can only
+  carry escaped) instead of whatever survives a text grammar and a parser's relabelling.
+  Equivalence is proven canonically (RDFC-1.0) over a report spanning all four severity
+  kinds, IRI/blank/triple-term focus nodes, a complex `sh:path` shared by two results, and
+  typed/language-tagged/blank/triple-term values. Rust surface only: no Python, JS/wasm, or
+  C ABI equivalent is added.
+- **cli:** `purrdf validate --format <rdf-syntax>` no longer serializes the report to
+  N-Triples and re-parses that text; it hands the report's own dataset to the shared sink.
+  Identical output, one fewer full parse of the report per invocation.
 - **cdt:** New crate `purrdf-cdt` implementing SEP-0009 SPARQL Composite Datatypes
   (`cdt:List` / `cdt:Map`) as a closed leaf over `purrdf-iri` + `purrdf-xsd` only. The
   function library is the spec's fifteen — `cdt:List`, `concat`, `contains`, `get`, `head`,
@@ -779,6 +805,81 @@ called out below with what a consumer must do.
   a blanket decorrelation — is corrected to point at this section. The README's shipped-surface
   bullet and Direction list move `EXISTS`'s SEP-0007 semantics out of "near-term direction" and
   into what SPARQL 1.1/1.2 already ships.
+
+- **conformance:** The embedding kNN lane (PURREMB nearest-neighbour retrieval) and the
+  `purrdf-geo` GeoSPARQL 1.1 lane now have conformance-matrix rows, ratchet budgets and
+  per-engine scoreboard entries. Both shipped with no matrix representation at all — the only
+  trace of either was a forward reference inside the governor row — so the umbrella gate could
+  not see a regression in either lane. The kNN row counts test functions rather than fixtures,
+  because it grades a seam rather than a document format and has no corpus; the document says so
+  rather than inventing a fixture count.
+
+  The GeoSPARQL row counts **corpus geometries**, and the reason is recorded because the first
+  version of it did not. Written as a `cargo test` tally over `purrdf-geo`'s five integration
+  binaries it measured **33 on one machine and 37 on the CI runner from byte-identical source**,
+  turning the doc drift-guard red for a reason unrelated to GeoSPARQL. A number that moves with
+  the build environment is not a measurement — the same principle the matrix's `_no_scoreboard`
+  path already states from the other direction — so the row now reports the 20 geometries of
+  `purrdf_geo::determinism::CORPUS` whose serialized bytes fold into one `u64`, compared against
+  the `GOLDEN_DIGEST` pinned in the test source. That comparison is an oracle rather than a
+  self-report, and it is stable everywhere. The row additionally records what it does **not**
+  measure: **no OGC conformance suite is vendored and none is claimed**, the crate's SHACL shapes
+  being first-party `example.org` mirrors of the shipped OGC 22-047r1 validator (PurRDF mints no
+  vocabulary IRIs), so the lane has an independent oracle for its determinism but none for its
+  semantics, and a misreading of OGC 22-047r1 would pass.
+- **release:** Correct `docs/RELEASE.md`'s outstanding-bootstrap section, which named **four**
+  crates as having no crates.io record. `purrdf-datalog` has had one since 2026-07-31 and
+  answers `0.12.0`; the genuinely unpublished set is `purrdf-cdt`, `purrdf-text` and
+  `purrdf-geo`, and the heading, the body, the publish-order ordinals and the in-page anchor
+  all said otherwise. That set is now `PURRDF_UNBOOTSTRAPPED_CRATES` in
+  `scripts/release-crates.sh`, a ledger `scripts/check-crates-io-records.sh` holds to the
+  registry in **both** directions — an unlisted missing crate and a listed present crate each
+  fail the preflight on their own — and the prose restates the ledger under a gate. The
+  bootstrap examples drop their pinned version literal in favour of the argumentless form,
+  which reads the workspace version from `cargo metadata` and cannot rot. The `make doc` / CI
+  "N publishable crates" comments are corrected 20 → 21.
+- **BREAKING** **release:** Both publish lanes — `scripts/bootstrap-crates-io.sh` and the
+  tag-driven `release-cargo.yaml` loop — now **verify** every `cargo publish` (cargo builds the
+  packaged crate against the registry before the upload that cannot be undone), and
+  `purrdf-geo` moves from 13th to 17th in the publish order to make that possible. The loop's `--no-verify` was load-bearing, not incidental: `purrdf-geo`
+  dev-depends on `purrdf-rdf` and `purrdf-shapes`, verification resolves the packaged crate's
+  whole graph including dev-dependencies, and while `purrdf-geo` was ordered before both, a
+  verifying publish of the set would have failed at crate 13 after twelve irreversible
+  uploads. Moving one crate removes the last forward dev-edge. The new
+  `scripts/check-publish-order.py` proves on every `make check` that the order is a
+  topological order of normal **and** dev-dependencies, that the release set is exactly the
+  publishable members, and that the bootstrap ledger is in-set and in order; its
+  `--self-test` perturbs each check and requires the refusal, and the release workflow runs it
+  again in its verify step at the point of no return. `PUBLISH_NO_VERIFY=true` restores
+  the old behaviour for one run. Anyone with a checked-out publish order, a pinned release
+  script, or a Trusted Publisher configured by ordinal must re-read
+  `scripts/release-crates.sh`.
+- **release:** `PUBLISH_COOLDOWN_SECONDS` defaults to `0` (was `620`). crates.io's new-crate
+  rate limit is enforced at the publish: a limited `cargo publish` exits non-zero, `set -e`
+  stops the run before the next crate, and a re-run resumes because published versions are
+  skipped — a visible, resumable refusal, not a corrupted release. The old default modelled the
+  limit's ten-minute refill unconditionally and added about half an hour of dead time to a
+  three-record run. The environment override is kept.
+
+### Testing
+
+- **conformance:** Bring `scripts/conformance-baseline.json`'s free-text `note:` prose under the
+  same gate as its `ledgered` integer. Only the integer was ever machine-checked, and the OWL 2
+  DL note rotted a full generation behind it — claiming 261 vendored cases, 30 non-terminating
+  and 12 withheld exclusions against a measured 262, 0 and 25, with every gate green the whole
+  time. `scripts/check-doc-claims.py` gains `baseline_note_claim`, which checks that the
+  baseline's suite names and the generated matrix block's suite names are the same set, that
+  every `ledgered` budget equals its matrix row's XFail/Skip column, and that every
+  matrix-derivable integer any note restates equals the column that measures it — with the DL
+  note's subset/exclusion tally sourced from the same frozen `census.tsv` the three
+  `docs/CONFORMANCE.md` restatements already are. A reworded note that stops matching its
+  pattern fails as loudly as a wrong number, so the gate cannot be silenced by rewriting prose.
+- **release:** `scripts/check-doc-claims.py` gains `outstanding_bootstrap_claim` and
+  `publishable_crate_count_claim`, holding `docs/RELEASE.md`'s bootstrap heading, body crate
+  count, per-crate publish-order ordinals and in-page anchor — and the `Makefile` / CI
+  publishable-crate counts — to `scripts/release-crates.sh`. Membership is deliberately left to
+  `scripts/check-crates-io-records.sh`, since whether a crate record exists is a fact about
+  crates.io rather than about this tree.
 
 ## [0.12.0] - 2026-08-02
 

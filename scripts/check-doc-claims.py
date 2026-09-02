@@ -442,11 +442,27 @@ _SPELLED = {
     1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
     8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
     14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
+    19: "nineteen", 20: "twenty", 21: "twenty-one",
 }
 
 # The same table read backwards, for `_int`. Derived rather than written out, so a
 # cardinal added above is one both directions gain at once.
 _CARDINAL = {word: value for value, word in _SPELLED.items()}
+
+# The cardinals above that do NOT become an ordinal by suffixing `th`. Everything
+# else does (four -> fourth, thirteen -> thirteenth), so the ordinals are derived
+# from the one cardinal table rather than written out a second time.
+_IRREGULAR_ORDINAL = {1: "first", 2: "second", 3: "third", 5: "fifth", 8: "eighth",
+                      9: "ninth", 12: "twelfth", 20: "twentieth",
+                      21: "twenty-first"}
+
+
+def _ordinal(value: int) -> str | None:
+    """`value` spelled as an English ordinal, or None when it is off the table."""
+    if value in _IRREGULAR_ORDINAL:
+        return _IRREGULAR_ORDINAL[value]
+    cardinal = _SPELLED.get(value)
+    return None if cardinal is None else f"{cardinal}th"
 
 
 def never_published_claim() -> list[str]:
@@ -2986,6 +3002,279 @@ def governor_corpus_count_claim(matrix: dict[str, tuple[int, int]]) -> list[str]
     return problems
 
 
+# The RL note opens `50 cases: all 27 positive entailments W3C places inside the
+# RL profile`. 27 is a lane split rather than a matrix column, so it is captured
+# under this name and sourced from the census the lane claims already use — a
+# number left uncaptured inside a matched sentence is a number nothing checks.
+_BASELINE_RL_POSITIVE = "rl_positive"
+
+
+def _baseline_note_sites() -> tuple[tuple[str, str, str], ...]:
+    """Every `note:` restatement in the ratchet baseline that has a MEASURED source.
+
+    Keyed by the suite whose note carries it. `pass` and `xskip` are that suite's
+    own two matrix columns and `total` is their sum, so each pattern is checked
+    against the row that measures the very corpus the note is describing.
+
+    Only notes stating a derivable integer appear. A note whose numbers describe
+    its corpus's internal composition — the CONSTRUCT note's triple/quad pairing,
+    the DESCRIBE note's clause enumeration, the governor note's five dimensions —
+    is deliberately absent, because the matrix does not measure those and a
+    pattern pretending otherwise would gate nothing while looking like it did.
+
+    A function rather than a module constant because `_flow` is defined below.
+    """
+    return (
+        (
+            "SPARQL 1.1/1.2 evaluation (full corpus)",
+            "the upstream-errata fixture count",
+            _flow(r"(?P<xskip>\d+) upstream-errata fixtures"),
+        ),
+        (
+            "SPARQL CDT (SEP-0009, vendored corpus)",
+            "the vendored SEP-0009 corpus size",
+            _flow(r"all (?P<pass>\d+) cases the pinned upstream commit"),
+        ),
+        (
+            "Entailment (OWL 2 DL consistency)",
+            "the vendored DL corpus size",
+            _flow(
+                r"vendored W3C OWL 2 suite \((?P<total>\d+) "
+                r"consistency/inconsistency cases\)"
+            ),
+        ),
+        (
+            "Entailment (OWL 2 RL, W3C entailment tests)",
+            "the W3C entailment corpus size",
+            _flow(
+                rf"(?P<total>\d+) cases: all (?P<{_BASELINE_RL_POSITIVE}>\d+) "
+                rf"positive entailments"
+            ),
+        ),
+        (
+            "GTS transport (frozen vectors)",
+            "the frozen GTS vector tally",
+            _flow(r"(?P<total>\d+) frozen cross-language GTS vectors")
+            + ANY
+            + _flow(r"(?P<pass>\d+) agree exactly"),
+        ),
+        (
+            "SPARQL embedding kNN (first-party)",
+            "the embedding-kNN lane size",
+            _flow(r"(?P<pass>\d+) first-party cases grading the PURREMB kNN"),
+        ),
+        (
+            "GeoSPARQL 1.1 determinism corpus",
+            "the GeoSPARQL determinism corpus size",
+            _flow(r"(?P<pass>\d+) corpus geometries whose SERIALIZED bytes"),
+        ),
+    )
+
+
+def load_baseline_suites() -> dict[str, dict[str, object]]:
+    """`scripts/conformance-baseline.json`'s suite table, JSON-decoded.
+
+    Decoded rather than read as text on purpose: this file spells its em dashes
+    as ``\\u2014`` escapes, so a regex over the raw bytes would silently fail to
+    match any sentence containing one — the exact "gate that measures nothing"
+    failure this script exists to prevent.
+    """
+    try:
+        data = json.loads(_read(_CONFORMANCE_BASELINE))
+    except json.JSONDecodeError as exc:  # pragma: no cover - a broken file is fatal
+        raise SystemExit(
+            f"check-doc-claims: {_CONFORMANCE_BASELINE.relative_to(_REPO)} is not "
+            f"valid JSON: {exc}"
+        ) from exc
+    suites = data.get("suites")
+    if not isinstance(suites, dict) or not suites:
+        raise SystemExit(
+            f"check-doc-claims: no `suites` table in "
+            f"{_CONFORMANCE_BASELINE.relative_to(_REPO)}"
+        )
+    return suites
+
+
+def baseline_note_claim(
+    matrix: dict[str, tuple[int, int]], census: dict[str, int]
+) -> list[str]:
+    """The ratchet baseline's free-text `note:` prose, brought under the gate.
+
+    Every suite in `scripts/conformance-baseline.json` carries two things: a
+    machine-checked `ledgered` integer, and a `note` that restates the suite's
+    measurements in prose. Only the integer was ever checked. `conformance-matrix.py`
+    asserts the live ledgered count EQUALS the budget and never reads the note at
+    all, so the note is the one part of that file with nothing behind it — and it
+    rotted exactly there: the OWL 2 DL note went a full generation saying the corpus
+    vendored 261 cases with 30 non-terminating and 12 withheld exclusions, against a
+    measured 262 / 0 / 25, with the `ledgered: 4` beside it correct the whole time
+    and every gate green.
+
+    Correcting the numbers alone would reset that clock rather than stop it, so this
+    claim checks three things instead:
+
+    1. **Structure** — the baseline's suite names and the generated matrix block's
+       suite names are the same set. A row added to the matrix without a budget, or a
+       budget left behind by a renamed suite, is caught here in `make check` rather
+       than only by a full `make conformance` run.
+    2. **The budget integer** — each suite's `ledgered` equals the matrix row's
+       XFail/Skip column, so the committed baseline and the committed matrix cannot
+       disagree in the tree.
+    3. **The prose** — every matrix-derivable integer a note restates, checked
+       against the matrix column that measures it (`_BASELINE_NOTE_SITES`), plus the
+       OWL 2 DL note's subset/exclusion tally checked against the frozen census the
+       CONFORMANCE.md prose is already sourced from.
+    """
+    suites = load_baseline_suites()
+    rel = _CONFORMANCE_BASELINE.relative_to(_REPO)
+    problems: list[str] = []
+
+    # --- 1. structure ------------------------------------------------------
+    only_baseline = sorted(set(suites) - set(matrix))
+    only_matrix = sorted(set(matrix) - set(suites))
+    for name in only_baseline:
+        problems.append(
+            f"{rel}: budgets a suite {name!r} that the generated matrix block in "
+            f"docs/CONFORMANCE.md has no row for — the suite was renamed or removed "
+            f"and its budget was left behind"
+        )
+    for name in only_matrix:
+        problems.append(
+            f"{rel}: the generated matrix block has a {name!r} row with no budget "
+            f"here; add one so the suite's ledgered gaps are ratcheted"
+        )
+
+    # --- 2. the budget integer --------------------------------------------
+    for name, entry in sorted(suites.items()):
+        if name not in matrix:
+            continue
+        ledgered = entry.get("ledgered")
+        if not isinstance(ledgered, int):
+            problems.append(f"{rel}: suite {name!r} has no integer `ledgered` budget")
+            continue
+        if ledgered != matrix[name][1]:
+            problems.append(
+                f"{rel}: suite {name!r} budgets {ledgered} ledgered gaps, but the "
+                f"generated matrix block measures {matrix[name][1]}"
+            )
+
+    # --- 3. the prose ------------------------------------------------------
+    for name, what, pattern in _baseline_note_sites():
+        entry = suites.get(name)
+        if entry is None:
+            problems.append(
+                f"{rel}: no suite {name!r} to carry {what}; the suite was renamed, so "
+                f"update _baseline_note_sites() rather than leaving the note ungated"
+            )
+            continue
+        note = entry.get("note")
+        if not isinstance(note, str):
+            problems.append(f"{rel}: suite {name!r} has no string `note`")
+            continue
+        row = matrix.get(name)
+        if row is None:
+            continue
+        expected = {
+            "pass": row[0],
+            "xskip": row[1],
+            "total": row[0] + row[1],
+            _BASELINE_RL_POSITIVE: census["rl_positive"],
+        }
+        problems.extend(
+            _check_note(rel, name, what, pattern, note, expected, "the matrix block")
+        )
+
+    # The DL note's subset/exclusion tally, sourced from the same frozen census
+    # docs/CONFORMANCE.md's three restatements of it are sourced from.
+    dl = suites.get("Entailment (OWL 2 DL consistency)")
+    if isinstance(dl, dict) and isinstance(dl.get("note"), str):
+        problems.extend(
+            _check_note(
+                rel,
+                "Entailment (OWL 2 DL consistency)",
+                "the DL subset/exclusion tally",
+                _flow(
+                    r"it vendors (?P<graded>\d+) of the (?P<shaped>\d+) "
+                    r"consistency-shaped cases in the upstream manifest, and the "
+                    r"harness's OWL2-DL-EXCLUDED line measures the other "
+                    r"(?P<excluded>\d+) — (?P<decides>\d+) of them the tableau decided "
+                    r"when probed \((?P<dc>\d+) consistent, (?P<di>\d+) inconsistent\)"
+                )
+                + ANY
+                + _flow(
+                    r"(?P<nonterm>\d+) do not terminate under a 40 s ceiling"
+                )
+                + ANY
+                + _flow(
+                    r"(?P<withheld>\d+) are withheld \((?P<wr>\d+) reasoner, "
+                    r"(?P<wp>\d+) parse\) and (?P<nopremise>\d+) carry no RDF/XML "
+                    r"premise\. Reading (?P<agreed>\d+)/(?P<total>\d+) as coverage"
+                ),
+                dl["note"],
+                {
+                    "graded": census["dl_graded"],
+                    "shaped": census["consistency_shaped"],
+                    "excluded": census["dl_excluded"],
+                    "decides": census["dl_decides"],
+                    "dc": census["dl_decides_consistent"],
+                    "di": census["dl_decides_inconsistent"],
+                    "nonterm": census["dl_non_terminating"],
+                    "withheld": census["dl_withholds"],
+                    "wr": census["dl_withholds_reasoner"],
+                    "wp": census["dl_withholds_parse"],
+                    "nopremise": census["dl_no_premise"],
+                    "agreed": matrix["Entailment (OWL 2 DL consistency)"][0],
+                    "total": sum(matrix["Entailment (OWL 2 DL consistency)"]),
+                },
+                "census.tsv and the matrix block",
+            )
+        )
+    return problems
+
+
+def _check_note(
+    rel: Path,
+    suite: str,
+    what: str,
+    pattern: str,
+    note: str,
+    expected: dict[str, int],
+    source: str,
+) -> list[str]:
+    """One `note:` restatement checked against its measured source.
+
+    The same contract `Claim.check` enforces, over a JSON-decoded string instead
+    of a file: exactly one match, and every captured group carries a measured
+    value. `expected` may offer more keys than the pattern captures — the caller
+    passes one dict per suite — but never fewer, which is the direction that
+    would leave a number ungated.
+    """
+    groups = set(re.compile(pattern).groupindex)
+    unsourced = sorted(groups - set(expected))
+    if unsourced:
+        return [
+            f"{rel}: {suite} — {what} captures {unsourced} with no measured value; "
+            f"every captured number must be sourced"
+        ]
+    matches = list(re.finditer(pattern, note))
+    if len(matches) != 1:
+        return [
+            f"{rel}: {suite} — expected exactly one match for {what} in its `note`, "
+            f"found {len(matches)}. The note was reworded, so update the pattern in "
+            f"scripts/check-doc-claims.py rather than letting the prose drift "
+            f"ungated.\n    pattern: {pattern}"
+        ]
+    found = matches[0].groupdict()
+    problems: list[str] = []
+    for group, text in sorted(found.items()):
+        if _int(text) != expected[group]:
+            problems.append(
+                f"{rel}: {suite} — {what} documents {group}={text}, but {source} "
+                f"measures {expected[group]}"
+            )
+    return problems
+
+
 def load_governor_schedule_source() -> tuple[str, int, list[tuple[str, int]]]:
     """``(GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, CHARGE_SCHEDULE)`` as the
     engine defines them, in ``crates/sparql-eval/src/governor/mod.rs``.
@@ -3417,16 +3706,30 @@ def rl_mechanism_counts() -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def load_release_crates() -> list[str]:
-    """The publish-ordered release set defined in scripts/release-crates.sh."""
+def _release_array(name: str) -> list[str]:
     text = _read(_RELEASE_CRATES)
-    body = re.search(r"PURRDF_RELEASE_CRATES=\((.*?)\)", text, re.DOTALL)
+    body = re.search(rf"{name}=\((.*?)\)", text, re.DOTALL)
     if not body:
         raise SystemExit(
-            f"check-doc-claims: no PURRDF_RELEASE_CRATES array in "
+            f"check-doc-claims: no {name} array in "
             f"{_RELEASE_CRATES.relative_to(_REPO)}"
         )
     return [line.strip() for line in body.group(1).split() if line.strip()]
+
+
+def load_release_crates() -> list[str]:
+    """The publish-ordered release set defined in scripts/release-crates.sh."""
+    return _release_array("PURRDF_RELEASE_CRATES")
+
+
+def load_unbootstrapped_crates() -> list[str]:
+    """The ledger of release crates with no crates.io record, in publish order.
+
+    Held to the registry in both directions by scripts/check-crates-io-records.sh
+    and to the release set by scripts/check-publish-order.py; here it is the
+    source docs/RELEASE.md's bootstrap section must restate.
+    """
+    return _release_array("PURRDF_UNBOOTSTRAPPED_CRATES")
 
 
 # ---------------------------------------------------------------------------
@@ -3684,6 +3987,179 @@ def release_crate_list_claim(crates: list[str]) -> list[str]:
             f"    release set: {crates}"
         ]
     return []
+
+
+def outstanding_bootstrap_claim(crates: list[str], ledger: list[str]) -> list[str]:
+    """docs/RELEASE.md's outstanding-bootstrap section, held to the committed ledger.
+
+    The section names the crates that need a token bootstrap before a `rust-v*`
+    tag can publish them, states each one's ORDINAL in the publish order, and is
+    linked to from the tag instructions by a GitHub anchor derived from its own
+    heading. Three restatements of one list, none of them derived — so all three
+    rotted: the section named `purrdf-datalog`, which has had a crates.io record
+    since 2026-07-31 and answers 200, and it named it in the heading, in the body
+    and inside the anchor.
+
+    Membership is not decided by this script, because whether a crate has a
+    crates.io record is a fact about crates.io. It IS decided — by
+    `scripts/check-crates-io-records.sh`, which holds `PURRDF_UNBOOTSTRAPPED_CRATES`
+    in `scripts/release-crates.sh` to the registry in both directions before any
+    packaging. That array is therefore the committed, preflight-verified ledger,
+    and this claim holds the prose to it: the heading names exactly the ledger's
+    crates in the ledger's order; the body, the anchor and the heading agree; each
+    crate is in the release set; and each stated ordinal is that crate's real
+    position in the publish order. An ordinal is the number a reader uses to reason
+    about how far a doomed release would get, and it moves silently every time a
+    crate is inserted ahead of it — which this change set did, deliberately, to
+    `purrdf-geo`.
+    """
+    text = _read(_RELEASE)
+    rel = _RELEASE.relative_to(_REPO)
+    heading = re.search(r"^### Outstanding bootstrap: (.+)$", text, re.MULTILINE)
+    if not heading:
+        return [
+            f"{rel}: no `### Outstanding bootstrap:` heading — the section was "
+            f"renamed or removed; update outstanding_bootstrap_claim so it stays "
+            f"checked"
+        ]
+    named = re.findall(r"`([a-z0-9-]+)`", heading.group(1))
+    if not named:
+        return [f"{rel}: the outstanding-bootstrap heading names no crate"]
+
+    problems: list[str] = []
+    ordinal = {name: index + 1 for index, name in enumerate(crates)}
+    if named != ledger:
+        problems.append(
+            f"{rel}: the outstanding-bootstrap heading names {named}, but "
+            f"PURRDF_UNBOOTSTRAPPED_CRATES in scripts/release-crates.sh — the "
+            f"ledger the crates.io preflight verifies — is {ledger}. The heading "
+            f"restates the ledger; edit the ledger only to match the registry"
+        )
+    for crate in named:
+        if crate not in ordinal:
+            problems.append(
+                f"{rel}: the outstanding-bootstrap heading names `{crate}`, which is "
+                f"not in the release set defined by scripts/release-crates.sh"
+            )
+
+    # The anchor the tag instructions link to is GitHub's slug of that heading.
+    slug = "outstanding-bootstrap-" + "-".join(named)
+    if f"(#{slug})" not in text:
+        found = re.findall(r"\(#(outstanding-bootstrap-[a-z0-9-]+)\)", text)
+        problems.append(
+            f"{rel}: the cross-reference to the outstanding-bootstrap section links "
+            f"to {found or ['no anchor']}, but the heading's anchor is now "
+            f"`#{slug}`. Renaming the heading without the link leaves a dead "
+            f"in-page link that renders as a working one"
+        )
+
+    # The body must name exactly the heading's crates, each with its true ordinal.
+    body = re.search(
+        r"^### Outstanding bootstrap:.*?\n(.*?)(?=\n## |\n### |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    if not body:
+        return problems + [f"{rel}: the outstanding-bootstrap section has no body"]
+    prose = body.group(1)
+    spelled = _SPELLED.get(len(named))
+    # `[A-Za-z-]+`, not `[A-Za-z]+`: the release set is 21 crates, and the
+    # spellings past twenty are hyphenated (`twenty-one`, `twenty-first`). A
+    # class that stopped at the hyphen would simply not match, and this claim
+    # would report "no count stated" for a document that states one correctly.
+    stated = re.search(
+        _flow(r"(?P<count>[A-Za-z-]+) crates are in the release set above"), prose
+    )
+    if not stated:
+        problems.append(
+            f"{rel}: the outstanding-bootstrap body states no crate count "
+            f"('<N> crates are in the release set above'); it was reworded, so "
+            f"update the pattern rather than leaving the count ungated"
+        )
+    elif spelled and stated.group("count").lower() != spelled:
+        problems.append(
+            f"{rel}: the outstanding-bootstrap body says "
+            f"'{stated.group('count')} crates', but its heading names {len(named)} "
+            f"({', '.join(named)})"
+        )
+
+    for crate in named:
+        if crate not in ordinal:
+            continue
+        want = _ordinal(ordinal[crate])
+        if want is None:
+            # An ordinal this table cannot spell is a position this claim cannot
+            # check, and silently skipping it would leave the number ungated while
+            # the run still printed OK. Fail, naming the table to extend.
+            problems.append(
+                f"{rel}: `{crate}` is at position {ordinal[crate]} in the release "
+                f"set, which _ordinal() cannot spell; extend _SPELLED / "
+                f"_IRREGULAR_ORDINAL in scripts/check-doc-claims.py rather than "
+                f"leaving this crate's ordinal unchecked"
+            )
+            continue
+        found = re.search(
+            _flow(rf"`{re.escape(crate)}` (?:is )?the \*\*(?P<ord>[a-z-]+)\*\*"),
+            prose,
+        )
+        if not found:
+            problems.append(
+                f"{rel}: the outstanding-bootstrap body states no publish-order "
+                f"ordinal for `{crate}`; every crate the heading names must carry "
+                f"one, because the ordinal is what says how far a doomed release "
+                f"gets before it fails"
+            )
+            continue
+        if found.group("ord") != want:
+            problems.append(
+                f"{rel}: says `{crate}` is the {found.group('ord')} crate in publish "
+                f"order, but scripts/release-crates.sh puts it at position "
+                f"{ordinal[crate]} ({want})"
+            )
+    return problems
+
+
+def publishable_crate_count_claim(crates: list[str]) -> list[str]:
+    """"the N publishable crates" — the doc build's own headline, in two files.
+
+    `make doc` and CI's `Doc (deny warnings)` step both run the same
+    `cargo doc --workspace --no-deps --exclude …` over every member that is not
+    `publish = false`, and both describe that set with a literal count. Nothing
+    derived it, so both said 20 while 21 manifests were publishable: `purrdf-cdt`,
+    `purrdf-text` and `purrdf-geo` arrived and the sentence did not move.
+
+    The count is sourced from `scripts/release-crates.sh`, which
+    `release_crate_list_claim` already holds to the publish array and which the
+    crates.io preflight reads — so the number here, the crates the doc job builds,
+    and the crates a `rust-v*` tag publishes are one fact with one definition.
+    """
+    problems: list[str] = []
+    expected = len(crates)
+    sites = (
+        (_REPO / "Makefile", _flow(r"docs for the (?P<n>\d+) publishable crates")),
+        (
+            _REPO / ".github" / "workflows" / "ci.yaml",
+            _flow(r"Document exactly the (?P<n>\d+) publishable crates"),
+        ),
+    )
+    for path, pattern in sites:
+        rel = path.relative_to(_REPO)
+        matches = list(re.finditer(pattern, _read(path)))
+        if len(matches) != 1:
+            problems.append(
+                f"{rel}: expected exactly one publishable-crate-count claim, found "
+                f"{len(matches)}. The line was reworded, so update the pattern in "
+                f"scripts/check-doc-claims.py rather than leaving it ungated.\n"
+                f"    pattern: {pattern}"
+            )
+            continue
+        got = _int(matches[0].group("n"))
+        if got != expected:
+            problems.append(
+                f"{rel}: says {got} publishable crates, but "
+                f"scripts/release-crates.sh names {expected}"
+            )
+    return problems
 
 
 def _flow(pattern: str) -> str:
@@ -4716,6 +5192,10 @@ def main(argv: list[str]) -> int:
     checked += coverage_checked
     problems.extend(release_crate_list_claim(crates))
     checked += 1
+    problems.extend(publishable_crate_count_claim(crates))
+    checked += 1
+    problems.extend(outstanding_bootstrap_claim(crates, load_unbootstrapped_crates()))
+    checked += 1
     problems.extend(rl_matrix_agreement_claim(matrix, lanes))
     checked += 1
     problems.extend(py_service_table_claim(load_py_entail_services()))
@@ -4738,6 +5218,8 @@ def main(argv: list[str]) -> int:
     problems.extend(reasoning_session_hosts_claim())
     checked += 1
     problems.extend(governor_corpus_count_claim(matrix))
+    checked += 1
+    problems.extend(baseline_note_claim(matrix, census))
     checked += 1
     problems.extend(governor_profile_digest_claim())
     checked += 1
