@@ -566,7 +566,7 @@ argument in this repository changes it.
 
 **The mitigation, and exactly what it proves.**
 `crates/sparql-conformance/tests/cdt_lexical_divergence.rs` tokenizes every
-corpus file this workspace ships (2,885 of them, across `vectors/`,
+corpus file this workspace ships (2,892 of them, across `vectors/`,
 `crates/sparql-conformance/suite/`, `.../corpus/` and `.../entailment-suite/`)
 with the production lexers, resolves each file's own prefix bindings, recovers
 every `cdt:List`/`cdt:Map` literal (959 of them), and grades each one with

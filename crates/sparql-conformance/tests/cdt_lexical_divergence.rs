@@ -518,7 +518,16 @@ fn the_recovery_resolves_datatypes_the_way_the_parser_does() {
 
 /// Files the scan tokenizes — every `.rq`/`.ru`/`.ttl`/`.trig`/`.nt`/`.nq`/`.n3`
 /// under [`CORPUS_ROOTS`].
-const EXPECTED_TOKENIZED_FILES: usize = 2885;
+///
+/// This moves whenever a corpus does, and it is meant to: the equality is what
+/// makes "every composite literal this workspace ships is inside the published
+/// space" a claim about a KNOWN population rather than about whatever the walk
+/// happened to reach. It went 2885 → 2892 when the SHACL 1.2 node-expression
+/// and rules work added seven Turtle vectors under `vectors/shacl/af/`; none of
+/// the seven carries a composite literal, which is why the three counts below
+/// did not move with it. Re-derive this number from a run, never guess it, and
+/// check the other three in the same run.
+const EXPECTED_TOKENIZED_FILES: usize = 2892;
 /// Of those, how many the lexer REFUSED. Every one is text-checked for the
 /// SEP-0009 namespace instead of being graded, so this number is the exact size
 /// of the scan's ungraded remainder.
