@@ -108,7 +108,7 @@ mod tests {
         )
         .expect("input");
         let outcome = read_csvw(&input, &config(CsvwMode::Standard)).expect("CSVW");
-        assert!(outcome.warnings.is_empty());
+        assert_eq!(outcome.warnings, [] as [_; 0]);
         assert!(outcome.loss_ledger.is_empty());
         let expected = parse_dataset(
             br#"@prefix csvw: <http://www.w3.org/ns/csvw#> .
@@ -201,7 +201,7 @@ mod tests {
         .expect("input");
 
         let outcome = read_csvw(&input, &config).expect("private-use language tag");
-        assert!(outcome.warnings.is_empty());
+        assert_eq!(outcome.warnings, [] as [_; 0]);
         assert_eq!(
             outcome.group.tables[0].rows[0].cells[0].values[0]
                 .language

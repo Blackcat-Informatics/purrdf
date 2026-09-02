@@ -1559,7 +1559,7 @@ object_id\tx_extension\tsubject_id
 # empty mapping-set note
 ";
         let set = parse_tsv(doc).expect("parse");
-        assert!(set.mappings.is_empty());
+        assert_eq!(set.mappings, [] as [_; 0]);
         assert_eq!(
             set.column_layout.columns(),
             &["object_id", "x_extension", "subject_id"]
@@ -1778,7 +1778,7 @@ ex:A\tskos:exactMatch\tex:B
     #[test]
     fn validate_clean_doc_has_no_errors() {
         let set = parse_tsv(CLEAN).expect("parse");
-        assert!(validate(&set).is_empty());
+        assert_eq!(validate(&set), [] as [_; 0]);
     }
 
     #[test]
@@ -1849,7 +1849,7 @@ ex:A\tskos:exactMatch\tex:B
     fn to_rdf_emits_owl_reification_for_a_mapping() {
         let set = parse_tsv(CLEAN).expect("parse");
         let quads = to_rdf(&set);
-        assert!(!quads.is_empty());
+        assert_ne!(quads, [] as [_; 0]);
 
         let has = |pred: &str, obj: &str| {
             quads.iter().any(|q| {

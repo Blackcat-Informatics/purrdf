@@ -996,7 +996,7 @@ mod tests {
         let asymmetry = clauses.clause(clauses.untriggered()[0]);
         assert_eq!(asymmetry.trigger(), None);
         assert_eq!(asymmetry.arity(), 2);
-        assert!(asymmetry.head.is_empty());
+        assert_eq!(asymmetry.head, [] as [Vec<HeadAtom>; 0]);
     }
 
     /// A SINGLETON nominal derives an atomic head — a deterministic identification — while a

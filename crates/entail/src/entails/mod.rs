@@ -1286,7 +1286,7 @@ mod tests {
         else {
             panic!("an existential in superclass position is outside OWL 2 RL");
         };
-        assert!(!violations.is_empty());
+        assert_ne!(violations, [] as [_; 0]);
     }
 
     /// AN INCONSISTENT PREMISE ENTAILS EVERYTHING, SO IT IS REFUSED.
@@ -1742,7 +1742,7 @@ mod tests {
             else {
                 panic!("an assertional conclusion over an RL premise is REFUTED, not shrugged at");
             };
-            assert!(!miss.summary().is_empty());
+            assert_ne!(miss.summary(), "");
         }
         // …and the same premise still refutes a negative fact the refutation lane RAN on:
         // there is no unique-name assumption, so nothing separates two unrelated individuals.
@@ -2166,7 +2166,7 @@ mod tests {
                 "nothing beyond the table was needed: {:?}",
                 answers.limits()
             );
-            assert!(!answers.rows().is_empty());
+            assert_ne!(answers.rows(), [] as [Vec<TermValue>; 0]);
             assert_eq!(answers.mechanism(), EntailmentMechanism::StrictTable);
         }
     }

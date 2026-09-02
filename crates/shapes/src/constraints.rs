@@ -2504,9 +2504,9 @@ mod tests {
 
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1, "the violation itself must still fire");
-        assert!(results[0].source_box_roles.is_empty());
-        assert!(results[0].path_box_roles.is_empty());
-        assert!(results[0].result_box_roles.is_empty());
+        assert_eq!(results[0].source_box_roles, [] as [_; 0]);
+        assert_eq!(results[0].path_box_roles, [] as [_; 0]);
+        assert_eq!(results[0].result_box_roles, [] as [_; 0]);
     }
 
     #[test]

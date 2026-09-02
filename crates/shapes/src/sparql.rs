@@ -1139,10 +1139,9 @@ mod tests {
     #[test]
     fn eval_order_empty_is_empty() {
         let dataset = dataset_from_ntriples(&[]);
-        assert!(
-            eval_order(&dataset, &[], false)
-                .expect("empty order")
-                .is_empty()
+        assert_eq!(
+            eval_order(&dataset, &[], false).expect("empty order"),
+            [] as [_; 0]
         );
     }
 

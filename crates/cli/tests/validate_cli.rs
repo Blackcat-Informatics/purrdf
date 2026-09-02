@@ -640,7 +640,7 @@ fn malformed_documents_are_runtime_failures() {
 
     let data_failure = run(&["validate", "--shapes", &good_shapes, &bad_data]);
     assert_eq!(code(&data_failure), 1, "{}", stderr(&data_failure));
-    assert!(stdout(&data_failure).is_empty());
+    assert_eq!(stdout(&data_failure), "");
 }
 
 /// An unsupported SHACL construct hard-fails rather than being skipped.
@@ -979,7 +979,7 @@ fn an_unknown_format_token_is_a_usage_error() {
 
     let out = run(&["validate", "--shapes", &shapes, "--format", "yaml", &data]);
     assert_eq!(code(&out), 2, "clap rejects an unknown value with exit 2");
-    assert!(!stderr(&out).is_empty());
+    assert_ne!(stderr(&out), "");
 }
 
 /// `--shapes` is required: `validate` never invents an empty shapes graph (which would

@@ -1218,6 +1218,6 @@ mod tests {
             &rule_hash,
             "the plan address is not the bare clause digest"
         );
-        assert!(!PLAN_SOLVER_VERSION.is_empty());
+        assert_ne!(PLAN_SOLVER_VERSION, "");
     }
 }

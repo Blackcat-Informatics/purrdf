@@ -3660,7 +3660,7 @@ mod tests {
         )];
         let edb = store_of(&[("a", P, "b")]);
         let evaluation = run(rules, edb);
-        assert!(evaluation.derivations().is_empty());
+        assert_eq!(evaluation.derivations(), []);
     }
 
     /// A fully ground body atom is a membership probe.
@@ -3683,7 +3683,7 @@ mod tests {
         assert_eq!(evaluation.derivations().len(), 1);
 
         let evaluation = run(vec![present], store_of(&[("x", P, "y")]));
-        assert!(evaluation.derivations().is_empty());
+        assert_eq!(evaluation.derivations(), []);
     }
 
     /// An empty program over a seeded store is the store itself.
@@ -3691,7 +3691,7 @@ mod tests {
     fn an_empty_program_derives_nothing() {
         let edb = store_of(&[("a", P, "b")]);
         let evaluation = run(Vec::new(), edb);
-        assert!(evaluation.derivations().is_empty());
+        assert_eq!(evaluation.derivations(), []);
         assert_eq!(evaluation.facts().row_count(), 1);
         assert_eq!(evaluation.budget().join_steps(), 0);
     }

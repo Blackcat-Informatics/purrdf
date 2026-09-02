@@ -1504,7 +1504,7 @@ fn explain_reports_a_deterministic_per_node_ledger() {
     assert!(ledger.len() >= 4, "expected a multi-node plan: {ledger:?}");
     for (position, node) in ledger.iter().enumerate() {
         assert_eq!(node.ordinal, position, "ordinals are positional");
-        assert!(!node.label.is_empty());
+        assert_ne!(node.label, "");
     }
     assert_eq!(ledger[0].depth, 0, "the first node is the plan root");
 

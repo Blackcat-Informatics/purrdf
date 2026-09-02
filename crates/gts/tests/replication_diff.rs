@@ -63,7 +63,7 @@ fn diff_identical_is_current() {
     let (local, _remote) = append_fixture();
     let result = diff(&inventory(&local), &inventory(&local));
     assert_eq!(result.status, DiffStatus::Current);
-    assert!(result.fetch.is_empty());
+    assert_eq!(result.fetch, [] as [_; 0]);
     assert!(result.continuous);
 }
 
@@ -94,7 +94,7 @@ fn diff_remote_behind_is_current() {
     // Swap: the bigger file is now local, the smaller one is remote.
     let result = diff(&inventory(&remote), &inventory(&local));
     assert_eq!(result.status, DiffStatus::Current);
-    assert!(result.fetch.is_empty());
+    assert_eq!(result.fetch, [] as [_; 0]);
     assert!(result.continuous);
 }
 
@@ -140,7 +140,7 @@ fn diff_problem_inventory_is_error() {
     assert_eq!(result.status, DiffStatus::Error);
     assert!(!result.continuous);
     assert!(result.splice_offset.is_none());
-    assert!(result.fetch.is_empty());
+    assert_eq!(result.fetch, [] as [_; 0]);
     assert!(result.detail.is_some());
     assert!(splice(&torn, &remote, &result).is_err());
 }

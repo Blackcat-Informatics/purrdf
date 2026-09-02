@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn commented_out_call_sites_are_not_flagged() {
         let body = strip_line_comments("// let w = Writer::new(\"x\");\n/// Writer::new(\"y\")\n");
-        assert!(sites_in(&body).is_empty());
+        assert_eq!(sites_in(&body), [] as [String; 0]);
     }
 
     /// …and neither is one inside the trailing `#[cfg(test)]` module.

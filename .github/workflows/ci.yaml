@@ -22,7 +22,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
       - name: Format
         run: cargo fmt --all --check
@@ -35,6 +37,12 @@ jobs:
 
       - name: Enforce no Cargo features
         run: python3 scripts/check-no-features.py
+
+      - name: Check every workflow installs the toolchain rust-toolchain.toml pins
+        run: python3 scripts/check-toolchain-pin.py
+
+      - name: Check the toolchain-pin gate can still fail
+        run: python3 scripts/check-toolchain-pin.py --self-test
 
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
@@ -73,7 +81,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
       - name: Run workspace tests (includes doc tests)
         run: cargo test --workspace --locked
@@ -88,7 +98,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |
@@ -114,7 +126,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
       - name: Install cargo-c (the pinned header-contract generator)
         # Pinned to the exact cargo-c whose bundled cbindgen the committed
@@ -135,7 +149,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
       # Document exactly the 18 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
@@ -154,12 +170,36 @@ jobs:
           persist-credentials: false
 
       - name: Install MSRV Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "1.96"
 
+      # RUSTUP_TOOLCHAIN is mandatory here, not belt-and-braces. The action
+      # selects a toolchain with `rustup default`, which sits at the BOTTOM of
+      # rustup's precedence order — below `rust-toolchain.toml`. So the install
+      # step above alone does not make cargo use 1.96 inside this repo; the
+      # repo pin wins and the job silently measures the dev toolchain instead.
+      # `RUSTUP_TOOLCHAIN` outranks the file, so this is what actually holds the
+      # floor at 1.96 and proves no nightly-only feature has crept in.
       - name: Check workspace on MSRV
         run: cargo check --workspace --lib --locked
+        env:
+          RUSTUP_TOOLCHAIN: "1.96"
+
+      # Prove the guard is live: if the toolchain selection above ever regresses
+      # to the repo pin, this fails loudly instead of the job quietly passing on
+      # a compiler that is not the MSRV.
+      - name: Assert the MSRV job really ran on 1.96
+        run: |
+          set -euo pipefail
+          version=$(rustc --version)
+          echo "$version"
+          case "$version" in
+            "rustc 1.96."*) ;;
+            *) echo "::error::MSRV job resolved '$version', expected rustc 1.96.x" >&2; exit 1 ;;
+          esac
+        env:
+          RUSTUP_TOOLCHAIN: "1.96"
 
   wasm:
     runs-on: ubuntu-latest
@@ -171,8 +211,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
           targets: wasm32-unknown-unknown
 
       - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
@@ -244,7 +285,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |
@@ -304,7 +347,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |
@@ -340,7 +385,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |

@@ -2568,7 +2568,7 @@ mod tests {
         let (dag, clauses, proof) = peano_answer_proof();
         // The top of the derivation is the recursive rule.
         assert!(!proof.is_assert(), "the sum step is a rule firing");
-        assert!(!proof.rule_identity().is_empty());
+        assert_ne!(proof.rule_identity(), "");
 
         // Walk down the single-premise chain to the base fact: it is an Assert.
         let mut node = &proof;
@@ -2580,7 +2580,7 @@ mod tests {
             "the base `add(z, Y, Y)` fact is an unconditional Assert leaf"
         );
         assert_eq!(node.rule(), 0);
-        assert!(!node.rule_identity().is_empty());
+        assert_ne!(node.rule_identity(), "");
         // The carried identity is exactly the clause's re-derived content address.
         assert_eq!(
             node.rule_identity(),

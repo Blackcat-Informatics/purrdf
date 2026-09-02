@@ -1888,7 +1888,7 @@ mod tests {
             .filter(|rule| !fired.lines().any(|f| f == *rule))
             .count();
         assert_eq!(missing, rdfs.lines().count() - fired.lines().count());
-        assert!(rules_bytes("simple").expect("known").is_empty());
+        assert_eq!(rules_bytes("simple").expect("known"), [] as [u8; 0]);
     }
 
     // ── The pointer surface ─────────────────────────────────────────────────

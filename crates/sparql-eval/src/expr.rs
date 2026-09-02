@@ -1137,16 +1137,23 @@ impl Drop for SuppressFirstWitnessWrapGuard {
 }
 
 /// Whether [`exists`]'s definition path should apply the first-witness
-/// `Slice{0, Some(1)}` wrap. Always `true` outside `cfg(test)` — the wrap is
-/// unconditional production behavior, never a runtime-configurable option; the
-/// `cfg(test)` branch lets [`suppress_first_witness_wrap_for_test`] force it off
-/// for the one differential test that needs an unwrapped control.
+/// `Slice{0, Some(1)}` wrap. Always `true` in a production build — the wrap is
+/// unconditional production behavior, never a runtime-configurable option.
+///
+/// Two `cfg`-selected definitions rather than one body with a `cfg`'d early
+/// return: the production answer is then a literal `true` with no thread-local
+/// in sight, which is the property this function exists to guarantee.
+#[cfg(not(test))]
 fn exists_apply_first_witness_wrap() -> bool {
-    #[cfg(test)]
-    if SUPPRESS_FIRST_WITNESS_WRAP.with(std::cell::Cell::get) {
-        return false;
-    }
     true
+}
+
+/// Test-build counterpart of [`exists_apply_first_witness_wrap`]: still `true` by
+/// default, but [`suppress_first_witness_wrap_for_test`] can force it off for the
+/// one differential test that needs an unwrapped control.
+#[cfg(test)]
+fn exists_apply_first_witness_wrap() -> bool {
+    !SUPPRESS_FIRST_WITNESS_WRAP.with(std::cell::Cell::get)
 }
 
 /// [`exists`]'s probe-vs-definition decision: `true` runs the memoized probe, `false`

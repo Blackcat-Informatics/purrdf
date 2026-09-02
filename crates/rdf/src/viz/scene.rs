@@ -1699,8 +1699,8 @@ mod tests {
         let table = scene.table.expect("table");
         assert_eq!(table.fields, spec.table_fields);
         assert!(table.rows.iter().all(|row| row.cells.len() == 2));
-        assert!(scene.nodes.is_empty());
-        assert!(scene.edges.is_empty());
+        assert_eq!(scene.nodes, [] as [_; 0]);
+        assert_eq!(scene.edges, [] as [_; 0]);
     }
 
     #[test]

@@ -37,7 +37,7 @@
 //! | antecedent | faithful? | why |
 //! |---|---|---|
 //! | `⊤` | yes | `⊤^I` is the whole ABSTRACT domain, and an unguarded clause fires at every abstract node |
-//! | `A` (named) | yes | `A^I` IS `{ x | A ∈ L(x) }` — that is what reading a model off a graph means |
+//! | `A` (named) | yes | `A^I` IS `{ x \| A ∈ L(x) }` — that is what reading a model off a graph means |
 //! | `{a}` (singleton nominal) | yes | `{a}^I` is the node denoting `a`, which [`BodyAtom::Denotes`] tests |
 //! | `∃r.F`, `≥1 r.F` with `F` faithful | yes | `x ∈ (∃r.F)^I` iff some `r`-neighbour of `x` is in `F^I`, which the edge join is |
 //! | `C₁ ⊓ … ⊓ Cₙ`, every `Cᵢ` faithful | yes | the conjunction of the guards |
@@ -667,7 +667,7 @@ mod tests {
             Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
             Concept::Named(A),
         );
-        assert!(meta.is_empty());
+        assert_eq!(meta, [] as [u32; 0]);
         assert_eq!(clauses.len(), 1);
         let c = table.intern(Concept::Named(C));
         let a = table.intern(Concept::Named(A));
@@ -728,7 +728,7 @@ mod tests {
             Concept::Some(Role::Named(R), Box::new(Concept::Top)),
             Concept::Named(A),
         );
-        assert!(meta.is_empty());
+        assert_eq!(meta, [] as [u32; 0]);
         let a = table.intern(Concept::Named(A));
         assert_eq!(
             clauses,
@@ -776,7 +776,7 @@ mod tests {
             Concept::Named(A),
             Concept::And(vec![Concept::Named(B), Concept::Named(C)]),
         );
-        assert!(meta.is_empty());
+        assert_eq!(meta, [] as [u32; 0]);
         assert_eq!(clauses.len(), 2, "one clause per conjunct: {clauses:?}");
         assert!(clauses.iter().all(|clause| clause.body.len() == 1));
     }
@@ -789,7 +789,7 @@ mod tests {
             Concept::Or(vec![Concept::Named(B), Concept::Named(C)]),
             Concept::Named(A),
         );
-        assert!(meta.is_empty());
+        assert_eq!(meta, [] as [u32; 0]);
         assert_eq!(clauses.len(), 2, "one clause per disjunct: {clauses:?}");
     }
 
@@ -797,7 +797,7 @@ mod tests {
     #[test]
     fn an_enumerated_antecedent_splits_into_one_clause_per_member() {
         let (clauses, meta, _) = absorbed(Concept::nominal(vec![IND, IND + 1]), Concept::Named(A));
-        assert!(meta.is_empty());
+        assert_eq!(meta, [] as [u32; 0]);
         assert_eq!(clauses.len(), 2);
         assert!(
             clauses
@@ -888,7 +888,7 @@ mod tests {
             || Ok::<(), std::convert::Infallible>(()),
         )
         .expect("infallible");
-        assert!(out.clauses.is_empty());
+        assert_eq!(out.clauses, [] as [_; 0]);
         assert_eq!(out.meta.len(), 1);
     }
 }

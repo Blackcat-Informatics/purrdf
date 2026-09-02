@@ -126,7 +126,7 @@ fn unknown_predicate_selects_nothing() {
         "{FOCUS <http://a.example/absent> _}@<http://a.example/S>",
         &data,
     );
-    assert!(got.is_empty());
+    assert_eq!(got, [] as [_; 0]);
 }
 
 // ── RDF-1.2 quoted-triple term parsing ──────────────────────────────────────

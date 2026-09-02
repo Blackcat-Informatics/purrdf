@@ -362,10 +362,16 @@ released in lockstep. That coherence is enforced in CI: a version-coherence chec
 fails the build if the three version sources disagree.
 
 **MSRV policy.** The supported minimum Rust is `rust-version` in the root
-`Cargo.toml` (currently **1.96**), pinned to the **stable** toolchain (nightly-free)
-and enforced by a dedicated CI MSRV job. Raising the MSRV is a notable change
-recorded in the changelog and, pre-1.0, rides a minor bump. The README MSRV badge
-is maintained by hand and must be bumped together with `rust-version`.
+`Cargo.toml` (currently **1.96**) on the **stable** channel, enforced by a dedicated
+CI MSRV job, and release artifacts are built on stable. Raising the MSRV is a
+notable change recorded in the changelog and, pre-1.0, rides a minor bump. The
+README MSRV badge is maintained by hand and must be bumped together with
+`rust-version`.
+
+Contributors run a dated nightly (`rust-toolchain.toml`) for its sharper clippy and
+rustdoc lint surface, but the workspace contains **no nightly-only features** — the
+MSRV job is what proves that on every change. Building PurRDF needs nothing beyond
+stable 1.96.
 
 ## The GMEOW family
 

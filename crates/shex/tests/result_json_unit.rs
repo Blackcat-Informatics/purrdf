@@ -221,7 +221,7 @@ fn reason_strings_with_quotes_and_newlines_stay_valid_json() {
     let rendered = result.to_result_json();
     let json: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
     let reason = json[0]["reason"].as_str().expect("reason present");
-    assert!(!reason.is_empty());
+    assert_ne!(reason, "");
 
     // Force a reason containing a quote and a newline directly, bypassing
     // the matcher, to prove the JSON layer escapes arbitrary reason text.
