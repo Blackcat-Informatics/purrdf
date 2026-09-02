@@ -809,6 +809,11 @@ struct CountingRelation {
     opens: Arc<AtomicU64>,
     /// Rows pulled across every invocation.
     pulls: Arc<AtomicU64>,
+    /// The internal work units each invocation reports on its FIRST pull, standing in for
+    /// a real generator's search cost (a candidate examined, a posting decoded). Zero for
+    /// the fixtures that isolate the invocation and row points, so those keep pricing
+    /// exactly what they always did.
+    work_per_open: u64,
     /// The single declared mode: the all-free pattern of this arity, which subsumes every
     /// invocation of it.
     modes: Vec<purrdf_core::binding_pattern::BindingPattern>,
@@ -824,7 +829,20 @@ impl CountingRelation {
             declared: count as u64,
             opens: Arc::new(AtomicU64::new(0)),
             pulls: Arc::new(AtomicU64::new(0)),
+            work_per_open: 0,
             modes: vec![crate::property_fn::PfArity::new(0, 1).all_free_mode()],
+        }
+    }
+
+    /// The same relation, reporting `work` units of internal work per invocation.
+    ///
+    /// A generator's cost is decoupled from its output — the point of the work channel is
+    /// that these two numbers are allowed to be wildly different — so this deliberately
+    /// sets them independently.
+    fn emitting_with_work(count: usize, work: u64) -> Self {
+        Self {
+            work_per_open: work,
+            ..Self::emitting(count)
         }
     }
 
@@ -860,6 +878,7 @@ impl crate::property_fn::PropertyFunction for CountingRelation {
             rows: self.rows.clone(),
             next: 0,
             pulls: Arc::clone(&self.pulls),
+            unreported_work: self.work_per_open,
         }))
     }
 }
@@ -870,6 +889,11 @@ struct CountingCursor {
     rows: Vec<crate::property_fn::PfRow>,
     next: usize,
     pulls: Arc<AtomicU64>,
+    /// Work this cursor has performed and not yet reported. Taken on the first
+    /// `take_work` and never re-reported, which is the partitioning contract the trait
+    /// states — a cursor that re-reported the same units would charge its caller twice
+    /// for one search.
+    unreported_work: u64,
 }
 
 impl crate::property_fn::PfCursor for CountingCursor {
@@ -878,6 +902,10 @@ impl crate::property_fn::PfCursor for CountingCursor {
         let row = self.rows.get(self.next).cloned();
         self.next += 1;
         Ok(row)
+    }
+
+    fn take_work(&mut self) -> u64 {
+        core::mem::take(&mut self.unreported_work)
     }
 }
 
@@ -992,6 +1020,146 @@ fn a_governed_property_function_query_spends_exactly_its_invocation_and_row_fuel
         .map(crate::governor::NodeCharges::fuel_total)
         .sum();
     assert_eq!(total, measured.fuel);
+    assert_eq!(
+        ledger_fuel(&ledger, ChargePoint::PropertyFunctionWork),
+        0,
+        "a relation that does not override take_work reports no work and charges none — \
+         which is what makes a budget sized against the previous profile version buy this \
+         same execution"
+    );
+}
+
+#[test]
+fn the_work_point_prices_a_search_the_rows_cannot_see() {
+    // The v8 point's whole reason for existing, stated as an inequality the other two
+    // points cannot express: a relation that returns TWO rows after doing FIVE HUNDRED
+    // units of internal work must not be priced like a two-row table. Before this point
+    // the two executions were indistinguishable in fuel.
+    let dataset = pf_dataset(3);
+    let searching = Arc::new(CountingRelation::emitting_with_work(2, 500));
+    let (searched, searched_ledger) = run_with_relations(
+        &pf_pattern(),
+        &dataset,
+        &pf_registry(Arc::clone(&searching) as Arc<dyn crate::property_fn::PropertyFunction>),
+        &QueryGovernors::METERED,
+    );
+    let table = Arc::new(CountingRelation::emitting(2));
+    let (scanned, scanned_ledger) = run_with_relations(
+        &pf_pattern(),
+        &dataset,
+        &pf_registry(Arc::clone(&table) as Arc<dyn crate::property_fn::PropertyFunction>),
+        &QueryGovernors::METERED,
+    );
+
+    assert_eq!(
+        searched.rows, scanned.rows,
+        "the two relations return the SAME rows; only the work behind them differs"
+    );
+    assert_eq!(
+        ledger_fuel(&searched_ledger, ChargePoint::PropertyFunctionRow),
+        ledger_fuel(&scanned_ledger, ChargePoint::PropertyFunctionRow),
+        "and the row point cannot tell them apart, which is the gap the work point closes"
+    );
+
+    // Three invocations, five hundred units each, charged once per unit.
+    assert_eq!(
+        ledger_fuel(&searched_ledger, ChargePoint::PropertyFunctionWork),
+        1_500,
+        "the work point counts what the relation reported, once per unit, per invocation"
+    );
+    assert_eq!(
+        ledger_fuel(&scanned_ledger, ChargePoint::PropertyFunctionWork),
+        0,
+        "and nothing at all for a relation that reports none"
+    );
+    assert_eq!(
+        searched.fuel - scanned.fuel,
+        1_500,
+        "so the ONLY fuel difference between the two runs is the reported work"
+    );
+
+    // The decomposition still adds up: a scaled charge must land in the ledger exactly as
+    // a loop of single charges would, or the ledger describes a different quantity.
+    let total: u64 = searched_ledger
+        .iter()
+        .map(crate::governor::NodeCharges::fuel_total)
+        .sum();
+    assert_eq!(total, searched.fuel);
+}
+
+#[test]
+fn reported_work_is_taken_once_and_never_re_charged() {
+    // `take_work` partitions the work across calls rather than re-reporting it. The
+    // engine reads it after EVERY pull, so a cursor whose counter did not reset would be
+    // charged once per pull instead of once per search — here, four pulls (three rows
+    // plus the terminating one) times a hundred, rather than a hundred.
+    let dataset = pf_dataset(1);
+    let relation = Arc::new(CountingRelation::emitting_with_work(3, 100));
+    let (run, ledger) = run_with_relations(
+        &pf_pattern(),
+        &dataset,
+        &pf_registry(Arc::clone(&relation) as Arc<dyn crate::property_fn::PropertyFunction>),
+        &QueryGovernors::METERED,
+    );
+    assert_eq!(run.rows, 3, "one driving row, three emitted rows");
+    assert_eq!(
+        ledger_fuel(&ledger, ChargePoint::PropertyFunctionWork),
+        100,
+        "one search, reported once — not once per pull"
+    );
+}
+
+#[test]
+fn reported_work_can_trip_a_fuel_ceiling_the_rows_alone_never_would() {
+    // The point is CHARGED, not merely recorded. A budget that comfortably affords the
+    // rows must still trip on the work behind them, or the number is decoration.
+    let dataset = pf_dataset(1);
+    let quiet = Arc::new(CountingRelation::emitting(2));
+    let (measured, _) = run_with_relations(
+        &pf_pattern(),
+        &dataset,
+        &pf_registry(Arc::clone(&quiet) as Arc<dyn crate::property_fn::PropertyFunction>),
+        &QueryGovernors::METERED,
+    );
+    assert_eq!(measured.tripped, None, "the measuring run completes");
+    let affordable = measured.fuel;
+
+    // The SAME query, the SAME rows, one unit of reported work. The ceiling that exactly
+    // afforded the quiet relation is one short for the working one.
+    let loud = Arc::new(CountingRelation::emitting_with_work(2, 1));
+    let (tripped, _) = run_with_relations(
+        &pf_pattern(),
+        &dataset,
+        &pf_registry(Arc::clone(&loud) as Arc<dyn crate::property_fn::PropertyFunction>),
+        &QueryGovernors::UNBOUNDED.with_fuel(affordable),
+    );
+    assert!(
+        matches!(
+            tripped.tripped,
+            Some(TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                ..
+            })
+        ),
+        "one reported unit must cross a ceiling that was exactly affordable without it: \
+         {tripped:?}"
+    );
+
+    // And the neighbouring VALID case: one more unit of budget affords it. A ceiling that
+    // refused BOTH would prove nothing about the work point at all.
+    let (afforded, ledger) = run_with_relations(
+        &pf_pattern(),
+        &dataset,
+        &pf_registry(Arc::new(CountingRelation::emitting_with_work(2, 1))
+            as Arc<dyn crate::property_fn::PropertyFunction>),
+        &QueryGovernors::UNBOUNDED.with_fuel(affordable + 1),
+    );
+    assert_eq!(
+        afforded.tripped, None,
+        "one more unit of budget is exactly enough"
+    );
+    assert_eq!(afforded.rows, 2, "and the full answer comes back");
+    assert_eq!(ledger_fuel(&ledger, ChargePoint::PropertyFunctionWork), 1);
 }
 
 #[test]

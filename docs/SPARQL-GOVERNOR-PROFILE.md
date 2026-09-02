@@ -185,6 +185,7 @@ units mean nothing outside this build.
 | `exists-probe-answered` | 1 | memoized-probe evaluation answering an `EXISTS`/`NOT EXISTS` filter |
 | `exists-definition-answered` | 1 | per-row-definition evaluation of an `EXISTS`/`NOT EXISTS` inner — once per distinct restriction of the row to the inner's correlated variables, never once per outer row |
 | `exists-inner-solutions-consumed` | 1 | row the definition path's inner materialized before its first-witness stop |
+| `property-function-work` | 1 | unit of internal work a property-function relation performed and reported through `PfCursor::take_work` — the unit is the relation's own (a candidate examined, a posting decoded), because the engine cannot see inside host code to define one |
 
 `update-mutated-quad` is the only point outside the query evaluator and the only one
 no algebra node raises. It exists because `CLEAR ALL`, `MOVE`, `COPY`, `ADD`, `LOAD`
@@ -499,7 +500,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `7` |
+| `GOVERNOR_PROFILE_VERSION` | `8` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -516,16 +517,16 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n7\n'
+{ printf 'purrdf-sparql-governors\n8\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
     property-function-invocation property-function-row \
     aggregate-invocation aggregate-accumulation \
     exists-probe-answered exists-definition-answered \
-    exists-inner-solutions-consumed
+    exists-inner-solutions-consumed property-function-work
 } | sha256sum
-# 28726bbb1d560fcd57585a0a361947e904283e59e96efaf9c2d38091ae256851
+# adb7f12b92d14c80dc4f27eb3c83286277baac53a34c343f9e44a12d3577cfce
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -603,7 +604,7 @@ at the former and a certified positional-prefix `budget-exhausted` at the latter
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = 2f7daf6abb6ac960a76e260b59e79d76c8d1ab2be6fa17efaf50d0acf6ee7282
+GOVERNOR_CORPUS_DIGEST = b20fbee8919cfaa3f8b831effd8d68d16b51b0b51ee8466ede4d1d3499720978
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -646,21 +647,22 @@ increment it. That restraint is what makes the number worth pinning.
 | 4 | the first version whose schedule is **not** byte-identical: `update-mutated-quad` is appended, because SPARQL `UPDATE` became governable and a mutation is work a budget must be able to bound. No *query* charges it |
 | 5 | `property-function-invocation` and `property-function-row` are appended, because the evaluator gained a second producer whose bag size an outside party picks: a host-supplied relation invoked from predicate position. Admission control also learns to price a call from the relation's declared row bound. No query without a registered property function charges either point |
 | 6 | `aggregate-invocation` and `aggregate-accumulation` are appended, because the evaluator's third such producer — an aggregate, built-in or a registered custom aggregate alike — folds a group's rows into one answer, and that fold's init/finish and per-value work rode the generic per-node accounting until now. Both points are charged from the one dispatch site that decides which kind of fold a given aggregate expression names, so a built-in and a custom aggregate over the same group shape cost the same fuel. No query without an aggregate charges either point |
-| **7** | `exists-probe-answered`, `exists-definition-answered`, and `exists-inner-solutions-consumed` are appended, because existence evaluation's strategy choice became an observable event: one memoized-probe evaluation, one per-row-definition evaluation (charged once per distinct restriction of the row to the inner's correlated variables, never once per outer row), and one row the definition path's inner materialized before its first-witness stop. The three make the probe/definition split and its witness cost readable off the evidence rather than inferred, which is what lets a ceiling be sized against the strategy a query actually takes. No query without an `EXISTS`/`NOT EXISTS` filter charges any of the three |
+| 7 | `exists-probe-answered`, `exists-definition-answered`, and `exists-inner-solutions-consumed` are appended, because existence evaluation's strategy choice became an observable event: one memoized-probe evaluation, one per-row-definition evaluation (charged once per distinct restriction of the row to the inner's correlated variables, never once per outer row), and one row the definition path's inner materialized before its first-witness stop. The three make the probe/definition split and its witness cost readable off the evidence rather than inferred, which is what lets a ceiling be sized against the strategy a query actually takes. No query without an `EXISTS`/`NOT EXISTS` filter charges any of the three |
+| **8** | `property-function-work` is appended, because v5 priced a host relation by the two quantities the *engine* can see — invocations driven and rows accepted — and for a generator relation neither is where the work is: a nearest-neighbour search examining a million vectors to return five rows charged six units, pricing a million distance computations exactly as it priced a six-row table scan. The count comes from the relation itself through `PfCursor::take_work`, the only party that can see inside its own search, and it is *spent* rather than merely recorded — so over-reporting exhausts the reporter's own caller, and under-reporting (the default, zero) can cost a receipt precision but never costs soundness, because every other ceiling stays in force unchanged. No relation written against v5's seam charges it |
 
 ### 12.1 What a consumer must re-verify when the version moves
 
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `7` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `8` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
    lying and must be rejected rather than reconciled.
 2. **Re-measure every fuel ceiling** under `QueryGovernors::METERED`, against your own
    representative queries. A ceiling sized against the previous version was sized
-   against work this build may no longer do (v3) or may now do (v4, v5, v6, v7). Do not
+   against work this build may no longer do (v3) or may now do (v4, v5, v6, v7, v8). Do not
    scale the old number.
 3. **Re-check ceilings you sized at or near a boundary.** Ceilings are inclusive, so a
    ceiling that was exactly the metered cost completed; after a bump it may be one
@@ -683,7 +685,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `7` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `8` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |
