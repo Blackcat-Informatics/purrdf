@@ -168,7 +168,11 @@ but it assumes nothing about your ontology or application.
   rules run as `sh:order` strata with `once`/`general` partitioning — plus
   scoped SHACL 1.2 support for reifier shapes. None of that is a claim of full
   SHACL 1.2 conformance. **129/129 passing** on the vendored W3C test suite,
-  zero ledgered.
+  zero ledgered. The answer is the W3C validation report as a frozen RDF
+  dataset (`ValidationReport::to_dataset()`), so any syntax — and the CLI's
+  `validate --format` — is a serialization of that dataset rather than a text
+  round-trip, with the report's minted blank nodes kept distinct from every
+  blank node the data graph carries.
 - **ShEx 2.1** — a from-scratch ShExC + ShExJ schema layer and validator gated
   against the official shexTest suite: **1,105/1,105 attempted validation tests,
   zero expected-failures** (imports and semantic actions included), 99/99 negative

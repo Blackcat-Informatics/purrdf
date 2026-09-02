@@ -330,6 +330,19 @@ print(report["results"])   # list of violation dicts
 Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
 `component`, `source_shape`, and `message`.
 
+## The report is a dataset
+
+`ValidationReport::to_dataset()` materializes the W3C validation report —
+the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen
+`RdfDataset`, built straight from the report's own terms rather than through a
+`to_ntriples()` → `parse_dataset()` round-trip. The direct path carries every
+RDF 1.2 term the report holds (a triple-term focus node included) with the
+report's own blank-node labels, and the blank nodes the report *mints* (the
+report node, one per result, the interior nodes of a complex `sh:path`) are
+guaranteed distinct from every blank node the data graph *carries*. Rendering
+the report in any syntax is then `serialize_dataset(&report.to_dataset(), …)`,
+which is exactly what `purrdf validate --format` does.
+
 ## SARIF output
 
 Validation reports stay structured in the engine; the SARIF 2.1.0 boundary is
