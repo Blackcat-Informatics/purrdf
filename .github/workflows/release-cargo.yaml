@@ -113,6 +113,11 @@ jobs:
           # requirements. This catches a partial bump (a stale ^x.y.z internal pin)
           # before any crate is irreversibly published.
           python3 scripts/check-versions.py
+          # The publish order is re-proved at the point of no return: the set is
+          # exactly the publishable members, and the order is a topological
+          # order of normal AND dev-dependencies — the second being what lets
+          # the publish loop below VERIFY each crate against the registry.
+          python3 scripts/check-publish-order.py
           # The wasm gate covers exactly the crates that get published — read
           # from the one release-set definition rather than a second copy.
           # shellcheck source=scripts/release-crates.sh
@@ -133,6 +138,11 @@ jobs:
           set -euo pipefail
 
           rm -rf target/package
+          # `--no-verify` is LOAD-BEARING here and only here: every crate is
+          # packaged before ANY is published, so a verification build of crate N
+          # would have to resolve crate N-1 at this version from crates.io, where
+          # it does not exist yet. The `.crate` files are produced now so that a
+          # packaging failure surfaces before the first irreversible upload.
           cargo package --workspace \
             --exclude purrdf-python \
             --exclude purrdf-capi \
@@ -212,12 +222,22 @@ jobs:
             exit 1
           }
 
+          # Each publish VERIFIES: cargo builds the packaged crate against the
+          # registry before the upload that cannot be undone, so a broken or
+          # wrong-version artifact is refused rather than made permanent. That
+          # build resolves the crate's whole graph, dev-dependencies included,
+          # which is resolvable only because (1) `wait_for_crate_version` blocks
+          # until the previous crate is served, and (2) check-publish-order.py
+          # above proved every dev-edge points backward in this order. This loop
+          # used to pass `--no-verify`, and the flag was load-bearing until
+          # `purrdf-geo` (dev-depending on two later crates) was reordered — see
+          # docs/RELEASE.md, "Verification is on, and why it was off".
           for crate in "${crates[@]}"; do
             if crate_version_exists "$crate"; then
               echo "${crate} ${version} already exists on crates.io; skipping"
               continue
             fi
-            cargo publish -p "$crate" --locked --no-verify
+            cargo publish -p "$crate" --locked
             wait_for_crate_version "$crate"
             # Give the registry index a short propagation window before publishing
             # dependents that name the freshly-published version.
