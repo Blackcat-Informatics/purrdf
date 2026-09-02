@@ -22,7 +22,7 @@ PurRDF has about **40,600 words of book, 33,700 words of README, and 68,700
 words of `docs/*.md`** in English, of which 74–95 % per surface is translatable
 prose (the rest is code, IRIs, identifiers and keywords that stay verbatim).
 Beneath that sits a **runtime-string tier** — 6,300 words of CLI `--help`, 139
-diagnostic construction sites over 79 stable codes, 5,200 words of `.pyi`
+diagnostic construction sites over 91 stable codes, 5,200 words of `.pyi`
 comment text plus 19,300 words of PyO3 rustdoc that become Python `__doc__`,
 and 4,100 words of hand-written JSDoc — and beneath that **873,000 words of
 rustdoc** that docs.rs cannot serve in any language but the one it was written
@@ -89,7 +89,7 @@ mechanically**, and every one of those gates was written against English:
    Python `__doc__` need a locale mechanism that does not exist in the code,
    diagnostics are pinned by tests, and Python has no per-language docstring
    convention. That tier is a multi-release project (§7, phase 5). What *can*
-   ship is a Chinese **reference page for the 79 diagnostic codes**, which is
+   ship is a Chinese **reference page for the 91 diagnostic codes**, which is
    documentation, not code.
 6. **Rustdoc is not translated.** docs.rs has no i18n; 873,000 words is larger
    than every other tier combined; the target audience reads English API
@@ -198,7 +198,7 @@ Root `AGENTS.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `PROVENANCE.md`,
 | Surface | Measure | Mechanism today |
 |---|---|---|
 | CLI `--help` | `crates/cli/src/cli.rs`: 6,326 words of `///` doc comments across 110 `#[arg]`/`#[command]` sites and 77 `value_name`s; 36,356 rustdoc words in the crate overall | clap derives help from rustdoc; clap has no locale mechanism |
-| Diagnostics | `RdfDiagnostic { severity, code, message, detail, location }`; 139 constructor call sites (`RdfDiagnostic::new/error/warning`), 79 distinct stable code strings (families: `owl-*`, `iri-*`, `gts-*`, `rdf-*`, `jsonld-*`, `sparql-*`, `reasoning-*`, `cdt-*`, `text-*`, `datalog-*`); 269 `write!(f, "…")` `Display` sites | `message` is a `String` built at the site; tests match on `code` and, in goldens, on `message` |
+| Diagnostics | `RdfDiagnostic { severity, code, message, detail, location }`; 139 constructor call sites (`RdfDiagnostic::new/error/warning`); **91 distinct stable codes by construction-site trace** — 66 literals at those call sites, 9 `iri-*` from `IriError::diagnostic_code`, 4 `native-sparql-*` from `UnsupportedKind::code`, and 12 built through a helper, a `From` impl or a constant that a literal grep cannot see (8 `rdf-ir-*` via `validate.rs`'s local `diag(code, message)`, 2 `cdt-*` via `impl From<CdtBlankError> for RdfDiagnostic`, 2 `reasoning-closure-relation-*` from `ClosureRelations` constants); families by prefix: `native-*` 33 (`native-codec-*` 17, `native-sparql-*` 14, `native-jsonld-*` 2), `rdf-*` 18, `gts-*` 14, `iri-*` 9, `jsonld-*` 6, `statements-*` 5, `cdt-*` 2, `reasoning-*` 2, `content-*` 1, `sssom-*` 1 — regime names, visualization ids and loss-ledger strings are not diagnostic codes and are not counted; 269 `write!(f, "…")` `Display` sites | `message` is a `String` built at the site; tests match on `code` and, in goldens, on `message` |
 | Python | `bindings/python/python/src/purrdf/__init__.pyi`: 10,248 words, of which 5,171 are `#`-comment documentation and 26 are docstrings; 157 `#[pyclass]`/`#[pyfunction]`/`#[pymethods]` sites carrying 19,336 rustdoc words that PyO3 emits as `__doc__`; 480 docstrings (7,445 words) in the pure-Python layer | one `__doc__` string per object; one `.pyi` per package; no per-language convention in Python, pyright or mypy |
 | JavaScript | `crates/rdf-wasm/js/index.d.ts`: 6,959 words, 97 JSDoc blocks (4,051 words); `index.mjs` 3,049 words; 12,931 rustdoc words in `crates/rdf-wasm/src` that `wasm-bindgen` copies into the generated `.d.ts` | one `.d.ts`; TypeScript has no locale-selected typings |
 
@@ -753,7 +753,7 @@ crate; **multi-release** ≈ larger than any single crate here.
 | **2 — SPARQL extensions and retrieval** | `sparql/querying.md` whole (composite datatypes, statistical aggregates, path witnesses, extension hosts); `sparql/results.md`; `crates/text/README.md`; `crates/cdt/README.md`; `crates/geo/README.md`; `docs/design/purrdf-embedding-knn.md`; `docs/design/purrdf-text-scoring.md`; the reader-facing sections of `docs/PURREMB.md` | ≈ 24,000 | **large** — `querying.md` alone is a third of the book and holds 22 of the 24 gated SPARQL fences |
 | **3 — Python API guide** | a Chinese API guide hosted in the book, derived from the 5,171 `#`-comment words of `__init__.pyi` and the 19,336 rustdoc words behind `__doc__`; **not** a second `.pyi` — Python, pyright and mypy have no locale-selected stub or docstring, so a parallel doc page is the only mechanism, and it drifts from the stub unless the gate diffs the two signature lists | ≈ 24,500 source words | **large** |
 | **4 — remainder of the book** | `entailment.md`, `validation/{shacl,shex}.md`, `concepts/{projections,base-iris,jsonld,canonicalization,visualization}.md`, `datalog.md`, `gts.md`, `slices.md`, `interop/rdfjs.md`, `project/*`; `entailment-rules.md` via the gettext fallback; `docs/RDF12-CANON-PROFILE.md`, `docs/SPARQL-GOVERNOR-PROFILE.md`, `docs/COLUMNAR.md` | ≈ 27,000 | **large** |
-| **5 — runtime strings** | a locale mechanism for clap help (none exists upstream), `RdfDiagnostic.message` (139 sites, tests pin messages), `Display` impls (269 sites), JSDoc; downstream matchers in `gmeow-ontology` and the playground; wasm-size-neutral but every binding grows a locale switch | ≈ 45,000 code-embedded words | **multi-release** — recommend *against* for 0.14.0; ship instead a Chinese reference page for the 79 diagnostic codes (documentation, phase 1 or 2, **small**) |
+| **5 — runtime strings** | a locale mechanism for clap help (none exists upstream), `RdfDiagnostic.message` (139 sites, tests pin messages), `Display` impls (269 sites), JSDoc; downstream matchers in `gmeow-ontology` and the playground; wasm-size-neutral but every binding grows a locale switch | ≈ 45,000 code-embedded words | **multi-release** — recommend *against* for 0.14.0; ship instead a Chinese reference page for the 91 diagnostic codes (documentation, phase 1 or 2, **small**) |
 | **never** | rustdoc (873,106 words; docs.rs has no i18n); `GTS-SPEC.md` (normative, governed elsewhere); `CONFORMANCE.md` and `BENCHMARKS.md` (numbers); contributor docs | — | — |
 
 Phases 1 and 2 are what an AI developer reads before deciding to use the
