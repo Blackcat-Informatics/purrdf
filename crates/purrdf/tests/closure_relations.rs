@@ -111,7 +111,7 @@ fn endpoints(result: &SparqlResult) -> Vec<String> {
     let mut ends: Vec<String> = rows
         .iter()
         .map(|row| match row[0].as_ref().expect("?end is bound") {
-            TermValue::Iri(iri) => iri.to_string(),
+            TermValue::Iri(iri) => iri.clone(),
             other => panic!("?end must bind an IRI, got {other:?}"),
         })
         .collect();
