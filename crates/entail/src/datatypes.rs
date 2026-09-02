@@ -329,9 +329,9 @@ mod tests {
             rows(&index, DT_ILL_TYPED_RELATION),
             vec![("bad".to_owned(), format!("<{XSD_INTEGER}>"))]
         );
-        assert!(rows(&index, DT_VALUE_RELATION).is_empty());
-        assert!(rows(&index, DT_EQUAL_RELATION).is_empty());
-        assert!(rows(&index, super::DT_DIFFERENT_RELATION).is_empty());
+        assert_eq!(rows(&index, DT_VALUE_RELATION), [] as [_; 0]);
+        assert_eq!(rows(&index, DT_EQUAL_RELATION), [] as [_; 0]);
+        assert_eq!(rows(&index, super::DT_DIFFERENT_RELATION), [] as [_; 0]);
     }
 
     /// A datatype `purrdf-xsd` does not model is not JUDGED: no typing, no clash.
@@ -342,7 +342,7 @@ mod tests {
             "<p/>",
             "http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral",
         )]);
-        assert!(index.materialize().is_empty());
+        assert_eq!(index.materialize(), [] as [_; 0]);
         // …and neither is a language-tagged literal, which is not recorded at all.
         let mut tagged = LiteralIndex::default();
         tagged.observe(
@@ -351,6 +351,6 @@ mod tests {
             "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
             true,
         );
-        assert!(tagged.materialize().is_empty());
+        assert_eq!(tagged.materialize(), [] as [_; 0]);
     }
 }

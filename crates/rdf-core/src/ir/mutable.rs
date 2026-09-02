@@ -1127,7 +1127,7 @@ mod tests {
             Some(&iri_val("b")),
             GraphMatchValue::Any,
         );
-        assert!(gone.is_empty());
+        assert_eq!(gone, [] as [_; 0]);
 
         // A bound value interned nowhere matches nothing.
         let nothing = m.quads_for_pattern(
@@ -1136,7 +1136,7 @@ mod tests {
             None,
             GraphMatchValue::Any,
         );
-        assert!(nothing.is_empty());
+        assert_eq!(nothing, [] as [_; 0]);
     }
 
     #[test]
@@ -1157,7 +1157,7 @@ mod tests {
 
         // Default-graph match excludes both named quads.
         let dflt = m.quads_for_pattern(None, None, None, GraphMatchValue::Default);
-        assert!(dflt.is_empty());
+        assert_eq!(dflt, [] as [_; 0]);
         // Any matches both.
         let any = m.quads_for_pattern(None, None, None, GraphMatchValue::Any);
         assert_eq!(any.len(), 2);
@@ -1188,7 +1188,7 @@ mod tests {
 
         // A graph value interned nowhere still matches nothing.
         let none = m.quads_for_pattern(None, None, None, GraphMatchValue::Named(&iri_val("nope")));
-        assert!(none.is_empty());
+        assert_eq!(none, [] as [_; 0]);
     }
 
     // -- freeze round-trip ------------------------------------------------------------

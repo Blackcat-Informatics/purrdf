@@ -363,10 +363,10 @@ mod tests {
     fn a_stream_that_is_not_the_claimed_encoding_fails() {
         let err = decode_transport(b"plain text", TransportEncoding::Gzip)
             .expect_err("plain bytes are not gzip");
-        assert!(!err.to_string().is_empty());
+        assert_ne!(err.to_string(), "");
         let err = decode_transport(b"plain text", TransportEncoding::Zstd)
             .expect_err("plain bytes are not zstd");
-        assert!(!err.to_string().is_empty());
+        assert_ne!(err.to_string(), "");
     }
 
     #[test]

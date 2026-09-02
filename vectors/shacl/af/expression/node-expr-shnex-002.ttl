@@ -1,0 +1,97 @@
+# First-party PurRDF conformance case for the W3C "SHACL 1.2 Node Expressions"
+# specification, sections 4.3.1 (FlatMap Expressions), 4.3.3 (MatchAll
+# Expressions) and 4.1.4 (Path Values Expressions).
+#
+# Modelled on the specification's own worked example, which flat-maps each
+# ex:department of a company to its ex:revenue values.
+#
+# See vectors/shacl/af/README.md for the directory's provenance rules.
+
+@prefix ex:    <http://example.org/shacl12/node-expr/shnex-002#> .
+@prefix mf:    <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix sht:   <http://www.w3.org/ns/shacl-test#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+<>
+  rdf:type mf:Manifest ;
+  mf:entries (
+      <node-expr-shnex-002>
+    ) ;
+.
+
+<node-expr-shnex-002>
+  rdf:type sht:Validate ;
+  rdfs:label "shnex:flatMap feeding shnex:matchAll in a sh:expression constraint" ;
+  rdfs:comment """SHACL 1.2 Node Expressions section 4.3.1: a flat map expression
+    evaluates its shnex:flatMap operand once per input node WITH THAT NODE AS FOCUS
+    and concatenates the results. Section 4.3.3: a match all expression yields
+    ( true ) only when every input node conforms. ex:Healthy has departments whose
+    revenues are all non-negative; ex:Troubled has one negative revenue, so its
+    flattened revenue sequence fails the match and a violation is reported.""" ;
+  mf:action [
+      sht:dataGraph <> ;
+      sht:shapesGraph <> ;
+    ] ;
+  mf:result [
+      rdf:type sh:ValidationReport ;
+      sh:conforms "false"^^xsd:boolean ;
+      sh:result [
+          rdf:type sh:ValidationResult ;
+          sh:focusNode ex:Troubled ;
+          sh:resultSeverity sh:Violation ;
+          sh:sourceConstraintComponent sh:ExpressionConstraintComponent ;
+          sh:sourceShape ex:CompanyShape ;
+          sh:value ex:Troubled ;
+        ] ;
+    ] ;
+  mf:status sht:approved ;
+.
+
+ex:CompanyShape
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Company ;
+  sh:expression [
+      shnex:matchAll ex:NonNegativeShape ;
+      shnex:nodes [
+          shnex:nodes [ shnex:pathValues ex:department ] ;
+          shnex:flatMap [ shnex:pathValues ex:revenue ] ;
+        ] ;
+    ] ;
+.
+
+ex:NonNegativeShape
+  rdf:type sh:NodeShape ;
+  sh:minInclusive 0 ;
+.
+
+ex:Healthy
+  rdf:type ex:Company ;
+  ex:department ex:HealthySales ;
+  ex:department ex:HealthyOps ;
+.
+
+ex:HealthySales
+  ex:revenue 21 ;
+.
+
+ex:HealthyOps
+  ex:revenue 21 ;
+.
+
+ex:Troubled
+  rdf:type ex:Company ;
+  ex:department ex:TroubledSales ;
+  ex:department ex:TroubledOps ;
+.
+
+ex:TroubledSales
+  ex:revenue 5 ;
+.
+
+ex:TroubledOps
+  ex:revenue -3 ;
+.

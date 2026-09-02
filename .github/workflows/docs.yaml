@@ -43,8 +43,9 @@ jobs:
       # release publishes; it ships as a /playground subpath of the single Pages
       # artifact (GitHub Pages allows only one deployment, already owned here).
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
           targets: wasm32-unknown-unknown
 
       - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache

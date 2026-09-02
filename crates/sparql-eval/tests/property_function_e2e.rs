@@ -798,7 +798,7 @@ fn query_with_source_view_dispatches_a_registered_relation_with_options() {
     let engine = NativeSparqlEngine::new();
     let registry = relations();
     let dataset = dataset();
-    let source = purrdf_sparql_eval::LocalRemoteQuerySource::new();
+    let source = purrdf_sparql_eval::InProcessServiceResolver::new();
 
     let result = engine
         .query_with_source_view(

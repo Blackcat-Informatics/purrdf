@@ -16,7 +16,7 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_sparql_eval::{
     LossVocabulary, MemoryRelation, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
-    QueryOptions, RemoteQuerySource, StandpointPredicates,
+    QueryOptions, ServiceResolver, StandpointPredicates,
 };
 
 use crate::manifest::{BASE_ROOT, SparqlTestCase, TestKind};
@@ -514,7 +514,7 @@ fn merge_source(
 /// whether that is an expected failure).
 pub fn run(
     case: &SparqlTestCase,
-    remote: Option<&(dyn RemoteQuerySource + Sync)>,
+    remote: Option<&(dyn ServiceResolver + Sync)>,
 ) -> Result<RunOutcome, String> {
     let query_text = std::fs::read_to_string(&case.query)
         .map_err(|e| format!("read query {}: {e}", case.query.display()))?;

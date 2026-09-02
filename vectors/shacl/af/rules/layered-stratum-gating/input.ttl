@@ -1,0 +1,48 @@
+# First-party SHACL Rules case: LAYERED stratified execution (SPARQL 1.2 RL §6.5
+# "Evaluation of a Rule Set", over the SHACL Advanced Features rule vocabulary).
+#
+# Two rules on the same shape, in two different strata:
+#
+#   sh:order 0 — tag every ex:Person with `ex:tag ex:seen` (ungated).
+#   sh:order 1 — assert `ex:untagged true`, but ONLY for a focus node conforming
+#                to ex:Untagged, which demands ZERO ex:tag values (sh:maxCount 0).
+#
+# Stratification runs the order-0 layer to completion and MATERIALIZES its
+# inferences before the order-1 layer reads the graph. By the time the order-1
+# rule evaluates its sh:condition, ex:alice already carries `ex:tag ex:seen`, so
+# the condition FAILS and the order-1 head is never derived.
+#
+# This is the case that proves sh:order is not inert: a single global fixpoint
+# over one flat rule list evaluates both rules against the SAME unmaterialized
+# round graph, sees ex:alice untagged, and wrongly derives `ex:untagged true`.
+# Swapping the two sh:order values yields a DIFFERENT inferred set — pinned by the
+# companion Rust test `swapping_orders_changes_the_inferred_set`.
+#
+# Expected derived set: exactly one triple (ex:alice ex:tag ex:seen).
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+ex:alice rdf:type ex:Person .
+
+ex:Untagged
+  rdf:type sh:NodeShape ;
+  sh:property [ sh:path ex:tag ; sh:maxCount 0 ] .
+
+ex:S
+  rdf:type sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:order 0 ;
+      sh:subject sh:this ;
+      sh:predicate ex:tag ;
+      sh:object ex:seen ] ;
+  sh:rule [
+      rdf:type sh:TripleRule ;
+      sh:order 1 ;
+      sh:condition ex:Untagged ;
+      sh:subject sh:this ;
+      sh:predicate ex:untagged ;
+      sh:object true ] .

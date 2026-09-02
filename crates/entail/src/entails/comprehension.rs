@@ -1169,8 +1169,11 @@ mod tests {
             ]],
             "the operand's own typing is the licence"
         );
-        assert!(!comprehended.minted().is_empty());
-        assert!(!comprehended.to_string().is_empty());
+        assert_ne!(
+            comprehended.minted(),
+            [] as [crate::entails::graph::Triple; 0]
+        );
+        assert_ne!(comprehended.to_string(), "");
         assert!(verify(&warrant, &premise, &conclusion));
     }
 

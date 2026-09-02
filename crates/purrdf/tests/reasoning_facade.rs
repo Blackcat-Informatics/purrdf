@@ -80,7 +80,7 @@ fn the_umbrella_names_every_type_the_reasoning_surface_carries() {
     let _ = missing.len();
     for boundary in report.boundaries() {
         let construct: Construct = boundary.construct();
-        assert!(!construct.as_str().is_empty());
+        assert_ne!(construct.as_str(), "");
     }
 
     // ── the error side, including its datalog payload ──────────────────────
@@ -129,7 +129,7 @@ fn the_umbrella_names_every_type_the_reasoning_surface_carries() {
 fn the_umbrella_reaches_the_datalog_engine_itself() {
     // Module paths, spelled through `purrdf::datalog` alone.
     let store: purrdf::datalog::store::RelationStore = purrdf::datalog::store::RelationStore::new();
-    assert!(!format!("{store:?}").is_empty());
+    assert_ne!(format!("{store:?}"), "");
     let mint: fn(&[purrdf::datalog::clause::DlClause]) -> ContractHash =
         purrdf::datalog::cache::contract_hash;
     // An empty program still has an identity, and it is a `ContractHash`.

@@ -1555,7 +1555,7 @@ mod tests {
                 "{shape:?}"
             );
             assert_eq!(shape.graph(), &PositionPlan::Constant(String::new()));
-            assert!(shape.equalities().is_empty());
+            assert_eq!(shape.equalities(), []);
         }
         assert_eq!(shapes[3].adornment().code(), "bbbb", "a ground probe");
     }
@@ -1727,7 +1727,7 @@ mod tests {
     #[test]
     fn restore_body_order_swaps_is_a_correct_in_place_program() {
         let identity: Vec<usize> = (0..7).collect();
-        assert!(restore_body_order_swaps(&identity).is_empty());
+        assert_eq!(restore_body_order_swaps(&identity), [] as [_; 0]);
         for seed in 0..32u64 {
             let order = permute(&identity, seed);
             let swaps = restore_body_order_swaps(&order);
@@ -1766,7 +1766,7 @@ mod tests {
         assert_eq!(cyclic.atoms()[0].body_index(), 0);
         assert_eq!(cyclic.variables(), ["?X", "?Y", "?Z"]);
         assert_eq!(cyclic.variable_slots(), [0, 1, 2]);
-        assert!(plan.hybrid_source_order_swaps().is_empty());
+        assert_eq!(plan.hybrid_source_order_swaps(), []);
     }
 
     /// A tree (every edge a bridge) is never promoted, and neither is a body whose only

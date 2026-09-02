@@ -1440,7 +1440,7 @@ mod tests {
         let decoded: Vec<u64> = DeltaListRef::new(&out, 0)
             .collect::<Result<_, _>>()
             .expect("decodes");
-        assert!(decoded.is_empty());
+        assert_eq!(decoded, [] as [_; 0]);
     }
 
     // -- proptest -----------------------------------------------------------------

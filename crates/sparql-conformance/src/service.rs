@@ -4,13 +4,13 @@
 //! In-memory `SERVICE` endpoint wiring for the conformance harness.
 //!
 //! A manifest's `qt:serviceData` declarations map endpoint IRIs to local data
-//! files. This builds a [`LocalRemoteQuerySource`] from them — each endpoint
+//! files. This builds an [`InProcessServiceResolver`] from them — each endpoint
 //! becomes an in-memory [`purrdf_core::RdfDataset`] that the native engine
 //! queries when a `SERVICE <endpoint> { … }` clause is evaluated. **Fully offline and
 //! deterministic**: there is no socket, the "remote" endpoint is just another
 //! in-memory dataset answered by the same native engine (dog-fooding).
 
-use purrdf_sparql_eval::LocalRemoteQuerySource;
+use purrdf_sparql_eval::InProcessServiceResolver;
 
 use crate::manifest::SparqlTestCase;
 
@@ -26,11 +26,11 @@ use crate::manifest::SparqlTestCase;
 /// # Errors
 ///
 /// Returns a message if an endpoint's data file cannot be read or parsed.
-pub fn build(case: &SparqlTestCase) -> Result<Option<LocalRemoteQuerySource>, String> {
+pub fn build(case: &SparqlTestCase) -> Result<Option<InProcessServiceResolver>, String> {
     if case.service_data.is_empty() {
         return Ok(None);
     }
-    let mut source = LocalRemoteQuerySource::new();
+    let mut source = InProcessServiceResolver::new();
     for (endpoint, path) in &case.service_data {
         let bytes = std::fs::read(path)
             .map_err(|e| format!("read service data {}: {e}", path.display()))?;

@@ -447,7 +447,7 @@ mod tests {
                 TermValue::iri(OWL_REFLEXIVEPROPERTY)
             ]]
         );
-        assert!(!reflexive.to_string().is_empty());
+        assert_ne!(reflexive.to_string(), "");
         assert!(verify(&warrant, &premise, &conclusion));
     }
 

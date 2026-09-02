@@ -16,7 +16,7 @@ use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_conformance::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use purrdf_sparql_eval::{
-    AggregateRegistry, EvalOptions, LocalRemoteQuerySource, NativeSparqlEngine, ParserOptions,
+    AggregateRegistry, EvalOptions, InProcessServiceResolver, NativeSparqlEngine, ParserOptions,
     QueryOptions, StandpointPredicates,
 };
 
@@ -59,7 +59,7 @@ fn eval_case(
     case: &SparqlTestCase,
     dataset: &Arc<RdfDataset>,
     query_text: &str,
-    remote: Option<&LocalRemoteQuerySource>,
+    remote: Option<&InProcessServiceResolver>,
 ) -> Result<SparqlResult, String> {
     let request = SparqlRequest {
         query: query_text,

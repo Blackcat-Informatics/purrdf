@@ -5400,6 +5400,32 @@ fn aggregate_function(upper: &str) -> Option<AggregateFunction> {
     })
 }
 
+/// Resolve a SPARQL built-in function NAME to the canonical keyword the grammar
+/// spells it with, case-insensitively.
+///
+/// This is the name-to-function seam a host uses when a *name* (rather than
+/// query text) identifies a SPARQL function — SHACL 1.2 Node Expressions §5's
+/// `sparql:<NAME>` call form is the motivating caller. It answers from the very
+/// table `builtin_function` resolves the grammar with, so a name is callable
+/// here exactly when the parser would accept the keyword, and the two can never
+/// drift apart into "the resolver claims a function the parser then rejects".
+///
+/// Returns `None` for a name that is not a keyword-callable built-in — including
+/// the SPARQL forms that are operators (`+`, `&&`), grammar productions
+/// (`BOUND`, `IF`, `COALESCE`, `sameTerm`, `EXISTS`) or aggregates rather than
+/// function calls. Those are not function *calls* in the grammar, so there is no
+/// keyword for this seam to return, and a caller that wants them must spell them
+/// itself.
+#[must_use]
+pub fn builtin_function_keyword(name: &str) -> Option<&'static str> {
+    let upper = name.to_ascii_uppercase();
+    let function = builtin_function(&upper)?;
+    // Round-trip through the serializer's table so the returned spelling is the ONE
+    // canonical keyword, not the caller's casing. `builtin_function` never yields
+    // `Function::Purrdf`/`Function::Custom`, the only two variants without one.
+    crate::serialize::function_keyword(&function)
+}
+
 fn builtin_function(upper: &str) -> Option<Function> {
     Some(match upper {
         "STR" => Function::Str,
@@ -6609,7 +6635,7 @@ mod tests {
         );
         assert_eq!(agg.args.len(), 1);
         assert!(!agg.distinct);
-        assert!(agg.scalarvals.is_empty());
+        assert_eq!(agg.scalarvals, [] as [_; 0]);
     }
 
     #[test]
@@ -6891,7 +6917,7 @@ mod tests {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
-        assert!(aggregates[0].1.args.is_empty());
+        assert_eq!(aggregates[0].1.args, [] as [_; 0]);
         assert!(aggregates[0].1.distinct);
         assert!(matches!(aggregates[0].1.function, AggregateFunction::Count));
     }
@@ -7273,7 +7299,7 @@ mod tests {
             panic!("expected DeleteInsert");
         };
         assert_eq!(delete.len(), 1);
-        assert!(insert.is_empty());
+        assert_eq!(insert.as_slice(), []);
         // The template IS the where pattern.
         assert!(matches!(**pattern, GraphPattern::Bgp { .. }));
     }
@@ -7353,7 +7379,7 @@ mod tests {
         assert_eq!(delete.len(), 1);
         assert_eq!(insert.len(), 1);
         assert!(with.is_none());
-        assert!(using.is_empty());
+        assert_eq!(using.as_slice(), []);
     }
 
     #[test]
@@ -7362,7 +7388,7 @@ mod tests {
         let GraphUpdateOperation::DeleteInsert { delete, insert, .. } = &u.operations[0] else {
             panic!("expected DeleteInsert");
         };
-        assert!(delete.is_empty());
+        assert_eq!(delete.as_slice(), []);
         assert_eq!(insert.len(), 1);
     }
 
@@ -7505,7 +7531,7 @@ mod tests {
         let u = SparqlParser::new()
             .parse_update("PREFIX ex: <http://e/>")
             .expect("prologue-only update");
-        assert!(u.operations.is_empty());
+        assert_eq!(u.operations, [] as [_; 0]);
     }
 
     #[test]
@@ -8907,7 +8933,10 @@ mod tests {
         // With NO configured namespace (the default) the extension seam is OFF:
         // a call-position IRI is an ordinary custom function — no error, no
         // special-casing, regardless of its local name.
-        assert!(ParserOptions::default().extension_fn_namespaces.is_empty());
+        assert_eq!(
+            ParserOptions::default().extension_fn_namespaces,
+            [] as [String; 0]
+        );
         let q = format!("{EXTP}SELECT ?h WHERE {{ ?r ?p ?o . BIND(g:heldIn(?r, ?s) AS ?h) }}");
         let Expression::FunctionCall(func, _) = bound_expr(&q) else {
             panic!("expected a FunctionCall");
@@ -9577,7 +9606,10 @@ mod tests {
     fn default_options_have_no_property_fn_namespaces() {
         // The seam is OFF by default: with no configured namespace the very same
         // query text parses to the ordinary BGP triple pattern it always did.
-        assert!(ParserOptions::default().property_fn_namespaces.is_empty());
+        assert_eq!(
+            ParserOptions::default().property_fn_namespaces,
+            [] as [String; 0]
+        );
         let q = "SELECT * WHERE { ?s pf:related ?o }";
         assert_eq!(
             pf_pattern_off(q),
@@ -9591,7 +9623,10 @@ mod tests {
                 }]
             }
         );
-        assert!(pf_calls(&pf_pattern_off(q)).is_empty());
+        assert_eq!(
+            pf_calls(&pf_pattern_off(q)),
+            [] as [&PropertyFunctionCall; 0]
+        );
     }
 
     #[test]
@@ -9695,8 +9730,8 @@ mod tests {
         // `()` denotes NO arguments on that side …
         let p = pf_pattern("SELECT * WHERE { () pf:solve ( ) }");
         let call = pf_only_call(&p);
-        assert!(call.subject_args.is_empty());
-        assert!(call.object_args.is_empty());
+        assert_eq!(call.subject_args, [] as [_; 0]);
+        assert_eq!(call.object_args, [] as [_; 0]);
     }
 
     #[test]
@@ -9707,7 +9742,7 @@ mod tests {
         let call = pf_only_call(&p);
         assert_eq!(call.subject_args, vec![pf_iri(RDF_NIL)]);
         let p2 = pf_pattern("SELECT * WHERE { () pf:solve ?o }");
-        assert!(pf_only_call(&p2).subject_args.is_empty());
+        assert_eq!(pf_only_call(&p2).subject_args, [] as [_; 0]);
         assert_ne!(call.subject_args, pf_only_call(&p2).subject_args);
     }
 
@@ -9872,7 +9907,7 @@ mod tests {
         // Even when the variable would bind to a configured-namespace IRI: only a
         // plain IRI predicate is recognized, at parse time.
         let p = pf_pattern("SELECT * WHERE { ?s ?p ?o }");
-        assert!(pf_calls(&p).is_empty());
+        assert_eq!(pf_calls(&p), [] as [&PropertyFunctionCall; 0]);
         assert_eq!(pf_triples(&p).len(), 1);
     }
 
@@ -9892,7 +9927,7 @@ mod tests {
         // collection, cons cells and all — identical to the seam-off parse.
         let q = "SELECT * WHERE { ( ?a ?b ) pf:related+ ?o }";
         assert_eq!(pf_pattern(q), pf_pattern_off(q));
-        assert!(pf_calls(&pf_pattern(q)).is_empty());
+        assert_eq!(pf_calls(&pf_pattern(q)), [] as [&PropertyFunctionCall; 0]);
     }
 
     #[test]
@@ -10028,7 +10063,7 @@ mod tests {
         // Only the PREDICATE position is the seam; the same IRI as a subject or
         // object is an ordinary term.
         let p = pf_pattern("SELECT * WHERE { pf:related ex:p pf:related }");
-        assert!(pf_calls(&p).is_empty());
+        assert_eq!(pf_calls(&p), [] as [&PropertyFunctionCall; 0]);
         let triples = pf_triples(&p);
         assert_eq!(triples.len(), 1);
         assert_eq!(triples[0].subject, pf_iri(&format!("{PF_NS}related")));

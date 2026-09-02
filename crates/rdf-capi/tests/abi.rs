@@ -262,7 +262,7 @@ fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
         assert!(error.is_null());
         let archive_bytes = buffer_bytes(archive);
         let ledger_bytes = buffer_bytes(project_ledger);
-        assert!(!archive_bytes.is_empty());
+        assert_ne!(archive_bytes, [] as [u8; 0]);
         let ledger = String::from_utf8(ledger_bytes).expect("ledger JSON");
         assert!(ledger.starts_with("{\n  \"schema_version\": 1,"));
 
@@ -425,7 +425,7 @@ fn every_research_object_profile_executes_through_the_c_abi() {
             );
             assert!(error.is_null());
             let archive_bytes = buffer_bytes(archive);
-            assert!(!archive_bytes.is_empty());
+            assert_ne!(archive_bytes, [] as [u8; 0]);
             purrdf_buffer_free(project_ledger);
             purrdf_buffer_free(archive);
 
@@ -1187,7 +1187,7 @@ fn parse_rejects_malformed_turtle_without_aborting() {
         assert!(!error.is_null());
         assert_eq!(purrdf_error_code(error), PurrdfStatus::ParseError as i32);
         let msg = std::ffi::CStr::from_ptr(purrdf_error_message(error));
-        assert!(!msg.to_bytes().is_empty());
+        assert_ne!(msg.to_bytes(), [] as [u8; 0]);
         purrdf_error_free(error);
     }
 }
@@ -2320,7 +2320,7 @@ fn gts_round_trips_a_plain_graph() {
     unsafe {
         let dataset = parse("application/n-triples", THREE_QUADS);
         let gts = to_gts(dataset);
-        assert!(!gts.is_empty());
+        assert_ne!(gts, [] as [u8; 0]);
         let restored = from_gts(&gts);
         assert_eq!(quad_count(restored), 3);
         purrdf_dataset_free(restored);
@@ -2343,7 +2343,7 @@ fn gts_star_roundtrip_preserves_the_statement_layer() {
         );
         let dataset = parse("application/n-triples", doc);
         let gts = to_gts(dataset);
-        assert!(!gts.is_empty());
+        assert_ne!(gts, [] as [u8; 0]);
 
         let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
         let mut error: *mut PurrdfError = std::ptr::null_mut();

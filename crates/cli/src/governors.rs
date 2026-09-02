@@ -420,7 +420,7 @@ mod tests {
             max_remote_requests: None,
         };
         assert!(!none.is_engaged());
-        assert!(none.named().is_empty());
+        assert_eq!(none.named(), [] as [&str; 0]);
         assert!(!none.to_governors().is_engaged());
 
         let all = GovernorFlags {

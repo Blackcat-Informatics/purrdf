@@ -133,32 +133,42 @@ impl<C> fmt::Debug for Id<C> {
 }
 
 // ── Brand markers (uninhabited: pure type-level tags, never constructed) ─────────
+//
+// Each brand wraps `Infallible` in a private field rather than being an empty
+// `enum`. Both spellings are uninhabited, but the wrapper is the form the
+// compiler's `empty_enums` lint asks for, and it keeps the intent legible: the
+// private `Infallible` field is a value that cannot exist, so the brand cannot be
+// constructed here or by any consumer. The `!` type the lint mentions first is
+// still unstable, and this workspace uses no nightly-only features, so the
+// wrapper is the only spelling available at the declared MSRV.
+
+use core::convert::Infallible;
 
 /// Brand: an interned atomic-term handle. See [`TermId`].
 #[derive(Debug)]
-pub enum Term {}
+pub struct Term(Infallible);
 /// Brand: a relation-partition handle. See [`PartitionId`].
 #[derive(Debug)]
-pub enum Partition {}
+pub struct Partition(Infallible);
 /// Brand: a rule handle. See [`RuleId`].
 #[derive(Debug)]
-pub enum Rule {}
+pub struct Rule(Infallible);
 /// Brand: a materialised-row handle. See [`RowId`].
 #[derive(Debug)]
-pub enum Row {}
+pub struct Row(Infallible);
 /// Brand: a hash-consed proof-term handle. See [`ProofId`].
 #[derive(Debug)]
-pub enum Proof {}
+pub struct Proof(Infallible);
 /// Brand: a hash-consed compound-term arena node handle. See [`NodeId`].
 #[derive(Debug)]
-pub enum Node {}
+pub struct Node(Infallible);
 /// Brand: a unification metavariable handle. See [`MetaId`].
 #[derive(Debug)]
-pub enum Meta {}
+pub struct Meta(Infallible);
 /// Brand: an interned atomic-symbol handle (a compound term's leaf/free lexical
 /// surface), distinct from `TermId`'s own atomic-fact-term interner. See [`SymId`].
 #[derive(Debug)]
-pub enum Sym {}
+pub struct Sym(Infallible);
 
 /// A dense per-interner atomic-term handle.
 pub type TermId = Id<Term>;

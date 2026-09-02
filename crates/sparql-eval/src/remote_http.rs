@@ -3,7 +3,7 @@
 
 //! HTTP-shaped transport adapter for SPARQL `SERVICE` federation.
 //!
-//! [`HttpRemoteQuerySource`] is a portable [`RemoteQuerySource`]: it builds the
+//! [`HttpRemoteQuerySource`] is a portable [`ServiceResolver`]: it builds the
 //! SPARQL Protocol POST request, delegates the actual HTTP exchange to an injected
 //! [`HttpTransport`], and decodes the `application/sparql-results+json` response
 //! with the wasm-clean [`purrdf_sparql_results::from_json`] reader.
@@ -17,14 +17,14 @@
 //! governor path lives in [`crate::governor::WallDeadline`] and nowhere else, which is
 //! what keeps this adapter deterministic and portable.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf_core::TrippedGovernor;
 use purrdf_sparql_algebra::Variable;
 
 use crate::governor::StopSignal;
-use crate::remote::{RemoteError, RemoteQuerySource, ResolvedBindings};
+use crate::remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
+use crate::service::{ServiceCapabilities, ServiceCapability, ServiceCatalog, ServiceProfile};
 
 /// The default per-request timeout for a federated `SERVICE` call.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -44,6 +44,29 @@ pub struct HttpRequest<'a> {
     pub content_type: &'a str,
     /// Accept header requested by the core adapter.
     pub accept: &'a str,
+    /// Per-service headers the transport must send **in addition to** the fixed fields
+    /// above, in this exact order: the service profile's own headers followed by its
+    /// credential header, when the profile has one and grants
+    /// [`ServiceCapability::Credentials`].
+    ///
+    /// Empty for a source with no [`ServiceCatalog`] and for a catalogued service whose
+    /// profile adds none — which is why configuring a catalog changes no byte of a
+    /// request that did not ask for one.
+    ///
+    /// Repeated names are legal HTTP and are preserved rather than merged; a transport
+    /// should append each pair rather than set-by-name, or a multi-valued header will
+    /// lose all but its last value.
+    ///
+    /// # A transport that ignores this field issues a different request than the one
+    /// configured
+    ///
+    /// This is the field a service's credential arrives in. A transport that reads the
+    /// fixed fields above but drops these would send an *unauthenticated* request for a
+    /// service the catalog says is credentialed — and the endpoint's rejection is an
+    /// ordinary [`RemoteError::Transport`], which `SERVICE SILENT` is entitled to swallow
+    /// to the join identity. The result is an answer that looks complete and is wrong,
+    /// with nothing anywhere naming the cause. Send every pair.
+    pub headers: &'a [(String, String)],
     /// The executing query's stop signal, or `None` when the caller set neither a deadline
     /// nor a cancellation.
     ///
@@ -78,7 +101,7 @@ pub struct HttpRequest<'a> {
     /// multiset bound survives in both cases — every row returned was genuinely
     /// established — so the loss is resumability, never soundness.
     ///
-    /// See [`crate::remote::RemoteQuerySource::query`] for the
+    /// See [`crate::remote::ServiceResolver::resolve`] for the
     /// same contract stated over the seam this adapter implements.
     pub stop: Option<&'a dyn StopSignal>,
 }
@@ -102,36 +125,63 @@ where
     }
 }
 
-/// A [`RemoteQuerySource`] that forwards queries to a remote SPARQL endpoint over
+/// A [`ServiceResolver`] that forwards queries to a remote SPARQL endpoint over
 /// an injected HTTP transport. Reusable across endpoints because the endpoint URL
 /// is per-call.
+///
+/// # Capability gating is opt-in, and adds no byte until it is opted into
+///
+/// With no [`ServiceCatalog`] this source contacts whatever endpoint it is handed, with
+/// the timeout and User-Agent it was built with and no extra headers — exactly as it did
+/// before catalogs existed, byte for byte. [`Self::with_catalog`] turns on per-service
+/// policy: every request must then be authorized for
+/// [`ServiceCapability::Query`] **and** [`ServiceCapability::Network`] — the second
+/// because this source is precisely the one that opens a socket — and the authorized
+/// profile supplies the request's extra headers, credential, timeout and User-Agent.
 #[derive(Debug, Clone)]
 pub struct HttpRemoteQuerySource<T> {
     transport: T,
     timeout: Duration,
     user_agent: String,
+    catalog: Option<ServiceCatalog>,
 }
 
 impl<T> HttpRemoteQuerySource<T> {
-    /// A source with the default 30s timeout.
+    /// A source with the default 30s timeout and no per-service policy.
     #[must_use]
     pub fn new(transport: T) -> Self {
         Self {
             transport,
             timeout: DEFAULT_TIMEOUT,
             user_agent: "purrdf-sparql-eval/0.1 (SERVICE federation)".to_owned(),
+            catalog: None,
         }
     }
 
-    /// Override the per-request timeout.
+    /// Override the per-request timeout. A per-service
+    /// [`ServiceProfile::with_timeout`] overrides this in turn.
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
+
+    /// Gate every request through `catalog`, and take each request's headers,
+    /// credential, timeout and User-Agent from the profile it authorizes.
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: ServiceCatalog) -> Self {
+        self.catalog = Some(catalog);
+        self
+    }
+
+    /// The per-service policy, when one is configured.
+    #[must_use]
+    pub const fn catalog(&self) -> Option<&ServiceCatalog> {
+        self.catalog.as_ref()
+    }
 }
 
-impl<T> RemoteQuerySource for HttpRemoteQuerySource<T>
+impl<T> ServiceResolver for HttpRemoteQuerySource<T>
 where
     T: HttpTransport,
 {
@@ -141,23 +191,47 @@ where
     /// [`HttpTransport::post`] is called, so a caller whose budget is spent never issues a
     /// request it cannot wait for. The signal is then handed to the transport in
     /// [`HttpRequest::stop`], which is the only way it can act during the exchange itself.
-    fn query(
-        &self,
-        endpoint: &str,
-        query_text: &str,
-        stop: Option<&Arc<dyn StopSignal>>,
-        max_intermediate_cells: Option<u64>,
-    ) -> Result<ResolvedBindings, RemoteError> {
-        if let Some(cause) = stop.and_then(|signal| signal.poll()) {
-            return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
+    ///
+    /// # …and the policy is applied before it, too
+    ///
+    /// The [`ServiceCatalog`] authorization below likewise happens before
+    /// [`HttpTransport::post`], so a service denied [`ServiceCapability::Network`] does
+    /// not have its socket opened and then discarded — the transport is never reached at
+    /// all. That ordering is the entire difference between a policy and an audit log.
+    fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+        if let Some(trip) = request.stop_trip() {
+            return Err(trip);
         }
+        let ServiceRequest {
+            endpoint,
+            query_text,
+            stop,
+            max_intermediate_cells,
+            ..
+        } = request;
+        let profile = match &self.catalog {
+            Some(catalog) => Some(catalog.authorize(
+                endpoint,
+                ServiceCapabilities::granting([
+                    ServiceCapability::Query,
+                    ServiceCapability::Network,
+                ]),
+            )?),
+            None => None,
+        };
+        let headers = profile.map_or_else(Vec::new, ServiceProfile::request_headers);
         let body = self.transport.post(HttpRequest {
             endpoint,
             query_text,
-            user_agent: &self.user_agent,
-            timeout: self.timeout,
+            user_agent: profile
+                .and_then(ServiceProfile::user_agent)
+                .unwrap_or(&self.user_agent),
+            timeout: profile
+                .and_then(ServiceProfile::timeout)
+                .unwrap_or(self.timeout),
             content_type: "application/sparql-query",
             accept: "application/sparql-results+json",
+            headers: &headers,
             stop: stop.map(|signal| &**signal),
         })?;
 

@@ -22,12 +22,12 @@ use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{
     AggregateRegistry, GovernedOutcome, GovernorState, NativeSparqlEngine,
-    PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, UserFunctionRegistry,
+    PropertyFunctionRegistry, QueryOptions, ShaclPrebinding, UserFunctionRegistry, ValueAggregate,
+    fold_values, order_values,
 };
 
-use crate::model::xsd;
 use crate::report::{Severity, ValidationResult};
-use crate::term::{Literal, NamedNode, Term, term_value_to_native};
+use crate::term::{NamedNode, Term, term_value_to_native};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -52,11 +52,11 @@ pub fn eval_target(
     select: &str,
     substitutions: &[(String, Term)],
 ) -> Result<Vec<Term>, String> {
-    eval_target_view(&**dataset, select, substitutions)
+    eval_target_view(dataset, select, substitutions)
 }
 
 /// Internal view-generic implementation of [`eval_target`].
-pub(crate) fn eval_target_view<D: DatasetView + Sync>(
+pub(crate) fn eval_target_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     select: &str,
     substitutions: &[(String, Term)],
@@ -122,7 +122,7 @@ pub fn eval_sparql_constraint(
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
     eval_sparql_constraint_view(
-        &**dataset,
+        dataset,
         focus,
         select,
         component,
@@ -136,7 +136,7 @@ pub fn eval_sparql_constraint(
 
 /// Internal view-generic implementation of [`eval_sparql_constraint`].
 #[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
-pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync>(
+pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     focus: &Term,
     select: &str,
@@ -224,11 +224,11 @@ pub fn eval_scalar_expr(
     sparql_expr: &str,
     args: &[(String, Term)],
 ) -> Result<Option<Term>, String> {
-    eval_scalar_expr_view(&**dataset, sparql_expr, args)
+    eval_scalar_expr_view(dataset, sparql_expr, args)
 }
 
 /// Internal view-generic implementation of [`eval_scalar_expr`].
-pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync>(
+pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     sparql_expr: &str,
     args: &[(String, Term)],
@@ -259,183 +259,155 @@ pub(crate) fn eval_scalar_expr_view<D: DatasetView + Sync>(
     Ok(value)
 }
 
-/// Evaluate a SPARQL set aggregate (`"MIN"` / `"MAX"` / `"SUM"`) over an explicit
-/// list of operand `values`, on the native engine.
+/// Run a SHACL 1.2 SPARQL-based node expression (SPARQL Extensions §6.1
+/// `sh:select` / §6.2 `sh:sparqlExpr`) and return the bindings of its single
+/// projected `variable`.
 ///
-/// This keeps *all* SHACL-AF aggregation on the single SPARQL path so numeric
-/// type-promotion and ordering match the engine exactly — there is no parallel
-/// Rust numeric fold. The operands are inlined into a one-column `VALUES` block:
+/// `bindings` pre-binds the focus node (`this`) and every scope variable through
+/// the SAME [`SparqlRequest::substitutions`] mechanism [`eval_scalar_expr`] uses
+/// for its arguments — the specification's "focusNode pre-bound to variable
+/// `$this` and scope variables pre-bound with matching names".
 ///
-/// ```sparql
-/// SELECT (MIN(?v) AS ?result) WHERE { VALUES (?v) { (t0) (t1) ... } }
-/// ```
-///
-/// Each `ti` is rendered through the workspace [`Term`] serializer
-/// ([`Term`]'s `Display`, i.e. N-Triples term syntax — `<iri>`, `"lex"^^<dt>`,
-/// `"lex"@lang`), which is valid inside a SPARQL `VALUES` block for IRIs and
-/// literals. Blank nodes and quoted triples cannot appear in `VALUES` (and are
-/// not comparable/numeric aggregation operands), so an operand of either kind is
-/// a hard type error.
-///
-/// The empty operand set is special-cased *before* building the query (an empty
-/// `VALUES` block is awkward and the algebra is unambiguous): `SUM` of nothing is
-/// `0`^^`xsd:integer`; `MIN`/`MAX` of nothing is unbound (`Ok(None)`).
-///
-/// Returns `Ok(Some(term))` when the aggregate bound `?result`, `Ok(None)` when
-/// it is unbound (e.g. `MIN`/`MAX` of an empty set), or `Err` on an engine error
-/// or an un-renderable operand.
+/// A solution row that leaves `variable` unbound contributes no output node (an
+/// unbound projection is an absence, which is what an empty output list means);
+/// a row that binds it contributes exactly that node. Solution ORDER is
+/// preserved and duplicates are kept: §6.1 makes the query's own `ORDER BY` /
+/// `LIMIT` the author's instrument, and sorting the answer here would destroy the
+/// very thing they wrote.
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` if `agg` is not one of `"MIN"`/`"MAX"`/`"SUM"`, an
-/// operand is a blank node or quoted triple, execution fails, the result is not a
-/// SELECT, or the query yields more than one row.
+/// Returns `Err(String)` if execution fails, the result is not a SELECT, or the
+/// query's result header does not carry `variable` at all (a shapes-load check
+/// already established the projection, so this can only mean the header and the
+/// projection disagree).
+pub(crate) fn eval_select_nodes_view<D: DatasetView + Sync + FocusGraphSource>(
+    dataset: &D,
+    select: &str,
+    variable: &str,
+    bindings: &[(String, Term)],
+) -> Result<Vec<Term>, String> {
+    let subs: Vec<(String, TermValue)> = bindings
+        .iter()
+        .map(|(name, term)| (name.clone(), term.to_term_value()))
+        .collect();
+    let (variables, rows) = run_select_generic_view(dataset, select, &subs)?;
+    let index = column_index(&variables, variable).ok_or_else(|| {
+        format!("SELECT result has no ?{variable} column, but that is the projected variable")
+    })?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            row.get(index)
+                .and_then(Option::as_ref)
+                .map(term_value_to_native)
+        })
+        .collect())
+}
+
+/// Evaluate a SPARQL set aggregate (`"MIN"` / `"MAX"` / `"SUM"`) over an explicit
+/// list of operand `values`.
+///
+/// This keeps *all* SHACL-AF aggregation on the evaluator's own accumulators, so
+/// numeric type-promotion and ordering match a `GROUP BY` fold exactly — there is
+/// no parallel Rust numeric fold. The operands go to
+/// [`purrdf_sparql_eval::fold_values`] as VALUES, not as text.
+///
+/// # Why not a query
+///
+/// The operands used to be serialized to N-Triples and spliced into a one-column
+/// `VALUES` block, which imposed two limits that belonged to the string bridge
+/// rather than to the aggregate. It could not carry a blank node or an RDF 1.2
+/// triple term, because `VALUES` cannot spell them — so `sh:min`/`sh:max` over
+/// triple terms hard-errored even though the comparator ranks them perfectly
+/// well. And because the spliced text embedded the operand DATA, every call
+/// minted a distinct key in the never-evicted plan cache, making memory grow with
+/// the input instead of with the program. Calling the fold directly removes both,
+/// and removes an `O(k)` query parse per evaluation with them.
+///
+/// The empty operand set needs no special case: the accumulators define it.
+/// `SUM` of nothing is `0`^^`xsd:integer`; `MIN`/`MAX` of nothing is unbound
+/// (`Ok(None)`).
+///
+/// # Errors
+///
+/// Returns `Err(String)` if `agg` is not one of `"MIN"`/`"MAX"`/`"SUM"`, or if
+/// the accumulator refuses an operand.
 pub fn eval_aggregate(
     dataset: &Arc<RdfDataset>,
     agg: &str,
     values: &[Term],
 ) -> Result<Option<Term>, String> {
-    eval_aggregate_view(&**dataset, agg, values)
+    eval_aggregate_view(dataset, agg, values)
 }
 
 /// Internal view-generic implementation of [`eval_aggregate`].
-pub(crate) fn eval_aggregate_view<D: DatasetView + Sync>(
-    dataset: &D,
+///
+/// `dataset` is unused — the fold is a function of the operand VALUES alone —
+/// but the parameter stays so every SHACL-AF evaluation helper keeps one shape
+/// and a caller does not have to remember which of them reads the graph.
+pub(crate) fn eval_aggregate_view<D: DatasetView + Sync + FocusGraphSource>(
+    _dataset: &D,
     agg: &str,
     values: &[Term],
 ) -> Result<Option<Term>, String> {
-    if !matches!(agg, "MIN" | "MAX" | "SUM") {
-        return Err(format!(
-            "unsupported aggregate {agg} (expected MIN/MAX/SUM)"
-        ));
-    }
-
-    // Empty operand set: special-case before building the query.
-    if values.is_empty() {
-        return Ok(match agg {
-            "SUM" => Some(Term::Literal(Literal::new_typed_literal(
-                "0",
-                NamedNode::new_unchecked(xsd::INTEGER),
-            ))),
-            // MIN/MAX of an empty set is unbound.
-            _ => None,
-        });
-    }
-
-    // Inline each operand into the VALUES block via the workspace Term serializer.
-    let mut rows = String::new();
-    for term in values {
-        match term {
-            Term::NamedNode(_) | Term::Literal(_) => {
-                // `Term`'s Display renders N-Triples term syntax, valid in VALUES.
-                rows.push('(');
-                rows.push_str(&term.to_string());
-                rows.push_str(") ");
-            }
-            Term::BlankNode(_) | Term::Triple(_) => {
-                return Err(format!(
-                    "aggregate {agg} operand {term} cannot appear in a SPARQL VALUES block (not a comparable/numeric value)"
-                ));
-            }
+    let aggregate = match agg {
+        "MIN" => ValueAggregate::Min,
+        "MAX" => ValueAggregate::Max,
+        "SUM" => ValueAggregate::Sum,
+        other => {
+            return Err(format!(
+                "unsupported aggregate {other} (expected MIN/MAX/SUM)"
+            ));
         }
-    }
-
-    let select = format!("SELECT ({agg}(?v) AS ?result) WHERE {{ VALUES (?v) {{ {rows}}} }}");
-    let (variables, result_rows) =
-        run_select_generic_view(dataset, &select, &[]).map_err(|e| format!("aggregate {e}"))?;
-
-    if result_rows.len() > 1 {
-        return Err(format!(
-            "aggregate {agg} produced {} solution rows (expected exactly one)",
-            result_rows.len()
-        ));
-    }
-    let Some(row) = result_rows.first() else {
-        return Ok(None);
     };
-    let result_index = column_index(&variables, "result");
-    let value = result_index
-        .and_then(|i| row.get(i))
-        .and_then(Option::as_ref)
-        .map(term_value_to_native);
-    Ok(value)
+    let operands: Vec<TermValue> = values.iter().map(Term::to_term_value).collect();
+    let folded = fold_values(aggregate, &operands)
+        .map_err(|e| format!("aggregate {agg} evaluation error: {e}"))?;
+    Ok(folded.as_ref().map(term_value_to_native))
 }
 
 /// Order an explicit list of operand `values` by SPARQL `ORDER BY` *value*
-/// semantics, on the native engine.
+/// semantics.
 ///
-/// This keeps SHACL-AF `sh:orderby` on the single SPARQL path so typed/numeric
-/// ordering matches the engine exactly — e.g. `"2"^^xsd:integer` sorts BEFORE
-/// `"10"^^xsd:integer` (value order), unlike a lexical `Term::to_string` sort.
-/// The operands are inlined into a one-column `VALUES` block and ordered:
+/// This keeps SHACL-AF `sh:orderby` on the evaluator's own comparator so
+/// typed/numeric ordering matches a query's `ORDER BY` exactly — e.g.
+/// `"2"^^xsd:integer` sorts BEFORE `"10"^^xsd:integer` (value order), unlike a
+/// lexical `Term::to_string` sort — and so blank nodes and RDF 1.2 triple terms
+/// order by the same total order every other term does (blank < IRI < literal <
+/// triple, triples componentwise). The sort is stable, so DUPLICATES are
+/// PRESERVED and equal-comparing values keep their input order.
 ///
-/// ```sparql
-/// SELECT ?v WHERE { VALUES (?v) { (t0) (t1) ... } } ORDER BY ?v
-/// ```
-///
-/// (`ORDER BY DESC(?v)` when `descending`). `ORDER BY` over `VALUES` returns one
-/// row per input row in order, so DUPLICATES are PRESERVED (no `DISTINCT`).
-///
-/// Each `ti` is rendered through the workspace [`Term`] serializer (N-Triples
-/// term syntax), exactly as [`eval_aggregate`]. Blank nodes and quoted triples
-/// cannot appear in a `VALUES` block, so an operand of either kind is a hard
-/// error. The empty operand set is `Ok(vec![])`.
+/// See [`eval_aggregate`] for why the operands are handed to
+/// [`purrdf_sparql_eval::order_values`] as values rather than spliced into a
+/// `VALUES` block as text.
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` if an operand is a blank node or quoted triple,
-/// execution fails, or the result is not a SELECT.
+/// Returns `Err(String)` never in the current implementation; the signature keeps
+/// the fallible shape its callers already thread so a future comparator that can
+/// refuse an operand does not become a breaking change.
 pub fn eval_order(
     dataset: &Arc<RdfDataset>,
     values: &[Term],
     descending: bool,
 ) -> Result<Vec<Term>, String> {
-    eval_order_view(&**dataset, values, descending)
+    eval_order_view(dataset, values, descending)
 }
 
 /// Internal view-generic implementation of [`eval_order`].
-pub(crate) fn eval_order_view<D: DatasetView + Sync>(
-    dataset: &D,
+///
+/// `dataset` is unused, for the reason given on [`eval_aggregate_view`].
+pub(crate) fn eval_order_view<D: DatasetView + Sync + FocusGraphSource>(
+    _dataset: &D,
     values: &[Term],
     descending: bool,
 ) -> Result<Vec<Term>, String> {
-    if values.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Inline each operand into the VALUES block via the workspace Term serializer.
-    let mut rows = String::new();
-    for term in values {
-        match term {
-            Term::NamedNode(_) | Term::Literal(_) => {
-                rows.push('(');
-                rows.push_str(&term.to_string());
-                rows.push_str(") ");
-            }
-            Term::BlankNode(_) | Term::Triple(_) => {
-                return Err(format!(
-                    "order-by operand {term} cannot appear in a SPARQL VALUES block (not orderable in VALUES)"
-                ));
-            }
-        }
-    }
-
-    let order = if descending { "DESC(?v)" } else { "?v" };
-    let select = format!("SELECT ?v WHERE {{ VALUES (?v) {{ {rows}}} }} ORDER BY {order}");
-    let (variables, result_rows) =
-        run_select_generic_view(dataset, &select, &[]).map_err(|e| format!("order-by {e}"))?;
-
-    let v_index = column_index(&variables, "v");
-    let mut out: Vec<Term> = Vec::with_capacity(result_rows.len());
-    for row in &result_rows {
-        match v_index.and_then(|i| row.get(i)).and_then(Option::as_ref) {
-            Some(value) => out.push(term_value_to_native(value)),
-            None => {
-                return Err("order-by query produced a solution row with no ?v binding".to_owned());
-            }
-        }
-    }
-    Ok(out)
+    let operands: Vec<TermValue> = values.iter().map(Term::to_term_value).collect();
+    Ok(order_values(operands, descending)
+        .iter()
+        .map(term_value_to_native)
+        .collect())
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -495,6 +467,56 @@ thread_local! {
     /// order so scheduling cannot change which query trips or what the evidence consumed;
     /// the `Arc` still lets nested evaluator workers share the one operation-owned state.
     static CURRENT_GOVERNORS: RefCell<Option<Arc<GovernorState>>> = const { RefCell::new(None) };
+
+    /// The custom node-expression function call depth in force on this thread — the
+    /// counter [`crate::expression::RecursionGuard::enter_call`] charges.
+    ///
+    /// It exists because a recursion can LEAVE this evaluator and come back: a
+    /// custom function's body may be a `sh:select` node expression whose query calls
+    /// the same function again through the SPARQL registration of SHACL 1.2 SPARQL
+    /// Extensions §7.3. The fresh evaluation context that query builds would restart
+    /// its own counter at zero, so the cycle would never reach any ceiling. Publishing
+    /// the depth here and seeding it into
+    /// [`QueryOptions::call_depth`](purrdf_sparql_eval::QueryOptions::call_depth) is
+    /// what makes the chain finite.
+    ///
+    /// A plain `Cell<u32>`, not a registry: it is a COUNTER, so it has no staleness
+    /// dimension and nothing about a graph is captured in it.
+    static CURRENT_CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A dataset a SHACL query runs over that can also lend the frozen graph behind it.
+///
+/// The one thing SHACL 1.2 SPARQL Extensions §7.3 needs from the query's dataset
+/// that [`DatasetView`] cannot express: a `focusGraph` an expression-bodied function
+/// body can be evaluated against. `DatasetView` carries an associated `Id` type, so
+/// `&dyn DatasetView` is not a legal type and the generic view cannot be erased
+/// behind a trait object — but every backend SHACL actually queries is a frozen
+/// [`RdfDataset`] behind one wrapper or another, and THAT is the erased handle.
+///
+/// The graph travels with the QUERY, which is what keeps it fresh: the rules fixpoint
+/// rebuilds its dataset each round and runs that round's queries over it, so the
+/// focus graph a function sees is the graph the calling query is reading, never a
+/// snapshot captured when the shapes were loaded.
+pub(crate) trait FocusGraphSource {
+    /// The frozen graph behind this view, when there is one.
+    fn focus_graph(&self) -> Option<&Arc<RdfDataset>>;
+}
+
+impl FocusGraphSource for Arc<RdfDataset> {
+    fn focus_graph(&self) -> Option<&Self> {
+        Some(self)
+    }
+}
+
+impl FocusGraphSource for RdfDataset {
+    /// A bare `&RdfDataset` borrow cannot produce the `Arc` that owns it, so a
+    /// caller holding one supplies no focus graph and an expression-bodied function
+    /// call over it is refused rather than answered. Every SHACL path that can call
+    /// one passes the `Arc` (or the class-membership view over it) instead.
+    fn focus_graph(&self) -> Option<&Arc<Self>> {
+        None
+    }
 }
 
 /// An RAII scope that installs `state` as the governor accounting for every SPARQL query
@@ -553,7 +575,7 @@ pub fn current_governors() -> Option<Arc<GovernorState>> {
 /// folding it into a report would produce a `conforms` that means nothing. So the trip
 /// becomes an `Err` on the spot; the governed validation entry recovers the *typed* trip
 /// from the shared state, which latched it, and reports that instead of a report.
-fn run_query_view<D: DatasetView + Sync>(
+fn run_query_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     query: &str,
     substitutions: &[(String, TermValue)],
@@ -598,6 +620,13 @@ fn run_query_view<D: DatasetView + Sync>(
         property_functions,
         aggregates: agg_registry,
         bnode_mint_prefix,
+        // The graph THIS query is reading, handed to any expression-bodied function
+        // it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a fixpoint round
+        // that rebuilt its dataset supplies the rebuilt one.
+        focus_graph: dataset.focus_graph(),
+        // The custom-function call depth in force, so a recursion that reaches SPARQL
+        // and comes back keeps counting instead of restarting at zero.
+        call_depth: current_call_depth(),
     };
 
     let Some(state) = governors else {
@@ -730,13 +759,53 @@ pub fn current_aggregates() -> Option<Arc<AggregateRegistry>> {
     CURRENT_AGGREGATES.with(|slot| slot.borrow().clone())
 }
 
+/// An RAII scope that publishes the custom node-expression function call depth in
+/// force on this thread, restoring the previous value on drop.
+///
+/// Installed around every custom-function body evaluation, so a `sh:select` body
+/// inside that function starts its query at the depth the caller had reached rather
+/// than at zero. See `CURRENT_CALL_DEPTH` for why the counter has to survive the
+/// trip out of this evaluator and back.
+#[must_use]
+#[derive(Debug)]
+pub struct CallDepthScope {
+    previous: u32,
+    /// A thread-local restoration guard must be dropped on the thread where it was
+    /// created; this marker makes that invariant compile-time enforced.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for CallDepthScope {
+    fn drop(&mut self) {
+        let restore = self.previous;
+        CURRENT_CALL_DEPTH.with(|slot| slot.set(restore));
+    }
+}
+
+/// Publish `depth` as the custom-function call depth in force on this thread,
+/// returning a guard that restores the previous depth when dropped.
+pub fn enter_call_depth_scope(depth: u32) -> CallDepthScope {
+    let previous = CURRENT_CALL_DEPTH.with(|slot| slot.replace(depth));
+    CallDepthScope {
+        previous,
+        _not_send: PhantomData,
+    }
+}
+
+/// The custom-function call depth in force on this thread (`0` outside any custom
+/// function body).
+#[must_use]
+pub fn current_call_depth() -> u32 {
+    CURRENT_CALL_DEPTH.with(std::cell::Cell::get)
+}
+
 /// Run a SELECT query over the dataset using the generic SPARQL `query` path
 /// with variable substitutions.
 ///
 /// This is the path used by SHACL-AF node expressions (scalar, aggregate,
 /// order-by). It does NOT apply the SHACL-specific pre-binding rewrite used for
 /// `sh:sparql` constraint/component bodies.
-pub(crate) fn run_select_generic_view<D: DatasetView + Sync>(
+pub(crate) fn run_select_generic_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     select: &str,
     substitutions: &[(String, TermValue)],
@@ -760,7 +829,7 @@ pub(crate) fn run_select_generic_view<D: DatasetView + Sync>(
 /// Pre-binds `$this`, and when known `$shapesGraph` and `$currentShape`, then
 /// applies the SHACL-specific substitution rewrite (FILTER/EXISTS expression
 /// substitution and `BOUND($v)` → `true`).
-pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
+pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     select: &str,
     substitutions: &[(String, TermValue)],
@@ -808,7 +877,7 @@ pub(crate) fn run_select_with_shacl_prebinding_view<D: DatasetView + Sync>(
 ///
 /// Returns `Err(String)` if execution fails or if the result is not a CONSTRUCT
 /// (`Solutions` / `Boolean` are rejected).
-pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
+pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     construct: &str,
     substitutions: &[(String, TermValue)],
@@ -843,7 +912,7 @@ pub(crate) fn run_construct_with_shacl_prebinding_view<D: DatasetView + Sync>(
 }
 
 /// Run an ASK query using SHACL-SPARQL pre-binding semantics.
-pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync>(
+pub(crate) fn run_ask_with_shacl_prebinding_view<D: DatasetView + Sync + FocusGraphSource>(
     dataset: &D,
     ask: &str,
     substitutions: &[(String, TermValue)],
@@ -875,6 +944,18 @@ fn column_index(variables: &[String], name: &str) -> Option<usize> {
     variables.iter().position(|v| v == name)
 }
 
+/// The number of query plans this thread's SHACL engine has memoized.
+///
+/// The plan cache is keyed on query TEXT and never evicts, which is correct for
+/// a fixed set of authored `sh:select` / `sh:ask` / CONSTRUCT bodies and wrong
+/// for any path that manufactures query text out of operand data — that path
+/// would grow the cache with the INPUT. Exposed so the aggregate/order-by
+/// evaluation path can pin "manufactures no query text" as a test.
+#[cfg(test)]
+fn cached_plan_count() -> usize {
+    SPARQL_ENGINE.with(NativeSparqlEngine::cached_plan_count)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -885,7 +966,7 @@ mod tests {
 
     use super::*;
     use crate::report::Severity;
-    use crate::term::{NamedNode, Term};
+    use crate::term::{Literal, NamedNode, Term};
 
     /// Build a tiny frozen dataset from a slice of N-Triples lines.
     fn dataset_from_ntriples(lines: &[&str]) -> Arc<RdfDataset> {
@@ -1091,13 +1172,104 @@ mod tests {
         );
     }
 
+    /// An RDF 1.2 triple term whose three components are the given IRIs.
+    fn triple_term(s: &str, p: &str, o: &str) -> Term {
+        Term::Triple(Box::new(crate::term::Triple::new(
+            named_term(s),
+            NamedNode::new_unchecked(p),
+            named_term(o),
+        )))
+    }
+
+    /// `MIN`/`MAX` rank a blank node and an RDF 1.2 triple term by the SAME total
+    /// order every other term uses — blank < IRI < literal < triple — instead of
+    /// refusing them.
+    ///
+    /// The refusal this replaces was never a property of the aggregate: it came
+    /// from serializing operands into a SPARQL `VALUES` block, which cannot spell
+    /// either kind. The comparator always could, so the capability asserted here
+    /// is the one the evaluator had all along.
     #[test]
-    fn eval_aggregate_blank_node_operand_is_error() {
+    fn eval_aggregate_ranks_blank_nodes_and_triple_terms() {
         let dataset = dataset_from_ntriples(&[]);
-        let err = eval_aggregate(&dataset, "SUM", &[Term::blank("b0")]).unwrap_err();
-        assert!(
-            err.contains("cannot appear in a SPARQL VALUES block"),
-            "got: {err}"
+        let blank = Term::blank("b0");
+        let iri = named_term("http://example.org/i");
+        let literal = int_lit("7");
+        let triple = triple_term(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o",
+        );
+        let vals = [triple.clone(), literal, iri, blank.clone()];
+
+        assert_eq!(
+            eval_aggregate(&dataset, "MIN", &vals).expect("min over mixed kinds"),
+            Some(blank),
+            "a blank node is the least term kind, so MIN is the blank node"
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "MAX", &vals).expect("max over mixed kinds"),
+            Some(triple),
+            "a triple term is the greatest term kind, so MAX is the triple term"
+        );
+    }
+
+    /// Two triple terms differing only in their object are ordered by that object,
+    /// componentwise — the aggregate reaches INSIDE the RDF 1.2 term rather than
+    /// treating every triple as one indivisible blob.
+    #[test]
+    fn eval_aggregate_orders_triple_terms_componentwise() {
+        let dataset = dataset_from_ntriples(&[]);
+        let low = triple_term(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/a",
+        );
+        let high = triple_term(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/b",
+        );
+        let vals = [high.clone(), low.clone()];
+        assert_eq!(
+            eval_aggregate(&dataset, "MIN", &vals).expect("min"),
+            Some(low)
+        );
+        assert_eq!(
+            eval_aggregate(&dataset, "MAX", &vals).expect("max"),
+            Some(high)
+        );
+    }
+
+    /// Evaluating the aggregate and the order-by over MANY DISTINCT operand sets
+    /// adds nothing to the thread's query-plan cache.
+    ///
+    /// The cache is keyed on query text and never evicts, so a path that spliced
+    /// the operands into a query would insert one permanent entry per distinct
+    /// operand set — memory growing with the input data, not with the program.
+    /// This asserts the count is unchanged across a hundred distinct sets, which
+    /// is only possible if no query is issued at all.
+    #[test]
+    fn repeated_aggregate_and_order_evaluation_does_not_grow_the_plan_cache() {
+        let dataset = dataset_from_ntriples(&[]);
+        // Warm the thread-local engine with one real query so the baseline is a
+        // populated cache rather than an empty one (an empty cache would pass this
+        // test even if the count were being reset rather than left alone).
+        eval_scalar_expr(&dataset, "STRLEN(\"warm\")", &[]).expect("warm-up query");
+        let baseline = cached_plan_count();
+        assert!(baseline > 0, "the warm-up query must have been cached");
+
+        for i in 0..100u32 {
+            let vals = [int_lit(&i.to_string()), int_lit(&(i + 1).to_string())];
+            eval_aggregate(&dataset, "SUM", &vals).expect("sum");
+            eval_aggregate(&dataset, "MIN", &vals).expect("min");
+            eval_order(&dataset, &vals, false).expect("order");
+        }
+
+        assert_eq!(
+            cached_plan_count(),
+            baseline,
+            "aggregate/order-by evaluation must issue no query, so it must add no plan-cache entry"
         );
     }
 
@@ -1139,20 +1311,74 @@ mod tests {
     #[test]
     fn eval_order_empty_is_empty() {
         let dataset = dataset_from_ntriples(&[]);
-        assert!(
-            eval_order(&dataset, &[], false)
-                .expect("empty order")
-                .is_empty()
+        assert_eq!(
+            eval_order(&dataset, &[], false).expect("empty order"),
+            [] as [_; 0]
         );
     }
 
+    /// `sh:orderby` sorts a bag containing a blank node and an RDF 1.2 triple term
+    /// into the SPARQL total order, ascending and descending, instead of refusing
+    /// them — the capability half of the pair with
+    /// `eval_aggregate_ranks_blank_nodes_and_triple_terms`.
     #[test]
-    fn eval_order_blank_node_operand_is_error() {
+    fn eval_order_ranks_blank_nodes_and_triple_terms() {
         let dataset = dataset_from_ntriples(&[]);
-        let err = eval_order(&dataset, &[Term::blank("b0")], false).unwrap_err();
-        assert!(
-            err.contains("cannot appear in a SPARQL VALUES block"),
-            "got: {err}"
+        let blank = Term::blank("b0");
+        let iri = named_term("http://example.org/i");
+        let literal = int_lit("7");
+        let triple = triple_term(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o",
+        );
+        // Deliberately shuffled relative to the expected order.
+        let vals = [literal.clone(), triple.clone(), blank.clone(), iri.clone()];
+
+        assert_eq!(
+            eval_order(&dataset, &vals, false).expect("ascending"),
+            vec![blank.clone(), iri.clone(), literal.clone(), triple.clone()],
+            "SPARQL orders term kinds blank < IRI < literal < triple"
+        );
+        assert_eq!(
+            eval_order(&dataset, &vals, true).expect("descending"),
+            vec![triple, literal, iri, blank],
+            "descending is exactly the reverse of that total order"
+        );
+    }
+
+    /// Triple terms sort componentwise (subject, then predicate, then object) and
+    /// each component is itself ordered by the same total order — so a triple whose
+    /// object is the smaller IRI sorts first even though its rendering is longer.
+    #[test]
+    fn eval_order_sorts_triple_terms_componentwise() {
+        let dataset = dataset_from_ntriples(&[]);
+        let a = triple_term(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/aaa",
+        );
+        let b = triple_term(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/b",
+        );
+        assert_eq!(
+            eval_order(&dataset, &[b.clone(), a.clone()], false).expect("ascending"),
+            vec![a, b]
+        );
+    }
+
+    /// A blank node keeps ordering by its LABEL within the blank-node kind, so a
+    /// bag of blanks is a stable, fully-determined sequence rather than an
+    /// arbitrary one.
+    #[test]
+    fn eval_order_orders_blank_nodes_by_label() {
+        let dataset = dataset_from_ntriples(&[]);
+        let vals = [Term::blank("b2"), Term::blank("b0"), Term::blank("b1")];
+        assert_eq!(
+            eval_order(&dataset, &vals, false).expect("ascending"),
+            vec![Term::blank("b0"), Term::blank("b1"), Term::blank("b2")]
         );
     }
 

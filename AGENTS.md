@@ -114,10 +114,37 @@ make metadata   # regenerate + verify generated artifacts
 make bench      # criterion benchmarks (report-only; not a gate)
 ```
 
-Toolchain: `rust-toolchain.toml` pins **stable** and the workspace is
-nightly-free by policy (`rust-version` in `Cargo.toml` is the enforced MSRV
-floor). Never introduce a nightly-only feature; rustup obeys the repo pin in
-CI too, so a nightly-ism would make the MSRV job a lie.
+Toolchain: `rust-toolchain.toml` pins a **dated nightly** for development and
+for every CI gate. That is a lint decision, not a licence: nightly clippy and
+rustdoc carry lints stable lacks, so a finding is a real finding rather than a
+channel artifact. The date is mandatory — a floating `nightly` would re-resolve
+to a different compiler daily, which no workspace with byte-deterministic
+serializers, a byte-deterministic GTS writer, frozen corpora, and
+content-addressed goldens can accept. Bump it deliberately, in its own commit,
+with the gates re-run.
+
+**The source stays nightly-free.** There are zero `#![feature(...)]` attributes
+in `crates/` and `bindings/`, and adding one is forbidden. What consumers need
+is `rust-version` in `Cargo.toml` (the MSRV, currently 1.96) — a *lower* floor on
+the *stable* channel — enforced by the dedicated `msrv` CI job. Never "align" the
+MSRV to the dev pin; they answer different questions.
+
+Two traps, both load-bearing:
+
+* `dtolnay/rust-toolchain` selects with `rustup default`, which ranks **below**
+  `rust-toolchain.toml`. A workflow that installs one toolchain while the repo
+  pins another does not fail — it silently runs the pin. Only
+  `RUSTUP_TOOLCHAIN` outranks the file, which is why the `msrv` job and the
+  release lanes set it explicitly, and why the `msrv` job also asserts
+  `rustc --version` really is 1.96.x.
+* `scripts/check-toolchain-pin.py` (in `make check` and CI) fails on any
+  workflow whose install step disagrees with the pin without that explicit
+  escape, and on a floating channel.
+
+Release lanes (`release-cargo`, `release-npm`, `release-pypi`) build on
+**stable** on purpose: nightly's sharper lints buy nothing for an artifact a
+consumer installs, and shipping one from an unreleased compiler is risk without
+upside.
 
 ## 4. Performance discipline
 

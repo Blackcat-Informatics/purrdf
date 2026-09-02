@@ -91,7 +91,7 @@ but it assumes nothing about your ontology or application.
   namespace — plus `SERVICE` federation through a host-injectable transport
   whose wire format is the deterministic serializer, round-trip-swept over
   the 823-item vendored corpus (update requests included). Gated by the full
-  W3C SPARQL 1.1 + 1.2 evaluation corpus: **861 passing**, 5 ledgered
+  W3C SPARQL 1.1 + 1.2 evaluation corpus: **862 passing**, 5 ledgered
   upstream-errata fixtures. Results in SPARQL JSON/XML/CSV/TSV.
 - **Governed execution** — every query/update entry point has a governed twin
   running under caller-set ceilings (fuel, answer rows, intermediate cells,
@@ -106,7 +106,7 @@ but it assumes nothing about your ontology or application.
   complete SHACL-AF surface (node expressions, expression constraints,
   user-defined SPARQL functions and target types, and SHACL Rules materialized
   as a new dataset), and scoped SHACL 1.2 support for reifier shapes —
-  **126/126 passing** on the vendored W3C test suite, zero ledgered.
+  **129/129 passing** on the vendored W3C test suite, zero ledgered.
 - **ShEx 2.1** — a from-scratch ShExC + ShExJ schema layer and validator gated
   against the official shexTest suite: **1,105/1,105 attempted validation tests,
   zero expected-failures** (imports and semantic actions included), 99/99 negative
@@ -315,13 +315,13 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | --- | --- | --- |
 | ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,105 / 1,105** attempted, 0 xfail |
 | ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
-| SHACL | W3C data-shapes (`vectors/shacl/`) | **126 / 126**, 0 ledgered |
+| SHACL | W3C data-shapes (`vectors/shacl/`) | **129 / 129**, 0 ledgered |
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **70 / 70** |
-| SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **17 / 17** |
-| Syntax codecs | W3C rdf-tests round-trip | **250 / 250** |
-| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **861** pass · 5 ledgered (upstream errata) |
+| SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **19 / 19** |
+| Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |
+| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **862** pass · 5 ledgered (upstream errata) |
 | SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs` (`vectors/sparql-cdt/`) | **658 / 658**, 0 ledgered — see the lexical-space divergence in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
-| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **49 / 49**, 0 ledgered |
+| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **50 / 50**, 0 ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **258 / 262** agreeing, 4 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |
@@ -363,10 +363,16 @@ released in lockstep. That coherence is enforced in CI: a version-coherence chec
 fails the build if the three version sources disagree.
 
 **MSRV policy.** The supported minimum Rust is `rust-version` in the root
-`Cargo.toml` (currently **1.96**), pinned to the **stable** toolchain (nightly-free)
-and enforced by a dedicated CI MSRV job. Raising the MSRV is a notable change
-recorded in the changelog and, pre-1.0, rides a minor bump. The README MSRV badge
-is maintained by hand and must be bumped together with `rust-version`.
+`Cargo.toml` (currently **1.96**) on the **stable** channel, enforced by a dedicated
+CI MSRV job, and release artifacts are built on stable. Raising the MSRV is a
+notable change recorded in the changelog and, pre-1.0, rides a minor bump. The
+README MSRV badge is maintained by hand and must be bumped together with
+`rust-version`.
+
+Contributors run a dated nightly (`rust-toolchain.toml`) for its sharper clippy and
+rustdoc lint surface, but the workspace contains **no nightly-only features** — the
+MSRV job is what proves that on every change. Building PurRDF needs nothing beyond
+stable 1.96.
 
 ## The GMEOW family
 

@@ -1178,7 +1178,7 @@ mod tests {
         assert_eq!(rows.quads.len(), view.graph().quads.len());
         assert_eq!(rows.reifiers, vec![(16, 0, 1, 2, None)]);
         assert_eq!(rows.annotations, vec![(16, 17, 18, None)]);
-        assert!(rows.blobs.is_empty());
+        assert_eq!(rows.blobs, [] as [_; 0]);
     }
 
     /// The relational projection keeps the statement layer's graph column. One

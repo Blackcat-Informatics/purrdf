@@ -416,9 +416,9 @@ mod tests {
         let leaf = dag.intern_leaf("a");
         let free = dag.intern_free("x");
         let bound = dag.intern_bound(0, 0);
-        assert!(dag.free_meta(leaf).is_empty());
-        assert!(dag.free_meta(free).is_empty());
-        assert!(dag.free_meta(bound).is_empty());
+        assert_eq!(dag.free_meta(leaf), []);
+        assert_eq!(dag.free_meta(free), []);
+        assert_eq!(dag.free_meta(bound), []);
     }
 
     /// `symbol`/`intern_symbol` round-trip, and interning the same string twice

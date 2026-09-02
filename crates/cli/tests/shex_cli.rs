@@ -703,7 +703,7 @@ fn a_map_naming_an_undeclared_shape_is_refused_rather_than_reported_nonconforman
     ]);
     assert_eq!(code(&start), 1, "{}", stderr(&start));
     assert!(stderr(&start).contains("START"), "{}", stderr(&start));
-    assert!(stdout(&start).is_empty());
+    assert_eq!(stdout(&start), "");
 
     // The refusal is decided from the map and the schema alone, so a selector that matches
     // NOTHING is refused too — otherwise the mistake would be invisible exactly when the
@@ -821,7 +821,7 @@ fn a_structurally_invalid_schema_is_refused() {
         "the refusal cites the structural requirements: {}",
         stderr(&out)
     );
-    assert!(stdout(&out).is_empty());
+    assert_eq!(stdout(&out), "");
 }
 
 /// An `EXTERNAL` shape is refused by name rather than reported as `nonconformant`.
@@ -888,7 +888,7 @@ fn a_semantic_action_is_refused_rather_than_treated_as_an_inert_success() {
         "and says why reporting it would be wrong: {}",
         stderr(&out)
     );
-    assert!(stdout(&out).is_empty());
+    assert_eq!(stdout(&out), "");
 }
 
 /// `--import IRI=FILE` folds an imported schema in; an import with no pair is refused by name;

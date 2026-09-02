@@ -596,6 +596,10 @@ pub(crate) fn function_is_builtin_stateful(f: &Function) -> bool {
 ///   `crate::user_fn::eval_user_function`'s state merge-back) rather than the
 ///   real `ctx` — silently diverging from the sequential stream exactly like
 ///   the builtins above. A sequential fallback is always correct.
+/// - Resolves to an **expression-bodied** [`crate::user_fn::ExprFunction`] —
+///   ALWAYS unsafe, for the same reason and one more: its body is a SHACL node
+///   expression over the focus graph that may re-enter a whole evaluator, and it
+///   carries no volatility declaration to be judged by.
 fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
     if function_is_builtin_stateful(f) {
         return true;
@@ -618,7 +622,14 @@ fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
             // Classify it UNSAFE (conservative + correct; sequential is always
             // right). An IRI resolving to neither custom kind is an XSD cast or
             // a hard error — both deterministic — so it stays safe.
+            //
+            // An expression-bodied function is unsafe for the same reason and one
+            // more: its body is a SHACL node expression that reads the focus graph
+            // and may re-enter a whole evaluator, so it inherits every hazard the
+            // SPARQL-bodied kind has and offers no volatility declaration to
+            // distinguish itself with.
             registry.resolve(iri.as_str()).is_some()
+                || registry.resolve_expr(iri.as_str()).is_some()
         }
         _ => false,
     }

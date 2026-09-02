@@ -54,16 +54,6 @@ fn c_abi_smoke() {
     let smoke_c = format!("{manifest}/tests/smoke.c");
     let header_dir = format!("{manifest}/include");
 
-    // The integration-test binary lives under `<profile>/deps/<name>-<hash>`,
-    // including when Cargo routes intermediates through a separate build dir,
-    // so its grandparent still names the active profile.
-    let test_exe = std::env::current_exe().expect("current_exe");
-    let test_profile_dir: PathBuf = test_exe
-        .parent()
-        .and_then(|deps| deps.parent())
-        .expect("profile dir")
-        .to_path_buf();
-
     // Build the platform-correct shared-library file name: `libpurrdf.so` on
     // Linux, `libpurrdf.dylib` on macOS, `purrdf.dll` on Windows. `DLL_SUFFIX`
     // already includes the leading dot.
@@ -77,20 +67,35 @@ fn c_abi_smoke() {
     // it before linkage: existence alone is insufficient because a prior test
     // run may have left a stale shared library for older Rust sources.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let profile = test_profile_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .expect("Cargo profile directory name");
+    // Which profile to build the cdylib under, read from THIS binary's own
+    // compilation rather than from where the binary happens to sit on disk.
+    //
+    // This used to be the grandparent directory of `current_exe()`, on the
+    // assumption that a test binary always lives in `<profile>/deps/`. Cargo's
+    // build-dir layout broke that: intermediates now land under a hash of the
+    // build configuration, so the grandparent is a name like `d9a41d75b93a9f20`
+    // and the nested build died on "profile `d9a41d75b93a9f20` is not defined".
+    // A directory layout is Cargo's to change whenever it likes; whether this
+    // compilation has debug assertions is a property of the compilation itself.
+    //
+    // The mapping is exact for every profile this workspace declares: `dev` is
+    // the only one leaving debug assertions on, and `bench` inherits `release`
+    // codegen. Matching is a build-time economy, not a correctness requirement —
+    // the cdylib is located from Cargo's JSON output below, never from this name.
+    let profile = if cfg!(debug_assertions) {
+        "dev"
+    } else {
+        "release"
+    };
     let mut cargo_build = Command::new(&cargo);
     cargo_build.args([
         "build",
         "-p",
         "purrdf-capi",
+        "--profile",
+        profile,
         "--message-format=json-render-diagnostics",
     ]);
-    if profile != "debug" {
-        cargo_build.args(["--profile", profile]);
-    }
     let output = cargo_build
         .output()
         .expect("failed to invoke cargo to build the libpurrdf cdylib");

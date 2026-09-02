@@ -1296,7 +1296,7 @@ mod tests {
         assert_eq!(resolved_set(&s, &got), [pair("a", "c")].into());
 
         // A both-bound miss (b is interned but (b,b) is not a tuple) yields nothing.
-        assert!(select_rows(&s, KNOWS, Bound::Both(b, b)).is_empty());
+        assert_eq!(select_rows(&s, KNOWS, Bound::Both(b, b)), [] as [_; 0]);
     }
 
     #[test]

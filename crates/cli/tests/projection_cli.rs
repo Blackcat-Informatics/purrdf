@@ -147,7 +147,7 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
         "project failed: {}",
         String::from_utf8_lossy(&projected.stderr)
     );
-    assert!(projected.stdout.is_empty());
+    assert_eq!(projected.stdout, [] as [u8; 0]);
     let ledger: serde_json::Value =
         serde_json::from_slice(&projected.stderr).expect("project ledger JSON");
     assert_eq!(ledger["schema_version"], 1);
@@ -198,7 +198,10 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
     let ledger: serde_json::Value =
         serde_json::from_slice(&lifted.stderr).expect("lift ledger JSON");
     assert_eq!(ledger["schema_version"], 1);
-    assert!(!ledger["losses"].as_array().expect("loss array").is_empty());
+    assert_ne!(
+        ledger["losses"].as_array().expect("loss array").as_slice(),
+        [] as [serde_json::Value; 0]
+    );
 }
 
 /// `--base` resolves relative IRIs on parse; the native pack container stores
@@ -272,7 +275,7 @@ fn stdin_stdout_paths_keep_binary_and_rdf_streams_clean() {
         "project stdin failed: {}",
         String::from_utf8_lossy(&projected.stderr)
     );
-    assert!(projected.stderr.is_empty());
+    assert_eq!(projected.stderr, [] as [u8; 0]);
     assert!(projected.stdout.len() >= 1_536);
 
     let lifted = run_with_stdin(
@@ -294,7 +297,7 @@ fn stdin_stdout_paths_keep_binary_and_rdf_streams_clean() {
         "lift stdin failed: {}",
         String::from_utf8_lossy(&lifted.stderr)
     );
-    assert!(lifted.stderr.is_empty());
+    assert_eq!(lifted.stderr, [] as [u8; 0]);
     let turtle = String::from_utf8(lifted.stdout).expect("Turtle");
     assert!(turtle.contains("https://example.org/s"));
 }

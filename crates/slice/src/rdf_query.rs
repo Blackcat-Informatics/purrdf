@@ -969,14 +969,14 @@ mod tests {
 
         // The default graph does NOT see the named-graph annotation.
         let default = ds.graph(GraphSel::Default);
-        assert!(
+        assert_eq!(
             default
                 .objects(
                     "https://example.org/ax",
                     "http://www.w3.org/2002/07/owl#annotatedSource",
                 )
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [_; 0]
         );
         // …but it does see the default-graph triple.
         assert_eq!(
@@ -1030,11 +1030,11 @@ mod tests {
         )
         .unwrap();
         let missing = ds.graph(GraphSel::Named("https://example.org/does-not-exist"));
-        assert!(
+        assert_eq!(
             missing
                 .objects("https://example.org/s", "https://example.org/p")
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [_; 0]
         );
         let mut hit = false;
         missing.for_each_quad(|_, _, _, _| hit = true);

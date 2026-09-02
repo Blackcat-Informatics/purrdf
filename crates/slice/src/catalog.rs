@@ -597,7 +597,7 @@ ex:subject ex:predicate ex:object .
 
         let digest = compute_semantic_digest(relative, &path)
             .expect("a relative-IRI artifact resolves under its own retrieval IRI");
-        assert!(!digest.is_empty());
+        assert_ne!(digest, "");
 
         // The digest is of the RESOLVED graph: writing the same document with the
         // references already expanded against that base gives the same digest.

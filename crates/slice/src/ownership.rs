@@ -1182,7 +1182,7 @@ mod rdf_fact_tests {
         // reference — which is precisely how the reference is silently dropped
         // at the ownership join.
         let facts = inspect_rdf_dataset(store.inner(), &SliceVocab::for_namespace(EX));
-        assert!(facts.is_defined_by.is_empty());
+        assert_eq!(facts.is_defined_by, [] as [_; 0]);
         assert!(facts.declared_terms.is_empty());
         assert!(facts.referenced_iris.contains(&quantity));
     }

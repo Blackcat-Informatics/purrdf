@@ -3518,7 +3518,7 @@ mod tests {
             let mut bound = free();
             bound[POS_PATH_ID] = Some(id.clone());
             let rows = drained(&relation, &bound);
-            assert!(!rows.is_empty());
+            assert_ne!(rows, [] as [PfRow; 0]);
             assert!(rows.iter().all(|row| &row[POS_PATH_ID] == id));
             assert_eq!(path_ids(&rows).len(), 1);
         }

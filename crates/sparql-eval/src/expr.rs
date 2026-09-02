@@ -1256,16 +1256,23 @@ impl Drop for SuppressFirstWitnessWrapGuard {
 }
 
 /// Whether [`exists`]'s definition path should apply the first-witness
-/// `Slice{0, Some(1)}` wrap. Always `true` outside `cfg(test)` — the wrap is
-/// unconditional production behavior, never a runtime-configurable option; the
-/// `cfg(test)` branch lets [`suppress_first_witness_wrap_for_test`] force it off
-/// for the one differential test that needs an unwrapped control.
+/// `Slice{0, Some(1)}` wrap. Always `true` in a production build — the wrap is
+/// unconditional production behavior, never a runtime-configurable option.
+///
+/// Two `cfg`-selected definitions rather than one body with a `cfg`'d early
+/// return: the production answer is then a literal `true` with no thread-local
+/// in sight, which is the property this function exists to guarantee.
+#[cfg(not(test))]
 fn exists_apply_first_witness_wrap() -> bool {
-    #[cfg(test)]
-    if SUPPRESS_FIRST_WITNESS_WRAP.with(std::cell::Cell::get) {
-        return false;
-    }
     true
+}
+
+/// Test-build counterpart of [`exists_apply_first_witness_wrap`]: still `true` by
+/// default, but [`suppress_first_witness_wrap_for_test`] can force it off for the
+/// one differential test that needs an unwrapped control.
+#[cfg(test)]
+fn exists_apply_first_witness_wrap() -> bool {
+    !SUPPRESS_FIRST_WITNESS_WRAP.with(std::cell::Cell::get)
 }
 
 /// [`exists`]'s probe-vs-definition decision: `true` runs the memoized probe, `false`
@@ -3434,6 +3441,18 @@ fn eval_function<D: DatasetView + Sync>(
             // datatype IRI.
             if let Some(native) = ctx.user_functions.resolve_native(iri.as_str()) {
                 let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
+                return Ok(result.map(|value| intern(ctx, value)));
+            }
+            // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2
+            // SPARQL Extensions §7.3's "SPARQL engines SHOULD register a function for
+            // any SHACL instance of sh:ListParameterExpressionFunction". Unlike the
+            // native kind it is handed the query's focus graph and the current call
+            // depth (see `crate::user_fn::ExprFnCall`), because its body is a node
+            // expression rather than a value-level closure. The registry's collision
+            // guard makes a cross-kind IRI unrepresentable, so the three probes are an
+            // ordering, not a precedence rule.
+            if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri.as_str()) {
+                let result = crate::user_fn::eval_expr_function(expr_fn, iri.as_str(), &vals, ctx)?;
                 return Ok(result.map(|value| intern(ctx, value)));
             }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {

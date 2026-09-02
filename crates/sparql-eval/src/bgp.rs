@@ -1799,7 +1799,7 @@ mod tests {
             var_pos("o"),
         )];
         let rows = run(&ds, &patterns, &["o"]);
-        assert!(rows.is_empty());
+        assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]);
     }
 
     #[test]
@@ -1977,7 +1977,7 @@ mod tests {
             ),
         )];
         let rows = run(&ds, &patterns, &["r"]);
-        assert!(rows.is_empty());
+        assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]);
     }
 
     /// A fully-open pattern `?r ?ap ?av` enumerates EVERY triple visible to the BGP:
@@ -2095,7 +2095,7 @@ mod tests {
             triple_obj(var_pos("x"), pred("http://ex/age"), var_pos("x")),
         )];
         let rows = run(&ds, &patterns, &["r", "x"]);
-        assert!(rows.is_empty());
+        assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]);
     }
 
     /// A dataset with no reifiers never interns `rdf:reifies`, so a reifies-pattern
@@ -2109,7 +2109,7 @@ mod tests {
             triple_obj(var_pos("s"), pred_var("p"), var_pos("o")),
         )];
         let rows = run(&ds, &patterns, &["r"]);
-        assert!(rows.is_empty());
+        assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]);
     }
 
     // ---- cost_based_order --------------------------------------------------

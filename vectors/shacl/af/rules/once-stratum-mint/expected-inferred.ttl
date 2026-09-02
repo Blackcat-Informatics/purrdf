@@ -1,0 +1,14 @@
+# Derived triples ONLY (the delta over input.ttl's graph).
+#
+# The order-0 stratum types ex:alice as an ex:Person; the order-1 run-once rule
+# then mints exactly ONE address blank for that focus node. The blank's label is
+# irrelevant — the harness compares by RDFC-1.0 canonicalization (isomorphism) —
+# but its CARDINALITY is not: a second minted address would not be isomorphic.
+
+@prefix ex:  <http://example.org/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+ex:alice rdf:type ex:Person ;
+         ex:addr  _:a .
+
+_:a ex:city ex:Metropolis .

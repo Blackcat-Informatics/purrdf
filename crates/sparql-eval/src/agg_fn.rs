@@ -1100,7 +1100,7 @@ mod tests {
             first, second,
             "the fingerprint is a pure function of contents"
         );
-        assert!(!first.is_empty());
+        assert_ne!(first, "");
     }
 
     /// GAP (registry instance identity): two INDEPENDENTLY constructed registries

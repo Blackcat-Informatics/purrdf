@@ -909,7 +909,7 @@ mod tests {
             EventError::message("boom"),
         ];
         for case in cases {
-            assert!(!case.to_string().is_empty());
+            assert_ne!(case.to_string(), "");
         }
         // It really is a std::error::Error.
         fn assert_error<E: std::error::Error>(_: &E) {}

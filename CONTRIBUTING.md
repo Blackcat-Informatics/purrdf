@@ -53,10 +53,20 @@ and the `CITATION.cff` citation record share **one** workspace version and ship 
 lockstep — CI runs a version-coherence check that fails if the four sources
 disagree.
 
-**MSRV.** The workspace pins **stable** in `rust-toolchain.toml` and is nightly-free
-by policy; the supported floor is `rust-version` in `Cargo.toml` (currently **1.96**),
-which CI enforces with a dedicated MSRV job. Raising the MSRV is a notable, changelog-
-recorded change that, pre-1.0, rides a minor bump.
+**MSRV.** The supported floor is `rust-version` in `Cargo.toml` (currently **1.96**)
+on the **stable** channel, and CI enforces it with a dedicated MSRV job. That floor
+is what you build against as a consumer; it is unaffected by the toolchain
+contributors run. Raising the MSRV is a notable, changelog-recorded change that,
+pre-1.0, rides a minor bump.
+
+**Development toolchain.** `rust-toolchain.toml` pins a **dated nightly** for local
+work and CI gates, because nightly clippy and rustdoc carry lints stable lacks —
+so a gate finding is a real finding, not a channel artifact. The *source* stays
+nightly-free: there are no `#![feature(...)]` attributes anywhere in the workspace
+and adding one is rejected, which is exactly what the MSRV job proves on every PR.
+Release artifacts are built on stable. If you have `rustup` installed, the pin
+applies automatically; `scripts/check-toolchain-pin.py` (part of `make check`)
+fails if a CI workflow ever drifts from it.
 
 **Changelog.** Write **conventional-commit messages** (`type(scope): summary`, e.g.
 `feat(sparql): ...`, `fix(gts): ...`) — they feed the generated changelog, so their

@@ -490,7 +490,7 @@ fn pattern_reaches_non_reproducible_builtin(
         // [`ConstructViewConfig::new`] uses) this arm never fires.
         GraphPattern::PropertyFunction(_) => Some(NonReproducibleCause::PropertyFunction),
         // `SERVICE` forwards `inner` to a remote endpoint resolved through a
-        // `RemoteQuerySource` the *evaluation* carries (`purrdf-sparql-eval`'s
+        // `ServiceResolver` the *evaluation* carries (`purrdf-sparql-eval`'s
         // `EvalCtx::remote`) — not visible here, at shape-validation time, and not
         // inferrable from the endpoint IRI (even a fixed, non-variable endpoint names a
         // live external service whose data can change between calls). The identical
@@ -1391,7 +1391,7 @@ mod tests {
     #[test]
     fn service_clause_is_refused_as_non_reproducible() {
         // `SERVICE` forwards its inner pattern to a remote endpoint resolved through
-        // a `RemoteQuerySource` the *evaluation* carries — not visible at this
+        // a `ServiceResolver` the *evaluation* carries — not visible at this
         // shape-validation point, and not inferrable from even a fixed endpoint IRI
         // (a live external service's data can change between calls). It needs no
         // `ParserOptions` seam either: `SERVICE` is ordinary SPARQL 1.1 syntax.

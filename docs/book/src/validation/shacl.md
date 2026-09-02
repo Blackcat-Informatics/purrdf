@@ -20,7 +20,7 @@ inference** (parity with pySHACL `inference="none"`); combine with
 
 - **SHACL Core** — every constraint component, full property paths, qualified
   value shapes, property pairs. The W3C `data-shapes` suite passes clean
-  (126/126, zero ledgered gaps at the time of writing — the live number is in
+  (129/129, zero ledgered gaps at the time of writing — the live number is in
   [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)).
 - **SHACL-SPARQL** — SPARQL-based constraints and targets, custom constraint
   components with pre-binding semantics, user-defined `sh:SPARQLFunction`

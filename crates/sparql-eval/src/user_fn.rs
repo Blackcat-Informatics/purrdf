@@ -28,11 +28,22 @@
 //!   runs) and a [`Volatility`] the fork-join parallel-evaluation gate consults to
 //!   decide whether the call may run across worker threads. It takes no
 //!   [`EvalCtx`] and so cannot re-enter the evaluator.
+//!
+//! - **Dataset-aware (expression-bodied)** ([`ExprFunction`], registered via
+//!   [`UserFunctionRegistry::register_expr`]) — a `Send + Sync` closure that, unlike
+//!   the native kind, is handed the GRAPH the calling query is running over plus the
+//!   current call depth, through [`ExprFnCall`]. It exists for the SHACL 1.2 SPARQL
+//!   Extensions §7 "Declaring SPARQL Functions based on Node Expressions" seam, where
+//!   the body is a node expression evaluated against a focus graph rather than a
+//!   SPARQL query. See [`ExprFnCall::focus_graph`] for why the graph is a concrete
+//!   [`Arc<RdfDataset>`] rather than the context's own `D: DatasetView` (which is not
+//!   object-safe — it carries an associated `Id` type), and `eval_expr_function` for
+//!   the re-entrancy bound.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, TermValue};
+use purrdf_core::{DatasetView, RdfDataset, TermValue};
 use purrdf_sparql_algebra::Query;
 
 use crate::DetHashMap;
@@ -158,6 +169,80 @@ pub struct UserFunction {
 /// worker threads, so a closure that lies about its own volatility can silently
 /// diverge under parallel evaluation.
 pub type NativeFnBody = Arc<dyn Fn(&[&TermValue]) -> Result<TermValue, EvalError> + Send + Sync>;
+
+/// Everything a dataset-aware (expression-bodied) user function is given when it is
+/// called: the IRI it was called through, the already-evaluated arguments, the graph
+/// the calling query is running over, and the current user-function call depth.
+///
+/// This is the whole of the difference between [`ExprFnBody`] and [`NativeFnBody`].
+/// A native closure sees only values and therefore cannot read a graph or re-enter
+/// an evaluator; an expression-bodied one is defined by a SHACL node expression,
+/// whose evaluation is a function OF a graph (`evalExpr(expr, focusGraph, focusNode,
+/// scope)`), so the graph has to travel with the call.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ExprFnCall<'a> {
+    /// The call-position IRI the function was reached through.
+    pub iri: &'a str,
+    /// The already-evaluated argument values in call order; a `None` cell is an
+    /// unbound argument.
+    pub args: &'a [Option<TermValue>],
+    /// The graph the calling query is running over — the specification's
+    /// `focusGraph`.
+    ///
+    /// A concrete `Arc<RdfDataset>` rather than the evaluation context's own
+    /// `D: DatasetView`: `DatasetView` carries an associated `Id` type, so `&dyn
+    /// DatasetView` is not a legal type and the generic view cannot be erased behind
+    /// a trait object. The frozen dataset IS the erased handle — every backend that
+    /// can supply a focus graph supplies exactly this, and one that cannot supplies
+    /// none, in which case the call never reaches a body at all (see
+    /// `eval_expr_function`).
+    ///
+    /// It is supplied per QUERY, through
+    /// [`QueryOptions::focus_graph`](crate::QueryOptions::focus_graph), never captured
+    /// once at registration time. That is what makes a function called during round
+    /// *n* of a fixpoint read round *n*'s graph: the caller passes the graph it is
+    /// actually querying, so a rebuilt graph is a rebuilt argument rather than a stale
+    /// capture.
+    pub focus_graph: &'a Arc<RdfDataset>,
+    /// The user-function call depth this invocation sits at (1 for a call from the
+    /// top-level query). A callee that re-enters SPARQL evaluation propagates this
+    /// through [`QueryOptions::call_depth`](crate::QueryOptions::call_depth) so a
+    /// cycle that leaves and re-enters the evaluator is still bounded.
+    pub depth: u32,
+}
+
+/// A dataset-aware (expression-bodied) user function body: a closure over the
+/// evaluated argument values AND the calling query's focus graph (see
+/// [`ExprFnCall`]).
+///
+/// `Ok(None)` is the SPARQL "expression error / no value" result, exactly as it is
+/// for [`NativeFnBody`]; `Err` is a hard failure that aborts the query. A body that
+/// cannot evaluate something MUST take one of those two exits — never a value it did
+/// not compute.
+pub type ExprFnBody =
+    Arc<dyn Fn(&ExprFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
+
+/// A registered dataset-aware function: its closure body plus its declared arity.
+///
+/// There is deliberately no [`Volatility`] axis. An expression-bodied function reads
+/// the focus graph and may re-enter a whole evaluator, so it is never a candidate for
+/// the fork-join parallel gate (`crate::parallel` refuses it unconditionally) and a
+/// declaration either way would be a distinction without a difference.
+#[derive(Clone)]
+pub struct ExprFunction {
+    pub(crate) body: ExprFnBody,
+    pub(crate) arity: Arity,
+}
+
+impl core::fmt::Debug for ExprFunction {
+    /// The closure body has no `Debug` impl, so only the declared arity is shown.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ExprFunction")
+            .field("arity", &self.arity)
+            .finish_non_exhaustive()
+    }
+}
 
 /// A native function's determinism class — the volatility axis of its descriptor
 /// (after PostgreSQL's `provolatile`).
@@ -304,19 +389,24 @@ impl core::fmt::Debug for NativeFunction {
 pub struct UserFunctionRegistry {
     fns: DetHashMap<String, UserFunction>,
     native: DetHashMap<String, NativeFunction>,
+    exprs: DetHashMap<String, ExprFunction>,
 }
 
 impl core::fmt::Debug for UserFunctionRegistry {
-    /// A [`NativeFunction`]'s closure has no `Debug` impl, so this lists both
-    /// tables' key sets (sorted for deterministic output) rather than deriving.
+    /// A [`NativeFunction`]/[`ExprFunction`] closure has no `Debug` impl, so this
+    /// lists the three tables' key sets (sorted for deterministic output) rather
+    /// than deriving.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut sparql_bodied: Vec<&str> = self.fns.keys().map(String::as_str).collect();
         sparql_bodied.sort_unstable();
         let mut native: Vec<&str> = self.native.keys().map(String::as_str).collect();
         native.sort_unstable();
+        let mut exprs: Vec<&str> = self.exprs.keys().map(String::as_str).collect();
+        exprs.sort_unstable();
         f.debug_struct("UserFunctionRegistry")
             .field("fns", &sparql_bodied)
             .field("native", &native)
+            .field("exprs", &exprs)
             .finish()
     }
 }
@@ -343,6 +433,7 @@ impl UserFunctionRegistry {
     pub const EMPTY: Self = Self {
         fns: DetHashMap::with_hasher(crate::DetHasher::new()),
         native: DetHashMap::with_hasher(crate::DetHasher::new()),
+        exprs: DetHashMap::with_hasher(crate::DetHasher::new()),
     };
 
     /// Register `func` under its `iri`. A later registration of the same IRI
@@ -350,18 +441,49 @@ impl UserFunctionRegistry {
     ///
     /// # Panics
     ///
-    /// Panics if `iri` is already registered as a [`NativeFunction`] — one IRI
-    /// cannot be both SPARQL-bodied and native (a host misconfiguration, caught
-    /// at registration time rather than silently shadowing one kind with the
-    /// other). Re-registering the same IRI with another SPARQL-bodied function is
-    /// unaffected ("last write wins").
+    /// Panics if `iri` is already registered as a [`NativeFunction`] or an
+    /// [`ExprFunction`] — one IRI cannot be two kinds at once (a host
+    /// misconfiguration, caught at registration time rather than silently shadowing
+    /// one kind with another). Re-registering the same IRI with another
+    /// SPARQL-bodied function is unaffected ("last write wins").
     pub fn insert(&mut self, iri: impl Into<String>, func: UserFunction) {
         let iri = iri.into();
         assert!(
             !self.native.contains_key(&iri),
             "IRI <{iri}> is already registered as a native function; cannot also register it as a SPARQL-bodied function"
         );
+        assert!(
+            !self.exprs.contains_key(&iri),
+            "IRI <{iri}> is already registered as an expression-bodied function; cannot also register it as a SPARQL-bodied function"
+        );
         self.fns.insert(iri, func);
+    }
+
+    /// Register a dataset-aware (expression-bodied) function under `iri`, with its
+    /// declared calling `arity`. A later registration of the same IRI as another
+    /// expression-bodied function replaces the earlier one ("last write wins").
+    ///
+    /// This is the registration seam SHACL 1.2 SPARQL Extensions §7.3 "Evaluation of
+    /// Custom SPARQL Functions" asks an engine to use: "SPARQL engines SHOULD
+    /// register a function for any SHACL instance of `sh:ListParameterExpressionFunction`
+    /// from any provided shapes graph."
+    ///
+    /// # Panics
+    ///
+    /// Panics if `iri` is already registered as a SPARQL-bodied [`UserFunction`] or
+    /// a [`NativeFunction`] — see [`Self::insert`]'s panic doc for the rationale
+    /// (symmetric guard).
+    pub fn register_expr(&mut self, iri: impl Into<String>, arity: Arity, body: ExprFnBody) {
+        let iri = iri.into();
+        assert!(
+            !self.fns.contains_key(&iri),
+            "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as expression-bodied"
+        );
+        assert!(
+            !self.native.contains_key(&iri),
+            "IRI <{iri}> is already registered as a native function; cannot also register it as expression-bodied"
+        );
+        self.exprs.insert(iri, ExprFunction { body, arity });
     }
 
     /// Register a native (host-Rust closure) function under `iri`, with its
@@ -371,8 +493,9 @@ impl UserFunctionRegistry {
     ///
     /// # Panics
     ///
-    /// Panics if `iri` is already registered as a SPARQL-bodied [`UserFunction`]
-    /// — see [`Self::insert`]'s panic doc for the rationale (symmetric guard).
+    /// Panics if `iri` is already registered as a SPARQL-bodied [`UserFunction`] or
+    /// an [`ExprFunction`] — see [`Self::insert`]'s panic doc for the rationale
+    /// (symmetric guard).
     pub fn register_native(
         &mut self,
         iri: impl Into<String>,
@@ -384,6 +507,10 @@ impl UserFunctionRegistry {
         assert!(
             !self.fns.contains_key(&iri),
             "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as native"
+        );
+        assert!(
+            !self.exprs.contains_key(&iri),
+            "IRI <{iri}> is already registered as an expression-bodied function; cannot also register it as native"
         );
         self.native.insert(
             iri,
@@ -407,18 +534,25 @@ impl UserFunctionRegistry {
         self.native.get(iri)
     }
 
-    /// Whether the registry holds no functions of either kind (the common case:
-    /// no `sh:SPARQLFunction` declared and no native functions registered, so
-    /// evaluation carries no registry at all).
+    /// Resolve a call-position IRI to its declared dataset-aware
+    /// (expression-bodied) function, if any.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.fns.is_empty() && self.native.is_empty()
+    pub fn resolve_expr(&self, iri: &str) -> Option<&ExprFunction> {
+        self.exprs.get(iri)
     }
 
-    /// The number of declared functions across both kinds.
+    /// Whether the registry holds no functions of any kind (the common case: no
+    /// `sh:SPARQLFunction` declared and nothing registered, so evaluation carries
+    /// no registry at all).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.fns.is_empty() && self.native.is_empty() && self.exprs.is_empty()
+    }
+
+    /// The number of declared functions across all three kinds.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.fns.len() + self.native.len()
+        self.fns.len() + self.native.len() + self.exprs.len()
     }
 }
 
@@ -628,6 +762,84 @@ pub(crate) fn eval_native_function(
     }
 }
 
+/// Execute a resolved dataset-aware (expression-bodied) function call: arity-check
+/// the arguments, obtain the calling query's focus graph, bound the re-entrancy
+/// depth, then invoke the closure.
+///
+/// # Why this cannot reuse the native path
+///
+/// A [`NativeFunction`] is a pure function of its argument values, so the evaluator
+/// hands it nothing else. An expression-bodied function is a SHACL node expression,
+/// and `evalExpr(expr, focusGraph, focusNode, scope)` is a function OF a graph — so
+/// the graph must travel with the call, and a call that has no graph to evaluate
+/// against cannot be answered at all.
+///
+/// # Fail-closed, twice
+///
+/// * **No focus graph.** When the calling query supplied none
+///   ([`QueryOptions::focus_graph`](crate::QueryOptions::focus_graph) left `None`) the
+///   call is a hard [`EvalError::Function`], never `Ok(None)`. `Ok(None)` is SPARQL's
+///   "this expression had an error, treat the value as unbound", and using it here
+///   would make a function that could not be evaluated indistinguishable from one
+///   that evaluated to nothing — a silent wrong answer.
+/// * **Re-entrancy.** A node-expression body can call back into query evaluation,
+///   which can call this function again. The chain is bounded by the SAME
+///   [`MAX_UDF_DEPTH`](crate::eval::MAX_UDF_DEPTH) ceiling the SPARQL-bodied path
+///   uses, and the depth is handed to the callee so a callee that leaves and re-enters
+///   the evaluator ([`QueryOptions::call_depth`](crate::QueryOptions::call_depth))
+///   keeps counting rather than restarting at zero. Unbounded native recursion in Rust
+///   ABORTS the process, which no caller can catch, so this bound is the difference
+///   between an error and a crash.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on an arity violation, an absent focus graph, a depth-bound
+/// breach, or a panic inside the closure (converted to a fixed, payload-free error, as
+/// on the native path); propagates the closure's own `Err` unchanged.
+pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
+    func: &ExprFunction,
+    iri: &str,
+    args: &[Option<TermValue>],
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<TermValue>, EvalError> {
+    if !func.arity.accepts(args.len()) {
+        return Err(EvalError::function(format!(
+            "expression-bodied function <{iri}> expects {} argument(s), got {}",
+            func.arity,
+            args.len()
+        )));
+    }
+    let Some(focus_graph) = ctx.focus_graph else {
+        return Err(EvalError::function(format!(
+            "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
+             against, and this query supplied none (QueryOptions::focus_graph); the call is \
+             refused rather than answered from a graph it never read"
+        )));
+    };
+    let depth = ctx.udf_depth.saturating_add(1);
+    if depth > crate::eval::MAX_UDF_DEPTH {
+        return Err(EvalError::function(format!(
+            "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
+            crate::eval::MAX_UDF_DEPTH
+        )));
+    }
+    let call = ExprFnCall {
+        iri,
+        args,
+        focus_graph,
+        depth,
+    };
+    // The same `catch_unwind` contract the native path documents: a panicking host
+    // closure must not abort a worker or surface nondeterministically, and the
+    // message is fixed and payload-free so it does not depend on which thread ran.
+    match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
+        Ok(inner_result) => inner_result,
+        Err(_) => Err(EvalError::function(format!(
+            "expression-bodied function <{iri}> panicked"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,6 +872,7 @@ mod tests {
     const EX_SCORE_NAN: &str = "http://example.org/ns#scoreNan";
     const EX_VAL: &str = "http://example.org/ns#val";
     const EX_SUBJECT_PREFIX: &str = "http://example.org/ns#s";
+    const EX_EXPR_COUNT: &str = "http://example.org/ns#exprCount";
 
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
@@ -679,6 +892,30 @@ mod tests {
 
     fn empty_dataset() -> Arc<RdfDataset> {
         RdfDatasetBuilder::new().freeze().expect("freeze")
+    }
+
+    /// A two-triple dataset, so a dataset-aware closure that answers the graph's
+    /// size has a size that could not have come from anywhere else.
+    fn dataset_with_two_triples() -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri(EX_VAL);
+        let object = builder.intern_literal(RdfLiteral::typed("1", XSD_INTEGER));
+        for local in ["a", "b"] {
+            let subject = builder.intern_iri(&format!("{EX_SUBJECT_PREFIX}{local}"));
+            builder.push_quad(subject, predicate, object, None);
+        }
+        builder.freeze().expect("freeze")
+    }
+
+    /// A trivial SPARQL-bodied function, for the cross-kind collision guard.
+    fn select_body_function() -> UserFunction {
+        UserFunction {
+            params: Vec::new(),
+            required: 0,
+            body: parse("SELECT (1 AS ?result) WHERE {}"),
+            kind: UserFnBody::Select,
+            return_constraint: TypeConstraint::default(),
+        }
     }
 
     /// A native closure that parses its literal argument as `f64` and divides it
@@ -1305,6 +1542,151 @@ mod tests {
             }
             other => panic!("expected solutions, got {other:?}"),
         }
+    }
+
+    /// A dataset-aware function is handed the graph the query is running over, and
+    /// can answer FROM it — the capability that distinguishes it from the native
+    /// kind, which sees only argument values.
+    #[test]
+    fn expr_function_receives_the_query_s_focus_graph() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_expr(
+            EX_EXPR_COUNT,
+            Arity::Exact(0),
+            Arc::new(|call: &ExprFnCall<'_>| {
+                // Answer the graph's own size, which is only knowable from the graph.
+                let count = call.focus_graph.quads().count();
+                Ok(Some(TermValue::typed_literal(
+                    count.to_string(),
+                    XSD_INTEGER,
+                )))
+            }),
+        );
+        let ds = dataset_with_two_triples();
+        let query = format!("SELECT ((<{EX_EXPR_COUNT}>()) AS ?v) WHERE {{}}");
+        let result = NativeSparqlEngine::new()
+            .query_with_options_view(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
+                    functions: &registry,
+                    focus_graph: Some(&ds),
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect("query");
+        match result {
+            SparqlResult::Solutions { rows, .. } => {
+                let cell = rows[0][0].as_ref().expect("bound result");
+                assert!(
+                    matches!(cell, TermValue::Literal { lexical_form, .. } if lexical_form == "2"),
+                    "the closure read the supplied focus graph, got {cell:?}"
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    /// Calling a dataset-aware function with no focus graph supplied is a hard
+    /// error, never an unbound value.
+    ///
+    /// An unbound result is SPARQL's "this expression errored", and using it here
+    /// would make "the function was never evaluated" indistinguishable from "the
+    /// function looked and found nothing".
+    #[test]
+    fn expr_function_without_a_focus_graph_is_a_hard_error() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_expr(
+            EX_EXPR_COUNT,
+            Arity::Exact(0),
+            Arc::new(|_call: &ExprFnCall<'_>| {
+                panic!("the body must never run without a focus graph")
+            }),
+        );
+        let ds = empty_dataset();
+        let query = format!("SELECT ((<{EX_EXPR_COUNT}>()) AS ?v) WHERE {{}}");
+        let err = NativeSparqlEngine::new()
+            .query_with_options_view(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
+                    functions: &registry,
+                    ..QueryOptions::EMPTY
+                },
+            )
+            .expect_err("a call with no focus graph must be refused");
+        assert!(err.to_string().contains("focus graph"), "got: {err}");
+    }
+
+    /// The call depth seeded on the query reaches the callee, and the ceiling is
+    /// enforced before the body runs — so a callee that re-enters the evaluator with
+    /// its own depth cannot recurse without bound.
+    #[test]
+    fn expr_function_depth_is_seeded_and_bounded() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_expr(
+            EX_EXPR_COUNT,
+            Arity::Exact(0),
+            Arc::new(|call: &ExprFnCall<'_>| {
+                Ok(Some(TermValue::typed_literal(
+                    call.depth.to_string(),
+                    XSD_INTEGER,
+                )))
+            }),
+        );
+        let ds = empty_dataset();
+        let query = format!("SELECT ((<{EX_EXPR_COUNT}>()) AS ?v) WHERE {{}}");
+        let run = |call_depth: u32| {
+            NativeSparqlEngine::new().query_with_options_view(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                QueryOptions {
+                    functions: &registry,
+                    focus_graph: Some(&ds),
+                    call_depth,
+                    ..QueryOptions::EMPTY
+                },
+            )
+        };
+        match run(7).expect("query") {
+            SparqlResult::Solutions { rows, .. } => {
+                let cell = rows[0][0].as_ref().expect("bound result");
+                assert!(
+                    matches!(cell, TermValue::Literal { lexical_form, .. } if lexical_form == "8"),
+                    "the seeded depth travels into the call, got {cell:?}"
+                );
+            }
+            other => panic!("expected solutions, got {other:?}"),
+        }
+        let err = run(crate::eval::MAX_UDF_DEPTH).expect_err("the ceiling must be enforced");
+        assert!(err.to_string().contains("depth bound"), "got: {err}");
+    }
+
+    /// One IRI cannot be two function kinds at once: registering an
+    /// expression-bodied function over a SPARQL-bodied one panics at registration
+    /// rather than silently shadowing it.
+    #[test]
+    #[should_panic(expected = "already registered as a SPARQL-bodied function")]
+    fn expr_function_collides_with_a_sparql_bodied_iri() {
+        let mut registry = UserFunctionRegistry::new();
+        registry.insert(EX_INC, select_body_function());
+        registry.register_expr(
+            EX_INC,
+            Arity::Exact(0),
+            Arc::new(|_call: &ExprFnCall<'_>| Ok(None)),
+        );
     }
 
     /// A native closure's own `Err` return is a hard query failure, rendered

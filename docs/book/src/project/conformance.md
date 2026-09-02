@@ -45,7 +45,7 @@ committed block is stale).
 | rdflib drop-in | rdflib 7.6's own vendored tests + first-party parity |
 
 At the time of writing every suite is green — for example 1,105/1,105
-attempted shexTest validation cases, 126/126 W3C SHACL, 250/250 codec
+attempted shexTest validation cases, 129/129 W3C SHACL, 264/264 codec
 round-trips, 70/70 W3C SPARQL entailment-regime cases, and 258/262 agreeing
 verdicts on the vendored W3C OWL 2 DL-consistency corpus — with the remaining
 non-passes strictly ledgered (five SPARQL fixtures with upstream-errata
