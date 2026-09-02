@@ -26,8 +26,10 @@
 //! `--from`, when given, applies to EVERY source in the list: it is one flag and a
 //! per-source override would need a per-source flag. When it is absent each source is
 //! classified from its own extension, so a mixed `a.ttl` + `b.nq` + `c.gts` list needs no
-//! flag at all. `--base` and `--transport` apply list-wide for the same reason, and
-//! `--base` is refused against any container source exactly as it is for one source.
+//! flag at all. `--base` and `--transport` apply list-wide for the same reason. Whether
+//! `--base` can be spent at all is decided once, in [`crate::convert`], over EVERY source's
+//! parse leg together with the target's serialize leg — a base one source resolves against
+//! is a base the run is using, so no single source can condemn it.
 //!
 //! # What the union guarantees, and the one thing it costs
 //!
@@ -107,9 +109,13 @@ impl<'a> Sources<'a> {
         }
     }
 
-    /// Resolve every source's format, refusing `--base` against a container, refusing an
-    /// explicit `--transport` against a pack, and refusing a second `-` (stdin can be
-    /// consumed once).
+    /// Resolve every source's format, refusing an explicit `--transport` against a pack and
+    /// refusing a second `-` (stdin can be consumed once).
+    ///
+    /// `--base` is NOT decided here. Whether it can be spent depends on the SERIALIZE leg
+    /// as well as these parse legs — `--base X --from turtle --to ntriples` is honoured on
+    /// the way in, and `--from ntriples --to ntriples` can spend it on neither side — so the
+    /// one refusal lives where both halves are known, in [`crate::convert`].
     pub(crate) fn resolve_formats(&self) -> Result<Vec<SourceFormat>, CliError> {
         let mut stdin_seen = false;
         let mut formats = Vec::with_capacity(self.paths.len());
@@ -125,7 +131,6 @@ impl<'a> Sources<'a> {
                 stdin_seen = true;
             }
             let format = format::resolve(self.from, path)?;
-            format::refuse_base_with_container(format, self.base, &format!("the source `{path}`"))?;
             // A pack is acquired as immutable bytes and verified in place; the transport
             // decoder is never reached for one, so a `--transport` naming an encoding for
             // a pack source would be accepted and never read.

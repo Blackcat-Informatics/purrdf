@@ -163,92 +163,18 @@ fn abi_version_is_the_current_minor() {
     assert_eq!(version.major, PURRDF_ABI_MAJOR);
     assert_eq!(version.minor, PURRDF_ABI_MINOR);
     assert_eq!(version.patch, PURRDF_ABI_PATCH);
+    // `0.7.0`: the mid-list `shapes_base_iri` parameter on the two SHACL entry
+    // points and `purrdf_serialize`'s two new loss counts are incompatible
+    // changes, and pre-1.0 those ride the MINOR component
+    // (`docs/book/src/project/releases.md`, "Pre-1.0 semver policy").
+    //
     // Pinned literally, not read back from the constants above: the minor tracks the
     // exported signatures, so a signature change that forgot to bump it fails HERE
     // rather than shipping a library whose reported version cannot distinguish it
-    // from the previous, differently-shaped one.
+    // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
+    // exact prototype list this triple describes, so *which* signature moved is
+    // reported there rather than as an opaque digest mismatch.
     assert_eq!((version.major, version.minor, version.patch), (0, 7, 0));
-}
-
-/// Every exported declaration in the COMMITTED header, one per entry, sorted.
-///
-/// A declaration starts at column 0 (cbindgen indents continuation lines and comment
-/// bodies) and names a `purrdf_` symbol before its parameter list; it runs to the
-/// `);` that closes it. Whitespace is normalized so re-wrapping a long parameter list
-/// is not mistaken for a signature change.
-fn exported_declarations() -> Vec<String> {
-    const HEADER: &str = include_str!("../include/purrdf.h");
-    let mut declarations = Vec::new();
-    let mut open: Option<String> = None;
-    for line in HEADER.lines() {
-        if open.is_none() && !starts_a_declaration(line) {
-            continue;
-        }
-        let buffer = open.get_or_insert_with(String::new);
-        if !buffer.is_empty() {
-            buffer.push(' ');
-        }
-        buffer.push_str(line.trim());
-        if line.trim_end().ends_with(");") {
-            declarations.push(open.take().unwrap_or_default());
-        }
-    }
-    assert!(open.is_none(), "an unterminated declaration in purrdf.h");
-    declarations.sort_unstable();
-    declarations
-}
-
-/// Whether `line` opens an exported function declaration.
-fn starts_a_declaration(line: &str) -> bool {
-    let Some(first) = line.chars().next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    line.find('(')
-        .is_some_and(|open| line[..open].contains("purrdf_"))
-}
-
-/// The exported surface, digested, pinned beside the ABI minor it belongs to.
-///
-/// `abi_version_is_the_current_minor` pins the version, and `make capi-check` pins the
-/// committed header to the code, but until this test nothing tied the two together: a
-/// signature could change, the header could be regenerated to match it, and the number
-/// a consumer reads back from `purrdf_abi_version` could stand still — leaving that
-/// consumer unable to tell a library with the old shape from one with the new. Any
-/// change to any exported parameter list now fails HERE, and the only way past is to
-/// update this digest and the minor above in the same edit, deliberately.
-const ABI_SURFACE_SHA256: &str = "939512efa893f8da259b0abe4b44d51ffec74058cbb93be34a186301684f4e09";
-
-#[test]
-fn the_exported_surface_is_digested_beside_the_abi_minor_it_belongs_to() {
-    let declarations = exported_declarations();
-    assert!(
-        declarations.len() > 60,
-        "the header scrape found only {} declaration(s) — the scrape itself is broken, \
-         not the ABI",
-        declarations.len()
-    );
-    // `purrdf_serialize`'s loss counts are the signature this pin was added for, so the
-    // scrape must actually be seeing them.
-    assert!(
-        declarations
-            .iter()
-            .any(|d| d.contains("purrdf_serialize(") && d.contains("out_named_graph_rows_dropped")),
-        "the scrape missed purrdf_serialize's parameter list"
-    );
-    let mut hasher = Sha256::new();
-    for declaration in &declarations {
-        hasher.update(declaration.as_bytes());
-        hasher.update(b"\n");
-    }
-    let digest = format!("{:x}", hasher.finalize());
-    assert_eq!(
-        digest, ABI_SURFACE_SHA256,
-        "an exported signature changed: update ABI_SURFACE_SHA256 *and* bump \
-         PURRDF_ABI_MINOR (and the literal in abi_version_is_the_current_minor) together"
-    );
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -781,6 +707,324 @@ fn serialize_round_trips_through_ntriples() {
     }
 }
 
+/// Serialize through the real C entry point and return `(status, bytes, error)`.
+/// `base` is passed exactly as a C host would: `None` becomes a null pointer.
+unsafe fn serialize_with_base(
+    dataset: *const PurrdfDataset,
+    media_type: &str,
+    base: Option<&str>,
+) -> (i32, Option<String>, *mut PurrdfError) {
+    unsafe {
+        let media = CString::new(media_type).expect("media type C string");
+        let base = base.map(|value| CString::new(value).expect("base C string"));
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            dataset,
+            media.as_ptr(),
+            base.as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            &raw mut buffer,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut error,
+        );
+        let text = if buffer.is_null() {
+            None
+        } else {
+            let text = String::from_utf8(buffer_bytes(buffer)).expect("utf8 output");
+            purrdf_buffer_free(buffer);
+            Some(text)
+        };
+        (status, text, error)
+    }
+}
+
+/// `purrdf_serialize`'s `base_iri` is the EGRESS base and is honored end to end
+/// through the C entry point, exactly as `include/purrdf.h` documents it. This is
+/// the C leg of the same contract `purrdf_rs::serialize_dataset_to_format`
+/// enforces: the parameter is read, not accepted and dropped.
+///
+/// Four legs, because "the bytes contain `@base`" alone would not prove the
+/// parameter caused it:
+/// 1. Turtle with a base emits the `@base` directive AND relativizes against it.
+/// 2. The SAME dataset and format with a null base emits neither — so leg 1's
+///    output is attributable to the argument and nothing else.
+/// 3. The emitted document re-parses to the same single quad with the same
+///    absolute subject, so relativizing is a spelling change and not data loss.
+/// 4. N-Triples with the same base is byte-identical to N-Triples without one:
+///    the grammar admits no relative IRI, so the registry — not the codec —
+///    declines to apply the base.
+#[test]
+fn serialize_emits_and_relativizes_against_the_caller_base_through_the_c_abi() {
+    const BASE: &str = "http://example.org/dir/";
+    const SUBJECT: &str = "http://example.org/dir/a";
+    const DOCUMENT: &str =
+        "<http://example.org/dir/a> <http://example.org/dir/p> <http://example.org/dir/o> .";
+
+    unsafe {
+        let dataset = parse("application/n-triples", DOCUMENT);
+
+        // 1. Turtle under a base: the directive is emitted and the IRIs shrink.
+        let (status, based, error) = serialize_with_base(dataset, "text/turtle", Some(BASE));
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let based = based.expect("turtle bytes");
+        assert!(
+            based.contains(&format!("@base <{BASE}> .")),
+            "the caller base must reach the emitted Turtle directive, got: {based}"
+        );
+        assert!(
+            based.contains("<a>") && based.contains("<p>") && based.contains("<o>"),
+            "IRIs under the base must be spelled relative to it, got: {based}"
+        );
+        assert!(
+            !based.contains(SUBJECT),
+            "no IRI under the base should still be absolute, got: {based}"
+        );
+
+        // 2. The same dataset and format with NO base: neither directive nor
+        //    relative spelling, so leg 1 is attributable to the argument.
+        let (status, absolute, error) = serialize_with_base(dataset, "text/turtle", None);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let absolute = absolute.expect("turtle bytes");
+        assert!(
+            !absolute.contains("@base"),
+            "a null base must not synthesize one, got: {absolute}"
+        );
+        assert!(
+            absolute.contains(SUBJECT),
+            "a null base must leave IRIs absolute, got: {absolute}"
+        );
+        assert_ne!(based, absolute);
+
+        // 3. Relativizing is a spelling change, not data loss: the based
+        //    document re-parses to the same quad with the same absolute subject.
+        let reparsed = parse("text/turtle", &based);
+        let mut quads: usize = 0;
+        assert_eq!(
+            purrdf_dataset_quad_count(reparsed, &raw mut quads),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(quads, 1);
+        let graph = any_graph();
+        let mut cursor: *mut PurrdfCursor = std::ptr::null_mut();
+        let mut cursor_error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_quads_for_pattern(
+                reparsed,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw const graph,
+                &raw mut cursor,
+                &raw mut cursor_error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        let rows = drain(cursor);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, SUBJECT);
+        purrdf_cursor_free(cursor);
+        purrdf_dataset_free(reparsed);
+
+        // 4. N-Triples admits no relative IRI by grammar, so the registry
+        //    declines the base and the bytes are unchanged by it.
+        let (status, nt_based, error) =
+            serialize_with_base(dataset, "application/n-triples", Some(BASE));
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let (status, nt_plain, error) = serialize_with_base(dataset, "application/n-triples", None);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(nt_based, nt_plain);
+        assert!(nt_plain.expect("n-triples bytes").contains(SUBJECT));
+
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Serialize configured JSON-LD/YAML-LD through the real C entry point and return
+/// `(status, bytes, error)`. `base` is passed exactly as a C host would: `None`
+/// becomes a null pointer.
+unsafe fn serialize_jsonld_with_base(
+    dataset: *const PurrdfDataset,
+    media_type: &str,
+    base: Option<&str>,
+    options: &str,
+) -> (i32, Option<String>, *mut PurrdfError) {
+    unsafe {
+        let media = CString::new(media_type).expect("media type C string");
+        let base = base.map(|value| CString::new(value).expect("base C string"));
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize_jsonld_configured(
+            dataset,
+            media.as_ptr(),
+            base.as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            options.as_ptr(),
+            options.len(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        let text = if buffer.is_null() {
+            None
+        } else {
+            let text = String::from_utf8(buffer_bytes(buffer)).expect("utf8 output");
+            purrdf_buffer_free(buffer);
+            Some(text)
+        };
+        (status, text, error)
+    }
+}
+
+/// `purrdf_serialize_jsonld_configured`'s `base_iri` is honored end to end, so a C
+/// host can express an egress base for the JSON-LD family exactly as it can for
+/// Turtle. Before this parameter existed the entry point hardcoded "no base" and
+/// a C caller had no way to reach the leg every sibling surface already had.
+///
+/// The JSON-LD family expresses its base as `@context.@base` (`'@base':` in
+/// YAML-LD), so both the directive and the relativized IRIs are observable in the
+/// emitted bytes. Each format is driven twice — with the base and with NULL —
+/// because "the bytes contain `@base`" alone would not prove the argument caused
+/// it. The caller's own context term must also survive: the base joins the
+/// context as a later member rather than replacing it.
+#[test]
+fn configured_jsonld_emits_and_relativizes_against_the_caller_base_through_the_c_abi() {
+    const BASE: &str = "http://example.org/dir/";
+    const SUBJECT: &str = "http://example.org/dir/alice";
+    const INPUT: &str = "<http://example.org/dir/alice> <https://schema.org/name> \"Alice\" .";
+    const OPTIONS: &str =
+        r#"{"version":1,"mode":"context","prefixes":{"schema":"https://schema.org/"}}"#;
+
+    unsafe {
+        let dataset = parse("application/n-triples", INPUT);
+        for (media_type, directive) in [
+            ("application/ld+json", format!("\"@base\": \"{BASE}\"")),
+            ("application/ld+yaml", format!("'@base': {BASE}")),
+        ] {
+            let (status, based, error) =
+                serialize_jsonld_with_base(dataset, media_type, Some(BASE), OPTIONS);
+            assert_eq!(status, PurrdfStatus::Ok as i32, "for {media_type}");
+            assert!(error.is_null());
+            let based = based.expect("configured bytes");
+            assert!(
+                based.contains(&directive),
+                "the caller base must reach the emitted {media_type} context, got: {based}"
+            );
+            assert!(
+                !based.contains(SUBJECT),
+                "the subject must be relativized against the base, got: {based}"
+            );
+            assert!(
+                based.contains("schema"),
+                "the caller's own context term must survive beside the base, got: {based}"
+            );
+
+            // The NULL-base control: same dataset, same format, same options.
+            let (status, plain, error) =
+                serialize_jsonld_with_base(dataset, media_type, None, OPTIONS);
+            assert_eq!(status, PurrdfStatus::Ok as i32, "for {media_type}");
+            assert!(error.is_null());
+            let plain = plain.expect("configured bytes");
+            assert!(
+                !plain.contains("@base"),
+                "a null base must not synthesize one for {media_type}, got: {plain}"
+            );
+            assert!(
+                plain.contains(SUBJECT),
+                "a null base must leave IRIs absolute for {media_type}, got: {plain}"
+            );
+            assert_ne!(
+                based, plain,
+                "the emitted {media_type} bytes must be attributable to the base argument"
+            );
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// A non-absolute `base_iri` is a HARD failure on the configured JSON-LD entry
+/// point too, with no buffer handed back to free — the same refusal
+/// `purrdf_serialize` gives, so the two serialize legs cannot drift apart on the
+/// one question a caller is most likely to get wrong.
+#[test]
+fn configured_jsonld_refuses_a_non_absolute_base_through_the_c_abi() {
+    const OPTIONS: &str =
+        r#"{"version":1,"mode":"context","prefixes":{"schema":"https://schema.org/"}}"#;
+    unsafe {
+        let dataset = parse(
+            "application/n-triples",
+            "<http://example.org/dir/alice> <https://schema.org/name> \"Alice\" .",
+        );
+        for media_type in ["application/ld+json", "application/ld+yaml"] {
+            let (status, bytes, error) =
+                serialize_jsonld_with_base(dataset, media_type, Some("dir/"), OPTIONS);
+            assert_eq!(
+                status,
+                PurrdfStatus::SerializeError as i32,
+                "a relative base must be refused for {media_type}"
+            );
+            assert!(
+                bytes.is_none(),
+                "a refused serialize must hand back no buffer for {media_type}"
+            );
+            assert!(!error.is_null());
+            let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                .to_str()
+                .expect("utf8 diagnostic");
+            assert!(
+                message.contains("dir/"),
+                "the diagnostic must name the offending base, got: {message}"
+            );
+            purrdf_error_free(error);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// A `base_iri` that is not an absolute IRI is a HARD failure through the C
+/// entry point — for a format that would have applied it and for one that would
+/// not. A base silently ignored is how a caller ships a document whose relative
+/// IRIs resolve somewhere they never intended, so the boundary refuses rather
+/// than absorbing the mistake, and it writes no buffer for the caller to free.
+#[test]
+fn serialize_refuses_a_non_absolute_base_through_the_c_abi() {
+    unsafe {
+        let dataset = parse(
+            "application/n-triples",
+            "<http://example.org/dir/a> <http://example.org/dir/p> <http://example.org/dir/o> .",
+        );
+        for media_type in ["text/turtle", "application/n-triples"] {
+            let (status, bytes, error) = serialize_with_base(dataset, media_type, Some("dir/"));
+            assert_eq!(
+                status,
+                PurrdfStatus::SerializeError as i32,
+                "a relative base must be refused for {media_type}"
+            );
+            assert!(
+                bytes.is_none(),
+                "a refused serialize must hand back no buffer for {media_type}"
+            );
+            assert!(!error.is_null());
+            let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                .to_str()
+                .expect("utf8 diagnostic");
+            assert!(
+                message.contains("dir/"),
+                "the diagnostic must name the offending base, got: {message}"
+            );
+            purrdf_error_free(error);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
 #[test]
 fn expanded_jsonld_and_yamlld_abi_bytes_are_frozen() {
     const INPUT: &str = "<https://example.org/alice> <https://schema.org/name> \"Alice\" .";
@@ -871,6 +1115,7 @@ fn configured_jsonld_context_handle_reuses_bytes_and_preserves_yaml_schema() {
                     dataset,
                     media.as_ptr(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     0,
                     context,
                     schema
@@ -899,6 +1144,7 @@ fn configured_jsonld_context_handle_reuses_bytes_and_preserves_yaml_schema() {
             purrdf_serialize_jsonld_configured(
                 dataset,
                 media.as_ptr(),
+                std::ptr::null(),
                 OPTIONS.as_ptr(),
                 OPTIONS.len(),
                 context,

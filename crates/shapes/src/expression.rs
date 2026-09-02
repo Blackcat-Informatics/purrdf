@@ -664,7 +664,7 @@ mod tests {
     /// Load a tiny data graph from Turtle.
     fn load_data(ttl: &str) -> TestData {
         let ds: Arc<RdfDataset> =
-            crate::text_ingest::parse_turtle_to_dataset(ttl).expect("turtle parse");
+            crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("turtle parse");
         TestData { ds }
     }
 

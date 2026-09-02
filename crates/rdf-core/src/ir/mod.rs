@@ -8,6 +8,10 @@
 //! path ([`validate`]), and the frozen, infallible, zero-allocation [`dataset`]
 //! iteration surface.
 
+// The IR-boundary absoluteness invariant: the one gate every term table's IRI arm
+// runs on its MISS path, so a relative IRI reference is unrepresentable in the IR
+// from any ingress rather than being re-checked once per codec seam.
+pub(crate) mod absolute;
 pub mod builder;
 pub mod bundle;
 // The pipeline carrier (C1): the frozen hot graph + lookaside + blob store +

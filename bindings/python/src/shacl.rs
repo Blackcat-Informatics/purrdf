@@ -32,12 +32,26 @@ use purrdf_shapes::report::ValidationReport;
 /// - `"results"` — list of dicts, each with keys:
 ///   `"focus"`, `"path"`, `"value"`, `"severity"`, `"component"`,
 ///   `"source_shape"`, `"message"`.
+///
+/// `shapes_base` is the base IRI the SHAPES document's relative IRI references resolve
+/// against. This binding is handed a string and so has no retrieval IRI of its own;
+/// PurRDF will not invent one, so a caller who read the shapes from a file or a URL and
+/// wants `<PersonShape>` to mean something should pass that document's IRI. Left `None`,
+/// a relative reference is a hard `ValueError` naming the remedy — never a validation
+/// that quietly conforms because the constraint term was never resolved. `data_nt` needs
+/// no counterpart: N-Triples admits no relative IRI by grammar.
 #[pyfunction]
-fn validate(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<Py<PyAny>> {
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None))]
+fn validate(
+    py: Python<'_>,
+    shapes_ttl: &str,
+    data_nt: &str,
+    shapes_base: Option<&str>,
+) -> PyResult<Py<PyAny>> {
     // Parse + validation run detached (GIL released); the result dicts are
     // built after the GIL is reacquired.
     let report = py
-        .detach(|| engine::validate_graphs(data_nt, shapes_ttl))
+        .detach(|| engine::validate_graphs(data_nt, shapes_ttl, shapes_base))
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     let out = PyDict::new(py);
@@ -106,9 +120,15 @@ fn validate(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<Py<PyAn
 /// GIL, mapping the error string to `ValueError` — stays here; the RDF work does
 /// not.
 #[pyfunction]
-fn entail(py: Python<'_>, shapes_ttl: &str, data_nt: &str) -> PyResult<String> {
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None))]
+fn entail(
+    py: Python<'_>,
+    shapes_ttl: &str,
+    data_nt: &str,
+    shapes_base: Option<&str>,
+) -> PyResult<String> {
     // Parse + entailment + serialization run detached (GIL released).
-    py.detach(|| purrdf_validate::entail_to_ntriples_string(shapes_ttl, data_nt))
+    py.detach(|| purrdf_validate::entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt))
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
@@ -136,11 +156,17 @@ impl PyShapes {
 
 #[pymethods]
 impl PyShapes {
+    /// `Shapes(shapes_ttl, *, base=None)`.
+    ///
+    /// `base` is the shapes document's own base IRI, used to resolve its relative IRI
+    /// references (RFC-3986 §5.1.2). Omitted, only an in-document `@base` can establish
+    /// one and a relative reference otherwise raises `ValueError`.
     #[new]
-    fn new(py: Python<'_>, shapes_ttl: &str) -> PyResult<Self> {
+    #[pyo3(signature = (shapes_ttl, *, base=None))]
+    fn new(py: Python<'_>, shapes_ttl: &str, base: Option<&str>) -> PyResult<Self> {
         // Shapes-graph parsing runs detached (GIL released).
         let inner = py
-            .detach(|| engine::parse_shapes(shapes_ttl))
+            .detach(|| engine::parse_shapes(shapes_ttl, base))
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(Self { inner })
     }

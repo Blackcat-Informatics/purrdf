@@ -66,6 +66,8 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use purrdf_iri::IriError;
+
 use crate::hash::{FastMap, FastSet, IdSet};
 use crate::ir::term::{StrRange, arena_str};
 use crate::{BlankScope, RdfDataset, RdfTextDirection, TermRef, TermValue};
@@ -93,7 +95,11 @@ pub type PackTermId = u64;
 // ---------------------------------------------------------------------------
 
 /// Why decoding a [`PackDict`] byte buffer failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Copy`: [`RelativeIri`](Self::RelativeIri) quotes the offending IRI verbatim,
+/// because a decode failure that named only the *kind* of problem would leave a
+/// caller no way to find which record in a large pack is at fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PackDictError {
     /// The buffer ended before all the bytes a header promised were present.
@@ -107,6 +113,19 @@ pub enum PackDictError {
     /// the dictionary's own range, a string was not valid UTF-8, or a front-coded
     /// record failed to reconstruct.
     Malformed(&'static str),
+    /// A decoded IRI record is not an absolute IRI, so it violates the IR-boundary
+    /// absoluteness invariant enforced by the crate-private `ir::absolute` module.
+    ///
+    /// Pack bytes are a genuine ingress — they may come from another writer, an
+    /// older version, or a corrupted file — so the invariant is enforced on decode
+    /// rather than assumed from the encoder. The carried [`IriError`] keeps the
+    /// workspace's shared [`IriError::diagnostic_code`] spelling.
+    RelativeIri {
+        /// The offending IRI record, verbatim.
+        iri: String,
+        /// Why it is not an absolute IRI.
+        reason: IriError,
+    },
 }
 
 impl fmt::Display for PackDictError {
@@ -117,6 +136,11 @@ impl fmt::Display for PackDictError {
                 "pack-dict: truncated input: needed at least {needed} bytes, found {found}"
             ),
             Self::Malformed(reason) => write!(f, "pack-dict: malformed input: {reason}"),
+            Self::RelativeIri { iri, reason } => write!(
+                f,
+                "pack-dict: IRI record {iri:?} cannot enter the RDF IR [{}]: {reason}",
+                reason.diagnostic_code()
+            ),
         }
     }
 }
@@ -464,7 +488,19 @@ fn decode_values(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError
 /// unified id (the caller must call this in strict unified-id order).
 fn push_entry(dict: &mut PackDict, raw: RawRecord) -> Result<(), PackDictError> {
     let entry = match raw {
-        RawRecord::Iri(s) => DictEntry::Iri(dict.push_str(&s)?),
+        RawRecord::Iri(s) => {
+            // Pack bytes are a real ingress, not a trusted internal handoff: they may
+            // have been written by another engine, an older version, or corrupted on
+            // disk. Every decoded IRI is therefore validated exactly once, here, as it
+            // enters the dictionary — the pack's own store-once boundary.
+            crate::ir::absolute::check_absolute(&s).map_err(|reason| {
+                PackDictError::RelativeIri {
+                    iri: s.clone(),
+                    reason,
+                }
+            })?;
+            DictEntry::Iri(dict.push_str(&s)?)
+        }
         RawRecord::Blank { label, scope } => DictEntry::Blank {
             label: dict.push_str(&label)?,
             scope: BlankScope(scope),
@@ -600,8 +636,11 @@ impl EncodedDict {
     ///
     /// # Errors
     ///
-    /// [`PackDictError`] if the buffer is malformed, truncated, or contains an
-    /// out-of-range id reference.
+    /// [`PackDictError`] if the buffer is malformed, truncated, contains an
+    /// out-of-range id reference, or carries an IRI record that is not absolute
+    /// ([`PackDictError::RelativeIri`]) — pack bytes are an untrusted ingress, so the
+    /// IR-boundary absoluteness invariant is enforced on decode rather than assumed
+    /// from whichever writer produced the file.
     pub fn decode(&self) -> Result<PackDict, PackDictError> {
         let mut dict = PackDict {
             arena: Vec::new(),
@@ -1582,6 +1621,62 @@ mod tests {
             .validate_references()
             .expect_err("a self-referential triple term must be rejected");
         assert!(matches!(err, PackDictError::Malformed(_)));
+    }
+
+    /// Pack bytes are an untrusted ingress: they may come from another engine, an
+    /// older version, or a corrupted file, and they reach the term table WITHOUT
+    /// passing `RdfDatasetBuilder`. So the decode seam enforces the IR-boundary
+    /// absoluteness invariant itself, reporting the shared `purrdf-iri` code and the
+    /// offending record verbatim.
+    #[test]
+    fn decoding_a_relative_iri_record_is_refused_with_the_shared_code() {
+        for (record, code) in [
+            (
+                RawRecord::Iri("notAbsolute".to_owned()),
+                "iri-relative-no-base",
+            ),
+            (RawRecord::Iri(String::new()), "iri-relative-no-base"),
+            (
+                RawRecord::Iri("/abs/path".to_owned()),
+                "iri-relative-no-base",
+            ),
+            (
+                RawRecord::Iri("http://example.org/a b".to_owned()),
+                "iri-disallowed-char",
+            ),
+        ] {
+            let mut dict = PackDict {
+                arena: Vec::new(),
+                entries: Vec::new(),
+            };
+            let err = push_entry(&mut dict, record).expect_err("must be refused on decode");
+            let PackDictError::RelativeIri { iri, reason } = &err else {
+                panic!("expected a RelativeIri refusal, got {err:?}");
+            };
+            assert_eq!(reason.diagnostic_code(), code);
+            // The message names the offending record so a large pack is diagnosable.
+            assert!(err.to_string().contains(&format!("{iri:?}")), "{err}");
+            assert!(dict.entries.is_empty(), "a refused record stores nothing");
+        }
+    }
+
+    /// The refusal is IRI-specific: a blank label or a literal lexical form may be any
+    /// string at all, and must not be dragged into the IRI grammar.
+    #[test]
+    fn decoding_leaves_non_iri_records_alone() {
+        let mut dict = PackDict {
+            arena: Vec::new(),
+            entries: Vec::new(),
+        };
+        push_entry(
+            &mut dict,
+            RawRecord::Blank {
+                label: "notAbsolute".to_owned(),
+                scope: 0,
+            },
+        )
+        .expect("a blank label is not an IRI");
+        assert_eq!(dict.entries.len(), 1);
     }
 
     #[test]

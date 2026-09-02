@@ -112,7 +112,7 @@ fn config() -> ProptestConfig {
 #[test]
 fn shapes_detect_violations() {
     let data = format!("<{EX}s0> <{RDF_TYPE}> <{EX}Thing> .\n<{EX}s0> <{EX}val> \"oops\" .");
-    let report = validate_graphs(&data, SHAPES_TTL).expect("validate");
+    let report = validate_graphs(&data, SHAPES_TTL, None).expect("validate");
     assert!(
         !report.result_tuples().is_empty(),
         "a string value under sh:datatype xsd:integer must produce a violation",
@@ -133,9 +133,9 @@ proptest! {
         combined.extend(extra);
         let combined_nt = to_ntriples(&combined);
 
-        let base_report = validate_graphs(&base_nt, SHAPES_TTL)
+        let base_report = validate_graphs(&base_nt, SHAPES_TTL, None)
             .expect("base validation should not error");
-        let combined_report = validate_graphs(&combined_nt, SHAPES_TTL)
+        let combined_report = validate_graphs(&combined_nt, SHAPES_TTL, None)
             .expect("combined validation should not error");
 
         let base_tuples = base_report.result_tuples();

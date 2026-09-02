@@ -136,7 +136,11 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
             vector.id
         );
 
-        let actual = match parse_jsonld(vector.input.as_bytes()) {
+        // No base: each pinned vector is self-contained and carries its own `@context`
+        // `@base` where the W3C fixture defines one. Injecting a base here would resolve
+        // references the oracle N-Quads resolved differently, so the comparison would be
+        // against a document the suite never specified.
+        let actual = match parse_jsonld(vector.input.as_bytes(), None) {
             Ok(dataset) => dataset,
             Err(error) => {
                 failures.push(format!("{} ({}): {error}", vector.id, vector.name));
@@ -220,7 +224,9 @@ fn pinned_w3c_compaction_vectors_match_the_independent_json_oracle() {
             );
         }
 
-        let dataset = match parse_jsonld(vector.input.as_bytes()) {
+        // No base, for the same reason as the to-RDF pass above: the vector is the
+        // specification, and a base it did not declare would change what it means.
+        let dataset = match parse_jsonld(vector.input.as_bytes(), None) {
             Ok(dataset) => dataset,
             Err(error) => {
                 failures.push(format!("{} ({}): {error}", vector.id, vector.name));

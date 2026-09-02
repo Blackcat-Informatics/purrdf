@@ -40,6 +40,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use purrdf_iri::IriError;
+
 use crate::dataset_view::{DatasetMut, GraphMatch, GraphMatchValue};
 use crate::hash::{FastMap, FastSet};
 use crate::ir::{RdfDataset, RdfDatasetBuilder, TermValue};
@@ -120,19 +122,36 @@ impl DeltaBuilder {
 
     /// Intern a delta term BY VALUE, returning its [`DeltaTermId`]. Idempotent: equal
     /// values dedup to one id (probe the hash bucket, compare candidates by `==`).
-    fn intern(&mut self, value: TermValue) -> DeltaTermId {
+    ///
+    /// # The absoluteness invariant is checked here, on the MISS path only
+    ///
+    /// The bucket probe below is the HIT path and returns before any validation: a
+    /// value this delta already holds was checked when it was first minted. Only a
+    /// genuinely new value pays the parse, exactly as the frozen IR's builder does
+    /// (see [`super::absolute`]).
+    ///
+    /// # Errors
+    ///
+    /// [`IriError`] when the value carries a non-absolute IRI — its own, a literal's
+    /// datatype, or one nested in a triple term.
+    fn intern(&mut self, value: TermValue) -> Result<DeltaTermId, IriError> {
         let h = Self::hash_of(&value);
         let bucket = self.index.entry(h).or_default();
         for &did in bucket.iter() {
             if self.values[did.index()] == value {
-                return did;
+                return Ok(did);
             }
         }
+        // Miss: this value is entering the delta for the first time, so it is owed the
+        // check. `index.entry` above holds a mutable borrow, so validate before taking
+        // it again below.
+        check_value_absolute(&value)?;
+        let bucket = self.index.entry(h).or_default();
         let i = u32::try_from(self.values.len()).expect("delta term table exceeds u32::MAX");
         let did = DeltaTermId(i);
         bucket.push(did);
         self.values.push(value);
-        did
+        Ok(did)
     }
 
     /// Find an already-interned [`TermValue`] WITHOUT minting; `None` if absent.
@@ -266,22 +285,35 @@ impl MutableDataset {
     /// mints (or finds) a `Delta` id in the delta interner. The delta stores the term
     /// fully-resolved by value, so a brand-new triple term is interned whole as one
     /// `TermValue::Triple` (its components carried by value).
-    fn resolve_value(&mut self, value: &TermValue) -> MutTermId {
+    /// A base hit needs no absoluteness check: the base is a FROZEN [`RdfDataset`],
+    /// which could not have been constructed carrying a relative IRI. Only the delta
+    /// mint below can introduce a new one, and it is checked there.
+    fn resolve_value(&mut self, value: &TermValue) -> Result<MutTermId, IriError> {
         if let Some(id) = self.base.term_id_by_value(value) {
-            return MutTermId::Base(id);
+            return Ok(MutTermId::Base(id));
         }
-        MutTermId::Delta(self.delta.intern(value.clone()))
+        Ok(MutTermId::Delta(self.delta.intern(value.clone())?))
     }
 
     /// Build a [`QuadKey`] from a value-quad, resolving each component to a
     /// [`MutTermId`] (minting delta ids for new terms as a side effect).
-    fn key_of(&mut self, quad: &QuadValues) -> QuadKey {
-        QuadKey {
-            s: self.resolve_value(&quad.s),
-            p: self.resolve_value(&quad.p),
-            o: self.resolve_value(&quad.o),
-            g: quad.g.as_ref().map(|g| self.resolve_value(g)),
-        }
+    ///
+    /// # Errors
+    ///
+    /// [`IriError`] if any component carries a non-absolute IRI. The delta may have
+    /// minted ids for earlier components before the failing one; that is harmless —
+    /// an unreferenced delta term is invisible to every read path and is dropped at
+    /// freeze — and no [`QuadKey`] is produced, so the quad is not inserted.
+    fn key_of(&mut self, quad: &QuadValues) -> Result<QuadKey, IriError> {
+        Ok(QuadKey {
+            s: self.resolve_value(&quad.s)?,
+            p: self.resolve_value(&quad.p)?,
+            o: self.resolve_value(&quad.o)?,
+            g: match quad.g.as_ref() {
+                Some(g) => Some(self.resolve_value(g)?),
+                None => None,
+            },
+        })
     }
 
     /// Build a [`QuadKey`] from a value-quad WITHOUT minting: every component must
@@ -657,6 +689,36 @@ impl MutableDataset {
     }
 }
 
+/// Enforce the IR-boundary absoluteness invariant over every IRI a [`TermValue`]
+/// carries: the value itself, a literal's datatype, and — recursively — the
+/// components of a triple term, which the delta interns WHOLE rather than
+/// component-by-component.
+///
+/// # This is fail-fast, and it does not replace the freeze-time check
+///
+/// [`MutableDataset::freeze`] re-interns every value through
+/// [`RdfDatasetBuilder`], which enforces the same invariant; that is what makes a
+/// relative IRI unrepresentable in the frozen IR, and it must stay. This check
+/// exists so a caller mutating a dataset learns at the `insert` that named the
+/// offending quad, instead of at some later freeze whose error cannot point back to
+/// the call. **Deleting either one because "the other covers it" is a regression:**
+/// the freeze check is the invariant, this one is the diagnosis.
+///
+/// Blank-node labels and literal lexical forms are arbitrary strings and are
+/// deliberately untouched — only IRIs are IRIs.
+fn check_value_absolute(value: &TermValue) -> Result<(), IriError> {
+    match value {
+        TermValue::Iri(iri) => super::absolute::check_absolute(iri),
+        TermValue::Blank { .. } => Ok(()),
+        TermValue::Literal { datatype, .. } => super::absolute::check_absolute(datatype),
+        TermValue::Triple { s, p, o } => {
+            check_value_absolute(s)?;
+            check_value_absolute(p)?;
+            check_value_absolute(o)
+        }
+    }
+}
+
 /// Re-intern a dataset-independent [`TermValue`] into a fresh builder, recursing for
 /// triple terms, and return the builder's dense [`TermId`]. The single remap
 /// primitive `freeze` drives every table through.
@@ -728,14 +790,47 @@ impl QuadValues {
             g: Some(g),
         }
     }
+
+    /// Enforce the IR-boundary absoluteness invariant over this quad WITHOUT interning
+    /// it: every IRI in all four positions, each literal's datatype, and — recursively —
+    /// the components of any triple term.
+    ///
+    /// # Why this is public
+    ///
+    /// [`DatasetMut::insert`] already applies it, so a caller building a dataset needs
+    /// nothing here. This exists for the container that holds quads but is NOT a store —
+    /// the Python `Dataset`, which is a plain quad list with set semantics and no term
+    /// table to intern into. Without a seam it would have had to re-spell "parse, then
+    /// test for a scheme", and a second spelling of the rule is exactly how the codecs
+    /// and the IR boundary would drift apart. It delegates to the same
+    /// crate-private `super::absolute::check_absolute` every other ingress reaches, so there is
+    /// exactly one owner of the rule.
+    ///
+    /// Blank-node labels and literal lexical forms are arbitrary strings and are
+    /// deliberately untouched — only IRIs are IRIs.
+    ///
+    /// # Errors
+    ///
+    /// [`IriError`] naming the first non-absolute IRI found, carrying the workspace's
+    /// shared [`IriError::diagnostic_code`] spelling (`iri-relative-no-base` for a
+    /// scheme-less reference).
+    pub fn check_absolute_iris(&self) -> Result<(), IriError> {
+        check_value_absolute(&self.s)?;
+        check_value_absolute(&self.p)?;
+        check_value_absolute(&self.o)?;
+        match &self.g {
+            Some(g) => check_value_absolute(g),
+            None => Ok(()),
+        }
+    }
 }
 
 impl DatasetMut for MutableDataset {
     type Quad = QuadValues;
 
-    fn insert(&mut self, quad: Self::Quad) -> bool {
-        let key = self.key_of(&quad);
-        self.insert_key(key)
+    fn insert(&mut self, quad: Self::Quad) -> Result<bool, IriError> {
+        let key = self.key_of(&quad)?;
+        Ok(self.insert_key(key))
     }
 
     fn remove(&mut self, quad: &Self::Quad) -> bool {
@@ -887,6 +982,13 @@ mod tests {
         QuadValues::triple(iri_val(s), iri_val(p), iri_val(o))
     }
 
+    /// Insert a fixture quad, asserting it satisfies the absoluteness invariant.
+    /// Every fixture below builds its IRIs through `iri_val`, so it does; the refusal
+    /// path has its own cases at the end of this module.
+    fn ins(m: &mut MutableDataset, quad: QuadValues) -> bool {
+        m.insert(quad).expect("fixture IRIs are absolute")
+    }
+
     /// A base with three quads: (a,p,b), (a,p,c), (b,p,c) — and one reifier+annotation.
     fn base3() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
@@ -930,7 +1032,7 @@ mod tests {
         assert_eq!(m.suppressed_len(), 1);
         assert!(!m.contains(&quad));
         // Insert of the suppressed base quad un-suppresses, does NOT add.
-        assert!(m.insert(quad.clone()));
+        assert!(ins(&mut m, quad.clone()));
         assert_eq!(m.suppressed_len(), 0, "un-suppressed");
         assert_eq!(m.added_len(), 0, "not pushed to added");
         assert!(m.contains(&quad));
@@ -940,7 +1042,7 @@ mod tests {
     fn rule2_remove_of_delta_added_drops_from_added() {
         let mut m = MutableDataset::new(base3());
         let quad = q("x", "p", "y"); // brand-new (delta) quad
-        assert!(m.insert(quad.clone()));
+        assert!(ins(&mut m, quad.clone()));
         assert_eq!(m.added_len(), 1);
         assert!(m.contains(&quad));
         // Remove of a delta-added quad drops it from `added`, NO suppression.
@@ -969,9 +1071,9 @@ mod tests {
         // insert → remove → insert returns to present (delta quad).
         let mut m = MutableDataset::new(base3());
         let nq = q("n", "p", "m");
-        assert!(m.insert(nq.clone()));
+        assert!(ins(&mut m, nq.clone()));
         assert!(m.remove(&nq));
-        assert!(m.insert(nq.clone()));
+        assert!(ins(&mut m, nq.clone()));
         assert!(m.contains(&nq));
         assert_eq!(m.added_len(), 1);
         assert_eq!(m.suppressed_len(), 0);
@@ -981,7 +1083,7 @@ mod tests {
         let bq = q("b", "p", "c");
         assert!(m.remove(&bq));
         assert!(!m.contains(&bq));
-        assert!(m.insert(bq.clone()));
+        assert!(ins(&mut m, bq.clone()));
         assert!(m.contains(&bq));
         assert_eq!(m.suppressed_len(), 0);
         assert_eq!(m.added_len(), 0, "base quad re-presented by un-suppress");
@@ -991,7 +1093,7 @@ mod tests {
     fn insert_existing_base_quad_is_noop() {
         let mut m = MutableDataset::new(base3());
         let quad = q("a", "p", "b");
-        assert!(!m.insert(quad), "already effective → no change");
+        assert!(!ins(&mut m, quad), "already effective → no change");
         assert_eq!(m.added_len(), 0);
     }
 
@@ -1001,7 +1103,7 @@ mod tests {
     fn contains_and_pattern_reflect_effective_set() {
         let mut m = MutableDataset::new(base3());
         // Add a quad, remove a base quad.
-        m.insert(q("z", "p", "w"));
+        ins(&mut m, q("z", "p", "w"));
         m.remove(&q("a", "p", "b"));
 
         assert!(m.contains(&q("z", "p", "w")));
@@ -1050,7 +1152,7 @@ mod tests {
         let mut m = MutableDataset::new(base);
         // Add a named-graph quad in a NEW delta graph.
         let nq = QuadValues::quad(iri_val("s2"), iri_val("p"), iri_val("o2"), iri_val("g2"));
-        assert!(m.insert(nq.clone()));
+        assert!(ins(&mut m, nq.clone()));
         assert!(m.contains(&nq));
 
         // Default-graph match excludes both named quads.
@@ -1077,7 +1179,7 @@ mod tests {
         let mut m = MutableDataset::new(base);
         let g2 = iri_val("g2"); // a graph term interned NOWHERE in the base
         let nq = QuadValues::quad(iri_val("s2"), iri_val("p"), iri_val("o2"), g2.clone());
-        assert!(m.insert(nq.clone()));
+        assert!(ins(&mut m, nq.clone()));
 
         // Query the delta-only named graph by VALUE — it must return that quad.
         let hits = m.quads_for_pattern(None, None, None, GraphMatchValue::Named(&g2));
@@ -1095,7 +1197,7 @@ mod tests {
     fn freeze_round_trip_quads_reifiers_annotations() {
         let mut m = MutableDataset::new(base3());
         // Insert a brand-new quad with a brand-new term, remove a base quad.
-        m.insert(q("new", "p", "thing"));
+        ins(&mut m, q("new", "p", "thing"));
         m.remove(&q("a", "p", "b"));
 
         let want = eff_set(&m);
@@ -1180,7 +1282,7 @@ mod tests {
         for _ in 0..25 {
             let mut m = MutableDataset::new(base3());
             for s in order {
-                assert!(m.insert(q(s, "brand-new-pred", "o")));
+                assert!(ins(&mut m, q(s, "brand-new-pred", "o")));
             }
             let frozen = m.freeze().expect("freeze compacts");
 
@@ -1254,7 +1356,7 @@ mod tests {
 
         let mut m = MutableDataset::new(base);
         // Insert a brand-new delta quad and suppress a DIFFERENT base quad (a,p,c).
-        m.insert(q("x", "p", "y"));
+        ins(&mut m, q("x", "p", "y"));
         assert!(m.remove(&q("a", "p", "c")));
 
         let frozen = m.freeze().expect("freeze compacts");
@@ -1292,7 +1394,7 @@ mod tests {
         let mut m1 = MutableDataset::new(Arc::clone(&base));
         let mut m2 = MutableDataset::new(Arc::clone(&base));
 
-        m1.insert(q("only", "in", "one"));
+        ins(&mut m1, q("only", "in", "one"));
         m2.remove(&q("a", "p", "b"));
 
         // m1 sees its add, not m2's removal.
@@ -1315,8 +1417,8 @@ mod tests {
         let mut m = MutableDataset::new(base3()); // base of 3 quads
         assert!(!m.should_compact());
         // Add 2 quads: churn 2, base 3 → 2*2=4 > 3 → signal.
-        m.insert(q("e1", "p", "o"));
-        m.insert(q("e2", "p", "o"));
+        ins(&mut m, q("e1", "p", "o"));
+        ins(&mut m, q("e2", "p", "o"));
         assert!(m.should_compact());
     }
 
@@ -1354,7 +1456,7 @@ mod tests {
                 let quad = q(sn, pn, on);
                 let tup = (sn.to_string(), pn.to_string(), on.to_string());
                 if is_insert {
-                    m.insert(quad);
+                    ins(&mut m, quad);
                     model.insert(tup);
                 } else {
                     m.remove(&quad);

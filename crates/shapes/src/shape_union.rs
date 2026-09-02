@@ -86,10 +86,20 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 /// [`RdfDataset::union`] standardizes each input's blanks apart under a fresh scope,
 /// providing exactly that per-file isolation.
 ///
+/// Each file parses under **its own** RFC-8089 `file://` retrieval IRI (RFC-3986
+/// §5.1.3), which is the base the document's origin supplies and which this loader is
+/// holding in `file`: a shape graph that spells a target class or a `sh:path` relative to
+/// its own file resolves rather than failing for want of a base. That is a per-FILE base,
+/// not a per-union one — the union is an artifact of this loader, and giving every member
+/// the same base would resolve one file's references against another file's location.
+/// An in-document `@base` still outranks it (§5.1.1), and a shape file whose every IRI is
+/// absolute parses to exactly the same dataset with or without it.
+///
 /// # Errors
 ///
-/// Returns `Err` when a file cannot be read, fails to parse as Turtle, or when
-/// [`shapes::from_dataset_with_prefixes`] rejects an unsupported SHACL construct.
+/// Returns `Err` when a file cannot be read, has no derivable retrieval IRI, fails to
+/// parse as Turtle, or when [`shapes::from_dataset_with_prefixes`] rejects an unsupported
+/// SHACL construct.
 pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String> {
     let files = shape_files(repo_root)?;
     let mut prefix_map: BTreeMap<String, String> = BTreeMap::new();
@@ -99,10 +109,14 @@ pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String
             .map_err(|e| format!("failed to read shape file {}: {e}", file.display()))?;
         let text = std::str::from_utf8(&bytes)
             .map_err(|e| format!("shape file {} is not UTF-8: {e}", file.display()))?;
+        // The document's own origin, through the workspace's one RFC-8089 derivation
+        // (`purrdf_slice::retrieval_base_iri`) rather than a second copy of it here.
+        let base = purrdf_slice::retrieval_base_iri(file)
+            .map_err(|e| format!("shape file {}: {e}", file.display()))?;
         // Parse via the native codecs. The native codec drops document
         // prefixes once it folds to the IR, so the per-file `@prefix` map is
         // recovered by scanning the source text — see the doc comment above.
-        let dataset = parse_dataset(&bytes, "text/turtle", None)
+        let dataset = parse_dataset(&bytes, "text/turtle", Some(base.as_str()))
             .map_err(|e| format!("failed to parse Turtle shape file {}: {e}", file.display()))?;
         per_file.push(dataset);
         for (prefix, namespace) in crate::text_ingest::extract_prefixes(text) {
@@ -287,6 +301,48 @@ mod tests {
         let (_store, shapes) = load_shapes(&repo).expect("load_shapes must succeed");
         // 3 node shapes loaded from the union.
         assert_eq!(shapes.node_shapes.len(), 3, "all three shapes loaded");
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A shape file spelling its shape relative to ITSELF loads: it resolves against that
+    /// file's own retrieval IRI (RFC-3986 §5.1.3) instead of hard-failing with
+    /// `iri-relative-no-base` while the loader holds the path.
+    #[test]
+    fn each_file_parses_under_its_own_retrieval_iri() {
+        let repo = mock_repo();
+        let header = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n";
+        // `<#Person>` is a same-document reference: only the file's own base resolves it.
+        touch(
+            &repo.join("shapes/purrdf-shapes.ttl"),
+            &format!("{header}<#PersonShape> a sh:NodeShape ; sh:targetClass <#Person> .\n"),
+        );
+        touch(
+            &repo.join("generated/shapes/frame-shapes.ttl"),
+            &format!("{header}<#FrameShape> a sh:NodeShape ; sh:targetClass <#Frame> .\n"),
+        );
+        let (_store, shapes) = load_shapes(&repo).expect("relative shapes resolve");
+        assert_eq!(shapes.node_shapes.len(), 2);
+
+        // Per-FILE, not per-union: the two `#PersonShape`/`#FrameShape` references
+        // resolved against different bases, so the shape IRIs differ by directory.
+        let mut iris: Vec<&str> = shapes
+            .node_shapes
+            .iter()
+            .map(|shape| match &shape.id {
+                crate::term::Term::NamedNode(node) => node.as_str(),
+                other => panic!("a shape spelled with an IRI must load as one, got {other:?}"),
+            })
+            .collect();
+        iris.sort_unstable();
+        assert!(
+            iris.iter().all(|iri| iri.starts_with("file:///")),
+            "each shape IRI is rooted at its own file: {iris:?}"
+        );
+        assert!(
+            iris[0].contains("/generated/shapes/frame-shapes.ttl#")
+                && iris[1].contains("/shapes/purrdf-shapes.ttl#"),
+            "each file's references resolve against ITS OWN location: {iris:?}"
+        );
         let _ = fs::remove_dir_all(&repo);
     }
 }

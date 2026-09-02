@@ -87,13 +87,13 @@ proptest! {
     #[test]
     fn parse_shapes_never_panics_raw(data in arbitrary_bytes()) {
         if let Ok(text) = std::str::from_utf8(&data) {
-            let _ = parse_shapes(text);
+            let _ = parse_shapes(text, None);
         }
     }
 
     #[test]
     fn parse_shapes_never_panics_structured(text in structured_shapes()) {
-        let _ = parse_shapes(&text);
+        let _ = parse_shapes(&text, None);
     }
 
     #[test]

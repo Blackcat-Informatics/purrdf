@@ -61,7 +61,7 @@ collection / list API, with no dependency on rdflib's private `test.utils` /
 
 ## Scoreboard (rdflib 7.6.0 vs purrdf shim, live)
 
-**85 passed / 1 xfailed** (0 xpassed, 0 failed, 0 collection errors; ledger
+**81 passed / 5 xfailed** (0 xpassed, 0 failed, 0 collection errors; ledger
 1/1 applied, 0 stale).
 
 Every one of the xfails has a concrete, self-describing reason in

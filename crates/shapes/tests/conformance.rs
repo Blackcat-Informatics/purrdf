@@ -70,6 +70,7 @@ fn conformance_corpus() {
         let report = match purrdf_shapes::engine::validate_graphs_with_config(
             &data_nt,
             &shapes_ttl,
+            None,
             Some(corpus_box_role_vocab()),
         ) {
             Ok(r) => r,
