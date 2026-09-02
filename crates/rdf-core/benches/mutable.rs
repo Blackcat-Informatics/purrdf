@@ -206,6 +206,35 @@ fn bench_query(c: &mut Criterion) {
     group.finish();
 }
 
+/// `MutableDataset::freeze` of the post-mutation effective set: every surviving
+/// base quad's four terms are carried into a fresh builder. The base shares one
+/// predicate across all quads and every subject/object recurs, so the per-base-id
+/// memo (one slot read per repeat, no owned `TermValue` rebuild) is what this
+/// measures. Report-only.
+fn bench_freeze(c: &mut Criterion) {
+    let base = build_base();
+    let (inserts, removes) = workload();
+    let mut cow = MutableDataset::new(Arc::clone(&base));
+    for q in &inserts {
+        let _ = cow.insert(q.clone()).expect("bench fixtures are absolute");
+    }
+    for q in &removes {
+        cow.remove(q);
+    }
+
+    let mut group = c.benchmark_group("mut_freeze");
+    group.bench_function("cow_freeze", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                cow.freeze()
+                    .expect("mutated bench fixture freezes")
+                    .quad_count(),
+            )
+        });
+    });
+    group.finish();
+}
+
 /// Print the relative head-to-head context once: how many quads each store holds, so
 /// the timed numbers are read against the same effective set. No winner asserted.
 fn bench_context(_c: &mut Criterion) {
@@ -239,6 +268,7 @@ criterion_group!(
     bench_context,
     bench_build,
     bench_mutate,
-    bench_query
+    bench_query,
+    bench_freeze
 );
 criterion_main!(benches);

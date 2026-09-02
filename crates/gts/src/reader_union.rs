@@ -111,7 +111,10 @@ impl Unioner {
         if let Some(&got) = self.intern.get(&key) {
             return got;
         }
-        let t = seg.terms[tid].clone();
+        // `seg` is a parameter, not a field of `self`, so the term can be
+        // borrowed across the `&mut self` recursion; only the two `Option<String>`
+        // fields that move into the pushed `Term` are cloned below.
+        let t = &seg.terms[tid];
         let datatype = t.datatype.map(|d| self.map_term(seg, seg_idx, d));
         let self_bound = t.kind == TermKind::Triple && t.reifier == Some(tid);
         let mapped_reifier = if self_bound {
@@ -154,8 +157,8 @@ impl Unioner {
             kind: t.kind,
             value,
             datatype,
-            lang: t.lang,
-            direction: t.direction,
+            lang: t.lang.clone(),
+            direction: t.direction.clone(),
             reifier,
             triple,
         });

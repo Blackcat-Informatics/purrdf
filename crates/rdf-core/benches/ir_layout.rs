@@ -429,10 +429,42 @@ fn bench_literal_intern(c: &mut Criterion) {
         last
     }
 
+    // Untyped and language-tagged forms take the constant-datatype branch of
+    // `intern_literal` (xsd:string / rdf:langString), where the datatype IRI is
+    // borrowed rather than minted per literal — measured next to the typed form.
+    fn intern_many_untyped(n: usize) -> usize {
+        let mut b = RdfDatasetBuilder::new();
+        let mut last = 0;
+        for i in 0..n {
+            last = b.intern_literal(RdfLiteral::simple(i.to_string())).index();
+        }
+        last
+    }
+    fn intern_many_lang(n: usize) -> usize {
+        let mut b = RdfDatasetBuilder::new();
+        let mut last = 0;
+        for i in 0..n {
+            last = b
+                .intern_literal(RdfLiteral::language_tagged(i.to_string(), "en-GB"))
+                .index();
+        }
+        last
+    }
+
     let mut group = c.benchmark_group("ir_literal_intern");
     group.bench_function("plain_typed", |b| {
         b.iter(|| {
             std::hint::black_box(intern_many(XSD_INT, &|i| i.to_string(), 512));
+        });
+    });
+    group.bench_function("plain_untyped", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many_untyped(512));
+        });
+    });
+    group.bench_function("language_tagged", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many_lang(512));
         });
     });
     group.bench_function("composite_no_blanks", |b| {
@@ -706,11 +738,52 @@ fn bench_metrics(_c: &mut Criterion) {
     print_alloc_metrics();
 }
 
+/// RDFC-1.0 canonicalization over a blank-heavy dataset: `CHAINS` disjoint
+/// blank-node chains of length `LEN` (every blank is a subject and an object, so
+/// the first-degree hash renders every neighbour label) plus one symmetric ring
+/// whose first-degree hashes collide and force the n-degree search. Reports the
+/// per-blank label/predicate rendering and issuer paths that canonicalization
+/// spends its time in; no threshold asserted.
+fn bench_canonicalize(c: &mut Criterion) {
+    const CHAINS: u32 = 64;
+    const LEN: u32 = 8;
+    const RING: u32 = 6;
+
+    let mut b = RdfDatasetBuilder::new();
+    let next = b.intern_iri("http://example.org/next");
+    let label = b.intern_iri("http://example.org/label");
+    for chain in 0..CHAINS {
+        let mut prev = b.intern_blank(&format!("c{chain}_0"), BlankScope::DEFAULT);
+        let lit = b.intern_literal(RdfLiteral::simple(format!("chain {chain}")));
+        b.push_quad(prev, label, lit, None);
+        for i in 1..LEN {
+            let cur = b.intern_blank(&format!("c{chain}_{i}"), BlankScope::DEFAULT);
+            b.push_quad(prev, next, cur, None);
+            prev = cur;
+        }
+    }
+    // The ring: every blank looks identical at first degree.
+    let ring: Vec<TermId> = (0..RING)
+        .map(|i| b.intern_blank(&format!("r{i}"), BlankScope::DEFAULT))
+        .collect();
+    for i in 0..RING as usize {
+        b.push_quad(ring[i], next, ring[(i + 1) % RING as usize], None);
+    }
+    let ds = b.freeze().expect("bench fixture freezes");
+
+    let mut group = c.benchmark_group("ir_canonicalize");
+    group.bench_function("blank_chains_and_ring", |b| {
+        b.iter(|| std::hint::black_box(purrdf_core::canonicalize(&ds).nquads.len()));
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_metrics,
     bench_build,
     bench_literal_intern,
+    bench_canonicalize,
     bench_iterate,
     bench_resolve,
     bench_value_lookup,

@@ -77,9 +77,12 @@ pub struct SpanTable {
 impl SpanCollector for SpanTable {
     const ENABLED: bool = true;
     fn record(&mut self, subject_key: &str, position: Position) {
-        self.by_subject
-            .entry(subject_key.to_owned())
-            .or_insert(position);
+        // `entry` needs an owned key and so allocated on every repeat subject; a
+        // borrowed probe first keeps the first-assertion-wins rule and allocates only
+        // when the subject is new.
+        if !self.by_subject.contains_key(subject_key) {
+            self.by_subject.insert(subject_key.to_owned(), position);
+        }
         self.ordered.push((subject_key.to_owned(), position));
     }
 }

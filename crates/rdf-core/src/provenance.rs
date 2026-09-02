@@ -29,6 +29,7 @@
 //! provenance gate fails.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt;
 
 use crate::ir::QuadHandle;
@@ -277,15 +278,19 @@ impl UnitInterner {
     /// Idempotent: equal names yield the same id.
     pub fn intern(&mut self, name: impl Into<String>) -> UnitId {
         let name = name.into();
-        if let Some(&id) = self.index.get(&name) {
-            return id;
+        // One hash + probe for both outcomes (`entry`), instead of the get + insert
+        // pair; the id is still numbered from `names.len()` before the push.
+        match self.index.entry(name) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let id = UnitId::from_index(
+                    u32::try_from(self.names.len()).expect("unit table exceeds u32::MAX entries"),
+                );
+                self.names.push(e.key().clone());
+                e.insert(id);
+                id
+            }
         }
-        let id = UnitId::from_index(
-            u32::try_from(self.names.len()).expect("unit table exceeds u32::MAX entries"),
-        );
-        self.index.insert(name.clone(), id);
-        self.names.push(name);
-        id
     }
 
     /// Resolve a `UnitId` to its name. Panics if the id is out of range (which
@@ -335,15 +340,18 @@ impl ArtifactInterner {
     /// `ArtifactId`. Idempotent: equal paths yield the same id.
     pub fn intern(&mut self, path: impl Into<String>) -> ArtifactId {
         let path = path.into();
-        if let Some(&id) = self.index.get(&path) {
-            return id;
+        match self.index.entry(path) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let id = ArtifactId::from_index(
+                    u32::try_from(self.paths.len())
+                        .expect("artifact table exceeds u32::MAX entries"),
+                );
+                self.paths.push(e.key().clone());
+                e.insert(id);
+                id
+            }
         }
-        let id = ArtifactId::from_index(
-            u32::try_from(self.paths.len()).expect("artifact table exceeds u32::MAX entries"),
-        );
-        self.index.insert(path.clone(), id);
-        self.paths.push(path);
-        id
     }
 
     /// Resolve an `ArtifactId` to its logical path.
@@ -396,15 +404,19 @@ impl OriginSetInterner {
     pub fn intern(&mut self, mut pairs: Vec<(UnitId, ArtifactId)>) -> OriginSetId {
         pairs.sort_unstable();
         pairs.dedup();
-        if let Some(&id) = self.index.get(&pairs) {
-            return id;
+        // `entry` hashes the whole pair set once, not twice.
+        match self.index.entry(pairs) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let id = OriginSetId::from_index(
+                    u32::try_from(self.sets.len())
+                        .expect("origin-set table exceeds u32::MAX entries"),
+                );
+                self.sets.push(e.key().clone());
+                e.insert(id);
+                id
+            }
         }
-        let id = OriginSetId::from_index(
-            u32::try_from(self.sets.len()).expect("origin-set table exceeds u32::MAX entries"),
-        );
-        self.index.insert(pairs.clone(), id);
-        self.sets.push(pairs);
-        id
     }
 
     /// Resolve an `OriginSetId` to its canonical set of `(UnitId, ArtifactId)`

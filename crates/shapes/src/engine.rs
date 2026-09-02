@@ -36,9 +36,12 @@ fn sort_focus_nodes(nodes: &mut [FocusNode]) {
 }
 
 /// Resolve a predicate IRI to its interned id in the Core dataset, if present.
+///
+/// Direct IRI lookup — exactly `resolve_id`'s `Term::NamedNode` arm — without
+/// cloning the predicate into a temporary owned `Term` per target resolution.
 #[inline]
 fn resolve_pred(ds: &RdfDataset, pred: &NamedNode) -> Option<TermId> {
-    resolve_id(ds, &Term::NamedNode(pred.clone()))
+    ds.term_id_by_iri(pred.as_str())
 }
 
 /// Collect distinct subjects of `(?, pred, ?)` across all graphs. Dedup is on the
@@ -391,6 +394,9 @@ pub(crate) fn resolve_focus_nodes(
             Target::Node(_) | Target::Sparql { .. } => None,
         };
         if let Some(ids) = ids {
+            // Upper bound on the pushes this target adds: one Vec growth step
+            // instead of amortized doubling across the loop.
+            nodes.reserve(ids.len());
             for id in ids {
                 if seen_ids.insert(id) {
                     nodes.push(FocusNode {

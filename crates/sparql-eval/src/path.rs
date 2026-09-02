@@ -307,7 +307,15 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // each derivation reaching `oid` is its own unit solution (one empty
         // row) — for a SET path (`bag == false`) that count is always 0 or 1.
         (Endpoint::Bound(sid), Endpoint::Bound(oid)) => {
-            let count = node_reach(sid, true).iter().filter(|&&y| y == oid).count();
+            // SET case: the reach set is a `BTreeSet` (elements unique), so the
+            // derivation count is a single O(log n) membership probe on the memoized
+            // set — no O(n) collect-into-`Vec` + filter pass. The BAG case keeps its
+            // multiset walk, where duplicates ARE the answer.
+            let count = if bag {
+                node_reach(sid, true).iter().filter(|&&y| y == oid).count()
+            } else {
+                usize::from(reach_cached(path, sid, true, &pctx).contains(&oid))
+            };
             for _ in 0..count {
                 if !push_pair(ctx, &mut rows, None, None) {
                     break;
@@ -552,6 +560,14 @@ fn reach_cached<D: DatasetView + Sync>(
     if ctx.stopped() {
         return Rc::new(BTreeSet::new());
     }
+    // `^inner` only flips the direction flag: its reach set IS `inner`'s set for the
+    // opposite direction, so share that memoized `Rc` instead of deep-cloning the
+    // `BTreeSet` into a second memo entry under the `Reverse` node's own key (the only
+    // reader of that entry would be this same delegating arm). The `stopped()` gate
+    // above and the delegated call's own probe/insert gating are unchanged.
+    if let PropertyPathExpression::Reverse(inner) = path {
+        return reach_cached(inner, node, !forward, ctx);
+    }
     let key = (
         std::ptr::from_ref::<PropertyPathExpression>(path) as usize,
         node,
@@ -578,6 +594,8 @@ fn reach_uncached<D: DatasetView + Sync>(
     use PropertyPathExpression as P;
     match path {
         P::NamedNode(p) => step_predicate(p, node, forward, ctx),
+        // Handled in `reach_cached` before the memo probe (shares `inner`'s `Rc`);
+        // kept here only so the match stays exhaustive for a direct caller.
         P::Reverse(inner) => reach_cached(inner, node, !forward, ctx).as_ref().clone(),
         P::Sequence(a, b) => {
             // Forward: step `a` then `b`. Backward (predecessors): step `b` then `a`,

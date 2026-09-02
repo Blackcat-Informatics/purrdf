@@ -14,15 +14,17 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+use ciborium::value::Value;
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ed25519_dalek::SigningKey;
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::compact::{CompactionParams, DictPlan, DictStrategy, compact_streamable};
-use purrdf_gts::model::{Graph, Term, TermKind};
+use purrdf_gts::mmr;
+use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{canonical, deterministic, encode};
-use purrdf_gts::writer::{SnapshotOptions, Writer, snapshot_from_graph};
+use purrdf_gts::writer::{SnapshotOptions, Writer, digest_string, snapshot_from_graph};
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -64,6 +66,18 @@ fn allocation_delta(before: (u64, u64), after: (u64, u64)) -> (u64, u64) {
 
 const PAYLOAD_LEN: usize = 512 * 1024;
 const ROWS: usize = 2_000;
+
+// Canonical-author bench shape: enough quads that the per-element key sorts
+// dominate, plus suppressions (each keyed by a canonical CBOR map) and blobs
+// carrying `pub` metadata (media type / representation lookup per blob).
+const CANONICAL_ROWS: usize = 4_000;
+const CANONICAL_SUPPRESSIONS: usize = 400;
+const CANONICAL_BLOBS: usize = 64;
+const CANONICAL_BLOB_LEN: usize = 256;
+
+// MMR root bench: a few thousand 32-byte frame ids, as a long segment's
+// `index.mmr` footer would commit.
+const MMR_FRAME_IDS: usize = 4_096;
 
 // Verify-bench container shape: a multi-segment `cat` file whose integrity
 // checks are dominated by BLAKE3 content-id and blob-digest work. Roughly
@@ -133,6 +147,110 @@ fn graph_with_quads(rows: usize) -> Graph {
         graph.quads.push((s, p, o, (idx % 5 == 0).then_some(g)));
     }
     graph
+}
+
+/// A folded graph shaped for the canonical `Writer::deterministic` path:
+/// quads (some in a named graph), quad/term suppressions with reasons and
+/// actors, and content-addressed blobs that all carry `mt`/`rep` metadata.
+fn canonical_graph() -> Graph {
+    let mut graph = graph_with_quads(CANONICAL_ROWS);
+    let by = graph.terms.len();
+    graph.terms.push(iri("http://example.org/auditor"));
+    for idx in 0..CANONICAL_SUPPRESSIONS {
+        let (s, p, o, _) = graph.quads[(idx * 7) % graph.quads.len()];
+        let target = if idx % 3 == 0 {
+            Value::Map(vec![
+                ("kind".into(), "term".into()),
+                ("id".into(), Value::from(s as u64)),
+            ])
+        } else {
+            Value::Map(vec![
+                ("kind".into(), "quad".into()),
+                (
+                    "q".into(),
+                    Value::Array(vec![
+                        Value::from(s as u64),
+                        Value::from(p as u64),
+                        Value::from(o as u64),
+                    ]),
+                ),
+            ])
+        };
+        graph.suppressions.push(Suppression {
+            targets: vec![target],
+            reason: (idx % 2 == 0).then(|| format!("retracted claim {idx}")),
+            by: (idx % 4 != 0).then_some(by),
+        });
+    }
+    for idx in 0..CANONICAL_BLOBS {
+        let data = seeded_payload(CANONICAL_BLOB_LEN, idx + 1);
+        let digest = digest_string(&data);
+        graph.set_blob_meta(
+            digest.clone(),
+            Value::Map(vec![
+                ("mt".into(), "application/octet-stream".into()),
+                ("rep".into(), format!("blob-{idx}").into()),
+            ]),
+        );
+        graph.set_blob(digest, data);
+    }
+    graph
+}
+
+/// `Writer::deterministic` over the canonical graph: term remap (identity
+/// keys + nesting depth), the cached-key quad/suppression sorts, and the
+/// per-blob metadata lookup. Report-only.
+fn bench_canonical_authoring(c: &mut Criterion) {
+    let graph = canonical_graph();
+    let before = allocation_snapshot();
+    let bytes = Writer::deterministic(&graph, "bench")
+        .expect("canonical author")
+        .into_bytes();
+    let alloc = allocation_delta(before, allocation_snapshot());
+    println!(
+        "[gts_authoring] canonical author: {} bytes out; allocations={} bytes={}",
+        bytes.len(),
+        alloc.0,
+        alloc.1
+    );
+
+    let mut group = c.benchmark_group("gts_authoring");
+    group.throughput(Throughput::Elements(CANONICAL_ROWS as u64));
+    group.bench_function("canonical_author_4k_quads_suppressions_blobs", |bencher| {
+        bencher.iter(|| {
+            let bytes = Writer::deterministic(black_box(&graph), black_box("bench"))
+                .expect("canonical author")
+                .into_bytes();
+            black_box(bytes);
+        });
+    });
+    group.finish();
+}
+
+/// `mmr::root` over a long frame-id list (the peaks-only fold). Report-only.
+fn bench_mmr_root(c: &mut Criterion) {
+    let frame_ids: Vec<Vec<u8>> = (0..MMR_FRAME_IDS)
+        .map(|idx| seeded_payload(32, idx))
+        .collect();
+    let before = allocation_snapshot();
+    let root = mmr::root(&frame_ids);
+    let alloc = allocation_delta(before, allocation_snapshot());
+    println!(
+        "[gts_mmr] root over {MMR_FRAME_IDS} frame ids: {} bytes; allocations={} bytes={}",
+        root.len(),
+        alloc.0,
+        alloc.1
+    );
+
+    let mut group = c.benchmark_group("gts_mmr");
+    group.throughput(Throughput::Elements(MMR_FRAME_IDS as u64));
+    group.bench_function("root_4k_frame_ids", |bencher| {
+        bencher.iter(|| {
+            let root = mmr::root(black_box(&frame_ids));
+            black_box(root);
+        });
+    });
+    group.finish();
 }
 
 fn bench_rsyncable_zstd(c: &mut Criterion) {
@@ -272,6 +390,8 @@ criterion_group!(
     benches,
     bench_rsyncable_zstd,
     bench_snapshot_authoring,
+    bench_canonical_authoring,
+    bench_mmr_root,
     bench_verify,
     bench_dict_compaction
 );

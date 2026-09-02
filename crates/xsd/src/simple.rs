@@ -32,12 +32,21 @@ pub fn parse_boolean(s: &str) -> Result<bool, XsdError> {
 /// The result has the same number of characters as the input.
 #[must_use]
 pub fn normalize_whitespace_replace(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '\t' | '\n' | '\r' => ' ',
-            other => other,
-        })
-        .collect()
+    // Byte scan, whole clean runs copied with one `push_str` each: the three
+    // trigger bytes are ASCII and every UTF-8 lead/continuation byte is >= 0x80,
+    // so slicing at a trigger index is always a char boundary and the output is
+    // byte-identical to the per-char map (no per-char push, exact-fit buffer).
+    let mut out = String::with_capacity(s.len());
+    let mut run_start = 0;
+    for (i, b) in s.bytes().enumerate() {
+        if matches!(b, b'\t' | b'\n' | b'\r') {
+            out.push_str(&s[run_start..i]);
+            out.push(' ');
+            run_start = i + 1;
+        }
+    }
+    out.push_str(&s[run_start..]);
+    out
 }
 
 /// Apply the XSD `whiteSpace = collapse` facet (the value space of `xsd:token`).
@@ -49,18 +58,28 @@ pub fn normalize_whitespace_replace(s: &str) -> String {
 /// verbatim (it is not part of the XSD `whiteSpace` facet).
 #[must_use]
 pub fn normalize_whitespace_collapse(s: &str) -> String {
+    // Byte scan copying each non-whitespace run with one `push_str`: the four
+    // XSD whitespace bytes are ASCII (never inside a multi-byte sequence), so run
+    // boundaries are char boundaries and the output matches the per-char loop.
     let mut out = String::with_capacity(s.len());
     let mut pending_space = false;
-    for ch in s.chars() {
-        if matches!(ch, ' ' | '\t' | '\n' | '\r') {
+    let mut run_start: Option<usize> = None;
+    for (i, b) in s.bytes().enumerate() {
+        if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+            if let Some(start) = run_start.take() {
+                out.push_str(&s[start..i]);
+            }
             pending_space = !out.is_empty();
-        } else {
+        } else if run_start.is_none() {
             if pending_space {
                 out.push(' ');
                 pending_space = false;
             }
-            out.push(ch);
+            run_start = Some(i);
         }
+    }
+    if let Some(start) = run_start {
+        out.push_str(&s[start..]);
     }
     out
 }
@@ -68,6 +87,76 @@ pub fn normalize_whitespace_collapse(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-byte-scan per-char `replace` facet, kept as the oracle.
+    fn replace_char_reference(s: &str) -> String {
+        s.chars()
+            .map(|c| match c {
+                '\t' | '\n' | '\r' => ' ',
+                other => other,
+            })
+            .collect()
+    }
+
+    /// The pre-byte-scan per-char `collapse` facet, kept as the oracle.
+    fn collapse_char_reference(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut pending_space = false;
+        for ch in s.chars() {
+            if matches!(ch, ' ' | '\t' | '\n' | '\r') {
+                pending_space = !out.is_empty();
+            } else {
+                if pending_space {
+                    out.push(' ');
+                    pending_space = false;
+                }
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    const WHITESPACE_FACET_CORPUS: &[&str] = &[
+        "",
+        " ",
+        "\t\n\r ",
+        "a",
+        "  a  ",
+        "a\tb\nc\rd e",
+        "\t\ta\n\nb\r\rc  d\t \n \r ",
+        "ünïcödé\tstring\nwith\rmultibyte",
+        " \u{00A0}nbsp\u{00A0}is not xsd whitespace\u{00A0} ",
+        "日本語\t中文\n한국어\r  العربية ",
+        "\u{1F600}\t\u{1F601}\n\u{1F602}\r\u{1F603}  \u{1F604}",
+        "\u{2028}\u{2029}\u{3000}\t\u{FEFF}",
+        "tail\t",
+        "\thead",
+        "a\r\nb",
+        "é",
+        "\té\n",
+    ];
+
+    #[test]
+    fn byte_scan_replace_matches_char_reference() {
+        for input in WHITESPACE_FACET_CORPUS {
+            assert_eq!(
+                normalize_whitespace_replace(input),
+                replace_char_reference(input),
+                "input = {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn byte_scan_collapse_matches_char_reference() {
+        for input in WHITESPACE_FACET_CORPUS {
+            assert_eq!(
+                normalize_whitespace_collapse(input),
+                collapse_char_reference(input),
+                "input = {input:?}"
+            );
+        }
+    }
 
     #[test]
     fn boolean_lexicals() {

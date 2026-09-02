@@ -27,6 +27,7 @@ pub use context::{
     JsonLdTypeMapping,
 };
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::hash::BuildHasherDefault;
@@ -42,7 +43,7 @@ use self::carrier::{
 
 use super::NativeRdfFormat;
 use super::codec::RdfCodec;
-use super::ser_model::{SerGraph, SerTerm, SerTermKind};
+use super::ser_model::{ReifierIndex as ReifierBindings, SerGraph, SerTerm, SerTermKind};
 use super::serialize::build_ser_graph;
 use super::text_parse::LineParseMode;
 use crate::{DatasetView, RdfDataset, RdfDiagnostic, RdfQuad, RdfTerm, SerializeGraph};
@@ -166,6 +167,8 @@ type AnnotationIndex = BTreeMap<(usize, Option<usize>), Vec<(usize, usize)>>;
 struct Indexes<'a> {
     reifier_of: &'a ReifierIndex,
     annotations_of: &'a AnnotationIndex,
+    /// Reifier id → `(s, p, o)` in O(1), for resolving quoted-triple terms.
+    bindings: &'a ReifierBindings,
 }
 /// Quads grouped by graph name and then by subject.
 type QuadGroups = BTreeMap<Option<usize>, BTreeMap<usize, Vec<(usize, usize)>>>;
@@ -186,23 +189,42 @@ type FixedHashSet<T> = HashSet<T, BuildHasherDefault<ahash::AHasher>>;
 /// wrongly trip the `@type` branch and round-trip back through the `@vocab`). A
 /// language-tagged literal keeps its `None` datatype slot — the `@language` branch never
 /// consults this helper for the datatype IRI. Non-literals resolve to `""`.
-fn datatype_iri(g: &SerGraph, term: &SerTerm) -> String {
+///
+/// Borrowed from the term table or a constant: the callers compare it or format it, and
+/// the one that stores it (`term_to_value`) takes ownership there rather than every call
+/// paying for a `String`.
+fn datatype_iri<'a>(g: &'a SerGraph, term: &'a SerTerm) -> Cow<'a, str> {
     match term.datatype {
-        Some(dt) => g.terms[dt].value.clone().unwrap_or_default(),
-        None if term.kind != SerTermKind::Literal => String::new(),
+        Some(dt) => Cow::Borrowed(g.terms[dt].value.as_deref().unwrap_or_default()),
+        None if term.kind != SerTermKind::Literal => Cow::Borrowed(""),
         // A language-tagged literal: `rdf:dirLangString` when a base direction is also
         // carried, else `rdf:langString` (the carrier's first-class representation).
-        None if term.lang.is_some() && term.direction.is_some() => RDF_DIR_LANG_STRING.to_string(),
-        None if term.lang.is_some() => RDF_LANG_STRING.to_string(),
+        None if term.lang.is_some() && term.direction.is_some() => {
+            Cow::Borrowed(RDF_DIR_LANG_STRING)
+        }
+        None if term.lang.is_some() => Cow::Borrowed(RDF_LANG_STRING),
         // A plain literal (no language) is `xsd:string`.
-        None => XSD_STRING.to_string(),
+        None => Cow::Borrowed(XSD_STRING),
     }
 }
 
 /// The `(s, p, o)` components of a quoted-triple term, resolved through its
 /// self-reifier binding (the [`SerGraph`] carries triple-term components there).
+///
+/// Scans the reifier table (O(rows)); the carrier builders resolve through a
+/// [`ReifierBindings`] snapshot instead, see [`triple_components_in`].
 fn triple_components(g: &SerGraph, term: &SerTerm) -> Option<(usize, usize, usize)> {
     term.reifier.and_then(|rid| g.reifier(rid))
+}
+
+/// [`triple_components`] through a one-per-document O(1) index, so rendering every
+/// quoted-triple term of a star-heavy graph is linear in the statement layer rather
+/// than quadratic. Same first-row-wins answer as the scan.
+fn triple_components_in(
+    bindings: &ReifierBindings,
+    term: &SerTerm,
+) -> Option<(usize, usize, usize)> {
+    term.reifier.and_then(|rid| bindings.get(rid))
 }
 
 /// Convert a sorted BTreeMap into a serde_json object value.
@@ -628,12 +650,14 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
         }
         reifier_of.entry((s, p, o, g)).or_default().push(rid);
     }
+    // One O(1) reifier-binding snapshot for the whole carrier build.
+    let bindings = graph.reifier_index();
     for list in reifier_of.values_mut() {
-        // Sort by the reifier's stable @id, not its input-order term id.
-        list.sort_by(|a, b| {
-            let a_id = term_id(&graph.terms[*a]).expect("reifier must be IRI or blank node");
-            let b_id = term_id(&graph.terms[*b]).expect("reifier must be IRI or blank node");
-            a_id.cmp(&b_id)
+        // Sort by the reifier's stable @id, not its input-order term id. The key is a
+        // pure function of the element, so computing it once per element (rather than
+        // twice per comparison, allocating each time) yields the same stable order.
+        list.sort_by_cached_key(|a| {
+            term_id(&graph.terms[*a]).expect("reifier must be IRI or blank node")
         });
     }
 
@@ -643,14 +667,14 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
         annotations_of.entry((r, g)).or_default().push((p, v));
     }
     for list in annotations_of.values_mut() {
-        // Sort by stable predicate @id then stable value key, not raw term ids.
-        list.sort_by(|(ap, av), (bp, bv)| {
-            let a_pred = term_id(&graph.terms[*ap]).expect("annotation predicate must be IRI");
-            let b_pred = term_id(&graph.terms[*bp]).expect("annotation predicate must be IRI");
-            a_pred.cmp(&b_pred).then_with(|| {
-                term_sort_key(graph, &graph.terms[*av])
-                    .cmp(&term_sort_key(graph, &graph.terms[*bv]))
-            })
+        // Sort by stable predicate @id then stable value key, not raw term ids. The
+        // tuple key orders exactly as `a_pred.cmp(&b_pred).then_with(value key)` did,
+        // computed once per element instead of per comparison.
+        list.sort_by_cached_key(|(p, v)| {
+            (
+                term_id(&graph.terms[*p]).expect("annotation predicate must be IRI"),
+                term_sort_key(graph, &bindings, &graph.terms[*v]),
+            )
         });
     }
 
@@ -659,6 +683,7 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
     let indexes = Indexes {
         reifier_of: &reifier_of,
         annotations_of: &annotations_of,
+        bindings: &bindings,
     };
 
     let mut bindings_by_reifier = BindingsByReifier::new();
@@ -1429,7 +1454,7 @@ fn build_value_object(
     indexes: &Indexes<'_>,
 ) -> Result<CarrierValue, RdfDiagnostic> {
     let term = if object_term.kind == SerTermKind::Triple {
-        build_triple_term_value(graph, object_term)?
+        build_triple_term_value(graph, indexes.bindings, object_term)?
     } else {
         term_to_value(graph, object_term)?
     };
@@ -1447,10 +1472,14 @@ fn build_value_object(
 
 /// Render a triple term as its distinguishable JSON-LD-star `@triple` object, resolving
 /// its `(s,p,o)` components through the term's own self-reifier binding.
-fn build_triple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<CarrierTerm, RdfDiagnostic> {
-    let (s, p, o) = triple_components(graph, term)
+fn build_triple_term_value(
+    graph: &SerGraph,
+    bindings: &ReifierBindings,
+    term: &SerTerm,
+) -> Result<CarrierTerm, RdfDiagnostic> {
+    let (s, p, o) = triple_components_in(bindings, term)
         .ok_or_else(|| parse("triple term with no components".to_string()))?;
-    build_nested_triple_node(graph, s, p, o)
+    build_nested_triple_node(graph, bindings, s, p, o)
 }
 
 /// Build the distinguishable JSON-LD-star `@triple` object for a quoted triple (s,p,o).
@@ -1462,12 +1491,13 @@ fn build_triple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<CarrierTe
 /// source IRI. Keys are `BTreeMap`-ordered, so the output is byte-deterministic.
 fn build_nested_triple_node(
     graph: &SerGraph,
+    bindings: &ReifierBindings,
     s: usize,
     p: usize,
     o: usize,
 ) -> Result<CarrierTerm, RdfDiagnostic> {
-    let subject = encode_triple_component(graph, s)?;
-    let object = encode_triple_component(graph, o)?;
+    let subject = encode_triple_component(graph, bindings, s)?;
+    let object = encode_triple_component(graph, bindings, o)?;
     let p_term = &graph.terms[p];
     let p_iri = p_term
         .value
@@ -1491,10 +1521,14 @@ fn build_nested_triple_node(
 /// table it walks does: every producer of a [`SerGraph`] guarantees that, and the one
 /// that takes a caller-supplied graph (`crate::gts::gts_to_ser`) proves it, refusing a
 /// self-reaching table with `gts-self-reaching-term`. See `ser_model::write_term`.
-fn encode_triple_component(graph: &SerGraph, idx: usize) -> Result<CarrierTerm, RdfDiagnostic> {
+fn encode_triple_component(
+    graph: &SerGraph,
+    bindings: &ReifierBindings,
+    idx: usize,
+) -> Result<CarrierTerm, RdfDiagnostic> {
     let term = &graph.terms[idx];
     if term.kind == SerTermKind::Triple {
-        build_triple_term_value(graph, term)
+        build_triple_term_value(graph, bindings, term)
     } else {
         term_to_value(graph, term)
     }
@@ -1519,7 +1553,9 @@ fn term_to_value(graph: &SerGraph, term: &SerTerm) -> Result<CarrierTerm, RdfDia
             {
                 None
             } else {
-                Some(datatype)
+                // The one place the datatype IRI is STORED: own it here, not in the
+                // helper every comparison above went through.
+                Some(datatype.into_owned())
             };
             Ok(CarrierTerm::Literal(CarrierLiteral {
                 lexical: term.value.clone().unwrap_or_default(),
@@ -1553,7 +1589,7 @@ fn build_annotation_node(
                 .as_deref()
                 .ok_or_else(|| parse("annotation predicate missing IRI".to_string()))?;
             let v_term = &graph.terms[v];
-            let value = CarrierValue::plain(simple_term_value(graph, v_term)?);
+            let value = CarrierValue::plain(simple_term_value(graph, indexes.bindings, v_term)?);
             node.properties
                 .entry(absolute_iri(p_iri))
                 .or_default()
@@ -1582,16 +1618,24 @@ fn build_orphan_reifier_node(
         .entry(absolute_iri(RDF_REIFIES))
         .or_default()
         .push(CarrierValue::plain(build_nested_triple_node(
-            graph, s, p, o,
+            graph,
+            indexes.bindings,
+            s,
+            p,
+            o,
         )?));
     node.sort_values();
     Ok(node)
 }
 
 /// Convert a term to a value object without recursive triple-term handling.
-fn simple_term_value(graph: &SerGraph, term: &SerTerm) -> Result<CarrierTerm, RdfDiagnostic> {
+fn simple_term_value(
+    graph: &SerGraph,
+    bindings: &ReifierBindings,
+    term: &SerTerm,
+) -> Result<CarrierTerm, RdfDiagnostic> {
     if term.kind == SerTermKind::Triple {
-        build_triple_term_value(graph, term)
+        build_triple_term_value(graph, bindings, term)
     } else {
         term_to_value(graph, term)
     }
@@ -1619,7 +1663,7 @@ fn term_id(term: &SerTerm) -> Result<String, RdfDiagnostic> {
 ///
 /// Unlike raw term ids, this key is independent of the order in which terms
 /// were appended to the graph, so it is safe to use when normalizing output.
-fn term_sort_key(graph: &SerGraph, term: &SerTerm) -> String {
+fn term_sort_key(graph: &SerGraph, bindings: &ReifierBindings, term: &SerTerm) -> String {
     match term.kind {
         SerTermKind::Iri | SerTermKind::Bnode => term_id(term).unwrap_or_default(),
         SerTermKind::Literal => {
@@ -1633,7 +1677,7 @@ fn term_sort_key(graph: &SerGraph, term: &SerTerm) -> String {
             let _ = write!(key, "^^{}", datatype_iri(graph, term));
             key
         }
-        SerTermKind::Triple => match triple_components(graph, term) {
+        SerTermKind::Triple => match triple_components_in(bindings, term) {
             Some((s, p, o)) => format!("triple:{s}:{p}:{o}"),
             None => "triple:none".to_string(),
         },

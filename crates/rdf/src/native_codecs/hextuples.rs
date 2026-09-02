@@ -20,6 +20,7 @@
 //! order, one canonical JSON array per line. HexTuples is a CLASSIC quad syntax with no
 //! RDF-1.2 triple-term surface: a triple term in a serialize request is a HARD error.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::codec::RdfCodec;
@@ -357,14 +358,18 @@ fn write_line(
     o: usize,
     g: Option<usize>,
 ) -> Result<(), RdfDiagnostic> {
+    // Every field is a `Cow` borrowed from the term table (or a constant) except the
+    // `_:` blank forms, which are the only ones that need building. serde_json writes
+    // a `Cow<str>` exactly as it writes a `String`, so the line is byte-identical.
     let subject = node_string(graph, s)?;
     let predicate = iri_string(graph, p)?;
     let (value, datatype, language) = object_fields(graph, o)?;
     let graph_field = match g {
         Some(gid) => node_string(graph, gid)?,
-        None => String::new(),
+        None => Cow::Borrowed(""),
     };
-    let line = serde_json::to_string(&[subject, predicate, value, datatype, language, graph_field])
+    let fields: [Cow<'_, str>; 6] = [subject, predicate, value, datatype, language, graph_field];
+    let line = serde_json::to_string(&fields)
         .map_err(|e| serialize_err(format!("JSON encode failed: {e}")))?;
     out.push_str(&line);
     out.push('\n');
@@ -372,21 +377,21 @@ fn write_line(
 }
 
 /// A node term's HexTuples string: an IRI verbatim, or a `_:`-prefixed blank label.
-fn node_string(graph: &SerGraph, tid: usize) -> Result<String, RdfDiagnostic> {
+fn node_string(graph: &SerGraph, tid: usize) -> Result<Cow<'_, str>, RdfDiagnostic> {
     let term = ser_term(graph, tid)?;
     match term.kind {
-        SerTermKind::Iri => Ok(ser_value(term)?.to_owned()),
-        SerTermKind::Bnode => Ok(format!("_:{}", ser_value(term)?)),
+        SerTermKind::Iri => Ok(Cow::Borrowed(ser_value(term)?)),
+        SerTermKind::Bnode => Ok(Cow::Owned(format!("_:{}", ser_value(term)?))),
         other => Err(serialize_err(format!(
             "a subject / graph node must be an IRI or blank node, got {other:?}"
         ))),
     }
 }
 
-fn iri_string(graph: &SerGraph, tid: usize) -> Result<String, RdfDiagnostic> {
+fn iri_string(graph: &SerGraph, tid: usize) -> Result<Cow<'_, str>, RdfDiagnostic> {
     let term = ser_term(graph, tid)?;
     match term.kind {
-        SerTermKind::Iri => Ok(ser_value(term)?.to_owned()),
+        SerTermKind::Iri => Ok(Cow::Borrowed(ser_value(term)?)),
         other => Err(serialize_err(format!(
             "a predicate must be an IRI, got {other:?}"
         ))),
@@ -394,28 +399,34 @@ fn iri_string(graph: &SerGraph, tid: usize) -> Result<String, RdfDiagnostic> {
 }
 
 /// The `(value, datatype, language)` triplet for an object term.
-fn object_fields(graph: &SerGraph, tid: usize) -> Result<(String, String, String), RdfDiagnostic> {
+type ObjectFields<'a> = (Cow<'a, str>, Cow<'a, str>, Cow<'a, str>);
+
+fn object_fields(graph: &SerGraph, tid: usize) -> Result<ObjectFields<'_>, RdfDiagnostic> {
     let term = ser_term(graph, tid)?;
     match term.kind {
         SerTermKind::Iri => Ok((
-            ser_value(term)?.to_owned(),
-            GLOBAL_ID.to_owned(),
-            String::new(),
+            Cow::Borrowed(ser_value(term)?),
+            Cow::Borrowed(GLOBAL_ID),
+            Cow::Borrowed(""),
         )),
         SerTermKind::Bnode => Ok((
-            format!("_:{}", ser_value(term)?),
-            LOCAL_ID.to_owned(),
-            String::new(),
+            Cow::Owned(format!("_:{}", ser_value(term)?)),
+            Cow::Borrowed(LOCAL_ID),
+            Cow::Borrowed(""),
         )),
         SerTermKind::Literal => {
-            let value = ser_value(term)?.to_owned();
+            let value = Cow::Borrowed(ser_value(term)?);
             if let Some(language) = &term.lang {
-                Ok((value, RDF_LANG_STRING.to_owned(), language.clone()))
+                Ok((
+                    value,
+                    Cow::Borrowed(RDF_LANG_STRING),
+                    Cow::Borrowed(language.as_str()),
+                ))
             } else if let Some(datatype) = term.datatype {
-                let datatype_iri = ser_value(ser_term(graph, datatype)?)?.to_owned();
-                Ok((value, datatype_iri, String::new()))
+                let datatype_iri = ser_value(ser_term(graph, datatype)?)?;
+                Ok((value, Cow::Borrowed(datatype_iri), Cow::Borrowed("")))
             } else {
-                Ok((value, XSD_STRING.to_owned(), String::new()))
+                Ok((value, Cow::Borrowed(XSD_STRING), Cow::Borrowed("")))
             }
         }
         SerTermKind::Triple => Err(serialize_err(

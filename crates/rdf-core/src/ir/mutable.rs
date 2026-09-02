@@ -136,15 +136,17 @@ impl DeltaBuilder {
     /// datatype, or one nested in a triple term.
     fn intern(&mut self, value: TermValue) -> Result<DeltaTermId, IriError> {
         let h = Self::hash_of(&value);
-        let bucket = self.index.entry(h).or_default();
-        for &did in bucket.iter() {
-            if self.values[did.index()] == value {
-                return Ok(did);
+        // Probe read-only (as `find` does): a hash miss must not mint an empty
+        // bucket — least of all for a value that then fails the check below.
+        if let Some(bucket) = self.index.get(&h) {
+            for &did in bucket {
+                if self.values[did.index()] == value {
+                    return Ok(did);
+                }
             }
         }
         // Miss: this value is entering the delta for the first time, so it is owed the
-        // check. `index.entry` above holds a mutable borrow, so validate before taking
-        // it again below.
+        // check.
         check_value_absolute(&value)?;
         let bucket = self.index.entry(h).or_default();
         let i = u32::try_from(self.values.len()).expect("delta term table exceeds u32::MAX");
@@ -543,6 +545,11 @@ impl MutableDataset {
     pub fn freeze(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
         let mut builder = RdfDatasetBuilder::new();
         let base = &*self.base;
+        // Base id -> builder id, filled on first use. Base ids are dense, so a
+        // flat table indexed by `TermId::index` is the memo: every later
+        // occurrence of a base term (a predicate, a class, a graph name) is one
+        // slot read instead of an owned `TermValue` rebuild + re-intern.
+        let mut memo: Vec<Option<TermId>> = vec![None; base.term_count()];
 
         // Running count of quads PUSHED so far == the next quad's builder ordinal.
         // Base quads are distinct and `added` quads are non-base, so no push collapses
@@ -565,10 +572,10 @@ impl MutableDataset {
             if self.suppressed.contains(&key) {
                 continue;
             }
-            let s = self.intern_base(&mut builder, q.s);
-            let p = self.intern_base(&mut builder, q.p);
-            let o = self.intern_base(&mut builder, q.o);
-            let g = q.g.map(|g| self.intern_base(&mut builder, g));
+            let s = self.intern_base(&mut builder, &mut memo, q.s);
+            let p = self.intern_base(&mut builder, &mut memo, q.p);
+            let o = self.intern_base(&mut builder, &mut memo, q.o);
+            let g = q.g.map(|g| self.intern_base(&mut builder, &mut memo, g));
             builder.push_quad(s, p, o, g);
             // Carry the base quad's source location, if any, keyed to its NEW pushed
             // ordinal (`new_ord`), not its base ordinal.
@@ -589,16 +596,16 @@ impl MutableDataset {
         let mut reifier_subjects: HashSet<TermValue> = HashSet::new();
         for (reifier, triple, graph) in base.reifiers_with_graph() {
             reifier_subjects.insert(self.base_value(reifier));
-            let reifier = self.intern_base(&mut builder, reifier);
-            let triple = self.intern_base(&mut builder, triple);
-            let graph = graph.map(|g| self.intern_base(&mut builder, g));
+            let reifier = self.intern_base(&mut builder, &mut memo, reifier);
+            let triple = self.intern_base(&mut builder, &mut memo, triple);
+            let graph = graph.map(|g| self.intern_base(&mut builder, &mut memo, g));
             builder.push_reifier_in_graph(reifier, triple, graph);
         }
         for (reifier, pred, obj, graph) in base.annotations_with_graph() {
-            let reifier = self.intern_base(&mut builder, reifier);
-            let pred = self.intern_base(&mut builder, pred);
-            let obj = self.intern_base(&mut builder, obj);
-            let graph = graph.map(|g| self.intern_base(&mut builder, g));
+            let reifier = self.intern_base(&mut builder, &mut memo, reifier);
+            let pred = self.intern_base(&mut builder, &mut memo, pred);
+            let obj = self.intern_base(&mut builder, &mut memo, obj);
+            let graph = graph.map(|g| self.intern_base(&mut builder, &mut memo, g));
             builder.push_annotation_in_graph(reifier, pred, obj, graph);
         }
 
@@ -674,7 +681,7 @@ impl MutableDataset {
         // through the same re-intern path so `GRAPH ?g` enumeration survives a
         // mutation freeze even when a declared graph gained/kept zero quads.
         for g in base.named_graphs() {
-            let g = self.intern_base(&mut builder, g);
+            let g = self.intern_base(&mut builder, &mut memo, g);
             builder.declare_named_graph(g);
         }
 
@@ -682,10 +689,24 @@ impl MutableDataset {
     }
 
     /// Resolve a BASE term id to its value and re-intern it into `builder`, returning
-    /// the builder's fresh dense id. Used to carry reifiers/annotations across freeze.
-    fn intern_base(&self, builder: &mut RdfDatasetBuilder, id: TermId) -> TermId {
+    /// the builder's dense id. Memoized per base id in `memo` (see `freeze`): the
+    /// builder's intern is idempotent and a pure function of the value, so the id
+    /// the first occurrence minted is exactly the id every re-intern would return —
+    /// the builder's term table and its allocation order are unchanged by the memo.
+    fn intern_base(
+        &self,
+        builder: &mut RdfDatasetBuilder,
+        memo: &mut [Option<TermId>],
+        id: TermId,
+    ) -> TermId {
+        let slot = &mut memo[id.index()];
+        if let Some(mapped) = *slot {
+            return mapped;
+        }
         let value = self.base_value(id);
-        intern_value(builder, &value)
+        let mapped = intern_value(builder, &value);
+        *slot = Some(mapped);
+        mapped
     }
 }
 
@@ -882,7 +903,6 @@ impl DatasetMut for MutableDataset {
         };
 
         self.effective_keys()
-            .into_iter()
             .filter(|k| {
                 sb.is_none_or(|id| k.s == id)
                     && pb.is_none_or(|id| k.p == id)
@@ -915,25 +935,23 @@ impl GraphMatchMut {
 }
 
 impl MutableDataset {
-    /// All effective quad KEYS (base-not-suppressed ∪ added), in MutTermId space.
-    fn effective_keys(&self) -> Vec<QuadKey> {
-        let mut out: Vec<QuadKey> = Vec::new();
-        for q in self.base.quads() {
+    /// All effective quad KEYS (base-not-suppressed ∪ added), in MutTermId space,
+    /// yielded lazily: base quads in frozen order, then the delta. The sole caller
+    /// filters and maps them once, so no base-sized `Vec` is materialized.
+    fn effective_keys(&self) -> impl Iterator<Item = QuadKey> + '_ {
+        let base = self.base.quads().filter_map(|q| {
             let key = QuadKey {
                 s: MutTermId::Base(q.s),
                 p: MutTermId::Base(q.p),
                 o: MutTermId::Base(q.o),
                 g: q.g.map(MutTermId::Base),
             };
-            if !self.suppressed.contains(&key) {
-                out.push(key);
-            }
-        }
+            (!self.suppressed.contains(&key)).then_some(key)
+        });
         // Delta-added quads, in call order (never `added`'s hash-iteration order) —
-        // `quads_for_pattern` (the sole caller) filters this list, so its own output
-        // order inherits the same call-order guarantee.
-        out.extend(self.added_in_order());
-        out
+        // `quads_for_pattern` (the sole caller) filters this sequence, so its own
+        // output order inherits the same call-order guarantee.
+        base.chain(self.added_in_order())
     }
 
     /// The effective quads as `Copy` base-or-frozen `QuadIds` is NOT exposed: ids

@@ -58,6 +58,22 @@
 //!   the case's own doc comment for why). A **catastrophe tripwire only**: see
 //!   `value_dispatch` below for the bench that can actually resolve the dispatch
 //!   layer's cost.
+//! - `n_optional_filter` — `OPTIONAL { ... FILTER(...) }` with the shared variable
+//!   bound on BOTH sides (3k `email` rows against the 30k-row `age` relation): the
+//!   filtered left-outer-join's hash-indexed candidate path in `binop.rs`
+//!   (`left_outer_join_filtered`), beside the plain `c_optional_heavy` OPTIONALs.
+//! - `o_minus_disjoint` — `MINUS` whose two arms share NO variable: the §18.5
+//!   domain-intersection guard makes it a no-op, which `eval_minus` returns without
+//!   scanning `|L|·|R|` pairs.
+//! - `p_langmatches_filter` — `FILTER(LANGMATCHES(LANG(?l), "en"))` over 30k
+//!   language-tagged literals: the allocation-free byte comparison in
+//!   `expr.rs::lang_matches`.
+//! - `q_construct_blank_coref` — a `CONSTRUCT` template whose blank label occurs in
+//!   TWO triples, so the per-row `blanks` co-reference map is both inserted into and
+//!   read back on every row (`construct.rs`'s hoisted-and-cleared map).
+//! - `r_path_reverse_star` — `(^ex:reportsTo)*` from the tree root: the `Reverse`
+//!   arm of `path.rs::reach_cached` on the closure's hot path (shares `inner`'s memo
+//!   `Rc` instead of deep-cloning the set per frontier node).
 //!
 //! A second, separate criterion group — `value_dispatch` — isolates the value-space
 //! operator dispatch (`value_add`/`value_sub`) from operand extraction, at ns
@@ -318,6 +334,49 @@ SELECT ?p WHERE {
   FILTER(((?a + 3) * 2 - (?a - 1)) / 2 > 20)
 }";
 
+/// (n) `OPTIONAL` with an inline `FILTER`: 3k `email` rows on the left, the 30k-row
+/// `age` relation on the right, joined on `?p` (bound on both sides, so the right
+/// index has no wild rows and every left row probes one keyed bucket) with the
+/// filter passing roughly half the pairings. 3k output rows either way (padded or
+/// merged) — the left-outer-join row floor.
+const Q_N: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?e ?a WHERE {
+  ?p ex:email ?e .
+  OPTIONAL { ?p ex:age ?a FILTER(?a > 47) }
+}";
+
+/// (o) `MINUS` over DISJOINT variable sets: no shared column, so §18.5's
+/// domain-intersection guard keeps every one of the 30k left rows.
+const Q_O: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?a WHERE {
+  ?p ex:age ?a .
+  MINUS { ?x ex:email ?e }
+}";
+
+/// (p) `LANGMATCHES` over the 30k `@en`/`@de` labels: 15k rows pass.
+const Q_P: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?l WHERE {
+  ?p ex:label ?l .
+  FILTER(LANGMATCHES(LANG(?l), \"en\"))
+}";
+
+/// (q) `CONSTRUCT` whose template blank `_:x` co-refers across two triples: every
+/// row mints one fresh label and reads it back once. 60k quads.
+const Q_Q: &str = "\
+PREFIX ex: <https://example.org/>
+CONSTRUCT { ?p ex:has _:x . _:x ex:label ?n } WHERE {
+  ?p ex:name ?n .
+}";
+
+/// (r) `(^ex:reportsTo)*` from the tree root: every descendant plus the root itself
+/// (30k solutions), each frontier step going through the `Reverse` arm.
+const Q_R: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?m WHERE { ex:person0 (^ex:reportsTo)* ?m }";
+
 /// The namespace the benchmark host configures for its one relation.
 const REL_NS: &str = "https://example.org/rel/";
 
@@ -355,6 +414,11 @@ const CASES: &[(&str, &str, usize)] = &[
     ("j_construct_blank_bearing", Q_J, PEOPLE),
     ("l_single_group_aggregate", Q_L, 1),
     ("m_arithmetic_dense_filter", Q_M, 1),
+    ("n_optional_filter", Q_N, PEOPLE / 10),
+    ("o_minus_disjoint", Q_O, PEOPLE),
+    ("p_langmatches_filter", Q_P, PEOPLE / 2),
+    ("q_construct_blank_coref", Q_Q, 2 * PEOPLE),
+    ("r_path_reverse_star", Q_R, PEOPLE),
 ];
 
 /// Run one query end-to-end through the engine, returning its solution count.

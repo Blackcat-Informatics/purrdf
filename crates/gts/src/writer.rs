@@ -613,7 +613,9 @@ impl Writer {
                 )
             })
             .collect();
-        quads.sort_by_key(quad_key);
+        // `quad_key` encodes a CBOR row per call; cache it once per element
+        // instead of re-encoding on every comparison (stable sort, same order).
+        quads.sort_by_cached_key(quad_key);
         if !quads.is_empty() {
             writer.add_quads(&quads);
         }
@@ -633,7 +635,9 @@ impl Writer {
                 )
             })
             .collect();
-        reifiers.sort_by_key(reifier_key);
+        // The key is a permutation of every field, so equal keys are identical
+        // rows and an unstable sort yields the same array without the buffer.
+        reifiers.sort_unstable_by_key(reifier_key);
         if !reifiers.is_empty() {
             writer.add_reifies(&reifiers);
         }
@@ -650,7 +654,8 @@ impl Writer {
                 )
             })
             .collect();
-        annotations.sort_by_key(annotation_key);
+        // Key covers every field (see `reifiers` above): unstable == stable here.
+        annotations.sort_unstable_by_key(annotation_key);
         if !annotations.is_empty() {
             writer.add_annot(&annotations);
         }
@@ -661,19 +666,19 @@ impl Writer {
             .map(|(digest, entry)| Ok((digest.clone(), entry.decoded_vec()?)))
             .collect::<Result<_, CodecError>>()?;
         blobs.sort_by(|a, b| a.0.cmp(&b.0));
+        // One O(m log m) index instead of an O(n*m) linear `find` per blob;
+        // `or_insert` keeps the FIRST entry for a digest, exactly as `find` did.
+        let mut meta_by_digest: BTreeMap<&str, &Value> = BTreeMap::new();
+        for (digest, meta) in &graph.blob_meta {
+            meta_by_digest.entry(digest.as_str()).or_insert(meta);
+        }
         for (digest, data) in blobs {
-            let meta = graph
-                .blob_meta
-                .iter()
-                .find(|(candidate, _)| candidate == &digest)
-                .map(|(_, meta)| meta);
-            let mt = meta
-                .and_then(|value| map_text(value, "mt"))
-                .map(str::to_string);
-            let rep = meta
-                .and_then(|value| map_text(value, "rep"))
-                .map(str::to_string);
-            writer.add_blob_owned(data, mt.as_deref(), rep.as_deref());
+            let meta = meta_by_digest.get(digest.as_str()).copied();
+            // Borrow the media type / representation straight out of the meta
+            // map; `add_blob_owned` takes `Option<&str>`, so no copies needed.
+            let mt = meta.and_then(|value| map_text(value, "mt"));
+            let rep = meta.and_then(|value| map_text(value, "rep"));
+            writer.add_blob_owned(data, mt, rep);
         }
 
         if !graph.meta.is_empty() {
@@ -690,7 +695,9 @@ impl Writer {
             .iter()
             .map(|suppression| remap_suppression(suppression, &remap.old_to_new))
             .collect();
-        suppressions.sort_by_key(suppression_key);
+        // `suppression_key` canonicalises a CBOR map (cloning every target) per
+        // call; cache it once per element rather than per comparison.
+        suppressions.sort_by_cached_key(suppression_key);
         for suppression in suppressions {
             writer.add_suppress(
                 suppression.targets,
@@ -1339,16 +1346,22 @@ fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usiz
 /// Return the deterministic term-id remapping used by canonical graph writers.
 pub fn deterministic_term_remap(graph: &Graph) -> TermRemap {
     let mut old_by_new: Vec<usize> = (0..graph.terms.len()).collect();
+    // One recursion stack shared by every term: both walkers push/pop in
+    // balance on every return path, so the stack is empty at each entry and a
+    // fresh `Vec` per term (two per term, here) bought nothing.
+    let mut stack: Vec<usize> = Vec::new();
     let keys: Vec<(usize, Vec<u8>)> = old_by_new
         .iter()
         .map(|&tid| {
             (
-                term_nesting_depth(graph, tid, &mut Vec::new()),
-                canonical(&term_identity_value(graph, tid, &mut Vec::new())),
+                term_nesting_depth(graph, tid, &mut stack),
+                canonical(&term_identity_value(graph, tid, &mut stack)),
             )
         })
         .collect();
-    old_by_new.sort_by(|a, b| keys[*a].cmp(&keys[*b]).then_with(|| a.cmp(b)));
+    // `then_with(a.cmp(b))` over distinct indices is a total order, so the
+    // unstable sort produces the identical permutation without a scratch buffer.
+    old_by_new.sort_unstable_by(|a, b| keys[*a].cmp(&keys[*b]).then_with(|| a.cmp(b)));
     let mut old_to_new = vec![0; graph.terms.len()];
     for (new, old) in old_by_new.iter().enumerate() {
         old_to_new[*old] = new;
@@ -1387,7 +1400,9 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
             )
         })
         .collect();
-    quads.sort_by_key(|quad| (quad.3, quad.0, quad.1, quad.2));
+    // Key is a permutation of all four quad fields: equal keys are identical
+    // rows, so the unstable sort yields the same array as the stable one.
+    quads.sort_unstable_by_key(|quad| (quad.3, quad.0, quad.1, quad.2));
 
     let mut entries: Vec<(Value, Value)> = vec![
         ("terms".into(), Value::Array(terms)),
@@ -1423,7 +1438,8 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
             )
         })
         .collect();
-    reifiers.sort_by_key(reifier_key);
+    // Key covers every row field (see `deterministic`): unstable == stable.
+    reifiers.sort_unstable_by_key(reifier_key);
     if !reifiers.is_empty() {
         entries.push((
             "reifies".into(),
@@ -1454,7 +1470,8 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
             )
         })
         .collect();
-    annotations.sort_by_key(annotation_key);
+    // Key covers every row field (see `deterministic`): unstable == stable.
+    annotations.sort_unstable_by_key(annotation_key);
     if !annotations.is_empty() {
         entries.push((
             "annot".into(),
@@ -1489,7 +1506,9 @@ fn term_identity_value(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Val
         TermKind::Literal => Value::Array(vec![
             "literal".into(),
             text_or_null(term.value.as_deref()),
-            graph.datatype_iri(term).into(),
+            // Borrowed datatype IRI: the owned `String` was copied into the
+            // `Value` and dropped immediately.
+            graph.datatype_iri_str(term).into(),
             text_or_null(term.lang.as_deref()),
             text_or_null(term.direction.as_deref()),
         ]),

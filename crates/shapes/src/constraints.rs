@@ -75,6 +75,34 @@ impl ValueNode {
         }
     }
 
+    /// The node kind of this value node without materializing an interned id.
+    /// Mirrors `term_ref_to_native` one-to-one: `Iri`→`NamedNode`,
+    /// `Blank`→`BlankNode`, `Literal`→`Literal`, `Triple`→`Triple`.
+    fn kind(&self, ds: &RdfDataset) -> ValueKind {
+        match self {
+            Self::Interned(id) => match ds.resolve(*id) {
+                TermRef::Iri(_) => ValueKind::Iri,
+                TermRef::Blank { .. } => ValueKind::Blank,
+                TermRef::Literal { .. } => ValueKind::Literal,
+                TermRef::Triple { .. } => ValueKind::Triple,
+            },
+            Self::Foreign(term) => ValueKind::of_term(term),
+        }
+    }
+
+    /// Borrow the language tag of a language-tagged literal value node without
+    /// materializing an interned id; `None` for any other node.
+    fn language<'a>(&'a self, ds: &'a RdfDataset) -> Option<&'a str> {
+        match self {
+            Self::Interned(id) => match ds.resolve(*id) {
+                TermRef::Literal { language, .. } => language,
+                TermRef::Iri(_) | TermRef::Blank { .. } | TermRef::Triple { .. } => None,
+            },
+            Self::Foreign(Term::Literal(literal)) => literal.language(),
+            Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
+        }
+    }
+
     /// Borrow `(lexical, datatype IRI)` for a literal value node.
     fn literal_parts<'a>(&'a self, ds: &'a RdfDataset) -> Option<(&'a str, &'a str)> {
         match self {
@@ -94,6 +122,27 @@ impl ValueNode {
                 Some((literal.value(), literal.datatype_str()))
             }
             Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
+        }
+    }
+}
+
+/// The RDF node kind of a value node — the discriminant `sh:nodeKind` tests, so
+/// the conforming path never builds an owned [`Term`] just to look at its variant.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum ValueKind {
+    Iri,
+    Blank,
+    Literal,
+    Triple,
+}
+
+impl ValueKind {
+    fn of_term(term: &Term) -> Self {
+        match term {
+            Term::NamedNode(_) => Self::Iri,
+            Term::BlankNode(_) => Self::Blank,
+            Term::Literal(_) => Self::Literal,
+            Term::Triple(_) => Self::Triple,
         }
     }
 }
@@ -298,14 +347,17 @@ fn eval_closed(
     ignored: &[NamedNode],
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Vec<ValidationResult> {
-    let mut permitted: FastSet<String> = FastSet::default();
+    // Borrowed keys: the set is only ever `contains`-probed (never iterated or
+    // returned), so it can point into `shape`/`ignored` — no per-predicate
+    // `String` copy per focus node.
+    let mut permitted: FastSet<&str> = FastSet::default();
     for ps in &shape.property_shapes {
         if let Path::Predicate(predicate) = &ps.path {
-            permitted.insert(predicate.as_str().to_owned());
+            permitted.insert(predicate.as_str());
         }
     }
     for ign in ignored {
-        permitted.insert(ign.as_str().to_owned());
+        permitted.insert(ign.as_str());
     }
 
     let mut results = Vec::new();
@@ -868,18 +920,14 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
-                if !check_node_kind(value, kind) {
+                // Kind-only check on the borrowed discriminant: the owned term is
+                // built only for a violation, not per conforming value node.
+                if !check_value_kind(value.kind(ds), kind) {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path(),
                         path_structure: path_structure(),
-                        value: Some(value.clone()),
+                        value: Some(value.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::NODE_KIND_CONSTRAINT_COMPONENT,
                         ),
@@ -1013,13 +1061,10 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
-                let len_opt = lexical_length(value);
+                // Length from the borrowed lexical surface (`ValueNode::lexical`
+                // agrees with `lexical_length` variant-for-variant): the owned term
+                // is built only for a violation, not per conforming value node.
+                let len_opt = value.lexical(ds).map(|s| s.chars().count());
                 let violates = match len_opt {
                     None => true, // blank node
                     Some(len) => (len as u64) < *n,
@@ -1029,7 +1074,7 @@ fn eval_constraint(
                         focus_node: focus.clone(),
                         result_path: result_path(),
                         path_structure: path_structure(),
-                        value: Some(value.clone()),
+                        value: Some(value.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::MIN_LENGTH_CONSTRAINT_COMPONENT,
                         ),
@@ -1051,13 +1096,10 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
-                let len_opt = lexical_length(value);
+                // Length from the borrowed lexical surface (`ValueNode::lexical`
+                // agrees with `lexical_length` variant-for-variant): the owned term
+                // is built only for a violation, not per conforming value node.
+                let len_opt = value.lexical(ds).map(|s| s.chars().count());
                 let violates = match len_opt {
                     None => true, // blank node
                     Some(len) => (len as u64) > *n,
@@ -1067,7 +1109,7 @@ fn eval_constraint(
                         focus_node: focus.clone(),
                         result_path: result_path(),
                         path_structure: path_structure(),
-                        value: Some(value.clone()),
+                        value: Some(value.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::MAX_LENGTH_CONSTRAINT_COMPONENT,
                         ),
@@ -1089,18 +1131,18 @@ fn eval_constraint(
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
-                // Content/recursion arm: this constraint needs the value node's term
-                // (its lexical form, datatype, node kind, or a recursion focus), so
-                // resolve it here. `value` borrows the owned term for the rest of the
-                // arm exactly as before.
-                let value_term = value.to_term(ds);
-                let value = &value_term;
-                if !language_matches_any(value, tags) {
+                // Tag match on the borrowed language (`None` = not a language-tagged
+                // literal, which never matches): the owned term is built only for a
+                // violation, not per conforming value node.
+                let matches = value
+                    .language(ds)
+                    .is_some_and(|lang| language_tag_matches_any(lang, tags));
+                if !matches {
                     results.push(ValidationResult {
                         focus_node: focus.clone(),
                         result_path: result_path(),
                         path_structure: path_structure(),
-                        value: Some(value.clone()),
+                        value: Some(value.to_term(ds)),
                         source_constraint_component: NamedNode::from(
                             sh::LANGUAGE_IN_CONSTRAINT_COMPONENT,
                         ),
@@ -2011,6 +2053,11 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
 }
 
 /// Check that a `Term` satisfies `sh:nodeKind`.
+///
+/// The constraint arm evaluates [`check_value_kind`] on the borrowed
+/// [`ValueKind`] so a conforming value node is never materialized; this
+/// owned-`Term` form is kept verbatim as the oracle the tests pin it against.
+#[cfg(test)]
 fn check_node_kind(value: &Term, kind: &NodeKindValue) -> bool {
     matches!(
         (value, kind),
@@ -2031,8 +2078,36 @@ fn check_node_kind(value: &Term, kind: &NodeKindValue) -> bool {
     )
 }
 
+/// `sh:nodeKind` on the bare discriminant: `Iri`/`Blank`/`Literal` match the
+/// `sh:nodeKind` values that include them; a `Triple` (quoted triple term)
+/// matches NO node kind, exactly as the owned-`Term` form's fall-through.
+fn check_value_kind(value: ValueKind, kind: &NodeKindValue) -> bool {
+    matches!(
+        (value, kind),
+        (
+            ValueKind::Iri,
+            NodeKindValue::Iri | NodeKindValue::BlankNodeOrIri | NodeKindValue::IriOrLiteral
+        ) | (
+            ValueKind::Blank,
+            NodeKindValue::BlankNode
+                | NodeKindValue::BlankNodeOrIri
+                | NodeKindValue::BlankNodeOrLiteral
+        ) | (
+            ValueKind::Literal,
+            NodeKindValue::Literal
+                | NodeKindValue::BlankNodeOrLiteral
+                | NodeKindValue::IriOrLiteral
+        )
+    )
+}
+
 /// Return the character count of the lexical form of `value`, or `None` for
 /// blank nodes (which violate `sh:minLength`).
+///
+/// The constraint arms take the same count from `ValueNode::lexical` (which
+/// agrees with this variant-for-variant) so a conforming value node is never
+/// materialized; this owned-term form remains the reference the tests pin.
+#[cfg(test)]
 fn lexical_length(value: &Term) -> Option<usize> {
     match value {
         Term::Literal(lit) => Some(lit.value().chars().count()),
@@ -2048,6 +2123,10 @@ fn lexical_length(value: &Term) -> Option<usize> {
 /// entry or extends it at a subtag boundary (e.g. `"en"` matches `"en"` and
 /// `"en-US"`, but not `"eng"`). A non-language-tagged literal (or any non-literal)
 /// never matches, so it always violates the constraint.
+///
+/// The constraint arm feeds `ValueNode::language` straight into
+/// [`language_tag_matches_any`]; this owned-`Term` form is the tests' oracle.
+#[cfg(test)]
 fn language_matches_any(value: &Term, tags: &[String]) -> bool {
     let Term::Literal(lit) = value else {
         return false;
@@ -2055,6 +2134,11 @@ fn language_matches_any(value: &Term, tags: &[String]) -> bool {
     let Some(lang) = lit.language() else {
         return false;
     };
+    language_tag_matches_any(lang, tags)
+}
+
+/// [`language_matches_any`] on an already-borrowed language tag.
+fn language_tag_matches_any(lang: &str, tags: &[String]) -> bool {
     // RFC 4647 basic filtering, case-insensitive, allocation-free: compare ASCII
     // slices in place rather than lowercasing `lang` and each `entry` per call.
     tags.iter().any(|entry| {
@@ -2336,6 +2420,108 @@ mod tests {
             value,
             NamedNode::new_unchecked(format!("{XSD}{dt}")),
         ))
+    }
+
+    /// The borrowed `ValueNode` accessors the length / node-kind / language
+    /// arms now use must agree, variant-for-variant, with the owned-`Term`
+    /// oracles (`lexical_length`, `check_node_kind`, `language_matches_any`)
+    /// they replaced — for interned AND foreign value nodes of every node kind.
+    #[test]
+    fn borrowed_value_node_accessors_match_owned_term_oracles() {
+        use crate::data::quads_for_pattern_ids;
+
+        let nt = format!(
+            "<{EX}s> <{EX}p> <{EX}iri-object> .\n\
+             <{EX}s> <{EX}p> _:b0 .\n\
+             <{EX}s> <{EX}p> \"plain\" .\n\
+             <{EX}s> <{EX}p> \"\" .\n\
+             <{EX}s> <{EX}p> \"ünïcödé 日本語\" .\n\
+             <{EX}s> <{EX}p> \"tagged\"@en .\n\
+             <{EX}s> <{EX}p> \"tagged-region\"@en-US .\n\
+             <{EX}s> <{EX}p> \"directional\"@ar--rtl .\n\
+             <{EX}s> <{EX}p> \"42\"^^<{XSD}integer> .\n\
+             <{EX}s> <{EX}p> <<( <{EX}qs> <{EX}qp> \"qo\" )>> .\n"
+        );
+        let store = crate::text_ingest::parse_ntriples_to_dataset(&nt).expect("N-Triples parse");
+        let ds: &RdfDataset = &store;
+        let subject = ds
+            .term_id_by_iri(&format!("{EX}s"))
+            .expect("subject interned");
+        let interned: Vec<ValueNode> =
+            quads_for_pattern_ids(ds, Some(subject), None, None, GraphFilter::AnyGraph)
+                .map(|q| ValueNode::Interned(q.o))
+                .collect();
+        assert_eq!(interned.len(), 10, "every object row must be interned");
+
+        let foreign_terms = vec![
+            ex("foreign-iri"),
+            Term::BlankNode("foreign-blank".to_owned()),
+            Term::Literal(Literal::new_simple_literal("foreign plain ünïcödé")),
+            Term::Literal(Literal::new_language_tagged_literal_unchecked(
+                "foreign tagged",
+                "fr-CA",
+            )),
+            xsd_lit("7", "integer"),
+            Term::Triple(Box::new(Triple::new(
+                ex("fs"),
+                NamedNode::new_unchecked(format!("{EX}fp")),
+                Term::Literal(Literal::new_simple_literal("fo")),
+            ))),
+        ];
+        let foreign: Vec<ValueNode> = foreign_terms.into_iter().map(ValueNode::Foreign).collect();
+
+        let kinds = [
+            NodeKindValue::Iri,
+            NodeKindValue::BlankNode,
+            NodeKindValue::Literal,
+            NodeKindValue::BlankNodeOrIri,
+            NodeKindValue::BlankNodeOrLiteral,
+            NodeKindValue::IriOrLiteral,
+        ];
+        let tag_lists: [Vec<String>; 4] = [
+            vec![],
+            vec!["en".to_owned()],
+            vec!["EN-us".to_owned(), "fr".to_owned()],
+            vec!["ar".to_owned(), "eng".to_owned()],
+        ];
+
+        let mut seen_kinds = FastSet::default();
+        for value in interned.iter().chain(&foreign) {
+            let term = value.to_term(ds);
+            seen_kinds.insert(value.kind(ds));
+            assert_eq!(value.kind(ds), ValueKind::of_term(&term), "{term}");
+            assert_eq!(
+                value.lexical(ds).map(|s| s.chars().count()),
+                lexical_length(&term),
+                "{term}"
+            );
+            let expected_language = match &term {
+                Term::Literal(lit) => lit.language(),
+                _ => None,
+            };
+            assert_eq!(value.language(ds), expected_language, "{term}");
+            for kind in &kinds {
+                assert_eq!(
+                    check_value_kind(value.kind(ds), kind),
+                    check_node_kind(&term, kind),
+                    "{term} / {kind:?}"
+                );
+            }
+            for tags in &tag_lists {
+                assert_eq!(
+                    value
+                        .language(ds)
+                        .is_some_and(|lang| language_tag_matches_any(lang, tags)),
+                    language_matches_any(&term, tags),
+                    "{term} / {tags:?}"
+                );
+            }
+        }
+        assert_eq!(
+            seen_kinds.len(),
+            4,
+            "IRI, blank, literal and triple all covered"
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::borrow::Cow;
 
 use purrdf_iri::BaseIri;
 
-use crate::RdfDiagnostic;
+use crate::{FastHasher, FastMap, RdfDiagnostic};
 
 /// The kind of a serialization term.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,11 +83,23 @@ impl SerGraph {
 
     /// Look up a reifier binding: the `(s, p, o)` of the FIRST `reifiers` row whose id
     /// equals `rid`.
+    ///
+    /// A linear scan of the table. A writer that resolves many quoted-triple terms
+    /// takes a [`reifier_index`](Self::reifier_index) once instead — this is O(rows)
+    /// per call, and rendering every triple term through it is quadratic in the
+    /// statement layer.
     pub(crate) fn reifier(&self, rid: usize) -> Option<SerTriple3> {
         self.reifiers
             .iter()
             .find(|(r, _, _)| *r == rid)
             .map(|(_, spo, _)| *spo)
+    }
+
+    /// An O(1) snapshot of [`reifier`](Self::reifier) over the CURRENT `reifiers`
+    /// table, with the same first-row-wins semantics. Build it once per document walk;
+    /// it does not track later mutation of `reifiers`.
+    pub(crate) fn reifier_index(&self) -> ReifierIndex {
+        ReifierIndex::build(&self.reifiers)
     }
 
     /// Reorder the base quads and the RDF 1.2 statement layer into a **canonical,
@@ -134,32 +146,91 @@ impl SerGraph {
         let mut left = String::new();
         let mut right = String::new();
 
+        // Each sort renders through an O(1) snapshot of the reifier table AS IT STANDS
+        // for that sort, rather than scanning `reifiers` on every quoted-triple term
+        // of every comparison (O(rows) per term, O(n log n) comparisons). The snapshot
+        // is taken per sort because the table is not the same for all three: see the
+        // reifier sort below.
+        let index = self.reifier_index();
         let mut quads = std::mem::take(&mut self.quads);
         quads.sort_by(|&(s1, p1, o1, g1), &(s2, p2, o2, g2)| {
-            cmp_terms(self, &[s1, p1, o1], &[s2, p2, o2], &mut left, &mut right)
-                .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+            cmp_terms(
+                self,
+                &index,
+                &[s1, p1, o1],
+                &[s2, p2, o2],
+                &mut left,
+                &mut right,
+            )
+            .then_with(|| cmp_graph(self, &index, g1, g2, &mut left, &mut right))
         });
         self.quads = quads;
 
+        // The reifier rows are sorted with the table TAKEN OUT of `self` (it is the
+        // thing being sorted), so a quoted-triple term met in a reifier row resolves
+        // to no binding and renders as its `_:unbound_triple_{tid}` fallback. That is
+        // the ordering this comparator has always produced, and the emitted order of
+        // an RDF 1.2 document depends on it; an EMPTY index reproduces it exactly.
         let mut reifiers = std::mem::take(&mut self.reifiers);
+        let emptied = ReifierIndex::default();
         reifiers.sort_by(|&(r1, (s1, p1, o1), g1), &(r2, (s2, p2, o2), g2)| {
             cmp_terms(
                 self,
+                &emptied,
                 &[r1, s1, p1, o1],
                 &[r2, s2, p2, o2],
                 &mut left,
                 &mut right,
             )
-            .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+            .then_with(|| cmp_graph(self, &emptied, g1, g2, &mut left, &mut right))
         });
         self.reifiers = reifiers;
 
+        // Rebuilt from the RESTORED (now sorted) table, so the first-row-wins answer is
+        // the one the scan gave over that table.
+        let index = self.reifier_index();
         let mut annotations = std::mem::take(&mut self.annotations);
         annotations.sort_by(|&(r1, p1, o1, g1), &(r2, p2, o2, g2)| {
-            cmp_terms(self, &[r1, p1, o1], &[r2, p2, o2], &mut left, &mut right)
-                .then_with(|| cmp_graph(self, g1, g2, &mut left, &mut right))
+            cmp_terms(
+                self,
+                &index,
+                &[r1, p1, o1],
+                &[r2, p2, o2],
+                &mut left,
+                &mut right,
+            )
+            .then_with(|| cmp_graph(self, &index, g1, g2, &mut left, &mut right))
         });
         self.annotations = annotations;
+    }
+}
+
+/// An id-keyed snapshot of a [`SerGraph`]'s `reifiers` table: `rid → (s, p, o)` of the
+/// FIRST row carrying `rid`, exactly [`SerGraph::reifier`]'s answer, in O(1).
+///
+/// Built once per document walk (each writer takes one at entry) so resolving a
+/// quoted-triple term costs a hash probe rather than a scan of every reifier row — the
+/// scan made a star-heavy document quadratic in its statement layer. The map is
+/// fixed-key hashed and only ever probed, never iterated, so it cannot reach the output
+/// order.
+#[derive(Debug, Default)]
+pub(crate) struct ReifierIndex {
+    bindings: FastMap<usize, SerTriple3>,
+}
+
+impl ReifierIndex {
+    /// Index `rows` in order; a repeated id keeps its first binding.
+    pub(crate) fn build(rows: &[SerReifierRow]) -> Self {
+        let mut bindings = FastMap::with_capacity_and_hasher(rows.len(), FastHasher::default());
+        for &(rid, spo, _) in rows {
+            bindings.entry(rid).or_insert(spo);
+        }
+        Self { bindings }
+    }
+
+    /// The `(s, p, o)` bound to `rid`, if any row carries it.
+    pub(crate) fn get(&self, rid: usize) -> Option<SerTriple3> {
+        self.bindings.get(&rid).copied()
     }
 }
 
@@ -346,6 +417,7 @@ pub(crate) fn escape_literal(lex: &str) -> Cow<'_, str> {
 /// `Vec<String>` key used to make after allocating one string per position per row.
 fn cmp_terms(
     g: &SerGraph,
+    ix: &ReifierIndex,
     a: &[usize],
     b: &[usize],
     left: &mut String,
@@ -354,8 +426,8 @@ fn cmp_terms(
     for (&x, &y) in a.iter().zip(b.iter()) {
         left.clear();
         right.clear();
-        write_term_absolute(g, x, left);
-        write_term_absolute(g, y, right);
+        write_term_absolute(g, ix, x, left);
+        write_term_absolute(g, ix, y, right);
         let ordering = left.as_str().cmp(right.as_str());
         if ordering != std::cmp::Ordering::Equal {
             return ordering;
@@ -372,6 +444,7 @@ fn cmp_terms(
 /// document.
 fn cmp_graph(
     g: &SerGraph,
+    ix: &ReifierIndex,
     a: Option<usize>,
     b: Option<usize>,
     left: &mut String,
@@ -380,10 +453,10 @@ fn cmp_graph(
     left.clear();
     right.clear();
     if let Some(x) = a {
-        write_term_absolute(g, x, left);
+        write_term_absolute(g, ix, x, left);
     }
     if let Some(y) = b {
-        write_term_absolute(g, y, right);
+        write_term_absolute(g, ix, y, right);
     }
     left.as_str().cmp(right.as_str())
 }
@@ -448,18 +521,27 @@ fn write_iri_ref(out: &mut String, iri: &str, base: Option<&BaseIri>) {
 /// whose input is a caller-supplied GTS graph and which therefore proves it, refusing
 /// a self-reaching table with `gts-self-reaching-term`. A fourth producer must do the
 /// same — a stack overflow here aborts the process rather than panicking.
-fn write_term(g: &SerGraph, tid: usize, out: &mut String) {
-    write_term_in(g, tid, out, g.base());
+///
+/// `ix` is the caller's one-per-document [`ReifierIndex`]: quoted-triple terms resolve
+/// through it rather than through a scan of the reifier table per term.
+fn write_term(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String) {
+    write_term_in(g, ix, tid, out, g.base());
 }
 
 /// Append one term's N-Triples surface to `out` with every IRI spelled ABSOLUTELY,
 /// whatever base the graph carries. This is the canonical-ordering key (see
 /// [`SerGraph::sort_canonical`]), never an output spelling.
-fn write_term_absolute(g: &SerGraph, tid: usize, out: &mut String) {
-    write_term_in(g, tid, out, None);
+fn write_term_absolute(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String) {
+    write_term_in(g, ix, tid, out, None);
 }
 
-fn write_term_in(g: &SerGraph, tid: usize, out: &mut String, base: Option<&BaseIri>) {
+fn write_term_in(
+    g: &SerGraph,
+    ix: &ReifierIndex,
+    tid: usize,
+    out: &mut String,
+    base: Option<&BaseIri>,
+) {
     use std::fmt::Write as _;
 
     let t = &g.terms[tid];
@@ -488,19 +570,19 @@ fn write_term_in(g: &SerGraph, tid: usize, out: &mut String, base: Option<&BaseI
                 }
             } else if let Some(dt) = t.datatype {
                 out.push_str("^^");
-                write_term_in(g, dt, out, base);
+                write_term_in(g, ix, dt, out, base);
             }
             // else: plain literal == xsd:string, written bare
         }
         // quoted triple (RDF 1.2 triple term), resolved through its reifier
-        SerTermKind::Triple => match t.reifier.and_then(|rf| g.reifier(rf)) {
+        SerTermKind::Triple => match t.reifier.and_then(|rf| ix.get(rf)) {
             Some((s, p, o)) => {
                 out.push_str("<<( ");
-                write_term_in(g, s, out, base);
+                write_term_in(g, ix, s, out, base);
                 out.push(' ');
-                write_term_in(g, p, out, base);
+                write_term_in(g, ix, p, out, base);
                 out.push(' ');
-                write_term_in(g, o, out, base);
+                write_term_in(g, ix, o, out, base);
                 out.push_str(" )>>");
             }
             // degraded but syntactically valid: an unbound reifier becomes a blank node
@@ -520,14 +602,17 @@ fn write_term_in(g: &SerGraph, tid: usize, out: &mut String, base: Option<&BaseI
 /// per quad; Turtle paid a third copy by wrapping this function's result.
 pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
     let mut any = false;
+    // One reifier index per document: every quoted-triple term below resolves through
+    // it in O(1) instead of scanning the reifier table.
+    let ix = g.reifier_index();
 
     for &(s, p, o, gname) in &g.quads {
-        write_term(g, s, out);
+        write_term(g, &ix, s, out);
         out.push(' ');
-        write_term(g, p, out);
+        write_term(g, &ix, p, out);
         out.push(' ');
-        write_term(g, o, out);
-        write_graph_terminator(g, gname, out);
+        write_term(g, &ix, o, out);
+        write_graph_terminator(g, &ix, gname, out);
         any = true;
     }
 
@@ -538,29 +623,29 @@ pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
         {
             continue;
         }
-        write_term(g, rid, out);
+        write_term(g, &ix, rid, out);
         out.push(' ');
         // Through the same speller as every other IRI, so one term cannot be written two
         // ways in one document when a base happens to cover the RDF namespace.
         write_iri_ref(out, RDF_REIFIES, g.base());
         out.push_str(" <<( ");
-        write_term(g, s, out);
+        write_term(g, &ix, s, out);
         out.push(' ');
-        write_term(g, p, out);
+        write_term(g, &ix, p, out);
         out.push(' ');
-        write_term(g, o, out);
+        write_term(g, &ix, o, out);
         out.push_str(" )>>");
-        write_graph_terminator(g, gname, out);
+        write_graph_terminator(g, &ix, gname, out);
         any = true;
     }
 
     for &(r, p, v, gname) in &g.annotations {
-        write_term(g, r, out);
+        write_term(g, &ix, r, out);
         out.push(' ');
-        write_term(g, p, out);
+        write_term(g, &ix, p, out);
         out.push(' ');
-        write_term(g, v, out);
-        write_graph_terminator(g, gname, out);
+        write_term(g, &ix, v, out);
+        write_graph_terminator(g, &ix, gname, out);
         any = true;
     }
 
@@ -568,10 +653,10 @@ pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
 }
 
 /// Close one N-Quads statement: the optional graph name, the `.`, and the line break.
-fn write_graph_terminator(g: &SerGraph, gname: Option<usize>, out: &mut String) {
+fn write_graph_terminator(g: &SerGraph, ix: &ReifierIndex, gname: Option<usize>, out: &mut String) {
     if let Some(gv) = gname {
         out.push(' ');
-        write_term(g, gv, out);
+        write_term(g, ix, gv, out);
     }
     out.push_str(" .\n");
 }
@@ -666,7 +751,7 @@ pub(crate) fn write_turtle(g: &SerGraph, out: &mut String) -> Result<(), RdfDiag
 /// It also mirrors [`write_term`]'s unguarded recursion, and rests on the same
 /// invariant: a [`SerGraph`]'s term table terminates because every producer of one
 /// guarantees it.
-fn write_trig_term(g: &SerGraph, tid: usize, out: &mut String) {
+fn write_trig_term(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String) {
     use std::fmt::Write as _;
 
     let t = &g.terms[tid];
@@ -696,20 +781,20 @@ fn write_trig_term(g: &SerGraph, tid: usize, out: &mut String) {
                 }
             } else if let Some(dt) = t.datatype {
                 out.push_str("^^");
-                write_trig_term(g, dt, out);
+                write_trig_term(g, ix, dt, out);
             }
         }
-        SerTermKind::Triple => match t.reifier.and_then(|rf| g.reifier(rf)) {
+        SerTermKind::Triple => match t.reifier.and_then(|rf| ix.get(rf)) {
             Some((s, p, o)) => {
                 out.push_str("<<( ");
-                write_trig_term(g, s, out);
+                write_trig_term(g, ix, s, out);
                 out.push(' ');
-                write_trig_term(g, p, out);
+                write_trig_term(g, ix, p, out);
                 out.push(' ');
-                write_trig_term(g, o, out);
+                write_trig_term(g, ix, o, out);
                 out.push_str(" )>>");
             }
-            None => write_term(g, tid, out),
+            None => write_term(g, ix, tid, out),
         },
     }
 }
@@ -727,23 +812,30 @@ fn close_graph(out: &mut String, open_graph: &mut Option<String>) {
 /// a finished `String`. `open_graph` still holds the RENDERED graph name because that
 /// name is what decides whether the next statement continues this block or starts
 /// another — but it is now rebuilt only when the graph CHANGES, not once per statement.
+///
+/// `scratch` is the caller's reusable buffer: the graph name is rendered into it and
+/// compared as TEXT against the open block (the comparison the writer has always made),
+/// and copied out only when a new block opens — one allocation per graph change rather
+/// than one per statement.
 fn begin_statement(
     out: &mut String,
     open_graph: &mut Option<String>,
+    scratch: &mut String,
     graph: &SerGraph,
+    ix: &ReifierIndex,
     graph_name: Option<usize>,
 ) {
     let Some(gid) = graph_name else {
         close_graph(out, open_graph);
         return;
     };
-    let mut rendered = String::new();
-    write_trig_term(graph, gid, &mut rendered);
-    if open_graph.as_deref() != Some(rendered.as_str()) {
+    scratch.clear();
+    write_trig_term(graph, ix, gid, scratch);
+    if open_graph.as_deref() != Some(scratch.as_str()) {
         close_graph(out, open_graph);
-        out.push_str(&rendered);
+        out.push_str(scratch);
         out.push_str(" {\n");
-        *open_graph = Some(rendered);
+        *open_graph = Some(scratch.clone());
     }
     out.push_str("  ");
 }
@@ -766,14 +858,18 @@ pub(crate) fn write_trig(g: &SerGraph, out: &mut String) {
     out.push_str(RDF_NS);
     out.push_str("> .\n\n");
     let mut open_graph: Option<String> = None;
+    // One graph-name scratch buffer and one reifier index for the whole document (see
+    // `begin_statement` and `ReifierIndex`).
+    let mut scratch = String::new();
+    let ix = g.reifier_index();
 
     for &(s, p, o, gname) in &g.quads {
-        begin_statement(out, &mut open_graph, g, gname);
-        write_trig_term(g, s, out);
+        begin_statement(out, &mut open_graph, &mut scratch, g, &ix, gname);
+        write_trig_term(g, &ix, s, out);
         out.push(' ');
-        write_trig_term(g, p, out);
+        write_trig_term(g, &ix, p, out);
         out.push(' ');
-        write_trig_term(g, o, out);
+        write_trig_term(g, &ix, o, out);
         out.push_str(" .\n");
     }
 
@@ -788,24 +884,24 @@ pub(crate) fn write_trig(g: &SerGraph, out: &mut String) {
         {
             continue;
         }
-        begin_statement(out, &mut open_graph, g, gname);
-        write_trig_term(g, rid, out);
+        begin_statement(out, &mut open_graph, &mut scratch, g, &ix, gname);
+        write_trig_term(g, &ix, rid, out);
         out.push_str(" rdf:reifies <<( ");
-        write_trig_term(g, s, out);
+        write_trig_term(g, &ix, s, out);
         out.push(' ');
-        write_trig_term(g, p, out);
+        write_trig_term(g, &ix, p, out);
         out.push(' ');
-        write_trig_term(g, o, out);
+        write_trig_term(g, &ix, o, out);
         out.push_str(" )>> .\n");
     }
 
     for &(r, p, v, gname) in &g.annotations {
-        begin_statement(out, &mut open_graph, g, gname);
-        write_trig_term(g, r, out);
+        begin_statement(out, &mut open_graph, &mut scratch, g, &ix, gname);
+        write_trig_term(g, &ix, r, out);
         out.push(' ');
-        write_trig_term(g, p, out);
+        write_trig_term(g, &ix, p, out);
         out.push(' ');
-        write_trig_term(g, v, out);
+        write_trig_term(g, &ix, v, out);
         out.push_str(" .\n");
     }
 
@@ -1019,7 +1115,7 @@ mod tests {
     /// itself.
     fn render_term(g: &SerGraph, tid: usize) -> String {
         let mut out = String::new();
-        write_term(g, tid, &mut out);
+        write_term(g, &g.reifier_index(), tid, &mut out);
         out
     }
 

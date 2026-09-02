@@ -93,7 +93,10 @@ pub fn to_json(
     provenance: &ResultProvenance,
     namespace: Option<&ProvenanceNamespace>,
 ) -> Result<SerializeOutcome, Error> {
-    let mut out = String::new();
+    // Cheap lower-bound pre-size (capacity is unobservable in the output):
+    // the fixed skeleton plus a modest per-cell estimate saves the early
+    // doubling reallocations on large result sets.
+    let mut out = String::with_capacity(output_size_hint(result));
     write_srj(result, provenance, namespace, &mut out)?;
     Ok(SerializeOutcome {
         bytes: out.into_bytes(),
@@ -252,6 +255,25 @@ fn write_provenance_body(
     out.push('}');
 }
 
+/// A cheap lower-bound estimate of the serialized size, used only to pre-size
+/// the output buffer.
+fn output_size_hint(result: &SparqlResult) -> usize {
+    const SKELETON: usize = 64;
+    match result {
+        SparqlResult::Solutions {
+            variables, rows, ..
+        } => SKELETON.saturating_add(
+            rows.len()
+                .saturating_mul(variables.len().saturating_add(1))
+                .saturating_mul(32),
+        ),
+        SparqlResult::Graph(dataset) => {
+            SKELETON.saturating_add(dataset.quad_count().saturating_mul(64))
+        }
+        SparqlResult::Boolean(_) => SKELETON,
+    }
+}
+
 /// The `queryForm` discriminator for a result kind.
 fn query_form(result: &SparqlResult) -> &'static str {
     match result {
@@ -261,8 +283,51 @@ fn query_form(result: &SparqlResult) -> &'static str {
     }
 }
 
+/// A byte the JSON escaper must act on: the two metacharacters and the C0
+/// controls. All triggers are ASCII, so non-ASCII bytes (`>= 0x80`) never match
+/// and a run split here always lands on a char boundary.
+const fn json_trigger_byte(b: u8) -> bool {
+    b < 0x20 || b == b'"' || b == b'\\'
+}
+
 /// Append a JSON-escaped string literal (including the surrounding quotes).
 fn json_string(value: &str, out: &mut String) {
+    use core::fmt::Write as _;
+
+    out.push('"');
+    let mut rest = value;
+    while !rest.is_empty() {
+        // Bulk-copy the clean run in one `push_str` rather than one `push`
+        // per `char`; only the trigger byte goes through the match below.
+        let run = rest
+            .bytes()
+            .position(json_trigger_byte)
+            .unwrap_or(rest.len());
+        out.push_str(&rest[..run]);
+        rest = &rest[run..];
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                // Writing to a `String` is infallible; the escape bytes are unchanged.
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+        rest = &rest[ch.len_utf8()..];
+    }
+    out.push('"');
+}
+
+/// The original per-`char` escaper, kept as the oracle for [`json_string`].
+#[cfg(test)]
+fn json_string_reference(value: &str, out: &mut String) {
     use core::fmt::Write as _;
 
     out.push('"');
@@ -274,7 +339,6 @@ fn json_string(value: &str, out: &mut String) {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => {
-                // Writing to a `String` is infallible; the escape bytes are unchanged.
                 let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
@@ -370,6 +434,34 @@ mod tests {
     fn json_text(result: &SparqlResult, prov: &ResultProvenance) -> String {
         let outcome = to_json(result, prov, None).expect("serialization succeeds");
         String::from_utf8(outcome.bytes).expect("UTF-8 output")
+    }
+
+    #[test]
+    fn json_string_matches_reference_escaper() {
+        let cases: [&str; 15] = [
+            "",
+            "plain ascii text 0123456789 ~!@#$%^&*()_+-=[]{};':,./<>?",
+            "\"",
+            "\\",
+            "\n",
+            "\r",
+            "\t",
+            "\u{0}\u{1}\u{8}\u{c}\u{1f}",
+            "\u{7f}",
+            "\u{80}\u{85}\u{9f}",
+            "caf\u{e9} \u{4e2d}\u{6587} \u{1f431}",
+            "mixed \"quoted\" \\ back\\slash\n\ttab \u{e9}\u{1}end",
+            "\u{2028}\u{feff}\u{e9}\"",
+            "trailing quote\"",
+            "\"leading quote",
+        ];
+        for case in cases {
+            let mut fast = String::from("prefix");
+            let mut reference = String::from("prefix");
+            json_string(case, &mut fast);
+            json_string_reference(case, &mut reference);
+            assert_eq!(fast, reference, "{case:?}");
+        }
     }
 
     fn json_text_ns(
