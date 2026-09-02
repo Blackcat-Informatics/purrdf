@@ -1455,3 +1455,276 @@ fn a_derived_index_guard_naming_this_space_is_checked_and_a_matching_one_is_admi
     };
     assert_eq!(ask(space), ask(plain.open(roomy()).expect("space")));
 }
+
+// ---------------------------------------------------------------------------
+// The two artifact shapes the reader branches on
+// ---------------------------------------------------------------------------
+
+/// Build a PURREMB artifact over `rows` with a chosen scalar type and a chosen set of
+/// effective prefixes, and open the prefix at `queried` as a space.
+///
+/// The fixtures above all take one path through the reader: `f64` scalars, one projection,
+/// effective dimension equal to stored dimension. PURREMB permits three more combinations
+/// and `EmbeddingSpace` reads all of them — a matrix stored as `f32` (which is what a real
+/// embedding model emits), and a Matryoshka space whose rows are a *shorter, separately
+/// postprocessed leading prefix* of the stored ones. Neither is a variation on the tested
+/// path; each is a different branch, and an untested branch in a reader is a wrong answer
+/// waiting for the first artifact that takes it.
+fn prefixed_fixture(
+    metric: &DistanceMetric,
+    rows: &[(&str, Vec<f64>)],
+    dtype: VectorDtype,
+    prefixes: &[(u32, PrefixPostprocessing)],
+    queried: usize,
+) -> Fixture {
+    let stored = u32::try_from(rows.first().map_or(0, |(_, v)| v.len())).expect("small");
+    let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+    let (source, _) = CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+
+    let mut targets = Vec::with_capacity(rows.len());
+    let mut bindings = Vec::with_capacity(rows.len());
+    for (local, _) in rows {
+        let term = iri(local);
+        let TermValue::Iri(text) = &term else {
+            unreachable!("fixture terms are IRIs")
+        };
+        let target = RdfTermTarget::Iri(text.clone())
+            .into_target(true, None)
+            .expect("term target");
+        bindings.push((target.id, term));
+        targets.push(target);
+    }
+    let set = TargetSet::new(targets.iter().map(|t| t.id).collect()).expect("target set");
+    let mut declared = targets;
+    declared.push(source.dataset_target(true).expect("dataset target"));
+    declared.sort_unstable_by_key(|target| target.id);
+
+    let effective: Vec<purrdf_core::EffectivePrefix> = prefixes
+        .iter()
+        .map(
+            |&(dimension, postprocessing)| purrdf_core::EffectivePrefix {
+                dimension,
+                postprocessing,
+            },
+        )
+        .collect();
+    let dimensionality = if effective.len() == 1 {
+        DimensionalityPolicy::fixed(effective[0].dimension, effective[0].postprocessing)
+            .expect("fixed dimensions")
+    } else {
+        DimensionalityPolicy::matryoshka(effective.clone()).expect("matryoshka dimensions")
+    };
+
+    let contract = EmbeddingFamilyContract {
+        model: identity("model"),
+        engine: identity("engine"),
+        tokenizer: identity("tokenizer"),
+        execution: stage("execution"),
+        subject_projection: stage("projection"),
+        preprocessing: AppliedStage::NotApplied,
+        chunking: AppliedStage::NotApplied,
+        pooling: stage("pooling"),
+        normalization: AppliedStage::NotApplied,
+        truncation: AppliedStage::NotApplied,
+        dtype,
+        metric: metric.clone(),
+        dimensionality,
+        extensions: Vec::new(),
+    };
+    let family = contract.derive().expect("family");
+    let projections: Vec<ProjectionSpec> = effective
+        .iter()
+        .map(|prefix| ProjectionSpec::derive(family.id, prefix.dimension, prefix.postprocessing))
+        .collect();
+    let vector_space = projections[queried].vector_space_id;
+
+    let metadata = CanonicalMetadataInput {
+        source,
+        family_contracts: vec![contract],
+        targets: declared,
+        target_sets: vec![set.clone()],
+        relations: Vec::new(),
+        token_spans: Vec::new(),
+        external_bindings: Vec::new(),
+        indexes: Vec::new(),
+        extensions: Vec::new(),
+    };
+    let mut builder = EmbeddingBuilder::from_typed_metadata(metadata);
+    match dtype {
+        VectorDtype::F32 => builder.add_f32_matrix(MatrixInput {
+            family_id: family.id,
+            target_set_id: set.id,
+            stored_dimension: stored,
+            rows: rows
+                .iter()
+                .zip(&bindings)
+                .map(|((_, values), (target, _))| {
+                    // Every fixture value below is exactly representable in binary32, so
+                    // this narrowing is exact and the f32 and f64 artifacts hold the same
+                    // real numbers — which is what makes comparing their ANSWERS a test of
+                    // the reader rather than of the cast.
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        reason = "the fixture values are exactly representable in binary32"
+                    )]
+                    MatrixRow::new(*target, values.iter().map(|&v| v as f32).collect())
+                })
+                .collect(),
+            projections,
+        }),
+        VectorDtype::F64 => builder.add_f64_matrix(MatrixInput {
+            family_id: family.id,
+            target_set_id: set.id,
+            stored_dimension: stored,
+            rows: rows
+                .iter()
+                .zip(&bindings)
+                .map(|((_, values), (target, _))| MatrixRow::new(*target, values.clone()))
+                .collect(),
+            projections,
+        }),
+    };
+    let encoded = builder.build().expect("encoded artifact");
+
+    Fixture {
+        artifact: encoded.bytes,
+        target_set: set.id,
+        vector_space,
+        bindings,
+    }
+}
+
+#[test]
+fn an_f32_matrix_answers_identically_to_the_f64_matrix_holding_the_same_numbers() {
+    // `read_vectors` branches on the matrix's declared scalar type, and every other
+    // fixture in this file takes the `f64` arm — while a real embedding model emits `f32`,
+    // so the untested arm is the one production uses. The two artifacts below hold the
+    // same real numbers (each value is exactly representable in binary32) and are read
+    // through different decoders, so an answer that differs is a decoder defect: a wrong
+    // stride, a dropped component, a lossy widening.
+    let rows = points();
+    let one_over_two_pow_ten = 1.0_f64 / 1024.0;
+    let mut rows = rows;
+    // A fractional component with an exact binary32 representation, so the comparison
+    // exercises a mantissa rather than only integers a byte-swap could not disturb.
+    rows.push(("d", vec![one_over_two_pow_ten, 0.5]));
+
+    let as_f64 = prefixed_fixture(
+        &DistanceMetric::SquaredEuclidean,
+        &rows,
+        VectorDtype::F64,
+        &[(2, PrefixPostprocessing::None)],
+        0,
+    )
+    .open(roomy())
+    .expect("the f64 space opens");
+    let as_f32 = prefixed_fixture(
+        &DistanceMetric::SquaredEuclidean,
+        &rows,
+        VectorDtype::F32,
+        &[(2, PrefixPostprocessing::None)],
+        0,
+    )
+    .open(roomy())
+    .expect("the f32 space opens");
+
+    assert_eq!(as_f32.dimension(), 2);
+    assert_eq!(as_f32.row_count(), rows.len());
+
+    let bound = [None, Some(iri("a")), Some(count(4)), None];
+    let from_f64 =
+        named(&invoke(&EmbeddingKnnRelation::new(Arc::new(as_f64)), &bound, None).expect("search"));
+    let from_f32 =
+        named(&invoke(&EmbeddingKnnRelation::new(Arc::new(as_f32)), &bound, None).expect("search"));
+    assert_eq!(from_f32.len(), 4, "all four rows, not a short bag");
+    assert_eq!(
+        from_f32, from_f64,
+        "the f32 decoder must yield the same neighbours AND the same distance lexicals: \
+         widening a binary32 to binary64 is exact, so there is nothing here for the two \
+         paths to legitimately disagree about"
+    );
+}
+
+#[test]
+fn a_matryoshka_space_is_searched_over_its_effective_prefix_not_its_stored_row() {
+    // A Matryoshka artifact stores full rows and declares shorter, separately
+    // postprocessed leading prefixes as their own vector spaces. `EmbeddingSpace` takes
+    // its dimension from the space it was asked for and reads the EFFECTIVE row, so a
+    // search over the 2-prefix must rank by the first two components after that prefix's
+    // deterministic L2 normalization — not by the stored four.
+    //
+    // The fixture makes the two answers incompatible rather than merely different: `near`
+    // is almost parallel to the seed in the first two components and enormous in the last
+    // two, while `far` is orthogonal in the first two and small everywhere. Ranked over
+    // the 2-prefix the order is (seed, near, far); ranked over the stored row it is
+    // (seed, far, near). Only one of those can be emitted.
+    let rows = vec![
+        ("seed", vec![1.0, 0.0, 0.0, 0.0]),
+        ("near", vec![1.0, 0.015_625, 50.0, 0.0]),
+        ("far", vec![0.0, 1.0, 0.0, 0.0]),
+    ];
+    let fixture = prefixed_fixture(
+        &DistanceMetric::SquaredEuclidean,
+        &rows,
+        VectorDtype::F64,
+        &[
+            (2, PrefixPostprocessing::DeterministicL2),
+            (4, PrefixPostprocessing::None),
+        ],
+        0,
+    );
+    let space = fixture.open(roomy()).expect("the 2-prefix space opens");
+    assert_eq!(
+        space.dimension(),
+        2,
+        "the space's dimension is the EFFECTIVE one; a reader that took the stored \
+         dimension would read four components per row and run off the end of the matrix"
+    );
+
+    let relation = EmbeddingKnnRelation::new(Arc::new(space));
+    let emitted = order(
+        &invoke(
+            &relation,
+            &[None, Some(iri("seed")), Some(count(3)), None],
+            None,
+        )
+        .expect("search"),
+    );
+    assert_eq!(
+        emitted,
+        vec!["seed".to_owned(), "near".to_owned(), "far".to_owned()],
+        "the ranking is over the normalized 2-prefix; over the stored four-component row \
+         `far` would come second"
+    );
+
+    // The control, so the claim above is a claim about the PROJECTION rather than about
+    // this fixture: the same artifact's full-dimension space ranks the same three rows the
+    // other way round.
+    let full = prefixed_fixture(
+        &DistanceMetric::SquaredEuclidean,
+        &rows,
+        VectorDtype::F64,
+        &[
+            (2, PrefixPostprocessing::DeterministicL2),
+            (4, PrefixPostprocessing::None),
+        ],
+        1,
+    )
+    .open(roomy())
+    .expect("the full space opens");
+    assert_eq!(full.dimension(), 4);
+    let over_stored = order(
+        &invoke(
+            &EmbeddingKnnRelation::new(Arc::new(full)),
+            &[None, Some(iri("seed")), Some(count(3)), None],
+            None,
+        )
+        .expect("search"),
+    );
+    assert_eq!(
+        over_stored,
+        vec!["seed".to_owned(), "far".to_owned(), "near".to_owned()],
+        "and the two spaces of ONE artifact genuinely disagree, which is what makes the \
+         assertion above a test"
+    );
+}
