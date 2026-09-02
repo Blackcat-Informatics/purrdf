@@ -217,6 +217,20 @@ impl<'a> Lexer<'a> {
         self.src[self.pos..].chars().next()
     }
 
+    /// The byte `ahead` bytes past the cursor, if in bounds.
+    ///
+    /// Comparing this against an ASCII byte is exactly `peek(ahead) == Some(c)`
+    /// for ASCII `c` WHEN every char between the cursor and that offset is ASCII
+    /// (so `pos + ahead` is a char start): an ASCII char is its single byte, and a
+    /// non-ASCII char's lead/continuation bytes are all `>= 0x80`, so neither side
+    /// can match the other. Callers only use it where the cursor char is a known
+    /// ASCII token lead and any intermediate byte was itself just matched as
+    /// ASCII — no UTF-8 decode per lookahead.
+    #[inline]
+    fn byte_at(&self, ahead: usize) -> Option<u8> {
+        self.bytes.get(self.pos + ahead).copied()
+    }
+
     fn run(mut self) -> Result<Vec<Spanned<'a>>> {
         let mut out = Vec::new();
         loop {
@@ -258,10 +272,12 @@ impl<'a> Lexer<'a> {
                 self.single(Token::Question)
             }
             '?' | '$' => self.lex_variable(c, start),
-            '_' if self.peek(1) == Some(':') => self.lex_blank_label(start),
+            // Cursor is on the ASCII lead char in each guarded arm below, so the
+            // next byte is the next char start (see `byte_at`).
+            '_' if self.byte_at(1) == Some(b':') => self.lex_blank_label(start),
             ':' => self.lex_prefixed_name(start),
             '@' => self.lex_lang_tag(start),
-            '{' if self.peek(1) == Some('|') => {
+            '{' if self.byte_at(1) == Some(b'|') => {
                 self.pos += 2;
                 Ok(Token::AnnotationOpen)
             }
@@ -275,7 +291,7 @@ impl<'a> Lexer<'a> {
             ';' => self.single(Token::Semicolon),
             ',' => self.single(Token::Comma),
             '/' => self.single(Token::Slash),
-            '|' if self.peek(1) == Some('}') => {
+            '|' if self.byte_at(1) == Some(b'}') => {
                 self.pos += 2;
                 Ok(Token::AnnotationClose)
             }
@@ -303,8 +319,9 @@ impl<'a> Lexer<'a> {
         Ok(t)
     }
 
+    /// Every caller sits on an ASCII `.`, so the next byte is the next char.
     fn next_is_digit(&self) -> bool {
-        matches!(self.peek(1), Some('0'..='9'))
+        matches!(self.byte_at(1), Some(b'0'..=b'9'))
     }
 
     /// Consume `lead`; if the next char is `two_ch` emit `two`, else if it is
@@ -424,8 +441,10 @@ impl<'a> Lexer<'a> {
     fn lex_string(&mut self, quote: char, start: usize) -> Result<Token<'a>> {
         // `quote` is `"` or `'` — ASCII, so its byte is the delimiter to scan for.
         let quote_byte = quote as u8;
-        // Long form `"""` / `'''` vs short form.
-        let long = self.peek(1) == Some(quote) && self.peek(2) == Some(quote);
+        // Long form `"""` / `'''` vs short form. The cursor is on the ASCII
+        // quote and `pos + 2` is only read once `pos + 1` matched the same ASCII
+        // quote, so both lookaheads are byte compares (see `byte_at`).
+        let long = self.byte_at(1) == Some(quote_byte) && self.byte_at(2) == Some(quote_byte);
         self.pos += if long { 3 } else { 1 };
         // Fast path: when the body carries no escape and closes cleanly, borrow the
         // literal slice VERBATIM (no per-char `String` build). Anything else — an
@@ -495,7 +514,9 @@ impl<'a> Lexer<'a> {
             }
             if c == quote {
                 if long {
-                    if self.peek(1) == Some(quote) && self.peek(2) == Some(quote) {
+                    // `c` is the ASCII quote under the cursor: byte lookahead is
+                    // exact here (see `byte_at`).
+                    if self.byte_at(1) == Some(quote_byte) && self.byte_at(2) == Some(quote_byte) {
                         self.pos += 3;
                         return Ok(Token::LongStringLit(Cow::Owned(value)));
                     }
@@ -633,10 +654,12 @@ impl<'a> Lexer<'a> {
     /// Returns `true` when the chars at `self.pos+1` (and optionally `+2`)
     /// constitute a valid SPARQL exponent body, i.e. `[0-9]+` or `[+-][0-9]+`.
     /// Called while `self.cur()` is `e`/`E`.
+    /// The cursor is on an ASCII `e`/`E`; `pos + 2` is only read after `pos + 1`
+    /// matched an ASCII sign, so both lookaheads are byte compares (see `byte_at`).
     fn exp_has_digits(&self) -> bool {
-        match self.peek(1) {
-            Some('+' | '-') => matches!(self.peek(2), Some('0'..='9')),
-            Some('0'..='9') => true,
+        match self.byte_at(1) {
+            Some(b'+' | b'-') => matches!(self.byte_at(2), Some(b'0'..=b'9')),
+            Some(b'0'..=b'9') => true,
             _ => false,
         }
     }

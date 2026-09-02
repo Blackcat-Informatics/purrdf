@@ -17,9 +17,10 @@
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use purrdf_core::ir::pack::dict::PackDict;
 use purrdf_core::{
     BlankScope, DatasetView, GraphMatch, PackBuilder, PackView, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, restore_pack, verify_pack,
+    RdfLiteral, RdfTextDirection, restore_pack, verify_pack,
 };
 
 /// Number of subject "rows" generated. Each row emits four quads (see
@@ -61,6 +62,72 @@ fn build_dataset() -> Arc<RdfDataset> {
 
     b.freeze()
         .expect("representative dataset is structurally valid")
+}
+
+/// Subject rows in the literal-heavy dictionary fixture. Each row interns five
+/// distinct literal terms (see [`build_literal_heavy_dataset`]), so the dictionary
+/// PFC-encodes on the order of ten thousand literal records per sample.
+const DICT_ROWS: u32 = 2_000;
+
+/// A dataset whose dictionary is dominated by literal terms of every shape the
+/// canonical byte-record distinguishes — plain `xsd:string`, typed, language-
+/// tagged, directional language-tagged, and long lexical forms — plus a quoted
+/// triple term per row (whose `s`/`p`/`o` the closure step must resolve), so
+/// [`PackDict::encode`]'s record encoder and closure worklist are both busy.
+fn build_literal_heavy_dataset() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    let q = b.intern_iri("http://example.org/q");
+
+    for n in 0..DICT_ROWS {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let plain = b.intern_literal(RdfLiteral::simple(format!("plain value {n}")));
+        let typed = b.intern_literal(RdfLiteral::typed(
+            format!("{n}.5"),
+            "http://www.w3.org/2001/XMLSchema#decimal",
+        ));
+        let tagged = b.intern_literal(RdfLiteral::language_tagged(
+            format!("tagged value {n}"),
+            "en-gb",
+        ));
+        let directional = b.intern_literal(RdfLiteral {
+            lexical_form: format!("directional value {n}"),
+            datatype: None,
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        });
+        let long = b.intern_literal(RdfLiteral::simple(format!(
+            "a much longer lexical form sharing a long common prefix with its neighbours {n}"
+        )));
+
+        b.push_quad(s, p, plain, None);
+        b.push_quad(s, p, typed, None);
+        b.push_quad(s, p, tagged, None);
+        b.push_quad(s, p, directional, None);
+        b.push_quad(s, p, long, None);
+        let quoted = b.intern_triple(s, p, plain);
+        b.push_quad(quoted, q, typed, None);
+    }
+
+    b.freeze()
+        .expect("literal-heavy dataset is structurally valid")
+}
+
+/// Dictionary encode alone: [`PackDict::encode`] (term collection, closure,
+/// canonical sort, PFC record encoding) over the literal-heavy fixture.
+fn bench_dict_encode(c: &mut Criterion) {
+    let ds = build_literal_heavy_dataset();
+    let encoded = PackDict::encode(&ds);
+    println!(
+        "[pack_query_dict_encode] {} terms, {} value bytes",
+        encoded.n_terms,
+        encoded.to_bytes().len()
+    );
+    let mut group = c.benchmark_group("pack_query_dict_encode");
+    group.bench_function("literal_heavy_2k_rows", |b| {
+        b.iter(|| std::hint::black_box(PackDict::encode(std::hint::black_box(&ds))));
+    });
+    group.finish();
 }
 
 /// Encode: [`PackBuilder::build_bytes`] over the representative dataset.
@@ -170,6 +237,7 @@ fn bench_verify_pack(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_dict_encode,
     bench_build_bytes,
     bench_from_bytes,
     bench_restore_pack,

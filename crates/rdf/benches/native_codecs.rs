@@ -17,8 +17,8 @@ use purrdf_rdf::native_codecs::jsonld::{
     serialize_dataset_to_jsonld, serialize_dataset_to_jsonld_with_options,
 };
 use purrdf_rdf::{
-    ParseOptions, SerializeGraph, parse_dataset, parse_dataset_from_reader, parse_dataset_with,
-    serialize_dataset,
+    ParseOptions, RdfDataset, RdfDatasetBuilder, RdfLiteral, SerializeGraph, parse_dataset,
+    parse_dataset_from_reader, parse_dataset_with, serialize_dataset,
 };
 
 #[path = "support/jsonld.rs"]
@@ -388,6 +388,178 @@ fn bench_jsonld_carrier_stress(c: &mut Criterion) {
     group.finish();
 }
 
+/// A ~2k-quad RDF 1.2 dataset for the text-family / RDF-XML / JSON-LD serializers:
+/// typed (`xsd:integer`, `xsd:dateTime`) and language-tagged literals on every row, a
+/// named graph on every fourth, and — when `star` is set — a quoted-triple object plus
+/// a reifier row and an annotation on every eighth. Every predicate repeats across all
+/// rows, so the interner's id memo answers most term occurrences.
+fn star_fixture(rows: usize, star: bool) -> std::sync::Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let knows = builder.intern_iri("https://example.org/knows");
+    let count = builder.intern_iri("https://example.org/count");
+    let seen = builder.intern_iri("https://example.org/seen");
+    let label = builder.intern_iri("https://example.org/label");
+    let asserts = builder.intern_iri("https://example.org/asserts");
+    let confidence = builder.intern_iri("https://example.org/confidence");
+    let graph = builder.intern_iri("https://example.org/graph");
+    for index in 0..rows {
+        let subject = builder.intern_iri(&format!("https://example.org/s{index}"));
+        let object = builder.intern_iri(&format!("https://example.org/o{}", index % 64));
+        let integer = builder.intern_literal(RdfLiteral::typed(
+            index.to_string(),
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        let stamp = builder.intern_literal(RdfLiteral::typed(
+            format!("2026-01-01T00:00:{:02}Z", index % 60),
+            "http://www.w3.org/2001/XMLSchema#dateTime",
+        ));
+        let tagged = builder.intern_literal(RdfLiteral::language_tagged(
+            format!("label {index}"),
+            if index % 2 == 0 { "en" } else { "de" },
+        ));
+        let graph_name = (index % 4 == 0).then_some(graph);
+        builder.push_quad(subject, knows, object, graph_name);
+        builder.push_quad(subject, count, integer, graph_name);
+        builder.push_quad(subject, seen, stamp, graph_name);
+        builder.push_quad(subject, label, tagged, graph_name);
+        if star && index % 8 == 0 {
+            let proposition = builder.intern_triple(subject, knows, object);
+            let reifier = builder.intern_iri(&format!("https://example.org/r{index}"));
+            let score = builder.intern_literal(RdfLiteral::typed(
+                format!("0.{}", index % 10),
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ));
+            builder.push_reifier_in_graph(reifier, proposition, graph_name);
+            builder.push_annotation_in_graph(reifier, confidence, score, graph_name);
+            builder.push_quad(subject, asserts, proposition, graph_name);
+        }
+    }
+    builder.freeze().expect("star serializer fixture")
+}
+
+/// Turtle / TriG / RDF-XML / HexTuples / JSON-LD egress over one ~2k-quad dataset with
+/// quoted-triple and reifier rows and datatyped literals (HexTuples has no triple-term
+/// surface, so it takes the same fixture without the star rows). Report-only.
+fn bench_serialize_formats(c: &mut Criterion) {
+    let star = star_fixture(ROWS / 4, true);
+    let plain = star_fixture(ROWS / 4, false);
+    let mut group = c.benchmark_group("native_codecs_serialize_formats");
+    group.throughput(Throughput::Elements(star.quad_count() as u64));
+    for (name, media_type, selection, dataset) in [
+        (
+            "turtle_2k_star",
+            "text/turtle",
+            SerializeGraph::DefaultGraph,
+            &star,
+        ),
+        (
+            "trig_2k_star",
+            "application/trig",
+            SerializeGraph::Dataset,
+            &star,
+        ),
+        (
+            "rdfxml_2k_star",
+            "application/rdf+xml",
+            SerializeGraph::DefaultGraph,
+            &star,
+        ),
+        (
+            "jsonld_2k_star",
+            "application/ld+json",
+            SerializeGraph::Dataset,
+            &star,
+        ),
+        (
+            "hextuples_2k",
+            "application/x-hextuples",
+            SerializeGraph::Dataset,
+            &plain,
+        ),
+    ] {
+        group.bench_function(name, |bencher| {
+            bencher.iter(|| {
+                let bytes = serialize_dataset(black_box(dataset), media_type, selection)
+                    .expect("serialize");
+                black_box(bytes);
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Turtle document whose every statement's object is an RDF collection: exercises the
+/// parser's collection loop (`rdf:first` / `rdf:rest` / `rdf:nil` cell emission).
+fn turtle_collections_fixture(rows: usize) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(rows * 120);
+    out.push_str("@prefix ex: <https://example.org/> .\n");
+    for idx in 0..rows {
+        let _ = writeln!(
+            out,
+            "ex:s{idx} ex:items ( \"a{idx}\" ex:o{} {} ( ex:nested \"x\" ) ) .",
+            idx % 16,
+            idx
+        );
+    }
+    out
+}
+
+fn bench_parse_turtle_collections(c: &mut Criterion) {
+    let text = turtle_collections_fixture(ROWS);
+    let mut group = c.benchmark_group("native_codecs_parse_turtle");
+    group.throughput(Throughput::Bytes(text.len() as u64));
+    group.bench_function("turtle_2k_collections", |bencher| {
+        bencher.iter(|| {
+            let dataset =
+                parse_dataset(black_box(text.as_bytes()), "text/turtle", None).expect("parse");
+            black_box(dataset);
+        });
+    });
+    group.finish();
+}
+
+/// A dataset where a handful of predicates and objects recur across thousands of quads,
+/// so nearly every term occurrence the Turtle serializer interns is a repeat: the
+/// interner's id-keyed memo answers it without materializing the term's value.
+fn repeated_predicates_fixture(rows: usize) -> std::sync::Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let predicates: Vec<_> = (0..5)
+        .map(|i| builder.intern_iri(&format!("https://example.org/p{i}")))
+        .collect();
+    let objects: Vec<_> = (0..8)
+        .map(|i| builder.intern_iri(&format!("https://example.org/o{i}")))
+        .collect();
+    for index in 0..rows {
+        let subject = builder.intern_iri(&format!("https://example.org/s{}", index / 5));
+        builder.push_quad(
+            subject,
+            predicates[index % predicates.len()],
+            objects[index % objects.len()],
+            None,
+        );
+    }
+    builder.freeze().expect("repeated-predicate fixture")
+}
+
+fn bench_serialize_turtle_repeated_predicates(c: &mut Criterion) {
+    let dataset = repeated_predicates_fixture(ROWS * 4);
+    let mut group = c.benchmark_group("native_codecs_serialize_turtle");
+    group.throughput(Throughput::Elements(dataset.quad_count() as u64));
+    group.bench_function("turtle_8k_repeated_predicates", |bencher| {
+        bencher.iter(|| {
+            let bytes = serialize_dataset(
+                black_box(&dataset),
+                "text/turtle",
+                SerializeGraph::DefaultGraph,
+            )
+            .expect("serialize");
+            black_box(bytes);
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_parse_nquads,
@@ -395,6 +567,9 @@ criterion_group!(
     bench_parse_nquads_streamed_vs_buffered,
     bench_parse_nquads_span_tracking,
     bench_serialize_nquads,
+    bench_serialize_formats,
+    bench_parse_turtle_collections,
+    bench_serialize_turtle_repeated_predicates,
     bench_jsonld_expanded,
     bench_jsonld_configured,
     bench_jsonld_derived_many_namespaces,

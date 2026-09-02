@@ -442,15 +442,17 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
 
     let out = l_schema.union(&r_schema);
     let out_len = out.len();
-    let left_len = l_schema.len();
     let right_to_out = right_to_out_map(&r_schema, &out);
 
     let mut rows = Vec::with_capacity(l_minted.len() + r_minted.len());
     for minted in l_minted {
-        let mut row = smallvec::smallvec![None; out_len];
         let reinterned =
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
-        row[..left_len].copy_from_slice(&reinterned);
+        // Same shape as `merge`: one exact-size allocation initialized from the left
+        // row directly, then padded — no write-None-then-overwrite pass over the prefix.
+        let mut row = Solution::with_capacity(out_len);
+        row.extend_from_slice(&reinterned);
+        row.resize(out_len, None);
         rows.push(row);
     }
     for minted in r_minted {
@@ -487,7 +489,6 @@ fn concat_union<D: DatasetView + Sync>(
 ) -> SolutionSeq<D::Id> {
     let out = l.schema.union(&r.schema);
     let out_len = out.len();
-    let left_len = l.schema.len();
     let right_to_out = right_to_out_map(&r.schema, &out);
 
     let expected = l.rows.len().saturating_add(r.rows.len());
@@ -498,9 +499,12 @@ fn concat_union<D: DatasetView + Sync>(
             let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
             break;
         }
-        // Left columns are out[0..left_len] in order; pad the rest with None.
-        let mut row = smallvec::smallvec![None; out_len];
-        row[..left_len].copy_from_slice(lrow);
+        // Left columns are out[0..left_len] in order; pad the rest with None. Same
+        // shape as `merge`: one exact-size allocation initialized from `lrow` directly,
+        // no write-None-then-overwrite pass over the left prefix.
+        let mut row = Solution::with_capacity(out_len);
+        row.extend_from_slice(lrow);
+        row.resize(out_len, None);
         rows.push(row);
     }
     for rrow in &r.rows {
@@ -940,6 +944,34 @@ fn left_join_lift<D: DatasetView + Sync>(
     Ok(lift.finish(joined))
 }
 
+/// Which right rows [`left_outer_join_filtered`] must offer to the filter for one
+/// left row: an exact keyed bucket (already the compatible subsequence, in ascending
+/// row order) or the full compatibility scan.
+enum Candidates<'a> {
+    /// The keyed bucket for the left row's shared-column key (possibly empty).
+    Bucket(&'a [usize]),
+    /// No exact bucket is usable: scan every right row through `compatible`.
+    Scan,
+}
+
+/// The candidate set for `lrow` — see the index comment in
+/// [`left_outer_join_filtered`] for the proof that a bucket is exactly what the scan
+/// would visit. A bucket is only ever used when `wild` is empty AND `lrow` is fully
+/// bound on its shared columns; an absent bucket is the empty candidate list.
+fn filtered_candidates<'a, I: ViewTermId>(
+    lrow: &[Option<SolutionTerm<I>>],
+    shared: &[(usize, usize)],
+    keyed: &'a DetHashMap<JoinKey<I>, Vec<usize>>,
+    wild: &[usize],
+) -> Candidates<'a> {
+    if wild.is_empty()
+        && let Some(key) = bound_key(lrow, shared, KeySide::Left)
+    {
+        return Candidates::Bucket(keyed.get(&key).map_or(&[], Vec::as_slice));
+    }
+    Candidates::Scan
+}
+
 /// A left outer join whose right-side pairings must additionally satisfy `expr`
 /// (the inline `OPTIONAL { ... FILTER expr }` condition, §18.6). A left solution
 /// with no pairing that is both compatible and passes the filter is emitted alone.
@@ -970,6 +1002,21 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     let right_to_out = right_to_out_map(&r.schema, &out);
     let shared = l.schema.shared_columns(&r.schema);
 
+    // Hash-index the right side (as the unfiltered `left_outer_join` does) so the
+    // per-left-row candidate set is a bucket lookup, not an O(|R|) compatibility scan.
+    // Used ONLY when `wild` is empty — every right row has all shared columns bound —
+    // because then, for a left row whose shared columns are all bound, `compatible`
+    // reduces to per-column equality on the shared columns, which is exactly
+    // `bound_key` equality (`JoinKey` atoms are collision-free term encodings, and a
+    // `Multi` key is termwise equality); `build_index` pushes indices into each
+    // bucket in ascending row order, so the bucket is precisely the ascending-index
+    // subsequence of `r.rows` the scan would have visited, in the same order.
+    // `merge`/`eval_ebv` therefore run over the identical candidate sequence, and the
+    // emitted rows, padding decisions, cell-ceiling trip points and charges are
+    // unchanged. A left row with an unbound shared column (`bound_key` → `None`)
+    // keeps the full scan, and so does an index with any wild row.
+    let (keyed, wild) = build_index(r, &shared);
+
     // A left outer join emits at least one row per left row.
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let rows = if cell_ceiling.is_none() && ctx.may_fork_row_loop(expr) {
@@ -978,13 +1025,26 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
             || ctx.fork_for_worker(),
             |child, acc, lrow| {
                 let before = acc.len();
-                for rrow in &r.rows {
-                    if !compatible(lrow, rrow, &shared) {
-                        continue;
+                match filtered_candidates(lrow, &shared, &keyed, &wild) {
+                    Candidates::Bucket(idxs) => {
+                        for &idx in idxs {
+                            let merged =
+                                merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
+                            if crate::expr::eval_ebv(expr, &merged, &out, child)? == Some(true) {
+                                acc.push(merged);
+                            }
+                        }
                     }
-                    let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
-                    if crate::expr::eval_ebv(expr, &merged, &out, child)? == Some(true) {
-                        acc.push(merged);
+                    Candidates::Scan => {
+                        for rrow in &r.rows {
+                            if !compatible(lrow, rrow, &shared) {
+                                continue;
+                            }
+                            let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                            if crate::expr::eval_ebv(expr, &merged, &out, child)? == Some(true) {
+                                acc.push(merged);
+                            }
+                        }
                     }
                 }
                 if pad_unmatched && acc.len() == before {
@@ -1000,18 +1060,35 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
             Vec::with_capacity(cell_ceiling.map_or(l.rows.len(), |cap| cap.min(l.rows.len())));
         'left: for lrow in &l.rows {
             let mut matched = false;
-            for rrow in &r.rows {
-                if !compatible(lrow, rrow, &shared) {
-                    continue;
-                }
-                let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
-                if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
-                    if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-                        let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-                        break 'left;
+            match filtered_candidates(lrow, &shared, &keyed, &wild) {
+                Candidates::Bucket(idxs) => {
+                    for &idx in idxs {
+                        let merged = merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
+                        if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
+                            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merged);
+                            matched = true;
+                        }
                     }
-                    rows.push(merged);
-                    matched = true;
+                }
+                Candidates::Scan => {
+                    for rrow in &r.rows {
+                        if !compatible(lrow, rrow, &shared) {
+                            continue;
+                        }
+                        let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                        if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
+                            if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
+                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+                                break 'left;
+                            }
+                            rows.push(merged);
+                            matched = true;
+                        }
+                    }
                 }
             }
             if pad_unmatched && !matched {
@@ -1178,6 +1255,16 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
         return Ok(lift.withheld());
     };
     let shared = l.schema.shared_columns(&r.schema);
+
+    // Disjoint domains (no shared column): the domain-intersection guard below is
+    // `shared.iter().any(..)` over an empty slice, provably `false` for every pair, so
+    // no right row can remove anything and the output IS the left bag. Move it
+    // instead of running the O(|L|·|R|) `par_retain` scan that would clone every row
+    // to reach the same answer; `par_retain` performs no governor charge or clock
+    // poll (it is a plain filter + clone), so skipping it skips no accounting.
+    if shared.is_empty() {
+        return Ok(lift.finish(l));
+    }
 
     let rows = crate::parallel::par_retain(&l.rows, |lrow| {
         // Keep the left row unless some right row removes it.

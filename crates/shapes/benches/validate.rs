@@ -11,6 +11,12 @@
 //! [`purrdf_shapes::engine::validate_graphs`] — parse data + shapes, resolve focus
 //! nodes, run every constraint. This is the end-to-end number Phase 2 (regex /
 //! subclass-closure / SPARQL caching) and Phase 4 (focus-node `rayon`) move.
+//!
+//! `shacl_focus_closed` is the per-value-node constraint path: a `sh:closed` shape
+//! with several property shapes over many focus nodes, whose values are checked
+//! by `sh:minLength`/`sh:maxLength`/`sh:nodeKind`/`sh:languageIn` — the arms that
+//! now read the interned value node's borrowed surface (length, kind, language)
+//! and the closed-permitted set's borrowed keys instead of materializing terms.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -85,6 +91,7 @@ const LINKML: &str = "https://w3id.org/linkml/";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const LINKML_EMIT_SIZES: &[usize] = &[32, 1_024, 60_000];
 const CORE_FOCUS_SIZES: &[usize] = &[512, 1_024, 2_048, 3_000, 100_000, 1_000_000];
+const CLOSED_FOCUS_SIZES: &[usize] = &[512, 4_096, 65_536];
 const SPARQL_FOCUS_SIZES: &[usize] = &[64, 512, 4_096];
 const REALTIME_FOCUS_SIZES: &[usize] = &[1, 8, 64, 512, 4_096];
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -276,6 +283,91 @@ ex:WholeBundleShape a sh:NodeShape ;
     }
 }
 
+/// A `sh:closed` node shape with five simple-predicate property shapes carrying
+/// `sh:minLength`/`sh:maxLength`/`sh:nodeKind`/`sh:languageIn`/`sh:datatype`,
+/// over `focus_nodes` conforming subjects. Every subject also carries `rdf:type`,
+/// which the shape admits only through `sh:ignoredProperties`, so the closed
+/// permitted-set probe runs on every outgoing triple of every focus node.
+fn closed_focus_fixture(focus_nodes: usize) -> ValidationFixture {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(RDF_TYPE);
+    let closed_class = builder.intern_iri(&format!("{BENCH_EX}ClosedClass"));
+    let label_predicate = builder.intern_iri(&format!("{BENCH_EX}label"));
+    let name_predicate = builder.intern_iri(&format!("{BENCH_EX}name"));
+    let code_predicate = builder.intern_iri(&format!("{BENCH_EX}code"));
+    let value_predicate = builder.intern_iri(&format!("{BENCH_EX}value"));
+    let member_predicate = builder.intern_iri(&format!("{BENCH_EX}member"));
+    let member = builder.intern_iri(&format!("{BENCH_EX}closed-member"));
+
+    for index in 0..focus_nodes {
+        let focus = builder.intern_iri(&format!("{BENCH_EX}closed-item{index}"));
+        let label = builder.intern_literal(RdfLiteral::simple(format!("item-{index}")));
+        let name = builder.intern_literal(RdfLiteral::language_tagged(
+            format!("name {index}"),
+            if index % 2 == 0 { "en" } else { "fr-CA" },
+        ));
+        let code = builder.intern_literal(RdfLiteral::simple(format!("CODE-{index:05}")));
+        let value = builder.intern_literal(RdfLiteral::typed(index.to_string(), XSD_INTEGER));
+        builder.push_quad(focus, rdf_type, closed_class, None);
+        builder.push_quad(focus, label_predicate, label, None);
+        builder.push_quad(focus, name_predicate, name, None);
+        builder.push_quad(focus, code_predicate, code, None);
+        builder.push_quad(focus, value_predicate, value, None);
+        builder.push_quad(focus, member_predicate, member, None);
+    }
+
+    let dataset = builder.freeze().expect("closed focus fixture must freeze");
+    let shapes = parse_shapes(
+        &format!(
+            r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex: <{BENCH_EX}> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:ClosedBundleShape a sh:NodeShape ;
+    sh:targetClass ex:ClosedClass ;
+    sh:closed true ;
+    sh:ignoredProperties ( rdf:type ) ;
+    sh:property [
+        sh:path ex:label ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal ;
+        sh:minLength 3 ;
+        sh:maxLength 32 ;
+    ] ;
+    sh:property [
+        sh:path ex:name ;
+        sh:nodeKind sh:Literal ;
+        sh:languageIn ( "en" "fr" ) ;
+    ] ;
+    sh:property [
+        sh:path ex:code ;
+        sh:minLength 5 ;
+        sh:maxLength 16 ;
+    ] ;
+    sh:property [
+        sh:path ex:value ;
+        sh:datatype xsd:integer ;
+        sh:nodeKind sh:Literal ;
+    ] ;
+    sh:property [
+        sh:path ex:member ;
+        sh:nodeKind sh:IRI ;
+        sh:maxLength 64 ;
+    ] .
+"#
+        ),
+        None,
+    )
+    .expect("closed focus shapes must parse");
+    ValidationFixture {
+        dataset,
+        shapes,
+        focus_nodes,
+    }
+}
+
 fn sparql_focus_fixture(focus_nodes: usize) -> ValidationFixture {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(RDF_TYPE);
@@ -442,6 +534,27 @@ fn bench_focus_core(c: &mut Criterion) {
             &fixture,
             move |bencher, fixture| {
                 probe.call_once(|| print_validation_probe("core", fixture));
+                bencher.iter(|| validate_fixture(black_box(fixture)));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_focus_closed(c: &mut Criterion) {
+    let mut group = c.benchmark_group("shacl_focus_closed");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &focus_nodes in CLOSED_FOCUS_SIZES {
+        let fixture = closed_focus_fixture(focus_nodes);
+        let probe = Once::new();
+        group.throughput(Throughput::Elements(focus_nodes as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(focus_nodes),
+            &fixture,
+            move |bencher, fixture| {
+                probe.call_once(|| print_validation_probe("closed", fixture));
                 bencher.iter(|| validate_fixture(black_box(fixture)));
             },
         );
@@ -1147,6 +1260,7 @@ criterion_group!(
     benches,
     bench_validate,
     bench_focus_core,
+    bench_focus_closed,
     bench_focus_sparql,
     bench_focus_realtime,
     bench_subclass_membership,

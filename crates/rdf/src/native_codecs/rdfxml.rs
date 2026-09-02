@@ -35,6 +35,7 @@
 //! expansion, node/property striping, base-IRI resolution, and `xmlns` prefix
 //! scoping.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -43,7 +44,9 @@ use roxmltree::{Document, Node};
 
 use super::codec::RdfCodec;
 use super::parse::{FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI, fold_statement_layer};
-use super::ser_model::{SerGraph, SerTerm, SerTermKind, deterministic_blank_label_with_prefix};
+use super::ser_model::{
+    ReifierIndex, SerGraph, SerTerm, SerTermKind, deterministic_blank_label_with_prefix,
+};
 use super::text_parse::LineParseMode;
 use crate::nesting::guard_xml_nesting;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId};
@@ -547,11 +550,16 @@ impl RdfXmlParser {
         let nodes = (0..items.len())
             .map(|_| self.fresh_collection_bnode())
             .collect::<Result<Vec<_>, _>>()?;
+        // The three RDF vocabulary IRIs are constants: build (format + validate) each
+        // once here rather than once per collection item, and clone the string below.
+        let rdf_first = rdf_iri(RDF_FIRST)?;
+        let rdf_rest = rdf_iri(RDF_REST)?;
+        let rdf_nil = rdf_iri(RDF_NIL)?;
         for (index, item) in items.iter().enumerate() {
             let object = self.parse_node_element(*item, context)?;
             self.insert_statement(
                 nodes[index].clone().into(),
-                rdf_iri(RDF_FIRST)?,
+                rdf_first.clone(),
                 object.into(),
                 None,
                 None,
@@ -559,11 +567,11 @@ impl RdfXmlParser {
             let rest: XmlTerm = if let Some(next) = nodes.get(index + 1) {
                 next.clone().into()
             } else {
-                XmlTerm::Iri(rdf_iri(RDF_NIL)?)
+                XmlTerm::Iri(rdf_nil.clone())
             };
             self.insert_statement(
                 nodes[index].clone().into(),
-                rdf_iri(RDF_REST)?,
+                rdf_rest.clone(),
                 rest,
                 None,
                 None,
@@ -1164,15 +1172,111 @@ fn qualify(node: Node<'_, '_>, namespace: Option<&str>, local: &str) -> String {
     }
 }
 
-fn escape_xml_text(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+/// XML character-data escape (`&`, `<`, `>`), borrowed when nothing needs escaping.
+fn escape_xml_text(value: &str) -> Cow<'_, str> {
+    escape_xml(value, false)
 }
 
-fn escape_xml_attr(value: &str) -> String {
-    escape_xml_text(value).replace('"', "&quot;")
+/// XML attribute-value escape: [`escape_xml_text`] plus `"`.
+fn escape_xml_attr(value: &str) -> Cow<'_, str> {
+    escape_xml(value, true)
+}
+
+/// Single-pass escaper. The trigger set is ASCII, so a byte scan finds the first
+/// trigger exactly, and an input without one — nearly every IRI and lexical form — is
+/// returned borrowed: no allocation, where the chained `replace` calls made three (or
+/// four) full copies of every value. Escaping `&` before the other triggers is what
+/// made the chain exact; mapping each trigger once here yields the identical bytes.
+fn escape_xml(value: &str, quote: bool) -> Cow<'_, str> {
+    let is_trigger = |b: u8| matches!(b, b'&' | b'<' | b'>') || (quote && b == b'"');
+    let Some(first) = value.bytes().position(is_trigger) else {
+        return Cow::Borrowed(value);
+    };
+    let mut out = String::with_capacity(value.len() + 16);
+    out.push_str(&value[..first]);
+    for ch in value[first..].chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' if quote => out.push_str("&quot;"),
+            other => out.push(other),
+        }
+    }
+    Cow::Owned(out)
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::{escape_xml_attr, escape_xml_text};
+
+    /// The chained-`replace` escapers this module shipped before the single-pass one,
+    /// kept as the reference the new implementation is compared against.
+    fn reference_text(value: &str) -> String {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+
+    fn reference_attr(value: &str) -> String {
+        reference_text(value).replace('"', "&quot;")
+    }
+
+    #[test]
+    fn single_pass_matches_chained_replace() {
+        let inputs = [
+            "",
+            "plain",
+            "&",
+            "<",
+            ">",
+            "\"",
+            "a & b",
+            "<tag>",
+            "say \"hi\"",
+            "&amp; already",
+            "<a href=\"x\">&</a>",
+            "ünïcödé & 日本語 <> \" 🦀",
+            "&&&<<<>>>\"\"\"",
+            "trailing&",
+            "&leading",
+        ];
+        for input in inputs {
+            assert_eq!(
+                &*escape_xml_text(input),
+                reference_text(input),
+                "text {input:?}"
+            );
+            assert_eq!(
+                &*escape_xml_attr(input),
+                reference_attr(input),
+                "attr {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn untriggered_input_is_borrowed() {
+        assert!(matches!(
+            escape_xml_text("no triggers ünïcödé"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            escape_xml_attr("no triggers 'single' ok"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(escape_xml_text("a<b"), std::borrow::Cow::Owned(_)));
+        assert!(matches!(
+            escape_xml_attr("a\"b"),
+            std::borrow::Cow::Owned(_)
+        ));
+        // `"` is a trigger only in attribute position.
+        assert!(matches!(
+            escape_xml_text("a\"b"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -1218,14 +1322,17 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
         return Err(serialize_err("cannot serialize a named graph"));
     }
 
-    let mut subjects: BTreeMap<String, Vec<PropertyItem>> = BTreeMap::new();
-    let mut subject_terms: BTreeMap<String, usize> = BTreeMap::new();
+    // One map keyed by the rendered subject, holding BOTH the first term id seen for
+    // that key and its property list — where two maps cost a second tree walk and a
+    // clone of every key. The `or_insert_with` keeps the first-writer-wins term id, and
+    // the `BTreeMap` key order (which decides element order) is untouched.
+    let mut subjects: BTreeMap<String, (usize, Vec<PropertyItem>)> = BTreeMap::new();
     for &(s, p, o, _) in &graph.quads {
         let key = subject_key(graph, s)?;
-        subject_terms.entry(key.clone()).or_insert(s);
         subjects
             .entry(key)
-            .or_default()
+            .or_insert_with(|| (s, Vec::new()))
+            .1
             .push(PropertyItem::Pair(p, o));
     }
     for &(rid, (s, p, o), _) in &graph.reifiers {
@@ -1240,22 +1347,25 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
             continue;
         }
         let key = subject_key(graph, rid)?;
-        subject_terms.entry(key.clone()).or_insert(rid);
         subjects
             .entry(key)
-            .or_default()
+            .or_insert_with(|| (rid, Vec::new()))
+            .1
             .push(PropertyItem::Reifies(s, p, o));
     }
     for &(r, p, v, _) in &graph.annotations {
         let key = subject_key(graph, r)?;
-        subject_terms.entry(key.clone()).or_insert(r);
         subjects
             .entry(key)
-            .or_default()
+            .or_insert_with(|| (r, Vec::new()))
+            .1
             .push(PropertyItem::Pair(p, v));
     }
 
     let namespaces = serializer_namespaces(graph, &subjects)?;
+    // One reifier index for the whole document: every quoted-triple object below
+    // resolves through it in O(1) rather than scanning the reifier table.
+    let reifier_index = graph.reifier_index();
     let mut out = String::from(
         "<?xml version=\"1.0\"?>\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema#\"",
     );
@@ -1274,20 +1384,32 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
     // parse is gated on `rdf:version="1.2"`).
     out.push_str(" rdf:version=\"1.2\">\n");
 
-    for (key, properties) in subjects {
-        let subject = *subject_terms
-            .get(&key)
-            .expect("subject term exists for every grouped subject");
+    for (subject, properties) in subjects.into_values() {
         out.push_str("  <rdf:Description");
         write_node_attribute(&mut out, graph, subject)?;
         out.push_str(">\n");
         for property in properties {
             match property {
                 PropertyItem::Pair(predicate, object) => {
-                    write_property(&mut out, "    ", graph, predicate, object, &namespaces)?;
+                    write_property(
+                        &mut out,
+                        "    ",
+                        graph,
+                        &reifier_index,
+                        predicate,
+                        object,
+                        &namespaces,
+                    )?;
                 }
                 PropertyItem::Reifies(s, p, o) => {
-                    write_reifies(&mut out, "    ", graph, (s, p, o), &namespaces)?;
+                    write_reifies(
+                        &mut out,
+                        "    ",
+                        graph,
+                        &reifier_index,
+                        (s, p, o),
+                        &namespaces,
+                    )?;
                 }
             }
         }
@@ -1305,12 +1427,20 @@ fn write_reifies(
     out: &mut String,
     indent: &str,
     graph: &SerGraph,
+    reifier_index: &ReifierIndex,
     (s, p, o): (usize, usize, usize),
     namespaces: &BTreeMap<String, String>,
 ) -> Result<(), RdfDiagnostic> {
     let name = serializer_qname(RDF_REIFIES_IRI, namespaces);
     let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
-    write_triple_node(out, &format!("{indent}  "), graph, (s, p, o), namespaces)?;
+    write_triple_node(
+        out,
+        &format!("{indent}  "),
+        graph,
+        reifier_index,
+        (s, p, o),
+        namespaces,
+    )?;
     let _ = writeln!(out, "{indent}</{name}>");
     Ok(())
 }
@@ -1359,7 +1489,7 @@ fn write_node_attribute(
 
 fn serializer_namespaces(
     graph: &SerGraph,
-    subjects: &BTreeMap<String, Vec<PropertyItem>>,
+    subjects: &BTreeMap<String, (usize, Vec<PropertyItem>)>,
 ) -> Result<BTreeMap<String, String>, RdfDiagnostic> {
     let mut namespaces = BTreeMap::from([
         (RDF_NS.to_string(), "rdf".to_string()),
@@ -1370,7 +1500,7 @@ fn serializer_namespaces(
     // each top-level quad's predicate (for an `rdf:reifies` binding that predicate is
     // `rdf:reifies`, already in the RDF namespace). Inner triple-term predicates are not
     // pre-registered — they qualify lazily in `write_property`.
-    for properties in subjects.values() {
+    for (_, properties) in subjects.values() {
         for property in properties {
             let predicate_iri = match property {
                 PropertyItem::Pair(predicate, _) => ser_value(ser_term(graph, *predicate)?)?,
@@ -1401,6 +1531,7 @@ fn write_property(
     out: &mut String,
     indent: &str,
     graph: &SerGraph,
+    reifier_index: &ReifierIndex,
     predicate: usize,
     object: usize,
     namespaces: &BTreeMap<String, String>,
@@ -1444,10 +1575,17 @@ fn write_property(
         SerTermKind::Triple => {
             let (s, p, o) = term
                 .reifier
-                .and_then(|rf| graph.reifier(rf))
+                .and_then(|rf| reifier_index.get(rf))
                 .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
             let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
-            write_triple_node(out, &format!("{indent}  "), graph, (s, p, o), namespaces)?;
+            write_triple_node(
+                out,
+                &format!("{indent}  "),
+                graph,
+                reifier_index,
+                (s, p, o),
+                namespaces,
+            )?;
             let _ = writeln!(out, "{indent}</{name}>");
         }
     }
@@ -1458,13 +1596,22 @@ fn write_triple_node(
     out: &mut String,
     indent: &str,
     graph: &SerGraph,
+    reifier_index: &ReifierIndex,
     (s, p, o): (usize, usize, usize),
     namespaces: &BTreeMap<String, String>,
 ) -> Result<(), RdfDiagnostic> {
     let _ = write!(out, "{indent}<rdf:Description");
     write_node_attribute(out, graph, s)?;
     out.push_str(">\n");
-    write_property(out, &format!("{indent}  "), graph, p, o, namespaces)?;
+    write_property(
+        out,
+        &format!("{indent}  "),
+        graph,
+        reifier_index,
+        p,
+        o,
+        namespaces,
+    )?;
     let _ = writeln!(out, "{indent}</rdf:Description>");
     Ok(())
 }
@@ -1475,7 +1622,7 @@ fn write_triple_node(
 ///
 /// Delegates to [`ser_model::spell_iri`], which is the one relativization seam in this
 /// crate; this codec performs no reference arithmetic of its own.
-fn iri_reference<'a>(graph: &SerGraph, iri: &'a str) -> std::borrow::Cow<'a, str> {
+fn iri_reference<'a>(graph: &SerGraph, iri: &'a str) -> Cow<'a, str> {
     super::ser_model::spell_iri(iri, graph.base())
 }
 

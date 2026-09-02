@@ -636,21 +636,22 @@ enum BlankRender<'a> {
     Canonical { issuer: &'a IdIssuer },
 }
 
-impl BlankRender<'_> {
-    /// The `_:`-less label a blank renders to under this strategy.
-    fn label(&self, id: TermId) -> String {
+impl<'a> BlankRender<'a> {
+    /// The `_:`-less label a blank renders to under this strategy. Borrowed: the
+    /// first-degree labels are static and the canonical ones live in the issuer,
+    /// so no `String` is minted per blank occurrence written.
+    fn label(self, id: TermId) -> &'a str {
         match self {
             BlankRender::FirstDegree { focus } => {
-                if id == *focus {
-                    "a".to_owned()
+                if id == focus {
+                    "a"
                 } else {
-                    "z".to_owned()
+                    "z"
                 }
             }
             BlankRender::Canonical { issuer } => issuer
                 .issued_for(id)
-                .expect("every blank has a canonical id at output time")
-                .to_owned(),
+                .expect("every blank has a canonical id at output time"),
         }
     }
 }
@@ -675,12 +676,17 @@ impl IdIssuer {
 
     /// Issue (or return the already-issued) id for `b`.
     fn issue(&mut self, b: TermId) -> &str {
-        if !self.issued.contains_key(&b) {
-            let id = format!("{}{}", self.prefix, self.order.len()).into_boxed_str();
-            self.issued.insert(b, id);
-            self.order.push(b);
+        // One tree descent for both outcomes (`entry`), instead of the
+        // contains + insert + get triple this replaced. The id is still numbered
+        // from `order.len()` BEFORE the push, so the issued sequence is unchanged.
+        let next = self.order.len();
+        match self.issued.entry(b) {
+            std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::btree_map::Entry::Vacant(e) => {
+                self.order.push(b);
+                e.insert(format!("{}{next}", self.prefix).into_boxed_str())
+            }
         }
-        self.issued.get(&b).expect("just inserted")
     }
 
     fn issued_for(&self, b: TermId) -> Option<&str> {
@@ -1002,11 +1008,13 @@ impl<'a> CanonState<'a> {
 
         // §4.4 step 5: resolve each ambiguous group via the n-degree search.
         for h in ambiguous {
-            let group = by_hash.get(&h).expect("ambiguous hash present").clone();
+            // `by_hash` is a local, not part of `self`, so the group can be walked
+            // by reference across the `&mut self` calls below (no `Vec` clone).
+            let group = by_hash.get(&h).expect("ambiguous hash present");
             // 5.2–5.3: for each not-yet-canonical blank, run hashNDegreeQuads against a
             // fresh temporary issuer seeded with that blank.
             let mut hash_paths: Vec<(HashHex, IdIssuer)> = Vec::new();
-            for b in group {
+            for &b in group {
                 if self.canonical.has(b) {
                     continue;
                 }
@@ -1257,7 +1265,7 @@ impl<'a> CanonState<'a> {
         input.push_str(position);
         if position != "g" && !position.starts_with("g.") {
             input.push('<');
-            input.push_str(&self.predicate_iri(predicate));
+            input.push_str(self.predicate_iri(predicate));
             input.push('>');
         }
         if let Some(id) = self.canonical.issued_for(related) {
@@ -1272,12 +1280,14 @@ impl<'a> CanonState<'a> {
         digest_hex(self.hash, input.as_bytes())
     }
 
-    /// The IRI value of a predicate slot (a real IRI term or a sentinel).
-    fn predicate_iri(&self, predicate: &Slot) -> String {
+    /// The IRI value of a predicate slot (a real IRI term or a sentinel). Borrowed
+    /// from the sentinel table or the dataset arena: this sits inside Hash Related
+    /// Blank Node, the innermost loop of the n-degree search, so it mints nothing.
+    fn predicate_iri(&self, predicate: &Slot) -> &str {
         match predicate {
-            Slot::Sentinel(iri) => (*iri).to_owned(),
+            Slot::Sentinel(iri) => iri,
             Slot::Term(id) => match self.ds.resolve(*id) {
-                TermRef::Iri(iri) => iri.to_owned(),
+                TermRef::Iri(iri) => iri,
                 other => unreachable!("predicate must be an IRI, got {other:?}"),
             },
             Slot::AnnotationGraph(_) => {
@@ -1363,7 +1373,7 @@ impl<'a> CanonState<'a> {
             }
             TermRef::Blank { .. } => {
                 out.push_str("_:");
-                out.push_str(&render.label(id));
+                out.push_str(render.label(id));
             }
             TermRef::Literal {
                 lexical,

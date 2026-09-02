@@ -17,6 +17,7 @@
 //! no-optionality doctrine, malformed structure is a HARD failure (`Err`), never a
 //! silent default.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -426,6 +427,11 @@ pub struct RdfDatasetBuilder {
     /// default, per the no-vocabulary-minting policy. Fixed at construction time
     /// (see [`RdfDatasetBuilder::with_content_addressing`]) — there is no setter.
     derivation_predicate: Option<String>,
+    /// The `rdf:reifies` predicate id, minted on the first reifier push and then
+    /// answered from here: the interner never forgets a term, so the id stays
+    /// valid for the builder's whole life, and every later push skips the
+    /// 47-byte hash + probe + compare a by-string re-intern would pay.
+    reifies_predicate: Option<TermId>,
 }
 
 /// A dataset builder whose structural validation has already passed.
@@ -500,6 +506,7 @@ impl RdfDatasetBuilder {
             // Merge scopes start at 1; scope 0 is BlankScope::DEFAULT (local pushes).
             next_merge_scope: 1,
             derivation_predicate: None,
+            reifies_predicate: None,
         }
     }
 
@@ -612,11 +619,13 @@ impl RdfDatasetBuilder {
 
         // C0.1: a language tag forces rdf:langString and a lowercased language key,
         // regardless of any (illegal) explicit datatype on the input literal.
-        let (datatype_iri, language_key) = match language {
-            Some(lang) => (RDF_LANG_STRING.to_string(), Some(lang.to_lowercase())),
+        // Borrowed for the two constant datatypes, moved (not copied) for an
+        // explicit one: no per-literal `String` is minted for the datatype IRI.
+        let (datatype_iri, language_key): (Cow<'static, str>, Option<String>) = match language {
+            Some(lang) => (Cow::Borrowed(RDF_LANG_STRING), Some(lang.to_lowercase())),
             None => match datatype {
-                Some(dt) => (dt, None),
-                None => (XSD_STRING.to_string(), None),
+                Some(dt) => (Cow::Owned(dt), None),
+                None => (Cow::Borrowed(XSD_STRING), None),
             },
         };
 
@@ -1035,7 +1044,10 @@ impl RdfDatasetBuilder {
     /// triple, graph)` triplet pushed twice collapses to one; the SAME `(reifier,
     /// triple)` in two distinct graphs is two bindings.
     pub fn push_reifier_in_graph(&mut self, reifier: TermId, triple: TermId, g: Option<TermId>) {
-        let _ = self.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
+        if self.reifies_predicate.is_none() {
+            self.reifies_predicate =
+                Some(self.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"));
+        }
         let binding = (reifier, triple, g);
         store_once(&mut self.reifiers, &mut self.reifier_index, binding);
     }
@@ -1185,6 +1197,9 @@ impl RdfDatasetBuilder {
         // The frozen `GRAPH ?g` enumeration set: every graph term that owns a quad,
         // UNION every graph the caller explicitly declared (possibly empty).
         let mut named_graphs: Vec<TermId> = declared_graphs;
+        // `filter_map` reports a zero lower bound, so the three `extend`s below
+        // would otherwise grow by doubling; the exact upper bound is known here.
+        named_graphs.reserve(quads.len() + reifiers.len() + annotations.len());
         named_graphs.extend(quads.iter().filter_map(|q| q.g));
         // A reifier / annotation declared inside a `GRAPH g { … }` block owns no base
         // quad in g (the `<< … >>` folds entirely into the side-tables), so g would be

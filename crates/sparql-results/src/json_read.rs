@@ -823,6 +823,25 @@ impl<'a> JsonParser<'a> {
         self.pos += 1; // consume opening '"'
         let mut s = String::new();
         loop {
+            // Fast path: a run of plain ASCII (no quote, no backslash) is one
+            // `push_str` instead of one `next_utf8_char` + `push` per byte.
+            // The escape / terminator / non-ASCII cases below are untouched.
+            let start = self.pos;
+            while self
+                .bytes
+                .get(self.pos)
+                .is_some_and(|&b| b < 0x80 && b != b'"' && b != b'\\')
+            {
+                self.pos += 1;
+            }
+            if self.pos > start {
+                // A run of bytes all `< 0x80` is ASCII, hence valid UTF-8; the
+                // `expect` documents that invariant rather than trusting it.
+                s.push_str(
+                    std::str::from_utf8(&self.bytes[start..self.pos])
+                        .expect("a pure-ASCII byte run is valid UTF-8"),
+                );
+            }
             let Some(c) = self.peek() else {
                 return Err(fmt("unterminated string"));
             };
@@ -946,6 +965,61 @@ mod tests {
     use super::*;
     use crate::json::to_json;
     use purrdf_core::SparqlResult;
+
+    fn parse_string_at(input: &[u8]) -> Result<(String, usize), Error> {
+        let mut parser = JsonParser::new(input);
+        let value = parser.parse_string()?;
+        Ok((value, parser.pos))
+    }
+
+    /// The ASCII bulk-copy fast path must splice correctly around escapes,
+    /// raw multibyte UTF-8, and the terminator, leaving `pos` just past the
+    /// closing quote so the enclosing parser resumes at the right byte.
+    #[test]
+    fn parse_string_mixed_ascii_escape_multibyte() {
+        let cases: [(&[u8], &str); 9] = [
+            (b"\"\"", ""),
+            (b"\"plain ascii\"", "plain ascii"),
+            (b"\"a\\\"b\"", "a\"b"),
+            (
+                b"\"tab\\tnl\\ncr\\r\\\\ \\/ \\b\\f\"",
+                "tab\tnl\ncr\r\\ / \u{8}\u{c}",
+            ),
+            (b"\"\\u00e9\\ud83d\\udc31\"", "\u{e9}\u{1f431}"),
+            (
+                "\"caf\u{e9} \u{4e2d}\u{6587} \u{1f431}\"".as_bytes(),
+                "caf\u{e9} \u{4e2d}\u{6587} \u{1f431}",
+            ),
+            (
+                "\"ascii \u{e9} \\\" more \\u0041 \u{1f431}\\n tail\"".as_bytes(),
+                "ascii \u{e9} \" more A \u{1f431}\n tail",
+            ),
+            (b"\"raw\x01control\"", "raw\u{1}control"),
+            (b"\"end\" trailing", "end"),
+        ];
+        for (input, expected) in cases {
+            let (value, pos) = parse_string_at(input).expect("string parses");
+            assert_eq!(value, expected, "{input:?}");
+            let close = input
+                .iter()
+                .rposition(|&b| b == b'"')
+                .expect("closing quote");
+            assert!(
+                pos == close + 1 || input.ends_with(b" trailing"),
+                "pos {pos} for {input:?}"
+            );
+        }
+        assert_eq!(parse_string_at(b"\"end\" trailing").expect("parses").1, 5);
+    }
+
+    #[test]
+    fn parse_string_errors_unchanged_after_ascii_run() {
+        assert!(parse_string_at(b"\"no terminator").is_err());
+        assert!(parse_string_at(b"\"ascii then bad escape \\q\"").is_err());
+        assert!(parse_string_at(b"\"ascii then \\").is_err());
+        assert!(parse_string_at(b"\"ascii then \xff\"").is_err());
+        assert!(parse_string_at(b"\"ascii then truncated \xe4\xb8").is_err());
+    }
 
     /// Provenance round-trip: what [`crate::json::to_json`] writes under a namespace,
     /// [`provenance_from_json`] reads back — the writer no longer emits

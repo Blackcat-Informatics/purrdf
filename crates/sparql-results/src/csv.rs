@@ -73,7 +73,13 @@ pub fn to_csv(
         }
     };
 
-    let mut out = String::new();
+    // Cheap lower-bound pre-size (capacity is unobservable): one line
+    // terminator per line plus a modest per-cell estimate.
+    let mut out = String::with_capacity(
+        rows.len()
+            .saturating_add(1)
+            .saturating_mul(variables.len().saturating_mul(16).saturating_add(2)),
+    );
 
     // Header: bare variable names, comma-separated, CRLF-terminated.
     for (i, var) in variables.iter().enumerate() {

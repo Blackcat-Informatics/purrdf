@@ -162,13 +162,36 @@ fn peak_list(nodes: &[Node]) -> Vec<MmrPeak> {
         .collect()
 }
 
+/// Peaks-only MMR fold: the same append/merge rule as [`build_nodes`] and the
+/// same `parent_hash` inputs, but it keeps just `(height, hash)` per peak.
+///
+/// `root` never descends into the tree, so boxing every merged child (two
+/// heap nodes per merge, `O(n)` boxes total) was pure waste on that path;
+/// `prove` still needs the children and keeps using [`build_nodes`].
+fn peak_fold(frame_ids: &[Vec<u8>]) -> Vec<MmrPeak> {
+    let mut peaks: Vec<MmrPeak> = Vec::new();
+    for (index, frame_id) in frame_ids.iter().enumerate() {
+        peaks.push(MmrPeak {
+            height: 0,
+            hash: leaf_hash(index, frame_id),
+        });
+        while peaks.len() >= 2 && peaks[peaks.len() - 1].height == peaks[peaks.len() - 2].height {
+            let right = peaks.pop().expect("right peak exists");
+            let left = peaks.pop().expect("left peak exists");
+            let height = left.height + 1;
+            let hash = parent_hash(height, &left.hash, &right.hash);
+            peaks.push(MmrPeak { height, hash });
+        }
+    }
+    peaks
+}
+
 /// Compute the stable `index.mmr` root over ordered frame ids.
 ///
 /// The root commits to both the frame count and the ordered peak list, so
 /// adding a frame changes the root even when an earlier proof path is reused.
 pub fn root(frame_ids: &[Vec<u8>]) -> Vec<u8> {
-    let nodes = build_nodes(frame_ids);
-    root_hash(frame_ids.len(), &peak_list(&nodes))
+    root_hash(frame_ids.len(), &peak_fold(frame_ids))
 }
 
 fn append_path(node: &Node, target: usize, path: &mut Vec<ProofStep>) -> bool {
@@ -344,7 +367,51 @@ pub fn verify_proof(proof: &Proof) -> Result<(), String> {
     Ok(())
 }
 
+/// A byte that the JSON escaper copies through verbatim: printable ASCII other
+/// than the two JSON metacharacters. Everything else — C0 controls, DEL
+/// (`0x7F`, which `char::is_control` reports), and every non-ASCII lead or
+/// continuation byte (`char::is_control` also covers the C1 range
+/// U+0080–U+009F) — is handed to the per-`char` arm below.
+fn json_plain_byte(b: u8) -> bool {
+    (0x20..0x7F).contains(&b) && b != b'"' && b != b'\\'
+}
+
 fn json_escape(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        // Bulk-copy the run of plain ASCII bytes in one `push_str` instead of
+        // one `push` per `char`; every trigger is an ASCII byte, so the split
+        // point is always a char boundary.
+        let run = rest
+            .bytes()
+            .position(|b| !json_plain_byte(b))
+            .unwrap_or(rest.len());
+        out.push_str(&rest[..run]);
+        rest = &rest[run..];
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
+}
+
+/// The original per-`char` escaper, kept as the oracle for [`json_escape`].
+#[cfg(test)]
+fn json_escape_reference(text: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     for ch in text.chars() {
@@ -904,5 +971,61 @@ mod tests {
         let left = vec![id(1), id(2), id(3)];
         let right = vec![id(1), id(3), id(2)];
         assert_ne!(root(&left), root(&right));
+    }
+
+    /// The tree-building computation `root` used before the peaks-only fold.
+    fn root_via_tree(frame_ids: &[Vec<u8>]) -> Vec<u8> {
+        let nodes = build_nodes(frame_ids);
+        root_hash(frame_ids.len(), &peak_list(&nodes))
+    }
+
+    #[test]
+    fn peaks_only_root_matches_tree_root_for_every_small_count() {
+        for count in 0..=40usize {
+            let frame_ids: Vec<Vec<u8>> = (0..count)
+                .map(|i| {
+                    let mut fid = id(u8::try_from(i).expect("count fits in a byte"));
+                    fid[31] = u8::try_from((i * 7) % 256).expect("reduced mod 256");
+                    fid
+                })
+                .collect();
+            assert_eq!(
+                root(&frame_ids),
+                root_via_tree(&frame_ids),
+                "root mismatch at count {count}"
+            );
+            assert_eq!(
+                peak_fold(&frame_ids),
+                peak_list(&build_nodes(&frame_ids)),
+                "peak list mismatch at count {count}"
+            );
+            if count > 0 {
+                let proof = prove(&frame_ids, count - 1).expect("proof exists");
+                assert_eq!(proof.root, root(&frame_ids));
+            }
+        }
+    }
+
+    #[test]
+    fn json_escape_matches_reference() {
+        let cases: [&str; 14] = [
+            "",
+            "plain ascii text 0123456789 ~!@#$%^&*()_+-=[]{};':,./<>?",
+            "\"",
+            "\\",
+            "\n",
+            "\r",
+            "\t",
+            "\u{0}\u{1}\u{1f}\u{7f}",
+            "\u{80}\u{85}\u{9f}",
+            "caf\u{e9} \u{4e2d}\u{6587} \u{1f431}",
+            "mixed \"quoted\" \\ back\\slash\n\ttab \u{e9}\u{1}end",
+            "\u{7f}\u{2028}\u{feff}",
+            "trailing quote\"",
+            "\"leading quote",
+        ];
+        for case in cases {
+            assert_eq!(json_escape(case), json_escape_reference(case), "{case:?}");
+        }
     }
 }

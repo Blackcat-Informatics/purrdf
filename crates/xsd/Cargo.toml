@@ -35,3 +35,11 @@ name = "purrdf_xsd"
 pretty_assertions = { workspace = true }
 # Round-trip / canonicalization property tests (lexical -> value -> canonical).
 proptest = { workspace = true }
+# Lexical hot-path baselines. DEV-DEPENDENCY ONLY: the zero-dep leaf gate checks
+# `cargo tree --edges normal`, which excludes dev-deps, so criterion here does not
+# breach the crate's zero-runtime-dependency contract (same footing as purrdf-iri).
+criterion = { workspace = true }
+
+[[bench]]
+name = "lexical"
+harness = false

@@ -20,7 +20,7 @@
 //! layer, so blank-node labels and quad ordering here need not match oxigraph's —
 //! `freeze` sorts and de-duplicates, and canonicalization relabels blanks.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_core::loss::{
@@ -33,12 +33,12 @@ use purrdf_sparql_algebra::{
     GraphPattern, NamedNodePattern, QuadPattern, TermPattern, TriplePattern,
 };
 
-use crate::DetHashMap;
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{instantiate_predicate, instantiate_term, positionally_ill_formed};
+use crate::{DetHashMap, DetHashSet};
 
 /// The `rdf:reifies` predicate IRI — the reification-layer indirection edge.
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -475,14 +475,25 @@ fn build_construct_graph<D: DatasetView + Sync>(
     let uniform_slot = GraphSlot::new(plan.uniform_graph, &mut builder);
 
     let has_reifier_decls = !plan.reifier_decl_indices.is_empty();
+    // Template-position membership mask for pass 2's "already declared in pass 1"
+    // skip: built once here so the per-row loop tests one `bool` per template quad
+    // instead of a linear `contains` scan over `reifier_decl_indices`.
+    let mut reifier_decl_mask = vec![false; template.len()];
+    for &idx in plan.reifier_decl_indices {
+        reifier_decl_mask[idx] = true;
+    }
     // Interned once (idempotent), used by pass 2 below to recognize a
     // *dynamically*-produced `rdf:reifies` edge — see its doc comment.
     let reifies_id = builder.intern_iri(RDF_REIFIES);
 
+    // Template blank labels are fresh per solution row; the map co-refers a label
+    // within this row only, so it is CLEARED per row (`mint_blank` only reads via
+    // `get` and inserts; the cross-row freshness comes from `ctx.bnode_counter`, not
+    // from this map) — hoisted so its table allocation is reused across rows.
+    let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+
     for row in &seq.rows {
-        // Template blank labels are fresh per solution row; the map co-refers a
-        // label within this row only.
-        let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+        blanks.clear();
 
         if !has_reifier_decls {
             // FAST NO-OP PATH: no rdf:reifies triple in the template → plain quads.
@@ -537,7 +548,9 @@ fn build_construct_graph<D: DatasetView + Sync>(
             // single-graph template — every pre-quad-template `CONSTRUCT` — the
             // graph half is constant and the key degenerates to the reifier id,
             // which is exactly the previous behavior.
-            let mut reifier_ids: HashSet<(GraphId, TermId)> = HashSet::new();
+            // Membership-only (insert/contains, never iterated), so the fixed-key
+            // `DetHashSet` is used: no `RandomState` seeding per row.
+            let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
             for &idx in plan.reifier_decl_indices {
                 if let Some(e) = instantiated[idx] {
                     builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
@@ -561,7 +574,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
             // idempotent no-op against the identical pass-1 binding (W3C
             // `eval-triple-terms` `construct-5`).
             for (idx, statement) in instantiated.iter().enumerate() {
-                if plan.reifier_decl_indices.contains(&idx) {
+                if reifier_decl_mask[idx] {
                     continue; // already handled in pass 1
                 }
                 if let Some(e) = *statement {
@@ -1044,11 +1057,14 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
     (proj_loss_id, loss_code_id, lost_reifies_id): (TermId, TermId, TermId),
     graph_id: Option<TermId>,
 ) {
+    // One blank-label scope per dropped reifier, exactly as before — CLEARED per
+    // iteration rather than reallocated (`mint_blank` only `get`s and inserts here).
+    let mut blanks: DetHashMap<String, String> = DetHashMap::default();
     for d in dropped {
         // Materialize the concrete reified triple term for this row. An unbound
         // inner variable yields `None` — there is no concrete triple to declare
         // lost, so the declaration is (correctly) skipped for this row.
-        let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+        blanks.clear();
         let Some(inner_term) = instantiate_term(&d.inner, row, schema, &mut blanks, ctx) else {
             continue;
         };

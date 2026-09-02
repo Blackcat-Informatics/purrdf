@@ -131,6 +131,7 @@ fn term_depends_on_anchor(
 /// `rf` implicit — the term whose own id IS `rid`. Miss an anchor and the loop
 /// is recorded rather than refused.
 fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> bool {
+    let mut seen: HashSet<usize> = HashSet::new();
     graph
         .terms
         .iter()
@@ -142,7 +143,9 @@ fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> b
         })
         .any(|(anchor, _)| {
             <[usize; 3]>::from(triple).into_iter().any(|component| {
-                let mut seen = HashSet::new();
+                // Each probe starts from an empty set; clearing the hoisted
+                // set reuses its table instead of allocating one per component.
+                seen.clear();
                 term_depends_on_anchor(graph, component, anchor, (rid, triple), &mut seen)
             })
         })
@@ -434,13 +437,19 @@ impl Folder<'_, '_, '_> {
     }
 
     fn emit_blob(&mut self, digest: &str) {
+        // Only a sink can observe the meta, so look it up only when one is
+        // present — and borrow it (`self.g` shared, `self.sink` mut are
+        // disjoint fields) instead of deep-cloning the CBOR map per blob.
+        let Some(sink) = self.sink.as_deref_mut() else {
+            return;
+        };
         let meta = self
             .g
             .blob_meta
             .iter()
             .find(|(stored, _)| stored == digest)
-            .map(|(_, meta)| meta.clone());
-        self.with_sink(|segment_index, sink| sink.blob(segment_index, digest, meta.as_ref()));
+            .map(|(_, meta)| meta);
+        sink.blob(self.segment_index, digest, meta);
     }
 
     fn push_opaque(&mut self, opaque: OpaqueNode) {
@@ -506,19 +515,21 @@ impl Folder<'_, '_, '_> {
     /// Total: a missing capability degrades to an opaque node, and a corrupt
     /// payload degrades to a `damaged` opaque node — the reader never aborts.
     fn fold_frame(&mut self, frame: &[(Value, Value)], index: usize) {
-        let ftype = text_or(map_get(frame, "t"), "").to_string();
+        // Borrowed from `frame` (a parameter, not `self`), so the `&mut self`
+        // handler calls below are unaffected and no per-frame `String` is made.
+        let ftype = text_or(map_get(frame, "t"), "");
         if ftype == "blob" {
             self.h_blob_frame(frame, index);
             return;
         }
         let payload = match self.payload(frame, false) {
             Err(PayloadError::Unavailable { reason, detail }) => {
-                self.opaque(frame, &ftype, reason);
+                self.opaque(frame, ftype, reason);
                 self.diag(diag_code_for(reason), detail, Some(index));
                 return;
             }
             Err(PayloadError::Damaged(detail)) => {
-                self.opaque(frame, &ftype, "damaged");
+                self.opaque(frame, ftype, "damaged");
                 self.diag(
                     "DamagedFrame",
                     format!("payload decode failed: {detail}"),
@@ -528,7 +539,7 @@ impl Folder<'_, '_, '_> {
             }
             Ok(p) => p,
         };
-        match ftype.as_str() {
+        match ftype {
             "terms" => self.h_terms(&payload, index),
             "quads" => self.h_quads(&payload, index),
             "reifies" => self.h_reifies(&payload, index),
@@ -539,7 +550,7 @@ impl Folder<'_, '_, '_> {
             "index" => self.h_index(&payload, index),
             "opaque" => self.h_opaque(&payload),
             _ => {
-                self.opaque(frame, &ftype, "unknown-frame-type");
+                self.opaque(frame, ftype, "unknown-frame-type");
                 self.diag(
                     "UnknownFrameType",
                     format!("unsupported frame type {ftype:?}"),
