@@ -186,8 +186,8 @@ release cadence, and dragging one into a wasm-clean carrier crate would be the
 
 Two consequences, both refusals rather than guesses:
 
-* **A binary operation on two geometries in different systems is a hard error**
-  naming both systems. Coordinates in two systems are two different numbers
+* **A binary operation on two geometries in different systems is refused** by
+  name, naming both systems. Coordinates in two systems are two different numbers
   describing the same place; arithmetic across them is meaningless, and answering
   anyway would be plausible and silently wrong.
 * **A measurement is computed in the coordinate system's own unit.** The caller
@@ -198,7 +198,34 @@ Two consequences, both refusals rather than guesses:
   metre. A number in the wrong unit is the worst kind of wrong answer: plausible,
   silent, and off by a factor nobody can see.
 
-`geof:transform` is registered and hard-errors, naming the missing database.
+### How far a refusal travels
+
+"Refused" is two different outcomes, and which one a `geof:` call gets is decided
+by `GeoError::is_expression_error` — the single site in `crates/geo/src/error.rs`
+that answers it — rather than at each call site.
+
+A refusal that is a statement about *these arguments* (`GeoError::Literal`, a
+lexical form its datatype does not license; `GeoError::Domain`, well-formed
+arguments the operation is undefined on, which is where the mixed-system and
+undeclared-unit refusals above land) is a **SPARQL expression error**. SPARQL 1.1
+§17.2 puts it there — "Functions invoked with an argument of the wrong type will
+produce a type error" — and the enclosing operator resolves it: a `FILTER`
+eliminates that one solution (§17), a `BIND` or `SELECT` expression leaves the
+variable unbound and evaluation continues (§10). Every other row is answered
+normally. The alternative was tried and is worse: with no per-solution channel,
+one malformed geometry anywhere in a dataset fails every query that scans past it.
+
+A refusal that holds for *every* solution alike stays query-fatal, because
+answering "no value" would empty a result set and present that as the answer.
+Three kinds are in this class: `GeoError::Unsupported` (a function this crate does
+not implement — a `false` from an unimplemented predicate is indistinguishable
+from an honest `false`), `GeoError::Config` (a declaration the host never made,
+which no row can repair and PurRDF fabricates no default for), and
+`GeoError::Arity` (a wrong argument count, which is a defect in the query text
+that no row can satisfy).
+
+`geof:transform` is registered and hard-errors (`GeoError::Unsupported`, so
+query-fatal), naming the missing database.
 
 ---
 
