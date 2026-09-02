@@ -1967,30 +1967,26 @@ const SUBPROPERTY_TTL: &str = concat!(
     "ex:b ex:sub ex:c .\n",
 );
 
-/// Under `--entailment`, a path relation answers about the PRE-closure edges — pinned,
-/// because it is a SHORT answer reported as complete.
+/// Under `--entailment`, a path relation answers about the CLOSURE's edges — the same
+/// dataset every other pattern in the same query reads.
 ///
-/// This is the one place the relation's endpoint projection stops agreeing with the core
-/// grammar's `p+`. Everywhere else that equality is the relation's contract (the kernel's
-/// `a16_the_endpoint_projection_agrees_with_p_plus_and_the_divergence_is_pinned` asserts
-/// it in the same engine). Here it breaks, because `--path-relation` snapshots the step
-/// out of the view the CLI holds and `purrdf::query_with_entailment_governed` then
-/// evaluates against a closure the CLI never sees. The two halves of one query therefore
-/// read two different datasets.
+/// This is the invariant `p+` and the relation's endpoint projection share everywhere else
+/// (the kernel's `a16_the_endpoint_projection_agrees_with_p_plus_and_the_divergence_is_pinned`
+/// asserts it in the same engine), and it used to BREAK here: `--path-relation` snapshotted
+/// the step out of the view the CLI holds while `purrdf::query_with_entailment_governed`
+/// evaluated against a closure the CLI never saw, so the two halves of one query read two
+/// different datasets. Over this fixture the grammar answered `{b, c}` and the walk answered
+/// `{b}` — a SHORT bag, at exit 0, with no diagnostic. `purrdf::ClosureRelations` fixed the
+/// ORDER (materialize, then register), and this test is the executed proof.
 ///
-/// Both halves are run below over the same file and the same regime, so the divergence is
-/// a measured pair rather than a claim: `p+` reaches `ex:c` through the derived edge, and
-/// the walk does not. Neither command fails, and neither prints a diagnostic — which is
-/// exactly why this needs an executed assertion. A test that only pinned the walk's
-/// `["b"]` would look like a correct answer; it is the `p+` row beside it that shows the
-/// answer is short.
-///
-/// This test is a description of current behaviour, NOT an endorsement of it. Making the
-/// walk see the closure means giving that entry point a materialize-then-register order it
-/// does not have — a change to a public API the Python `path_relations` surface shares —
-/// so when that lands, this test is the one that must go red.
+/// Three runs, because one would not settle it. The grammar and the relation are run over the
+/// same file under the same regime and must now AGREE on the endpoint set; and the relation is
+/// run a third time with no regime at all, where it must answer `{b}` — the pre-closure edges
+/// really are smaller, so a walk that returned `{b, c}` there would be reading edges the data
+/// does not have. The regime is the whole difference, and the third run is what proves the
+/// walk still follows the data rather than having been widened into always answering more.
 #[test]
-fn a_path_relation_under_entailment_answers_over_the_pre_closure_edges() {
+fn a_path_relation_under_entailment_walks_the_closure() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "subproperty.ttl", SUBPROPERTY_TTL);
@@ -2021,7 +2017,7 @@ fn a_path_relation_under_entailment_answers_over_the_pre_closure_edges() {
         "p+ under RDFS reaches ex:c through the entailed ex:b ex:p ex:c"
     );
 
-    // The relation, same file, same regime: it does NOT.
+    // The relation, same file, same regime: it sees it too, now.
     let relation = run(&[
         "query",
         "--data",
@@ -2041,13 +2037,35 @@ fn a_path_relation_under_entailment_answers_over_the_pre_closure_edges() {
     );
     assert_eq!(
         stdout(&relation),
-        "end,len,step,node\r\nhttp://example.org/b,1,1,http://example.org/b\r\n",
-        "the snapshot was taken before the closure, so the derived edge is not walked — a \
-         short answer, returned with a success exit and no diagnostic"
+        "end,len,step,node\r\n\
+         http://example.org/b,1,1,http://example.org/b\r\n\
+         http://example.org/c,2,1,http://example.org/b\r\n\
+         http://example.org/c,2,2,http://example.org/c\r\n",
+        "the snapshot is taken over the closure, so the derived ex:b ex:p ex:c is walked: \
+         one one-hop witness to ex:b and the two step rows of the two-hop witness to ex:c"
     );
 
-    // WITHOUT the regime the two agree, which is what identifies the closure as the whole
-    // cause. A neighbouring case that still succeeds, rather than a lone failing one.
+    // The ENDPOINT SETS agree, which is the invariant, stated over the two answers rather
+    // than restated as a constant.
+    let endpoints = |csv: &str| {
+        let mut ends: Vec<String> = csv
+            .lines()
+            .skip(1)
+            .filter_map(|row| row.split(',').next().map(str::to_owned))
+            .collect();
+        ends.sort();
+        ends.dedup();
+        ends
+    };
+    assert_eq!(
+        endpoints(&stdout(&relation)),
+        endpoints(&stdout(&grammar)),
+        "the walk's endpoint projection must agree with p+ under the same regime — the \
+         invariant that broke when the two halves read two different datasets"
+    );
+
+    // WITHOUT the regime the walk answers the SMALLER set, which is what identifies the
+    // closure as the whole cause and proves the relation was not simply widened.
     let ungoverned = run(&[
         "query",
         "--data",
@@ -2058,11 +2076,135 @@ fn a_path_relation_under_entailment_answers_over_the_pre_closure_edges() {
         &spec,
         &walk_query("?len ?step"),
     ]);
+    assert!(
+        ungoverned.status.success(),
+        "the no-regime lane must answer; stderr:\n{}",
+        stderr(&ungoverned)
+    );
     assert_eq!(
         stdout(&ungoverned),
-        stdout(&relation),
-        "the relation's answer is identical with and without --entailment: the regime \
-         changed the dataset under it and the snapshot did not follow"
+        "end,len,step,node\r\nhttp://example.org/b,1,1,http://example.org/b\r\n",
+        "with no regime there is no derived edge, so ex:c is unreachable — the walk still \
+         reads the data it is given rather than always answering more"
+    );
+}
+
+/// The ONE pairing the closure-side snapshot refuses, and the two neighbouring ones it
+/// must not.
+///
+/// A `--path-relation` is snapshotted over the closure now, and the OWL-Direct combined
+/// approach's closure carries blank nodes its restricted chase MINTED. Those are not terms
+/// of the scoping graph, and the regime's witness filtration cannot reach a
+/// property-function call's output — so a walk over that closure could hand one back as an
+/// observable binding. That pairing is refused, by code, at exit 2.
+///
+/// A refusal is a claim, so the neighbours are executed here beside it: the SAME ontology
+/// under the SAME regime with no `--path-relation` still answers `ex:a`, and an OWL-Direct
+/// run over a TBox outside the Horn fragment — which mints no witness at all — still walks
+/// its relation. The refusal is keyed on witnesses actually minted, not on the regime's
+/// name, and these two runs are what says so.
+#[test]
+fn a_path_relation_is_refused_only_where_the_chase_minted_a_witness() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let minting = write_file(dir, "somevalues.ttl", SOME_VALUES_FROM_TTL);
+    let mintless = write_file(
+        dir,
+        "equivalent.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:A a owl:Class .\n",
+            "ex:B a owl:Class .\n",
+            "ex:A owl:equivalentClass ex:B .\n",
+            "ex:a a ex:A .\n",
+            "ex:a ex:p ex:b .\n",
+        ),
+    );
+    let spec = format!(
+        "iri={WALK_IRI};forward=http://example.org/p;min-hops=1;max-hops=4;\
+         max-paths-per-seed=64;max-expansions=999;mode=walk"
+    );
+
+    // Refused: the chase minted a witness and the relation would read the closure.
+    let refused = run(&[
+        "query",
+        "--data",
+        &minting,
+        "--entailment",
+        "owl-direct",
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &spec,
+        &walk_query("?len ?step"),
+    ]);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "combining two flags that cannot both be honoured is a usage refusal; stdout:\n{}",
+        stdout(&refused)
+    );
+    let message = stderr(&refused);
+    assert!(
+        message.contains("reasoning-closure-relation-witness"),
+        "the refusal must carry its stable code:\n{message}"
+    );
+    assert!(
+        message.contains("rdf, rdfs, owl-rl, d, rif, simple"),
+        "the refusal must name the regimes that DO accept the pairing:\n{message}"
+    );
+    assert!(
+        stdout(&refused).is_empty(),
+        "a refused query prints no rows:\n{}",
+        stdout(&refused)
+    );
+
+    // Neighbour one: same ontology, same regime, no relation — still answers.
+    let answered = run(&[
+        "query",
+        "--data",
+        &minting,
+        "--entailment",
+        "owl-direct",
+        "--results-format",
+        "json",
+        "SELECT ?x WHERE { ?x <http://example.org/r> ?y . ?y a <http://example.org/B> }",
+    ]);
+    assert!(
+        answered.status.success(),
+        "owl-direct without a relation is untouched; stderr:\n{}",
+        stderr(&answered)
+    );
+    assert!(
+        stdout(&answered).contains("\"value\":\"http://example.org/a\""),
+        "the combined approach's certain answer must still be returned:\n{}",
+        stdout(&answered)
+    );
+
+    // Neighbour two: owl-direct over a TBox outside the Horn fragment mints nothing, so
+    // the relation is registered over the closure and walks it.
+    let walked = run(&[
+        "query",
+        "--data",
+        &mintless,
+        "--entailment",
+        "owl-direct",
+        "--results-format",
+        "csv",
+        "--path-relation",
+        &spec,
+        &walk_query("?len ?step"),
+    ]);
+    assert!(
+        walked.status.success(),
+        "an owl-direct run that mints no witness must not be refused; stderr:\n{}",
+        stderr(&walked)
+    );
+    assert_eq!(
+        stdout(&walked),
+        "end,len,step,node\r\nhttp://example.org/b,1,1,http://example.org/b\r\n",
+        "the walk answers over the closure's ex:p edges"
     );
 }
 

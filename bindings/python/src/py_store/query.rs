@@ -134,7 +134,7 @@ pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
 /// [`MemoryRelation`] is. The path-witness variant keeps that property by carrying the
 /// traversal's DEFINITION (directed predicates and an explicit envelope) rather than a
 /// callback the traversal would ask for each hop.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) enum RelationSpec {
     /// Rows supplied as Python data: `(subject_arity, object_arity, rows)`.
     Rows {
@@ -462,6 +462,12 @@ fn arity(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<usize> {
 /// evaluate over, is what makes that unreachable from Python: registration is per call,
 /// so there is no place for a stale snapshot to be kept.
 ///
+/// Under `entailment=`, the dataset the call evaluates over is not this snapshot but the
+/// CLOSURE the reasoner materializes from it, so this registry is the one the query is
+/// PARSED against and [`registry_over`] — driven by `purrdf::ClosureRelations` — builds
+/// the one it is ANSWERED against. Both read the same specs; only the dataset differs,
+/// and only the second one's edges reach an answer.
+///
 /// # Errors
 ///
 /// `ValueError` carrying the kernel's own diagnostic for a ragged table
@@ -480,12 +486,35 @@ pub(super) fn build_relations(
     if specs.is_empty() {
         return Ok(None);
     }
+    registry_over(specs, dataset)
+        .map(Some)
+        .map_err(PyValueError::new_err)
+}
+
+/// [`build_relations`]'s core, with the failure left as the already-named message rather
+/// than as a Python exception.
+///
+/// Split out for the ENTAILMENT lane, which cannot raise from where this runs: it hands
+/// this to [`purrdf::ClosureRelations::rebuilt_by`], which calls it with the closure the
+/// reasoner materialized and takes a `purrdf_sparql_eval::EvalError` back — the CLOSURE
+/// being the dataset a `path_relations` traversal and a `relations_from_graph` table head
+/// must BOTH be read from, since it is the dataset the query is answered over. Only the
+/// error's clothing differs between the two callers.
+///
+/// # Errors
+///
+/// The `property function <iri>: …` message naming the relation and the kernel's own
+/// diagnostic.
+pub(super) fn registry_over(
+    specs: Vec<(String, RelationSpec)>,
+    dataset: &RdfDataset,
+) -> Result<PropertyFunctionRegistry, String> {
     let mut registry = PropertyFunctionRegistry::new();
     for (iri, spec) in specs {
         let relation = build_relation(&iri, spec, dataset)?;
         registry.register(iri, relation);
     }
-    Ok(Some(registry))
+    Ok(registry)
 }
 
 /// Build one relation out of its already-converted spec and the frozen snapshot.
@@ -497,10 +526,8 @@ fn build_relation(
     iri: &str,
     spec: RelationSpec,
     dataset: &RdfDataset,
-) -> PyResult<Arc<dyn PropertyFunction>> {
-    let named = |e: purrdf_sparql_eval::EvalError| {
-        PyValueError::new_err(format!("property function <{iri}>: {e}"))
-    };
+) -> Result<Arc<dyn PropertyFunction>, String> {
+    let named = |e: purrdf_sparql_eval::EvalError| format!("property function <{iri}>: {e}");
     match spec {
         RelationSpec::Rows {
             subject_arity,

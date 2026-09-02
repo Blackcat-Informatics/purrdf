@@ -623,8 +623,13 @@ class Store:
     # too: a registered relation is reachable from the closure query exactly as it is
     # from an ordinary one, so registering one here and omitting it there cannot silently
     # change which rows the SAME predicate position yields. `relations_from_graph` reads
-    # its table — and `path_relations` snapshots its edges — from this store's
-    # PRE-entailment snapshot.
+    # its table — and `path_relations` snapshots its edges — from the CLOSURE the regime
+    # materializes, which is the dataset the query is answered over; a regime that DERIVES
+    # a quad under a step's predicate therefore widens the walk exactly as it widens a
+    # `p+` in the same query. The one refused pairing is `entailment="owl-direct"` on an
+    # ontology whose restricted chase mints existential witnesses: a walk over that
+    # closure could return a minted blank node, so it raises `ValueError` carrying the
+    # code `reasoning-closure-relation-witness` rather than answering.
     def query_entailment_governed(
         self,
         query: str,
@@ -812,7 +817,8 @@ class MutableDataset:
     # behave exactly as on `query_governed` above: a registered relation is reachable
     # from the closure query exactly as it is from an ordinary one.
     # `relations_from_graph` reads its table — and `path_relations` snapshots its edges —
-    # from this dataset's PRE-entailment snapshot.
+    # from the CLOSURE the regime materializes, exactly as `Store.query_entailment_governed`
+    # does, including its one refused `owl-direct` pairing.
     def query_entailment_governed(
         self,
         query: str,

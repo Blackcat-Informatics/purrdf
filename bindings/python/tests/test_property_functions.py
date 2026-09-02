@@ -982,3 +982,156 @@ def test_the_path_relation_keyword_is_keyword_only() -> None:
     """Every engine-configuration argument is named at the call site."""
     with pytest.raises(TypeError):
         _store_with(CHAIN_TTL).query(WALK_QUERY, _walk_relation())  # type: ignore[misc]
+
+
+# ── a path relation under an entailment regime ────────────────────────────────────
+
+#: `ex:sub rdfs:subPropertyOf ex:p` makes `ex:b ex:p ex:c` ENTAILED and never asserted,
+#: so the RDFS closure carries an `ex:p` edge the store does not.
+SUBPROPERTY_TTL = f"""
+@prefix ex: <{EX}> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:sub rdfs:subPropertyOf ex:p .
+ex:a ex:p ex:b .
+ex:b ex:sub ex:c .
+"""
+
+#: `A ⊑ ∃r.B`, `a : A` — the shape whose combined-approach answer needs a chase-minted
+#: existential witness, which is the one closure a path relation may not be built over.
+SOME_VALUES_FROM_TTL = f"""
+@prefix ex: <{EX}> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:A a owl:Class .
+ex:B a owl:Class .
+ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:r ; owl:someValuesFrom ex:B ] .
+ex:a a ex:A .
+"""
+
+
+def test_a_path_relation_under_entailment_walks_the_closure() -> None:
+    """The walk reads the CLOSURE, so it agrees with `p+` in the same query.
+
+    It did not always. ``path_relations`` was snapshotted from the store while the query
+    was answered over the closure the reasoner materialized, so a regime that DERIVED a
+    quad under the step's predicate left the walk answering about a strictly smaller edge
+    set than every other pattern beside it — a short bag, returned as a complete result,
+    with no diagnostic.
+
+    Three runs settle it rather than one: `p+` and the walk under the same regime must
+    agree, and the walk with NO regime must answer the smaller set — otherwise the fix
+    could be a relation that was simply widened into always returning more.
+    """
+    store = _store_with(SUBPROPERTY_TTL)
+    grammar = store.query_entailment_governed(
+        f"SELECT ?end WHERE {{ <{EX}a> <{EX}p>+ ?end }} ORDER BY ?end",
+        "rdfs",
+    )
+    assert grammar.outcome is not None
+    assert _column(grammar.outcome.result) == ["b", "c"]
+
+    entailed = store.query_entailment_governed(
+        WALK_QUERY, "rdfs", path_relations=_walk_relation()
+    )
+    assert entailed.outcome is not None
+    # Read once: a solution sequence is an iterator, so a second pass over the same
+    # handle would see it already drained and read an empty set as an agreement.
+    walked = _walk_rows(entailed.outcome.result)
+    assert walked == [
+        ("b", 1, 1, "b"),
+        ("c", 2, 1, "b"),
+        ("c", 2, 2, "c"),
+    ]
+
+    # The endpoint sets agree — the invariant, read off the two answers.
+    assert sorted({row[0] for row in walked}) == ["b", "c"]
+
+    # Without the regime the derived edge does not exist, so the walk stops at `ex:b`.
+    plain = store.query(WALK_QUERY, path_relations=_walk_relation())
+    assert _walk_rows(plain) == [("b", 1, 1, "b")]
+
+
+def test_a_graph_table_under_entailment_reads_the_closure() -> None:
+    """`relations_from_graph` follows the same order, for the same reason.
+
+    A table head is read out of the dataset exactly as a traversal's edges are, so a
+    regime that completes the list reaches it. `rdfs:subPropertyOf` makes the head's
+    `rdf:rest` an entailed triple, which the pre-closure store does not carry: the read
+    used to stop at the first cell, and now it reaches the row the entailed cell names.
+    """
+    turtle = f"""
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <{EX}> .
+
+ex:tail rdfs:subPropertyOf rdf:rest .
+
+ex:memberTable
+    rdf:first ( ex:ada ex:alpha ) ;
+    ex:tail   ( ( ex:brian ex:alpha ) ) .
+"""
+    store = _store_with(turtle)
+    entailed = store.query_entailment_governed(
+        SELECT_MEMBERS,
+        "rdfs",
+        relations_from_graph={MEMBER_OF: (_node("memberTable"), 1, 1)},
+    )
+    assert entailed.outcome is not None
+    assert _pairs(entailed.outcome.result) == [("ada", "alpha"), ("brian", "alpha")]
+
+    # Without the regime the head carries no `rdf:rest` at all, so the list ends after
+    # its first cell and the table is one row short. That smaller answer is what the
+    # pre-closure read gives, and it is what makes the regime — rather than a widened
+    # reader — the whole cause of the row above.
+    assert _pairs(
+        store.query(
+            SELECT_MEMBERS,
+            relations_from_graph={MEMBER_OF: (_node("memberTable"), 1, 1)},
+        )
+    ) == [("ada", "alpha")]
+
+
+def test_a_path_relation_is_refused_only_where_the_chase_minted_a_witness() -> None:
+    """The one refused pairing, executed beside the two neighbours it must not refuse.
+
+    An OWL Direct-Semantics closure whose restricted chase minted existential witnesses
+    carries blank nodes that are not terms of the scoping graph, and the regime's witness
+    filtration cannot reach a property function's output — so a walk over that closure
+    could hand one back. That pairing raises. Every other regime, and every `owl-direct`
+    run that mints nothing, still answers.
+    """
+    minting = _store_with(SOME_VALUES_FROM_TTL)
+    with pytest.raises(ValueError, match="reasoning-closure-relation-witness"):
+        minting.query_entailment_governed(
+            WALK_QUERY, "owl-direct", path_relations=_walk_relation()
+        )
+
+    # Neighbour one: the same ontology under the same regime, with no relation, still
+    # returns the combined approach's certain answer.
+    answered = minting.query_entailment_governed(
+        f"SELECT ?x WHERE {{ ?x <{EX}r> ?y . ?y a <{EX}B> }}", "owl-direct"
+    )
+    assert answered.outcome is not None
+    assert _column(answered.outcome.result) == ["a"]
+
+    # Neighbour two: `owl:equivalentClass` is outside the Horn fragment the combined
+    # approach certifies, so that lane mints nothing and the walk runs.
+    mintless = _store_with(
+        f"""
+@prefix ex: <{EX}> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+ex:A a owl:Class .
+ex:B a owl:Class .
+ex:A owl:equivalentClass ex:B .
+ex:a a ex:A .
+ex:a ex:p ex:b .
+"""
+    )
+    walked = mintless.query_entailment_governed(
+        WALK_QUERY, "owl-direct", path_relations=_walk_relation()
+    )
+    assert walked.outcome is not None
+    assert _walk_rows(walked.outcome.result) == [("b", 1, 1, "b")]

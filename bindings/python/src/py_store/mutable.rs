@@ -20,7 +20,7 @@ use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
     PyUpdateOutcome, build_aggregates, build_engine, build_relations, collect_relations,
     materialize_entailment_outcome, materialize_outcome, materialize_results,
-    materialize_update_outcome, run_governed,
+    materialize_update_outcome, registry_over, run_governed,
 };
 use super::store::PyQuadIter;
 use super::term::{
@@ -30,9 +30,10 @@ use super::term::{
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::py_store::iri_value_error;
 use crate::{
-    BlankScope, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDatasetBuilder, RdfLiteral,
-    RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SerializeOptions, SparqlRequest, StatementLayer,
-    TermValue, query_with_entailment_governed, serialize_dataset_with,
+    BlankScope, ClosureRelations, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SerializeOptions,
+    SparqlRequest, StatementLayer, TermValue, query_with_entailment_governed,
+    serialize_dataset_with,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -439,8 +440,9 @@ impl PyMutableDataset {
     /// `property_fn_namespaces` / `relations` / `relations_from_graph` / `path_relations` behave exactly as on
     /// `Store.query_entailment_governed`: a registered relation is reachable from the closure
     /// query exactly as it is from an ordinary one. `relations_from_graph` reads its table —
-    /// and `path_relations` snapshots its edges — from this dataset's PRE-entailment
-    /// snapshot, the base the closure is materialized from.
+    /// and `path_relations` snapshots its edges — from the CLOSURE the regime materializes,
+    /// exactly as `Store.query_entailment_governed` does, including the one `owl-direct`
+    /// pairing [`purrdf::ClosureRelations`] refuses.
     #[pyo3(signature = (
         query,
         entailment,
@@ -510,7 +512,23 @@ impl PyMutableDataset {
             let dataset = inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("snapshot failed: {e}")))?;
-            let registry = build_relations(specs, &dataset)?;
+            // Two registries, and only the second one answers. This one is what the query
+            // is PARSED against — a registered predicate becomes a call node only if its
+            // registry was in scope when the query was read — and it is built over the
+            // store's own snapshot. The one below is built over the CLOSURE the regime
+            // materializes, which is the dataset the query is evaluated over, so a
+            // `path_relations` traversal and a `relations_from_graph` table both read the
+            // same data every other pattern in the query does. Before this pairing existed
+            // they read the pre-closure store and returned a SHORT bag with no diagnostic.
+            let registry = build_relations(specs.clone(), &dataset)?;
+            let rebuild = |closure: &RdfDataset| {
+                registry_over(specs.clone(), closure).map_err(purrdf_sparql_eval::EvalError::data)
+            };
+            let relations = if specs.is_empty() {
+                ClosureRelations::NONE
+            } else {
+                ClosureRelations::rebuilt_by(&rebuild)
+            };
             let engine = build_engine(config);
             let aggregates = build_aggregates(aggregate_namespace);
             query_with_entailment_governed(
@@ -531,6 +549,7 @@ impl PyMutableDataset {
                         .unwrap_or(&purrdf_sparql_eval::AggregateRegistry::EMPTY),
                     ..purrdf_sparql_eval::QueryOptions::EMPTY
                 },
+                &relations,
                 governors,
             )
             .map_err(|e| PyValueError::new_err(format!("entailment query failed: {e}")))

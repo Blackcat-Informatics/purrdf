@@ -122,7 +122,7 @@
 
 use std::sync::Arc;
 
-use purrdf::GovernedEntailment;
+use purrdf::{ClosureRelations, GovernedEntailment};
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
@@ -592,42 +592,39 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
 /// so a statistical aggregate — or a `--path-relation` — reaches the entailment-aware lane
 /// exactly as it reaches the ordinary one.
 ///
-/// # A path relation on this lane answers about the PRE-closure edges. Observed.
+/// # A path relation on this lane answers about the CLOSURE's edges
 ///
-/// The snapshot is built inside [`EntailedQueryOp::run`], where the source view is what the
-/// reasoner has not yet closed over; the evaluation then runs against the materialized
-/// closure. So when a regime DERIVES quads under a step's predicate, the walk answers over
-/// a strictly smaller edge set than every other pattern in the same query. This is a real
-/// divergence, not a theoretical one — over
-/// `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub ex:c .`:
+/// It did not always. The snapshot used to be built in [`EntailedQueryOp::run`] over the
+/// source view — what the reasoner has not yet closed over — while the evaluation ran
+/// against the materialized closure, so when a regime DERIVED quads under a step's
+/// predicate the walk answered over a strictly smaller edge set than every other pattern
+/// in the same query. Over `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub
+/// ex:c .`, `query --entailment rdfs 'SELECT ?end WHERE { ex:a ex:p+ ?end }'` answered
+/// `ex:b, ex:c` (the closure derives `ex:b ex:p ex:c`) and the same regime with
+/// `--path-relation '…forward=ex:p…'` answered `ex:b` alone: a SHORT bag, reported
+/// complete, at exit 0, with no diagnostic.
 ///
-/// * `query --entailment rdfs 'SELECT ?end WHERE { ex:a ex:p+ ?end }'` answers
-///   `ex:b, ex:c` — the closure derives `ex:b ex:p ex:c`.
-/// * the same regime with `--path-relation '…forward=ex:p…'`, calling the walk, answers
-///   `ex:b` and nothing else.
+/// [`purrdf::ClosureRelations`] is the fix, and it is a fix to the ORDER rather than a
+/// filter over the symptom: this lane hands that entry point a rebuilder, the closure is
+/// materialized first, the specs are snapshotted over it, and the query is prepared and
+/// evaluated against relations that read the same dataset every other pattern does.
+/// `a_path_relation_under_entailment_walks_the_closure` in `tests/query_cli.rs` runs both
+/// halves of that command pair and asserts they now agree.
 ///
-/// `a_path_relation_under_entailment_answers_over_the_pre_closure_edges` in
-/// `tests/query_cli.rs` pins exactly that pair, so the divergence is an asserted answer
-/// rather than one a user discovers. It is a SHORT answer reported as complete, and the
-/// only reason it is not a silent one is that it is written down here and executed there.
-///
-/// The claim this comment used to make — that nothing at the property-function seam could
-/// check it — was false. [`purrdf_sparql_eval::PathGraph::assert_matches`] is precisely
-/// that check, and its own docs say so: it re-walks the step over the dataset being
-/// evaluated and compares a full SHA-256 of the edge set. What blocks calling it HERE is
-/// narrower and worth naming: this lane never holds the closure.
-/// [`purrdf::query_with_entailment_governed`] materializes it internally and returns
-/// answers, so the CLI has no dataset to hand the check, and rebuilding the snapshot
-/// against the closure would require that entry point to expose a
-/// materialize-then-register order it does not have. Fixing it is therefore a change to
-/// that public entry point — which the Python surface's `path_relations` shares verbatim —
-/// and not something this module can do alone.
+/// The one combination it refuses is named where it is raised
+/// (`reasoning-closure-relation-witness`): an OWL Direct-Semantics run whose restricted
+/// chase minted existential witnesses cannot also derive relations from that closure,
+/// because a walk over the chase's edges could hand a minted blank node back as an
+/// observable binding — which is the one thing the regime's witness filtration exists to
+/// prevent, and the one place it cannot reach. Every other regime, and every OWL-Direct
+/// run that mints no witness, answers.
 #[allow(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct, independently-named input (the engine, the \
               dataset, the query text/base, the resolved entailment plan, the governors, \
-              the evaluation options, and the report target); bundling them into a struct \
-              would not shrink the call sites, which already name every field"
+              the evaluation options, the closure-side relation rebuilder, and the report \
+              target); bundling them into a struct would not shrink the call sites, which \
+              already name every field"
 )]
 fn entailed_query<D: DatasetView>(
     engine: &NativeSparqlEngine,
@@ -637,6 +634,7 @@ fn entailed_query<D: DatasetView>(
     plan: &reason::EntailmentPlan,
     governors: &QueryGovernors,
     options: EngineQueryOptions<'_>,
+    relations: &ClosureRelations<'_>,
     report_target: &ReportTarget,
 ) -> Result<GovernedEntailment, CliError> {
     let request = SparqlRequest {
@@ -650,6 +648,7 @@ fn entailed_query<D: DatasetView>(
         request,
         plan.query_entailment(),
         options,
+        relations,
         governors,
     ) {
         Ok(answered) => {
@@ -669,6 +668,17 @@ fn entailed_query<D: DatasetView>(
             ))
         }
         Err(purrdf::ReasoningError::Entailment(other)) => Err(other.into()),
+        // One query-side diagnostic is a USAGE error rather than a runtime one, and it is
+        // told apart by its stable code rather than by its prose: the refusal of
+        // `--path-relation` beside an `--entailment owl-direct` run whose chase minted
+        // witnesses is a statement about the FLAGS the operator combined, so it exits 2
+        // like every other unenforceable combination this module refuses, and the message
+        // already names both the cause and the regimes that do accept the pairing.
+        Err(purrdf::ReasoningError::Query(diagnostic))
+            if diagnostic.code == ClosureRelations::WITNESS_REFUSAL_CODE =>
+        {
+            Err(CliError::Usage(diagnostic.to_string()))
+        }
         Err(purrdf::ReasoningError::Query(diagnostic)) => Err(diagnostic.into()),
         // `ReasoningError` is `#[non_exhaustive]`, so a variant added in its own crate
         // reaches the CLI without a compile error. It is reported rather than swallowed:
@@ -690,8 +700,9 @@ struct EntailedQueryOp<'a> {
     plan: &'a reason::EntailmentPlan,
     governors: &'a QueryGovernors,
     aggregates: Option<&'a AggregateRegistry>,
-    /// The `--path-relation` specs, snapshotted over the PRE-closure view; see
-    /// [`entailed_query`] for why that scope is the one stated on the flag.
+    /// The `--path-relation` specs, snapshotted over the CLOSURE the regime materializes;
+    /// see [`entailed_query`] for the order that makes that true and the one combination
+    /// it refuses.
     relations: RelationSpecs<'a>,
     report_target: &'a ReportTarget,
 }
@@ -699,8 +710,29 @@ struct EntailedQueryOp<'a> {
 impl ViewOp for EntailedQueryOp<'_> {
     type Output = GovernedEntailment;
 
+    /// # Two snapshots, and why the first one is not the wasteful half of a mistake
+    ///
+    /// The specs are snapshotted twice when both flags are given: once over the SOURCE
+    /// view, and again — inside [`purrdf::query_with_entailment_governed`] — over the
+    /// closure. Only the second answers the query. The first exists because the entry
+    /// point parses before it materializes, deliberately, so that an invalid query fails
+    /// without paying for a closure first; and a parse is registry-aware, because a
+    /// registered predicate becomes a call node only if the registry was in scope when the
+    /// query was read. The two registries agree on everything that parse decides — the
+    /// call IRIs, their arity, their modes — and differ only in the edges the second one
+    /// walks, which is exactly the difference this pairing exists to introduce.
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
-        let relations = path_relation::build_registry(view, self.relations.specs)?;
+        let specs = self.relations.specs;
+        let admitted = path_relation::build_registry(view, specs)?;
+        let rebuild = |closure: &purrdf_core::RdfDataset| {
+            path_relation::registry_over(closure, specs)
+                .map_err(purrdf_sparql_eval::EvalError::data)
+        };
+        let relations = if specs.is_empty() {
+            ClosureRelations::NONE
+        } else {
+            ClosureRelations::rebuilt_by(&rebuild)
+        };
         entailed_query(
             self.engine,
             view,
@@ -708,7 +740,8 @@ impl ViewOp for EntailedQueryOp<'_> {
             self.base,
             self.plan,
             self.governors,
-            engine_options(self.aggregates, relations.as_ref()),
+            engine_options(self.aggregates, admitted.as_ref()),
+            &relations,
             self.report_target,
         )
     }

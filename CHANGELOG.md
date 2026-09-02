@@ -87,6 +87,28 @@ called out below with what a consumer must do.
   registered aggregate's resolution depend on the number of focus nodes). Callers constructing
   `Shapes` via struct literal must now supply `aggregates`, or use `Shapes::default()` / the
   parser's constructor, both of which populate it with an empty registry.
+- **BREAKING** **cli,python,purrdf:** A dataset-derived property function combined with an
+  entailment regime returned a SHORT answer, reported complete, at a success exit and with no
+  diagnostic. The registry is built by the caller, before the call, and therefore before the
+  closure exists — so a `--path-relation` walk (or a `path_relations` / `relations_from_graph`
+  registration) read the SOURCE data while every other pattern in the same query read the
+  closure. Over `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub ex:c .` under
+  `rdfs`, `SELECT ?end WHERE { ex:a ex:p+ ?end }` answered `ex:b, ex:c` and the equivalent walk
+  answered `ex:b` alone. Both entry points now materialize the closure FIRST and register the
+  relations against it, so the two halves of one query read one dataset: `query_with_entailment`
+  and `query_with_entailment_governed` take a new `relations: &ClosureRelations<'_>` argument
+  (after `options`, before `governors`). Rust callers whose relations are dataset-independent —
+  an in-memory table, an empty registry — pass `ClosureRelations::NONE` and keep their present
+  behaviour byte for byte; a caller with a dataset-derived relation passes
+  `ClosureRelations::rebuilt_by(&f)`, where `f` is handed the materialized closure and returns
+  the registry to answer with. The CLI and Python surfaces are unchanged in shape and now supply
+  the rebuilder themselves; the C ABI and WebAssembly surfaces register no relation and pass
+  `NONE`. One pairing is refused rather than answered: a rebuilder combined with an OWL
+  Direct-Semantics run whose restricted chase MINTED existential witnesses, because a walk over
+  that closure could return a minted blank node as an observable binding and the regime's witness
+  filtration cannot reach a property function's output. It carries the stable code
+  `reasoning-closure-relation-witness` (exit 2 from the CLI, `ValueError` from Python) and names
+  the regimes that accept the pairing; an `owl-direct` run that mints no witness is not refused.
 - **BREAKING** **iri,rdf,cli:** A relative IRI reference with no base IRI in scope is now a hard
   error instead of being interned verbatim. Documents that previously "worked" this way were
   emitting N-Triples no conformant parser accepts, so the failure surfaces an existing defect

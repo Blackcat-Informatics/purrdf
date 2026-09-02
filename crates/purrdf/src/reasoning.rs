@@ -13,7 +13,7 @@ use purrdf_entail::{
     materialize_combined, materialize_combined_until,
 };
 use purrdf_rdf::{
-    DatasetView, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, RdfTextDirection,
+    DatasetView, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, RdfTextDirection,
     SparqlRequest, SparqlResult, TermValue, dataset_from_view,
 };
 use purrdf_sparql_algebra::{
@@ -21,8 +21,8 @@ use purrdf_sparql_algebra::{
     PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 use purrdf_sparql_eval::{
-    BudgetExhausted, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors,
-    QueryOptions, StopCause, StopSignal, TrippedGovernor,
+    BudgetExhausted, EvalError, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
+    PropertyFunctionRegistry, QueryGovernors, QueryOptions, StopCause, StopSignal, TrippedGovernor,
 };
 
 /// A reasoning session over one ontology — the OWL 2 Direct-Semantics services, held
@@ -176,6 +176,163 @@ impl From<EntailError> for ReasoningError {
     }
 }
 
+/// How a caller's **dataset-derived** property-function relations are re-derived over the
+/// closure an entailment-regime query is actually answered against.
+///
+/// # The problem this parameter exists to solve
+///
+/// A [`QueryOptions::property_functions`] registry is built by the caller, before the call.
+/// For an ordinary query that is unremarkable: the caller holds the dataset the query will
+/// run over, so a relation snapshotted from it answers about the same edges every other
+/// pattern in the query reads. An entailment-regime query breaks that identity. The dataset
+/// the query is evaluated over is the CLOSURE, which this function materializes internally
+/// and the caller never holds — so a relation the caller snapshotted answers about the
+/// PRE-closure data while the rest of the query reads the closure. The two halves of one
+/// query then read two different datasets.
+///
+/// That is not a theoretical divergence. Over
+/// `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub ex:c .`, under
+/// [`QueryEntailment::Rdfs`], `SELECT ?end WHERE { ex:a ex:p+ ?end }` answers `ex:b, ex:c`
+/// (the closure derives `ex:b ex:p ex:c`) while a
+/// [`PathWitnessRelation`](purrdf_sparql_eval::PathWitnessRelation) over the same step
+/// answers `ex:b` alone — a SHORT bag, returned complete, with no diagnostic. The
+/// property-function seam hands a relation no dataset at evaluation time, so nothing
+/// downstream can notice.
+///
+/// Supplying a rebuilder here is what closes it: the closure is materialized first, the
+/// relations are derived from THAT dataset, and the query is then prepared and evaluated
+/// against a registry that answers about the edges the rest of the query sees.
+///
+/// # [`NONE`](Self::NONE) is not a weaker setting; it is a different claim
+///
+/// Not every relation is derived from a dataset. A lookup table registered from host
+/// memory answers identically no matter what the query runs over, and re-deriving it would
+/// be meaningless work. [`NONE`] states exactly that — "every relation in `options` is
+/// dataset-independent" — and is the correct value for such a registry, for an empty one,
+/// and for [`QueryEntailment::Simple`], whose closure is the source dataset.
+///
+/// [`NONE`]: Self::NONE
+pub struct ClosureRelations<'a> {
+    /// Derives the relation registry from the materialized closure, or `None` when the
+    /// caller's registry is dataset-independent and needs no re-derivation.
+    rebuild: Option<&'a RelationRebuilder<'a>>,
+}
+
+/// The host callback [`ClosureRelations::rebuilt_by`] takes: the materialized closure in,
+/// the registry to answer it with out.
+///
+/// Named rather than written inline because it appears in three positions — the field, the
+/// constructor's parameter, and the private reader that calls it — and a
+/// hand-repeated `dyn Fn` signature is three places for the three to drift apart.
+pub type RelationRebuilder<'a> =
+    dyn Fn(&RdfDataset) -> Result<PropertyFunctionRegistry, EvalError> + 'a;
+
+impl std::fmt::Debug for ClosureRelations<'_> {
+    /// Which of the two shapes this value has. The rebuilder itself is host code with no
+    /// rendering of its own, so naming it would print a pointer nobody can act on.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClosureRelations")
+            .field("rebuild", &self.rebuild.map(|_| "<host rebuilder>"))
+            .finish()
+    }
+}
+
+impl<'a> ClosureRelations<'a> {
+    /// Every relation in the caller's registry is dataset-independent, so the registry
+    /// passed in `options` is the one the closure is queried with, unchanged.
+    pub const NONE: Self = Self { rebuild: None };
+
+    /// Re-derive the relation registry from the materialized closure with `build`.
+    ///
+    /// `build` is handed the exact dataset the SPARQL evaluation will run over, and the
+    /// registry it returns replaces [`QueryOptions::property_functions`] for both the
+    /// prepare and the evaluation of the closure's query — both, because a plan carries
+    /// the identity of the registry it was prepared against and refuses to run against
+    /// any other (see `purrdf_sparql_eval`'s `RegistryId`).
+    #[must_use]
+    pub const fn rebuilt_by(build: &'a RelationRebuilder<'a>) -> Self {
+        Self {
+            rebuild: Some(build),
+        }
+    }
+
+    /// Whether a rebuilder was supplied.
+    #[must_use]
+    pub const fn is_some(&self) -> bool {
+        self.rebuild.is_some()
+    }
+
+    /// The [`RdfDiagnostic::code`] of the one combination this parameter refuses: a
+    /// rebuilder supplied for an OWL Direct-Semantics run whose restricted chase minted
+    /// existential witnesses.
+    ///
+    /// Owned here, and named here, so a host that wants to classify the refusal — the CLI
+    /// raises it as a USAGE error rather than a runtime one, because the operator combined
+    /// two flags — compares against this constant instead of retyping the string.
+    pub const WITNESS_REFUSAL_CODE: &'static str = "reasoning-closure-relation-witness";
+
+    /// The [`RdfDiagnostic::code`] carrying a rebuilder's OWN failure — the host's
+    /// snapshot of the closure did not build. See [`Self::WITNESS_REFUSAL_CODE`] for why
+    /// the string lives here.
+    pub const REBUILD_FAILURE_CODE: &'static str = "reasoning-closure-relation-rebuild";
+}
+
+/// Re-derive `relations` over the materialized `closure`, or `Ok(None)` when the caller
+/// declared its registry dataset-independent.
+///
+/// # Why a chase witness is refused here rather than filtered later
+///
+/// `surrogates` is the set of blank labels the OWL-Direct combined approach's restricted
+/// chase minted as existential witnesses. Those terms are legitimate bindings for a
+/// variable the answer never exposes and illegitimate for one it does, and
+/// [`restrict_witness_bindings`] enforces that — but it enforces it by wrapping the
+/// pattern leaves that READ the entailed graph, and it deliberately treats a
+/// property-function call as the identity, on the stated grounds that nothing a call emits
+/// can be a witness because its rows come from the host's registry rather than from the
+/// closure.
+///
+/// Re-deriving a relation FROM the closure is precisely the change that would make that
+/// sentence false: a walk over the chase's edges can reach a minted witness and hand it
+/// back as an observable binding, past every filter built to stop it. So the combination
+/// is refused, and refused on the narrowest condition that can carry the leak — a
+/// rebuilder supplied AND witnesses actually minted. A non-Horn TBox mints none and takes
+/// the whole-vocabulary augmentation instead; a Horn one whose chase fired no existential
+/// rule mints none either. Both keep answering, with their relations derived over the
+/// closure like every other regime's.
+fn relations_over_closure(
+    relations: &ClosureRelations<'_>,
+    closure: &RdfDataset,
+    surrogates: &BTreeSet<String>,
+) -> Result<Option<PropertyFunctionRegistry>, ReasoningError> {
+    let Some(build) = relations.rebuild else {
+        return Ok(None);
+    };
+    if !surrogates.is_empty() {
+        return Err(ReasoningError::Query(
+            RdfDiagnostic::error(
+                ClosureRelations::WITNESS_REFUSAL_CODE,
+                "a property-function registry derived from the closure cannot be combined \
+                 with an OWL Direct-Semantics run whose restricted chase minted existential \
+                 witnesses: a relation walking the closure could return a minted blank node \
+                 as an observable binding, which the entailment regime's scoping graph does \
+                 not contain",
+            )
+            .with_detail(format!(
+                "{} witness term(s) were minted. Query this ontology under an entailment \
+                 regime that mints none (rdf, rdfs, owl-rl, d, rif, simple), or drop the \
+                 dataset-derived relations from this call",
+                surrogates.len()
+            )),
+        ));
+    }
+    build(closure).map(Some).map_err(|error| {
+        ReasoningError::Query(RdfDiagnostic::error(
+            ClosureRelations::REBUILD_FAILURE_CODE,
+            format!("deriving the property-function relations over the closure failed: {error}"),
+        ))
+    })
+}
+
 /// Evaluate SPARQL under an explicit native entailment regime, and say what the reasoner
 /// did.
 ///
@@ -212,6 +369,14 @@ impl From<EntailError> for ReasoningError {
 /// which reads no registry of any kind. Pass [`QueryOptions::EMPTY`] to configure none,
 /// which is the behaviour this function had before it took the parameter.
 ///
+/// # `relations` is how a DATASET-DERIVED relation reaches the closure
+///
+/// `options.property_functions` is built before this call and therefore before the closure
+/// exists, so a relation snapshotted from the caller's dataset answers about the
+/// PRE-closure edges while every other pattern in the query reads the closure.
+/// [`ClosureRelations`] is the parameter that fixes the order — see its documentation for
+/// the worked divergence and for when [`ClosureRelations::NONE`] is the right value.
+///
 /// # Errors
 ///
 /// Returns [`ReasoningError::Query`] for SPARQL failures and
@@ -222,6 +387,7 @@ pub fn query_with_entailment<D: DatasetView>(
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
     options: QueryOptions<'_>,
+    relations: &ClosureRelations<'_>,
 ) -> Result<(SparqlResult, ReasoningReport), ReasoningError> {
     // Parse first so invalid queries fail before potentially expensive closure work.
     // OWL Direct also inspects this same cached plan, avoiding a second parse/cache lookup.
@@ -290,6 +456,24 @@ pub fn query_with_entailment<D: DatasetView>(
     // sees the filtered sequence) and a constructed graph (scrubbed after, because a
     // `DESCRIBE` draws triples from the dataset rather than from a variable binding).
     let surrogates = combined_surrogates.unwrap_or_default();
+    // Materialize, THEN register: a dataset-derived relation is re-derived over the closure
+    // that is about to be queried, so the walk and the surrounding patterns read one
+    // dataset rather than two. The re-parse is what makes the swap legal as well as
+    // correct — a plan carries the identity of the registry it was prepared against, and a
+    // registry built here is a different instance than the one `options` arrived with.
+    let rebound = relations_over_closure(relations, &prepared, &surrogates)?;
+    let options = match rebound.as_ref() {
+        Some(registry) => QueryOptions {
+            property_functions: registry,
+            ..options
+        },
+        None => options,
+    };
+    let prepared_query = if rebound.is_some() {
+        engine.prepare_query_with_options(request.query, request.base_iri, options)?
+    } else {
+        prepared_query
+    };
     // The rewrite is tagged with the SAME `options` the original plan was prepared under —
     // required by `PreparedQuery::rewritten`'s own contract, and necessary here: the
     // rewritten plan is evaluated under `options` below, and a mismatched tag would refuse
@@ -513,12 +697,23 @@ impl purrdf_datalog::StopSignal for ClosureStop {
 /// [`ReasoningError::Entailment`] for malformed or inconsistent knowledge bases. A tripped
 /// governor is **not** an error in either phase: it is one of the two arms of
 /// [`GovernedEntailment`].
+///
+/// # `relations` is how a DATASET-DERIVED relation reaches the closure
+///
+/// `options.property_functions` is built before this call and therefore before the closure
+/// exists, so a relation snapshotted from the caller's dataset answers about the
+/// PRE-closure edges while every other pattern in the query reads the closure.
+/// [`ClosureRelations`] is the parameter that fixes the order — see its documentation for
+/// the worked divergence and for when [`ClosureRelations::NONE`] is the right value. It is
+/// what the `purrdf query --path-relation --entailment …` and Python
+/// `path_relations=`-plus-`entailment=` pairings both supply.
 pub fn query_with_entailment_governed<D: DatasetView>(
     engine: &NativeSparqlEngine,
     dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
     options: QueryOptions<'_>,
+    relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError> {
     // Parse first, exactly as the ungoverned lane does: an invalid query is a failure rather
@@ -609,6 +804,21 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     // any truncation), and the scrub is over the result (so it reaches a `DESCRIBE`'s
     // triples). See this function's documentation for why a partial answer needs both.
     let surrogates = combined_surrogates.unwrap_or_default();
+    // Materialize, THEN register — the same order, and for the same reason, as the
+    // ungoverned lane's. See `relations_over_closure`.
+    let rebound = relations_over_closure(relations, &prepared, &surrogates)?;
+    let options = match rebound.as_ref() {
+        Some(registry) => QueryOptions {
+            property_functions: registry,
+            ..options
+        },
+        None => options,
+    };
+    let prepared_query = if rebound.is_some() {
+        engine.prepare_query_with_options(request.query, request.base_iri, options)?
+    } else {
+        prepared_query
+    };
     // Tagged with the SAME `options` the original plan was prepared under — see
     // `query_with_entailment`'s identical rewrite for why a mismatched tag would refuse the
     // plan rather than silently drop a registry.
@@ -1624,6 +1834,7 @@ mod tests {
             },
             mode,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .unwrap()
     }
@@ -1675,6 +1886,7 @@ mod tests {
             },
             QueryEntailment::D,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .unwrap();
         // `dt-type1` is premise-free, so every supported datatype is typed in every closure.
@@ -1693,6 +1905,7 @@ mod tests {
                 },
                 QueryEntailment::Simple,
                 QueryOptions::EMPTY,
+                &ClosureRelations::NONE,
             )
             .unwrap()
             .0,
@@ -1760,6 +1973,7 @@ mod tests {
                 aggregates: &registry,
                 ..QueryOptions::EMPTY
             },
+            &ClosureRelations::NONE,
         )
         .expect("the registered aggregate resolves over the entailed closure");
         assert_eq!(report.regime(), Regime::Rdfs);
@@ -1792,6 +2006,7 @@ mod tests {
             },
             QueryEntailment::Rdfs,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .expect_err("an unregistered custom aggregate must be refused, entailed or not");
         assert!(
@@ -1826,6 +2041,7 @@ mod tests {
             },
             QueryEntailment::Rdf,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .unwrap();
         assert!(matches!(result, SparqlResult::Boolean(true)));
@@ -1913,6 +2129,7 @@ mod tests {
             },
             QueryEntailment::OwlDirect,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .unwrap();
         assert_eq!(report.regime(), Regime::OwlDirect);
@@ -1957,6 +2174,7 @@ mod tests {
             },
             QueryEntailment::OwlDirect,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .unwrap();
         assert_eq!(report.regime(), Regime::OwlDirect);
@@ -1998,6 +2216,7 @@ mod tests {
             },
             QueryEntailment::OwlDirect,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .unwrap();
         assert_eq!(report.regime(), Regime::OwlDirect);
@@ -2051,6 +2270,7 @@ mod tests {
             },
             QueryEntailment::OwlDirect,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .expect("owl-direct answers")
     }

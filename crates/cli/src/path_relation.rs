@@ -421,6 +421,27 @@ pub(crate) fn build_registry<D: DatasetView>(
     if specs.is_empty() {
         return Ok(None);
     }
+    registry_over(view, specs)
+        .map(Some)
+        .map_err(CliError::Usage)
+}
+
+/// [`build_registry`]'s core, with the failure left as the already-named message rather
+/// than wrapped in a [`CliError`].
+///
+/// Split out for the ENTAILMENT lane, which cannot use the `CliError` spelling: it hands
+/// this to [`purrdf::ClosureRelations::rebuilt_by`], which runs it against the closure the
+/// reasoner materialized and takes a `purrdf_sparql_eval::EvalError` back. Both callers
+/// snapshot the same specs the same way; only the error's clothing differs.
+///
+/// # Errors
+///
+/// The `--path-relation <iri>: …` message naming the relation and the kernel's own
+/// diagnostic, when a step or an envelope is malformed.
+pub(crate) fn registry_over<D: DatasetView>(
+    view: &D,
+    specs: &[PathRelationSpec],
+) -> Result<PropertyFunctionRegistry, String> {
     let mut registry = PropertyFunctionRegistry::new();
     for spec in specs {
         let alternatives = spec
@@ -455,13 +476,13 @@ pub(crate) fn build_registry<D: DatasetView>(
             }
         }
     }
-    Ok(Some(registry))
+    Ok(registry)
 }
 
 /// Attach the relation's IRI to a kernel diagnostic, so a multi-relation command line
 /// says which `--path-relation` was wrong.
-fn named(iri: &str, error: &purrdf_sparql_eval::EvalError) -> CliError {
-    CliError::Usage(format!("--path-relation <{iri}>: {error}"))
+fn named(iri: &str, error: &purrdf_sparql_eval::EvalError) -> String {
+    format!("--path-relation <{iri}>: {error}")
 }
 
 #[cfg(test)]

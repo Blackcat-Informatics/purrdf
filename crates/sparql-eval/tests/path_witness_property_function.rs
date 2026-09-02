@@ -1633,9 +1633,18 @@ fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
         estimate,
     } = exhausted.tripped
     else {
+        // The trip is named rather than rendered. `TrippedGovernor` has three variants and
+        // this arm rules out exactly two of them, so saying which two is the whole of the
+        // information a `{:?}` would carry — and a formatted `.tripped` is what CodeQL's
+        // `rust/cleartext-logging` heuristic flags, because the field is reached through a
+        // value called `certificate` and the rule keys on the NAME. That is a false
+        // positive, and the honest way to hold a security gate green is to stop giving it
+        // the shape rather than to dismiss the finding: nothing here needs the payload.
         panic!(
-            "admission refuses before evaluation: {:?}",
-            exhausted.tripped
+            "admission refuses this call before any row is produced, so the trip must be \
+             Refused — a Budget means the estimate admitted the call and the ceiling then \
+             bit during evaluation, and a Stopped means a signal fired that this test never \
+             installs"
         );
     };
     assert_eq!(dimension, ResourceDimension::IntermediateCells);

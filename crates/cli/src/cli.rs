@@ -478,6 +478,13 @@ pub(crate) enum Command {
         /// literal semicolon and `\\` for a literal backslash. Any other backslash escape
         /// is refused rather than passed through, so a typo cannot become a predicate that
         /// registers and then silently matches nothing.
+        ///
+        /// Beside `--entailment`, the step is snapshotted over the CLOSURE — the dataset
+        /// the query is answered over — so a regime that DERIVES a quad under the step's
+        /// predicate widens the walk exactly as it widens a `p+` in the same query. The
+        /// one refused pairing is `--entailment owl-direct` on an ontology whose
+        /// restricted chase mints existential witnesses; the refusal names itself and the
+        /// regimes that accept it.
         #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
         path_relation: Vec<crate::path_relation::PathRelationSpec>,
         /// The SPARQL query text.

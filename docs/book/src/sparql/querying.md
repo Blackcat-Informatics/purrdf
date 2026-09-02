@@ -1368,6 +1368,39 @@ store.query(
 )
 ```
 
+### Under an entailment regime, the walk reads the closure
+
+A path relation is a snapshot of the step's edges, and the dataset it must be
+snapshotted from is the one the query is *answered over*. Under `--entailment`
+(or Python's `query_entailment_governed`) that is the **closure**, not the source
+graph — so a regime that derives a quad under the step's predicate widens the walk
+exactly as it widens a `p+` written beside it. Over
+
+```turtle
+ex:sub rdfs:subPropertyOf ex:p .
+ex:a   ex:p ex:b .
+ex:b   ex:sub ex:c .
+```
+
+`SELECT ?end WHERE { ex:a ex:p+ ?end }` under `rdfs` answers `ex:b, ex:c`, and the
+registered walk seeded at `ex:a` reaches `ex:c` too. Without the regime both stop at
+`ex:b`, because the derived `ex:b ex:p ex:c` does not exist to be walked.
+
+One pairing is refused rather than answered: `--entailment owl-direct` on an ontology
+whose restricted chase mints existential witnesses. Those witnesses are blank nodes
+that are not terms of the scoping graph, and the regime's witness filtration cannot
+reach a property function's output — so a walk over that closure could hand one back
+as a binding. The refusal carries the code `reasoning-closure-relation-witness` and
+names the regimes that do accept the pairing. An `owl-direct` run that mints no
+witness — a TBox outside the combined approach's Horn fragment, or one whose chase
+fires no existential rule — is not refused.
+
+The Rust surface spells the same thing explicitly: `query_with_entailment` and
+`query_with_entailment_governed` take a `ClosureRelations` argument, which is either
+`ClosureRelations::NONE` (every registered relation is dataset-independent, so the
+caller's registry is used unchanged) or `ClosureRelations::rebuilt_by(&f)`, where `f`
+is handed the materialized closure and returns the registry to answer with.
+
 ## Reaching extensions from other hosts
 
 The SHACL-AF function registry and the GENERAL custom-aggregate registry are
