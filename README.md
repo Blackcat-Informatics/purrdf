@@ -236,8 +236,9 @@ triple pattern.
     float arithmetic (the one float boundary is the `xsd:double` result
     literal). The `geof:` family lands on the scalar seam and the spatial
     relations rewrite through the property-function seam; `geof:transform`,
-    the buffers, hulls, overlay set operations and GML/KML/DGGS encodings are
-    registered but **hard-error by name** rather than answering a default, and
+    the buffers, the concave hull, the overlay set operations and the
+    GML/KML/DGGS encodings are registered but **hard-error by name** rather
+    than answering a default (`geof:convexHull` is implemented), and
     a `metric*` measure answers only in a CRS the caller declared in metres
     (there is no ellipsoidal geodesic).
   - **Embedding kNN** — nearest-neighbour search over a

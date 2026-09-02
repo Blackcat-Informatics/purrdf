@@ -14,8 +14,9 @@ and on wasm32. It is GeoSPARQL 1.1's topological predicates, accessors, and
 exactly computable measures and constructors over vector geometry, not a
 PostGIS: `geof:transform` hard-errors by name (there is no CRS database), a
 `metric*` measure answers only in a CRS the caller declared in metres (there is
-no ellipsoidal geodesic), and buffers, hulls, the overlay set operations and
-the GML/KML/DGGS encodings are registered and hard-error by name. No raster.
+no ellipsoidal geodesic), and the buffers, the concave hull (`geof:convexHull`
+is implemented), the overlay set operations and the GML/KML/DGGS encodings are
+registered and hard-error by name. No raster.
 
 `purrdf-geo` (`purrdf::geo` from the umbrella crate) implements GeoSPARQL 1.1
 (OGC 22-047r1) for PurRDF: exact, float-free geometry reached from SPARQL
