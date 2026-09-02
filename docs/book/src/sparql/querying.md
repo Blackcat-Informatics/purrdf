@@ -83,9 +83,10 @@ Anything outside this surface — and every malformed query — is a typed
   definition itself, chosen per site by a prepare-time admissibility proof —
   see [below](#exists-under-sep-0007).
 - **The SERVICE seam** — `SERVICE` federation is evaluated through a
-  **host-injectable transport**: the engine itself performs no I/O, so
+  **host-injectable `ServiceResolver`**: the engine itself performs no I/O, so
   federation stays wasm-portable and the host decides how (and whether)
-  remote endpoints are reached. All seven W3C `service` federation cases pass
+  remote endpoints are reached — down to per-service headers, credentials and
+  capabilities (see [below](#per-service-context-the-serviceresolver-seam)). All seven W3C `service` federation cases pass
   through this seam. The forwarded body is re-emitted through the
   deterministic serializer — the federation wire format — whose
   parse → serialize → re-parse fidelity is swept over the 823-item corpus
@@ -470,6 +471,88 @@ side's per-row correlation — the endpoint resolves to that IRI before the
 remote call is made (the same per-row substitution described under "Points of
 disagreement with Jena" above) and the query dispatches normally, the same as
 a `SERVICE` with a fixed IRI.
+
+### Per-service context: the `ServiceResolver` seam
+
+`SERVICE` is answered through one trait, `ServiceResolver`, which receives the
+whole request as a `ServiceRequest` — endpoint, forwarded query text, the
+`SILENT` flag, the executing query's stop signal, and the intermediate-cell
+ceiling. Two implementations ship: `HttpRemoteQuerySource`, which builds and
+decodes SPARQL Protocol requests over a host-injected `HttpTransport`, and
+`InProcessServiceResolver`, which answers from datasets already in memory.
+
+Everything a resolver needs to know about an *individual* service — extra
+headers, a credential, a timeout, and what it is permitted to do — lives on the
+resolver in a `ServiceCatalog`, keyed by the service IRI. Deliberately not in
+the IRI itself: a service IRI is a name, not a credential store, and encoding
+context there would put it into the query text, where it is visible to whoever
+wrote the query, is serialized into plans and receipts, and travels along with a
+nested `SERVICE` body.
+
+A `ServiceCatalog` maps each service IRI to a `ServiceProfile`, and each profile
+grants an explicit set of capabilities:
+
+| Capability | Grants |
+|---|---|
+| `Query` | resolving this service at all |
+| `Network` | performing network I/O to resolve it |
+| `Credentials` | attaching the profile's credential to the request |
+
+A catalog denies by default: a service with no entry and no explicitly
+configured fallback profile is refused. Gating is opt-in — a resolver with no
+catalog behaves exactly as it did before catalogs existed, contacting whatever
+endpoint it is handed and adding no headers — and configuring a catalog changes
+no byte of a request whose profile adds nothing.
+
+Withholding `Network` is what makes an in-process façade *provable* rather than
+promised: `InProcessServiceResolver` owns a dataset map and nothing else — no
+transport, no socket, no injected callback — so there is no code path through it
+that performs I/O. A host can therefore offer `SERVICE`-shaped composition
+without `SERVICE`-shaped risk. `ServiceRouter` composes the two, sending some
+services in process and the rest to the network, with the routing table rather
+than the query text deciding which is which. The catalog is consulted on
+*every* resolution, nested ones included, so a `SERVICE` buried inside a
+forwarded body cannot reach an endpoint the catalog refuses at the top level.
+
+The policy is applied *before* the transport is called, which is the whole
+difference between a gate and an audit log: a denied service never has its
+socket opened and then discarded.
+
+### The `SILENT` contract
+
+SPARQL 1.1 §10 says a `SERVICE SILENT` clause whose endpoint cannot be reached
+"will be considered to have matched with a single, empty, solution" — the join
+identity, so the surrounding query proceeds unchanged. PurRDF keeps that promise
+exactly, and confines it to what it is a promise *about*:
+
+| Outcome | `SERVICE` | `SERVICE SILENT` |
+|---|---|---|
+| The endpoint is unreachable, or its response undecodable | query error | join identity |
+| A capability was denied | query error | query error |
+| This engine's own governor tripped | truncation | truncation |
+
+The first and last rows are long-standing behaviour: `SILENT` is a statement
+about an endpoint the caller does not control, never about the caller's own
+budget, so a governor trip reached through a `SERVICE` clause propagates as a
+truncation whether or not `SILENT` is written.
+
+The middle row follows from that same principle. A capability denial is a
+decision taken on *this* side of the seam — by the host running the engine,
+deterministically, before any endpoint was consulted — so it is exactly like a
+governor trip and nothing like an unreachable endpoint. Swallowing one would put
+the join identity into the surrounding join, making it a no-op, and hand back an
+answer that looks complete and is wrong; and because a denial is permanent
+rather than transient, it would be wrong identically on every run, so nothing
+would ever surface a symptom.
+
+There is deliberately no knob that softens this. A host that genuinely wants a
+blocked service to behave like an unreachable one already has an exact way to
+say so: return a transport error from its own resolver. That is an honest claim
+that the endpoint did not answer, and `SILENT` swallows it under the first row.
+Adding a visibility flag would have bought no expressive power, only a second
+spelling of an existing one — and with it the possibility of two callers running
+the same query over the same data through the same resolver and getting
+different answers.
 
 ## EXISTS under SEP-0007
 

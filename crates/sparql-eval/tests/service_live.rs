@@ -14,7 +14,7 @@ use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause, Tri
 use purrdf_sparql_algebra::Variable;
 use purrdf_sparql_eval::{
     CancellationFlag, HttpRemoteQuerySource, HttpRequest, NativeSparqlEngine, PartialAnswers,
-    QueryGovernors, QueryOptions, RemoteError, RemoteQuerySource, StopSignal,
+    QueryGovernors, QueryOptions, RemoteError, ServiceRequest, ServiceResolver, StopSignal,
 };
 
 const ENDPOINT: &str = "https://query.example/sparql";
@@ -46,7 +46,10 @@ fn fixture_transport(request: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
 fn http_transport_decodes_remote_bindings() {
     let source = HttpRemoteQuerySource::new(fixture_transport);
     let resolved = source
-        .query(ENDPOINT, "SELECT ?x WHERE { BIND(1 AS ?x) }", None, None)
+        .resolve(ServiceRequest::new(
+            ENDPOINT,
+            "SELECT ?x WHERE { BIND(1 AS ?x) }",
+        ))
         .expect("injected transport");
     assert_eq!(resolved.variables, vec![Variable::new("x")]);
     assert_eq!(resolved.rows.len(), 1, "expected exactly one binding row");
@@ -57,7 +60,10 @@ fn http_transport_decodes_remote_bindings() {
 fn http_transport_cell_bound_decodes_no_limit_plus_one_row() {
     let source = HttpRemoteQuerySource::new(fixture_transport);
     let resolved = source
-        .query(ENDPOINT, "SELECT ?x WHERE { BIND(1 AS ?x) }", None, Some(0))
+        .resolve(
+            ServiceRequest::new(ENDPOINT, "SELECT ?x WHERE { BIND(1 AS ?x) }")
+                .with_max_intermediate_cells(Some(0)),
+        )
         .expect("the bounded response is a typed prefix, not a decode error");
 
     assert_eq!(resolved.variables, vec![Variable::new("x")]);
@@ -91,7 +97,7 @@ fn the_stop_signal_travels_with_the_request_and_gates_it() {
 
     let query = "SELECT ?x WHERE { BIND(1 AS ?x) }";
     source
-        .query(ENDPOINT, query, Some(&signal), None)
+        .resolve(ServiceRequest::new(ENDPOINT, query).with_stop(Some(&signal)))
         .expect("an unfired signal does not gate the request");
     assert_eq!(posts.load(Ordering::Relaxed), 1);
 
@@ -99,7 +105,7 @@ fn the_stop_signal_travels_with_the_request_and_gates_it() {
     // only be observed after the exchange returned would not bound the exchange.
     flag.cancel();
     let err = source
-        .query(ENDPOINT, query, Some(&signal), None)
+        .resolve(ServiceRequest::new(ENDPOINT, query).with_stop(Some(&signal)))
         .expect_err("a fired signal refuses the request");
     assert_eq!(
         err,

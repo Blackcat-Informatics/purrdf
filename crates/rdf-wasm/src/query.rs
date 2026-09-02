@@ -12,7 +12,7 @@
 //! ## Federation is intentionally absent
 //!
 //! This binds the plain [`SparqlEngine::query`](purrdf_core::SparqlEngine::query)
-//! entry — the one with **no** [`RemoteQuerySource`](purrdf_sparql_eval::remote)
+//! entry — the one with **no** [`ServiceResolver`](purrdf_sparql_eval::remote)
 //! installed. A `SERVICE` or `LOAD` clause therefore **hard-fails** with a JsError
 //! rather than silently returning an empty or partial result: in a browser there is
 //! no resolver to fetch a remote graph, and a false answer is worse than an error.

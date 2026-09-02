@@ -113,6 +113,9 @@ pub mod remote;
 pub mod remote_http;
 mod row_ingest;
 pub mod scratch;
+// Per-service context for the SERVICE seam: the capability/credential/header policy a
+// host attaches to individual endpoints, and the two resolvers built on it.
+pub mod service;
 pub mod solution;
 pub mod stat_agg;
 mod substitute;
@@ -167,9 +170,16 @@ pub use property_fn::{
     MemoryRelation, PfArgs, PfArity, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
     PropertyFunctionRegistry,
 };
-pub use remote::{LocalRemoteQuerySource, RemoteError, RemoteQuerySource, ResolvedBindings};
+pub use remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
 pub use remote_http::{HttpRemoteQuerySource, HttpRequest, HttpTransport};
+// The per-service policy surface: what a resolver may do for one endpoint, what it
+// sends, and the two resolvers that consume it. Re-exported so a host configures
+// federation without naming the module path.
 pub use scratch::{ScratchId, ScratchInterner, SolutionTerm};
+pub use service::{
+    InProcessServiceResolver, ServiceCapabilities, ServiceCapability, ServiceCatalog,
+    ServiceCredential, ServiceDenial, ServiceProfile, ServiceRouter,
+};
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::{GraphResolveRequest, GraphResolver};
 pub use user_fn::{
