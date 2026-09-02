@@ -34,7 +34,7 @@ use purrdf::sparql::{
     WallDeadline,
 };
 use purrdf::{BlankScope, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
-use purrdf::{GovernedEntailment, QueryEntailment, query_with_entailment};
+use purrdf::{ClosureRelations, GovernedEntailment, QueryEntailment, query_with_entailment};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
@@ -86,6 +86,7 @@ fn query_with_entailment_governed_(
         },
         entailment,
         QueryOptions::EMPTY,
+        &ClosureRelations::NONE,
         governors,
     )
 }
@@ -202,6 +203,7 @@ fn an_unreached_ceiling_answers_exactly_as_the_ungoverned_lane_does() {
         },
         QueryEntailment::Rdfs,
         QueryOptions::EMPTY,
+        &ClosureRelations::NONE,
     )
     .expect("the ungoverned lane answers");
 
@@ -253,6 +255,7 @@ fn the_ungoverned_lane_is_byte_for_byte_unchanged() {
             },
             mode,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .expect("the ungoverned lane answers");
         assert_eq!(report.regime(), regime, "{regime:?}");
@@ -322,6 +325,7 @@ fn a_custom_aggregate_registry_reaches_the_governed_entailed_closure() {
             aggregates: &registry,
             ..QueryOptions::EMPTY
         },
+        &ClosureRelations::NONE,
         &QueryGovernors::UNBOUNDED,
     )
     .expect("the registered aggregate resolves over the governed entailed closure");
@@ -520,6 +524,7 @@ fn a_signal_that_never_fires_changes_no_closure() {
             },
             mode,
             QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
         )
         .expect("the ungoverned lane answers");
 

@@ -24,6 +24,14 @@
 //!
 //! # The governed surface
 //!
+//! It also owns the Python side of caller-supplied property-function relations —
+//! [`RelationSpec`] and its three keyword spellings (`relations`,
+//! `relations_from_graph`, `path_relations`). All three cross the boundary as **pure
+//! data**: a table of terms, the head of one written in the store's own dataset, or a
+//! traversal SPECIFICATION over the store's own edges. None of them is a Python
+//! callable, which is what keeps the seam GIL-free — nothing the engine invokes while
+//! detached can re-enter the interpreter.
+//!
 //! This module also owns the Python side of caller-supplied execution governors:
 //! [`GovernorArgs`] (the ceilings a keyword argument carries), [`PyStopWatch`] (the
 //! composed stop signal — the caller's token, the caller's deadline, and the
@@ -48,8 +56,9 @@ use purrdf_core::{GraphMatch, ResourceVector};
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
     GovernorEvidence, MemoryRelation, NativeSparqlEngine, ParserOptions, PartialAnswers,
-    PropertyFunctionRegistry, QueryGovernors, ResourceDimension, StandpointPredicates, StopCause,
-    StopSignal, TrippedGovernor, WallDeadline,
+    PathDirection, PathGraph, PathLimits, PathStep, PathWitnessRelation, PropertyFunction,
+    PropertyFunctionRegistry, QueryGovernors, ResourceDimension, ShortestPathWitnessRelation,
+    StandpointPredicates, StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -118,11 +127,14 @@ pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
 /// the GIL is released.
 ///
 /// A relation the Python surface registers is pure data — a frozen table of
-/// [`TermValue`]s, or the head of one written in the store's own dataset — never a
-/// Python callable. That is what makes the seam GIL-free: nothing the engine invokes
-/// while detached can re-enter the interpreter, so a relation is `Send + Sync` owned
-/// data exactly as a Rust host's [`MemoryRelation`] is.
-#[derive(Debug)]
+/// [`TermValue`]s, the head of one written in the store's own dataset, or a traversal
+/// SPECIFICATION over the store's own edges — never a Python callable. That is what
+/// makes the seam GIL-free: nothing the engine invokes while detached can re-enter the
+/// interpreter, so a relation is `Send + Sync` owned data exactly as a Rust host's
+/// [`MemoryRelation`] is. The path-witness variant keeps that property by carrying the
+/// traversal's DEFINITION (directed predicates and an explicit envelope) rather than a
+/// callback the traversal would ask for each hop.
+#[derive(Debug, Clone)]
 pub(super) enum RelationSpec {
     /// Rows supplied as Python data: `(subject_arity, object_arity, rows)`.
     Rows {
@@ -144,30 +156,60 @@ pub(super) enum RelationSpec {
         /// The declared number of object-side arguments.
         object_arity: usize,
     },
+    /// A path-witness traversal over the store's own edges, declared as
+    /// `(steps, min_hops, max_hops, max_paths_per_seed, max_expansions_per_invocation,
+    /// mode)`.
+    ///
+    /// Every field is mandatory. [`PathLimits`] deliberately has no `Default`: a
+    /// zero-hop path has no witness, and an unbounded traversal depth is a stack
+    /// overflow — an ABORT, which escapes the property-function seam's panic containment
+    /// entirely — so this binding invents no envelope on the caller's behalf.
+    PathWitness {
+        /// The hop's ordered alternation of directed predicates, already resolved out
+        /// of Python's `"forward"` / `"inverse"` spelling.
+        steps: Vec<(TermValue, PathDirection)>,
+        /// The shortest walk length the relation accepts.
+        min_hops: u32,
+        /// The longest walk length the relation accepts.
+        max_hops: u32,
+        /// Candidate walks one seed may enumerate before the traversal fails.
+        max_paths_per_seed: u64,
+        /// Edges one invocation may traverse before the traversal fails.
+        max_expansions_per_invocation: u64,
+        /// `true` for `"shortest"` (one shortest witness per reachable pair), `false`
+        /// for `"walk"` (every simple-prefix witness).
+        shortest: bool,
+    },
 }
 
-/// Collect the `relations` / `relations_from_graph` keyword dicts into the ordered
-/// `(IRI, spec)` list one call registers.
+/// Collect the `relations` / `relations_from_graph` / `path_relations` keyword dicts
+/// into the ordered `(IRI, spec)` list one call registers.
 ///
 /// # A duplicate IRI is refused here, not at registration
 ///
 /// [`PropertyFunctionRegistry::register`] **panics** on a duplicate, deliberately: a
 /// shadowed relation silently changes which rows a graph pattern produces, and both
 /// spellings of the call are identical. Python dict keys are unique, so the only way
-/// to reach that panic from this surface is to name one IRI in both dicts — refused
-/// here as a `ValueError`, because a host misconfiguration crossing a language
+/// to reach that panic from this surface is to name one IRI in more than one dict —
+/// refused here as a `ValueError`, because a host misconfiguration crossing a language
 /// boundary is an exception, not an abort.
 ///
 /// # Errors
 ///
 /// `TypeError` if a key is not a `str` or a value is not the declared shape;
-/// `ValueError` if an IRI is declared twice.
+/// `ValueError` if an IRI is declared twice, or if a `path_relations` value names an
+/// unknown direction or mode.
 pub(super) fn collect_relations(
     relations: Option<&Bound<'_, PyDict>>,
     relations_from_graph: Option<&Bound<'_, PyDict>>,
+    path_relations: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Vec<(String, RelationSpec)>> {
     let mut specs: Vec<(String, RelationSpec)> = Vec::new();
-    for (dict, from_graph) in [(relations, false), (relations_from_graph, true)] {
+    for (dict, kind) in [
+        (relations, RelationKind::Rows),
+        (relations_from_graph, RelationKind::Graph),
+        (path_relations, RelationKind::Path),
+    ] {
         let Some(dict) = dict else { continue };
         for (key, value) in dict {
             let iri = key.extract::<String>().map_err(|_| {
@@ -180,10 +222,10 @@ pub(super) fn collect_relations(
                      and the only observable difference is which rows the query returns"
                 )));
             }
-            let spec = if from_graph {
-                graph_relation_spec(&iri, &value)?
-            } else {
-                rows_relation_spec(&iri, &value)?
+            let spec = match kind {
+                RelationKind::Rows => rows_relation_spec(&iri, &value)?,
+                RelationKind::Graph => graph_relation_spec(&iri, &value)?,
+                RelationKind::Path => path_relation_spec(&iri, &value)?,
             };
             specs.push((iri, spec));
         }
@@ -191,10 +233,146 @@ pub(super) fn collect_relations(
     Ok(specs)
 }
 
+/// Which keyword dict a relation declaration came out of, so one loop reads all three
+/// without a positional flag whose meaning depends on how many kinds there are.
+#[derive(Debug, Clone, Copy)]
+enum RelationKind {
+    /// The `relations` keyword.
+    Rows,
+    /// The `relations_from_graph` keyword.
+    Graph,
+    /// The `path_relations` keyword.
+    Path,
+}
+
+/// Parse one `path_relations` value: `(steps, min_hops, max_hops, max_paths_per_seed,
+/// max_expansions_per_invocation, mode)`.
+///
+/// `steps` is a sequence of `(predicate_term, "forward" | "inverse")` pairs — the hop's
+/// ordered alternation of directed predicates — and `mode` is `"walk"` or `"shortest"`.
+///
+/// # Nothing here is optional, and nothing is coerced
+///
+/// The whole envelope is read off the caller's tuple. There is no default `min_hops`, no
+/// default `max_hops`, and no default guard, because [`PathLimits`] has no `Default` and
+/// this binding does not invent one: the numbers state how much work the host is willing
+/// to buy, and a number this crate chose is a limit the caller never read. An unknown
+/// direction or mode string is a `ValueError` naming what was given and what is accepted,
+/// never a silent fallback to one of the two.
+///
+/// # Errors
+///
+/// `TypeError` if the value is not the declared six-position shape, if `steps` is not a
+/// sequence of pairs, if a predicate is not an RDF term, or if a count is not a
+/// non-negative integer of its width. `ValueError` for an unknown direction or mode.
+fn path_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationSpec> {
+    let [steps, min_hops, max_hops, max_paths, max_expansions, mode] = relation_fields(
+        iri,
+        value,
+        "(steps, min_hops, max_hops, max_paths_per_seed, max_expansions_per_invocation, mode)",
+    )?;
+    let mut alternatives: Vec<(TermValue, PathDirection)> = Vec::new();
+    for step in steps.try_iter().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "path relation <{iri}>: `steps` must be a sequence of \
+             (predicate, \"forward\"|\"inverse\") pairs"
+        ))
+    })? {
+        let step = step?;
+        let pair: Vec<Bound<'_, PyAny>> = step.extract().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "path relation <{iri}>: each step must be a \
+                 (predicate, \"forward\"|\"inverse\") pair"
+            ))
+        })?;
+        let [predicate, direction] = <[Bound<'_, PyAny>; 2]>::try_from(pair).map_err(|_| {
+            PyTypeError::new_err(format!(
+                "path relation <{iri}>: each step must be a \
+                 (predicate, \"forward\"|\"inverse\") pair"
+            ))
+        })?;
+        alternatives.push((
+            extract_term_value(&predicate)?,
+            path_direction(iri, &direction)?,
+        ));
+    }
+    Ok(RelationSpec::PathWitness {
+        steps: alternatives,
+        min_hops: count(iri, &min_hops, "min_hops")?,
+        max_hops: count(iri, &max_hops, "max_hops")?,
+        max_paths_per_seed: count(iri, &max_paths, "max_paths_per_seed")?,
+        max_expansions_per_invocation: count(
+            iri,
+            &max_expansions,
+            "max_expansions_per_invocation",
+        )?,
+        shortest: path_mode(iri, &mode)?,
+    })
+}
+
+/// Read one step's direction: `"forward"` traverses subject→object, `"inverse"`
+/// object→subject.
+fn path_direction(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<PathDirection> {
+    let spelling: String = value.extract().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "path relation <{iri}>: a step direction must be the string \"forward\" or \
+             \"inverse\""
+        ))
+    })?;
+    match spelling.as_str() {
+        "forward" => Ok(PathDirection::Forward),
+        "inverse" => Ok(PathDirection::Inverse),
+        other => Err(PyValueError::new_err(format!(
+            "path relation <{iri}>: unknown step direction {other:?}; a step direction is \
+             \"forward\" (subject to object) or \"inverse\" (object to subject)"
+        ))),
+    }
+}
+
+/// Read the traversal mode, returning `true` for the shortest-witness relation.
+///
+/// Two relation TYPES, not one type with a runtime flag — the planner reads cardinality
+/// off the registration, and "exponential" versus "polynomial" cannot be a property of a
+/// value it cannot see. This string chooses which type is registered under the IRI.
+fn path_mode(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let spelling: String = value.extract().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "path relation <{iri}>: `mode` must be the string \"walk\" or \"shortest\""
+        ))
+    })?;
+    match spelling.as_str() {
+        "walk" => Ok(false),
+        "shortest" => Ok(true),
+        other => Err(PyValueError::new_err(format!(
+            "path relation <{iri}>: unknown mode {other:?}; `mode` is \"walk\" (every \
+             simple-prefix witness, exponential in the worst case) or \"shortest\" (one \
+             shortest witness per reachable pair, polynomial)"
+        ))),
+    }
+}
+
+/// Read one envelope position as a non-negative integer of its own width, naming the
+/// field rather than reporting an anonymous extraction failure.
+///
+/// The RANGE check that matters — a zero `min_hops`, an empty length interval, a
+/// `max_hops` past `purrdf_sparql_eval::MAX_HOPS_CAP`, a zero guard — belongs to
+/// [`PathLimits::new`] and is left there rather than restated: a second copy of a bound
+/// is a second opinion about it.
+fn count<T>(iri: &str, value: &Bound<'_, PyAny>, field: &str) -> PyResult<T>
+where
+    T: for<'a, 'py> FromPyObject<'a, 'py>,
+{
+    value.extract::<T>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "path relation <{iri}>: `{field}` must be a non-negative integer in range"
+        ))
+    })
+}
+
 /// Parse one `relations` value: `(subject_arity, object_arity, rows)`.
 fn rows_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationSpec> {
     let [subject_arity, object_arity, rows] =
-        relation_triple(iri, value, "(subject_arity, object_arity, rows)")?;
+        relation_fields(iri, value, "(subject_arity, object_arity, rows)")?;
     let subject_arity = arity(iri, &subject_arity)?;
     let object_arity = arity(iri, &object_arity)?;
     let mut table = Vec::new();
@@ -224,7 +402,7 @@ fn rows_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationS
 /// Parse one `relations_from_graph` value: `(head, subject_arity, object_arity)`.
 fn graph_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<RelationSpec> {
     let [head, subject_arity, object_arity] =
-        relation_triple(iri, value, "(head, subject_arity, object_arity)")?;
+        relation_fields(iri, value, "(head, subject_arity, object_arity)")?;
     Ok(RelationSpec::Graph {
         head: extract_term_value(&head)?,
         subject_arity: arity(iri, &subject_arity)?,
@@ -232,20 +410,23 @@ fn graph_relation_spec(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<Relation
     })
 }
 
-/// Unpack a relation declaration into its three positions, naming the expected shape
+/// Unpack a relation declaration into its `N` positions, naming the expected shape
 /// in the error rather than reporting an anonymous extraction failure.
-fn relation_triple<'py>(
+///
+/// One helper across the three keywords, parameterised by width, so a declaration of the
+/// wrong length reads the same way whichever kind it was meant to be.
+fn relation_fields<'py, const N: usize>(
     iri: &str,
     value: &Bound<'py, PyAny>,
     shape: &str,
-) -> PyResult<[Bound<'py, PyAny>; 3]> {
+) -> PyResult<[Bound<'py, PyAny>; N]> {
     let shape_error = || {
         PyTypeError::new_err(format!(
             "property function <{iri}> must be declared as {shape}"
         ))
     };
     let items: Vec<Bound<'py, PyAny>> = value.extract().map_err(|_| shape_error())?;
-    <[Bound<'py, PyAny>; 3]>::try_from(items).map_err(|_| shape_error())
+    <[Bound<'py, PyAny>; N]>::try_from(items).map_err(|_| shape_error())
 }
 
 /// Read one declared arity position as a non-negative integer.
@@ -265,18 +446,39 @@ fn arity(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<usize> {
 /// no-relations case — is the absence of a registry rather than an empty one, so a
 /// caller who names no relation gets byte-for-byte the pre-existing evaluation.
 ///
-/// # The graph a table head is read from
+/// # The graph a table head — or a traversal's edges — is read from
 ///
 /// [`GraphMatch::Default`], matching the Rust harness: a relation table is
 /// *configuration* written beside the data, and the default graph is the one a store
 /// loaded without a graph name puts it in. Reading `Any` instead would let a table
-/// silently gain rows from an unrelated named graph.
+/// silently gain rows, or a traversal silently gain edges, from an unrelated named graph.
+///
+/// # The snapshot's lifetime is this call's
+///
+/// A [`PathGraph`] answers about the dataset it was snapshotted from, and the
+/// property-function seam hands a relation no dataset at evaluation time — so a
+/// relation built from one store and evaluated against another would answer, silently,
+/// about the first. Building it here, from the very snapshot the call is about to
+/// evaluate over, is what makes that unreachable from Python: registration is per call,
+/// so there is no place for a stale snapshot to be kept.
+///
+/// Under `entailment=`, the dataset the call evaluates over is not this snapshot but the
+/// CLOSURE the reasoner materializes from it, so this registry is the one the query is
+/// PARSED against and [`registry_over`] — driven by `purrdf::ClosureRelations` — builds
+/// the one it is ANSWERED against. Both read the same specs; only the dataset differs,
+/// and only the second one's edges reach an answer.
 ///
 /// # Errors
 ///
 /// `ValueError` carrying the kernel's own diagnostic for a ragged table
-/// ([`MemoryRelation::new`]) or a torn, absent, or wrong-width list
-/// ([`MemoryRelation::from_graph`]).
+/// ([`MemoryRelation::new`]), a torn, absent, or wrong-width list
+/// ([`MemoryRelation::from_graph`]), an empty or duplicated step alternation
+/// ([`PathStep::new`]), or an unbuildable envelope ([`PathLimits::new`]).
+///
+/// A step ALTERNATIVE the dataset has no edges for is deliberately not among those: it
+/// contributes zero edges, exactly as the core grammar's `p|q` does not fail when `q`
+/// matches nothing (see [`PathGraph::from_dataset`]). The boundary inherits that rule
+/// rather than second-guessing it.
 pub(super) fn build_relations(
     specs: Vec<(String, RelationSpec)>,
     dataset: &RdfDataset,
@@ -284,30 +486,96 @@ pub(super) fn build_relations(
     if specs.is_empty() {
         return Ok(None);
     }
+    registry_over(specs, dataset)
+        .map(Some)
+        .map_err(PyValueError::new_err)
+}
+
+/// [`build_relations`]'s core, with the failure left as the already-named message rather
+/// than as a Python exception.
+///
+/// Split out for the ENTAILMENT lane, which cannot raise from where this runs: it hands
+/// this to [`purrdf::ClosureRelations::rebuilt_by`], which calls it with the closure the
+/// reasoner materialized and takes a `purrdf_sparql_eval::EvalError` back — the CLOSURE
+/// being the dataset a `path_relations` traversal and a `relations_from_graph` table head
+/// must BOTH be read from, since it is the dataset the query is answered over. Only the
+/// error's clothing differs between the two callers.
+///
+/// # Errors
+///
+/// The `property function <iri>: …` message naming the relation and the kernel's own
+/// diagnostic.
+pub(super) fn registry_over(
+    specs: Vec<(String, RelationSpec)>,
+    dataset: &RdfDataset,
+) -> Result<PropertyFunctionRegistry, String> {
     let mut registry = PropertyFunctionRegistry::new();
     for (iri, spec) in specs {
-        let table = match spec {
-            RelationSpec::Rows {
-                subject_arity,
-                object_arity,
-                rows,
-            } => MemoryRelation::new(subject_arity, object_arity, rows),
-            RelationSpec::Graph {
-                head,
-                subject_arity,
-                object_arity,
-            } => MemoryRelation::from_graph(
+        let relation = build_relation(&iri, spec, dataset)?;
+        registry.register(iri, relation);
+    }
+    Ok(registry)
+}
+
+/// Build one relation out of its already-converted spec and the frozen snapshot.
+///
+/// Split out of [`build_relations`] because the three kinds no longer share a concrete
+/// type: two are a [`MemoryRelation`] and the third is one of two path-witness relations,
+/// so the arms meet as `Arc<dyn PropertyFunction>` rather than as one table value.
+fn build_relation(
+    iri: &str,
+    spec: RelationSpec,
+    dataset: &RdfDataset,
+) -> Result<Arc<dyn PropertyFunction>, String> {
+    let named = |e: purrdf_sparql_eval::EvalError| format!("property function <{iri}>: {e}");
+    match spec {
+        RelationSpec::Rows {
+            subject_arity,
+            object_arity,
+            rows,
+        } => Ok(Arc::new(
+            MemoryRelation::new(subject_arity, object_arity, rows).map_err(named)?,
+        )),
+        RelationSpec::Graph {
+            head,
+            subject_arity,
+            object_arity,
+        } => Ok(Arc::new(
+            MemoryRelation::from_graph(
                 dataset,
                 &head,
                 GraphMatch::Default,
                 subject_arity,
                 object_arity,
-            ),
+            )
+            .map_err(named)?,
+        )),
+        RelationSpec::PathWitness {
+            steps,
+            min_hops,
+            max_hops,
+            max_paths_per_seed,
+            max_expansions_per_invocation,
+            shortest,
+        } => {
+            let step = PathStep::new(steps).map_err(named)?;
+            let graph = Arc::new(
+                PathGraph::from_dataset(dataset, &step, GraphMatch::Default).map_err(named)?,
+            );
+            let limits = PathLimits::new(
+                min_hops,
+                max_hops,
+                max_paths_per_seed,
+                max_expansions_per_invocation,
+            )
+            .map_err(named)?;
+            if shortest {
+                Ok(Arc::new(ShortestPathWitnessRelation::new(graph, limits)))
+            } else {
+                Ok(Arc::new(PathWitnessRelation::new(graph, limits)))
+            }
         }
-        .map_err(|e| PyValueError::new_err(format!("property function <{iri}>: {e}")))?;
-        registry.register(iri, Arc::new(table));
     }
-    Ok(Some(registry))
 }
 
 /// Build the [`AggregateRegistry`] for one query/update call from the caller's
@@ -1802,6 +2070,66 @@ mod tests {
             build_relations(Vec::new(), &dataset)
                 .expect("no relations is not an error")
                 .is_none()
+        );
+    }
+
+    /// An alternative the dataset has no edges for contributes zero edges rather than
+    /// failing — the kernel's own rule, inherited verbatim rather than second-guessed at
+    /// the boundary. The relation is registered and answers nothing.
+    #[test]
+    fn a_path_relation_over_an_edgeless_predicate_still_registers() {
+        let specs = vec![(
+            "https://ex.example/rel/walk".to_owned(),
+            RelationSpec::PathWitness {
+                steps: vec![(
+                    TermValue::iri("https://ex.example/p"),
+                    PathDirection::Forward,
+                )],
+                min_hops: 1,
+                max_hops: 4,
+                max_paths_per_seed: 8,
+                max_expansions_per_invocation: 64,
+                shortest: false,
+            },
+        )];
+        let dataset = parse_dataset(b"", "application/n-triples", None).expect("empty dataset");
+        let registry = build_relations(specs, &dataset)
+            .expect("an edgeless alternative is not a misconfiguration")
+            .expect("one relation was declared, so a registry exists");
+        assert!(
+            registry.resolve("https://ex.example/rel/walk").is_some(),
+            "the relation is registered under the caller's IRI"
+        );
+    }
+
+    /// A zero `min_hops` is refused by the kernel's own envelope, not defaulted away: a
+    /// zero-hop path is the identity and has no statement to bind as a witness.
+    #[test]
+    fn a_path_relation_with_a_zero_min_hops_is_refused() {
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let a = builder.intern_iri("https://ex.example/a");
+        let p = builder.intern_iri("https://ex.example/p");
+        let b = builder.intern_iri("https://ex.example/b");
+        builder.push_quad(a, p, b, None);
+        let dataset = builder.freeze().expect("a one-quad dataset");
+        let specs = vec![(
+            "https://ex.example/rel/walk".to_owned(),
+            RelationSpec::PathWitness {
+                steps: vec![(
+                    TermValue::iri("https://ex.example/p"),
+                    PathDirection::Forward,
+                )],
+                min_hops: 0,
+                max_hops: 4,
+                max_paths_per_seed: 8,
+                max_expansions_per_invocation: 64,
+                shortest: false,
+            },
+        )];
+        let error = build_relations(specs, &dataset).expect_err("min_hops of zero is refused");
+        assert!(
+            format!("{error}").contains("min_hops must be at least 1"),
+            "the kernel's own diagnostic must cross the boundary: {error}"
         );
     }
 }

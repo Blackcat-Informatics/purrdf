@@ -102,14 +102,16 @@
 //! `--aggregate-namespace` beside either `--entailment` or `--explain` used to be
 //! refusals too; both now run instead of being refused.
 //!
-//! The rendered `relations` block is always empty here: the CLI has no property-function
-//! registration surface at all — [`ExplainOp::run`] leaves
+//! The rendered `relations` block lists whatever `--path-relation` registered — that flag
+//! is this binary's property-function registration surface (see [`crate::path_relation`]),
+//! and [`ExplainOp::run`] sets
 //! [`QueryOptions::property_functions`](purrdf_sparql_eval::QueryOptions::property_functions)
-//! at its `EMPTY` default on every call — so there is never anything for it to list. That
-//! is the honest minimal form, not a missing feature — [`QueryExplanation::render`] always
-//! emits the block, empty or not, precisely so "no relations were in scope" and "this build
-//! does not report relations" stay distinguishable bytes. The `aggregates` block is the
-//! exact opposite case: with `--aggregate-namespace`, [`ExplainOp::run`] sets
+//! from the SAME registry every other lane evaluates under. Without the flag the block is
+//! empty, which is the honest minimal form rather than a missing feature —
+//! [`QueryExplanation::render`] always emits the block, empty or not, precisely so "no
+//! relations were in scope" and "this build does not report relations" stay
+//! distinguishable bytes. The `aggregates` block is the same case: with
+//! `--aggregate-namespace`, [`ExplainOp::run`] sets
 //! [`QueryOptions::aggregates`](purrdf_sparql_eval::QueryOptions::aggregates) on the SAME
 //! [`NativeSparqlEngine::explain_query_with_options_view`] call — there is one explain code
 //! path, not a registry-free entry and a registry-carrying one that could drift apart, which
@@ -118,15 +120,17 @@
 //! using more than one registered extension at once — and the block lists the ten
 //! registered statistical aggregate IRIs.
 
-use purrdf::GovernedEntailment;
+use std::sync::Arc;
+
+use purrdf::{ClosureRelations, GovernedEntailment};
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 use purrdf_sparql_eval::{
-    AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryExplanation,
-    QueryGovernors, QueryOptions as EngineQueryOptions,
+    AggregateRegistry, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
+    PropertyFunctionRegistry, QueryExplanation, QueryGovernors, QueryOptions as EngineQueryOptions,
 };
 use purrdf_sparql_results::{
     ProvenanceNamespace, ResultProvenance, SparqlResultsFormat, serialize,
@@ -138,6 +142,7 @@ use crate::error::{CliError, CliOutcome};
 use crate::format;
 use crate::governors::{self, GovernorFlags};
 use crate::ledger;
+use crate::path_relation::{self, PathRelationSpec};
 use crate::reason;
 use crate::report;
 use crate::sink;
@@ -157,20 +162,102 @@ struct QueryOp<'a> {
     /// against (see [`AggregateRegistry`]'s instance-identity fingerprint) — never a
     /// freshly built one, even with identical content, or evaluation refuses the plan.
     aggregates: Option<&'a AggregateRegistry>,
+    /// The `--path-relation` specs to snapshot over this view. See [`prepare_against`]
+    /// for why the registry is born here rather than beside the flags.
+    relations: RelationSpecs<'a>,
+}
+
+/// The `--path-relation` specs one lane will snapshot, plus the query text they force a
+/// re-prepare of.
+///
+/// # Why the registry is built inside [`ViewOp::run`]
+///
+/// [`purrdf_sparql_eval::PathGraph::from_dataset`] reads the step's edges out of the
+/// dataset being queried, so a registry cannot exist before the data source has been
+/// opened. And a plan must be prepared against the registry it is evaluated under —
+/// the registry is what decides which predicates became CALL nodes at all, and the engine
+/// refuses a plan/registry disagreement rather than silently evaluating a relation's
+/// predicate as an ordinary triple pattern. Both therefore happen inside `run`, where the
+/// concrete view is in hand; the engine's plan cache makes the second parse of the same
+/// text free.
+///
+/// The outer prepare in [`run`] is kept and reused verbatim whenever no `--path-relation`
+/// was given, so a malformed query is still a parse error raised before the data source
+/// is read, exactly as it was before this flag existed.
+#[derive(Clone, Copy)]
+struct RelationSpecs<'a> {
+    /// The parsed specs, empty when `--path-relation` was not given.
+    specs: &'a [PathRelationSpec],
+    /// The query text, re-prepared against the registry when there is one.
+    query: &'a str,
+    /// `--base`, threaded into that re-prepare so both parses resolve identically.
+    base: Option<&'a str>,
+}
+
+impl<'a> RelationSpecs<'a> {
+    /// Snapshot the specs over `view` and prepare the plan the resulting registry
+    /// implies, returning both plus the [`EngineQueryOptions`] they must be evaluated
+    /// under.
+    ///
+    /// The returned plan is `None` when no `--path-relation` was given: the caller then
+    /// uses the plan it prepared before the source was read, which is the pre-existing
+    /// behaviour byte-for-byte.
+    fn prepare_against<D: DatasetView>(
+        self,
+        engine: &NativeSparqlEngine,
+        view: &D,
+        aggregates: Option<&'a AggregateRegistry>,
+    ) -> Result<(Option<PropertyFunctionRegistry>, Option<Arc<PreparedQuery>>), CliError> {
+        let relations = path_relation::build_registry(view, self.specs)?;
+        let Some(registry) = relations else {
+            return Ok((None, None));
+        };
+        let prepared = engine.prepare_query_with_options(
+            self.query,
+            self.base,
+            EngineQueryOptions {
+                aggregates: aggregates.unwrap_or(&AggregateRegistry::EMPTY),
+                property_functions: &registry,
+                ..EngineQueryOptions::EMPTY
+            },
+        )?;
+        Ok((Some(registry), Some(prepared)))
+    }
+}
+
+/// The canonical empty aggregate registry, as a `static` rather than a temporary: the
+/// options this module builds outlive the expression that builds them, and a
+/// `HashMap`-backed registry's drop glue blocks Rust's rvalue static promotion for a
+/// reference that must live that long. (`crate::update` states the same reason.)
+static EMPTY_AGGREGATES: AggregateRegistry = AggregateRegistry::EMPTY;
+/// The canonical empty property-function registry; see [`EMPTY_AGGREGATES`].
+static EMPTY_RELATIONS: PropertyFunctionRegistry = PropertyFunctionRegistry::EMPTY;
+
+/// The evaluation options a lane runs under, given what its two registries resolved to.
+fn engine_options<'a>(
+    aggregates: Option<&'a AggregateRegistry>,
+    relations: Option<&'a PropertyFunctionRegistry>,
+) -> EngineQueryOptions<'a> {
+    EngineQueryOptions {
+        aggregates: aggregates.unwrap_or(&EMPTY_AGGREGATES),
+        property_functions: relations.unwrap_or(&EMPTY_RELATIONS),
+        ..EngineQueryOptions::EMPTY
+    }
 }
 
 impl ViewOp for QueryOp<'_> {
     type Output = SparqlResult;
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<SparqlResult, CliError> {
+        let (relations, prepared) =
+            self.relations
+                .prepare_against(self.engine, view, self.aggregates)?;
+        let options = engine_options(self.aggregates, relations.as_ref());
         Ok(self.engine.query_prepared_view(
             view,
-            self.prepared,
+            prepared.as_deref().unwrap_or(self.prepared),
             &[],
-            EngineQueryOptions {
-                aggregates: self.aggregates.unwrap_or(&AggregateRegistry::EMPTY),
-                ..EngineQueryOptions::EMPTY
-            },
+            options,
         )?)
     }
 }
@@ -255,6 +342,8 @@ struct GovernedQueryOp<'a> {
     flags: GovernorFlags,
     /// The SAME registry instance `prepared` was parsed against; see [`QueryOp::aggregates`].
     aggregates: Option<&'a AggregateRegistry>,
+    /// The `--path-relation` specs to snapshot over this view; see [`RelationSpecs`].
+    relations: RelationSpecs<'a>,
 }
 
 impl ViewOp for GovernedQueryOp<'_> {
@@ -262,19 +351,20 @@ impl ViewOp for GovernedQueryOp<'_> {
 
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<GovernedOutcome, CliError> {
         let governors: QueryGovernors = self.flags.to_governors();
-        // `QueryOptions::EMPTY` for every axis but `aggregates`: the CLI wires no
-        // SHACL-AF function table and no property-function registry, and it prepared
-        // this plan through the matching registry-free parse — so the plan and the
-        // evaluation agree on an empty seam there. `aggregates` is `self.aggregates`
-        // exactly, the SAME instance `prepared` was parsed against (see `run` below).
+        let (relations, prepared) =
+            self.relations
+                .prepare_against(self.engine, view, self.aggregates)?;
+        // `QueryOptions::EMPTY` for every axis but the two registries: the CLI wires no
+        // SHACL-AF function table. Both registries here are the SAME instances the plan
+        // being evaluated was parsed against — `aggregates` from `run` below, and
+        // `property_functions` from the re-prepare `prepare_against` just did over this
+        // view — which is what the engine's plan/registry identity check demands.
+        let options = engine_options(self.aggregates, relations.as_ref());
         Ok(self.engine.query_prepared_governed_view(
             view,
-            self.prepared,
+            prepared.as_deref().unwrap_or(self.prepared),
             &[],
-            purrdf_sparql_eval::QueryOptions {
-                aggregates: self.aggregates.unwrap_or(&AggregateRegistry::EMPTY),
-                ..purrdf_sparql_eval::QueryOptions::EMPTY
-            },
+            options,
             &governors,
         )?)
     }
@@ -294,6 +384,10 @@ struct ExplainOp<'a> {
     /// The SAME registry `--aggregate-namespace` builds for every other lane; see
     /// [`QueryOp::aggregates`] for why identity (not merely content) matters.
     aggregates: Option<&'a AggregateRegistry>,
+    /// The `--path-relation` specs to snapshot over this view; see [`RelationSpecs`].
+    /// This lane needs no re-prepare of its own — the explain entry takes the query TEXT
+    /// and parses it against the options it is handed — so only the registry is used.
+    relations: RelationSpecs<'a>,
 }
 
 impl ViewOp for ExplainOp<'_> {
@@ -302,21 +396,16 @@ impl ViewOp for ExplainOp<'_> {
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<QueryExplanation, CliError> {
         // Routed through the one options-carrying explain entry rather than a
         // narrower per-registry explain entry (none exist any more; see
-        // `NativeSparqlEngine::explain_query_with_options`'s documentation): the
-        // CLI has no property-function registration surface, so `property_functions`
-        // stays at `QueryOptions::EMPTY`'s value on every call, but going through the
-        // SAME entry a caller with more than one registry would need keeps this the
-        // one CLI code path for "explain, optionally with an aggregate registry" rather
-        // than two that could drift.
-        Ok(self.engine.explain_query_with_options_view(
-            view,
-            self.query,
-            self.base,
-            EngineQueryOptions {
-                aggregates: self.aggregates.unwrap_or(&AggregateRegistry::EMPTY),
-                ..EngineQueryOptions::EMPTY
-            },
-        )?)
+        // `NativeSparqlEngine::explain_query_with_options`'s documentation): it is the
+        // one CLI code path for "explain, optionally with an aggregate registry, a
+        // property-function registry, or both", so the two cannot drift apart. The
+        // rendered `relations` block therefore lists exactly what `--path-relation`
+        // registered.
+        let relations = path_relation::build_registry(view, self.relations.specs)?;
+        let options = engine_options(self.aggregates, relations.as_ref());
+        Ok(self
+            .engine
+            .explain_query_with_options_view(view, self.query, self.base, options)?)
     }
 }
 
@@ -497,17 +586,45 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
 /// An INCONSISTENT knowledge base is handled exactly as `reason` handles it: it has no closure
 /// and it did have a run, so the report is written first and the refusal returned after.
 ///
-/// `aggregates` is the SAME registry instance every other lane in this module uses (see
-/// [`QueryOp::aggregates`]): `query_with_entailment_governed` now takes the engine's
+/// `options` carries the SAME registry instances every other lane in this module uses (see
+/// [`QueryOp::aggregates`]): `query_with_entailment_governed` takes the engine's
 /// `QueryOptions` and threads it into both the closure query's PARSE and its evaluation,
-/// so a statistical aggregate reaches the entailment-aware lane exactly as it reaches the
-/// ordinary one.
+/// so a statistical aggregate — or a `--path-relation` — reaches the entailment-aware lane
+/// exactly as it reaches the ordinary one.
+///
+/// # A path relation on this lane answers about the CLOSURE's edges
+///
+/// It did not always. The snapshot used to be built in [`EntailedQueryOp::run`] over the
+/// source view — what the reasoner has not yet closed over — while the evaluation ran
+/// against the materialized closure, so when a regime DERIVED quads under a step's
+/// predicate the walk answered over a strictly smaller edge set than every other pattern
+/// in the same query. Over `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub
+/// ex:c .`, `query --entailment rdfs 'SELECT ?end WHERE { ex:a ex:p+ ?end }'` answered
+/// `ex:b, ex:c` (the closure derives `ex:b ex:p ex:c`) and the same regime with
+/// `--path-relation '…forward=ex:p…'` answered `ex:b` alone: a SHORT bag, reported
+/// complete, at exit 0, with no diagnostic.
+///
+/// [`purrdf::ClosureRelations`] is the fix, and it is a fix to the ORDER rather than a
+/// filter over the symptom: this lane hands that entry point a rebuilder, the closure is
+/// materialized first, the specs are snapshotted over it, and the query is prepared and
+/// evaluated against relations that read the same dataset every other pattern does.
+/// `a_path_relation_under_entailment_walks_the_closure` in `tests/query_cli.rs` runs both
+/// halves of that command pair and asserts they now agree.
+///
+/// The one combination it refuses is named where it is raised
+/// (`reasoning-closure-relation-witness`): an OWL Direct-Semantics run whose restricted
+/// chase minted existential witnesses cannot also derive relations from that closure,
+/// because a walk over the chase's edges could hand a minted blank node back as an
+/// observable binding — which is the one thing the regime's witness filtration exists to
+/// prevent, and the one place it cannot reach. Every other regime, and every OWL-Direct
+/// run that mints no witness, answers.
 #[allow(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct, independently-named input (the engine, the \
               dataset, the query text/base, the resolved entailment plan, the governors, \
-              the aggregate registry, and the report target); bundling them into a struct \
-              would not shrink the call sites, which already name every field"
+              the evaluation options, the closure-side relation rebuilder, and the report \
+              target); bundling them into a struct would not shrink the call sites, which \
+              already name every field"
 )]
 fn entailed_query<D: DatasetView>(
     engine: &NativeSparqlEngine,
@@ -516,7 +633,8 @@ fn entailed_query<D: DatasetView>(
     base: Option<&str>,
     plan: &reason::EntailmentPlan,
     governors: &QueryGovernors,
-    aggregates: Option<&AggregateRegistry>,
+    options: EngineQueryOptions<'_>,
+    relations: &ClosureRelations<'_>,
     report_target: &ReportTarget,
 ) -> Result<GovernedEntailment, CliError> {
     let request = SparqlRequest {
@@ -529,10 +647,8 @@ fn entailed_query<D: DatasetView>(
         dataset,
         request,
         plan.query_entailment(),
-        EngineQueryOptions {
-            aggregates: aggregates.unwrap_or(&AggregateRegistry::EMPTY),
-            ..EngineQueryOptions::EMPTY
-        },
+        options,
+        relations,
         governors,
     ) {
         Ok(answered) => {
@@ -552,6 +668,17 @@ fn entailed_query<D: DatasetView>(
             ))
         }
         Err(purrdf::ReasoningError::Entailment(other)) => Err(other.into()),
+        // One query-side diagnostic is a USAGE error rather than a runtime one, and it is
+        // told apart by its stable code rather than by its prose: the refusal of
+        // `--path-relation` beside an `--entailment owl-direct` run whose chase minted
+        // witnesses is a statement about the FLAGS the operator combined, so it exits 2
+        // like every other unenforceable combination this module refuses, and the message
+        // already names both the cause and the regimes that do accept the pairing.
+        Err(purrdf::ReasoningError::Query(diagnostic))
+            if diagnostic.code == ClosureRelations::WITNESS_REFUSAL_CODE =>
+        {
+            Err(CliError::Usage(diagnostic.to_string()))
+        }
         Err(purrdf::ReasoningError::Query(diagnostic)) => Err(diagnostic.into()),
         // `ReasoningError` is `#[non_exhaustive]`, so a variant added in its own crate
         // reaches the CLI without a compile error. It is reported rather than swallowed:
@@ -573,13 +700,39 @@ struct EntailedQueryOp<'a> {
     plan: &'a reason::EntailmentPlan,
     governors: &'a QueryGovernors,
     aggregates: Option<&'a AggregateRegistry>,
+    /// The `--path-relation` specs, snapshotted over the CLOSURE the regime materializes;
+    /// see [`entailed_query`] for the order that makes that true and the one combination
+    /// it refuses.
+    relations: RelationSpecs<'a>,
     report_target: &'a ReportTarget,
 }
 
 impl ViewOp for EntailedQueryOp<'_> {
     type Output = GovernedEntailment;
 
+    /// # Two snapshots, and why the first one is not the wasteful half of a mistake
+    ///
+    /// The specs are snapshotted twice when both flags are given: once over the SOURCE
+    /// view, and again — inside [`purrdf::query_with_entailment_governed`] — over the
+    /// closure. Only the second answers the query. The first exists because the entry
+    /// point parses before it materializes, deliberately, so that an invalid query fails
+    /// without paying for a closure first; and a parse is registry-aware, because a
+    /// registered predicate becomes a call node only if the registry was in scope when the
+    /// query was read. The two registries agree on everything that parse decides — the
+    /// call IRIs, their arity, their modes — and differ only in the edges the second one
+    /// walks, which is exactly the difference this pairing exists to introduce.
     fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
+        let specs = self.relations.specs;
+        let admitted = path_relation::build_registry(view, specs)?;
+        let rebuild = |closure: &purrdf_core::RdfDataset| {
+            path_relation::registry_over(closure, specs)
+                .map_err(purrdf_sparql_eval::EvalError::data)
+        };
+        let relations = if specs.is_empty() {
+            ClosureRelations::NONE
+        } else {
+            ClosureRelations::rebuilt_by(&rebuild)
+        };
         entailed_query(
             self.engine,
             view,
@@ -587,7 +740,8 @@ impl ViewOp for EntailedQueryOp<'_> {
             self.base,
             self.plan,
             self.governors,
-            self.aggregates,
+            engine_options(self.aggregates, admitted.as_ref()),
+            &relations,
             self.report_target,
         )
     }
@@ -630,6 +784,11 @@ pub(crate) struct QueryOptions<'a> {
     /// `purrdf` provenance extension on a SPARQL-results JSON/XML emission. `None` (the
     /// default) emits pure-W3C output, exactly as before this flag existed.
     pub(crate) provenance_namespace: Option<(&'a str, &'a str)>,
+    /// `--path-relation`, repeatable: the path-witness relations this call registers.
+    /// Empty (the default) leaves `QueryOptions::property_functions` at its `EMPTY`
+    /// value, so a query naming one of these IRIs is an ordinary triple pattern reading
+    /// the data — exactly as before this flag existed.
+    pub(crate) path_relations: &'a [PathRelationSpec],
 }
 
 /// Run the `query` subcommand.
@@ -662,6 +821,16 @@ pub(crate) fn run(
     // break every `--aggregate-namespace` query.
     let aggregates = build_aggregate_registry(options.aggregate_namespace);
 
+    // Refused ONCE, before any lane opens the data source: `PropertyFunctionRegistry`
+    // PANICS on a duplicate IRI, and a command line is a host misconfiguration rather than
+    // an abort.
+    path_relation::refuse_duplicate_iris(options.path_relations)?;
+    let relations = RelationSpecs {
+        specs: options.path_relations,
+        query: options.query,
+        base: options.base,
+    };
+
     // Validated ONCE, before any lane runs, so a malformed `--provenance-namespace` is a
     // usage error before the query is even parsed — never discovered only after a
     // successful evaluation, when serializing the answer would otherwise be the first
@@ -685,12 +854,19 @@ pub(crate) fn run(
                 query: options.query,
                 base: options.base,
                 aggregates: aggregates.as_ref(),
+                relations,
             },
         )?;
         sink::write_out("-", explanation.render().as_bytes())?;
         return Ok(CliOutcome::Complete);
     }
 
+    // Prepared unconditionally, before the source is opened, so a malformed query is a
+    // parse error raised before any file is read. It is the plan the lanes below evaluate
+    // whenever no `--path-relation` was given; with one, `RelationSpecs::prepare_against`
+    // re-prepares against the registry it snapshots (the registry decides which predicates
+    // are call nodes, and it cannot exist until the view does), and the plan cache makes
+    // that second parse free.
     let prepared = engine.prepare_query_with_options(
         options.query,
         options.base,
@@ -724,6 +900,7 @@ pub(crate) fn run(
                 plan: &plan,
                 governors: &governors,
                 aggregates: aggregates.as_ref(),
+                relations,
                 report_target,
             },
         )?;
@@ -745,6 +922,7 @@ pub(crate) fn run(
                 prepared: &prepared,
                 flags: options.governors,
                 aggregates: aggregates.as_ref(),
+                relations,
             },
         )?;
         return emit_governed(
@@ -766,6 +944,7 @@ pub(crate) fn run(
             // `prepared` is an `Arc<PreparedQuery>`; reborrow it as `&PreparedQuery`.
             prepared: &prepared,
             aggregates: aggregates.as_ref(),
+            relations,
         },
     )?;
     emit_result(
