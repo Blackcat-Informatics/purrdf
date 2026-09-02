@@ -39,9 +39,11 @@ incompatible vendor language, which is exactly what a carrier must not do:
 
 ```sparql
 # "quick" immediately followed by "brown"
-?doc <https://example.org/pf/occurs> ( "quick" ?l ?p1 ) .
-?doc <https://example.org/pf/occurs> ( "brown" ?l ?p2 ) .
-FILTER(?p2 = ?p1 + 1)
+SELECT ?doc WHERE {
+  ?doc <https://example.org/pf/occurs> ( "quick" ?l ?p1 ) .
+  ?doc <https://example.org/pf/occurs> ( "brown" ?l ?p2 ) .
+  FILTER(?p2 = ?p1 + 1)
+}
 ```
 
 `FILTER(ABS(?p2 - ?p1) <= 3)` is proximity; `FILTER(?matched = 2)` on the
