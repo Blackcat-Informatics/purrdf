@@ -172,10 +172,44 @@ def parse_glossary(text: str) -> list[Row]:
     return rows
 
 
+# How a self-test specimen is derived from a ``/regex/`` rejection: the
+# lookarounds are removed and the two quantified classes the glossary uses are
+# given a concrete value. ``check_consistency`` asserts the derived specimen
+# really matches its regex, so a regex this table cannot derive a specimen for
+# is a hard error rather than a rejection the self-test never exercises.
+_SPECIMEN_SUBSTITUTIONS = (
+    (re.compile(r"\(\?<?[!=].*?\)"), ""),
+    (re.compile(r"\\d\+"), "0"),
+    (re.compile(r"\\d"), "0"),
+    (re.compile(r"\\s\*"), " "),
+    (re.compile(r"\\s\+"), " "),
+)
+
+
+def specimen(rule: Rejection) -> str:
+    """Text the self-test injects to prove ``rule`` is refused."""
+    spelled = rule.spelled
+    if not (len(spelled) >= 2 and spelled[0] == "/" and spelled[-1] == "/"):
+        return spelled
+    text = spelled[1:-1]
+    for pattern, replacement in _SPECIMEN_SUBSTITUTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def check_consistency(rows: list[Row]) -> None:
-    """A rejected rendering may not appear inside ANY row's rendering."""
+    """A rejected rendering may not appear inside ANY row's rendering, and every
+    ``/regex/`` rejection must match the specimen derived for it."""
     for row in rows:
         for rejection in row.rejected:
+            probe = specimen(rejection)
+            if rejection.find(probe) is None:
+                raise SystemExit(
+                    f"check-i18n-glossary: row {row.term!r} rejects {rejection.spelled!r}, "
+                    f"but the specimen derived for it ({probe!r}) does not match it, so "
+                    f"the self-test could never prove it bites. Spell the regex with the "
+                    f"constructs the specimen derivation knows (lookarounds, \\d, \\s)"
+                )
             for other in rows:
                 hit = rejection.find(_strip_code(other.rendering))
                 if hit:
@@ -278,12 +312,10 @@ def self_test(rows: list[Row], report: bool) -> list[str]:
 
     for row in rows:
         for rule in row.rejected:
-            # A literal rejection is injected as itself; a /regex/ one needs a
-            # specimen, which is the rejection with its lookaround stripped.
-            specimen = re.sub(r"\(\?<?!.*?\)", "", rule.spelled.strip("/"))
+            probe = specimen(rule)
             verdict(
-                f"{rule.term}: the rejected rendering {specimen!r} in a msgstr",
-                _po_with(f"本页使用{specimen}一词。"),
+                f"{rule.term}: the rejected rendering {probe!r} in a msgstr",
+                _po_with(f"本页使用{probe}一词。"),
                 True,
             )
         rendering = _strip_code(row.rendering)
@@ -292,18 +324,17 @@ def self_test(rows: list[Row], report: bool) -> list[str]:
             _po_with(f"本页使用 {rendering} 一词。"),
             False,
         )
-    first = rules[0]
-    specimen = re.sub(r"\(\?<?!.*?\)", "", first.spelled.strip("/"))
+    probe = specimen(rules[0])
     verdict("an untranslated entry (empty msgstr)", _po_with(""), False)
     verdict("an English msgstr", _po_with("Entailment regimes"), False)
     verdict(
-        f"a FUZZY entry carrying {specimen!r} (not rendered, so not refused)",
-        _po_with(f"本页使用{specimen}一词。", fuzzy=True),
+        f"a FUZZY entry carrying {probe!r} (not rendered, so not refused)",
+        _po_with(f"本页使用{probe}一词。", fuzzy=True),
         False,
     )
     verdict(
-        f"an OBSOLETE entry carrying {specimen!r} (not rendered, so not refused)",
-        _po_with(f"本页使用{specimen}一词。", obsolete=True),
+        f"an OBSOLETE entry carrying {probe!r} (not rendered, so not refused)",
+        _po_with(f"本页使用{probe}一词。", obsolete=True),
         False,
     )
     return problems

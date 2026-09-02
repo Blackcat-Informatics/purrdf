@@ -79,9 +79,9 @@ found by running the gate over the first translated drafts, not guessed.
 | 27 | property function | 属性函数 | E (Jena usage) | — | Chinese Jena material uses 属性函数 |
 | 28 | composite datatype (`SEP-0009`) | 复合数据类型 | E | 组合数据类型 | natural DB rendering; the SEP number stays |
 | 29 | governor / budget | governor（执行调控器）/ 预算 | K / E | — | no settled rendering for "governor" in this sense; 预算 is established for resource budgets |
-| 30 | ledgered (`xfail` ledger) | 台账（预期失败台账） | E, qualified | `/(?<!台)账本/` | 台账 is the engineering register word; 账本 reads as blockchain. The lookbehind spares 台账本身 ("the ledger itself"), where 账本 straddles two words |
+| 30 | ledgered (`xfail` ledger) | 台账（预期失败台账） | E, qualified | `/(?<!台)账本/`、`/\d+\s*台账/` | 台账 is the engineering register word; 账本 reads as blockchain (the lookbehind spares 台账本身, "the ledger itself"). In COUNTS, 台账 may not follow a bare numeral: 「0 台账」 is "zero ledgers", a broken noun phrase; write 「0 例入账」, 「台账为空」, 「5 例入台账」 |
 | 31 | walk vs. path | 游走 vs. 路径 | E | — | the pair maps cleanly (随机游走 is standard); keep the distinction the code makes |
-| 32 | out-of-core | 核外 | E (HPC) | — | 核外计算 is standard |
+| 32 | out-of-core (outside `purrdf-core`) | 核心之外 / 核心 crate 之外 | C | 核外 | The English is a PUN: "out-of-core" means outside the `purrdf-core` crate — capabilities that arrive as sibling crates through the extension seams — not the CS sense. 核外 / 核外计算 is exactly that CS sense (data larger than RAM, streamed from disk), so 「核外 SPARQL 扩展」 beside 「内存倒排索引」 two paragraphs later reads as a contradiction that the English does not have. Do not "correct" this row back to 核外 |
 | 33 | interned / interner | 驻留 / 驻留表 | E (Python community) | — | |
 | 34 | fixpoint, semi-naive | 不动点, 半朴素 | E | — | |
 | 35 | embedding, kNN, full-text search | 嵌入（向量嵌入）, k 近邻, 全文检索 | E | 全文搜索 | the audience's core vocabulary |
@@ -89,6 +89,13 @@ found by running the gate over the first translated drafts, not guessed.
 | 37 | shape, focus node, validation report | 形状, 焦点节点, 验证报告 | E | 校验报告 | SHACL Chinese usage; bare 校验 is not gated (校验和 is a checksum) |
 | 38 | quad template | 四元组模板 | C | — | a first-party extension that SPARQL 1.2 does not define; `check-spec-attribution.py` recognises this rendering as an anchor and the disclaimers 「并非 SPARQL 1.2 特性」/「SPARQL 1.2 并未定义」/「第一方扩展」 |
 | 39 | PurRDF | PurRDF | H | — | the brand is never translated or lower-cased in prose (`docs/BRAND.md`); `check-brand-casing.py` enforces it inside CJK text too |
+| 40 | Research Object (RO-Crate) | Research Object（RO） | K | `/研究对象(?!（Research Object）)/` | a proper noun; 研究对象 means "the object of study". Keep English on first use per page, or at minimum gloss it as 研究对象（Research Object） — the bare word is refused |
+| 41 | realization (DL, of an individual) | 实现（realization） on first use / 实例归类 | C | — | bare 实现 collides with 实现 = "implementation", the far commoner sense in this book; gloss it or use 实例归类. Not gated: 实现 in the implementation sense is everywhere |
+| 42 | surface (API surface) | 接口 / 表面 (API 表面 only when "surface" is the exact term) | E | `/表面(?!上)/` | technical, not literary: the English "surface" is the API surface. 表面上 ("ostensibly") is ordinary prose and spared; bare 表面 for an API is refused |
+| 43 | seam (extension seam) | 扩展点 | E | — | 接缝 is acceptable but 扩展点 reads naturally to the audience |
+| 44 | mint (an IRI, a witness, a blank node) | 生成 | E | 铸造 | technical, not literary: 铸造 ("cast, coin") is the English project idiom carried over and reads as metaphor in Chinese |
+| 45 | reach (a host, a surface) | 到达 | E | 抵达 | technical, not literary: 抵达 is the literary "arrive" |
+| 46 | dropped loudly | 显式报错丢弃 | E | 大声 | "loudly" is idiom: the drop is reported explicitly; 大声地丢弃 is nonsense in Chinese |
 
 Add a row when a translation coins or settles a term; add a **Rejected**
 entry only for a rendering that is wrong wherever it appears. The gate reads
