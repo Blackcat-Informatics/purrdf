@@ -540,19 +540,23 @@ build-provenance attestations and SPDX SBOMs — see [`docs/RELEASE.md`](./docs/
 
 ## Versioning & MSRV
 
-**Pre-1.0 semver policy.** While the version is `0.x`, a **minor** bump
-(`0.x` → `0.(x+1)`) may include breaking API changes; a **patch** bump
-(`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible. All three published
-surfaces — the crates.io crate suite, the PyPI `purrdf` package, and the npm
+**Semver from 1.0.0.** From 1.0.0 the suite follows semantic versioning in
+full: a **breaking** change bumps the **major** version — a commit carrying `!`
+or `BREAKING CHANGE:` is a major-bump trigger, and the changelog marks each
+such entry **BREAKING** — a **minor** bump is additive and API-compatible, and a
+**patch** bump is bugfix-only. That is what the number commits to; it is not a
+claim of stability beyond what semver means. All three published surfaces — the
+crates.io crate suite, the PyPI `purrdf` package, and the npm
 `@blackcatinformatics/purrdf` package — share **one** workspace version and are
-released in lockstep. That coherence is enforced in CI: a version-coherence check
-fails the build if the three version sources disagree.
+released in lockstep, and a version-coherence check in CI fails the build if
+the version sources (`Cargo.toml`, `pyproject.toml`, `package.json`,
+`CITATION.cff`) disagree. The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](./crates/rdf-capi/include/purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.7**), bumped on every exported-signature change, pinned by `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through `purrdf_abi_version`. It is versioned separately from the workspace and stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise about it.
 
 **MSRV policy.** The supported minimum Rust is `rust-version` in the root
 `Cargo.toml` (currently **1.96**) on the **stable** channel, enforced by a dedicated
 CI MSRV job, and release artifacts are built on stable. Raising the MSRV is a
-notable change recorded in the changelog and, pre-1.0, rides a minor bump. The
-README MSRV badge is maintained by hand and must be bumped together with
+notable change recorded in the changelog and never ships in a patch release.
+The README MSRV badge is maintained by hand and must be bumped together with
 `rust-version`.
 
 Contributors run a dated nightly (`rust-toolchain.toml`) for its sharper clippy and

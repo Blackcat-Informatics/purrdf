@@ -133,6 +133,15 @@ stays inactive; it never invents an IRI for you. (Test fixtures use
 The full invariant list is in
 [Design Rules & Invariants](project/design-rules.md).
 
+## What the version number commits to
+
+From 1.0.0 the suite follows semantic versioning in full: a breaking change
+bumps the major version, a minor bump is additive, a patch bump is bugfix-only,
+and the crates.io, PyPI and npm packages ship one workspace version in
+lockstep. The one exception is the C ABI (`purrdf.h`), which carries its own
+`0.x` ABI version, bumped on every exported-signature change, and is not
+frozen. See [Versioning & Releases](project/releases.md).
+
 ## Why RDF 1.2?
 
 RDF 1.2 (and SPARQL 1.2) add first-class statement-level metadata to the data
