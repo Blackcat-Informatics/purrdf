@@ -97,7 +97,11 @@ on their expected-failure ledgers. See
   adjective ([Performance](performance.md)).
 - **One version, lockstep releases** — crates.io, PyPI, and npm ship one
   workspace version ([Versioning & Releases](releases.md)).
-- **Stable toolchain only** — the workspace is nightly-free; the MSRV floor
-  (currently 1.96) is enforced by a dedicated CI job.
+- **Nightly-free source, stable MSRV** — there are no `#![feature(...)]`
+  attributes anywhere in the workspace and the MSRV floor (currently 1.96, on
+  the stable channel) is enforced by a dedicated CI job that builds on exactly
+  that compiler. Contributors and the CI gates run a *dated* nightly pinned in
+  `rust-toolchain.toml` for its sharper clippy and rustdoc lints; release
+  artifacts are built on stable.
 - **Brand** — the project is **PurRDF** in prose and `purrdf` in identifiers
   ([`docs/BRAND.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/BRAND.md)).

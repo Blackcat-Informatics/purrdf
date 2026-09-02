@@ -215,8 +215,14 @@ ownership, and all limits. Complete examples are in
 - `QueryEngine.explainQuery(dataset, sparql, options?)` / `governorDimensions()` — the
   metered charge ledger a budget is sized from (join orders, plan estimates, per-node
   cost) and the engine's dimension vocabulary, which keys every `evidence` map.
-- `shaclValidateToSarif(shapesTtl, dataNt)` / `shaclEntail(shapesTtl, dataNt)` — SHACL
-  validation to a SARIF 2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples.
+- `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)` /
+  `shaclEntail(shapesTtl, dataNt, shapesBase?)` — SHACL validation to a SARIF
+  2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples. `shapesBase` is
+  the base the shapes document's relative IRI references resolve against; a
+  browser or Node host has no retrieval IRI of its own, so omit it and a
+  relative reference throws rather than being mis-parsed (`dataNt` needs no
+  counterpart — N-Triples admits no relative IRI by grammar). `Dataset.parse`
+  takes the same optional third argument.
 - `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
   materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /
   `"owl-rl"` / `"d"` / `"owl-direct"` / `"rif"` — none is refused), returning

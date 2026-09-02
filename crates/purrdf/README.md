@@ -12,7 +12,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 <h1 align="center"><code>purrdf</code></h1>
 
 <p align="center">
-  <em>The RDF 1.2 toolkit with a purr: primitives, codecs, SPARQL, SHACL, ShEx, and graph transport.</em>
+  <em>The RDF 1.2 toolkit with a purr: primitives, codecs, SPARQL, SHACL, ShEx, entailment, full-text search, GeoSPARQL, and graph transport.</em>
 </p>
 
 <p align="center">
@@ -53,15 +53,29 @@ caller-supplied configuration.
   side-tables, and base-direction literals.
 - **Native codecs** — first-party parsers/serializers for Turtle, TriG, N-Triples,
   N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD; byte-deterministic
-  output.
+  output. Every syntax resolves relative IRI references through the one RFC 3986
+  layer in `purrdf::iri` (`BaseIri`/`BaseScope`), and a relative reference with
+  no base in scope is a hard error rather than a term.
 - **Canonicalization** — W3C RDFC-1.0, tested against the W3C fixture suite.
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator (property
   paths, aggregates, EXISTS/NOT EXISTS answered by a memoized existence probe
   where a prepare-time proof licenses it and by the per-row definition
-  otherwise, cost-based BGP planning), gated by the W3C conformance suite;
-  results in SPARQL JSON/XML/CSV/TSV.
-- **SHACL** — the complete SHACL Core feature set plus SHACL-SPARQL constraints
-  and targets, on PurRDF's own engine.
+  otherwise, cost-based BGP planning, the SEP-0009 composite datatypes,
+  governed execution), gated by the W3C conformance suites; results in SPARQL
+  JSON/XML/CSV/TSV. Caller-keyed extension seams — scalar functions, property
+  functions (path witnesses and embedding kNN ship in-crate), custom aggregates,
+  and a `SERVICE` resolver with per-service context — under `purrdf::sparql`.
+- **Full-text search** — `purrdf::text`: an in-memory inverted index over RDF
+  1.2 literals with exact fixed-point BM25 ranking and no floating point, so
+  the same query ranks identically natively and on wasm32; reached from SPARQL
+  as property functions under the caller's IRIs.
+- **GeoSPARQL 1.1** — `purrdf::geo`: exact, float-free WKT/GeoJSON geometry,
+  every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM, the
+  `geof:` family on the scalar seam and spatial-relation rewrite on the
+  property-function seam, with the OGC vocabulary supplied by the caller.
+- **SHACL** — the complete SHACL Core feature set, SHACL-SPARQL constraints and
+  targets, and SHACL-AF (node expressions and SHACL Rules, aligned with the
+  SHACL 1.2 node-expression and rule-layering drafts), on PurRDF's own engine.
 - **ShEx 2.1** — ShExC/ShExJ schemas and shape-map validation, gated against the
   official shexTest suite.
 - **Entailment** — Simple / RDF / RDFS / OWL 2 RL / D forward materialization
