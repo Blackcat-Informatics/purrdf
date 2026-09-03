@@ -37,11 +37,67 @@ corpora that gate all of it. Issues and pull requests are welcome.
 ## Development
 
 ```bash
+make doctor     # what this machine actually enforces (run when a gate prints SKIP)
 make metadata   # regenerate + verify generated artifacts (loss matrices, queries)
 make check      # fmt, build, tests, hygiene gates
 make bench      # criterion benchmarks
 make wasm-pkg   # build the ESM/wasm package
 make capi-build # build libpurrdf via cargo-c
+```
+
+`make check` is the gate, but it is not the whole gate: **`make conformance` and
+the rustdoc lane run separately**, so adding a test can leave `make check` green
+while `make conformance` goes red. Run both before claiming a change is done.
+
+### A SKIP is not a pass
+
+Several gates degrade to `SKIP` when a tool is missing locally and hard-fail in
+CI instead. `make doctor` prints which ones are inert on your machine and why.
+The distinction that matters most: if `rustup` is not on `PATH`, then
+`rust-toolchain.toml`'s dated-nightly pin is **not enforced locally at all** —
+`cargo` resolves to whatever is on `PATH` — and `make wasm` can neither detect
+nor install the wasm32 target, so it skips silently. That is a different
+situation from "the target is not installed", and `make doctor` says which one
+you are in.
+
+### Benchmarks
+
+Benches are **report-only** and never gate; PurRDF asserts no speedups (see
+`docs/BENCHMARKS.md`). They run weekly and on demand from
+`.github/workflows/benchmarks.yaml`, not on every push.
+
+`cargo bench --workspace` works. It did not until recently: `bindings/python`
+sets `test = false` on its lib because a PyO3 `extension-module` cannot link as
+an executable (it leaves the CPython API unresolved for the interpreter to supply
+at `dlopen` time), but `test = false` does **not** disable the auto-generated
+BENCH target — so `cargo bench --workspace` failed to link with ~70 undefined
+`pyo3-ffi` symbols while `cargo test --workspace` was green. It is now
+`bench = false` as well. CI never saw it because the benchmark workflow names
+crates individually.
+
+`[profile.bench]` inherits `lto = "fat"` and `codegen-units = 1` from
+`[profile.release]`, so a full bench build is slow; naming the crate you care
+about is usually what you want:
+
+```bash
+cargo bench -p purrdf-sparql-eval --no-run --locked
+```
+
+### Reclaiming disk from stale cargo build directories
+
+If this machine sets `[unstable] build-dir-new-layout` in `~/.cargo/config.toml`,
+cargo keys each build directory on a hash of the **workspace path**, so every
+worktree gets its own tree and those trees **outlive the worktree by design** —
+nothing cleans them up when the worktree is deleted. On a checkout with heavy
+branch or worktree churn they accumulate without bound and can fill the disk.
+
+`scripts/sweep-cargo-build-dirs.sh` maps each hash directory back to the
+workspace that created it and reports the ones whose workspace no longer exists.
+It prints by default and deletes only with `--delete`:
+
+```bash
+bash scripts/sweep-cargo-build-dirs.sh            # report only
+bash scripts/sweep-cargo-build-dirs.sh --delete   # remove orphans
 ```
 
 ## Versioning & releases

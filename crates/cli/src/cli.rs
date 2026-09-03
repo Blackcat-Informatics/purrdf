@@ -1081,8 +1081,10 @@ pub(crate) enum CliShexFormat {
 #[derive(Subcommand, Debug)]
 pub(crate) enum PackCommand {
     /// Verify a pack container's full integrity — every section digest AND the
-    /// RDFC-1.0 canonical-identity digest. Prints the verified 64-hex digest and
-    /// exits 0; a corrupt or non-pack input exits non-zero with a message.
+    /// canonical-identity digest, which is computed under the `purrdf-rdfc12` profile
+    /// and is NOT an RDFC-1.0 digest (the two agree byte for byte only on the RDF 1.1
+    /// subset). Prints the verified 64-hex digest and exits 0; a corrupt or non-pack
+    /// input exits non-zero with a message.
     ///
     /// The ordinary read/reason paths already verify a pack on every open (nothing
     /// enters the pipeline unverified); this is the explicit surface for confirming a

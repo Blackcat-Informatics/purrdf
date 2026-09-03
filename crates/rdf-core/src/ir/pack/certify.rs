@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The certified-projection verifier: an INDEPENDENT check that a pack's
-//! stored RDFC-1.0 digest genuinely matches its
+//! stored canonical-identity digest genuinely matches its
 //! own contents, on top of the per-section SHA-256 integrity
 //! [`PackView::from_bytes`] already enforces.
 //!
 //! # Why a second, independent digest recompute
 //!
 //! [`super::container::PackBuilder::build_bytes`] stores a SHA-256 digest of the SOURCE dataset's
-//! RDFC-1.0 canonical N-Quads in the container header (see
+//! `purrdf-rdfc12` canonical N-Quads in the container header (see
 //! [`super::container`]'s module docs, the `rdfc_digest` header field). That value
 //! is trusted data written once at build time — nothing re-derives it from the
 //! pack's own sections afterward. [`verify_pack`] closes that gap: it walks the
@@ -54,7 +54,14 @@ use super::container::{PackError, PackView};
 // PackDigest
 // ---------------------------------------------------------------------------
 
-/// A verified SHA-256 RDFC-1.0 digest: the output of [`verify_pack`] on success.
+/// A verified SHA-256 `purrdf-rdfc12` digest: the output of [`verify_pack`] on success.
+///
+/// NOT an RDFC-1.0 digest, and never to be labelled one. It is computed through
+/// [`crate::try_canonicalize_with`] — the [`crate::CANON_PROFILE_ID`] profile, whose
+/// output agrees with RDFC-1.0 byte for byte ONLY on the RDF 1.1 subset (no reifiers,
+/// no annotations, no triple terms, no reserved IRIs). On anything else the bytes
+/// differ, and the profile REFUSES input RDFC-1.0 would accept. See
+/// `docs/RDF12-CANON-PROFILE.md` §1.
 ///
 /// Distinct from a bare `[u8; 32]` so a caller cannot confuse an UNVERIFIED digest
 /// (e.g. one merely read off [`PackView::rdfc_digest`] without recomputing it) with
@@ -261,7 +268,7 @@ pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, Rd
 /// reifier bindings, and statement annotations are all restored; no RDF text is
 /// serialized or parsed along the way.
 ///
-/// The stored RDFC-1.0 header digest is not independently recomputed here. A
+/// The stored canonical-identity header digest is not independently recomputed here. A
 /// caller that needs a certified identity rather than structural restoration
 /// should call [`verify_pack`] as well. Content-addressed caches normally verify
 /// the complete pack blob against their own manifest digest before calling this
@@ -286,7 +293,7 @@ pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
 /// Open, structurally verify, and CERTIFY a pack: [`PackView::from_bytes`] first
 /// (magic/version/every section's SHA-256/each submodule's own structural
 /// validation), then independently reconstruct the dataset the pack claims to
-/// encode and recompute its RDFC-1.0 SHA-256 digest, then compare that recompute
+/// encode and recompute its `purrdf-rdfc12` SHA-256 digest, then compare that recompute
 /// to the pack's own stored `rdfc_digest` header field.
 ///
 /// A pack that passes both checks is a **certified read-only projection**: its
@@ -337,7 +344,7 @@ pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
     Ok(PackDigest(expected))
 }
 
-/// Read a pack's stored RDFC-1.0 digest AFTER structural validation, without the
+/// Read a pack's stored canonical-identity digest AFTER structural validation, without the
 /// (more expensive) independent recompute [`verify_pack`] performs.
 ///
 /// [`PackView::from_bytes`] still runs in full (magic/version/every section's

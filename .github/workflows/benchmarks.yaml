@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# The criterion + Python-compat benchmark suites, OFF the per-push path.
+#
+# These run ~90-120 minutes and are `continue-on-error` by project rule: a bench
+# never gates a merge, and PurRDF asserts no speedups (docs/BENCHMARKS.md). Run
+# per push, that bought a two-hour runner per commit for a result nothing reads —
+# and GitHub auto-cancelled a ~2 h run outright, so the data was not even
+# collected. A weekly run on an uncontended runner is strictly better DATA than a
+# per-push run competing with the gating jobs for the same machine, which is the
+# second reason this moved rather than merely being deleted.
+#
+# `workflow_dispatch` is what makes it available on demand: a change that plausibly
+# moves performance is benchmarked by running this workflow against the branch, not
+# by waiting for the schedule.
+name: Benchmarks
+
+on:
+  schedule:
+    # Sundays 04:17 UTC. Off the hour, because scheduled workflows queue on shared
+    # runners and the top of the hour is where everyone else's cron already is.
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    continue-on-error: true
+    # Read-only. `actions: write` was carried here from the per-push job and no step
+    # uses it — checkout, the toolchain installs, the bench runs and
+    # `upload-artifact` all work under `contents: read`. A scheduled workflow runs
+    # with the repository token, so an unused write scope is a standing grant for
+    # nothing.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+
+      # SHA-pinned action rather than `curl https://astral.sh/uv/install.sh | sh`,
+      # which is what the job ran on the per-push path: an unversioned installer
+      # piped into a shell is whatever that URL serves on the day it runs. This is
+      # the same pin `release-pypi.yaml` already uses.
+      #
+      # The three remaining unpinned copies in `ci.yaml` are pre-existing and are
+      # deliberately not touched here — this PR moves a job, and rewriting the
+      # gating lanes' installer belongs in its own change.
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Compile benchmark harnesses
+        run: |
+          cargo bench -p purrdf-gts --no-run --locked
+          cargo bench -p purrdf-core --no-run --locked
+          cargo bench -p purrdf-rdf --bench native_codecs --no-run --locked
+          cargo bench -p purrdf-rdf --bench projections --no-run --locked
+          cargo bench -p purrdf-sparql-eval --no-run --locked
+          cargo bench -p purrdf-shapes --bench validate --no-run --locked
+          cargo bench -p purrdf-entail --no-run --locked
+          cargo bench -p purrdf-geo --no-run --locked
+          cargo bench -p purrdf-text --bench search --no-run --locked
+          cargo bench -p purrdf-wasm --bench query_engine_reuse --no-run --locked
+          cargo bench -p purrdf-iri --no-run --locked
+          cargo bench -p purrdf-xsd --no-run --locked
+          cargo bench -p purrdf-sparql-algebra --bench tokenize --no-run --locked
+          cargo bench -p purrdf-sparql-results --no-run --locked
+
+      - name: Run native criterion suites
+        run: |
+          cargo bench -p purrdf-gts --locked
+          cargo bench -p purrdf-core --locked
+          cargo bench -p purrdf-rdf --bench native_codecs --locked
+          cargo bench -p purrdf-rdf --bench projections --locked
+          cargo bench -p purrdf-sparql-eval --locked
+          cargo bench -p purrdf-shapes --bench validate --locked
+          cargo bench -p purrdf-entail --locked
+          cargo bench -p purrdf-geo --locked
+          cargo bench -p purrdf-text --bench search --locked
+          cargo bench -p purrdf-wasm --bench query_engine_reuse --locked
+          cargo bench -p purrdf-iri --locked
+          cargo bench -p purrdf-xsd --locked
+          cargo bench -p purrdf-sparql-algebra --bench tokenize --locked
+          cargo bench -p purrdf-sparql-results --locked
+
+      - name: Run Python compat harness
+        working-directory: bindings/python
+        run: |
+          uv run maturin develop
+          uv run python benchmarks/bench_compat.py --json bench_compat.json
+
+      - name: Upload benchmark artifacts
+        if: success() || failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-results
+          path: |
+            target/criterion/
+            bindings/python/bench_compat.json
+          if-no-files-found: warn

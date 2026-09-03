@@ -117,6 +117,28 @@ source "${release_list}"
 source "${repo}/scripts/crates-io-api.sh"
 crates=("${PURRDF_UNBOOTSTRAPPED_CRATES[@]}")
 release_set=("${PURRDF_RELEASE_CRATES[@]}")
+# `preflight`'s decision, readable by every step that follows it. Declared here so
+# the plan is visibly a VALUE the script carries rather than something recomputed
+# — the previous shape recomputed nothing and simply re-walked `crates`, which is
+# how a DEFERRED crate reached `cargo package`.
+PLAN_TO_CREATE=()
+PLAN_DEFERRED=()
+
+# plan_cargo_args: fill `cargo_args` with the `-p` list every per-crate step gets.
+#
+# ONE construction, used by the gates, `cargo package`, and `--plan`'s printout —
+# so what `--plan` shows is the array the irreversible step is handed, not a
+# description of it. That identity is the point: the 179-case self-test passed a
+# script that packaged the whole LEDGER because no arm ever looked at these
+# arguments, only at the plan text above them.
+cargo_args=()
+plan_cargo_args() {
+  local crate
+  cargo_args=()
+  for crate in "${PLAN_TO_CREATE[@]}"; do
+    cargo_args+=("-p" "$crate")
+  done
+}
 user_agent="$(crates_io_user_agent "${VERSION}")"
 
 # Pause after publishing a crate that CREATED a new crates.io record, before
@@ -209,6 +231,11 @@ EOF
     return 1
   fi
 
+  # to_create ESCAPES this function (declared at file scope, below `preflight`'s
+  # definition site is too late — see PLAN_TO_CREATE). Everything after the plan
+  # must iterate the PLAN, not the ledger: a DEFERRED crate's dependencies are by
+  # definition not on the registry, so `cargo package` dies on it before the first
+  # upload. Observed verbatim at token step 1 of the 0.13.0 bootstrap.
   local -a to_create=() to_skip=() has_record=() deferred=() not_in_set=()
   local crate idx dep_line kind dep dep_state state
 
@@ -319,6 +346,16 @@ EOF
     return 1
   fi
 
+  # THE PLAN, published to the steps that act on it. Everything after this point
+  # — the wasm32 check, the test run, `cargo package` and the publish loop —
+  # iterates PLAN_TO_CREATE, never `crates`. The two differ exactly when a crate
+  # is DEFERRED, which is the case that broke: `cargo package -p purrdf-geo` at
+  # 0.13.0 died with "failed to select a version for the requirement
+  # `purrdf-core = ^0.13.0`" because geo was deferred and its dependency was not
+  # on the registry yet — before a single record had been created.
+  PLAN_TO_CREATE=("${to_create[@]}")
+  PLAN_DEFERRED=("${deferred[@]}")
+
   echo
   if [[ "${#to_create[@]}" -eq 0 ]]; then
     echo "Nothing to create at ${VERSION} in this pass: ${to_skip[*]} already exist${deferred[0]:+; deferred: ${#deferred[@]} (see above)}."
@@ -377,12 +414,27 @@ self_test() {
   version() {
     printf '200\n{"version":{"crate":"%s","num":"%s"}}\n' "$2" "${VERSION}" > "$1/$2@${VERSION}"
   }
-  # deps_present <dir>: every path-dependency of every fixture crate, at VERSION.
+  # deps_present <dir>: every path-dependency of every fixture crate, at VERSION —
+  # EXCEPT a dependency that is itself a fixture crate.
+  #
+  # A ledger crate is BY DEFINITION not on the registry, so minting a version
+  # record for one contradicts the fixture. It also silently broke arm 5 the day
+  # the real ledger emptied: the fallback fixture became the last two release
+  # crates, `purrdf-wasm` depends on `purrdf`, and so `deps_present` wrote
+  # `purrdf@VERSION` for the very crate that arm needs seen as "record exists, but
+  # not at this version" — flipping the plan from REFUSE to `skip` and the arm's
+  # exit code from 1 to 0. The plan already handles a ledger crate depending on an
+  # earlier one through its in-pass check ("created earlier in this pass"), which
+  # is the real behaviour this should be exercising; arm 2b encodes the same
+  # exclusion for its own expectations.
   deps_present() {
-    local crate dep_line
+    local crate dep_line dep
     for crate in "${fixture[@]}"; do
       while IFS= read -r dep_line; do
-        [[ -n "$dep_line" ]] && version "$1" "${dep_line#* }"
+        [[ -z "$dep_line" ]] && continue
+        dep="${dep_line#* }"
+        in_list "$dep" "${fixture[@]}" && continue
+        version "$1" "$dep"
       done < <(workspace_path_deps "$crate")
     done
   }
@@ -472,6 +524,26 @@ self_test() {
     "gh run rerun" \
     "${expect_step1[@]}"
 
+  # 2c. THE ARGUMENTS HANDED TO THE IRREVERSIBLE STEP, at that same round-1
+  #     registry state. This is the arm whose absence let the real defect ship: the
+  #     plan above said CREATE one / DEFER the rest and was RIGHT, while every step
+  #     after it re-walked the whole ledger and `cargo package` died on a deferred
+  #     crate's missing dependency before a single record was created. Asserting the
+  #     plan text is not asserting the args; only this is.
+  arm "token step 1: the gates and package pass get ONLY ${fixture[0]}" pass \
+    "$mock" "$(ledger_file step1args "${fixture[@]}")" \
+    "cargo args: -p ${fixture[0]}"
+  # And the neighbouring VALID case: with every dependency up, nothing is deferred
+  # and the args must cover the whole ledger. A fix that narrowed the args by
+  # refusing too much would pass the arm above and fail this one.
+  mock="${tmp}/allargs"; mkdir -p "$mock"
+  deps_present "$mock"
+  local expect_all_args="cargo args:"
+  for crate in "${fixture[@]}"; do expect_all_args+=" -p ${crate}"; done
+  arm "nothing deferred: the args cover every ledger crate" pass \
+    "$mock" "$(ledger_file allargs "${fixture[@]}")" \
+    "$expect_all_args"
+
   # 3. The valid path: no records, every dependency present — the plan proceeds
   #    and names every ledger crate as a record to CREATE.
   mock="${tmp}/valid"; mkdir -p "$mock"
@@ -530,7 +602,11 @@ case "$mode" in
     ;;
   plan)
     preflight
+    plan_cargo_args
     echo
+    # The ARGUMENTS, not a description of them: this is the array `cargo check
+    # --target wasm32`, `cargo test`, `cargo package` and the publish loop receive.
+    echo "cargo args: ${cargo_args[*]:-(none)}"
     echo "--plan: stopping before the token check, the gates and any publish."
     exit
     ;;
@@ -577,10 +653,18 @@ if command -v rustup >/dev/null; then
     rustup target add wasm32-unknown-unknown
   fi
 fi
-cargo_args=()
-for crate in "${crates[@]}"; do
-  cargo_args+=("-p" "$crate")
-done
+# THE PLAN, not the ledger. A DEFERRED crate is one whose dependencies are not on
+# crates.io at ${VERSION}; building, testing or packaging it here fails on exactly
+# that, and it is not being published in this pass anyway.
+if [[ "${#PLAN_TO_CREATE[@]}" -eq 0 ]]; then
+  echo "Nothing to create in this pass; the gates and publish loop have no crate to run on."
+  exit 0
+fi
+plan_cargo_args
+if [[ "${#PLAN_DEFERRED[@]}" -gt 0 ]]; then
+  echo "Gates and packaging cover this pass's ${#PLAN_TO_CREATE[@]} crate(s): ${PLAN_TO_CREATE[*]}"
+  echo "(${#PLAN_DEFERRED[@]} deferred crate(s) are excluded — their dependencies are not on crates.io yet.)"
+fi
 cargo check --locked --target wasm32-unknown-unknown --lib "${cargo_args[@]}"
 cargo test --locked "${cargo_args[@]}"
 rm -rf target/package
@@ -622,8 +706,8 @@ wait_for_crate_version() {
 }
 
 created=()
-for idx in "${!crates[@]}"; do
-  crate="${crates[$idx]}"
+for idx in "${!PLAN_TO_CREATE[@]}"; do
+  crate="${PLAN_TO_CREATE[$idx]}"
   state="$(version_state "$crate")"
   registry_or_die "$state"
   if [[ "$state" == "present" ]]; then
@@ -633,7 +717,7 @@ for idx in "${!crates[@]}"; do
   cargo publish -p "$crate" "${publish_args[@]}"
   wait_for_crate_version "$crate"
   created+=("$crate")
-  if ((idx + 1 < ${#crates[@]})) && [[ "${PUBLISH_COOLDOWN_SECONDS}" != "0" ]]; then
+  if ((idx + 1 < ${#PLAN_TO_CREATE[@]})) && [[ "${PUBLISH_COOLDOWN_SECONDS}" != "0" ]]; then
     sleep "${PUBLISH_COOLDOWN_SECONDS}"
   fi
 done

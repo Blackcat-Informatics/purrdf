@@ -124,6 +124,35 @@ sibling). All three carry a Trusted Publisher entry and the
 directions, and it gains an entry again only when a future release adds a
 brand-new crate.
 
+#### The `0.0.0-bootstrap` placeholders — yanked
+
+`purrdf-text` and `purrdf-geo` each carried a `0.0.0-bootstrap` version: an
+empty lib published under deadline purely to create the crate record so Trusted
+Publishing could be enabled on it. Nothing ever resolved to them — `1.0.0` is
+`max_version` for both — but a version list is read by people, and a `0.0.0`
+release of a crate that never had one is a puzzle for every future reader.
+
+Both are now **yanked**, which hides them from resolution without deleting them:
+
+```sh
+cargo yank --version 0.0.0-bootstrap purrdf-text
+cargo yank --version 0.0.0-bootstrap purrdf-geo
+```
+
+Two things to carry forward if a future release ever needs this pattern again:
+
+* **Yank is a separate permission from publish.** Every PurRDF crate is locked
+  to Trusted Publishing for publishing, but that lock does not grant or deny
+  yank — that needs an API token carrying the yank scope, and the release
+  workflow's trusted session cannot do it. This step is always manual.
+* **It is reversible** (`cargo yank --undo --version …`), which is what makes it
+  the right tool here rather than a request to crates.io support.
+
+The better outcome is not needing a placeholder at all: that is what
+`scripts/bootstrap-crates-io.sh` exists for, and why its plan/package mismatch
+was worth fixing — the placeholders were published by hand precisely because
+that script could not complete a run.
+
 
 ## Changelog and release notes
 
