@@ -25,7 +25,7 @@
 //! | `n_terms`       | `u64`     | 8     | 16     | the dictionary's total unified-id count              |
 //! | `section_count` | `u32`     | 4     | 24     | always `SECTION_COUNT` = `3` in this format version |
 //! | `reserved`      | `u32`     | 4     | 28     | always `0`; reserved for a future format revision    |
-//! | `rdfc_digest`   | `[u8;32]` | 32    | 32     | SHA-256 of the dataset's RDFC-1.0 canonical N-Quads  |
+//! | `rdfc_digest`   | `[u8;32]` | 32    | 32     | SHA-256 of the dataset's `purrdf-rdfc12` N-Quads     |
 //!
 //! ## Capability flags (the header's `flags` field)
 //!
@@ -262,7 +262,7 @@ impl std::fmt::Display for PackError {
             Self::RdfcDigestMismatch { expected, computed } => {
                 write!(
                     f,
-                    "pack-container: RDFC-1.0 digest mismatch: header claims {}, recomputed {}",
+                    "pack-container: canonical-identity digest mismatch: header claims {}, recomputed {}",
                     hex32(expected),
                     hex32(computed)
                 )
