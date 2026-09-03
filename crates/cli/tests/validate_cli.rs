@@ -1349,3 +1349,374 @@ fn a_malformed_shapes_graph_is_a_named_usage_error() {
         "the value is refused at the command line, not at the IR boundary: {err}"
     );
 }
+
+// ── owl:imports in the shapes graph ──────────────────────────────────────────
+//
+// Jena's SHACL validator dereferences `owl:imports` over HTTP. PurRDF ships no HTTP client
+// and must stay wasm32-clean, so the closure is caller-supplied — the same answer `entails
+// --import` and `shex --import` give. What was a BUG is that an unresolved import used to be
+// SILENT: a shapes graph whose shapes all lived in an imported document reported `conforms
+// true / results 0` against no shapes at all, with exit 0 and not a word on stderr.
+
+/// A root shapes document that is nothing but an ontology header importing `shapes-a`.
+const IMPORT_ROOT: &str = concat!(
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n",
+    "<http://example.org/root> rdf:type owl:Ontology ;\n",
+    "    owl:imports <http://example.org/shapes-a> .\n",
+);
+
+/// `shapes-a` carries a shape AND imports `shapes-b`, so the closure must be transitive.
+const IMPORT_A: &str = concat!(
+    "@prefix sh:   <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix owl:  <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .\n",
+    "@prefix ex:   <http://example.org/> .\n",
+    "<http://example.org/shapes-a> owl:imports <http://example.org/shapes-b> .\n",
+    "ex:AgeShape a sh:NodeShape ; sh:targetClass ex:Person ;\n",
+    "    sh:property [ sh:path ex:age ; sh:datatype xsd:integer ;\n",
+    "                  sh:message \"age must be an integer\" ] .\n",
+);
+
+/// `shapes-b` is reached ONLY through `shapes-a`; its shape firing proves transitivity.
+const IMPORT_B: &str = concat!(
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:NameShape a sh:NodeShape ; sh:targetClass ex:Person ;\n",
+    "    sh:property [ sh:path ex:name ; sh:minCount 1 ;\n",
+    "                  sh:message \"name is required\" ] .\n",
+);
+
+/// One `ex:Person` that violates BOTH imported shapes.
+const IMPORT_DATA: &str = concat!(
+    "@prefix ex:  <http://example.org/> .\n",
+    "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n",
+    "ex:alice rdf:type ex:Person ; ex:age \"not-a-number\" .\n",
+);
+
+/// `--import IRI=FILE` folds the shapes graph's TRANSITIVE `owl:imports` closure in, and the
+/// shapes that only exist in imported documents decide the verdict.
+#[test]
+fn shapes_graph_imports_are_folded_transitively_from_the_import_table() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
+    let a = write_file(dir.path(), "a.ttl", IMPORT_A);
+    let b = write_file(dir.path(), "b.ttl", IMPORT_B);
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &root,
+        "--import",
+        &format!("http://example.org/shapes-a={a}"),
+        "--import",
+        &format!("http://example.org/shapes-b={b}"),
+        &data,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "a decided verdict exits 0: {err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 2\n"),
+        "both imported shapes fire — the depth-2 one proves the closure is transitive, not \
+         one level deep: {err}"
+    );
+    let report = stdout(&out);
+    assert!(
+        report.contains("age must be an integer") && report.contains("name is required"),
+        "each imported shape's own message reaches the report: {report}"
+    );
+}
+
+/// WITHOUT `--import`, an unresolved `owl:imports` is REPORTED and the run proceeds.
+///
+/// This is the issue's actual defect: the pre-fix behaviour was silence. It is deliberately a
+/// diagnostic rather than a refusal — see the neighbouring-valid-case test below.
+#[test]
+fn an_unresolved_shapes_import_is_reported_rather_than_dropped_in_silence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    let out = run(&["validate", "--shapes", &root, &data]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "still a decided verdict: {err}");
+    assert!(
+        err.contains("http://example.org/shapes-a"),
+        "the warning names the import it could not resolve: {err}"
+    );
+    assert!(
+        err.contains("--import"),
+        "and the flag that resolves it: {err}"
+    );
+    // The verdict is unchanged from the pre-fix behaviour — the shapes graph really does
+    // carry no shapes. What changed is that the operator is now TOLD why it is empty.
+    assert!(
+        err.contains("shacl conforms true\n") && err.contains("shacl results 0\n"),
+        "validating against the root alone still decides: {err}"
+    );
+}
+
+/// Naming ANY pair makes the closure mandatory: an import no pair resolves is refused by
+/// name, and a pair the closure never reaches is refused as unused.
+#[test]
+fn a_named_import_table_must_resolve_the_whole_closure_and_be_fully_used() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
+    let a = write_file(dir.path(), "a.ttl", IMPORT_A);
+    let b = write_file(dir.path(), "b.ttl", IMPORT_B);
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    // Half a closure: `shapes-a` is supplied, the `shapes-b` it imports is not. Folding this
+    // in would validate against a DIFFERENT shapes graph than the operator described.
+    let partial = run(&[
+        "validate",
+        "--shapes",
+        &root,
+        "--import",
+        &format!("http://example.org/shapes-a={a}"),
+        &data,
+    ]);
+    let err = stderr(&partial);
+    assert_eq!(code(&partial), 1, "a runtime refusal: {err}");
+    assert!(
+        err.contains("http://example.org/shapes-b") && err.contains("--import"),
+        "the refusal names the unresolved IRI and the flag: {err}"
+    );
+
+    // A pair nothing imports would be read and never used.
+    let unused = run(&[
+        "validate",
+        "--shapes",
+        &root,
+        "--import",
+        &format!("http://example.org/shapes-a={a}"),
+        "--import",
+        &format!("http://example.org/shapes-b={b}"),
+        "--import",
+        &format!("http://example.org/nobody-imports-this={b}"),
+        &data,
+    ]);
+    let err = stderr(&unused);
+    assert_eq!(code(&unused), 2, "a usage error: {err}");
+    assert!(
+        err.contains("never reaches") && err.contains("nobody-imports-this"),
+        "the refusal quotes the unused pair back: {err}"
+    );
+
+    // The degenerate form of the same fault: a pair against a shapes graph with no imports.
+    let no_imports = run(&[
+        "validate",
+        "--shapes",
+        &b,
+        "--import",
+        &format!("http://example.org/shapes-a={a}"),
+        &data,
+    ]);
+    let err = stderr(&no_imports);
+    assert_eq!(code(&no_imports), 2, "a usage error: {err}");
+    assert!(
+        err.contains("no owl:imports at all"),
+        "the refusal says why the pair cannot be used: {err}"
+    );
+}
+
+/// THE NEIGHBOURING VALID CASES. Every one of these must still SUCCEED.
+///
+/// Over-refusal is the mirror image of the silent drop this change fixes, and it is exactly
+/// what a stricter reading of `owl:imports` would produce. Two documents in this repo's own
+/// vendored W3C SHACL corpus carry an inert `owl:imports`
+/// (`vectors/shacl/sparql/component/validator-001.ttl`,
+/// `vectors/shacl/sparql/node/prefixes-001.ttl`); hard-failing on an unresolved import would
+/// reject them, and `make conformance` would go red for input that is valid.
+#[test]
+fn valid_shapes_graphs_are_not_refused_by_the_import_machinery() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    // 1. A shapes graph with an INERT owl:imports and its own shapes: the shapes decide, and
+    //    the unresolved import does not stop the run. This is the corpus case.
+    let inert = write_file(
+        dir.path(),
+        "inert.ttl",
+        &format!(
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             <http://example.org/inert> owl:imports <http://example.org/never-supplied> .\n{IMPORT_B}"
+        ),
+    );
+    let out = run(&["validate", "--shapes", &inert, &data]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "an inert import is not a refusal: {err}");
+    assert!(
+        err.contains("shacl results 1\n"),
+        "the shapes graph's OWN shape still fires: {err}"
+    );
+
+    // 2. A shapes graph with no imports and no --import: byte-for-byte the pre-flag path.
+    let plain = write_file(dir.path(), "plain.ttl", IMPORT_B);
+    let out = run(&["validate", "--shapes", &plain, &data]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "{err}");
+    assert!(
+        err.contains("shacl conforms false\n") && err.contains("shacl results 1\n"),
+        "the overwhelmingly common invocation is unchanged: {err}"
+    );
+
+    // 3. An import CYCLE terminates and still folds. OWL 2 §3.4 defines the imports closure
+    //    as the transitive one and explicitly permits `A` to import `B` to import `A`, so
+    //    refusing a cycle would refuse an ontology the specification allows.
+    let cyc_root = write_file(
+        dir.path(),
+        "cyc-root.ttl",
+        concat!(
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "<http://example.org/cyc-root> owl:imports <http://example.org/cyc-a> .\n",
+        ),
+    );
+    let cyc_a = write_file(
+        dir.path(),
+        "cyc-a.ttl",
+        &format!(
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             <http://example.org/cyc-a> owl:imports <http://example.org/cyc-b> .\n{IMPORT_B}"
+        ),
+    );
+    let cyc_b = write_file(
+        dir.path(),
+        "cyc-b.ttl",
+        concat!(
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "<http://example.org/cyc-b> owl:imports <http://example.org/cyc-a> .\n",
+        ),
+    );
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &cyc_root,
+        "--import",
+        &format!("http://example.org/cyc-a={cyc_a}"),
+        "--import",
+        &format!("http://example.org/cyc-b={cyc_b}"),
+        &data,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(
+        code(&out),
+        0,
+        "a cycle terminates rather than refusing: {err}"
+    );
+    assert!(
+        err.contains("shacl results 1\n"),
+        "and the shape reached through the cycle still fires: {err}"
+    );
+}
+
+/// An IMPORTED document's own `@prefix` declarations reach its SHACL-SPARQL queries, and its
+/// `sh:message` templates are substituted per solution, end to end.
+///
+/// The frozen IR does not retain a document's prefix map, so the fold has to carry every
+/// document's prefixes forward — not just the root's. `xsd:` here is declared ONLY in the
+/// imported document, and the `sh:select` that uses it is in that same document.
+#[test]
+fn an_imported_documents_prefixes_and_message_templates_survive_the_fold() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = write_file(
+        dir.path(),
+        "sp-root.ttl",
+        concat!(
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "<http://example.org/sp-root> owl:imports <http://example.org/sparql-a> .\n",
+        ),
+    );
+    let imported = write_file(
+        dir.path(),
+        "sparql-a.ttl",
+        concat!(
+            "@prefix sh:  <http://www.w3.org/ns/shacl#> .\n",
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+            "@prefix ex:  <http://example.org/> .\n",
+            "ex:LiteralTypeShape a sh:NodeShape ; sh:targetClass ex:Person ;\n",
+            "    sh:sparql [ a sh:SPARQLConstraint ;\n",
+            "        sh:message \"Property {$path} has an untyped literal: '{$value}' on {$this}.\" ;\n",
+            "        sh:select \"\"\"SELECT $this ?path ?value WHERE {\n",
+            "            $this ?path ?value . FILTER(isLiteral(?value))\n",
+            "            FILTER(DATATYPE(?value) = xsd:string) }\"\"\" ] .\n",
+        ),
+    );
+    let data = write_file(
+        dir.path(),
+        "sp-data.ttl",
+        concat!(
+            "@prefix ex:  <http://example.org/> .\n",
+            "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n",
+            "ex:alice rdf:type ex:Person ; ex:nickname \"Ali\" .\n",
+        ),
+    );
+
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &root,
+        "--import",
+        &format!("http://example.org/sparql-a={imported}"),
+        &data,
+    ]);
+    let err = stderr(&out);
+    assert_eq!(code(&out), 0, "{err}");
+    assert!(
+        err.contains("shacl results 1\n"),
+        "the imported SHACL-SPARQL constraint ran, so its `xsd:` prefix resolved: {err}"
+    );
+    assert!(
+        stdout(&out).contains(
+            "\"Property http://example.org/nickname has an untyped literal: 'Ali' on \
+             http://example.org/alice.\""
+        ),
+        "every template is substituted from the solution's own bindings: {}",
+        stdout(&out)
+    );
+}
+
+/// A malformed `--import` pair is a usage error naming the argument, decided before any file
+/// is opened — never a silently skipped import.
+#[test]
+fn malformed_shapes_import_pairs_are_usage_errors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = write_file(dir.path(), "root.ttl", IMPORT_ROOT);
+    let a = write_file(dir.path(), "a.ttl", IMPORT_A);
+    let data = write_file(dir.path(), "data.ttl", IMPORT_DATA);
+
+    for (pair, needle) in [
+        ("notapair", "has no `=`"),
+        ("http://example.org/x=", "both halves"),
+        ("=file.ttl", "both halves"),
+        ("rel/path=a.ttl", "iri-non-absolute-base"),
+    ] {
+        let spec = pair.replace("a.ttl", &a);
+        let out = run(&["validate", "--shapes", &root, "--import", &spec, &data]);
+        let err = stderr(&out);
+        assert_eq!(code(&out), 2, "`{pair}` is a usage error: {err}");
+        assert!(
+            err.contains("--import") && err.contains(needle),
+            "`{pair}` names the flag and says what is wrong: {err}"
+        );
+    }
+
+    // One IRI resolves to one document; the second pair would be read and never used.
+    let duplicate = run(&[
+        "validate",
+        "--shapes",
+        &root,
+        "--import",
+        &format!("http://example.org/shapes-a={a}"),
+        "--import",
+        &format!("http://example.org/shapes-a={a}"),
+        &data,
+    ]);
+    let err = stderr(&duplicate);
+    assert_eq!(code(&duplicate), 2, "{err}");
+    assert!(
+        err.contains("named twice"),
+        "the duplicate is refused by name: {err}"
+    );
+}

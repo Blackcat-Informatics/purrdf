@@ -1104,7 +1104,7 @@ mod tests {
 
     // ── sh:message templating on the sh:sparql path (SHACL-SPARQL §5.3.3) ─────
     //
-    // Issue #253: `{$path}` / `{$value}` shipped unsubstituted in
+    // `{$path}` / `{$value}` used to ship unsubstituted in
     // `sh:resultMessage` because the caller's message string was cloned once per
     // row while the row's own bindings sat unread. The substitution itself has
     // always existed (`components::substitute_message_templates`) — it was only
@@ -1121,7 +1121,7 @@ mod tests {
         ])
     }
 
-    /// The reporter's constraint shape from issue #253, reduced to its essentials:
+    /// The reported constraint shape, reduced to its essentials:
     /// project `?path` and `?value`, and reference both from `sh:message`.
     const UNTYPED_LITERAL_SELECT: &str = "SELECT $this ?path ?value WHERE { \
          $this ?path ?value . FILTER(isLiteral(?value)) \
