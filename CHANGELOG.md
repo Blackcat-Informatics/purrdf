@@ -1,10 +1,33 @@
 # Changelog
 
 All notable changes to the PurRDF crate suite are recorded here. The suite
-ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
-bump may carry breaking changes and a patch bump is bugfix-only.
+ships one lockstep version across crates.io, PyPI, and npm; from 1.0.0 a
+breaking change bumps the major version, a minor bump is additive, and a patch
+bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+0.x.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-09-02
+
+The first release under full semantic versioning. The tree is the 0.13.0 tree:
+0.13.0 was published only to create the crates.io records for `purrdf-cdt`,
+`purrdf-geo` and `purrdf-text` — Trusted Publishing cannot create a crate that
+does not exist — and 1.0.0 is the same code republished through Trusted
+Publishing across all 21 crates, PyPI and npm. There is no functional change
+between the two.
+
+### Documentation
+
+- **release:** From 1.0.0 a breaking change bumps the major version, a minor
+  bump is additive, and a patch bump is bugfix-only; the changelog's
+  **BREAKING** markers name each one. The C ABI (`purrdf.h`,
+  `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` = 0.7) is versioned separately and
+  remains 0.x. The changelog header, its `cliff.toml` template and the release
+  docs now state that policy instead of the pre-1.0 one.
+- **release:** `make bump` now regenerates `purrdf.h`, because cbindgen derives
+  `PURRDF_MINOR` from the crate version and the 0.13.0 bump left the committed
+  header one integer behind, failing `capi-check` in CI.
 
 ## [0.13.0] - 2026-09-02
 

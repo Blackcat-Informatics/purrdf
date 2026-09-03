@@ -81,7 +81,4 @@ PURRDF_RELEASE_CRATES=(
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_UNBOOTSTRAPPED_CRATES=(
-  purrdf-cdt
-  purrdf-text
-  purrdf-geo
 )

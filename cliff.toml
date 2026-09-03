@@ -13,9 +13,9 @@
 # repeated user-facing release-note bullet carries no additional information.
 #
 # A conventional `type(scope)!:` subject or a `BREAKING CHANGE:` footer renders a
-# leading **BREAKING** marker on its bullet. Pre-1.0 the suite ships breaking
-# changes under a minor bump, so the changelog is the only place a consumer can
-# see that a bump carries one — it must never be silent.
+# leading **BREAKING** marker on its bullet. From 1.0.0 a breaking change bumps
+# the major version, and the marker still names each one so a consumer reading
+# the changelog sees exactly what the bump carries — it must never be silent.
 #
 # The marker is resolved over the release's WHOLE commit set before any bullet is
 # rendered, because the squash merge keeps the branch history as a second parent:
@@ -30,8 +30,10 @@ header = """
 # Changelog
 
 All notable changes to the PurRDF crate suite are recorded here. The suite
-ships one lockstep version across crates.io, PyPI, and npm; pre-1.0, a minor
-bump may carry breaking changes and a patch bump is bugfix-only.
+ships one lockstep version across crates.io, PyPI, and npm; from 1.0.0 a
+breaking change bumps the major version, a minor bump is additive, and a patch
+bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+0.x.
 
 """
 body = """
@@ -109,8 +111,9 @@ commit_parsers = [
   { message = ".*", group = "Other" },
 ]
 
-# A breaking commit is never dropped by a `skip = true` parser: pre-1.0 a minor
-# bump MAY carry breaking changes, so the marker must always reach the changelog.
+# A breaking commit is never dropped by a `skip = true` parser: from 1.0.0 a
+# breaking change bumps the major version, and the marker must always reach the
+# changelog so the bump's cause is named.
 protect_breaking_commits = true
 filter_commits = false
 # Only the canonical crates.io release tags mark releases; the parallel
