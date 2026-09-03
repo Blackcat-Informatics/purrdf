@@ -97,7 +97,14 @@ jobs:
       #
       # The preflight reads the same scripts/release-crates.sh the publish step
       # below sources, so it cannot check a different list than the one published.
-      - name: Preflight — every release crate has a crates.io record
+      # It also refuses any record that is NOT locked to Trusted Publishing
+      # (`trustpub_only` in the public record JSON): this lane is the only one
+      # that publishes versions of these crates — an API token's sole remaining
+      # job is creating a record — and an unlocked record is one a leaked token
+      # could publish. What no preflight can see is whether a Trusted Publisher
+      # ENTRY exists for a crate; see the loop comment below for what that
+      # failure looks like.
+      - name: Preflight — every release crate has a crates.io record, locked to this lane
         env:
           PURRDF_RELEASE_VERSION: ${{ github.ref_name }}
         run: bash scripts/check-crates-io-records.sh
@@ -232,6 +239,16 @@ jobs:
           # used to pass `--no-verify`, and the flag was load-bearing until
           # `purrdf-geo` (dev-depending on two later crates) was reordered — see
           # docs/RELEASE.md, "Verification is on, and why it was off".
+          #
+          # Failure mode, stated honestly: the OIDC token above is scoped to the
+          # crates whose Trusted Publisher entries matched this workflow. A crate
+          # with no entry fails AT its own `cargo publish` ("The provided access
+          # token is not valid for crate `<name>`"), after every crate ahead of
+          # it has been published — a loud stop under `set -e`, with a partial
+          # publish that a re-run of this tag resumes (published versions are
+          # skipped). The preflight cannot see entries (crates.io has no public
+          # API for them); its lock check is the closest thing, because the lock
+          # can only be enabled once an entry exists.
           for crate in "${crates[@]}"; do
             if crate_version_exists "$crate"; then
               echo "${crate} ${version} already exists on crates.io; skipping"

@@ -52,6 +52,17 @@ cargo lane:
   publishing;
 - every workspace crate version must match the tag version.
 
+Every version of every crate — all 21 — is published by that lane and nothing
+else. Each existing crate record is locked on crates.io with *Require trusted
+publishing* (`trustpub_only`), so an API token cannot publish a new version of
+any of them: crates.io answers with `403 Forbidden: New versions of this crate
+can only be published using Trusted Publishing`. A token has exactly one role
+left, creating the record of a brand-new crate — the one thing a Trusted
+Publishing token is refused (`Trusted Publishing tokens do not support creating
+new crates`) — and the release process document above is exact about how that
+bootstrap works, what it cannot do while the new crate's dependencies are not
+on the registry yet, and the two shapes that break that deadlock.
+
 Four workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
 `purrdf-sparql-conformance` (the test harness), `purrdf-cli` (the `purrdf`
