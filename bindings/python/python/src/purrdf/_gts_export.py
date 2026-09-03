@@ -66,6 +66,7 @@ _TABLES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             value       VARCHAR,
             datatype_id BIGINT,
             lang        VARCHAR,
+            direction   VARCHAR,
             reifier_id  BIGINT,
             triple_s    BIGINT,
             triple_p    BIGINT,
@@ -77,6 +78,7 @@ _TABLES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "value",
             "datatype_id",
             "lang",
+            "direction",
             "reifier_id",
             "triple_s",
             "triple_p",
@@ -137,10 +139,15 @@ def _rows(data: bytes) -> dict[str, Any]:
 
 
 def _flatten_terms(terms: Sequence[Any]) -> Iterator[tuple[Any, ...]]:
-    """Flatten each term row's optional ``(s, p, o)`` triple into three columns."""
-    for term_id, kind, value, datatype_id, lang, reifier_id, triple in terms:
+    """Flatten each term row's optional ``(s, p, o)`` triple into three columns.
+
+    The unpack is deliberately strict about arity. The projection's row is public
+    API that grows only at the END, so a widened row should fail loudly here
+    rather than be silently accepted and written into the wrong columns.
+    """
+    for term_id, kind, value, datatype_id, lang, reifier_id, triple, direction in terms:
         s, p, o = triple if triple is not None else (None, None, None)
-        yield (term_id, kind, value, datatype_id, lang, reifier_id, s, p, o)
+        yield (term_id, kind, value, datatype_id, lang, direction, reifier_id, s, p, o)
 
 
 def _table_rows(rows: dict[str, Any], table: str) -> list[tuple[Any, ...]]:

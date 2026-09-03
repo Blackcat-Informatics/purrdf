@@ -104,13 +104,28 @@ pub enum PublicValue {
 }
 
 /// One dictionary term row: `(term_id, kind, value, datatype_id, lang,
-/// reifier_id, triple)` where `kind` is `0` IRI / `1` literal / `2` blank node /
-/// `3` triple term.
+/// reifier_id, triple, direction)` where `kind` is `0` IRI / `1` literal / `2`
+/// blank node / `3` triple term.
 ///
 /// `triple` carries a quoted-triple term's OWN `(s, p, o)` component ids when
 /// the term is self-describing. It is not derivable from `reifier_id`: one
 /// reifier id may bind several different triples, so a projection that offered
 /// only the reifier column could not say which triple THIS term is.
+///
+/// `direction` is the RDF 1.2 literal BASE DIRECTION (`"ltr"` / `"rtl"`), and it
+/// is a column of its own rather than a suffix on `lang`. The term model stores
+/// the two separately — `lang` is bare (`en`), and the public-text renderer
+/// recombines them into `@en--ltr` for display only — so a projection that
+/// emitted `lang` alone dropped the direction entirely. Two literals differing
+/// only in direction are DIFFERENT terms under the canonicalization profile
+/// (`@en--ltr` ≠ `@en--rtl`), so collapsing them is a silent conflation, not a
+/// cosmetic loss.
+///
+/// It is APPENDED rather than placed beside `lang` where it reads best. Every
+/// index in this tuple is public API that callers unpack positionally, so a
+/// reordering would keep compiling and silently move `reifier_id` into a
+/// caller's `direction` slot. Growing only at the end is what makes widening
+/// this row safe.
 pub type TermRow = (
     usize,
     u8,
@@ -119,6 +134,7 @@ pub type TermRow = (
     Option<String>,
     Option<usize>,
     Option<(usize, usize, usize)>,
+    Option<String>,
 );
 /// One quad row of dictionary term ids: `(subject, predicate, object, graph?)`.
 pub type QuadRow = (usize, usize, usize, Option<usize>);
@@ -794,6 +810,7 @@ pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
                     term.lang.clone(),
                     term.reifier,
                     term.triple,
+                    term.direction.clone(),
                 )
             })
             .collect(),

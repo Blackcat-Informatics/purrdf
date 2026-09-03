@@ -1074,8 +1074,19 @@ def feedback_bundle_native(
 
 # ── GTS fold view and relational exports (bindings/python/src/py_gts_view.rs) ───
 
+# (term_id, kind, value, datatype_id, lang, reifier_id, triple, direction).
+# `direction` is the RDF 1.2 literal base direction ("ltr"/"rtl") and is APPENDED
+# rather than placed beside `lang`: callers unpack this row positionally, so the
+# row grows only at the end.
 _TermRow = tuple[
-    int, int, str | None, int | None, str | None, int | None, tuple[int, int, int] | None
+    int,
+    int,
+    str | None,
+    int | None,
+    str | None,
+    int | None,
+    tuple[int, int, int] | None,
+    str | None,
 ]
 _QuadRow = tuple[int, int, int, int | None]
 _ReifierRow = tuple[int, int, int, int, int | None]

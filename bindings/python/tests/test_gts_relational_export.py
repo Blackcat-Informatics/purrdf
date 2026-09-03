@@ -87,12 +87,12 @@ def test_sqlite_export_round_trips_every_table(
         assert quads == [tuple(row) for row in rows["quads"]]
 
         terms = connection.execute(
-            "SELECT term_id, kind, value, datatype_id, lang, reifier_id,"
+            "SELECT term_id, kind, value, datatype_id, lang, direction, reifier_id,"
             " triple_s, triple_p, triple_o FROM terms"
         ).fetchall()
         expected = [
-            (tid, kind, value, dt, lang, rid, *(triple or (None, None, None)))
-            for tid, kind, value, dt, lang, rid, triple in rows["terms"]
+            (tid, kind, value, dt, lang, direction, rid, *(triple or (None, None, None)))
+            for tid, kind, value, dt, lang, rid, triple, direction in rows["terms"]
         ]
         assert terms == expected
     finally:
@@ -216,3 +216,90 @@ def test_the_writers_are_reachable_under_every_documented_name(
     # And they no longer raise: the whole point of the change.
     target = tmp_path / "reachable.sqlite"
     assert purrdf.gts_to_sqlite(container, str(target)) == str(target)
+
+
+def test_base_direction_survives_the_export(tmp_path: Path) -> None:
+    """RDF 1.2 literal base direction reaches the exported `direction` column.
+
+    The term model stores language and direction SEPARATELY — `lang` is bare
+    (`en`) and the two are recombined into `@en--ltr` only for display — so the
+    relational projection dropped direction entirely until it got a column of its
+    own. Nothing pinned it, which is how it went unnoticed.
+
+    This is a conflation, not a cosmetic loss: `@en--ltr` and `@en--rtl` are
+    different terms under the canonicalization profile, so two literals differing
+    only in direction exported as one indistinguishable pair of rows.
+    """
+    source = (
+        "@prefix ex: <http://example.org/> .\n"
+        'ex:cat ex:label "Cat"@en--ltr .\n'
+        'ex:cat ex:label "Cat"@en--rtl .\n'
+        'ex:cat ex:plain "Cat"@en .\n'
+    )
+    container = purrdf.gts_from_quads(source.encode(), format=RdfFormat.TURTLE)
+    rows = purrdf.gts_relational_rows_from_bytes(container)
+
+    target = tmp_path / "direction.sqlite"
+    purrdf.gts_to_sqlite(container, str(target))
+    connection = sqlite3.connect(target)
+    try:
+        stored = connection.execute(
+            "SELECT value, lang, direction FROM terms WHERE kind = 1 ORDER BY term_id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    directions = sorted((d for _v, _l, d in stored), key=lambda d: (d is not None, d))
+    assert directions == [None, "ltr", "rtl"], (
+        f"each base direction must reach its own column, not be dropped: {stored}"
+    )
+    # The lang column stays BARE — direction is a separate axis, not a suffix.
+    assert {lang for _v, lang, _d in stored} == {"en"}, stored
+    # And the two directional literals remain distinguishable, which is the
+    # property that was actually lost.
+    assert len({(v, lang, d) for v, lang, d in stored}) == 3, stored
+    # The export agrees with the projection it is derived from.
+    assert sorted(t[7] or "" for t in rows["terms"] if t[1] == 1) == ["", "ltr", "rtl"]
+
+
+def test_one_reifier_binding_two_triples_exports_both(tmp_path: Path) -> None:
+    """A multi-valued reifier must export every binding.
+
+    `rdf:reifies` is NOT a functional property: one reifier id may legitimately
+    bind several distinct triples, and the statement layer is multi-valued. An
+    export that keyed, joined or de-duplicated on `reifier_id` would keep one
+    binding and silently discard the rest — the exact defect the wire format's
+    self-describing triple terms exist to prevent.
+
+    Nothing here keys on `reifier_id`: rows are written positionally in the
+    projection's order and no table carries a PRIMARY KEY or UNIQUE constraint.
+    That is a deliberate property, so it is pinned rather than assumed.
+    """
+    source = (
+        "@prefix ex: <http://example.org/> .\n"
+        'ex:cat ex:label "Cat"@en ~ ex:r1 .\n'
+        'ex:cat ex:label "Chat"@fr ~ ex:r1 .\n'
+    )
+    container = purrdf.gts_from_quads(source.encode(), format=RdfFormat.TURTLE)
+    rows = purrdf.gts_relational_rows_from_bytes(container)
+
+    assert len(rows["reifiers"]) == 2, (
+        f"the projection itself must keep both bindings: {rows['reifiers']}"
+    )
+    bound = {r[0] for r in rows["reifiers"]}
+    assert len(bound) == 1, f"both rows share one reifier id: {rows['reifiers']}"
+
+    target = tmp_path / "multi.sqlite"
+    purrdf.gts_to_sqlite(container, str(target))
+    connection = sqlite3.connect(target)
+    try:
+        stored = connection.execute(
+            "SELECT reifier_id, subject, predicate, object FROM reifiers"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert len(stored) == 2, f"both bindings must survive the export: {stored}"
+    assert len({row[3] for row in stored}) == 2, (
+        f"and they must remain DISTINCT triples, not one row twice: {stored}"
+    )
