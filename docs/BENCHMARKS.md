@@ -582,9 +582,17 @@ pack bytes and decoding behavior remain unchanged.
 `rdflib` **in one process** and prints a side-by-side table with the
 purrdf/rdflib ratio. It is deliberately kept out of `make pytest` because it is
 slow and timing-sensitive, but it is run in the separate, report-only
-`benchmarks` CI job. That job produces `bench_compat.json` and uploads it
-alongside the Criterion artifacts. The job uses `continue-on-error: true`, so it
-never fails the main gate.
+`benchmarks` workflow (`.github/workflows/benchmarks.yaml`). That workflow
+produces `bench_compat.json` and uploads it alongside the Criterion artifacts.
+It uses `continue-on-error: true`, so it never fails anything.
+
+It runs on a **weekly schedule plus `workflow_dispatch`**, not on every push. A
+~2 h report-only job on the per-push path burned a runner per commit for a
+result nothing gates on, and — because it competed with the gating jobs for the
+same shared runners — GitHub auto-cancelled a full run, so the numbers were not
+collected either. A scheduled run on an uncontended runner is better data as
+well as cheaper. To benchmark a specific branch, dispatch the workflow against
+it rather than waiting for Sunday.
 
 ### Methodology
 
