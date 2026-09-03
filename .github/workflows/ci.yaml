@@ -62,6 +62,9 @@ jobs:
       - name: Check no first-party extension is attributed to a SPARQL specification
         run: python3 scripts/check-spec-attribution.py --self-test
 
+      - name: Check the zh-Hans translation against its glossary
+        run: python3 scripts/check-i18n-glossary.py
+
       - name: Check cross-registry release coherence
         run: python3 scripts/check-versions.py
 

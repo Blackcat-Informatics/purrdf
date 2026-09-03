@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check geo-determinism book book-samples check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -25,6 +25,15 @@ GIT_CLIFF_VERSION := 2.13.1
 # wasm-toolchain composite action reads this same value, so the pin lives in one
 # place.
 BINARYEN_VERSION := 130
+
+# mdbook-i18n-helpers — the gettext preprocessor, the .pot extractor and the
+# .po normalizer behind the zh-Hans book — is pinned so the extracted msgids
+# and the rendered translation are reproducible across machines, exactly like
+# git-cliff and binaryen above. `check-i18n` hard-fails unless
+# `cargo install --list` reports this version (the binaries carry no version
+# of their own, so the install record is the check); docs.yaml reads this same
+# value, so the pin lives in one place.
+MDBOOK_I18N_HELPERS_VERSION := 0.4.0
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -49,6 +58,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-brand-casing.py
 	python3 scripts/check-spec-attribution.py --self-test
+	python3 scripts/check-i18n-glossary.py
 	python3 scripts/check-versions.py
 	python3 scripts/check-publish-order.py
 	python3 scripts/check-wasm-js-exports.py
@@ -66,6 +76,10 @@ check-brand-casing: ## Reject bare lowercase 'purrdf' in prose (project is PurRD
 
 check-spec-attribution: ## Reject attributing a first-party extension (the quad template) to a SPARQL spec.
 	python3 scripts/check-spec-attribution.py --self-test
+
+check-i18n: ## Gate the zh-Hans translation: the glossary, then render it and run the prose gates + the SPARQL fence parser over the rendering (needs mdbook + the pinned mdbook-i18n-helpers).
+	python3 scripts/check-i18n-glossary.py
+	python3 scripts/check-i18n-render.py --self-test
 
 changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit history.
 	@# git-cliff regenerates the WHOLE file from commit SUBJECTS and has no
@@ -161,6 +175,15 @@ book-samples: ## Regenerate deterministic SVG visualization samples embedded in 
 
 book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
 	mdbook build docs/book
+
+book-zh: ## Build the zh-Hans book into docs/book/book/zh-Hans/ (after `book`; search off — see book.toml).
+	MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false mdbook build -d docs/book/book/zh-Hans docs/book
+
+book-pot: ## Extract the translation template docs/book/po/messages.pot (ignored) from the English book.
+	MDBOOK_OUTPUT='{"xgettext": {"pot-file": "messages.pot"}}' mdbook build -d docs/book/po docs/book
+
+book-po-update: book-pot ## Refresh docs/book/po/zh-Hans.po against the current English source (msgmerge; fuzzy/obsolete entries render as English until retranslated).
+	msgmerge --quiet --update --backup=none docs/book/po/zh-Hans.po docs/book/po/messages.pot
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
 	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
