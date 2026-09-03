@@ -1,3 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: CC-BY-4.0
 book/
+# Regenerated from src/ by `make book-pot`; the committed catalogue is po/zh-Hans.po.
+po/messages.pot

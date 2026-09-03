@@ -6,6 +6,8 @@ bump may carry breaking changes and a patch bump is bugfix-only.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-02
+
 This release re-founds the aggregate algebra on the SPARQL specification's own shape, adds a
 caller-extensible aggregate registry (with a first-party statistical set), retains and enforces
 the `VERSION` declaration, adds RDF 1.2's `ADJUST` and the underlying F&O temporal operation
@@ -16,7 +18,6 @@ and the Part 3 assignment restriction). It carries a large number of breaking su
 called out below with what a consumer must do.
 
 ### Bug Fixes
-
 - **BREAKING** **core:** `check_provenance` now measures the sidecar against the dataset in BOTH
   directions, and an empty quad set means "the dataset is empty", not "check nothing". Rule 3
   (every dataset quad has at least one occurrence) previously ran only when the handle slice was
@@ -450,7 +451,6 @@ called out below with what a consumer must do.
   query that depended on any of the three previous wrong answers now gets the correct one.
 
 ### Features
-
 - **shapes:** New `ValidationReport::to_dataset()` returns the report graph as a frozen
   `Arc<RdfDataset>` — the report's PRIMAL RDF form. Rendering a report in any syntax other
   than N-Triples previously forced a `to_ntriples()` → `parse_dataset()` round-trip; that
@@ -771,7 +771,6 @@ called out below with what a consumer must do.
   points, so its fuel is unchanged in value even though the schedule and its digest moved.
 
 ### Performance
-
 - **core:** The interner no longer mints a `String` for the datatype IRI of every untyped or
   language-tagged literal; `rdf:reifies` is interned once per builder rather than by string on
   every reifier push. RDFC-1.0 canonicalization renders blank labels and predicate IRIs by
@@ -815,50 +814,12 @@ called out below with what a consumer must do.
   set against a fresh walk at every consultation.
 
 ### Refactor
-
 - **sparql-eval:** Drive built-in aggregates through the same `AggregateAccumulator` fold trait
   as caller-registered ones — each built-in is now a concrete accumulator monomorphized through
   one generic driver, rather than a hand-rolled counter plus a per-function enum. No behavior
   change; governor charging and the frozen corpus are untouched.
 
-### Testing
-
-- **results:** Pin its:dir precedence over legacy spellings in SRX
-- **sparql,conformance:** Pin the newly-added SPARQL evaluation surface in the conformance
-  corpus: the `VERSION` declaration evaluated (not merely parsed), the `AGG` call form's
-  grammar, and `GROUP_CONCAT`'s row-order concatenation pinned to an exact string.
-- **sparql-algebra:** Pin the whole serializer with a corpus round-trip sweep: parse, serialize,
-  re-parse, and compare (modulo left-linearized join spines) over every vendored W3C, first-party,
-  and doc-example query text — the empty exception ledger is the point; every disagreement it
-  found is fixed above, not ledgered.
-- **rdf:** Reduce the golden-capture deferred-construct classifier to the engine's actual typed
-  residue — `LATERAL`, `SERVICE`, `DESCRIBE`, and property paths no longer misroute into expected
-  deferral now that they are implemented.
-- **sparql-conformance:** Add the `purrdf-extend` `LATERAL` manifest cases: the SEP-0006 worked
-  examples (including the scoping oracle, proving Project-boundary narrowing rather than mere
-  textual substitution), a shared-variable-injection case, and the SEP's own legal/illegal syntax
-  pair.
-- **sparql-conformance:** Add eight `purrdf-extend` SEP-0007 `EXISTS`/`NOT EXISTS` manifest cases
-  through the shipped stack — the correlated graph-variable body, the `OPTIONAL`-padding tautology
-  in both polarities, nested negation, a per-row `LIMIT 1` sub-select a one-shot probe would
-  truncate wrongly, the `MINUS` shape whose right-operand correlation a one-shot probe would flip,
-  and the Part 3 assignment restriction's own colliding-`BIND`/colliding-`VALUES` negative-syntax
-  pair — bringing the suite to fifty-five cases (forty-eight evaluation, five negative-syntax).
-  Each expected evaluation result was hand-derived from the `Replace`/`PrjMap` substitution
-  definition before being pinned against the release binary, so a still-wrong engine could not
-  have pinned itself correct.
-- **sparql-eval:** Pin the probe/definition strategy boundary from both sides with a test-only
-  forced-strategy seam: agreement tests run every admissible shape through both strategies and
-  assert row-for-row equality, and divergence witnesses force the probe onto each refused shape
-  and assert the specific wrong answer it would give. A bounded-exhaustive generator sweeps
-  hundreds of inner shapes at depth two, checking memo equivalence throughout and cross-strategy
-  agreement on every admitted one. Twenty-four `FILTER EXISTS`/`FILTER NOT EXISTS` shapes also run
-  as real query text through the public engine end to end, including the substitution document's
-  own worked examples, every solution modifier inside the body, the `HAVING`-position scope pin,
-  and quoted-triple/blank-node outer bindings.
-
 ### Documentation
-
 - **sparql:** Document the aggregate seam and the SPARQL 1.2 remainder: the book's query chapter
   gains `ADJUST`, the `VERSION` declaration, the custom-aggregate seam with a worked registration
   example, and the ten statistical aggregates; the results chapter documents the `its:dir`
@@ -940,6 +901,40 @@ called out below with what a consumer must do.
   three-record run. The environment override is kept.
 
 ### Testing
+- **results:** Pin its:dir precedence over legacy spellings in SRX
+- **sparql,conformance:** Pin the newly-added SPARQL evaluation surface in the conformance
+  corpus: the `VERSION` declaration evaluated (not merely parsed), the `AGG` call form's
+  grammar, and `GROUP_CONCAT`'s row-order concatenation pinned to an exact string.
+- **sparql-algebra:** Pin the whole serializer with a corpus round-trip sweep: parse, serialize,
+  re-parse, and compare (modulo left-linearized join spines) over every vendored W3C, first-party,
+  and doc-example query text — the empty exception ledger is the point; every disagreement it
+  found is fixed above, not ledgered.
+- **rdf:** Reduce the golden-capture deferred-construct classifier to the engine's actual typed
+  residue — `LATERAL`, `SERVICE`, `DESCRIBE`, and property paths no longer misroute into expected
+  deferral now that they are implemented.
+- **sparql-conformance:** Add the `purrdf-extend` `LATERAL` manifest cases: the SEP-0006 worked
+  examples (including the scoping oracle, proving Project-boundary narrowing rather than mere
+  textual substitution), a shared-variable-injection case, and the SEP's own legal/illegal syntax
+  pair.
+- **sparql-conformance:** Add eight `purrdf-extend` SEP-0007 `EXISTS`/`NOT EXISTS` manifest cases
+  through the shipped stack — the correlated graph-variable body, the `OPTIONAL`-padding tautology
+  in both polarities, nested negation, a per-row `LIMIT 1` sub-select a one-shot probe would
+  truncate wrongly, the `MINUS` shape whose right-operand correlation a one-shot probe would flip,
+  and the Part 3 assignment restriction's own colliding-`BIND`/colliding-`VALUES` negative-syntax
+  pair — bringing the suite to fifty-five cases (forty-eight evaluation, five negative-syntax).
+  Each expected evaluation result was hand-derived from the `Replace`/`PrjMap` substitution
+  definition before being pinned against the release binary, so a still-wrong engine could not
+  have pinned itself correct.
+- **sparql-eval:** Pin the probe/definition strategy boundary from both sides with a test-only
+  forced-strategy seam: agreement tests run every admissible shape through both strategies and
+  assert row-for-row equality, and divergence witnesses force the probe onto each refused shape
+  and assert the specific wrong answer it would give. A bounded-exhaustive generator sweeps
+  hundreds of inner shapes at depth two, checking memo equivalence throughout and cross-strategy
+  agreement on every admitted one. Twenty-four `FILTER EXISTS`/`FILTER NOT EXISTS` shapes also run
+  as real query text through the public engine end to end, including the substitution document's
+  own worked examples, every solution modifier inside the body, the `HAVING`-position scope pin,
+  and quoted-triple/blank-node outer bindings.
+
 
 - **conformance:** Bring `scripts/conformance-baseline.json`'s free-text `note:` prose under the
   same gate as its `ledgered` integer. Only the integer was ever machine-checked, and the OWL 2

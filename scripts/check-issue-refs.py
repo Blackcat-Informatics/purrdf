@@ -237,6 +237,19 @@ ISSUE_PATTERN = r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)"
 # legitimately as provenance and are excluded by path, not by pattern.
 ISSUE_URL_PATTERN = r"github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+"
 
+# The word boundary every process-token family anchors on — spelled as explicit
+# ASCII lookarounds rather than ``\b``. Python places ``\b`` only between a
+# ``\w`` and a ``\W`` character, and CJK characters are ``\w``, so ``\bH12\b``
+# matched ``风险 H12 点`` and did NOT match ``风险H12点``: every family below went
+# blind the moment a token was glued to Chinese prose, and the gate depended on
+# a typography rule (a half-width space between Latin and CJK runs) that it
+# does not check. A process token is an ASCII word; "not preceded or followed
+# by an ASCII word character" is the boundary that was meant, and it reads a
+# CJK neighbour as the prose it is. ``#NNN`` and the URL form were never
+# ``\b``-anchored and were not affected.
+_NOT_AFTER_WORD = r"(?<![A-Za-z0-9_])"
+_NOT_BEFORE_WORD = r"(?![A-Za-z0-9_])"
+
 # Every rejected token family in ONE pattern, so a file is lexed once no matter
 # how many families there are. ``match.lastgroup`` names the family, which is what
 # separates an issue reference from a process reference in the report and what
@@ -245,21 +258,25 @@ TOKEN_RE = re.compile(
     rf"(?P<issue_url>{ISSUE_URL_PATTERN})"
     rf"|(?P<issue>{ISSUE_PATTERN})"
     r"|(?P<issue_iri>example\.org/\d{2,4}-)"
-    r"|(?P<task>\b[Tt]ask\s+#?\d+\b)"
-    r"|(?P<epic>\bEPIC\b)"
-    r"|(?P<branch>(?i:\bthis\ branch\b))"
-    r"|(?P<history_ref>\bon\s+`?origin/main`?\b)"
-    r"|(?P<issue_normative>\bissue-normative\b)"
-    r"|(?P<hazard>\bH\d{1,3}\b)"
-    r"|(?P<hazard_label>\b[FN]\d{1,3}:|\([FHN]\d{1,3}\))"
-    r"|(?P<plan_ref>\bthe plan(?:[\'’]s\b|\s+§))"
-    r"|(?P<ac_label>\bAC\d\b)"
-    r"|(?P<gap_tag>(?i:gap)\s+R\d{1,2}\b"
-    r"|(?i:gap)\s+G\d{1,2}\b"
-    r"|\bG\d{1,2}\s+regression\b"
-    r"|\bG\d{1,2}:"
-    r"|\bR\d{1,2}:)"
+    rf"|(?P<task>{_NOT_AFTER_WORD}[Tt]ask\s+#?\d+{_NOT_BEFORE_WORD})"
+    rf"|(?P<epic>{_NOT_AFTER_WORD}EPIC{_NOT_BEFORE_WORD})"
+    rf"|(?P<branch>(?i:{_NOT_AFTER_WORD}this\ branch{_NOT_BEFORE_WORD}))"
+    rf"|(?P<history_ref>{_NOT_AFTER_WORD}on\s+`?origin/main`?{_NOT_BEFORE_WORD})"
+    rf"|(?P<issue_normative>{_NOT_AFTER_WORD}issue-normative{_NOT_BEFORE_WORD})"
+    rf"|(?P<hazard>{_NOT_AFTER_WORD}H\d{{1,3}}{_NOT_BEFORE_WORD})"
+    rf"|(?P<hazard_label>{_NOT_AFTER_WORD}[FN]\d{{1,3}}:|\([FHN]\d{{1,3}}\))"
+    rf"|(?P<plan_ref>{_NOT_AFTER_WORD}the plan(?:[\'’]s{_NOT_BEFORE_WORD}|\s+§))"
+    rf"|(?P<ac_label>{_NOT_AFTER_WORD}AC\d{_NOT_BEFORE_WORD})"
+    rf"|(?P<gap_tag>(?i:gap)\s+R\d{{1,2}}{_NOT_BEFORE_WORD}"
+    rf"|(?i:gap)\s+G\d{{1,2}}{_NOT_BEFORE_WORD}"
+    rf"|{_NOT_AFTER_WORD}G\d{{1,2}}\s+regression{_NOT_BEFORE_WORD}"
+    rf"|{_NOT_AFTER_WORD}G\d{{1,2}}:"
+    rf"|{_NOT_AFTER_WORD}R\d{{1,2}}:)"
 )
+
+# Where a rendered book tree's files live in the source tree, for register
+# lookups in ``--rendered-tree`` mode (see ``main``).
+RENDERED_SOURCE_PREFIX = "docs/book/src/"
 
 # The families that name a TRACKER ITEM — a bare number, a fixture host carrying
 # one, or the URL form of the same thing. They are banned outright with no
@@ -1373,6 +1390,32 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         "ex:a <http://example.org/ns#123> ex:b .\n",
         None,
     ),
+    # The process-token families glued to CJK prose. Each is a token this gate
+    # already rejected in English and reported clean over when the neighbouring
+    # character was Chinese, because `\b` is not a boundary between a Latin
+    # letter and a CJK character. The English control beside each proves the
+    # ASCII lookaround is the same boundary `\b` was wherever `\b` worked, and
+    # the clean Chinese sentence at the end proves the widened match fires on
+    # tokens, not on Chinese.
+    ("a hazard id glued to CJK", ".md", "风险H12点已处理。\n", "H12"),
+    ("a hazard id spaced from CJK (house typography)", ".md", "风险 H12 点已处理。\n", "H12"),
+    ("a hazard id in English prose", ".md", "risk H12 handled.\n", "H12"),
+    ("EPIC glued to CJK", ".md", "此为EPIC的一部分。\n", "EPIC"),
+    ("a task reference glued to CJK", ".md", "见Task 28的描述。\n", "Task 28"),
+    ("an acceptance-criterion label glued to CJK", ".md", "满足AC1要求。\n", "AC1"),
+    ("a bare #NNN glued to CJK", ".md", "参见#31。\n", "#31"),
+    (
+        "a Chinese sentence with Latin acronyms and no process token",
+        ".md",
+        "本节描述三元组项（triple term）的处理方式，见 RDF 1.2 与 SHACL。\n",
+        None,
+    ),
+    (
+        "an ASCII word that merely ends in a token shape stays spared",
+        ".md",
+        "the MAC1 register and the SHA256 digest and ACID transactions\n",
+        None,
+    ),
     (
         "an ordinary N-Triples fixture with no reference at all",
         ".nt",
@@ -1471,12 +1514,75 @@ def self_test(report: bool) -> list[str]:
     return problems
 
 
+def scan_rendered_tree(tree: Path) -> int:
+    """Scan every ``.md`` under a rendered book tree. Returns the exit code.
+
+    A rendering of ``docs/book/src/`` — ``mdbook build`` with the ``markdown``
+    renderer and a translation applied (see ``scripts/check-i18n-render.py``)
+    — is outside the default enumeration twice over: it is build output, and
+    it is untracked. The same scanners run over it here; the registers are
+    consulted through the source mapping (``DIR/x.md`` is
+    ``docs/book/src/x.md``), and no stale-entry report is made, because the
+    tree carries only the book and the English scan is what keeps the
+    registers exact.
+    """
+    issues: list[str] = []
+    process: list[str] = []
+    scanned = 0
+    for path in sorted(p for p in tree.rglob("*.md") if p.is_file()):
+        scanned += 1
+        rel = path.relative_to(tree).as_posix()
+        source_rel = RENDERED_SOURCE_PREFIX + rel
+        for line, col, token, text, kind in scan_path(path):
+            if kind in ISSUE_FAMILIES:
+                issues.append(f"{path}:{line}:{col}: {token} {text}")
+                continue
+            if kind == "branch" and source_rel in AMBIGUOUS_BRANCH_PHRASES:
+                continue
+            if kind == "plan_ref" and source_rel in AMBIGUOUS_PLAN_PHRASES:
+                continue
+            if kind == "gap_tag" and source_rel in AMBIGUOUS_GAP_CLAUSE_FILES:
+                continue
+            if (source_rel, token) in PRE_EXISTING_PROCESS_REFERENCES:
+                continue
+            process.append(
+                f"{path}:{line}:{col}: process reference {token!r} — "
+                f"{PROCESS_REMEDY[kind]}\n    {text}"
+            )
+    if scanned == 0:
+        print(
+            f"check-issue-refs: no .md file under {tree} — a rendered tree with "
+            "nothing in it is a vacuous pass, not a clean one",
+            file=sys.stderr,
+        )
+        return 1
+    for entry in issues + process:
+        print(entry)
+    if issues or process:
+        return 1
+    print(
+        f"OK: no issue-reference tokens and no process references in the rendered "
+        f"tree ({scanned} page(s) scanned under {tree})."
+    )
+    return 0
+
+
 def main(argv: list[str]) -> int:
-    unknown = [argument for argument in argv[1:] if argument != "--self-test"]
-    if unknown:
-        print(f"usage: {Path(argv[0]).name} [--self-test]", file=sys.stderr)
-        return 2
-    alone = "--self-test" in argv[1:]
+    rendered: Path | None = None
+    alone = False
+    args = list(argv[1:])
+    while args:
+        argument = args.pop(0)
+        if argument == "--self-test":
+            alone = True
+        elif argument == "--rendered-tree" and args:
+            rendered = Path(args.pop(0))
+        else:
+            print(
+                f"usage: {Path(argv[0]).name} [--self-test] [--rendered-tree DIR]",
+                file=sys.stderr,
+            )
+            return 2
 
     if alone:
         print(
@@ -1505,6 +1611,12 @@ def main(argv: list[str]) -> int:
             "controls are excluded by path."
         )
         return 0
+
+    if rendered is not None:
+        if not rendered.is_dir():
+            print(f"check-issue-refs: {rendered} is not a directory", file=sys.stderr)
+            return 2
+        return scan_rendered_tree(rendered)
 
     root = repo_root()
 
