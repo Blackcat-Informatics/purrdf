@@ -49,10 +49,16 @@ jobs:
         with:
           toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
 
+      # SHA-pinned action rather than `curl https://astral.sh/uv/install.sh | sh`,
+      # which is what the job ran on the per-push path: an unversioned installer
+      # piped into a shell is whatever that URL serves on the day it runs. This is
+      # the same pin `release-pypi.yaml` already uses.
+      #
+      # The three remaining unpinned copies in `ci.yaml` are pre-existing and are
+      # deliberately not touched here — this PR moves a job, and rewriting the
+      # gating lanes' installer belongs in its own change.
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Compile benchmark harnesses
         run: |
