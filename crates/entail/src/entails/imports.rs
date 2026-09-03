@@ -187,8 +187,8 @@ impl ImportMap {
 /// consumer of a document has to honour — so this is `pub`: the CLI's SHACL lane reads a
 /// shapes graph's imports through it rather than re-deriving "which objects count", which is
 /// exactly the judgement the paragraph above records. It walks the closure itself because it
-/// must also carry each document's `@prefix` map, which [`resolve`] has no reason to know
-/// about.
+/// must also carry each document's `@prefix` map, which this module's own crate-private
+/// `resolve` has no reason to know about.
 #[must_use]
 pub fn imported_iris(ds: &RdfDataset) -> Vec<String> {
     let Some(imports) = ds.term_id_by_iri(OWL_IMPORTS) else {
