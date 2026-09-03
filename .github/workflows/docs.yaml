@@ -8,6 +8,14 @@ on:
       - "docs/book/**"
       - "docs/playground/**"
       - "crates/rdf-wasm/**"
+      # The zh-Hans gate renders the book and runs these over the rendering.
+      - "crates/sparql-algebra/**"
+      - "scripts/check-i18n-*.py"
+      - "scripts/po_catalog.py"
+      - "scripts/check-brand-casing.py"
+      - "scripts/check-issue-refs.py"
+      - "scripts/check-spec-attribution.py"
+      - "scripts/check-doc-claims.py"
       - "Makefile"
       - ".github/actions/wasm-toolchain/**"
       - ".github/workflows/docs.yaml"
@@ -15,7 +23,9 @@ on:
     branches:
       - main
 
-# Pinned so local (`make book`) and CI builds stay reproducible.
+# Pinned so local (`make book`) and CI builds stay reproducible. The second
+# pinned tool, mdbook-i18n-helpers, is read from the Makefile below
+# (MDBOOK_I18N_HELPERS_VERSION) so it has one source of truth.
 env:
   MDBOOK_VERSION: 0.5.3
 
@@ -36,12 +46,10 @@ jobs:
             | tar -xz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Build book
-        run: mdbook build docs/book
-
-      # The RDF-1.2 console is a static surface built from the SAME wasm the npm
-      # release publishes; it ships as a /playground subpath of the single Pages
-      # artifact (GitHub Pages allows only one deployment, already owned here).
+      # Rust and the cached toolchain come BEFORE the book builds: the zh-Hans
+      # gate compiles a small example (the SPARQL fence parser) and the
+      # rust-cache the wasm-toolchain action sets up also restores ~/.cargo/bin,
+      # which is where the pinned mdbook-i18n-helpers lands.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
@@ -50,6 +58,37 @@ jobs:
 
       - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
         uses: ./.github/actions/wasm-toolchain
+
+      - name: Install mdbook-i18n-helpers (pinned in the Makefile)
+        run: |
+          set -euo pipefail
+          ver="$(grep -oP '^MDBOOK_I18N_HELPERS_VERSION := \K[0-9.]+' Makefile)"
+          test -n "$ver" || { echo "could not read MDBOOK_I18N_HELPERS_VERSION from Makefile"; exit 1; }
+          # Idempotent: an already-installed matching version is skipped, so a
+          # restored ~/.cargo/bin costs nothing and a cold runner builds it once.
+          cargo install mdbook-i18n-helpers --version "$ver" --locked
+          cargo install --list | grep -qx "mdbook-i18n-helpers v${ver}:" \
+            || { echo "mdbook-i18n-helpers ${ver} is not what cargo reports installed"; cargo install --list; exit 1; }
+          echo "mdbook-i18n-helpers ${ver} installed"
+
+      - name: Build book
+        run: mdbook build docs/book
+
+      # The translation catalogue is invisible to every other gate (no gate
+      # reads a .po), so the zh-Hans book is rendered to Markdown here and the
+      # four prose gates plus the SPARQL fence parser run over the rendering —
+      # after proving each arm can go red (--self-test inside `make check-i18n`).
+      - name: Gate the zh-Hans translation (render + prose gates + SPARQL fence parser)
+        run: make check-i18n
+
+      # Folded into the same Pages artifact at /zh-Hans/. Search is off on this
+      # build (see docs/book/book.toml): the index holds zero CJK tokens.
+      - name: Build the zh-Hans book into the Pages artifact at /zh-Hans
+        run: make book-zh
+
+      # The RDF-1.2 console is a static surface built from the SAME wasm the npm
+      # release publishes; it ships as a /playground subpath of the single Pages
+      # artifact (GitHub Pages allows only one deployment, already owned here).
 
       - name: Set up Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0

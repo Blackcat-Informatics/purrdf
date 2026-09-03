@@ -7,6 +7,30 @@ authors = ["Blackcat Informatics® Inc."]
 language = "en"
 src = "src"
 
+# Translations are gettext catalogues under po/ (mdbook-i18n-helpers, pinned by
+# MDBOOK_I18N_HELPERS_VERSION in the Makefile and .github/workflows/docs.yaml).
+# A build with MDBOOK_BOOK__LANGUAGE=zh-Hans applies po/zh-Hans.po; a msgid with
+# no translation renders as its English source, so translation lag is visible
+# to the reader paragraph by paragraph rather than hidden behind a stale page.
+# `after = ["links"]` so {{#include}} is expanded before extraction and lookup.
+# The English build finds no po/en.po and passes the book through unchanged.
+[preprocessor.gettext]
+after = ["links"]
+
 [output.html]
 git-repository-url = "https://github.com/Blackcat-Informatics/purrdf"
 edit-url-template = "https://github.com/Blackcat-Informatics/purrdf/edit/main/docs/book/src/{path}"
+
+# Search is ON for the English book and OFF for the zh-Hans build, which is
+# rendered with MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false (Makefile `book-zh`,
+# the single command docs.yaml also runs). Measured, not assumed: mdBook's
+# search is elasticlunr with the `/[\s\-]+/` tokenizer and the English
+# pipeline (trimmer, stop-word filter, stemmer), and on both mdBook 0.4.52 and
+# the CI-pinned 0.5.3 a Chinese page contributes ZERO CJK tokens to the index —
+# a heading of 三元组项与具体化 produces an empty `title` branch, and only the
+# Latin tokens (`rdf`, `sparql`, `1.2`) survive. A live search box that answers
+# every Chinese query with "no results" reads as "the book does not cover
+# this", which is a silent failure aimed at exactly the reader the translation
+# is for; so the zh-Hans build has no search box at all.
+[output.html.search]
+enable = true

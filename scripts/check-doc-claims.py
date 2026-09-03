@@ -101,6 +101,7 @@ import json
 import re
 import string
 import sys
+import subprocess
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -613,6 +614,24 @@ def _check_surface_landmarks(found: set[Path]) -> None:
             )
 
 
+@lru_cache(maxsize=1)
+def _tracked_paths() -> tuple[Path, ...]:
+    """Every path ``git ls-files`` reports, absolute, in path order.
+
+    ONE enumeration for every walk in this script, so the documented surface, the
+    registry manifests and the coverage-table candidates agree about what "the tree"
+    is, and all three agree with the other prose gates: committed first-party source,
+    never a build output, never an untracked file.
+    """
+    out = subprocess.run(
+        ["git", "-C", str(_REPO), "ls-files", "-z"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return tuple(sorted(_REPO / rel for rel in out.split("\0") if rel))
+
+
 def _documented_surface() -> list[Path]:
     """Every file in this repository's own documented surface, in path order.
 
@@ -636,11 +655,14 @@ def _documented_surface() -> list[Path]:
         only one of its fields is published. See :func:`_registry_prose`, which the
         entailment-overclaim ban sweeps alongside this walk's Markdown.
       * ``.html`` is deliberately out. Two HTML files are tracked (one vendored RO-Crate
-        fixture and the playground shell), and ``docs/book/book`` holds hundreds more that
-        are mdBook OUTPUT — a re-rendering of Markdown this walk already reads. Including
-        the suffix would sweep the same prose twice and make the gate's answer depend on
-        whether ``make book`` had been run on the machine. The suffix set is what keeps
-        this walk independent of the build.
+        fixture and the playground shell); a re-rendering of Markdown this walk already
+        reads would sweep the same prose twice.
+      * UNTRACKED files are out, whatever their suffix: the walk enumerates ``git
+        ls-files`` — the convention the three sibling prose gates follow — so a build
+        output under ``docs/book/book`` or a developer's scratch notes under ``docs/``
+        never reach it. The first version walked the filesystem, and a stray untracked
+        ``.md`` reddened this gate while the other three could not see it. ``git add``
+        before running the gates.
       * ``.sh``, ``.yml`` and the ``Makefile`` are deliberately out: their comments are build
         mechanics addressed to whoever edits the build, published to no reader. The
         ``scripts`` arm takes ``.py``/``.json`` because those two carry the conformance
@@ -649,17 +671,18 @@ def _documented_surface() -> list[Path]:
         statements this project makes.
     """
     found: list[Path] = []
-    for root in ("crates", "bindings", "docs"):
-        for path in sorted((_REPO / root).rglob("*")):
+    for path in _tracked_paths():
+        parts = path.relative_to(_REPO).parts
+        if parts[0] in ("crates", "bindings", "docs"):
             if path.suffix not in {".rs", ".md", ".pyi", ".mjs", ".ts"}:
                 continue
-            if _UNDOCUMENTED_SEGMENTS.intersection(path.parts):
+            if _UNDOCUMENTED_SEGMENTS.intersection(parts):
                 continue
             found.append(path)
-    for path in sorted((_REPO / "scripts").rglob("*")):
-        if path.suffix in {".py", ".json"}:
+        elif parts[0] == "scripts" and path.suffix in {".py", ".json"}:
             found.append(path)
-    found.extend(sorted(_REPO.glob("*.md")))
+        elif len(parts) == 1 and path.suffix == ".md":
+            found.append(path)
     # Subsumes "the walk returned nothing": every arm must reach its landmark, so a walk
     # that returns nothing fails by naming the first arm that stopped running rather than
     # by reporting a zero that says nothing about which arm produced it.
@@ -720,12 +743,14 @@ def _registry_manifest_paths() -> tuple[Path, ...]:
         )
     names = sorted({name for name, _ in _REGISTRY_DESCRIPTION})
     found: list[Path] = []
-    for root in ("crates", "bindings"):
-        for name in names:
-            for path in (_REPO / root).rglob(name):
-                if not _UNDOCUMENTED_SEGMENTS.intersection(path.parts):
-                    found.append(path)
-    found.extend(_REPO / name for name in names if (_REPO / name).is_file())
+    for path in _tracked_paths():
+        parts = path.relative_to(_REPO).parts
+        if path.name not in names:
+            continue
+        if parts[0] in ("crates", "bindings") and not _UNDOCUMENTED_SEGMENTS.intersection(parts):
+            found.append(path)
+        elif len(parts) == 1:
+            found.append(path)
     reached = set(found)
     members = (
         tomllib.loads(_read(_REPO / "Cargo.toml")).get("workspace", {}).get("members", [])
@@ -1262,8 +1287,12 @@ def _entailment_claim_units(surface: list[Path]) -> list[tuple[str, str]]:
 _BLOCK_OPENER = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|\|)")
 _FENCE = re.compile(r"^\s*(?:```|~~~)")
 # The sentence terminator, and the whitespace after it that a paragraph join has already
-# normalized to one space.
-_TERMINATOR = re.compile(r"(?<=[.!?])\s+")
+# normalized to one space. Two alphabets of terminator: the ASCII three, which are followed
+# by whitespace, and the full-width CJK three (。！？), which are not — Chinese prose runs
+# its sentences together with no space, so the split there is zero-width. Without the
+# second alternation a Chinese paragraph was ONE sentence to the ban, and a scope phrase
+# anywhere in it exempted every claim in it.
+_TERMINATOR = re.compile(r"(?<=[.!?])\s+|(?<=[。！？])\s*")
 
 
 def _paragraph_sentences(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
@@ -1749,6 +1778,45 @@ def _check_separators() -> None:
         )
 
 
+# A Chinese paragraph of four sentences, terminated by the three full-width marks and the
+# full stop again. `_sentences` must return four units from it; it returned one.
+_CJK_PARAGRAPH = "第一句。第二句！第三句？第四句。"
+
+
+def _check_cjk_terminators() -> None:
+    """Full-width terminators split sentences, so a Chinese scope phrase scopes ONE claim.
+
+    Two directions, like every other pair here. The claim in the SECOND sentence of a
+    Chinese paragraph must be caught although the FIRST sentence carries the scope phrase —
+    that is the weakening the one-sentence paragraph produced. And the claim that carries
+    the scope phrase in its OWN sentence must stay exempt when a Chinese sentence follows
+    it — the neighbouring valid case, so the split does not refuse a scoped claim by
+    cutting its scope off.
+    """
+    units = _sentences(_CJK_PARAGRAPH)
+    if len(units) != 4:
+        raise SystemExit(
+            f"check-doc-claims: `_sentences` splits {_CJK_PARAGRAPH!r} into {len(units)} "
+            f"unit(s), not 4 — full-width terminators (。！？) are not sentence boundaries "
+            f"to it, so a Chinese paragraph is one sentence and one scope phrase exempts "
+            f"every claim in it"
+        )
+    specimen, _wrapped = _OVERCLAIM_SPECIMENS[2]
+    claim = specimen.rstrip(".")
+    leaked = f"{_CORPUS_SCOPE} 限定了第一句。{claim}。第三句。"
+    if not _overclaims_in("cjk-probe", f"{leaked}\n"):
+        raise SystemExit(
+            f"check-doc-claims: the banned claim in the second sentence of {leaked!r} is "
+            f"NOT caught — the scope phrase in the first Chinese sentence exempted it"
+        )
+    scoped = f"第一句。{claim} {_CORPUS_SCOPE}。第三句。"
+    if _overclaims_in("cjk-probe", f"{scoped}\n"):
+        raise SystemExit(
+            f"check-doc-claims: the scoped claim in {scoped!r} is REFUSED — the full-width "
+            f"split cut a sentence off from the scope phrase it carries"
+        )
+
+
 def _check_reflow_agreement(form: str, text: str) -> None:
     """The two spellings of the normalization must produce the same string."""
     if _reflowed_stripped(text) != _reflowed(text).strip():
@@ -1984,6 +2052,7 @@ def overclaim_self_test(surface: list[Path], report: bool) -> list[str]:
     """
     _check_ban_table()
     _check_specimens()
+    _check_cjk_terminators()
     units = _entailment_claim_units(surface)
     wrong: list[str] = []
     checked = 0
@@ -3797,14 +3866,16 @@ _COVERAGE_HEADER = "| Regime | Rule table | Defined | Implemented |"
 # binding READMEs, and the repository front page. Every `.md` under `docs/` is
 # swept, so a new chapter is covered without an edit here.
 def _coverage_candidates() -> list[Path]:
-    return sorted(
-        {
-            _REPO / "README.md",
-            *(_REPO / "crates").glob("*/README.md"),
-            *(_REPO / "bindings").glob("*/README.md"),
-            *(_REPO / "docs").rglob("*.md"),
-        }
-    )
+    found = {_REPO / "README.md"}
+    for path in _tracked_paths():
+        parts = path.relative_to(_REPO).parts
+        if path.suffix != ".md":
+            continue
+        if parts[0] == "docs" or (
+            parts[0] in ("crates", "bindings") and len(parts) == 3 and path.name == "README.md"
+        ):
+            found.add(path)
+    return sorted(found)
 
 
 def rule_coverage_documents() -> list[Path]:
@@ -5164,12 +5235,84 @@ def build_claims(
     ]
 
 
+def scan_rendered_tree(tree: Path) -> int:
+    """The two prose bans over a rendered book tree. Returns the exit code.
+
+    A rendering of ``docs/book/src/`` with a translation applied (``mdbook build`` with
+    the ``markdown`` renderer; see ``scripts/check-i18n-render.py``) is build output, so
+    :func:`_documented_surface` never reaches it — and a gettext ``.po`` file is reached
+    by nothing at all. The 105 numeric claims are located by English sentence in named
+    files and are not re-located here: the scoreboards stay English and the translation
+    links to them. What DOES transfer is the two bans that judge prose by rule — the
+    entailment-overclaim ban, sentence by sentence (now including full-width
+    terminators), and the superseded-fragment-name ban — so those run over every page.
+
+    The overclaim ban's MEMBERSHIP rule transfers with it: a page is swept only when its
+    reflowed text carries a subject marker (:func:`_markers_in`), exactly as
+    :func:`_entailment_claim_units` derives the swept set from the source. The first
+    version of this mode swept every page and refused ``project/performance.md`` for the
+    word ``faster`` — a page the source gate does not sweep, and one whose own sentence
+    disclaims the comparative claim — which is the over-refusal a widened sweep produces
+    when it stops reading the rule it widens.
+    """
+    _check_cjk_terminators()
+    problems: list[str] = []
+    scanned = 0
+    swept = 0
+    for path in sorted(p for p in tree.rglob("*.md") if p.is_file()):
+        scanned += 1
+        text = path.read_text(encoding="utf-8")
+        label = str(path)
+        if _markers_in(text):
+            swept += 1
+            problems.extend(_overclaims_in(label, text))
+        for match in re.finditer(r"\bALCH?OIQ\b", text):
+            line = text.count("\n", 0, match.start()) + 1
+            problems.append(
+                f"{label}:{line}: superseded fragment spelling `{match.group(0)}` — the "
+                f"decision core's one published name is SHOIQ(D)"
+            )
+    if scanned == 0:
+        print(
+            f"check-doc-claims: no .md file under {tree} — a rendered tree with nothing "
+            "in it is a vacuous pass, not a clean one",
+            file=sys.stderr,
+        )
+        return 1
+    if problems:
+        print("Rendered pages make a banned claim:\n", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+    print(
+        f"OK: the stale-name ban swept {scanned} rendered page(s) under {tree}, and the "
+        f"entailment-overclaim ban swept the {swept} marker-bearing page(s) among them, "
+        f"sentence by sentence."
+    )
+    return 0
+
+
 def main(argv: list[str]) -> int:
-    unknown = [argument for argument in argv[1:] if argument != "--self-test"]
-    if unknown:
-        print(f"usage: {Path(argv[0]).name} [--self-test]", file=sys.stderr)
-        return 2
-    alone = "--self-test" in argv[1:]
+    rendered: Path | None = None
+    alone = False
+    args = list(argv[1:])
+    while args:
+        argument = args.pop(0)
+        if argument == "--self-test":
+            alone = True
+        elif argument == "--rendered-tree" and args:
+            rendered = Path(args.pop(0))
+        else:
+            print(
+                f"usage: {Path(argv[0]).name} [--self-test] [--rendered-tree DIR]",
+                file=sys.stderr,
+            )
+            return 2
+    if rendered is not None:
+        if not rendered.is_dir():
+            print(f"check-doc-claims: {rendered} is not a directory", file=sys.stderr)
+            return 2
+        return scan_rendered_tree(rendered)
 
     # ONE traversal of the documented surface, shared by both bans, so neither can be
     # narrowed without narrowing the other.
