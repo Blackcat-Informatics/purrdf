@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-02T16:37:33-06:00\n"
+"POT-Creation-Date: 2026-09-02T20:40:32-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -406,8 +406,9 @@ msgstr ""
 msgid ""
 "Topological predicates, accessors and exactly computable measures over "
 "vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, "
-"no buffers, hulls, overlay set operations or raster — each unimplemented "
-"function hard-errors by name."
+"no buffers, no concave hull, no overlay set operations, no raster — each "
+"unimplemented function hard-errors by name (`geof:convexHull` is "
+"implemented)."
 msgstr ""
 
 #: src/introduction.md:109
@@ -471,10 +472,24 @@ msgid ""
 msgstr ""
 
 #: src/introduction.md:136
-msgid "Why RDF 1.2?"
+msgid "What the version number commits to"
 msgstr ""
 
 #: src/introduction.md:138
+msgid ""
+"From 1.0.0 the suite follows semantic versioning in full: a breaking change "
+"bumps the major version, a minor bump is additive, a patch bump is bugfix-"
+"only, and the crates.io, PyPI and npm packages ship one workspace version in "
+"lockstep. The one exception is the C ABI (`purrdf.h`), which carries its own "
+"`0.x` ABI version, bumped on every exported-signature change, and is not "
+"frozen. See [Versioning & Releases](project/releases.md)."
+msgstr ""
+
+#: src/introduction.md:145
+msgid "Why RDF 1.2?"
+msgstr ""
+
+#: src/introduction.md:147
 msgid ""
 "RDF 1.2 (and SPARQL 1.2) add first-class statement-level metadata to the "
 "data model: **triple terms** that can appear in object position, "
@@ -485,11 +500,11 @@ msgid ""
 "transport. See [RDF 1.2 Features](concepts/rdf12.md)."
 msgstr ""
 
-#: src/introduction.md:146
+#: src/introduction.md:155
 msgid "Where PurRDF sits"
 msgstr ""
 
-#: src/introduction.md:148
+#: src/introduction.md:157
 msgid ""
 "PurRDF is the library layer of a small family of linked-data projects: it is "
 "the data backbone of the [GMEOW](https://github.com/Blackcat-Informatics/"
@@ -497,36 +512,36 @@ msgid ""
 "engine — but it assumes nothing about your ontology or application."
 msgstr ""
 
-#: src/introduction.md:154
+#: src/introduction.md:163
 msgid "How to read this book"
 msgstr ""
 
-#: src/introduction.md:156
+#: src/introduction.md:165
 msgid ""
 "New users: start with [Getting Started](getting-started/rust.md) in your "
 "language, then read the [Concepts](concepts/interned-dataset.md) chapters."
 msgstr ""
 
-#: src/introduction.md:158
+#: src/introduction.md:167
 msgid ""
 "Engine users: jump to [SPARQL](sparql/querying.md), [Validation](validation/"
 "shacl.md), or [Entailment](entailment.md)."
 msgstr ""
 
-#: src/introduction.md:160
+#: src/introduction.md:169
 msgid ""
 "Integrators: see [Interop](interop/rdflib.md) and [GTS Graph Transport]"
 "(gts.md)."
 msgstr ""
 
-#: src/introduction.md:162
+#: src/introduction.md:171
 msgid ""
 "Contributors: read the [Project](project/design-rules.md) chapters, then "
 "[AGENTS.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
 "AGENTS.md) in the repository."
 msgstr ""
 
-#: src/introduction.md:166
+#: src/introduction.md:175
 msgid ""
 "API reference documentation lives on [docs.rs/purrdf](https://docs.rs/"
 "purrdf); the repository is [github.com/Blackcat-Informatics/purrdf](https://"
@@ -7842,12 +7857,12 @@ msgid ""
 "accessors, and exactly computable measures and constructors over vector "
 "geometry, not a PostGIS: `geof:transform` hard-errors by name (there is no "
 "CRS database), a `metric*` measure answers only in a CRS the caller declared "
-"in metres (there is no ellipsoidal geodesic), and buffers, hulls, the "
-"overlay set operations and the GML/KML/DGGS encodings are registered and "
-"hard-error by name. No raster."
+"in metres (there is no ellipsoidal geodesic), and the buffers, the concave "
+"hull (`geof:convexHull` is implemented), the overlay set operations and the "
+"GML/KML/DGGS encodings are registered and hard-error by name. No raster."
 msgstr ""
 
-#: src/sparql/geosparql.md:20
+#: src/sparql/geosparql.md:21
 msgid ""
 "`purrdf-geo` (`purrdf::geo` from the umbrella crate) implements GeoSPARQL "
 "1.1 (OGC 22-047r1) for PurRDF: exact, float-free geometry reached from "
@@ -7862,11 +7877,11 @@ msgid ""
 "unknown`."
 msgstr ""
 
-#: src/sparql/geosparql.md:31
+#: src/sparql/geosparql.md:32
 msgid "It mints no vocabulary"
 msgstr ""
 
-#: src/sparql/geosparql.md:33
+#: src/sparql/geosparql.md:34
 msgid ""
 "GeoSPARQL's IRIs are OGC's, not PurRDF's. Every IRI the crate reads or "
 "writes — the two literal datatypes, the `geof:` function names, the `geo:` "
@@ -7876,52 +7891,52 @@ msgid ""
 "makes the feature that needs it a hard error, never a fabricated fallback."
 msgstr ""
 
-#: src/sparql/geosparql.md:43
+#: src/sparql/geosparql.md:44
 msgid "\"http://www.opengis.net/def/crs/OGC/1.3/CRS84\""
 msgstr ""
 
-#: src/sparql/geosparql.md:45
+#: src/sparql/geosparql.md:46
 msgid "\"http://www.opengis.net/ont/geosparql#\""
 msgstr ""
 
-#: src/sparql/geosparql.md:45
+#: src/sparql/geosparql.md:46
 msgid ""
 "// geo:\n"
 "    \"http://www.opengis.net/def/function/geosparql/\""
 msgstr ""
 
-#: src/sparql/geosparql.md:46
+#: src/sparql/geosparql.md:47
 msgid "// geof:\n"
 msgstr ""
 
-#: src/sparql/geosparql.md:47
+#: src/sparql/geosparql.md:48
 msgid "// the CRS a bare WKT literal means\n"
 msgstr ""
 
-#: src/sparql/geosparql.md:48
+#: src/sparql/geosparql.md:49
 msgid "// the CRS GeoJSON is in\n"
 msgstr ""
 
-#: src/sparql/geosparql.md:50 src/sparql/geosparql.md:51
+#: src/sparql/geosparql.md:51 src/sparql/geosparql.md:52
 msgid "\"http://www.opengis.net/def/uom/OGC/1.0/metre\""
 msgstr ""
 
-#: src/sparql/geosparql.md:52
+#: src/sparql/geosparql.md:53
 msgid "\"http://www.opengis.net/ont/sf#\""
 msgstr ""
 
-#: src/sparql/geosparql.md:56
+#: src/sparql/geosparql.md:57
 msgid "The `geof:` family on the scalar seam"
 msgstr ""
 
-#: src/sparql/geosparql.md:58
+#: src/sparql/geosparql.md:59
 msgid ""
 "`functions::register` installs every `geof:` function into a "
 "`UserFunctionRegistry` under the vocabulary's function namespace, and the "
 "registry is handed to the engine through `QueryOptions::functions`:"
 msgstr ""
 
-#: src/sparql/geosparql.md:73
+#: src/sparql/geosparql.md:74
 msgid ""
 "r#\"PREFIX geof: <http://www.opengis.net/def/function/geosparql/>\n"
 "                  PREFIX geo:  <http://www.opengis.net/ont/geosparql#>\n"
@@ -7932,7 +7947,7 @@ msgid ""
 "                  }\"#"
 msgstr ""
 
-#: src/sparql/geosparql.md:87
+#: src/sparql/geosparql.md:88
 msgid ""
 "A function's refusals travel exactly as far as SPARQL says they should. A "
 "malformed literal or a domain refusal — mixed CRSs, the measure of an empty "
@@ -7946,11 +7961,11 @@ msgid ""
 "`functions::compute`."
 msgstr ""
 
-#: src/sparql/geosparql.md:97
+#: src/sparql/geosparql.md:98
 msgid "Spatial relations on the property-function seam"
 msgstr ""
 
-#: src/sparql/geosparql.md:99
+#: src/sparql/geosparql.md:100
 msgid ""
 "GeoSPARQL's Query Rewrite rules let `?a geo:sfWithin ?b` hold between "
 "_features_ whose geometries satisfy the relation, not only where a triple "
@@ -7963,25 +7978,25 @@ msgid ""
 "matched nothing."
 msgstr ""
 
-#: src/sparql/geosparql.md:123
+#: src/sparql/geosparql.md:124
 msgid ""
 "// The parser must claim `geo:sfWithin` in predicate position; the "
 "registry's\n"
 "// own descriptors are exactly the IRIs it should claim.\n"
 msgstr ""
 
-#: src/sparql/geosparql.md:133
+#: src/sparql/geosparql.md:134
 msgid ""
 "An asserted `geo:sfWithin` triple matches whether or not the geometries "
 "satisfy it — the rewrite rules are entailments, not definitions — and a "
 "relation the index refutes contributes no row beyond what the data asserts."
 msgstr ""
 
-#: src/sparql/geosparql.md:137
+#: src/sparql/geosparql.md:138
 msgid "Every answer is exact, and identical on every target"
 msgstr ""
 
-#: src/sparql/geosparql.md:139
+#: src/sparql/geosparql.md:140
 msgid ""
 "Geometry is where floating point normally destroys reproducibility: `f64` "
 "addition is not associative, so a different traversal order gives a "
@@ -7990,14 +8005,14 @@ msgid ""
 "than mitigating it."
 msgstr ""
 
-#: src/sparql/geosparql.md:145
+#: src/sparql/geosparql.md:146
 msgid ""
 "**Coordinates are read as exact rationals.** A lexical decimal is parsed "
 "digit by digit into an exact numerator and denominator; nothing is rounded "
 "on the way in."
 msgstr ""
 
-#: src/sparql/geosparql.md:148
+#: src/sparql/geosparql.md:149
 msgid ""
 "**Every geometric decision is integer arithmetic.** Orientation, segment "
 "intersection, point-in-ring, ring winding and the DE-9IM matrix are "
@@ -8005,14 +8020,14 @@ msgid ""
 "specifies completely and identically on every target."
 msgstr ""
 
-#: src/sparql/geosparql.md:152
+#: src/sparql/geosparql.md:153
 msgid ""
 "**Irrational measures are integer square roots** at a fixed internal scale, "
 "summed as integers — one rounding, at the end, of a value that was exact "
 "until then."
 msgstr ""
 
-#: src/sparql/geosparql.md:155
+#: src/sparql/geosparql.md:156
 msgid ""
 "**The single float boundary is the result literal.** An `xsd:double` result "
 "is the correctly rounded nearest double, computed with integer arithmetic "
@@ -8020,17 +8035,17 @@ msgid ""
 "`clippy::float_arithmetic`, so there is no second float path to find."
 msgstr ""
 
-#: src/sparql/geosparql.md:160
+#: src/sparql/geosparql.md:161
 msgid ""
 "The cross-target claim is executed, not argued: `make geo-determinism` runs "
 "the same corpus natively and on wasm32 and compares bytes."
 msgstr ""
 
-#: src/sparql/geosparql.md:163
+#: src/sparql/geosparql.md:164
 msgid "What is here, and what is not"
 msgstr ""
 
-#: src/sparql/geosparql.md:165
+#: src/sparql/geosparql.md:166
 msgid ""
 "Implemented: the WKT and GeoJSON codecs (with CRS and coordinate-dimension "
 "support); every topological relation of the Simple Features, Egenhofer and "
@@ -8038,7 +8053,7 @@ msgid ""
 "constructors that are exactly computable."
 msgstr ""
 
-#: src/sparql/geosparql.md:170
+#: src/sparql/geosparql.md:171
 msgid ""
 "Registered but **hard-erroring by name**: the operations that would require "
 "facilities the crate deliberately does not have — a coordinate-reference-"
@@ -8050,7 +8065,7 @@ msgid ""
 "exists to keep out."
 msgstr ""
 
-#: src/sparql/geosparql.md:178
+#: src/sparql/geosparql.md:179
 msgid ""
 "Like the full-text index, this is a Rust-host seam: the registrations are "
 "host closures and do not cross the Python, WebAssembly or C boundary. The "
@@ -11828,43 +11843,63 @@ msgid ""
 msgstr ""
 
 #: src/project/releases.md:13
-msgid "Pre-1.0 semver policy"
+msgid "Semver policy from 1.0.0"
 msgstr ""
 
 #: src/project/releases.md:15
-msgid "While the version is `0.x`:"
+msgid "From 1.0.0 the suite follows semantic versioning in full:"
 msgstr ""
 
 #: src/project/releases.md:17
-msgid "a **minor** bump (`0.x` → `0.(x+1)`) may include breaking API changes;"
-msgstr ""
-
-#: src/project/releases.md:18
 msgid ""
-"a **patch** bump (`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible."
+"a **breaking** change bumps the **major** version. A commit carrying `!` or "
+"a `BREAKING CHANGE:` footer is a major-bump trigger, and the changelog marks "
+"each such entry **BREAKING**;"
 msgstr ""
 
 #: src/project/releases.md:20
-msgid ""
-"All three published surfaces share one workspace version and are released "
-"together. That coherence is enforced in CI: a version-coherence check fails "
-"the build if the three version sources disagree."
+msgid "a **minor** bump is additive and API-compatible;"
 msgstr ""
 
-#: src/project/releases.md:24
+#: src/project/releases.md:21
+msgid "a **patch** bump is bugfix-only."
+msgstr ""
+
+#: src/project/releases.md:23
+msgid ""
+"That is what the version number commits to; it is a policy statement, not a "
+"claim of stability beyond what semver means. All three published surfaces "
+"share one workspace version and are released together, and a version-"
+"coherence check in CI fails the build if the version sources (`Cargo.toml`, "
+"`pyproject.toml`, `package.json`, `CITATION.cff`) disagree."
+msgstr ""
+
+#: src/project/releases.md:29
+msgid ""
+"The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](https://"
+"github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/"
+"purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently "
+"**0.7**), bumped on every exported-signature change, pinned by `crates/rdf-"
+"capi/tests/abi_signatures.rs`, and read back at runtime through "
+"`purrdf_abi_version`. It is versioned separately from the workspace and "
+"stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise "
+"about it."
+msgstr ""
+
+#: src/project/releases.md:31
 msgid "MSRV policy"
 msgstr ""
 
-#: src/project/releases.md:26
+#: src/project/releases.md:33
 msgid ""
 "The supported minimum Rust is `rust-version` in the root `Cargo.toml` — "
 "currently **1.96** — on the **stable** channel, enforced by a dedicated CI "
 "MSRV job that sets `RUSTUP_TOOLCHAIN` explicitly and asserts the compiler it "
 "measured really is 1.96. Raising the MSRV is a notable change recorded in "
-"the changelog and, pre-1.0, rides a minor bump."
+"the changelog; it rides a **minor** bump and never ships in a patch release."
 msgstr ""
 
-#: src/project/releases.md:32
+#: src/project/releases.md:39
 msgid ""
 "The MSRV is a promise to consumers; the development toolchain is a tool "
 "choice, and the two are orthogonal. `rust-toolchain.toml` pins a **dated "
@@ -11874,11 +11909,11 @@ msgid ""
 "change), and the release lanes build every published artifact on stable."
 msgstr ""
 
-#: src/project/releases.md:39
+#: src/project/releases.md:46
 msgid "Tag-driven trusted publishing"
 msgstr ""
 
-#: src/project/releases.md:41
+#: src/project/releases.md:48
 msgid ""
 "Releases are tag-driven: `rust-v<version>` publishes the crate suite to "
 "crates.io, `py-v<version>` publishes to PyPI, and `npm-v<version>` publishes "
@@ -11886,36 +11921,36 @@ msgid ""
 "cargo lane:"
 msgstr ""
 
-#: src/project/releases.md:46
+#: src/project/releases.md:53
 msgid ""
 "publication uses **Trusted Publishing** through GitHub Actions OIDC — no "
 "long-lived registry secret;"
 msgstr ""
 
-#: src/project/releases.md:48
+#: src/project/releases.md:55
 msgid "the privileged publish jobs use pinned actions and no dependency cache;"
 msgstr ""
 
-#: src/project/releases.md:49
+#: src/project/releases.md:56
 msgid ""
 "every `.crate` package receives a GitHub **build-provenance attestation**;"
 msgstr ""
 
-#: src/project/releases.md:50
+#: src/project/releases.md:57
 msgid "the package set receives an **SPDX SBOM** and SBOM attestation;"
 msgstr ""
 
-#: src/project/releases.md:51
+#: src/project/releases.md:58
 msgid ""
 "the release crate set is checked on `wasm32-unknown-unknown` before "
 "publishing;"
 msgstr ""
 
-#: src/project/releases.md:53
+#: src/project/releases.md:60
 msgid "every workspace crate version must match the tag version."
 msgstr ""
 
-#: src/project/releases.md:55
+#: src/project/releases.md:62
 msgid ""
 "Four workspace members are deliberately never published to crates.io: "
 "`purrdf-capi` (built via cargo-c, distributed as `libpurrdf`), `purrdf-"
@@ -11924,47 +11959,47 @@ msgid ""
 "instead)."
 msgstr ""
 
-#: src/project/releases.md:61
+#: src/project/releases.md:68
 msgid "Cutting a release"
 msgstr ""
 
-#: src/project/releases.md:63
+#: src/project/releases.md:70
 msgid ""
 "The coherent flow from `main` uses the `make` helpers so the three lanes can "
 "never drift:"
 msgstr ""
 
-#: src/project/releases.md:67
+#: src/project/releases.md:74
 msgid ""
 "# 1. Bump all three version sources in lockstep (fails unless they end up "
 "equal).\n"
 msgstr ""
 
-#: src/project/releases.md:69
+#: src/project/releases.md:76
 msgid ""
 "# 2. Regenerate the committed C-ABI header from the bumped crate version.\n"
 msgstr ""
 
-#: src/project/releases.md:72
+#: src/project/releases.md:79
 msgid "# 3. Regenerate the changelog from the conventional-commit history.\n"
 msgstr ""
 
-#: src/project/releases.md:75
+#: src/project/releases.md:82
 msgid ""
 "# 4. Review, then commit the release bump, generated header, and changelog.\n"
 msgstr ""
 
-#: src/project/releases.md:77
+#: src/project/releases.md:84
 msgid "\"chore(release): 0.2.2\""
 msgstr ""
 
-#: src/project/releases.md:78
+#: src/project/releases.md:85
 msgid ""
 "# 5. From an up-to-date main, run every release gate, then push all three "
 "tags.\n"
 msgstr ""
 
-#: src/project/releases.md:83
+#: src/project/releases.md:90
 msgid ""
 "`make release-tags` refuses to run unless the working tree is clean, the "
 "branch is `main` and synchronized with `origin/main`, the version check "
@@ -11979,11 +12014,11 @@ msgid ""
 "Release built from the committed `CHANGELOG.md`."
 msgstr ""
 
-#: src/project/releases.md:95
+#: src/project/releases.md:102
 msgid "Citing PurRDF"
 msgstr ""
 
-#: src/project/releases.md:97
+#: src/project/releases.md:104
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"

@@ -113,32 +113,49 @@ class Row:
 
     def anchored_in(self, msgid: str) -> bool:
         """Whether one of the row's anchors appears in ``msgid`` (case-insensitive, at a
-        word start, as a prefix — ``entail`` covers ``entailment``)."""
+        word start, as a prefix — ``canonical`` covers ``canonicalization``; a ``/…/``
+        anchor is a regular expression, so ``/entail(?!s\\b)/`` covers ``entailment``
+        and not the verb ``entails``)."""
         return any(_anchor_re(a, case_sensitive=False).search(msgid) for a in self.anchors)
 
 
 def _anchor_re(anchor: str, *, case_sensitive: bool) -> re.Pattern[str]:
-    return re.compile(r"(?<![A-Za-z0-9])" + re.escape(anchor), 0 if case_sensitive else re.I)
+    flags = 0 if case_sensitive else re.I
+    if len(anchor) >= 2 and anchor[0] == "/" and anchor[-1] == "/":
+        return re.compile(r"(?<![A-Za-z0-9])" + anchor[1:-1], flags)
+    return re.compile(r"(?<![A-Za-z0-9])" + re.escape(anchor), flags)
+
+
+def _token_re(token: str) -> re.Pattern[str]:
+    """A keep-English token as a WHOLE token: not inside another word on either side, so
+    ``RDF`` in ``RDFLib`` neither anchors the row in a msgid nor satisfies it in a msgstr
+    (``PurRDF`` used to). Case-sensitive: these are proper names."""
+    return re.compile(r"(?<![A-Za-z0-9])" + re.escape(token) + r"(?![A-Za-z0-9])")
 
 
 def split_cells(line: str) -> list[str]:
     """The cells of a Markdown table row, honouring backtick spans and ``\\|``.
 
     ``|`` inside a code span is content (the annotation syntax ``{| |}`` sits in one cell
-    of the glossary), and ``\\|`` is a literal pipe inside a cell (the regex alternation in
-    a Rejected entry), so the split tracks both.
+    of the glossary), ``\\|`` is a literal pipe inside a cell (the regex alternation in a
+    Rejected entry), and every other backslash is content too (``\\s``, ``\\b`` in a regex
+    cell) — the first version dropped those and silently read ``\\s*`` as ``s*``.
     """
     cells: list[str] = []
     buf: list[str] = []
     in_code = False
-    escaped = False
-    for c in line.strip():
-        if escaped:
-            buf.append(c)
-            escaped = False
-        elif c == "\\":
-            escaped = True
-        elif c == "`":
+    text = line.strip()
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and i + 1 < len(text) and text[i + 1] == "|":
+            # The one Markdown escape a cell needs: a literal pipe. Every other
+            # backslash is content — the regex classes in an Anchor or Rejected cell.
+            buf.append("|")
+            i += 2
+            continue
+        i += 1
+        if c == "`":
             in_code = not in_code
             buf.append(c)
         elif c == "|" and not in_code:
@@ -351,7 +368,8 @@ def offences(label: str, msgid: str | None, msgstr: str, rows: list[Row]) -> lis
                     )
         if row.keep_english and msgid is not None:
             for token in row.anchors:
-                if _anchor_re(token, case_sensitive=True).search(msgid) and token not in msgstr:
+                pattern = _token_re(token)
+                if pattern.search(msgid) and not pattern.search(msgstr):
                     out.append(
                         f"{label}: the keep-English term {token!r} in the msgid does not "
                         f"survive into the msgstr — glossary row {row.term!r} keeps it "
@@ -405,7 +423,7 @@ def file_units(path: Path) -> list[tuple[str, str | None, str]]:
 # global rejection is wrong wherever it appears and has no other sense to spare.
 NEIGHBOURS: dict[str, str] = {
     "具名图": "作者具名发表了这篇文章。",  # global near miss: 具名 alone
-    "资料集": "参考资料见附录。",  # global near miss: 资料 alone
+    "/(?<!参考)资料集/": "参考资料见附录。",  # global near miss: 资料 alone
     "资料类型": "参考资料见附录。",  # global near miss
     "空白节点": "网页模板中的空白节点会被忽略。",  # an empty DOM node
     "字面值": "该常量的字面值为 42。",  # a constant's literal value
@@ -415,15 +433,15 @@ NEIGHBOURS: dict[str, str] = {
     "蕴含": "这一设计蕴含着一个假设。",  # implies
     "实体化": "该抽象概念被实体化为一个类。",  # reified into a class
     "标准化": "RDF 1.2 已由 W3C 标准化。",  # standardized
-    "决定性": "这是决定性因素。",  # decisive
-    "出处": "引文出处见脚注。",  # a citation's source
+    "/决定性(?!能)/": "这是决定性因素。",  # decisive
+    "/(?<!输)出处/": "引文出处见脚注。",  # a citation's source
     "三元组术语": "本节解释三元组术语的由来。",  # the terminology of triples
     "三元组词项": "三元组词项在逻辑学教材中另有含义。",
     "基本方向": "设计的基本方向是确定性。",  # basic direction
     "组合数据类型": "C 语言中的结构体是一种组合数据类型。",  # an aggregate type in C
     "/(?<!台)账本/": "区块链是一种分布式账本。",  # a blockchain ledger
     "核外": "核外电子决定了元素的化学性质。",  # extranuclear electrons
-    "/研究对象(?![（(]Research Object)/": "本研究的研究对象为大学生。",  # the object of study
+    "/研究对象(?!\\s*[（(]\\s*Research Object)/": "本研究的研究对象为大学生。",  # the object of study
     "/表面(?!上|看来|来看)/": "水的表面张力很大。",  # surface tension
     "铸造": "青铜器由铸造而成。",  # bronze casting
     "抵达": "列车准时抵达车站。",  # a train arriving
@@ -564,13 +582,44 @@ def self_test(rows: list[Row], report: bool) -> list[str]:
         _po_text(anchored, f"本页使用{probe}一词。", obsolete=True),
         False,
     )
-    # The sentences from the review that the first version refused, and the book's own.
+    # The sentences from the review that the first version refused, and the book's own —
+    # the latter read from the REAL catalogue, so the proof is over the msgids the
+    # translator will actually meet, not a synthetic short one.
+    real = [
+        e.msgid
+        for e in po_catalog.messages(po_catalog.parse_po(PO_PATH.read_text(encoding="utf-8")))
+        if "standardized" in e.msgid
+    ] if PO_PATH.is_file() else []
+    if not real:
+        problems.append(
+            "NO REAL SPECIMEN: the catalogue no longer carries a msgid with 'standardized', so "
+            "the book's-own-sentence proof reads nothing; re-point it at a sentence the book "
+            "does say"
+        )
+    for index, msgid in enumerate(real, 1):
+        verdict(
+            f"the book's own msgid #{index} ('standardized', {len(msgid.split())} words) "
+            f"rendered with 标准化",
+            _po_text(msgid, "…但不存在标准化的拼写，因此这里描述的是 PurRDF 的写法。SPARQL 1.2 GRAPH CONSTRUCT"),
+            False,
+        )
     for what, msgid, msgstr in (
         (
             "the book's own sentence: 'no standardized spelling exists'",
             "Other engines already ship a form of it, but no standardized spelling exists.",
             "其他引擎已经提供了某种形式，但不存在标准化的拼写。",
         ),
+        # The residual collision class: the rejected form in its other sense INSIDE an
+        # anchored paragraph, spared by the row's lookaround.
+        ("输出处理 inside a paragraph about provenance", "Provenance of the output processing step.", "输出处理步骤的溯源。"),
+        ("决定性能 inside a paragraph about determinism", "Determinism determines performance.", "确定性决定性能。"),
+        ("the verb 'entails' does not anchor the entailment row", "Streaming entails a cost.", "流式处理蕴含着一定开销。"),
+        ("'literally' does not anchor the literal row", "The value is literally 42.", "该常量的字面值为 42。"),
+        ("参考资料集合 spared by the global row's lookbehind", "Reference materials.", "参考资料集合见附录。"),
+        # The half-width gloss with the house half-width space.
+        ("the gloss with half-width parentheses and a space", "Research Object projections", "研究对象 (Research Object) 投影"),
+        # A keep-English token inside another word neither anchors nor satisfies.
+        ("RDFLib in the msgid does not demand a standalone RDF", "RDFLib compatibility.", "RDFLib 兼容层。"),
         (
             "a faithful sentence keeping every invariant",
             "PurRDF is an RDF 1.2 toolkit in Rust with Python and WebAssembly bindings.",
@@ -585,6 +634,8 @@ def self_test(rows: list[Row], report: bool) -> list[str]:
         verdict(what, _po_text(msgid, msgstr), False)
     for what, msgid, msgstr in (
         ("Research Object rendered as 研究物件", "Research Object projections", "研究物件（RO）投影"),
+        ("RDF in the msgid, only PurRDF in the msgstr", "The RDF toolkit PurRDF.", "PurRDF 工具包。"),
+        ("the rejected form in the term's own paragraph, other sense but no lookaround", "Entailment of the statement.", "陈述所蕴含的东西。"),
         ("GMEOW translated", "The GMEOW ontology.", "吉猫协议本体。"),
         ("IRI translated in running text", "Every IRI is absolute.", "每个国际化资源标识符都是绝对的。"),
     ):

@@ -57,13 +57,14 @@ catalogue containing one poisoned ``msgstr`` — the arm's OWN self-test specime
 from the gate script (a bare ``purrdf`` glued to CJK, a hazard id glued to CJK, the
 Chinese attribution of the quad template, the overclaim ban's specimen after a full-width
 terminator) plus a fenced ``sparql`` block with a full-width brace written INSIDE a prose
-``msgstr``, plus a translation of a ``msgid`` the source does not carry — renders the book
-with THAT catalogue (``MDBOOK_PREPROCESSOR__GETTEXT__PO_DIR``), and asserts the arm goes
-red. The fence poison takes that shape because
-``mdbook-xgettext`` at the pinned version extracts no message for a ``sparql`` fence at
-all (only comments and string literals of the languages it lexes), so the English
-examples are byte-invariant under translation and the one way a query reaches the
-rendering through the catalogue is a translator writing a fence into a paragraph. A gate whose red state has never been observed is a gate
+``msgstr`` AND a real ``sparql`` fence msgid with a full-width brace, plus a translation
+of a ``msgid`` the source does not carry — renders the book with THAT catalogue
+(``MDBOOK_PREPROCESSOR__GETTEXT__PO_DIR``), and asserts the arm goes red. Both fence
+shapes are real: ``mdbook-xgettext`` at the pinned version extracts a fence whose language
+it does not lex (``sparql``, ``console``, ``text``, no language) as ONE message — the whole
+block, marker lines included — while a Rust or shell fence contributes only its comments
+and string literals; so a translator can break a shipped query by editing its message, or
+add one inside a paragraph. A gate whose red state has never been observed is a gate
 whose green state means nothing.
 
 Run locally as ``make check-i18n``; CI runs it in the docs workflow before building
@@ -295,6 +296,16 @@ def _prose_msgid(template: list) -> str:
     raise SystemExit("check-i18n-render: the template has no plain prose message to poison")
 
 
+def _sparql_fence_msgid(template: list) -> str:
+    """A shipped ``sparql`` fence as the extractor emits it: the whole block, markers
+    included. Its presence is asserted — a book with no such message would leave the
+    fence arm proven only through the paragraph poison."""
+    for e in template:
+        if e.msgid.startswith("```sparql\n") and "{" in e.msgid:
+            return e.msgid
+    raise SystemExit("check-i18n-render: the template carries no sparql fence message to poison")
+
+
 # A msgid no English page carries: the stale entry arm 6 exists to refuse.
 _STALE_MSGID = "This sentence exists in the catalogue and nowhere in the English source."
 
@@ -364,6 +375,7 @@ def poisons(template: list) -> tuple[tuple[str, str, str, str], ...]:
     ``markdown`` renderer.
     """
     prose = _prose_msgid(template)
+    fence = _sparql_fence_msgid(template)
     brand = load_gate("check-brand-casing.py")
     refs = load_gate("check-issue-refs.py")
     spec = load_gate("check-spec-attribution.py")
@@ -395,6 +407,12 @@ def poisons(template: list) -> tuple[tuple[str, str, str, str], ...]:
             "a fenced sparql block with a full-width brace, written inside a paragraph",
             prose,
             "示例：\n\n```sparql\nSELECT ?s WHERE ｛ ?s ?p ?o ｝\n```\n",
+        ),
+        (
+            "sweep_sparql_fences",
+            "a shipped sparql fence's own message, its first brace made full-width",
+            fence,
+            fence.replace("{", "｛", 1),
         ),
     )
 
