@@ -104,16 +104,20 @@ plus a first-party differential parity suite — see
 [rdflib Compatibility](../interop/rdflib.md) for details and the known,
 ledgered divergences.
 
-## GTS relational exports
+## GTS relational rows
 
-The Python package also ships GTS relational exports for analytics pipelines:
+The Python package reads a [GTS container](../gts.md) back as in-memory
+relational rows:
 
 ```python
-from purrdf import gts_to_sqlite, gts_to_duckdb, gts_to_parquet
+from purrdf import gts_relational_rows_from_bytes
+
+rows = gts_relational_rows_from_bytes(gts_bytes)  # terms, quads, reifiers, annotations, blobs
 ```
 
-These project a [GTS container](../gts.md) into SQLite, DuckDB, or Parquet
-tables.
+Writing those rows to a store is the caller's step. The names `gts_to_sqlite`,
+`gts_to_duckdb` and `gts_to_parquet` are declared but not implemented: each
+raises `ValueError` and writes nothing.
 
 ## Graph, tabular, and research-object archives
 

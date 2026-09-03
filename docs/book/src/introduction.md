@@ -8,7 +8,9 @@ SPDX-License-Identifier: CC-BY-4.0
 **PurRDF** is an [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) toolkit:
 primitives, codecs, SPARQL, SHACL, ShEx, entailment, and graph transport,
 implemented once in Rust and carried verbatim into Python, WebAssembly/JavaScript,
-and C. Every published crate builds for `wasm32-unknown-unknown`, so the engine
+and C, with one exception stated up front: the GTS container reaches Rust, the CLI
+(as an input format), Python and C, and is not exposed by the wasm/JavaScript
+package. Every published crate builds for `wasm32-unknown-unknown`, so the engine
 that answers a query on a server answers it, byte for byte, in a browser tab.
 It is developed by Blackcat Informatics® Inc. and published under
 MIT OR Apache-2.0.
@@ -54,8 +56,10 @@ reimplemented per language.
   Every syntax resolves relative IRI references through one RFC 3986 layer,
   and a relative reference with no base in scope is a hard error.
   See [Base IRIs & Relative References](concepts/base-iris.md).
-- **Canonicalization** — W3C RDFC-1.0 plus dataset diff and isomorphism.
-  See [Canonicalization & Diff](concepts/canonicalization.md).
+- **Canonicalization** — W3C RDFC-1.0 on the RDF 1.1 subset; over RDF 1.2
+  constructs, either the flat form (RDFC-1.0 over `rdf:reifies` triples) or the
+  first-party `purrdf-rdfc12` profile, named apart — plus dataset diff and
+  isomorphism. See [Canonicalization & Diff](concepts/canonicalization.md).
 - **Projections & carriers** — deterministic LPG, CSVW, OBO Graphs,
   dataset-description, and research-object projections, each with a located
   loss ledger.
@@ -70,10 +74,12 @@ reimplemented per language.
   superset a conformant SEP-0009 reader will call ill-formed), caller-registered
   aggregates and property functions (including
   path witnesses that bind a traversal hop by hop), governed execution with
-  per-node explain receipts, and `SERVICE` federation through a host-injected
-  resolver carrying per-service context, gated by the W3C conformance suites.
+  per-node explain receipts, and a `SERVICE` seam — a host-injected resolver
+  carrying per-service context; no HTTP client and no resolver ship, so
+  `SERVICE` and `LOAD` fail by name on every shipped surface unless written
+  `SILENT` — gated by the W3C conformance suites.
   See [SPARQL](sparql/querying.md).
-- **Out-of-core SPARQL extensions** — deterministic full-text search with
+- **SPARQL extensions outside `purrdf-core`** — deterministic full-text search with
   exact fixed-point BM25 ([Full-Text Search](sparql/full-text.md)), exact and
   float-free GeoSPARQL 1.1 ([GeoSPARQL](sparql/geosparql.md)), and
   nearest-neighbour search over a PURREMB embedding space
@@ -106,7 +112,7 @@ dataset already in memory, through the evaluator's caller-keyed extension seams
 | --- | --- | --- | --- |
 | Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no floating point in the crate. | BM25 ranking, not a Lucene: no stemming, no stop-word lists, no query dialect; an in-memory index built once over a frozen dataset. |
 | Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM; no GEOS, no PROJ. | Topological predicates, accessors and exactly computable measures over vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, no buffers, hulls, overlay set operations or raster — each unimplemented function hard-errors by name. |
-| Vector similarity | pgvector | [Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a PURREMB embedding space, binary64 in a pinned accumulation order. | Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no approximate index; PurRDF computes no embeddings — the vectors arrive in an artifact the caller produced. |
+| Vector similarity | pgvector | [Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a PURREMB embedding space, binary64 in a pinned accumulation order. | Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no approximate index; PurRDF computes no embeddings — the vectors come from a PURREMB artifact the caller fills, which PurRDF itself writes (`EmbeddingBuilder`, `EmbeddingStreamWriter`; Rust only) and opens fail-closed. |
 
 All three are pure functions of their input on every target — fixed point,
 exact rationals, or a pinned binary64 order, with canonical tie-breaks — and

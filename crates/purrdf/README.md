@@ -56,7 +56,13 @@ caller-supplied configuration.
   output. Every syntax resolves relative IRI references through the one RFC 3986
   layer in `purrdf::iri` (`BaseIri`/`BaseScope`), and a relative reference with
   no base in scope is a hard error rather than a term.
-- **Canonicalization** — W3C RDFC-1.0, tested against the W3C fixture suite.
+- **Canonicalization** — W3C RDFC-1.0, tested against the W3C fixture suite,
+  on the RDF 1.1 subset. Over reifiers and annotations there are two named
+  forms: `canonical_flat_nquads` rewrites them to plain `rdf:reifies` triples
+  and canonicalizes those under RDFC-1.0, while `canonicalize` is the
+  first-party `purrdf-rdfc12` v1 profile (a reserved-namespace lowering, byte-
+  identical to RDFC-1.0 only on the RDF 1.1 subset; a digest over it must not
+  be labelled RDFC-1.0).
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator (property
   paths, aggregates, EXISTS/NOT EXISTS answered by a memoized existence probe
   where a prepare-time proof licenses it and by the per-row definition

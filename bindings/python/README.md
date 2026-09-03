@@ -13,7 +13,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 PurRDF is a from-scratch, dependency-light [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/)
 engine — parsers and serializers, SPARQL, SHACL, ShEx, RDFC-1.0 canonicalization, and the
 GTS graph-transport container — written in Rust and carried verbatim into Python, JavaScript,
-and C. The `purrdf` package is the Python surface of that one engine: the same
+and C (the GTS container reaches Python and C; the JavaScript package does not expose
+it). The `purrdf` package is the Python surface of that one engine: the same
 byte-identical semantics in every language, including triple terms, reifiers, and
 base-direction literals that most incumbent libraries do not carry.
 
@@ -613,22 +614,25 @@ name and must never be installed alongside the genuine
 environment. It is a separate distribution (never bundled into the main `purrdf`
 wheel) precisely so environments that need the real rdflib simply omit it.
 
-## GTS graph transport and relational exports
+## GTS graph transport and relational rows
 
 GTS is PurRDF's single-file, content-addressed, append-only container for RDF 1.2
-graphs. Build one from quads and export it straight to relational stores:
+graphs. Build one from quads and read it back as in-memory relational rows:
 
 ```python
 import purrdf
 
 gts_bytes = purrdf.gts_from_quads(my_nquads_bytes, format=purrdf.RdfFormat.N_QUADS)
 
-purrdf.gts_to_sqlite(gts_bytes, "graph.db")
-purrdf.gts_to_duckdb(gts_bytes, "graph.duckdb")
-files = purrdf.gts_to_parquet(gts_bytes, "out/")
+rows = purrdf.gts_relational_rows_from_bytes(gts_bytes)
+rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs"]
 ```
 
-The same entry points are grouped under `purrdf.gts` for discoverability.
+`gts_relational_rows_from_bytes` returns a `GtsRelationalRows` dict of five row
+lists; writing them to a store is the caller's step. The names `gts_to_sqlite`,
+`gts_to_duckdb` and `gts_to_parquet` are declared but **not implemented**: each
+raises `ValueError` and writes nothing. The same entry points are grouped under
+`purrdf.gts` for discoverability.
 
 ## Learn more
 

@@ -28,8 +28,13 @@ crate everything else in the workspace builds on. It owns:
 - **Structured diagnostics** — typed `RdfDiagnostic`s with source locations;
   deliberately SARIF-free (the SARIF boundary is
   [`purrdf-validate`](https://crates.io/crates/purrdf-validate)).
-- **RDFC-1.0** — W3C dataset canonicalization (`canonicalize`), plus dataset
-  diff and isomorphism checks.
+- **Canonicalization** — `canonicalize` is the first-party `purrdf-rdfc12` v1
+  profile: W3C RDFC-1.0 in full, plus a lowering of reifiers and annotations
+  into a reserved `urn:purrdf:rdfc:` namespace (input already carrying it is
+  refused). It agrees with RDFC-1.0 byte for byte on the RDF 1.1 subset, which
+  the W3C fixture suite gates; a digest over its RDF 1.2 output must not be
+  labelled RDFC-1.0 (`CANON_PROFILE_ID`/`CANON_PROFILE_VERSION` name the
+  profile at runtime). Plus dataset diff and isomorphism checks.
 - **Store/backend traits** — the narrow parser-ingress, serializer-egress, and
   `SparqlEngine` seams concrete adapters implement in sibling crates.
 - **Provenance and the loss ledger** — a generic provenance sidecar for the
@@ -71,7 +76,7 @@ kernel small and its invariants enforceable at the crate boundary.
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
 workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
-C. Most applications should depend on the umbrella
+C (the GTS container itself reaches Python and C, not the wasm package). Most applications should depend on the umbrella
 [`purrdf`](https://crates.io/crates/purrdf) crate, which re-exports this kernel
 through `purrdf-rdf`; depend on `purrdf-core` directly only when you are
 building an engine or adapter over the IR itself.

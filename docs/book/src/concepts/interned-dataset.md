@@ -66,7 +66,8 @@ Beyond the IR itself, `purrdf-core` owns:
 - **Structured diagnostics** — typed `RdfDiagnostic`s with source locations
   (deliberately SARIF-free; the SARIF boundary is
   [`purrdf-validate`](https://docs.rs/purrdf-validate)).
-- **RDFC-1.0** canonicalization, dataset diff, and isomorphism — see
+- **Canonicalization** (RDFC-1.0 on the RDF 1.1 subset; the `purrdf-rdfc12`
+  profile over reifiers and annotations), dataset diff, and isomorphism — see
   [Canonicalization & Diff](canonicalization.md).
 - **Store and engine seams** — the narrow parser-ingress, serializer-egress,
   and `SparqlEngine` traits that adapters implement in sibling crates.
