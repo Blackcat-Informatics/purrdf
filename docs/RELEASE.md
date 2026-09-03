@@ -103,10 +103,12 @@ on every `make check` that it is a topological order of normal **and**
 dev-dependencies, which is what lets `cargo publish` verify every crate — see
 [Verification](#verification-is-on-and-why-it-was-off).
 
-crates.io currently requires the crate to exist before a Trusted Publisher can
-be configured. Bootstrap publishes for new crate records therefore use an
-explicit token. After those crate records exist, enable the Trusted Publisher
-entries above and use the GitHub release workflow for future releases.
+crates.io requires a crate to exist before a Trusted Publisher can be
+configured for it, and refuses to create one from a Trusted Publishing token —
+its publish handler answers `Trusted Publishing tokens do not support creating
+new crates. Publish the crate manually, first`. Creating a record is therefore
+the **only** thing an API token does in this release process, and the next
+section is exact about how little that is.
 
 ### Outstanding bootstrap: `purrdf-cdt`, `purrdf-text`, `purrdf-geo`
 
@@ -124,64 +126,221 @@ now *has* a record for also fails it, so the ledger cannot go on naming a crate
 someone has since bootstrapped. This section restates the ledger, and
 `scripts/check-doc-claims.py` fails `make check` if it restates it wrongly.
 
-**What that would cost without the preflight, and why the preflight exists.**
-`cargo publish` cannot be undone, and this lane publishes one crate at a time in
-dependency order — so a `rust-v*` tag would irreversibly publish the three crates
-ahead of `purrdf-cdt` and only then fail. `purrdf-cdt` moved that failure point
-EARLIER than any previous new crate did: it is a leaf over `purrdf-iri` +
-`purrdf-xsd`, so it sorts near the front of the dependency order, and the damage
-would stop after three crates rather than after six. **That is the counterfactual,
-not current behaviour**: the preflight described below runs before any packaging
-or publishing, so today a tag pushed in this state costs a red job and publishes
-nothing at all.
+#### What a token can do, and what it cannot
 
-This section previously also named `purrdf-datalog`, which has had a crates.io
-record since 2026-07-31 and answers `0.12.0`. That was a stale entry, not a
-missing record, and nothing could see it: the list lived only in this prose. It
-is why the list is now a ledger with two gates on it. Offline,
-`outstanding_bootstrap_claim` in
-[`scripts/check-doc-claims.py`](../scripts/check-doc-claims.py) holds this
-section — heading, crate names, publish-order ordinals and the anchor that links
-here — to `PURRDF_UNBOOTSTRAPPED_CRATES` and `PURRDF_RELEASE_CRATES` on every
-`make check`, so a crate that moves in the release set cannot leave a wrong
-ordinal behind. Online, the preflight below holds the ledger itself to crates.io.
-*Membership* is only ever decided by that second gate: whether a record exists is
-a fact about the registry, not about this tree, and this section must never be
-read in place of running the preflight.
+**The token lane creates records. It publishes nothing else.** Every existing
+PurRDF crate on crates.io is locked with crates.io's per-crate *Require trusted
+publishing* setting — `"trustpub_only": true` in the public record JSON of all
+eighteen — and crates.io answers a token publish of a locked crate with a 403.
+That was established by an actual publish attempt, not by reading about it:
+`scripts/bootstrap-crates-io.sh 0.13.0`, run with a valid `CARGO_TOKEN` from a
+clean tree, packaged all 21 crates, verified `purrdf-events`, and on its
+**first** upload received
 
-The mechanism that makes it a refusal rather than a partial publish: the release job runs
-[`scripts/check-crates-io-records.sh`](../scripts/check-crates-io-records.sh)
-**before any packaging or publishing**; it queries `/api/v1/crates/<name>` for
-every crate in the release set and fails the job naming the missing crate and
-the bootstrap command below. Run it locally at any time:
+```text
+error: failed to publish purrdf-events v0.13.0 to registry at https://crates.io
+
+Caused by:
+  the remote server responded with an error (status 403 Forbidden): New versions of this crate can only be published using Trusted Publishing (see https://crates.io/docs/trusted-publishing).
+```
+
+Nothing landed (`purrdf-events/0.13.0` answered 404 afterwards). Until then
+this document and that script both assumed the token lane could publish the
+whole 21-crate set; that has been false since the records were locked. The
+real division of labour:
+
+| Lane | Publishes |
+| --- | --- |
+| API token (`scripts/bootstrap-crates-io.sh`) | the first-ever version of a crate with **no record** — nothing else |
+| Trusted Publishing (`rust-v*` tag, `release-cargo.yaml`) | **every** subsequent version of **every** crate, all 21, the three new ones included |
+
+The bootstrap script therefore walks `PURRDF_UNBOOTSTRAPPED_CRATES` and only
+that: a ledger crate that already has a record is refused by name (a token
+walking into eighteen 403s in a row fails safe, but it is wrong, not strict),
+and `scripts/check-crates-io-records.sh` refuses any record that is not locked,
+naming the setting to enable. Both refusals, and their valid neighbours, are
+exercised offline by each script's `--self-test` on every `make check`.
+
+#### The deadlock
+
+Creating a record is a real `cargo publish`, and `cargo publish` — with **or
+without** `--no-verify` — resolves the packaged crate's dependency graph against
+the registry to write its lockfile. The three ledger crates depend on
+`purrdf-iri`, `purrdf-xsd`, `purrdf-core` and `purrdf-sparql-eval`, and as
+dev-dependencies on `purrdf-sparql-results`, `purrdf-rdf`, `purrdf-shapes` and
+`purrdf-sparql-algebra`, all at the workspace version. At 0.13.0, verbatim, on
+the stable cargo the lane uses and on the pinned nightly alike:
+
+```text
+$ cargo publish -p purrdf-cdt --no-verify --dry-run --locked
+error: failed to prepare local package for uploading
+
+Caused by:
+  failed to select a version for the requirement `purrdf-iri = "^0.13.0"`
+  candidate versions found which didn't match: 0.12.0, 0.11.0, 0.10.0, ...
+  location searched: crates.io index
+  required by package `purrdf-cdt v0.13.0 (…/crates/cdt)`
+```
+
+And the trusted lane cannot simply go first: `purrdf-cdt` is a *normal*
+dependency of `purrdf-core`, `purrdf-sparql-algebra` and `purrdf-sparql-eval`,
+and `purrdf` depends on `purrdf-text` and `purrdf-geo`, so `purrdf-core 0.13.0`
+cannot be published before `purrdf-cdt 0.13.0` exists any more than
+`purrdf-cdt` can before `purrdf-iri`. The two lanes block each other in both
+directions, and the release is published by **interleaving** them.
+
+#### The procedure: the interleave
+
+The trusted lane publishes everything it can, skips each ledger crate, and
+**stops cleanly at the first crate that depends on a skipped one**; the token
+creates that ledger crate's record — its dependencies now exist, so the publish
+is *verified* — the maintainer enables Trusted Publishing on the new record, and
+the same workflow run is re-run and resumes where it stopped. The loop is
+[`scripts/publish-release-crates.sh`](../scripts/publish-release-crates.sh); its
+stop condition is computed from `cargo metadata` over every dependency kind
+(verification resolves dev-dependencies too, and a dev-edge onto a *skipped*
+crate fails exactly like a normal one), never hand-listed, and its `--self-test`
+runs the whole interleave against a mock registry on every `make check`,
+checking each stop against an independently computed first dependent. For the
+current graph that is **three tag runs and two token steps**, because
+`purrdf-text` and `purrdf-geo` share their first dependent (`purrdf`) and are
+created in one token pass.
+
+The workflow is tag-triggered only, so a stopped run is resumed with
+`gh run rerun <run-id>` — same tag, same SHA, same workflow file — never by
+re-pushing the tag. The GitHub Release is created only by the run that reports
+the set complete. The sequence, with the exact commands and the messages to
+expect (`gh run list --workflow release-cargo.yaml` gives the run id):
 
 ```sh
-bash scripts/check-crates-io-records.sh
+# 1. Tag. The lane publishes purrdf-events, purrdf-iri, purrdf-xsd, purrdf-gts;
+#    skips purrdf-cdt ("skipping purrdf-cdt: bootstrap pending"); stops with
+#      STOP: purrdf-core 0.13.0 depends on purrdf-cdt 0.13.0 (normal), which is in
+#      PURRDF_UNBOOTSTRAPPED_CRATES and not on crates.io yet.
+#    The job is green; the "Release incomplete" step names what comes next.
+make release-tags VERSION=0.13.0
+
+# 2. Token step 1, from a clean checkout of rust-v0.13.0. The plan says
+#      CREATE RECORD  purrdf-cdt (no crates.io record; dependencies on crates.io: …)
+#      DEFER          purrdf-text (… its dependencies are not on crates.io yet …)
+#      DEFER          purrdf-geo  (…)
+#    and it creates purrdf-cdt, verified.
+git checkout rust-v0.13.0
+scripts/bootstrap-crates-io.sh --plan
+CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh
+
+# 3. On crates.io, for purrdf-cdt: add the Trusted Publisher entry (table above)
+#    AND enable "Require trusted publishing". This release never touches
+#    purrdf-cdt again (it is published), so a missed entry bites at the NEXT
+#    release — a 403 at purrdf-cdt after the crates ahead of it — while a missed
+#    lock makes step 4 refuse in the preflight, by design; and the lock can only
+#    be enabled once the entry exists. Then resume the run:
+gh run rerun <run-id>
+
+# 4. The lane resumes at purrdf-core, publishes through purrdf-validate, skips
+#    purrdf-text and purrdf-geo, and stops with
+#      STOP: purrdf 0.13.0 depends on purrdf-text 0.13.0 (normal),purrdf-geo 0.13.0 (normal), …
+
+# 5. Token step 2 (the plan shows purrdf-cdt as "skip … created by an earlier
+#    run" and CREATE RECORD for purrdf-text and purrdf-geo):
+CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh
+
+# 6. On crates.io, for purrdf-text AND purrdf-geo: Trusted Publisher entry AND
+#    "Require trusted publishing". Then resume once more:
+gh run rerun <run-id>
+#    The lane publishes purrdf and purrdf-wasm, reports
+#      COMPLETE: all 21 release crates are on crates.io at 0.13.0
+#    and creates the GitHub Release.
+```
+
+After the release: remove the three crates from `PURRDF_UNBOOTSTRAPPED_CRATES`
+and from this section (the offline gate holds the two together), on `main`. Not
+before — the tag's tree is frozen while its release is in flight, which is why
+the preflight tolerates a ledgered crate whose record exists *at the version
+being released* (it reports it as `created … by this release's token step`)
+and still refuses one whose record exists at any other version as stale.
+
+The bootstrap script is the token step, and only that: it walks the ledger,
+creates in one pass every ledger crate whose dependencies are on crates.io at
+the target version, **defers** the rest by name — with the trusted-lane run
+that will publish their dependencies as the next step — and refuses outright
+when it can create nothing (`REFUSING: nothing can be created yet`), when a
+ledger crate already has a record at another version, or when the ledger is
+empty. `--plan` runs only that preflight and needs no token. It refuses a dirty
+tree by default and skips a ledger crate whose version an earlier pass created.
+
+#### The shapes that were rejected, and why
+
+**`--no-verify` at the release version, token first.** Proposed on the
+assumption that skipping verification skips dependency resolution. It does
+not: the error above is `cargo publish --no-verify --dry-run`, and it is
+cargo's lockfile resolve, which runs before any upload with or without the
+flag. There is nothing for `--no-verify` to buy at the point the token step
+becomes possible either — the dependencies exist, so the publish verifies.
+
+**A temporary unlock.** Disable *Require trusted publishing* on the eighteen
+existing crates, token-publish all 21 in order with the old whole-set loop,
+re-lock. One run, no workflow change — and 0.13.0 of every crate becomes a
+token publish with no Trusted Publishing provenance, no build-provenance
+attestation and no SBOM attestation (both are made by the workflow), plus
+thirty-six hand flips of a setting whose every change emails every owner.
+That discards the posture the lane exists for.
+
+**A placeholder record.** Token-publish a dependency-free stub (an empty
+`lib.rs` at `0.0.0`) under each name from a throwaway crate, lock it, yank it
+once the real version is up. One tag run, fully verified, no interleave — but a
+yanked version stays in a crate's history forever, and the first real artifact
+of three crates would not be their first version.
+
+#### The preflight
+
+The release job runs
+[`scripts/check-crates-io-records.sh`](../scripts/check-crates-io-records.sh)
+**before any packaging or publishing**. For every crate in the release set it
+queries `/api/v1/crates/<name>` and:
+
+- **permits** a crate with no record that the ledger names, reporting it as
+  `PENDING … bootstrap pending` — the loop above handles it;
+- **refuses** a crate with no record that the ledger does *not* name — an
+  undocumented bootstrap requirement, which the loop would only skip if the
+  ledger named it;
+- **refuses** a ledgered crate that has a record at any version other than the
+  one being released — a stale ledger entry (this section previously named
+  `purrdf-datalog`, which has had a record since 2026-07-31, for a full cycle,
+  because the list lived only in prose);
+- **refuses** any record that is not locked to Trusted Publishing
+  (`trustpub_only`), naming the setting — the step most easily forgotten
+  between interleave runs.
+
+Run it locally at any time; give it the version so the in-flight tolerance
+applies:
+
+```sh
+PURRDF_RELEASE_VERSION=0.13.0 bash scripts/check-crates-io-records.sh
 ```
 
 Only a literal 404 counts as missing: crates.io answers 403 to a default
 `User-Agent`, so the script sends the same `purrdf-release/<version>` agent the
 publish loop uses, retries transient statuses, and treats any other answer as a
-hard stop rather than as "missing".
+hard stop rather than as "missing". Offline, `outstanding_bootstrap_claim` in
+[`scripts/check-doc-claims.py`](../scripts/check-doc-claims.py) holds this
+section — heading, crate names, publish-order ordinals and the anchor that links
+here — to `PURRDF_UNBOOTSTRAPPED_CRATES` and `PURRDF_RELEASE_CRATES` on every
+`make check`. *Membership* is only ever decided by the online gate: whether a
+record exists is a fact about the registry, not about this tree.
 
-**The record itself can only be created by a maintainer**, because creating it
-is a token-authenticated, irreversible outward publish that a Trusted Publisher
-is not permitted to perform. Do it once, from a clean local checkout, before the
-next `rust-v*` tag:
-
-```sh
-CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh
-```
-
-The version argument is optional and deliberately omitted here: with none given
-the script reads the workspace version out of `cargo metadata`, so this command
-cannot go stale the way a pinned literal in a document does.
-
-The bootstrap script prints its full plan — which crates it will skip, publish,
-and **create a record for** — before it runs any gate, so the irreversible part
-is visible while it is still stoppable. After it completes, add a Trusted
-Publisher entry for each newly created record using the table above; the
-preflight then passes and the tag lane works unchanged.
+What the preflight **cannot** see, so that a green run is not read as more than
+it is: whether a Trusted Publisher entry exists for a crate and points at this
+repository and workflow. crates.io has no public API for those entries. The OIDC
+token the lane exchanges is scoped to the crates whose entries matched, and a
+crate with no entry — including a record the token step just created whose
+entry was not added before the run was re-run — fails at its **own**
+`cargo publish` (`The provided access token is not valid for crate `<name>``),
+after every crate ahead of it has been published: a loud stop under
+`set -euo pipefail` with a partial publish that re-running the run resumes,
+not a pre-publish refusal. The lock check is the closest a preflight gets,
+because on crates.io the lock can only be enabled from a crate's settings page
+once an entry exists.
 
 `purrdf-python`, `purrdf-sparql-conformance`, `purrdf-cli`, and `purrdf-capi`
 remain workspace crates, but they are not in this crates.io release lane.
@@ -191,25 +350,12 @@ native command-line package, and
 the C ABI is a native artifact that should get a separate release lane if/when it
 is shipped.
 
-For the bootstrap publish from a clean local checkout:
-
-```sh
-CARGO_REGISTRY_TOKEN="${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh
-```
-
-The script states its crates.io plan first (skip / publish / **create record**,
-per crate), then runs the local release gates, refuses dirty source by default,
-skips crate versions that already exist, and publishes crates in dependency
-order.
-It also verifies the published crate set with `cargo check --target
-wasm32-unknown-unknown --lib`; if the target is not installed and `rustup` is
-available, the script installs it before checking.
-
 #### Verification is on, and why it was off
 
-Each `cargo publish` — in this bootstrap script **and** in the tag-driven
-[`release-cargo.yaml`](../.github/workflows/release-cargo.yaml) loop, which is
-the same loop under an OIDC token — **verifies**: cargo unpacks the `.crate` it
+Each `cargo publish` — in the bootstrap script **and** in the tag lane's loop
+([`scripts/publish-release-crates.sh`](../scripts/publish-release-crates.sh),
+run by [`release-cargo.yaml`](../.github/workflows/release-cargo.yaml) under an
+OIDC token) — **verifies**: cargo unpacks the `.crate` it
 is about to upload and builds it against the registry, so a wrong-version or
 broken artifact is refused *before* the one step that cannot be undone. Both
 loops used to pass `--no-verify`, and that flag was **load-bearing**, not
@@ -229,9 +375,11 @@ point of no return — that the release order is a topological order of normal
 workspace members, and that the bootstrap ledger is in-set and in order. Its
 `--self-test` perturbs each of those and requires the refusal.
 
-Two `--no-verify` remain, both deliberate. The pre-loop `cargo package
---workspace` (in both lanes) packages every crate before *any* is published, so
-verification there is impossible by construction; it exists to find a packaging failure
+Two `--no-verify` remain, both deliberate. The pre-loop `cargo package` (the
+whole workspace in the workflow, the ledger crates in the bootstrap) packages
+every crate before *any* is published, so verification there is impossible by
+construction in the workflow and pointless in the bootstrap, whose preflight
+already proved every dependency resolves; it exists to find a packaging failure
 before the first irreversible upload rather than midway through the set. And
 `PUBLISH_NO_VERIFY=true` restores the old loop behaviour for one run, for a
 verification failure that is demonstrably not a broken artifact (a registry
@@ -293,12 +441,14 @@ git push origin rust-v0.1.5
 ```
 
 The workflow first refuses outright if any crate in the release set has no
-crates.io record (see [Outstanding
-bootstrap](#outstanding-bootstrap-purrdf-cdt-purrdf-text-purrdf-geo)); that check runs before
-packaging, so a missing record costs a red job rather than a half-published
-release. It then publishes crates in dependency order and skips any
-crate/version that already exists on crates.io, which keeps reruns safe after a
-partial publish.
+crates.io record and is not in the bootstrap ledger, or has a record that is
+not locked to Trusted Publishing (see [Outstanding
+bootstrap](#outstanding-bootstrap-purrdf-cdt-purrdf-text-purrdf-geo)); that
+check runs before packaging. It then publishes crates in dependency order,
+skips any crate/version that already exists on crates.io (which keeps re-runs
+safe after a partial publish), skips ledgered crates, and stops cleanly at the
+first crate that depends on one — the interleave described there — resuming
+with `gh run rerun <run-id>`.
 
 ## PyPI Release
 

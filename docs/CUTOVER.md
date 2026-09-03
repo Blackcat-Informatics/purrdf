@@ -35,11 +35,14 @@ from its workspace. Integrated on the PurRDF side of the line:
 
 ## Prerequisites for the reasoning-substrate cutover
 
-1. **A crates.io record for `purrdf-datalog`.** The crate is new; a Trusted
-   Publisher entry can only be configured after a first token-authenticated
-   bootstrap publish (`scripts/bootstrap-crates-io.sh`). Until that exists, a
-   `rust-v*` tag fails mid-publish. This is a maintainer-token action no
-   automation may take.
+1. **A crates.io record for `purrdf-datalog`.** **Satisfied**: the record has
+   existed since 2026-07-31 and `0.12.0` was published through the Trusted
+   Publishing lane on 2026-08-02. It was a prerequisite because a Trusted
+   Publisher entry can only be configured for a crate that exists, and creating
+   a record is the one thing an API token still does for this workspace
+   (`scripts/bootstrap-crates-io.sh`; every later version of every crate goes
+   through the `rust-v*` lane — see `docs/RELEASE.md`). A maintainer-token
+   action no automation may take.
 2. **gmeow re-pins.** The measured pin predates `crates/datalog` existing; every
    row below requires a purrdf version that carries `purrdf-datalog`,
    `purrdf-entail`'s reasoning surface, and `purrdf-xsd::{range,rational}`.
