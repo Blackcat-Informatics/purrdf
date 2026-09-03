@@ -16,9 +16,15 @@ adjacent characters marks the word as part of a longer identifier instead of
 prose: ``purrdf-xsd``/``purrdf_xsd`` are crate/module names, ``purrdf::`` is a
 Rust path, ``purrdf/`` and ``purrdf.h`` are filesystem/header paths, a
 backtick-wrapped `` `purrdf` `` is a code span naming the crate, and an
-alphanumeric neighbour makes it a fragment of a longer identifier or plural —
-``libpurrdf``, ``purrdfs`` — not the bare word. None of those are prose and
-none are rewritten. A bare match IS prose, and the fix depends on what it
+ASCII-alphanumeric neighbour makes it a fragment of a longer identifier or
+plural — ``libpurrdf``, ``purrdfs`` — not the bare word. None of those are
+prose and none are rewritten. The neighbour test is ASCII on purpose:
+``str.isalnum`` is Unicode-aware (``'本'.isalnum()`` is ``True``), and with it a
+bare ``purrdf`` glued to CJK prose — ``本purrdf项目`` — was classified as an
+identifier fragment and never flagged, while the same word one half-width
+space away (``本 PurRDF 项目``, the house typography) was. Every identifier
+this repository mints is ASCII, so a non-ASCII neighbour is prose by
+construction. A bare match IS prose, and the fix depends on what it
 names: if it names the PROJECT/BRAND, capitalize it to ``PurRDF``; if it names
 the ``purrdf`` FACADE CRATE specifically (a legitimate but unmarked mention),
 wrap it in backticks instead of capitalizing it — the crate's own name does
@@ -44,6 +50,25 @@ fields are covered by their own convention (checked by hand — every
 and ``.py``/``.yaml`` comments in this repository do not carry brand-name
 prose today. Widen this list the day one does.
 
+    python3 scripts/check-brand-casing.py                       # verify (exit 1 on a hit)
+    python3 scripts/check-brand-casing.py --self-test           # prove the rule bites both ways
+    python3 scripts/check-brand-casing.py --rendered-tree DIR   # scan a rendered book tree
+
+The self-test replays glued-CJK, spaced-CJK, code-span and identifier shapes
+against the same scanners the tree scan uses, and runs before every scan: a
+shape this gate cannot see is a shape that ships with the gate green.
+
+``--rendered-tree DIR`` scans every ``.md`` under DIR — a rendering of
+``docs/book/src/`` produced by ``mdbook build`` with the ``markdown`` renderer
+and a translation applied (see ``scripts/check-i18n-render.py``). The register
+below is consulted through that mapping (``DIR/x.md`` is
+``docs/book/src/x.md``), and in that mode it is a CEILING rather than an exact
+count: a translation that carries fewer bare mentions than its English source
+is an improvement, not stale debt, and the English source's own scan is what
+keeps the register exact. Nothing under ``docs/book/book`` or any other build
+output is ever scanned by the default mode, so this flag is the only way a
+translation reaches this gate at all.
+
 Like ``check-issue-refs.py``'s ``PRE_EXISTING_PROCESS_REFERENCES``, the debt
 that predates this rule is carried in a single frozen register,
 ``PRE_EXISTING_BRAND_CASING``, which may only SHRINK. It differs from that
@@ -67,6 +92,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -171,10 +197,14 @@ SCAN_DIRS = ("crates", "bindings", "docs")
 
 # A bare-word match may not touch one of these characters on either side —
 # each one marks the word as part of an identifier rather than prose. An
-# alphanumeric neighbour is checked separately in ``is_bare`` (it marks a
-# longer identifier or plural, e.g. ``libpurrdf``/``purrdfs``, and cannot be
+# ASCII-alphanumeric neighbour is checked separately in ``is_bare`` (it marks
+# a longer identifier or plural, e.g. ``libpurrdf``/``purrdfs``, and cannot be
 # enumerated as a fixed character set).
 _ADJACENT_IDENTIFIER_CHARS = frozenset("-_:/.`")
+
+# Where a rendered book tree's files live in the source tree, for register
+# lookups in ``--rendered-tree`` mode.
+RENDERED_SOURCE_PREFIX = "docs/book/src/"
 
 BRAND_RE = re.compile(r"purrdf")
 
@@ -378,26 +408,46 @@ def find_inline_code_spans(line: str) -> list[tuple[int, int]]:
     return spans
 
 
+def is_identifier_char(c: str) -> bool:
+    """Whether ``c`` can continue an identifier: ASCII letters and digits only.
+
+    Not ``str.isalnum``. That predicate is Unicode-aware — ``'本'.isalnum()`` is
+    ``True`` — so a bare ``purrdf`` glued to CJK prose (``本purrdf项目``) read
+    as an identifier fragment and passed silently, while ``本 PurRDF 项目``
+    one space away was scanned. Every identifier this repository mints (crate
+    names, module paths, the binary, package names) is ASCII, so ASCII is the
+    exact boundary: a non-ASCII neighbour is prose.
+    """
+    return c.isascii() and c.isalnum()
+
+
 def is_bare(text: str, start: int, end: int) -> bool:
     """Whether ``text[start:end]`` (a ``purrdf`` match) is a bare prose word.
 
     Not bare — i.e. an identifier fragment, not prose — if a ``-``, ``_``,
     ``:``, ``/``, ``.``, or backtick sits immediately before or after it, or if
-    an alphanumeric character does: that shape is a longer identifier
-    (``libpurrdf``) or a plural/suffixed form (``purrdfs``), not the bare word.
+    an ASCII-alphanumeric character does (see ``is_identifier_char``): that
+    shape is a longer identifier (``libpurrdf``) or a plural/suffixed form
+    (``purrdfs``), not the bare word. A CJK neighbour is prose, so
+    ``本purrdf项目`` IS bare.
     """
     before = text[start - 1] if start > 0 else " "
     after = text[end] if end < len(text) else " "
-    if before in _ADJACENT_IDENTIFIER_CHARS or before.isalnum():
+    if before in _ADJACENT_IDENTIFIER_CHARS or is_identifier_char(before):
         return False
-    if after in _ADJACENT_IDENTIFIER_CHARS or after.isalnum():
+    if after in _ADJACENT_IDENTIFIER_CHARS or is_identifier_char(after):
         return False
     return True
 
 
 def scan_rust(path: Path) -> list[tuple[int, int, str]]:
     """Return ``(line, col, snippet)`` bare-``purrdf`` hits in a Rust file."""
-    src = path.read_text(encoding="utf-8")
+    return scan_rust_text(path.read_text(encoding="utf-8"))
+
+
+def scan_rust_text(src: str) -> list[tuple[int, int, str]]:
+    """[`scan_rust`] over TEXT — what the self-test calls, so a case is
+    measured against the scanner that ships rather than a copy of it."""
     hits: list[tuple[int, int, str]] = []
     for start_line, start_col, text in rust_comments(src):
         for m in BRAND_RE.finditer(text):
@@ -416,7 +466,11 @@ def scan_rust(path: Path) -> list[tuple[int, int, str]]:
 
 def scan_markdown(path: Path) -> list[tuple[int, int, str]]:
     """Return ``(line, col, snippet)`` bare-``purrdf`` hits in a Markdown file."""
-    src = path.read_text(encoding="utf-8")
+    return scan_markdown_text(path.read_text(encoding="utf-8"))
+
+
+def scan_markdown_text(src: str) -> list[tuple[int, int, str]]:
+    """[`scan_markdown`] over TEXT — see [`scan_rust_text`]."""
     hits: list[tuple[int, int, str]] = []
 
     in_fence = False
@@ -440,7 +494,151 @@ def scan_markdown(path: Path) -> list[tuple[int, int, str]]:
     return hits
 
 
-def main() -> int:
+# ── This gate's own falsifiability ────────────────────────────────────────────
+#
+# ``(what, suffix, text, expected hit count)``. Every case is scanned by the
+# same function the tree scan uses. The CJK pairs are the point: a tightening
+# is a refusal, and a refusal is a claim — so the glued shape that must now be
+# FLAGGED sits beside the spaced, code-span and identifier neighbours that
+# must still PASS, and both halves are asserted on every run.
+_CASES: tuple[tuple[str, str, str, int], ...] = (
+    # Must be flagged: bare prose, with and without CJK neighbours.
+    ("bare 'purrdf' glued to CJK on both sides", ".md", "本purrdf项目\n", 1),
+    (
+        "bare 'purrdf' glued to CJK, full-width comma after",
+        ".md",
+        "本工具包名为purrdf，用于处理RDF。\n",
+        1,
+    ),
+    ("bare 'purrdf' before full-width punctuation", ".md", "purrdf。它是一个工具包。\n", 1),
+    ("bare 'purrdf' in English prose", ".md", "the purrdf toolkit\n", 1),
+    ("bare 'purrdf' glued to CJK in a Rust comment", ".rs", "// 本purrdf项目\nfn f() {}\n", 1),
+    ("bare 'purrdf' glued to CJK in a Rust doc comment", ".rs", "/// 本purrdf项目\nfn f() {}\n", 1),
+    # Must pass: the capitalised brand, code spans, identifiers, fences.
+    ("the brand, house typography (half-width spaces)", ".md", "本 PurRDF 项目\n", 0),
+    ("the brand glued to CJK", ".md", "PurRDF工具包支持SPARQL。\n", 0),
+    ("the facade crate in a code span beside CJK", ".md", "`purrdf` 门面 crate\n", 0),
+    ("a crate name beside CJK", ".md", "purrdf-core 是内核\n", 0),
+    ("a longer identifier and a plural", ".md", "libpurrdf and purrdfs\n", 0),
+    ("a Rust path and a module path", ".md", "purrdf::Dataset and purrdf_core\n", 0),
+    ("the crate name inside a fenced block", ".md", "```\npurrdf\n```\n", 0),
+    ("a string literal in Rust is not a comment", ".rs", 'const N: &str = "purrdf";\n', 0),
+)
+
+
+def self_test(report: bool) -> list[str]:
+    """Every case the scanners answer wrongly. An empty list is the only pass."""
+    problems: list[str] = []
+    for what, suffix, text, expected in _CASES:
+        hits = scan_rust_text(text) if suffix == ".rs" else scan_markdown_text(text)
+        ok = len(hits) == expected
+        if report:
+            verdict = "flagged" if hits else "passes "
+            print(f"  {'ok' if ok else 'WRONG':5}  {verdict}  {suffix}: {what}")
+        if ok:
+            continue
+        if expected:
+            problems.append(
+                f"  • {suffix}: {what} is NOT flagged — exactly the bare prose this "
+                "gate exists to reject"
+            )
+        else:
+            problems.append(
+                f"  • {suffix}: {what} is FLAGGED ({hits}) — a lint that fires on an "
+                "identifier or the brand itself is a lint that gets switched off"
+            )
+    return problems
+
+
+def iter_rendered_paths(tree: Path) -> Iterator[Path]:
+    """Every ``.md`` under a rendered book tree, in a deterministic order."""
+    yield from sorted(p for p in tree.rglob("*.md") if p.is_file())
+
+
+def scan_rendered_tree(tree: Path) -> int:
+    """Scan a rendered book tree (see the module doc). Returns the exit code.
+
+    Every hit is reported. A file is spared only up to the count its SOURCE
+    page carries in ``PRE_EXISTING_BRAND_CASING`` — a ceiling, since a
+    translation that drops a bare mention improved on its source.
+    """
+    registered_counts = dict(PRE_EXISTING_BRAND_CASING)
+    offenders: list[tuple[str, int, int, str]] = []
+    scanned = 0
+    for path in iter_rendered_paths(tree):
+        scanned += 1
+        rel = path.relative_to(tree).as_posix()
+        found = scan_markdown(path)
+        if not found:
+            continue
+        ceiling = registered_counts.get(RENDERED_SOURCE_PREFIX + rel, 0)
+        if len(found) <= ceiling:
+            continue
+        for line, col, snippet in found:
+            offenders.append((rel, line, col, snippet))
+    if scanned == 0:
+        print(
+            f"check-brand-casing: no .md file under {tree} — a rendered tree "
+            "with nothing in it is a vacuous pass, not a clean one",
+            file=sys.stderr,
+        )
+        return 1
+    for rel, line, col, snippet in offenders:
+        print(
+            f"{tree / rel}:{line}:{col}: bare 'purrdf' in prose — use 'PurRDF' "
+            f"for the project/brand, or wrap `purrdf` in backticks if it names "
+            f"the facade crate"
+        )
+        print(f"    {snippet}")
+    if offenders:
+        return 1
+    print(
+        f"OK: no bare 'purrdf' prose in the rendered tree ({scanned} page(s) "
+        f"scanned under {tree})."
+    )
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    rendered: Path | None = None
+    alone = False
+    args = list(argv[1:])
+    while args:
+        arg = args.pop(0)
+        if arg == "--self-test":
+            alone = True
+        elif arg == "--rendered-tree" and args:
+            rendered = Path(args.pop(0))
+        else:
+            print(
+                f"usage: {Path(argv[0]).name} [--self-test] [--rendered-tree DIR]",
+                file=sys.stderr,
+            )
+            return 2
+
+    if alone:
+        print("check-brand-casing: proving the bare-word rule bites, and only bites —")
+    # BEFORE the scan, on every run (pure text over a dozen strings): a gate
+    # that cannot see the shape it rejects prints OK over exactly that shape.
+    blind = self_test(report=alone)
+    if blind:
+        print(
+            "check-brand-casing: this gate answers its own cases wrongly:\n"
+            + "\n".join(blind)
+            + "\n\nFix the scan, not the case.",
+            file=sys.stderr,
+        )
+        return 1
+    if alone:
+        print(f"OK: all {len(_CASES)} shapes are flagged or spared as written.")
+        return 0
+
+    if rendered is not None:
+        if not rendered.is_dir():
+            print(f"check-brand-casing: {rendered} is not a directory", file=sys.stderr)
+            return 2
+        return scan_rendered_tree(rendered)
+
     root = repo_root()
     registered_counts = dict(PRE_EXISTING_BRAND_CASING)
 
@@ -499,4 +697,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))
