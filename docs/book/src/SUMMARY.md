@@ -57,3 +57,4 @@ SPDX-License-Identifier: CC-BY-4.0
 - [Conformance & Testing](project/conformance.md)
 - [Performance](project/performance.md)
 - [Versioning & Releases](project/releases.md)
+- [Diagnostic Code Reference](project/diagnostic-codes.md)
