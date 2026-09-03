@@ -15,7 +15,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 PurRDF 是一个从零实现、依赖极简的 [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/)
 引擎——解析器与序列化器、SPARQL、SHACL、ShEx、RDFC-1.0 规范化，以及 GTS 图传输
-容器——以 Rust 编写，并原样带入 Python、JavaScript 与 C。`purrdf` 包是这同一个引擎
+容器——以 Rust 编写，并原样带入 Python、JavaScript 与 C（GTS 容器可从 Python 与 C 访问；JavaScript 包并不
+暴露它）。`purrdf` 包是这同一个引擎
 的 Python 接口：在每种语言中都是同样的、字节级一致的语义，包括大多数现有库尚未承载
 的三元组项、具体化节点（reifier）与基础方向字面量。
 
@@ -560,22 +561,24 @@ pip install purrdf[rdflib]
 它被刻意做成独立分发包（从不打进主 `purrdf` wheel），正是为了让需要真实 rdflib 的环境
 直接不装它即可。
 
-## GTS 图传输与关系型导出
+## GTS 图传输与关系型行
 
 GTS 是 PurRDF 面向 RDF 1.2 图的单文件、内容寻址、仅追加的容器。从四元组构建一个，
-然后直接导出到关系型存储：
+然后把它读回为内存中的关系型行：
 
 ```python
 import purrdf
 
 gts_bytes = purrdf.gts_from_quads(my_nquads_bytes, format=purrdf.RdfFormat.N_QUADS)
 
-purrdf.gts_to_sqlite(gts_bytes, "graph.db")
-purrdf.gts_to_duckdb(gts_bytes, "graph.duckdb")
-files = purrdf.gts_to_parquet(gts_bytes, "out/")
+rows = purrdf.gts_relational_rows_from_bytes(gts_bytes)
+rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs"]
 ```
 
-同样的入口点也归组在 `purrdf.gts` 之下以便发现。
+`gts_relational_rows_from_bytes` 返回一个 `GtsRelationalRows` 字典，含五个行列表；把它们
+写入某个存储是调用方自己的步骤。`gts_to_sqlite`、`gts_to_duckdb` 与 `gts_to_parquet` 这
+三个名字已声明但**未实现**：每一个都抛出 `ValueError` 且不写出任何东西。同样的入口点也
+归组在 `purrdf.gts` 之下以便发现。
 
 ## 进一步了解
 

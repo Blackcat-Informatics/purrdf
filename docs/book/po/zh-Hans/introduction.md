@@ -15,7 +15,8 @@ zh-Hans 译稿（第一阶段）。与 docs/book/src/introduction.md 逐段对�
 
 **PurRDF** 是一个 [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) 工具包：图原语、
 编解码器、SPARQL、SHACL、ShEx、蕴涵与图传输，以 Rust 实现一次，并原样带入 Python、
-WebAssembly/JavaScript 与 C。每一个已发布的 crate 都能构建到 `wasm32-unknown-unknown`，
+WebAssembly/JavaScript 与 C，但有一处例外须先行说明：GTS 容器可从 Rust、CLI（作为输入
+格式）、Python 与 C 访问，而 wasm/JavaScript 包并不暴露它。每一个已发布的 crate 都能构建到 `wasm32-unknown-unknown`，
 因此在服务器上回答某条查询的引擎，也会在浏览器标签页中逐字节地给出同一答案。它由
 黑猫信息科技（Blackcat Informatics® Inc.）开发，以 MIT OR Apache-2.0 发布。
 
@@ -54,7 +55,9 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
   [编解码器与确定性](concepts/codecs.md)。每种语法都经由同一个 RFC 3986 层解析相对
   IRI（国际化资源标识符）引用，而作用域内没有基础 IRI 的相对引用是硬错误。参见
   [基础 IRI 与相对引用](concepts/base-iris.md)。
-- **规范化**——W3C RDFC-1.0，外加数据集 diff 与同构判定。参见
+- **规范化**——W3C RDFC-1.0，而在 RDF 1.2 构造之上，则是扁平形式（在 `rdf:reifies` 三元组
+  上运行 RDFC-1.0）或第一方的 `purrdf-rdfc12` profile 二者之一，以不同的名字区分——外加
+  数据集 diff 与同构判定。参见
   [规范化与 Diff](concepts/canonicalization.md)。
 - **投影与载体**——确定性的 LPG、CSVW、OBO Graphs、数据集描述与 Research Object（RO）投影，每一种
   都带有定位到具体位置的损失台账。参见
@@ -66,12 +69,13 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
   `UNFOLD`——并有一处明确陈述的分歧：PurRDF 允许 RDF 1.2 三元组项与带方向的语言标签
   字面量作为复合元素，这是一个词法超集，符合 SEP-0009 的读取器会将其判为格式错误）、
   调用方注册的聚合函数与属性函数（包括逐跳绑定遍历过程的路径见证（path witness））、带逐节点解释回执
-  的受调控执行，以及经由宿主注入的、携带逐服务上下文的解析器进行的 `SERVICE` 联邦
-  查询，全部由 W3C 一致性套件把关。参见 [SPARQL](sparql/querying.md)。
+  的受调控执行，以及一个 `SERVICE` 扩展点——一个宿主注入的、携带逐服务上下文的解析器；
+  不附带 HTTP 客户端，也不附带解析器，因此在每个随库发布的接口上 `SERVICE` 与 `LOAD`
+  都会按名称失败，除非写作 `SILENT`——全部由 W3C 一致性套件把关。参见 [SPARQL](sparql/querying.md)。
 - **核心之外的 SPARQL 扩展**——采用精确定点 BM25 的确定性全文检索
   （[全文检索](sparql/full-text.md)）、精确且无浮点的 GeoSPARQL 1.1
   （[GeoSPARQL](sparql/geosparql.md)），以及在 PURREMB 嵌入空间上的最近邻搜索
-  （[嵌入最近邻](sparql/embedding-knn.md)）——每一个都是扩展接缝（extension seam）的消费者，在调用方
+  （[嵌入最近邻](sparql/embedding-knn.md)）——每一个都是扩展点（extension seam）的消费者，在调用方
   提供的 IRI 之下注册。
 - **SHACL 与 ShEx**——两种形状语言的原生验证器；SHACL 引擎覆盖 Core、SHACL-SPARQL 与
   SHACL-AF，并与 SHACL 1.2 的节点表达式与规则分层草案对齐。参见
@@ -89,7 +93,7 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
 ## 一个引擎取代三个数据库
 
 需要带排名的文本检索、空间谓词或最近邻搜索的 RDF 项目，通常正是为了这三项工作而在
-三元组存储旁边运行一个 PostgreSQL。PurRDF 直接在已加载到内存的数据集上、通过求值器提供的、以调用方为键的扩展接缝，用 SPARQL
+三元组存储旁边运行一个 PostgreSQL。PurRDF 直接在已加载到内存的数据集上、通过求值器提供的、以调用方为键的扩展点，用 SPARQL
 回答全部三项——下面每个页面都以「它的接口取代了
 什么、止步于何处」开篇。
 
@@ -97,12 +101,12 @@ PurRDF 之所以存在，是为了让一张图在任何地方都是**同一张�
 | --- | --- | --- | --- |
 | 带排名的全文检索 | PostgreSQL `tsvector`/`tsquery` | [全文检索](sparql/full-text.md)：`purrdf-text`，一个覆盖 RDF 1.2 字面量的倒排索引，以精确的 `i128` 定点数做 BM25 排名，crate 内没有浮点。 | 是 BM25 排名，不是 Lucene：没有词干提取，没有停用词表，没有查询方言；一个在冻结数据集上一次性构建的内存索引。 |
 | 空间谓词 | PostGIS | [GeoSPARQL](sparql/geosparql.md)：`purrdf-geo`，GeoSPARQL 1.1，WKT 与 GeoJSON 解析为精确有理数，Simple Features、Egenhofer 与 RCC8 的每一种关系都在精确的 DE-9IM 上判定；没有 GEOS，没有 PROJ。 | 是矢量几何上的拓扑谓词、访问器与可精确计算的度量，不是 PostGIS：没有 CRS 变换，没有椭球大地测量，没有缓冲区，没有凹包，没有叠加集合运算，没有栅格——每个未实现的函数都按名称硬错误（`geof:convexHull` 已实现）。 |
-| 向量相似度 | pgvector | [嵌入最近邻](sparql/embedding-knn.md)：在 PURREMB 嵌入空间上的精确 top-k，binary64 且累加顺序固定。 | 由调用方提供的 `KnnGuard` 限定的精确扫描，三种度量，没有近似索引；PurRDF 不计算嵌入——向量来自调用方产出的工件。 |
+| 向量相似度 | pgvector | [嵌入最近邻](sparql/embedding-knn.md)：在 PURREMB 嵌入空间上的精确 top-k，binary64 且累加顺序固定。 | 由调用方提供的 `KnnGuard` 限定的精确扫描，三种度量，没有近似索引；PurRDF 不计算嵌入——向量来自由调用方填充的 PURREMB 工件，该工件由 PurRDF 自身写出（`EmbeddingBuilder`、`EmbeddingStreamWriter`；仅限 Rust）并以失败即关闭（fail-closed）的方式打开。 |
 
 三者在每个目标上都是其输入的纯函数——定点数、精确有理数，或固定顺序的 binary64，
 外加规范的并列判定——而这一声称是被执行而非被论证的：文本与 k 近邻的确定性测试在
 原生与 `wasm32-unknown-unknown` 上运行同一份测试体，`make geo-determinism` 则逐字节
-比较两个目标。它们是 Rust 宿主上的接缝：宿主在自己的 IRI 之下注册一个索引或一个空间，
+比较两个目标。它们是 Rust 宿主上的扩展点：宿主在自己的 IRI 之下注册一个索引或一个空间，
 而该宿主本身也可以编译到 wasm32。已发布的 npm 包与 Python wheel 尚未暴露这三种关系。
 
 ## 第一天就值得知道的两条设计规则

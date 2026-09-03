@@ -64,9 +64,10 @@ assert_eq!(ds.quad_count(), 1);
 - **`DatasetView`**——每个引擎据以求值的静态读取 trait。
 - **结构化诊断**——带源位置的、有类型的 `RdfDiagnostic`（刻意不含 SARIF；SARIF 的
   边界在 [`purrdf-validate`](https://docs.rs/purrdf-validate)）。
-- **RDFC-1.0** 规范化、数据集 diff 与同构判定——参见
+- **规范化**（RDF 1.1 子集上的 RDFC-1.0；具体化节点与注解之上的 `purrdf-rdfc12`
+  profile）、数据集 diff 与同构判定——参见
   [规范化与 Diff](canonicalization.md)。
-- **存储与引擎接缝（seam）**——狭窄的解析器入口、序列化器出口以及 `SparqlEngine` trait，由
+- **存储与引擎扩展点（seam）**——狭窄的解析器入口、序列化器出口以及 `SparqlEngine` trait，由
   兄弟 crate 中的适配器实现。
 - **溯源与损失台账**——一个通用的溯源附件（sidecar）与机器可读的 RDF↔GTS 损失矩阵，
   外加原生的 FnO 与 SSSOM 编解码器

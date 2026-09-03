@@ -138,14 +138,14 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 | `native-sparql-query-parse` | 查询文本在 SPARQL 1.1/1.2 语法（含强制的 `VERSION` 声明）下无法解析。 | 在报告的位置修正查询。 |
 | `native-sparql-update-parse` | 更新请求无法解析。 | 在报告的位置修正更新语句。 |
 | `native-sparql-query-explain` | `--explain` 下的求值失败；求值器的错误在消息中给出。 | 处理底层的求值错误。 |
-| `native-sparql-property-function` | 属性函数接缝（seam）拒绝了该查询：已声明命名空间下的某谓词没有注册、调用位置的元数与关系不匹配、没有任何全序能服务某条链，或者一个已准备的计划正在与其准备时不同的注册表下求值。 | 注册该关系、更正元数，或在同一注册表下准备并求值。 |
-| `native-sparql-aggregate-function` | 自定义聚合接缝拒绝了该查询：`AGG(<iri>, …)` 指名了未注册的聚合，或者一个已准备的计划正在不同的聚合注册表下求值。 | 注册该聚合，或在同一注册表下准备并求值。 |
+| `native-sparql-property-function` | 属性函数扩展点（seam）拒绝了该查询：已声明命名空间下的某谓词没有注册、调用位置的元数与关系不匹配、没有任何全序能服务某条链，或者一个已准备的计划正在与其准备时不同的注册表下求值。 | 注册该关系、更正元数，或在同一注册表下准备并求值。 |
+| `native-sparql-aggregate-function` | 自定义聚合扩展点拒绝了该查询：`AGG(<iri>, …)` 指名了未注册的聚合，或者一个已准备的计划正在不同的聚合注册表下求值。 | 注册该聚合，或在同一注册表下准备并求值。 |
 | `native-sparql-custom-function` | 某函数或聚合 IRI 未解析到任何已注册的自定义函数、原生函数或 XSD 构造器。 | 在该 IRI 下注册函数，或使用原生函数。 |
 | `native-sparql-quoted-triple-term-variable` | 在基本图模式或属性路径中，变量占据了引用三元组项的某个组成部分；结构性的三元组项匹配不在范围内。 | 把三元组项作为整体绑定，或经由具体化节点匹配其组成部分。 |
 | `native-sparql-heldin-unconfigured` | 调用 `heldIn` 时没有调用方提供的立场谓词（standpoint predicate）配置。 | 使用 `heldIn` 之前先配置立场谓词。 |
 | `native-sparql-graph-pattern-depth-exceeded` | 手工构造的图模式嵌套深度超过了解析器的安全上限。 | 展平该模式。 |
 | `native-sparql-bnode-mint-prefix` | 选项中提供的空节点生成前缀无效。 | 提供合法的前缀。 |
-| `native-sparql-load-no-resolver` | 请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主接缝。 | 注入一个解析器，或去掉 `LOAD`。 |
+| `native-sparql-load-no-resolver` | 请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主扩展点。 | 注入一个解析器，或去掉 `LOAD`。 |
 | `native-sparql-update-bad-destination` | `ADD`/`MOVE`/`COPY`/`LOAD` 的目标是 `NAMED` 或 `ALL`；目标必须是 `DEFAULT` 或单个命名 `GRAPH`。 | 指名单个目标图。 |
 | `native-sparql-subst-iri` | 某代换值不是合法的 IRI。 | 提供合法的 IRI。 |
 | `native-sparql-subst-triple-predicate` | 某代换进来的引用三元组的谓词不是 IRI。 | 使用 IRI 谓词。 |

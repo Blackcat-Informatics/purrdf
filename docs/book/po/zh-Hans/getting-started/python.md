@@ -102,15 +102,18 @@ pip install purrdf[rdflib]
 兼容层在 CI 中以 rdflib 7.6 自带的、随库固化（vendored）的测试套件加上第一方的差分
 对等性测试套件（parity suite）把关——细节以及已知的、已入台账的分歧见 [rdflib 兼容](../interop/rdflib.md)。
 
-## GTS 关系型导出
+## GTS 关系型行
 
-Python 包还为分析流水线附带了 GTS 的关系型导出：
+Python 包把一个 [GTS 容器](../gts.md) 读回为内存中的关系型行：
 
 ```python
-from purrdf import gts_to_sqlite, gts_to_duckdb, gts_to_parquet
+from purrdf import gts_relational_rows_from_bytes
+
+rows = gts_relational_rows_from_bytes(gts_bytes)  # terms, quads, reifiers, annotations, blobs
 ```
 
-它们把一个 [GTS 容器](../gts.md) 投影为 SQLite、DuckDB 或 Parquet 表。
+把这些行写入某个存储是调用方自己的步骤。`gts_to_sqlite`、`gts_to_duckdb` 与
+`gts_to_parquet` 这三个名字已声明但未实现：每一个都抛出 `ValueError` 且不写出任何东西。
 
 ## 图、表格与 Research Object（RO）归档
 

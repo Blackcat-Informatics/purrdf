@@ -46,7 +46,7 @@ let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
 ## Open Knowledge Format 包
 
 原生的 OKF 编解码器把由调用方指定 profile 的 RDF 1.2 数据集映射为面向智能体的、带
-YAML frontmatter 的 Markdown 文件，并经由 RDF 事件接缝（seam）把它们提升回来。OKF 是一个
+YAML frontmatter 的 Markdown 文件，并经由 RDF 事件扩展点（seam）把它们提升回来。OKF 是一个
 内存中的包（bundle）API，而不是又一种媒体类型：文件如何存放由调用方决定，因此同一份
 代码保持确定性且 wasm 干净。
 
@@ -80,8 +80,8 @@ SARIF 2.1.0（参见 [SHACL](../validation/shacl.md#sarif-output)）。
 RDF 1.2 的陈述级数据（三元组项、具体化节点绑定、注解）在每一次具 star 能力的往返中
 都得以保留。序列化到不具 star 能力的投影时，这一层会被*显式*丢弃：实际丢弃的数量
 交给机器可读的损失台账
-（[`generated/rdf-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/rdf-loss-matrix.json)），
-而不是凭空消失。同一纪律也适用于 SPARQL 结果边界（[结果格式](../sparql/results.md)）
+（[`generated/transcode-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/transcode-loss-matrix.json)，
+代码 `rdf12-star-unrepresentable`），而不是凭空消失。同一纪律也适用于 SPARQL 结果边界（[结果格式](../sparql/results.md)）
 与 RDF↔GTS 边界。
 
 ## 简洁打包编解码器
@@ -175,4 +175,4 @@ N-Quads、N-Triples、RDF/XML、TriG 与 Turtle 共 264/264 个往返用例。�
 - [规范化与 Diff](canonicalization.md)——当需要的是*规范*序列化而不只是确定性
   序列化时。
 - [驻留数据集 IR](interned-dataset.md)——文本编解码器解析出的目标，以及 pack
-  编解码器与 `RdfDataset` 一同实现的 `DatasetView` 读取接缝。
+  编解码器与 `RdfDataset` 一同实现的 `DatasetView` 读取扩展点。
