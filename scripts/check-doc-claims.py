@@ -4186,6 +4186,24 @@ def outstanding_bootstrap_claim(crates: list[str], ledger: list[str]) -> list[st
     text = _read(_RELEASE)
     rel = _RELEASE.relative_to(_REPO)
     heading = re.search(r"^### Outstanding bootstrap: (.+)$", text, re.MULTILINE)
+    if not ledger:
+        # The empty-ledger state (every crate bootstrapped, 2026-09-03): the doc
+        # must say so in the completed form, and must NOT still carry an
+        # outstanding-bootstrap section naming crates the registry already has.
+        problems: list[str] = []
+        if heading:
+            problems.append(
+                f"{rel}: PURRDF_UNBOOTSTRAPPED_CRATES is empty, but an "
+                f"`### Outstanding bootstrap:` section still names "
+                f"{heading.group(1)} — replace it with the completed-bootstrap "
+                f"section"
+            )
+        if "### Bootstrap: complete (ledger empty)" not in text:
+            problems.append(
+                f"{rel}: PURRDF_UNBOOTSTRAPPED_CRATES is empty but the doc has "
+                f"no `### Bootstrap: complete (ledger empty)` section stating it"
+            )
+        return problems
     if not heading:
         return [
             f"{rel}: no `### Outstanding bootstrap:` heading — the section was "
