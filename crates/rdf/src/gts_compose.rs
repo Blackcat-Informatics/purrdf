@@ -10,7 +10,7 @@
 //! content-addressed blobs — without pulling pyo3.
 //!
 //! [`SnapshotBuilder`] interns terms (append-order, scope-aware blank nodes),
-//! content-sorts them (`(kind, value, datatype-IRI, lang)`, IRIs first), and
+//! content-sorts them (`(kind, value, datatype-IRI, lang, direction)`, IRIs first), and
 //! [`emit_gts`] authors the single `dist`-profile `snapshot` frame preceded by the
 //! blob frames (sorted by `(rep, decoded-bytes)`). All CBOR encoding,
 //! canonicalization, frame-id chaining, and signing is delegated to `purrdf-gts`.
@@ -66,6 +66,13 @@ struct TermRow {
     /// The datatype IRI string for a typed literal (interned later as a term).
     datatype: Option<String>,
     lang: Option<String>,
+    /// RDF 1.2 literal base direction (`"ltr"` / `"rtl"`).
+    ///
+    /// Part of the term's IDENTITY, not decoration: `"Cat"@en--ltr` and
+    /// `"Cat"@en--rtl` are different terms, so this participates in both the
+    /// intern key and the content-sort key. Omitting it from the key merged them
+    /// into one term and silently rewrote the graph.
+    direction: Option<String>,
 }
 
 /// An accumulating snapshot builder mirroring `gts_producer._Builder`.
@@ -76,9 +83,9 @@ struct TermRow {
 #[derive(Debug, Default)]
 pub struct SnapshotBuilder {
     terms: Vec<TermRow>,
-    /// Intern index keyed by `(kind, value, datatype-or-empty, lang-or-empty)`,
-    /// matching the Python `_Interner` keys exactly.
-    index: HashMap<(u8, String, String, String), usize>,
+    /// Intern index keyed by
+    /// `(kind, value, datatype-or-empty, lang-or-empty, direction-or-empty)`.
+    index: HashMap<(u8, String, String, String, String), usize>,
     /// Blank-node intern index keyed by `(scope, label)` (C0.2): two equal
     /// labels in different ingest scopes stay distinct terms.
     bnode_index: HashMap<(Option<String>, String), usize>,
@@ -99,17 +106,19 @@ impl SnapshotBuilder {
         value: &str,
         datatype: Option<&str>,
         lang: Option<&str>,
-    ) -> (u8, String, String, String) {
+        direction: Option<&str>,
+    ) -> (u8, String, String, String, String) {
         (
             kind,
             value.to_owned(),
             datatype.unwrap_or("").to_owned(),
             lang.unwrap_or("").to_owned(),
+            direction.unwrap_or("").to_owned(),
         )
     }
 
     fn intern_iri(&mut self, iri: &str) -> usize {
-        let key = Self::intern_key(TermKind::Iri as u8, iri, None, None);
+        let key = Self::intern_key(TermKind::Iri as u8, iri, None, None, None);
         if let Some(&id) = self.index.get(&key) {
             return id;
         }
@@ -119,6 +128,7 @@ impl SnapshotBuilder {
             value: iri.to_owned(),
             datatype: None,
             lang: None,
+            direction: None,
         });
         self.index.insert(key, id);
         id
@@ -141,18 +151,25 @@ impl SnapshotBuilder {
             value,
             datatype: None,
             lang: None,
+            direction: None,
         });
         self.bnode_index.insert(bkey, id);
         id
     }
 
-    fn intern_literal(&mut self, lex: &str, datatype: Option<&str>, lang: Option<&str>) -> usize {
+    fn intern_literal(
+        &mut self,
+        lex: &str,
+        datatype: Option<&str>,
+        lang: Option<&str>,
+        direction: Option<&str>,
+    ) -> usize {
         // Ensure the datatype IRI is interned (IRIs sort before literals, so the
         // datatype id always precedes the literal — §7.5, preserved here).
         if let Some(dt) = datatype {
             self.intern_iri(dt);
         }
-        let key = Self::intern_key(TermKind::Literal as u8, lex, datatype, lang);
+        let key = Self::intern_key(TermKind::Literal as u8, lex, datatype, lang, direction);
         if let Some(&id) = self.index.get(&key) {
             return id;
         }
@@ -162,6 +179,7 @@ impl SnapshotBuilder {
             value: lex.to_owned(),
             datatype: datatype.map(str::to_owned),
             lang: lang.map(str::to_owned),
+            direction: direction.map(str::to_owned),
         });
         self.index.insert(key, id);
         id
@@ -287,13 +305,22 @@ impl SnapshotBuilder {
             crate::RdfTerm::BlankNode(label) => Some(self.intern_bnode(label, scope)),
             crate::RdfTerm::Literal(literal) => {
                 if let Some(lang) = &literal.language {
-                    Some(self.intern_literal(&literal.lexical_form, None, Some(lang)))
+                    // Base direction rides with the language tag — it exists only on
+                    // a language-tagged literal — and is carried here rather than
+                    // dropped, which is what merged `@en--ltr` with `@en--rtl`.
+                    let direction = literal.direction.map(|d| d.as_str().to_owned());
+                    Some(self.intern_literal(
+                        &literal.lexical_form,
+                        None,
+                        Some(lang),
+                        direction.as_deref(),
+                    ))
                 } else {
                     let datatype = match literal.datatype.as_deref() {
                         Some(dt) if dt == XSD_STRING => None,
                         other => other,
                     };
-                    Some(self.intern_literal(&literal.lexical_form, datatype, None))
+                    Some(self.intern_literal(&literal.lexical_form, datatype, None, None))
                 }
             }
             crate::RdfTerm::Triple(_) => None,
@@ -321,7 +348,8 @@ impl SnapshotBuilder {
             .map(|&old| {
                 let row = &self.terms[old];
                 let datatype = row.datatype.as_ref().map(|dt| {
-                    let old_dt = self.index[&Self::intern_key(TermKind::Iri as u8, dt, None, None)];
+                    let old_dt =
+                        self.index[&Self::intern_key(TermKind::Iri as u8, dt, None, None, None)];
                     remap[old_dt]
                 });
                 Term {
@@ -329,7 +357,7 @@ impl SnapshotBuilder {
                     value: Some(row.value.clone()),
                     datatype,
                     lang: row.lang.clone(),
-                    direction: None,
+                    direction: row.direction.clone(),
                     reifier: None,
                     triple: None,
                 }
@@ -372,7 +400,7 @@ impl SnapshotBuilder {
         (wire_terms, quads, reifies, annot)
     }
 
-    fn sort_key(&self, tid: usize) -> (u8, String, String, String) {
+    fn sort_key(&self, tid: usize) -> (u8, String, String, String, String) {
         let t = &self.terms[tid];
         let dt = t.datatype.clone().unwrap_or_default();
         (
@@ -380,6 +408,7 @@ impl SnapshotBuilder {
             t.value.clone(),
             dt,
             t.lang.clone().unwrap_or_default(),
+            t.direction.clone().unwrap_or_default(),
         )
     }
 
@@ -713,6 +742,62 @@ mod tests {
 
     fn ingest_nq(nq: &str) -> SnapshotBuilder {
         ingest(nq, "application/n-quads")
+    }
+
+    /// RDF 1.2 base direction is part of a literal's IDENTITY through the composer.
+    ///
+    /// The intern key was `(kind, value, datatype, lang)` with no direction, so
+    /// `"Cat"@en--ltr` and `"Cat"@en--rtl` hashed to one slot and MERGED into a
+    /// single term — three distinct literals became one and every quad was
+    /// repointed at it. That is a conflation, not a dropped column: the emitted
+    /// graph was a different graph.
+    ///
+    /// `gts_write`'s path already carried direction and had a test for it
+    /// (`gts_write::tests`), which is precisely how the two write paths came to
+    /// disagree without anything noticing — only one of them was asked.
+    #[test]
+    fn base_direction_separates_otherwise_identical_literals() {
+        let b = ingest_nq(
+            "<http://example.org/c> <http://example.org/p> \"Cat\"@en--ltr .\n\
+             <http://example.org/c> <http://example.org/p> \"Cat\"@en--rtl .\n\
+             <http://example.org/c> <http://example.org/q> \"Cat\"@en .\n",
+        );
+        let (terms, quads, _reifies, _annot) = b.canonical_tables();
+
+        let mut literals: Vec<(Option<&str>, Option<&str>)> = terms
+            .iter()
+            .filter(|t| t.kind == TermKind::Literal)
+            .map(|t| (t.lang.as_deref(), t.direction.as_deref()))
+            .collect();
+        literals.sort_unstable();
+        assert_eq!(
+            literals,
+            vec![
+                (Some("en"), None),
+                (Some("en"), Some("ltr")),
+                (Some("en"), Some("rtl")),
+            ],
+            "three literals differing only in base direction must stay three terms"
+        );
+        assert_eq!(quads.len(), 3, "and each quad keeps its own object");
+
+        // THE NEIGHBOURING CASE: interning must still COLLAPSE genuine duplicates.
+        // A fix that made every literal unique would pass the assertion above and
+        // silently stop deduplicating, which is the mirror-image defect.
+        let dup = ingest_nq(
+            "<http://example.org/c> <http://example.org/p> \"Cat\"@en--ltr .\n\
+             <http://example.org/d> <http://example.org/p> \"Cat\"@en--ltr .\n",
+        );
+        let (dup_terms, dup_quads, _r, _a) = dup.canonical_tables();
+        assert_eq!(
+            dup_terms
+                .iter()
+                .filter(|t| t.kind == TermKind::Literal)
+                .count(),
+            1,
+            "two occurrences of the SAME directional literal are still one term"
+        );
+        assert_eq!(dup_quads.len(), 2);
     }
 
     /// Re-render a read-back GTS container [`Graph`] to N-Quads through the native
