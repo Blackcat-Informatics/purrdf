@@ -38,6 +38,18 @@ fn run(args: &[&str]) -> Output {
 }
 
 /// Run `purrdf` with `args`, writing `stdin_bytes` to its standard input.
+///
+/// A `BrokenPipe` from that write is EXPECTED, not a failure. Several cases here
+/// pipe data to an invocation that is refused at the command line — a `-` stdin
+/// input with no `--from`, say — and those refusals are decided BEFORE stdin is
+/// read, which is the whole point: a malformed request should not require reading
+/// the document first. So the child can exit and close the pipe while the parent
+/// is still writing, and whether it does is a race between two processes.
+///
+/// Panicking on that turned a correct refusal into an intermittently red gate.
+/// Every other write error still panics, and the assertions on exit code, stdout
+/// and stderr are untouched — a child that exited early is judged by what it
+/// returned, exactly as before.
 fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
     let mut child = purrdf()
         .args(args)
@@ -46,12 +58,16 @@ fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn purrdf");
-    child
+    match child
         .stdin
         .take()
         .expect("piped stdin")
         .write_all(stdin_bytes.as_bytes())
-        .expect("write stdin");
+    {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("write stdin: {error:?}"),
+    }
     child.wait_with_output().expect("wait for purrdf")
 }
 
