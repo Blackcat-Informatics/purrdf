@@ -124,6 +124,28 @@ sibling). All three carry a Trusted Publisher entry and the
 directions, and it gains an entry again only when a future release adds a
 brand-new crate.
 
+#### The `0.0.0-bootstrap` placeholders
+
+The two placeholder versions are an empty lib published under deadline purely to
+create the crate record so Trusted Publishing could be enabled on it. Nothing
+resolves to them — `1.0.0` is `max_version` for both — but they stay in the
+version list forever unless yanked, where a reader meets a `0.0.0` release of a
+crate that never had one.
+
+Yank them:
+
+```sh
+cargo yank --version 0.0.0-bootstrap purrdf-text
+cargo yank --version 0.0.0-bootstrap purrdf-geo
+```
+
+Yanking is reversible (`cargo yank --undo`) and hides the version from
+resolution without deleting it. Note the permission asymmetry: both crates are
+locked to Trusted Publishing for **publish**, but **yank is a separate scope** —
+this needs an API token that carries it, not the release workflow's trusted
+session. Verify the token can yank before assuming it; the release lane cannot
+do this step.
+
 
 ## Changelog and release notes
 

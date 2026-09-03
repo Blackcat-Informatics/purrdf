@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -260,9 +260,55 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
+	elif ! command -v rustup >/dev/null 2>&1; then \
+		echo "SKIP: rustup is not on PATH, so the wasm32 target cannot be detected OR installed."; \
+		echo "      This is NOT the same as 'target not installed': with no rustup, rust-toolchain.toml's"; \
+		echo "      pinned toolchain is also unenforced locally, and this gate is silently inert."; \
+		echo "      Run 'make doctor' for the full list of pins this machine does not enforce."; \
 	else \
 		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 	fi
+
+doctor: ## Report which build pins this machine actually enforces (never gates; run it when a gate SKIPs).
+	@# Every "SKIP" a gate prints is a claim that something was not checked, and the
+	@# reasons are not interchangeable: a missing TARGET is one command away, while a
+	@# missing `rustup` means `rust-toolchain.toml` is inert and the toolchain running
+	@# your gate is whatever `cargo` happens to resolve to. Both used to print the same
+	@# line, because `rustup ... 2>/dev/null` swallows "command not found" and lands in
+	@# the same branch as "target absent". This target states the difference out loud.
+	@echo "PurRDF environment doctor — what this machine enforces"
+	@echo
+	@printf 'toolchain pin (rust-toolchain.toml): '
+	@grep -oE 'channel = "[^"]+"' rust-toolchain.toml 2>/dev/null | head -1 | cut -d'"' -f2 || echo "(none declared)"
+	@printf 'rustup:                              '
+	@if command -v rustup >/dev/null 2>&1; then \
+		rustup --version 2>/dev/null | head -1; \
+	else \
+		echo "ABSENT — rust-toolchain.toml is NOT enforced on this machine."; \
+		echo '                                     `cargo`/`rustc` resolve to whatever is on PATH, so the'; \
+		echo "                                     dated-nightly pin is honoured only in CI, and \`make wasm\`"; \
+		echo "                                     cannot detect or install the wasm32 target (it SKIPs)."; \
+	fi
+	@printf 'active rustc:                        '
+	@rustc --version 2>/dev/null || echo "ABSENT"
+	@printf 'wasm32-unknown-unknown target:       '
+	@if ! command -v rustup >/dev/null 2>&1; then \
+		echo "UNKNOWN (no rustup to ask) — \`make wasm\` will SKIP"; \
+	elif rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
+		echo "installed — \`make wasm\` runs for real"; \
+	else \
+		echo "NOT installed — \`make wasm\` SKIPs; 'rustup target add wasm32-unknown-unknown'"; \
+	fi
+	@printf 'wasm-bindgen-test-runner:            '
+	@command -v wasm-bindgen-test-runner >/dev/null 2>&1 \
+		&& echo "on PATH — \`make wasm-test\` runs for real" \
+		|| echo "absent — \`make wasm-test\` SKIPs"
+	@printf 'node:                                '
+	@command -v node >/dev/null 2>&1 && node --version || echo "absent — the wasm test harness SKIPs"
+	@printf 'cargo build directory:               '
+	@echo "$(CARGO_TARGET_DIR)"
+	@echo
+	@echo "A SKIP is not a pass. In CI every line above is a hard failure instead."
 
 geo-determinism: ## Prove purrdf-geo's native and wasm32 answers are byte-identical (own gate, NOT part of `check`).
 	bash scripts/check-geo-determinism.sh
@@ -283,7 +329,11 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# wasm lane already installs, so there is no second version to keep in step.
 	@if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		if [ -n "$${CI:-}" ]; then echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; fi; \
-		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
+		if ! command -v rustup >/dev/null 2>&1; then \
+			echo "SKIP: rustup is not on PATH — the wasm32 target cannot be detected or installed ('make doctor')"; \
+		else \
+			echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
+		fi; \
 	elif ! command -v wasm-bindgen-test-runner >/dev/null 2>&1; then \
 		if [ -n "$${CI:-}" ]; then echo "FAIL: wasm-bindgen-test-runner absent in CI"; exit 1; fi; \
 		echo "SKIP: wasm-bindgen-test-runner not on PATH — install wasm-bindgen-cli $$(grep -oE 'wasm-bindgen = \"=[0-9.]+' Cargo.toml | cut -d= -f3) to enable"; \
