@@ -33,8 +33,11 @@ loss ledger) and adds what the kernel deliberately leaves out:
 - **RDF 1.2 statement layer** — reifier bindings and annotations survive every
   star-capable round-trip; star-incapable projections drop them *loudly*, with
   the realized count handed to the loss ledger.
-- **Canonicalization entry points** — W3C RDFC-1.0 (`canonicalize`) and
-  canonical flat N-Quads over the frozen IR.
+- **Canonicalization entry points** — `canonical_flat_nquads`, W3C RDFC-1.0
+  over the statement layer flattened to plain `rdf:reifies`/annotation
+  triples, and `canonicalize`, the first-party `purrdf-rdfc12` v1 profile
+  (RDFC-1.0 plus a reserved-namespace lowering of reifiers and annotations;
+  byte-identical to RDFC-1.0 only on the RDF 1.1 subset).
 - **GTS adapters** — import/export between `RdfDataset` and the
   [`purrdf-gts`](https://crates.io/crates/purrdf-gts) container, including
   snapshot composition and content-chain verification.
@@ -254,7 +257,7 @@ The caller-configured classes/properties/individuals CSVW view is runnable in
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
 workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
-C. Most applications should depend on the umbrella
+C (the GTS container itself reaches Python and C, not the wasm package). Most applications should depend on the umbrella
 [`purrdf`](https://crates.io/crates/purrdf) crate, which re-exports this entire
 surface at its root and adds the SPARQL, SHACL, ShEx, and slice modules; depend
 on `purrdf-rdf` directly only when you want the RDF layer alone.

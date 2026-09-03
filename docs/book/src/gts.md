@@ -70,6 +70,35 @@ trust-policy layer are also part of the engine. All cryptography is
 what keeps the whole engine wasm-friendly. An encrypted frame you cannot
 decrypt is simply an opaque node in the fold: the container remains readable.
 
+## Rust-library-only: compaction certificates, proofs and keyring verification
+
+Beyond reading, writing and folding, `purrdf-gts` and the umbrella's `gts`
+module carry a verification stack that no other surface reaches — not the
+CLI, Python, wasm or C:
+
+- **Streamable compaction with a certificate** — `compact_streamable`
+  rewrites an accretive log into one delivery-ordered segment (leading stream
+  index, trailing offset footer, in-band dictionaries), and
+  `compact_and_certify` / `verify_compaction` / `compose` bind a content
+  projection so that the pre- and post-compaction containers fold to
+  byte-identical canonical content; the verifier recomputes from the pre bytes
+  with its own keyring. Compaction never changes content and mints no content
+  signatures.
+- **Merkle mountain range proofs** — `mmr::{root, prove, verify_proof,
+  prove_file}` (`gts-mmr-proof-v1`), and `verify_content_chain`, which walks
+  COSE signature → head replay → digest inclusion. There is no transparency
+  log and no signed checkpoint service.
+- **OpenPGP transport keys** — armored Ed25519 certificates and unencrypted
+  secret keys (`parse_transport_key`, `parse_secret_signing_key`) with
+  `verify_file_with_keyring` for rotation; other algorithms, encrypted keys
+  and v5/v6 packets are rejected, and there is no keyring or revocation store.
+
+Where it stops, stated plainly: the `files`/tar profile, the nested
+GTS-in-blob reader, the trust-`policy` layer and the deterministic ULID helper
+have no direct tests in this repository — their oracle is upstream in
+`gmeow-gts` — and the whole stack is exercised here only through the frozen
+vectors and the compaction and certification test files.
+
 ## Conformance vectors
 
 GTS conformance is defined against a **frozen, language-neutral vector
@@ -93,5 +122,5 @@ round-trip; `crates/rdf-capi/tests/abi.rs`'s
 - [`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md)
   — the normative wire format (version 0.9-draft, wire-format major 1).
 - [Slices, Mappings & Provenance](slices.md) — the RDF↔GTS loss ledger.
-- [Getting Started: Python](getting-started/python.md#gts-relational-exports)
-  — projecting a container into SQLite/DuckDB/Parquet.
+- [Getting Started: Python](getting-started/python.md#gts-relational-rows)
+  — reading a container back as relational rows.

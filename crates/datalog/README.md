@@ -78,7 +78,7 @@ ran instead of a claim about which rules were meant to.
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
 workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
-C. It is the evaluator beneath
+C (the GTS container itself reaches Python and C, not the wasm package). It is the evaluator beneath
 [`purrdf-entail`](https://crates.io/crates/purrdf-entail) and is published
 separately so a caller can depend on the fixpoint alone. Note that it is not
 re-exported by the umbrella [`purrdf`](https://crates.io/crates/purrdf) crate.

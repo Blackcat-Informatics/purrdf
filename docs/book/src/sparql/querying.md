@@ -96,7 +96,11 @@ Anything outside this surface — and every malformed query — is a typed
   federation stays wasm-portable and the host decides how (and whether)
   remote endpoints are reached — down to per-service headers, credentials and
   capabilities (see
-  [below](#per-service-context-the-serviceresolver-seam)). All seven W3C
+  [below](#per-service-context-the-serviceresolver-seam)). Where it stops:
+  PurRDF ships no HTTP client (the exchange is an `HttpTransport` trait the
+  Rust host implements) and no shipped surface — CLI, Python, wasm or C —
+  installs a resolver, so a non-`SILENT` `SERVICE` or `LOAD` there fails by
+  name; federation is a Rust-host composition. All seven W3C
   `service` federation cases pass
   through this seam. The forwarded body is re-emitted through the
   deterministic serializer — the federation wire format — whose
