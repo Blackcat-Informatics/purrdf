@@ -23,15 +23,24 @@
 #
 # Three checks, each a failure on its own:
 #
-#   1. RECORDS. Every release crate has one. A missing record names the crate
-#      and the bootstrap command.
+#   1. RECORDS. Every release crate has one, EXCEPT a crate the ledger names:
+#      a ledgered crate with no record is "bootstrap pending" — permitted, and
+#      reported as such — because the release lane handles it by the
+#      interleave (scripts/publish-release-crates.sh skips it and stops cleanly
+#      at its first dependent for the token step). A missing record the ledger
+#      does NOT name refuses the run, naming the crate: it is a new,
+#      undocumented bootstrap requirement.
 #   2. LEDGER. `PURRDF_UNBOOTSTRAPPED_CRATES` (the committed ledger of crates
 #      known to lack a record) agrees with the registry in BOTH directions when
-#      run over the whole release set: a missing crate the ledger does not name
-#      is a new, undocumented bootstrap requirement, and a ledgered crate that
-#      now HAS a record is a stale entry — the ledger named `purrdf-datalog`
-#      for a full cycle after that crate was published, because nothing
-#      checked that direction.
+#      run over the whole release set: the missing-but-unledgered case above,
+#      and a ledgered crate that HAS a record — a stale entry; the ledger named
+#      `purrdf-datalog` for a full cycle after that crate was published,
+#      because nothing checked that direction. One tolerance, needed by the
+#      interleave: a tag's tree is frozen while its release is in flight, so a
+#      ledgered crate whose record exists AT THE RELEASE VERSION being
+#      published (PURRDF_RELEASE_VERSION) was created by this release's own
+#      token step and is reported, not refused. A record at any other version
+#      is stale, as before.
 #   3. LOCK. Every record carries `trustpub_only = true`: crates.io's per-crate
 #      "Require trusted publishing" setting, the registry-side statement that
 #      an API token cannot publish a new version (crates.io answers one with
@@ -61,7 +70,10 @@
 #                                                     # green path, offline
 #
 # Environment:
-#   PURRDF_RELEASE_VERSION      version string put in the User-Agent (cosmetic).
+#   PURRDF_RELEASE_VERSION      the version being released (`rust-v` prefix
+#                               accepted); decides the stale-ledger tolerance
+#                               above and goes in the User-Agent. Unset, no
+#                               tolerance applies.
 #   PURRDF_RELEASE_CRATES_FILE  an alternative release-set/ledger file
 #                               (self-test only; default scripts/release-crates.sh)
 #   PURRDF_CRATES_IO_MOCK       a mock registry directory (scripts/crates-io-api.sh)
@@ -73,8 +85,9 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/crates-io-api.sh
 source "${repo}/scripts/crates-io-api.sh"
 
-version="${PURRDF_RELEASE_VERSION:-preflight}"
-user_agent="$(crates_io_user_agent "${version}")"
+version="${PURRDF_RELEASE_VERSION:-}"
+version="${version#rust-v}"
+user_agent="$(crates_io_user_agent "${version:-preflight}")"
 release_list="${PURRDF_RELEASE_CRATES_FILE:-${repo}/scripts/release-crates.sh}"
 
 self_test() {
@@ -141,7 +154,10 @@ self_test() {
     fi
   }
 
-  echo "check-crates-io-records.sh self-test (release set: ${#set[@]} crates)"
+  local VERSION
+  VERSION="$(cd "${repo}" && cargo metadata --no-deps --format-version 1 \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+  echo "check-crates-io-records.sh self-test (release set: ${#set[@]} crates; version ${VERSION})"
   local first="${set[0]}" last="${set[-1]}"
   local mock
 
@@ -153,14 +169,34 @@ self_test() {
     "lock     every record is trustpub_only=true" \
     "All ${#set[@]} release crates have a crates.io record."
 
-  # 2. A ledgered crate really is missing: refuse, naming it and the bootstrap.
+  # 2. A ledgered crate really is missing: permitted — "bootstrap pending" —
+  #    and said so, with the interleave named.
   mock="${tmp}/missing"; mkdir -p "$mock"; all_locked "$mock" "$last"
-  arm "ledgered crate missing (${last})" refuse \
+  arm "ledgered crate missing (${last}): bootstrap pending, permitted" pass \
     "$mock" "$(ledger_file missing "$last")" \
-    "MISSING  ${last}" \
+    "PENDING  ${last} (no crates.io record; in PURRDF_UNBOOTSTRAPPED_CRATES — bootstrap pending)" \
     "ledger   PURRDF_UNBOOTSTRAPPED_CRATES agrees with crates.io (1 unbootstrapped)" \
-    "crates.io has no crate record for: ${last}" \
+    "bootstrap pending for: ${last}" \
     "scripts/bootstrap-crates-io.sh"
+
+  # 2b. A ledgered crate whose record exists AT the release version: created
+  #     by this release's token step — tolerated when the version is known...
+  mock="${tmp}/created"; mkdir -p "$mock"; all_locked "$mock"
+  printf '200\n{"version":{"crate":"%s","num":"%s"}}\n' "$last" "${VERSION}" > "${mock}/${last}@${VERSION}"
+  local out status=0
+  out="$(PURRDF_CRATES_IO_MOCK="${mock}" PURRDF_RELEASE_CRATES_FILE="$(ledger_file created "$last")" \
+    PURRDF_RELEASE_VERSION="rust-v${VERSION}" bash "${BASH_SOURCE[0]}" 2>&1)" || status=$?
+  if [[ "$status" -eq 0 ]] && grep -qF "created  ${last} (ledgered, but its ${VERSION} record exists: created by this release's token step" <<<"$out"; then
+    printf '  ok      ledgered crate created at %s by this release: tolerated (exit 0)\n' "$VERSION"
+  else
+    printf '  FAILED  ledgered crate created at %s by this release (exit %s)\n' "$VERSION" "$status"
+    while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$out"
+    failures=$((failures + 1))
+  fi
+  #     ...and stale without it (no version given: no tolerance).
+  arm "ledgered crate with a record, no release version given: stale" refuse \
+    "$mock" "$(ledger_file created2 "$last")" \
+    "${last} is in PURRDF_UNBOOTSTRAPPED_CRATES but crates.io HAS a record for it (stale ledger entry)"
 
   # 3. A missing crate the ledger does not name: refuse on the ledger too.
   mock="${tmp}/unledgered"; mkdir -p "$mock"; all_locked "$mock" "$last"
@@ -194,7 +230,7 @@ self_test() {
 
   # 7. An explicit crate list: records and locks are checked, the ledger is not.
   mock="${tmp}/explicit"; mkdir -p "$mock"; all_locked "$mock"
-  local out status=0
+  status=0
   out="$(PURRDF_CRATES_IO_MOCK="${mock}" bash "${BASH_SOURCE[0]}" "$first" "$last" 2>&1)" || status=$?
   if [[ "$status" -eq 0 ]] && grep -qF "All 2 release crates have a crates.io record." <<<"$out" \
     && ! grep -qF "ledger " <<<"$out"; then
@@ -236,6 +272,12 @@ fi
 
 trap 'rm -f "${CRATES_IO_BODY:-}"' EXIT
 
+in_ledger() {
+  local entry
+  for entry in "${ledger[@]}"; do [[ "$entry" == "$1" ]] && return 0; done
+  return 1
+}
+
 missing=()
 present=()
 errors=()
@@ -255,7 +297,11 @@ for crate in "${crates[@]}"; do
       present+=("$crate")
       ;;
     missing)
-      printf 'MISSING  %s\n' "$crate"
+      if [[ "$check_ledger" == "true" ]] && in_ledger "$crate"; then
+        printf 'PENDING  %s (no crates.io record; in PURRDF_UNBOOTSTRAPPED_CRATES — bootstrap pending)\n' "$crate"
+      else
+        printf 'MISSING  %s\n' "$crate"
+      fi
       missing+=("$crate")
       ;;
     *)
@@ -293,9 +339,22 @@ if [[ "$check_ledger" == "true" ]]; then
   done
   for entry in "${ledger[@]}"; do
     for crate in "${present[@]}"; do
-      if [[ "$entry" == "$crate" ]]; then
-        ledger_problems+=("${entry} is in PURRDF_UNBOOTSTRAPPED_CRATES but crates.io HAS a record for it (stale ledger entry)")
+      [[ "$entry" == "$crate" ]] || continue
+      if [[ -n "$version" ]]; then
+        state="$(crates_io_version_state "$crate" "$version" "${user_agent}")"
+        case "$state" in
+          present)
+            printf 'created  %s (ledgered, but its %s record exists: created by this release'"'"'s token step; drop it from the ledger after the release)\n' "$crate" "$version"
+            continue 2
+            ;;
+          missing) ;;
+          *)
+            echo "ERROR    ${crate} — ${state#error: }" >&2
+            exit 1
+            ;;
+        esac
       fi
+      ledger_problems+=("${entry} is in PURRDF_UNBOOTSTRAPPED_CRATES but crates.io HAS a record for it (stale ledger entry)")
     done
   done
   if [[ "${#ledger_problems[@]}" -gt 0 ]]; then
@@ -339,31 +398,57 @@ if [[ "${#present[@]}" -gt 0 ]]; then
   printf 'lock     every record is trustpub_only=true (%d)\n' "${#present[@]}"
 fi
 
-if [[ "${#missing[@]}" -gt 0 ]]; then
+pending=()
+unledgered=()
+for crate in "${missing[@]}"; do
+  if [[ "$check_ledger" == "true" ]] && in_ledger "$crate"; then
+    pending+=("$crate")
+  else
+    unledgered+=("$crate")
+  fi
+done
+
+if [[ "${#unledgered[@]}" -gt 0 ]]; then
   cat >&2 <<EOF
 
-crates.io has no crate record for: ${missing[*]}
+crates.io has no crate record for: ${unledgered[*]}
 
 Refusing to publish. This lane publishes ${#crates[@]} crates one at a time in
-dependency order and cargo publish CANNOT be undone, so continuing would
-irreversibly publish every crate ahead of the missing one and then fail.
+dependency order and cargo publish CANNOT be undone; a crate with no record
+that the ledger does not name is an undocumented bootstrap requirement, and
+the publish loop would only skip it if PURRDF_UNBOOTSTRAPPED_CRATES named it.
 
 crates.io refuses to create a crate from a Trusted Publishing token ("Trusted
 Publishing tokens do not support creating new crates"), so this workflow cannot
-create these records. Creating a record is the ONE thing an API token still
-does for this workspace — it cannot publish a new version of any existing
-crate, they are all locked — and it is a one-time publish from a clean local
-checkout (docs/RELEASE.md, "Outstanding bootstrap"):
+create the record; creating one is the ONE thing an API token still does for
+this workspace (it cannot publish a new version of any existing crate — they
+are all locked). Add the crate to PURRDF_UNBOOTSTRAPPED_CRATES in
+scripts/release-crates.sh and to the "Outstanding bootstrap" section of
+docs/RELEASE.md, re-tag, and follow the interleave that section describes:
+the lane publishes up to the crate's first dependent and stops, then
 
     scripts/bootstrap-crates-io.sh --plan          # the preflight and plan, no token
     CARGO_REGISTRY_TOKEN="\${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh
 
-Then add the Trusted Publisher entry for each newly created crate
-(GitHub Actions / Blackcat-Informatics / purrdf / release-cargo.yaml / no
-environment), enable "Require trusted publishing" on it, remove it from
-PURRDF_UNBOOTSTRAPPED_CRATES, and re-run this tag.
+creates the record, you add its Trusted Publisher entry and enable "Require
+trusted publishing", and the workflow run is re-run.
 EOF
   exit 1
+fi
+
+if [[ "${#pending[@]}" -gt 0 ]]; then
+  cat <<EOF
+
+bootstrap pending for: ${pending[*]}
+
+Each is in PURRDF_UNBOOTSTRAPPED_CRATES and has no crates.io record. The publish
+loop (scripts/publish-release-crates.sh) skips each of them, publishes every
+crate that does not depend on one, and STOPS cleanly at the first crate that
+does — naming the token step, scripts/bootstrap-crates-io.sh, as what comes
+next. The set is not complete until every one has been created and this
+workflow run has been re-run (docs/RELEASE.md, "Outstanding bootstrap").
+EOF
+  exit 0
 fi
 
 printf '\nAll %d release crates have a crates.io record.\n' "${#crates[@]}"

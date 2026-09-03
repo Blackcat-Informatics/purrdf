@@ -71,7 +71,10 @@ jobs:
       - name: Check the crates.io record preflight refuses every wrong registry state (offline)
         run: bash scripts/check-crates-io-records.sh --self-test
 
-      - name: Check the crates.io bootstrap refuses existing records and missing dependencies (offline)
+      - name: Check the release publish loop runs the bootstrap interleave to completion (offline)
+        run: bash scripts/publish-release-crates.sh --self-test
+
+      - name: Check the crates.io bootstrap refuses existing records and defers missing dependencies (offline)
         run: bash scripts/bootstrap-crates-io.sh --self-test
 
       - name: Check every wasm-bindgen free function is re-exported from the npm package root

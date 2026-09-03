@@ -87,24 +87,28 @@ jobs:
 
       # THE POINT OF NO RETURN IS THE PUBLISH LOOP, AND IT IS NOT ATOMIC.
       # `cargo publish` runs once per crate, in dependency order, and cannot be
-      # undone. If any crate in the release set has no crates.io record, the loop
-      # irreversibly publishes every crate ahead of it and only then fails — and
-      # the OIDC token this lane uses cannot create the record, because crates.io
-      # requires a crate to exist before a Trusted Publisher can be configured for
-      # it. So the existence of the whole set is settled HERE, before anything
-      # leaves the runner: a missing record becomes a clean refusal naming the
-      # crate and the bootstrap command, not a half-published release.
+      # undone — and the OIDC token this lane uses cannot create a crate record
+      # ("Trusted Publishing tokens do not support creating new crates"). So the
+      # state of the whole set is settled HERE, before anything leaves the runner:
+      #
+      #   * a crate with no record that PURRDF_UNBOOTSTRAPPED_CRATES names is
+      #     "bootstrap pending": permitted, because the publish loop below skips
+      #     it and stops cleanly at its first dependent for the token step (the
+      #     interleave — docs/RELEASE.md, "Outstanding bootstrap");
+      #   * a crate with no record the ledger does NOT name is a clean refusal
+      #     naming the crate — an undocumented bootstrap requirement;
+      #   * a record NOT locked to Trusted Publishing (`trustpub_only` in the
+      #     public record JSON) is a refusal naming the setting: this lane is the
+      #     only one that publishes versions of these crates, an unlocked record
+      #     is one a leaked token could publish, and a record the token step just
+      #     created is unlocked until the maintainer enables it — that is the
+      #     step this check exists to catch between interleave runs.
       #
       # The preflight reads the same scripts/release-crates.sh the publish step
-      # below sources, so it cannot check a different list than the one published.
-      # It also refuses any record that is NOT locked to Trusted Publishing
-      # (`trustpub_only` in the public record JSON): this lane is the only one
-      # that publishes versions of these crates — an API token's sole remaining
-      # job is creating a record — and an unlocked record is one a leaked token
-      # could publish. What no preflight can see is whether a Trusted Publisher
-      # ENTRY exists for a crate; see the loop comment below for what that
-      # failure looks like.
-      - name: Preflight — every release crate has a crates.io record, locked to this lane
+      # sources, so it cannot check a different list than the one published. What
+      # no preflight can see is whether a Trusted Publisher ENTRY exists for a
+      # crate; see the publish step for what that failure looks like.
+      - name: Preflight — every release crate has a crates.io record or is ledgered for bootstrap; every record is locked to this lane
         env:
           PURRDF_RELEASE_VERSION: ${{ github.ref_name }}
         run: bash scripts/check-crates-io-records.sh
@@ -186,82 +190,68 @@ jobs:
         id: auth
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
+      # The loop lives in scripts/publish-release-crates.sh so the one piece of
+      # logic that decides what is published can be dry-run and self-tested
+      # locally against a mock registry (`--self-test` runs the whole interleave
+      # on every `make check`). Per crate, in publish order: already published
+      # -> skip (re-runs resume); in PURRDF_UNBOOTSTRAPPED_CRATES with no record
+      # -> SKIP, visibly; depends on a skipped ledger crate -> STOP CLEANLY
+      # (exit 0, `complete=false`) naming the crate, the ledger crate it waits
+      # on, and the token step as what comes next; otherwise `cargo publish
+      # --locked`, VERIFIED, then wait until crates.io serves the version.
+      #
+      # Verification resolves the packaged crate's whole graph, dev-dependencies
+      # included, which is resolvable because every dependency is either already
+      # served or a ledger crate the token step created — or the loop stopped.
+      # This loop used to pass `--no-verify`, load-bearing until `purrdf-geo`
+      # (dev-depending on two later crates) was reordered — see docs/RELEASE.md,
+      # "Verification is on, and why it was off".
+      #
+      # Failure mode, stated honestly: the OIDC token above is scoped to the
+      # crates whose Trusted Publisher entries matched this workflow. A crate
+      # with no entry — including a record the token step created whose entry
+      # was not added before this run was re-run — fails AT its own `cargo
+      # publish` ("The provided access token is not valid for crate `<name>`"),
+      # after every crate ahead of it has been published: a loud stop under
+      # `set -e`, with a partial publish that re-running this run resumes. The
+      # preflight cannot see entries (crates.io has no public API for them); its
+      # lock check is the closest thing, because the lock can only be enabled
+      # once an entry exists.
+      #
+      # Re-running: this workflow is tag-triggered only, so a stopped run is
+      # resumed with `gh run rerun <run-id>` (same tag, same SHA, same workflow
+      # file), not by re-pushing the tag.
       - name: Publish workspace crates to crates.io
+        id: publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          # One definition of the release set, sourced by the script:
+          # scripts/release-crates.sh (see also the wasm gate above).
+          bash scripts/publish-release-crates.sh "${VERSION#rust-v}"
 
-          version="${VERSION#rust-v}"
-          # One definition of the release set, shared with the preflight above
-          # and with scripts/bootstrap-crates-io.sh.
-          # shellcheck source=scripts/release-crates.sh
-          source scripts/release-crates.sh
-          crates=("${PURRDF_RELEASE_CRATES[@]}")
+      - name: Release incomplete — the interleave continues with the token step
+        if: steps.publish.outputs.complete != 'true'
+        env:
+          VERSION: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          cat <<EOF
+          This run stopped cleanly with crates still to publish (see the publish
+          step for the crate it stopped at and the ledger crate it waits on). The
+          GitHub Release for ${VERSION} is NOT created until the set is complete.
 
-          crate_version_exists() {
-            local crate="$1"
-            local status
-            status="$(curl -sS -H "User-Agent: purrdf-release/${version} (paudley@blackcatinformatics.ca)" \
-              -o /tmp/purrdf-crate-version.json -w "%{http_code}" \
-              "https://crates.io/api/v1/crates/${crate}/${version}")"
-            case "$status" in
-              200) return 0 ;;
-              404) return 1 ;;
-              *)
-                cat /tmp/purrdf-crate-version.json
-                echo "Unexpected crates.io status ${status} for ${crate} ${version}" >&2
-                exit 1
-                ;;
-            esac
-          }
-
-          wait_for_crate_version() {
-            local crate="$1"
-            for _ in $(seq 1 30); do
-              if crate_version_exists "$crate"; then
-                return 0
-              fi
-              sleep 10
-            done
-            echo "Timed out waiting for crates.io to expose ${crate} ${version}" >&2
-            exit 1
-          }
-
-          # Each publish VERIFIES: cargo builds the packaged crate against the
-          # registry before the upload that cannot be undone, so a broken or
-          # wrong-version artifact is refused rather than made permanent. That
-          # build resolves the crate's whole graph, dev-dependencies included,
-          # which is resolvable only because (1) `wait_for_crate_version` blocks
-          # until the previous crate is served, and (2) check-publish-order.py
-          # above proved every dev-edge points backward in this order. This loop
-          # used to pass `--no-verify`, and the flag was load-bearing until
-          # `purrdf-geo` (dev-depending on two later crates) was reordered — see
-          # docs/RELEASE.md, "Verification is on, and why it was off".
-          #
-          # Failure mode, stated honestly: the OIDC token above is scoped to the
-          # crates whose Trusted Publisher entries matched this workflow. A crate
-          # with no entry fails AT its own `cargo publish` ("The provided access
-          # token is not valid for crate `<name>`"), after every crate ahead of
-          # it has been published — a loud stop under `set -e`, with a partial
-          # publish that a re-run of this tag resumes (published versions are
-          # skipped). The preflight cannot see entries (crates.io has no public
-          # API for them); its lock check is the closest thing, because the lock
-          # can only be enabled once an entry exists.
-          for crate in "${crates[@]}"; do
-            if crate_version_exists "$crate"; then
-              echo "${crate} ${version} already exists on crates.io; skipping"
-              continue
-            fi
-            cargo publish -p "$crate" --locked
-            wait_for_crate_version "$crate"
-            # Give the registry index a short propagation window before publishing
-            # dependents that name the freshly-published version.
-            sleep 15
-          done
+          Next, from a clean checkout of ${VERSION}:
+            CARGO_REGISTRY_TOKEN="\${CARGO_TOKEN}" scripts/bootstrap-crates-io.sh ${VERSION#rust-v}
+          then on crates.io, for EACH record it created, add the Trusted Publisher
+          entry and enable "Require trusted publishing"; then resume this run:
+            gh run rerun ${RUN_ID}
+          EOF
 
       - name: Publish GitHub Release with changelog notes
+        if: steps.publish.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.ref_name }}

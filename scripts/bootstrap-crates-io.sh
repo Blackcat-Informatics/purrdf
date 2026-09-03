@@ -42,12 +42,16 @@
 #         candidate versions found which didn't match: 0.12.0, 0.11.0, 0.10.0, ...
 #
 # (`cargo publish -p purrdf-cdt --no-verify --dry-run` at 0.13.0, verbatim.)
-# `--no-verify` skips the BUILD, not the resolve. Those dependencies can only
-# reach crates.io through the trusted lane, which refuses while any record is
-# missing — the deadlock docs/RELEASE.md's bootstrap section lays out, with the
-# two shapes that break it. This script checks every dependency BEFORE any
-# gate, names the missing ones, and stops; it never discovers them one upload
-# in.
+# `--no-verify` skips the BUILD, not the resolve. Those dependencies reach
+# crates.io through the trusted lane, which publishes up to the first crate
+# that depends on a ledger crate and STOPS (scripts/publish-release-crates.sh)
+# — that is the token step's cue. So this script creates, in one pass, every
+# ledger crate whose dependencies are on crates.io at the target version,
+# VERIFIED (the dependencies exist, so nothing needs `--no-verify`), DEFERS
+# every ledger crate whose dependencies are not up yet — naming them and the
+# trusted-lane run that will publish them — and refuses outright only when it
+# can create nothing. That is the interleave in docs/RELEASE.md, "Outstanding
+# bootstrap".
 #
 # Usage:
 #   scripts/bootstrap-crates-io.sh [VERSION]          create the ledger records
@@ -205,7 +209,7 @@ EOF
     return 1
   fi
 
-  local -a to_create=() to_skip=() has_record=() missing_deps=() not_in_set=()
+  local -a to_create=() to_skip=() has_record=() deferred=() not_in_set=()
   local crate idx dep_line kind dep dep_state state
 
   echo "crates.io bootstrap plan for ${VERSION} (ledger: ${crates[*]}):"
@@ -237,11 +241,12 @@ EOF
       [[ -z "$dep_line" ]] && continue
       kind="${dep_line%% *}"
       dep="${dep_line#* }"
-      # A dependency that is itself an EARLIER ledger entry is created by this
-      # same run before this crate is reached; a later one is an ordering bug
-      # check-publish-order.py refuses, and is reported as missing here too.
-      if in_list "$dep" "${crates[@]:0:$idx}"; then
-        deps_ok+=("${dep} (${kind}; created earlier in this run)")
+      # A dependency that is itself an EARLIER ledger entry and is being
+      # created (or already exists) in this pass is satisfied; one that is
+      # deferred is not — and a LATER one is an ordering bug
+      # check-publish-order.py refuses, reported as missing here too.
+      if in_list "$dep" "${crates[@]:0:$idx}" && in_list "$dep" "${to_create[@]}" "${to_skip[@]}"; then
+        deps_ok+=("${dep} (${kind}; created earlier in this pass)")
         continue
       fi
       dep_state="$(version_state "$dep")"
@@ -250,11 +255,11 @@ EOF
         deps_ok+=("${dep} ${VERSION} (${kind})")
       else
         deps_missing+=("${dep} ${VERSION} (${kind})")
-        missing_deps+=("${crate} needs ${dep} ${VERSION} (${kind} dependency) — not on crates.io")
       fi
     done < <(workspace_path_deps "$crate")
     if [[ "${#deps_missing[@]}" -gt 0 ]]; then
-      printf '  BLOCKED        %s (no record; cannot be uploaded: %s)\n' "$crate" "$(IFS=,; echo "${deps_missing[*]}")"
+      printf '  DEFER          %s (no record; its dependencies are not on crates.io yet: %s — the next trusted-lane run publishes them)\n' "$crate" "$(IFS=,; echo "${deps_missing[*]}")"
+      deferred+=("${crate} waits on $(IFS=,; echo "${deps_missing[*]}")")
     else
       printf '  CREATE RECORD  %s (no crates.io record; dependencies on crates.io: %s)\n' "$crate" "$(IFS=,; echo "${deps_ok[*]:-none}")"
       to_create+=("$crate")
@@ -291,23 +296,22 @@ registry in both directions. Fix the ledger, never the registry.
 EOF
     } >&2
   fi
-  if [[ "${#missing_deps[@]}" -gt 0 ]]; then
+  if [[ "${#deferred[@]}" -gt 0 && "${#to_create[@]}" -eq 0 && "${#to_skip[@]}" -eq 0 && "$failed" == "false" ]]; then
     failed=true
     {
       echo
-      echo "REFUSING: these ledger crates depend on versions crates.io does not have:"
-      for dep in "${missing_deps[@]}"; do echo "  - ${dep}"; done
+      echo "REFUSING: nothing can be created yet — every ledger crate depends on versions crates.io does not have:"
+      for dep in "${deferred[@]}"; do echo "  - ${dep}"; done
       cat <<EOF
 
 \`cargo publish\` resolves the packaged crate's dependency graph against the
 registry to write its lockfile — with or without --no-verify — so each crate
 above would fail with "failed to select a version for the requirement" before
-anything is uploaded. Those dependencies are existing crates, which only the
-Trusted Publishing lane can publish, and that lane refuses while any release
-crate lacks a record. docs/RELEASE.md, "Outstanding bootstrap", lays out the
-two shapes that break this deadlock: a dependency-free placeholder record,
-or publishing the rest of the set at ${VERSION} ahead of the ledger crates.
-Neither is this script's decision to make.
+anything is uploaded. Those dependencies are published by the trusted lane:
+push (or re-run) the rust-v${VERSION} tag first. Its publish loop
+(scripts/publish-release-crates.sh) publishes everything up to the first crate
+that depends on a ledger crate, then STOPS and names this script as the next
+step; run it again then. docs/RELEASE.md, "Outstanding bootstrap".
 EOF
     } >&2
   fi
@@ -317,17 +321,20 @@ EOF
 
   echo
   if [[ "${#to_create[@]}" -eq 0 ]]; then
-    echo "Nothing left to create at ${VERSION}: ${to_skip[*]} already exist. Remove them from the ledger and push the rust-v* tag."
+    echo "Nothing to create at ${VERSION} in this pass: ${to_skip[*]} already exist${deferred[0]:+; deferred: ${#deferred[@]} (see above)}."
+    echo "Next: re-run the rust-v${VERSION} workflow run (gh run rerun <run-id>); it resumes where it stopped."
     return 0
   fi
   cat <<EOF
-${#to_create[@]} crate record(s) will be CREATED by this token: ${to_create[*]}
-Creating a record is permanent. Afterwards, for each new crate on crates.io:
+${#to_create[@]} crate record(s) will be CREATED by this token in this pass: ${to_create[*]}
+${deferred[0]:+deferred to a later pass (dependencies not up yet): ${#deferred[@]} — see DEFER above
+}Creating a record is permanent. Afterwards, on crates.io, for EACH new crate:
 add the Trusted Publisher entry (GitHub Actions / Blackcat-Informatics /
-purrdf / release-cargo.yaml / no environment), enable "Require trusted
-publishing" so the record is locked like its siblings, and remove the crate
-from PURRDF_UNBOOTSTRAPPED_CRATES. The rust-v* lane refuses until then, by
-design (scripts/check-crates-io-records.sh).
+purrdf / release-cargo.yaml / no environment) and enable "Require trusted
+publishing" so the record is locked like its siblings — this release does not
+touch the crate again, but the next release's run would 403 at it without the
+entry, and the preflight refuses it without the lock. Then re-run the rust-v${VERSION}
+workflow run (gh run rerun <run-id>): it resumes at the crate it stopped on.
 EOF
 }
 
@@ -427,14 +434,43 @@ self_test() {
     while IFS= read -r dep_line; do
       [[ -z "$dep_line" ]] && continue
       dep="${dep_line#* }"
-      in_list "$dep" "${fixture[@]}" || expect_missing+=("${crate} needs ${dep} ${VERSION}")
+      in_list "$dep" "${fixture[@]}" || expect_missing+=("${crate} waits on")
+      in_list "$dep" "${fixture[@]}" || expect_missing+=("${dep} ${VERSION} (${dep_line%% *})")
     done < <(workspace_path_deps "$crate")
   done
-  arm "ledger crates' dependencies absent at ${VERSION}" refuse \
+  arm "every ledger crate's dependencies absent at ${VERSION}: nothing creatable" refuse \
     "$mock" "$(ledger_file absent "${fixture[@]}")" \
-    "REFUSING: these ledger crates depend on versions crates.io does not have" \
+    "REFUSING: nothing can be created yet" \
     "failed to select a version for the requirement" \
+    "scripts/publish-release-crates.sh" \
     "${expect_missing[@]}"
+
+  # 2b. Token step 1 of the interleave: the FIRST ledger crate's dependencies
+  #     are up (the trusted lane stopped at its first dependent), the others'
+  #     are not — create the first, DEFER the rest, proceed.
+  mock="${tmp}/step1"; mkdir -p "$mock"
+  while IFS= read -r dep_line; do
+    [[ -n "$dep_line" ]] && version "$mock" "${dep_line#* }"
+  done < <(workspace_path_deps "${fixture[0]}")
+  local -a expect_step1=("CREATE RECORD  ${fixture[0]} (no crates.io record")
+  local -a others=("${fixture[@]:1}")
+  for crate in "${others[@]}"; do
+    # A later ledger crate whose dependencies happen to be a subset of the
+    # first's would be creatable too; only assert DEFER for those that are not.
+    local deferred_here=false
+    while IFS= read -r dep_line; do
+      [[ -z "$dep_line" ]] && continue
+      dep="${dep_line#* }"
+      in_list "$dep" "${fixture[@]}" && continue
+      [[ -f "${mock}/${dep}@${VERSION}" ]] || deferred_here=true
+    done < <(workspace_path_deps "$crate")
+    [[ "$deferred_here" == "true" ]] && expect_step1+=("DEFER          ${crate} (no record; its dependencies are not on crates.io yet")
+  done
+  arm "token step 1: ${fixture[0]}'s dependencies present, the rest deferred" pass \
+    "$mock" "$(ledger_file step1 "${fixture[@]}")" \
+    "1 crate record(s) will be CREATED by this token in this pass: ${fixture[0]}" \
+    "gh run rerun" \
+    "${expect_step1[@]}"
 
   # 3. The valid path: no records, every dependency present — the plan proceeds
   #    and names every ledger crate as a record to CREATE.
@@ -444,7 +480,7 @@ self_test() {
   for crate in "${fixture[@]}"; do expect_create+=("CREATE RECORD  ${crate} (no crates.io record"); done
   arm "valid: no records, dependencies present" pass \
     "$mock" "$(ledger_file valid "${fixture[@]}")" \
-    "${#fixture[@]} crate record(s) will be CREATED by this token" \
+    "${#fixture[@]} crate record(s) will be CREATED by this token in this pass" \
     "${expect_create[@]}"
 
   # 4. Resumability: the first ledger crate was created at VERSION by an
@@ -606,12 +642,16 @@ cat <<EOF
 
 Created crates.io record(s): ${created[*]:-none}
 
-This token's job is done; it cannot publish another version of these crates
-once they are locked. Now, on crates.io, for each of them:
+This token's job for them is done; it cannot publish another version once
+they are locked. Now, on crates.io, for EACH of them:
   1. add the Trusted Publisher entry (GitHub Actions / Blackcat-Informatics /
      purrdf / release-cargo.yaml / no environment);
-  2. enable "Require trusted publishing" (trustpub_only), as on every sibling;
-then remove them from PURRDF_UNBOOTSTRAPPED_CRATES in scripts/release-crates.sh,
-update the "Outstanding bootstrap" section of docs/RELEASE.md that
-scripts/check-doc-claims.py derives from it, and push the rust-v* tag.
+  2. enable "Require trusted publishing" (trustpub_only), as on every sibling
+     — the next release's run would 403 at the crate without the entry, and
+     the preflight refuses it without the lock;
+then re-run the rust-v${VERSION} workflow run (gh run rerun <run-id>): it
+resumes at the crate it stopped on. If it stops again, run this script again
+for the ledger crates it deferred. After the release is complete, remove the
+new crates from PURRDF_UNBOOTSTRAPPED_CRATES in scripts/release-crates.sh and
+from the "Outstanding bootstrap" section of docs/RELEASE.md.
 EOF

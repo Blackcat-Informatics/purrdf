@@ -60,8 +60,9 @@ can only be published using Trusted Publishing`. A token has exactly one role
 left, creating the record of a brand-new crate — the one thing a Trusted
 Publishing token is refused (`Trusted Publishing tokens do not support creating
 new crates`) — and the release process document above is exact about how that
-bootstrap works, what it cannot do while the new crate's dependencies are not
-on the registry yet, and the two shapes that break that deadlock.
+bootstrap works: the lane publishes up to the first crate that depends on a
+new one and stops cleanly, the token creates the new crate's record, Trusted
+Publishing is enabled on it, and the same run is resumed.
 
 Four workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
