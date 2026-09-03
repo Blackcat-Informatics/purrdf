@@ -111,7 +111,7 @@ dataset already in memory, through the evaluator's caller-keyed extension seams
 | You needed | Usually from | Now inside PurRDF | Where it stops |
 | --- | --- | --- | --- |
 | Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no floating point in the crate. | BM25 ranking, not a Lucene: no stemming, no stop-word lists, no query dialect; an in-memory index built once over a frozen dataset. |
-| Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM; no GEOS, no PROJ. | Topological predicates, accessors and exactly computable measures over vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, no buffers, hulls, overlay set operations or raster — each unimplemented function hard-errors by name. |
+| Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM; no GEOS, no PROJ. | Topological predicates, accessors and exactly computable measures over vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, no buffers, no concave hull, no overlay set operations, no raster — each unimplemented function hard-errors by name (`geof:convexHull` is implemented). |
 | Vector similarity | pgvector | [Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a PURREMB embedding space, binary64 in a pinned accumulation order. | Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no approximate index; PurRDF computes no embeddings — the vectors come from a PURREMB artifact the caller fills, which PurRDF itself writes (`EmbeddingBuilder`, `EmbeddingStreamWriter`; Rust only) and opens fail-closed. |
 
 All three are pure functions of their input on every target — fixed point,
@@ -138,6 +138,15 @@ stays inactive; it never invents an IRI for you. (Test fixtures use
 
 The full invariant list is in
 [Design Rules & Invariants](project/design-rules.md).
+
+## What the version number commits to
+
+From 1.0.0 the suite follows semantic versioning in full: a breaking change
+bumps the major version, a minor bump is additive, a patch bump is bugfix-only,
+and the crates.io, PyPI and npm packages ship one workspace version in
+lockstep. The one exception is the C ABI (`purrdf.h`), which carries its own
+`0.x` ABI version, bumped on every exported-signature change, and is not
+frozen. See [Versioning & Releases](project/releases.md).
 
 ## Why RDF 1.2?
 

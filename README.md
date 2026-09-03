@@ -262,6 +262,29 @@ triple pattern.
   Python-only streaming `project_artifacts` for the four LPG profiles), wasm
   (`Dataset.project`, `liftProjection`) and C (`purrdf_project`,
   `purrdf_lift`).
+- **RDF 1.2 visualization** — a statement-centric projection (`purrdf::viz`)
+  that lays out a dataset and renders static SVG, with RDF 1.2 drawn as RDF
+  1.2: a triple term is a bounded statement glyph rather than an arrow, a
+  reifier is a node joined to the statement it reifies by a `reifies` edge
+  with its annotations beside it, an asserted occurrence stays distinct from a
+  quoted one, and named-graph context and dialect diagnostics (generalized or
+  symmetric positions) are kept rather than flattened. Three modes over one
+  model — `compact` (resource graph), `incidence` (exact statement/incidence
+  graph) and `table` (statement rows). The layout is deterministic: ids are
+  minted from statement keys, every ordering is a sort on them, cycle breaking
+  is fixed, and the complete versioned export JSON (`purrdf-viz-export-1`)
+  the picture was drawn from is embedded in the SVG's `<metadata>`, so the
+  file is a machine-readable export of the statement model as well as a
+  drawing; `make check` re-renders the book's fifteen sample SVGs and fails
+  on any byte of drift. Where it stops: static SVG only, no interactive layout; a
+  caller-set ceiling (`VizSpec::max_statements`, default 500, and
+  `max_terms`, default 1,500) that refuses a larger input with
+  `VizError::TooLarge` rather than truncating it; reachable from Rust and the
+  JavaScript/wasm package (`visualModel`, `visualExport`, `visualSvg`), not
+  yet from Python, C or the CLI. See
+  [RDF 1.2 Visualization](./docs/book/src/concepts/visualization.md) and its
+  samples, e.g.
+  [asserted-reified-compact](./docs/book/src/assets/visualization/purrdf-viz2-asserted-reified-compact.svg).
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator over the
   interned IR: all four query forms plus full SPARQL Update, property paths,
   cost-based BGP planning, and the enforced `VERSION` declaration (including
@@ -323,8 +346,9 @@ triple pattern.
     float arithmetic (the one float boundary is the `xsd:double` result
     literal). The `geof:` family lands on the scalar seam and the spatial
     relations rewrite through the property-function seam; `geof:transform`,
-    the buffers, hulls, overlay set operations and GML/KML/DGGS encodings are
-    registered but **hard-error by name** rather than answering a default, and
+    the buffers, the concave hull, the overlay set operations and the
+    GML/KML/DGGS encodings are registered but **hard-error by name** rather
+    than answering a default (`geof:convexHull` is implemented), and
     a `metric*` measure answers only in a CRS the caller declared in metres
     (there is no ellipsoidal geodesic).
   - **Embedding kNN** — nearest-neighbour search over a
@@ -716,19 +740,23 @@ build-provenance attestations and SPDX SBOMs — see [`docs/RELEASE.md`](./docs/
 
 ## Versioning & MSRV
 
-**Pre-1.0 semver policy.** While the version is `0.x`, a **minor** bump
-(`0.x` → `0.(x+1)`) may include breaking API changes; a **patch** bump
-(`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible. All three published
-surfaces — the crates.io crate suite, the PyPI `purrdf` package, and the npm
+**Semver from 1.0.0.** From 1.0.0 the suite follows semantic versioning in
+full: a **breaking** change bumps the **major** version — a commit carrying `!`
+or `BREAKING CHANGE:` is a major-bump trigger, and the changelog marks each
+such entry **BREAKING** — a **minor** bump is additive and API-compatible, and a
+**patch** bump is bugfix-only. That is what the number commits to; it is not a
+claim of stability beyond what semver means. All three published surfaces — the
+crates.io crate suite, the PyPI `purrdf` package, and the npm
 `@blackcatinformatics/purrdf` package — share **one** workspace version and are
-released in lockstep. That coherence is enforced in CI: a version-coherence check
-fails the build if the three version sources disagree.
+released in lockstep, and a version-coherence check in CI fails the build if
+the version sources (`Cargo.toml`, `pyproject.toml`, `package.json`,
+`CITATION.cff`) disagree. The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](./crates/rdf-capi/include/purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.7**), bumped on every exported-signature change, pinned by `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through `purrdf_abi_version`. It is versioned separately from the workspace and stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise about it.
 
 **MSRV policy.** The supported minimum Rust is `rust-version` in the root
 `Cargo.toml` (currently **1.96**) on the **stable** channel, enforced by a dedicated
 CI MSRV job, and release artifacts are built on stable. Raising the MSRV is a
-notable change recorded in the changelog and, pre-1.0, rides a minor bump. The
-README MSRV badge is maintained by hand and must be bumped together with
+notable change recorded in the changelog; it rides a **minor** bump and never
+ships in a patch release. The README MSRV badge is maintained by hand and must be bumped together with
 `rust-version`.
 
 Contributors run a dated nightly (`rust-toolchain.toml`) for its sharper clippy and

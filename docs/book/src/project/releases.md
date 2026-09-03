@@ -10,16 +10,23 @@ PurRDF ships to three registries — the crates.io crate suite, the PyPI
 **one** workspace version, in lockstep. The full process is
 [`docs/RELEASE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/RELEASE.md).
 
-## Pre-1.0 semver policy
+## Semver policy from 1.0.0
 
-While the version is `0.x`:
+From 1.0.0 the suite follows semantic versioning in full:
 
-- a **minor** bump (`0.x` → `0.(x+1)`) may include breaking API changes;
-- a **patch** bump (`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible.
+- a **breaking** change bumps the **major** version. A commit carrying `!` or
+  a `BREAKING CHANGE:` footer is a major-bump trigger, and the changelog marks
+  each such entry **BREAKING**;
+- a **minor** bump is additive and API-compatible;
+- a **patch** bump is bugfix-only.
 
-All three published surfaces share one workspace version and are released
-together. That coherence is enforced in CI: a version-coherence check fails
-the build if the three version sources disagree.
+That is what the version number commits to; it is a policy statement, not a
+claim of stability beyond what semver means. All three published surfaces
+share one workspace version and are released together, and a
+version-coherence check in CI fails the build if the version sources
+(`Cargo.toml`, `pyproject.toml`, `package.json`, `CITATION.cff`) disagree.
+
+The one exception is the C ABI. `libpurrdf`'s [`purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h) carries its own `PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR` (currently **0.7**), bumped on every exported-signature change, pinned by `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through `purrdf_abi_version`. It is versioned separately from the workspace and stays `0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise about it.
 
 ## MSRV policy
 
@@ -27,7 +34,7 @@ The supported minimum Rust is `rust-version` in the root `Cargo.toml` —
 currently **1.96** — on the **stable** channel, enforced by a dedicated CI
 MSRV job that sets `RUSTUP_TOOLCHAIN` explicitly and asserts the compiler it
 measured really is 1.96. Raising the MSRV is a notable change recorded in the
-changelog and, pre-1.0, rides a minor bump.
+changelog; it rides a **minor** bump and never ships in a patch release.
 
 The MSRV is a promise to consumers; the development toolchain is a tool
 choice, and the two are orthogonal. `rust-toolchain.toml` pins a **dated
