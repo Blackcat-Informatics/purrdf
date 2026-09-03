@@ -70,7 +70,7 @@ underneath a caller.
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
 workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
-C. Most applications should depend on the umbrella
+C (the GTS container itself reaches Python and C, not the wasm package). Most applications should depend on the umbrella
 [`purrdf`](https://crates.io/crates/purrdf) crate, which re-exports this crate
 as `purrdf::xsd`; depend on `purrdf-xsd` directly when you just want a small,
 dependency-free XSD value library.

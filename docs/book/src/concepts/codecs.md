@@ -85,8 +85,8 @@ RDF 1.2 statement-level data (triple terms, reifier bindings, annotations)
 survives every star-capable round-trip. Serializing into a star-incapable
 projection drops that layer *loudly*: the realized drop count is handed to the
 machine-readable loss ledger
-([`generated/rdf-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/rdf-loss-matrix.json))
-rather than disappearing. The same discipline applies at the SPARQL results
+([`generated/transcode-loss-matrix.json`](https://github.com/Blackcat-Informatics/purrdf/blob/main/generated/transcode-loss-matrix.json),
+code `rdf12-star-unrepresentable`) rather than disappearing. The same discipline applies at the SPARQL results
 boundary ([Result Formats](../sparql/results.md)) and the RDF↔GTS boundary.
 
 ## The succinct pack codec

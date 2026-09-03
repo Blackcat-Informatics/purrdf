@@ -160,6 +160,26 @@ _EXTEND_MANIFEST = (
     _REPO / "crates" / "sparql-conformance" / "suite" / "purrdf-extend" / "manifest.ttl"
 )
 
+# The revision-pinned W3C JSON-LD 1.1 corpora. Each file carries its own
+# `expected_vector_count`, and `crates/rdf/tests/jsonld_w3c_conformance.rs` asserts
+# that count against the vector list AND against the exact pass count on every run
+# (`assert_eq!(passed, EXPECTED_VECTOR_COUNT, "exact W3C pass count")`), so the
+# field is a measurement this script may quote. The lens is not a row of the
+# generated matrix block, which is how its scoreboard row went ungated while every
+# neighbouring row was derived.
+_JSONLD_VECTORS = (
+    _REPO / "crates" / "rdf" / "tests" / "fixtures" / "jsonld-w3c-rec" / "vectors.json"
+)
+_JSONLD_COMPACTION_VECTORS = (
+    _REPO
+    / "crates"
+    / "rdf"
+    / "tests"
+    / "fixtures"
+    / "jsonld-w3c-rec"
+    / "compaction_vectors.json"
+)
+
 _MATRIX_BEGIN = "<!-- BEGIN GENERATED: conformance-matrix -->"
 _MATRIX_END = "<!-- END GENERATED: conformance-matrix -->"
 
@@ -2952,6 +2972,85 @@ def load_matrix() -> dict[str, tuple[int, int]]:
     return suites
 
 
+def load_jsonld_vector_counts() -> tuple[int, int]:
+    """(toRDF vectors, compaction vectors) read from the pinned W3C corpora.
+
+    Each file's ``expected_vector_count`` must equal the length of its own vector
+    list here, exactly as the Rust harness asserts, so a corpus edited by hand
+    without its count fails this loader rather than silently re-basing a claim.
+    """
+    counts: list[int] = []
+    for path in (_JSONLD_VECTORS, _JSONLD_COMPACTION_VECTORS):
+        data = json.loads(_read(path))
+        expected = int(data["expected_vector_count"])
+        actual = len(data["vectors"])
+        if expected != actual:
+            raise SystemExit(
+                f"check-doc-claims: {path.relative_to(_REPO)} declares "
+                f"expected_vector_count={expected} but carries {actual} vectors"
+            )
+        counts.append(expected)
+    return counts[0], counts[1]
+
+
+def jsonld_lens_claims() -> list[Claim]:
+    """Every prose restatement of the JSON-LD context-lens numbers.
+
+    Two sites: the CONFORMANCE scoreboard row and the root README's table row,
+    both derived from the pinned corpora rather than from each other.
+    """
+    to_rdf, compaction = load_jsonld_vector_counts()
+    src = (
+        "expected_vector_count in crates/rdf/tests/fixtures/jsonld-w3c-rec/"
+        "{vectors,compaction_vectors}.json, asserted as the exact pass count by "
+        "crates/rdf/tests/jsonld_w3c_conformance.rs"
+    )
+    expected = {
+        "to_rdf": to_rdf,
+        "to_rdf_total": to_rdf,
+        "compaction": compaction,
+        "compaction_total": compaction,
+    }
+    pattern = (
+        r"\*\*(?P<to_rdf>\d+) / (?P<to_rdf_total>\d+)\*\* applicable toRDF · "
+        r"\*\*(?P<compaction>\d+) / (?P<compaction_total>\d+)\*\* exact compaction"
+    )
+    return [
+        Claim(
+            "the CONFORMANCE JSON-LD 1.1 context-lens scoreboard row",
+            _CONFORMANCE,
+            r"\| JSON-LD 1\.1 context lens \| W3C JSON-LD 1\.1 REC \+ first-party "
+            r"RDF 1\.2 vectors \| " + pattern,
+            expected,
+            src,
+        ),
+        Claim(
+            "the root README's JSON-LD 1.1 context-lens row",
+            _README,
+            r"\| JSON-LD 1\.1 context lens \| W3C JSON-LD 1\.1 REC toRDF \+ compaction "
+            r"\(`crates/rdf/tests/fixtures/jsonld-w3c-rec/`\) \| " + pattern + r" \|",
+            expected,
+            src,
+        ),
+    ]
+
+
+def rdf12_canon_profile_claim(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
+    """The root README's `purrdf-rdfc12` row restates the generated matrix row."""
+    passed, ledgered = matrix["RDF 1.2 canonicalization profile"]
+    return [
+        Claim(
+            "the root README's RDF 1.2 canonicalization-profile row",
+            _README,
+            r"\| RDF 1\.2 canonicalization profile \(`purrdf-rdfc12` v1\) \| "
+            r"first-party vectors \(`vectors/rdf12-canon/`\) \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* \|",
+            {"passed": passed, "total": passed + ledgered},
+            "the generated conformance-matrix block in docs/CONFORMANCE.md",
+        )
+    ]
+
+
 def load_governor_corpus_counts() -> dict[str, int]:
     """Case counts derived from the frozen governor-corpus manifest.
 
@@ -5410,8 +5509,10 @@ def main(argv: list[str]) -> int:
     problems.extend(overclaim_problems)
     checked += 1
 
-    for claim in build_claims(
-        inventory, matrix, census, lanes, mechanisms, extend_families
+    for claim in (
+        build_claims(inventory, matrix, census, lanes, mechanisms, extend_families)
+        + jsonld_lens_claims()
+        + rdf12_canon_profile_claim(matrix)
     ):
         claim.check()
         problems.extend(claim.failures)

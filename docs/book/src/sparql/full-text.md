@@ -21,7 +21,7 @@ dataset, tokenizes them by the Unicode standard's own rules, and answers ranked
 retrieval queries with BM25 scores — from SPARQL, through the evaluator's
 property-function seam, under IRIs the caller supplies.
 
-It is an **out-of-core sibling crate**, not a kernel change: nothing in
+It is a **sibling crate outside `purrdf-core`**, not a kernel change: nothing in
 `purrdf-core`, `purrdf-sparql-algebra` or the property-function seam itself was
 altered to admit it. That is the shape every extension in this chapter takes.
 

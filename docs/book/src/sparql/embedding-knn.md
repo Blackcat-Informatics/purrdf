@@ -13,7 +13,10 @@ on wasm32. It is an exact scan — every candidate scored, no pruning, no
 approximate index — bounded by a caller-supplied `KnnGuard`, under three
 metrics (cosine, negative dot, squared Euclidean), over a PURREMB embedding
 space. PurRDF computes no embeddings and runs no ANN payload: the vectors
-arrive in an artifact the caller produced.
+come from a PURREMB artifact the caller fills, and PurRDF writes that carrier
+itself (`EmbeddingBuilder` in memory, `EmbeddingStreamWriter` streaming — Rust
+only) and opens it fail-closed; the model that produced the vectors is the
+caller's.
 
 The PURREMB layer in `purrdf-core` (see
 [Deterministic embedding companions](../concepts/codecs.md#deterministic-embedding-companions)

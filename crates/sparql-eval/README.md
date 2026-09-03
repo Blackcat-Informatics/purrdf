@@ -37,7 +37,8 @@ Design pillars:
   per-row definition otherwise, cost-based BGP planning (with an
   `explain_query` introspection API), SPARQL UPDATE, the SEP-0009 composite
   datatypes (`FOLD`/`UNFOLD` and the `cdt:` function library), and a
-  host-injectable `SERVICE` resolver so federation stays wasm-portable.
+  host-injectable `SERVICE` resolver so federation stays wasm-portable (no
+  HTTP client ships; the host supplies the `HttpTransport` and the resolver).
 - **Caller-keyed extension seams** — scalar functions (`UserFunctionRegistry`,
   whose native bodies carry SPARQL's expression-error channel so a per-solution
   domain error drops the row under `FILTER` or leaves the variable unbound
@@ -98,7 +99,7 @@ Serialize results to SPARQL JSON/XML/CSV/TSV with the sibling
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
 workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
-C. Most applications should depend on the umbrella
+C (the GTS container itself reaches Python and C, not the wasm package). Most applications should depend on the umbrella
 [`purrdf`](https://crates.io/crates/purrdf) crate, which re-exports this crate
 under `purrdf::sparql`; depend on `purrdf-sparql-eval` directly only when you
 want the evaluator alone.

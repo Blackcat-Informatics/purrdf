@@ -91,7 +91,7 @@ reproducing idiom; `ORDER BY DESC(?score)` can disagree with it.
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)
 workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
-C. Most applications should depend on the umbrella
+C (the GTS container itself reaches Python and C, not the wasm package). Most applications should depend on the umbrella
 [`purrdf`](https://crates.io/crates/purrdf) crate; depend on `purrdf-text`
 directly when you want the index and its arithmetic on their own.
 
