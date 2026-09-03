@@ -72,6 +72,12 @@ PURRDF_RELEASE_CRATES=(
 # the in-page anchor all derive from it — and scripts/check-publish-order.py
 # holds it to the release set. Membership itself is a fact about crates.io and
 # is only ever decided by the preflight, never by prose.
+#
+# This array is ALSO the whole of what scripts/bootstrap-crates-io.sh will
+# publish. An API token can create a record; it cannot publish a new version of
+# any crate that has one (every existing record is locked to Trusted Publishing
+# and answers a token publish with 403), so the bootstrap walks this ledger and
+# refuses any entry that has a record, by name.
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_UNBOOTSTRAPPED_CRATES=(

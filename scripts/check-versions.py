@@ -26,7 +26,7 @@ lint closes both gaps as a hard, no-optionality gate:
    publishable crate missing from the lane is a latent release break — e.g. a
    listed crate depending on an unlisted one makes ``cargo publish`` fail on a
    missing dependency. Its consumers (``.github/workflows/release-cargo.yaml``,
-   ``scripts/bootstrap-crates-io.sh`` and
+   ``scripts/publish-release-crates.sh``, ``scripts/bootstrap-crates-io.sh`` and
    ``scripts/check-crates-io-records.sh``) must *source* that file rather than
    restate the list, so the crates.io record preflight can never be checking a
    different set than the one the publisher walks.
@@ -179,6 +179,7 @@ _CRATE_TOKEN_RE = re.compile(r"^purrdf(?:-[a-z]+)*$")
 _RELEASE_LIST = "scripts/release-crates.sh"
 _RELEASE_LIST_CONSUMERS = (
     ".github/workflows/release-cargo.yaml",
+    "scripts/publish-release-crates.sh",
     "scripts/bootstrap-crates-io.sh",
     "scripts/check-crates-io-records.sh",
 )
