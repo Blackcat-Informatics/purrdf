@@ -82,6 +82,19 @@ for _name in _GTS_EXPORTS:
     _value = getattr(_module, _name, None)
     if _value is not None:
         setattr(_gts, _name, _value)
+
+# The three relational EXPORT writers are pure Python (see `_gts_export`), layered
+# on the native `gts_relational_rows_from_bytes` above. They are attached to the
+# root module as well as to `purrdf.gts` because that is where they have always
+# been importable from: they used to be `#[pyfunction]`s registered natively onto
+# `rdf`, and moving the implementation must not move the name.
+from . import _gts_export as _gts_export_impl  # noqa: E402
+
+for _name in ("gts_to_sqlite", "gts_to_duckdb", "gts_to_parquet"):
+    _value = getattr(_gts_export_impl, _name)
+    setattr(_module, _name, _value)
+    setattr(_gts, _name, _value)
+
 setattr(_gts, "__all__", [n for n in _GTS_EXPORTS if hasattr(_gts, n)])
 
 # Attach every engine to the swapped module by attribute access …

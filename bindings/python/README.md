@@ -629,10 +629,21 @@ rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs
 ```
 
 `gts_relational_rows_from_bytes` returns a `GtsRelationalRows` dict of five row
-lists; writing them to a store is the caller's step. The names `gts_to_sqlite`,
-`gts_to_duckdb` and `gts_to_parquet` are declared but **not implemented**: each
-raises `ValueError` and writes nothing. The same entry points are grouped under
-`purrdf.gts` for discoverability.
+lists. `gts_to_sqlite(data, path)`, `gts_to_duckdb(data, path)` and
+`gts_to_parquet(data, out_dir)` write those five tables out — `terms`, `quads`,
+`reifiers`, `annotations`, `blobs` — in the projection's own row order, so
+exporting the same container twice produces the same content. `gts_to_parquet`
+writes one file per table and returns their paths in table order.
+
+SQLite needs nothing beyond the standard library. The other two raise
+`ModuleNotFoundError` naming the extra when it is absent:
+
+```bash
+pip install 'purrdf[duckdb]'    # gts_to_duckdb
+pip install 'purrdf[parquet]'   # gts_to_parquet
+```
+
+The same entry points are grouped under `purrdf.gts` for discoverability.
 
 ## Learn more
 

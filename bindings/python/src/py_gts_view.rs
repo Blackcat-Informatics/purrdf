@@ -294,37 +294,25 @@ fn gts_relational_rows_from_bytes<'py>(
     relational_rows_dict(py, rows)
 }
 
-#[pyfunction]
-fn gts_to_sqlite(data: &[u8], path: &str) -> PyResult<String> {
-    let _ = (data, path);
-    Err(PyValueError::new_err(
-        "gts_to_sqlite is pending reimplementation on purrdf primitives",
-    ))
-}
-
-#[pyfunction]
-fn gts_to_duckdb(data: &[u8], path: &str) -> PyResult<String> {
-    let _ = (data, path);
-    Err(PyValueError::new_err(
-        "gts_to_duckdb is pending reimplementation on purrdf primitives",
-    ))
-}
-
-#[pyfunction]
-fn gts_to_parquet(data: &[u8], out_dir: &str) -> PyResult<Vec<String>> {
-    let _ = (data, out_dir);
-    Err(PyValueError::new_err(
-        "gts_to_parquet is pending reimplementation on purrdf primitives",
-    ))
-}
+// `gts_to_sqlite` / `gts_to_duckdb` / `gts_to_parquet` are NOT here.
+//
+// They used to be `#[pyfunction]`s that unconditionally raised a
+// `pending reimplementation` ValueError — a callable that always throws, which
+// is documentation by exception. They now live in
+// `python/src/purrdf/_gts_export.py` and are attached to the same public names,
+// so the surface is unchanged for a caller and this stays a 1.x addition.
+//
+// Python, not Rust, because the half that has to be fast and has to agree with
+// the rest of PurRDF — folding the container and dictionary-encoding it — is
+// `gts_relational_rows_from_bytes` above, and it is already here. What remained
+// was schema definition and row insertion for three third-party file formats;
+// doing that in Rust would pull `rusqlite`, `duckdb` and the Arrow/Parquet stack
+// into the workspace to write rows those projects already know how to write.
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGtsFoldView>()?;
     m.add("GTS_ALL_SCOPE", ALL_SCOPE)?;
     m.add_function(wrap_pyfunction!(gts_relational_rows_from_bytes, m)?)?;
-    m.add_function(wrap_pyfunction!(gts_to_sqlite, m)?)?;
-    m.add_function(wrap_pyfunction!(gts_to_duckdb, m)?)?;
-    m.add_function(wrap_pyfunction!(gts_to_parquet, m)?)?;
     Ok(())
 }
 

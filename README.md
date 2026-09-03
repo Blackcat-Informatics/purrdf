@@ -567,8 +567,10 @@ The Python package also ships an [rdflib compatibility layer](./bindings/python/
 (`from purrdf.compat.rdflib import Graph`) and a GTS fold view
 (`GtsFoldViewNative`, `gts_relational_rows_from_bytes`) that reads a container
 into in-memory relational row dicts (terms, quads, reifiers, annotations,
-blobs). The three names `gts_to_sqlite`, `gts_to_duckdb` and `gts_to_parquet`
-are declared but not implemented: each raises `ValueError` and writes nothing.
+blobs). `gts_to_sqlite`, `gts_to_duckdb` and `gts_to_parquet` write those five
+tables out — one row per projection row, in the projection's own order, so the
+same container exports to the same content twice. SQLite needs nothing beyond
+the standard library; the other two take the `[duckdb]` / `[parquet]` extras.
 
 For a literal, zero-change `import rdflib`, install the opt-in extra:
 

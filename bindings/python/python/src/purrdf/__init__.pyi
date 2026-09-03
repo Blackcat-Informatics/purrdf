@@ -1172,11 +1172,18 @@ class GtsFoldViewNative:
 
 def gts_relational_rows_from_bytes(data: bytes) -> GtsRelationalRows: ...
 
-# Declared but NOT implemented: each of the three below raises `ValueError`
-# unconditionally and writes nothing (bindings/python/src/py_gts_view.rs).
-# `gts_relational_rows_from_bytes` is the working relational surface.
+# The relational EXPORT writers, layered in pure Python over
+# `gts_relational_rows_from_bytes` (python/src/purrdf/_gts_export.py). Five tables
+# — terms, quads, reifiers, annotations, blobs — written in the projection's own
+# row order, so exporting the same container twice produces the same content.
+#
+# `gts_to_sqlite` uses the standard library and needs nothing extra. The other two
+# need an optional dependency and raise `ModuleNotFoundError` naming the extra
+# when it is absent: `pip install 'purrdf[duckdb]'` / `'purrdf[parquet]'`.
 def gts_to_sqlite(data: bytes, path: str) -> str: ...
 def gts_to_duckdb(data: bytes, path: str) -> str: ...
+
+# Returns one path per table, in the fixed table order rather than directory order.
 def gts_to_parquet(data: bytes, out_dir: str) -> list[str]: ...
 
 # A Python handle to a frozen, immutable RDF 1.2 dataset.
