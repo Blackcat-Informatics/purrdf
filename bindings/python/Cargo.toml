@@ -19,7 +19,20 @@ workspace = true
 name = "purrdf_native"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
+# No auto-generated lib TEST and no auto-generated lib BENCH harness. Both would
+# be ordinary executables linking this lib, and this lib is a PyO3
+# `extension-module`: it deliberately leaves the CPython API unresolved for the
+# interpreter to supply at dlopen time. An executable has no interpreter to
+# supply them, so it fails at link with ~70 undefined `pyo3-ffi` refcount
+# symbols. The extension is exercised through pytest against the built module
+# (`make pytest`), which is the only place those symbols exist.
+#
+# `bench = false` is not redundant with `test = false`: `cargo bench` builds the
+# BENCH target, which `test = false` does not disable, so `cargo bench
+# --workspace` broke on this crate while `cargo test --workspace` was green. CI
+# never caught it because the benchmark workflow names crates individually.
 test = false
+bench = false
 
 [dependencies]
 purrdf = { workspace = true }
