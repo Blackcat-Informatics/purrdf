@@ -138,14 +138,22 @@ def _rows(data: bytes) -> dict[str, Any]:
     return _native.gts_relational_rows_from_bytes(data)
 
 
-def _flatten_terms(terms: Sequence[Any]) -> Iterator[tuple[Any, ...]]:
-    """Flatten each term row's optional ``(s, p, o)`` triple into three columns.
+def _flatten_terms(
+    terms: Sequence[Any], directions: Sequence[Any]
+) -> Iterator[tuple[Any, ...]]:
+    """Flatten each term row's ``(s, p, o)`` triple and zip in its base direction.
 
-    The unpack is deliberately strict about arity. The projection's row is public
-    API that grows only at the END, so a widened row should fail loudly here
-    rather than be silently accepted and written into the wrong columns.
+    ``directions`` is a column parallel to ``terms`` rather than a field inside the
+    row, because the row is public API that callers unpack positionally — see
+    ``purrdf_rdf::gts_view::term_directions``. The two are index-aligned by
+    construction; ``strict=True`` says so rather than trusting it.
+
+    The unpack is deliberately strict about arity: a row that changes shape should
+    fail loudly here rather than be accepted and written into the wrong columns.
     """
-    for term_id, kind, value, datatype_id, lang, reifier_id, triple, direction in terms:
+    for (term_id, kind, value, datatype_id, lang, reifier_id, triple), direction in zip(
+        terms, directions, strict=True
+    ):
         s, p, o = triple if triple is not None else (None, None, None)
         yield (term_id, kind, value, datatype_id, lang, direction, reifier_id, s, p, o)
 
@@ -153,7 +161,7 @@ def _flatten_terms(terms: Sequence[Any]) -> Iterator[tuple[Any, ...]]:
 def _table_rows(rows: dict[str, Any], table: str) -> list[tuple[Any, ...]]:
     """The row tuples for one table, in the projection's own order."""
     if table == "terms":
-        return list(_flatten_terms(rows["terms"]))
+        return list(_flatten_terms(rows["terms"], rows["directions"]))
     if table == "blobs":
         return [(digest, payload) for digest, payload in rows["blobs"]]
     return [tuple(row) for row in rows[table]]

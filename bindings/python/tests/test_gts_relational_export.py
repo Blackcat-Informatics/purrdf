@@ -92,7 +92,9 @@ def test_sqlite_export_round_trips_every_table(
         ).fetchall()
         expected = [
             (tid, kind, value, dt, lang, direction, rid, *(triple or (None, None, None)))
-            for tid, kind, value, dt, lang, rid, triple, direction in rows["terms"]
+            for (tid, kind, value, dt, lang, rid, triple), direction in zip(
+                rows["terms"], rows["directions"], strict=True
+            )
         ]
         assert terms == expected
     finally:
@@ -259,7 +261,10 @@ def test_base_direction_survives_the_export(tmp_path: Path) -> None:
     # property that was actually lost.
     assert len({(v, lang, d) for v, lang, d in stored}) == 3, stored
     # The export agrees with the projection it is derived from.
-    assert sorted(t[7] or "" for t in rows["terms"] if t[1] == 1) == ["", "ltr", "rtl"]
+    literal_dirs = [
+        d for t, d in zip(rows["terms"], rows["directions"], strict=True) if t[1] == 1
+    ]
+    assert sorted(d or "" for d in literal_dirs) == ["", "ltr", "rtl"]
 
 
 def test_one_reifier_binding_two_triples_exports_both(tmp_path: Path) -> None:

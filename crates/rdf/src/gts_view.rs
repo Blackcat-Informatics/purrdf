@@ -104,28 +104,22 @@ pub enum PublicValue {
 }
 
 /// One dictionary term row: `(term_id, kind, value, datatype_id, lang,
-/// reifier_id, triple, direction)` where `kind` is `0` IRI / `1` literal / `2`
-/// blank node / `3` triple term.
+/// reifier_id, triple)` where `kind` is `0` IRI / `1` literal / `2` blank node /
+/// `3` triple term.
 ///
 /// `triple` carries a quoted-triple term's OWN `(s, p, o)` component ids when
 /// the term is self-describing. It is not derivable from `reifier_id`: one
 /// reifier id may bind several different triples, so a projection that offered
 /// only the reifier column could not say which triple THIS term is.
 ///
-/// `direction` is the RDF 1.2 literal BASE DIRECTION (`"ltr"` / `"rtl"`), and it
-/// is a column of its own rather than a suffix on `lang`. The term model stores
-/// the two separately — `lang` is bare (`en`), and the public-text renderer
-/// recombines them into `@en--ltr` for display only — so a projection that
-/// emitted `lang` alone dropped the direction entirely. Two literals differing
-/// only in direction are DIFFERENT terms under the canonicalization profile
-/// (`@en--ltr` ≠ `@en--rtl`), so collapsing them is a silent conflation, not a
-/// cosmetic loss.
+/// # RDF 1.2 base direction is NOT in this row
 ///
-/// It is APPENDED rather than placed beside `lang` where it reads best. Every
-/// index in this tuple is public API that callers unpack positionally, so a
-/// reordering would keep compiling and silently move `reifier_id` into a
-/// caller's `direction` slot. Growing only at the end is what makes widening
-/// this row safe.
+/// It is a parallel column instead — [`term_directions`] — because this alias is
+/// published API and callers unpack it POSITIONALLY. Widening the tuple is a
+/// breaking change to every such caller, and it fails at runtime rather than at
+/// the type boundary for the Python and JS surfaces that see the same row. A
+/// parallel column is a worse shape to read than an eighth field and a better one
+/// to add, which is the whole trade: this is an additive release.
 pub type TermRow = (
     usize,
     u8,
@@ -134,7 +128,6 @@ pub type TermRow = (
     Option<String>,
     Option<usize>,
     Option<(usize, usize, usize)>,
-    Option<String>,
 );
 /// One quad row of dictionary term ids: `(subject, predicate, object, graph?)`.
 pub type QuadRow = (usize, usize, usize, Option<usize>);
@@ -148,6 +141,34 @@ pub type ReifierRow = (usize, usize, usize, usize, Option<usize>);
 pub type AnnotationRow = (usize, usize, usize, Option<usize>);
 /// One decoded blob row: `(digest, payload bytes)`.
 pub type BlobRow = (String, Vec<u8>);
+
+/// The RDF 1.2 base direction of every term, positionally parallel to
+/// [`RelationalRows::terms`].
+///
+/// `Some("ltr")` / `Some("rtl")` for a directional language-tagged literal, `None`
+/// for everything else. Index `i` describes the term whose id is `i`, which is the
+/// same index [`relational_rows`] assigns, so the two zip.
+///
+/// # Why this is not an eighth column on `TermRow`
+///
+/// Direction genuinely belongs beside `lang`, and putting it there is a breaking
+/// change: [`TermRow`] is a published tuple alias that callers unpack positionally,
+/// and the Python and JS surfaces expose the same row shape where the failure is at
+/// runtime rather than at a type boundary. So it is added ALONGSIDE rather than
+/// inside — a worse shape to read, a safe one to ship.
+///
+/// The term model has always carried direction; only the projection omitted it, and
+/// `lang` is stored bare (`en`) with `@en--ltr` recombined for display, so a caller
+/// reading `lang` alone silently loses it. Two literals differing only in direction
+/// are DIFFERENT terms under the canonicalization profile, so that loss conflates.
+#[must_use]
+pub fn term_directions(graph: &Graph) -> Vec<Option<String>> {
+    graph
+        .terms
+        .iter()
+        .map(|term| term.direction.clone())
+        .collect()
+}
 
 /// The compact dictionary-encoded relational projection of a folded GTS graph:
 /// term dictionary, quads, statement-layer rows, and decoded blobs, all keyed by
@@ -810,7 +831,6 @@ pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
                     term.lang.clone(),
                     term.reifier,
                     term.triple,
-                    term.direction.clone(),
                 )
             })
             .collect(),

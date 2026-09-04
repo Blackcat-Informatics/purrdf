@@ -259,10 +259,13 @@ impl PyGtsFoldView {
 
     fn relational_rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let view = &self.inner;
-        let rows = py
-            .detach(|| view.relational_rows())
+        let (rows, directions) = py
+            .detach(|| {
+                view.relational_rows()
+                    .map(|rows| (rows, crate::gts_view::term_directions(view.graph())))
+            })
             .map_err(PyValueError::new_err)?;
-        relational_rows_dict(py, rows)
+        relational_rows_dict(py, rows, directions)
     }
 }
 
@@ -285,13 +288,14 @@ fn gts_relational_rows_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
 ) -> PyResult<Bound<'py, PyDict>> {
-    let rows = py
+    let (rows, directions) = py
         .detach(|| {
             let graph = purrdf_gts::reader::read(data, true, None);
             crate::gts_view::relational_rows(&graph)
+                .map(|rows| (rows, crate::gts_view::term_directions(&graph)))
         })
         .map_err(PyValueError::new_err)?;
-    relational_rows_dict(py, rows)
+    relational_rows_dict(py, rows, directions)
 }
 
 // `gts_to_sqlite` / `gts_to_duckdb` / `gts_to_parquet` are NOT here.
@@ -457,9 +461,20 @@ fn term_kind_int(kind: TermKind) -> u8 {
     }
 }
 
-fn relational_rows_dict(py: Python<'_>, rows: RelationalRows) -> PyResult<Bound<'_, PyDict>> {
+/// Build the projection dict.
+///
+/// `directions` is a SEPARATE key positionally parallel to `terms`, not an eighth
+/// column inside each term row. Python callers unpack those rows positionally, so
+/// widening them breaks at runtime with no type boundary to catch it; a new key
+/// breaks nothing that does not already ask for it.
+fn relational_rows_dict(
+    py: Python<'_>,
+    rows: RelationalRows,
+    directions: Vec<Option<String>>,
+) -> PyResult<Bound<'_, PyDict>> {
     let out = PyDict::new(py);
     out.set_item("terms", rows.terms)?;
+    out.set_item("directions", directions)?;
     out.set_item("quads", rows.quads)?;
     out.set_item("reifiers", rows.reifiers)?;
     out.set_item("annotations", rows.annotations)?;
