@@ -112,8 +112,7 @@ from purrdf import gts_relational_rows_from_bytes
 rows = gts_relational_rows_from_bytes(gts_bytes)  # terms, quads, reifiers, annotations, blobs
 ```
 
-把这些行写入某个存储是调用方自己的步骤。`gts_to_sqlite`、`gts_to_duckdb` 与
-`gts_to_parquet` 这三个名字已声明但未实现：每一个都抛出 `ValueError` 且不写出任何东西。
+把这些行写入某个存储是调用方自己的步骤。
 
 ## 图、表格与 Research Object（RO）归档
 

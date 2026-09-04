@@ -1074,8 +1074,19 @@ def feedback_bundle_native(
 
 # ── GTS fold view and relational exports (bindings/python/src/py_gts_view.rs) ───
 
+# (term_id, kind, value, datatype_id, lang, reifier_id, triple, direction).
+# `direction` is the RDF 1.2 literal base direction ("ltr"/"rtl") and is APPENDED
+# rather than placed beside `lang`: callers unpack this row positionally, so the
+# row grows only at the end.
 _TermRow = tuple[
-    int, int, str | None, int | None, str | None, int | None, tuple[int, int, int] | None
+    int,
+    int,
+    str | None,
+    int | None,
+    str | None,
+    int | None,
+    tuple[int, int, int] | None,
+    str | None,
 ]
 _QuadRow = tuple[int, int, int, int | None]
 _ReifierRow = tuple[int, int, int, int, int | None]
@@ -1172,11 +1183,18 @@ class GtsFoldViewNative:
 
 def gts_relational_rows_from_bytes(data: bytes) -> GtsRelationalRows: ...
 
-# Declared but NOT implemented: each of the three below raises `ValueError`
-# unconditionally and writes nothing (bindings/python/src/py_gts_view.rs).
-# `gts_relational_rows_from_bytes` is the working relational surface.
+# The relational EXPORT writers, layered in pure Python over
+# `gts_relational_rows_from_bytes` (python/src/purrdf/_gts_export.py). Five tables
+# — terms, quads, reifiers, annotations, blobs — written in the projection's own
+# row order, so exporting the same container twice produces the same content.
+#
+# `gts_to_sqlite` uses the standard library and needs nothing extra. The other two
+# need an optional dependency and raise `ModuleNotFoundError` naming the extra
+# when it is absent: `pip install 'purrdf[duckdb]'` / `'purrdf[parquet]'`.
 def gts_to_sqlite(data: bytes, path: str) -> str: ...
 def gts_to_duckdb(data: bytes, path: str) -> str: ...
+
+# Returns one path per table, in the fixed table order rather than directory order.
 def gts_to_parquet(data: bytes, out_dir: str) -> list[str]: ...
 
 # A Python handle to a frozen, immutable RDF 1.2 dataset.

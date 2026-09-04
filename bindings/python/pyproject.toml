@@ -31,6 +31,12 @@ classifiers = [
 # hence a separate distribution (bindings/python-rdflib-shadow), never bundled
 # into the main purrdf wheel and deliberately absent from the [dev] oracle env.
 rdflib = ["purrdf-rdflib"]
+# The optional halves of the GTS relational export surface. `gts_to_sqlite` needs
+# NEITHER — `sqlite3` is in the standard library — which is why there is no
+# `sqlite` extra to install: an extra that resolves to nothing is a way to make a
+# caller think they have to opt in to something that already works.
+duckdb = ["duckdb>=1.1"]
+parquet = ["pyarrow>=17"]
 
 [project.urls]
 Homepage = "https://blackcatinformatics.ca/purrdf/"
@@ -54,6 +60,11 @@ dev = [
   "jsonschema>=4,<5",
   "linkml==1.11.1",
   "pydantic>=2,<3",
+  # The optional halves of the GTS relational export, so the round-trip tests for
+  # all three writers actually RUN in the dev environment rather than skipping.
+  # A writer whose test skips by default is a writer nobody is checking.
+  "duckdb>=1.1",
+  "pyarrow>=17",
 ]
 
 # uv-only: resolve the opt-in `rdflib` extra's `purrdf-rdflib` from the in-repo

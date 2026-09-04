@@ -115,9 +115,12 @@ from purrdf import gts_relational_rows_from_bytes
 rows = gts_relational_rows_from_bytes(gts_bytes)  # terms, quads, reifiers, annotations, blobs
 ```
 
-Writing those rows to a store is the caller's step. The names `gts_to_sqlite`,
-`gts_to_duckdb` and `gts_to_parquet` are declared but not implemented: each
-raises `ValueError` and writes nothing.
+`gts_to_sqlite(data, path)`, `gts_to_duckdb(data, path)` and
+`gts_to_parquet(data, out_dir)` write those same five tables out, in the
+projection's own row order — so exporting a container twice produces the same
+content. SQLite needs nothing beyond the standard library; the other two raise
+`ModuleNotFoundError` naming the extra to install (`purrdf[duckdb]`,
+`purrdf[parquet]`).
 
 ## Graph, tabular, and research-object archives
 
