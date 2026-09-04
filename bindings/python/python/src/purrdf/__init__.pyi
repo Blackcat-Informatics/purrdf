@@ -1074,19 +1074,14 @@ def feedback_bundle_native(
 
 # ── GTS fold view and relational exports (bindings/python/src/py_gts_view.rs) ───
 
-# (term_id, kind, value, datatype_id, lang, reifier_id, triple, direction).
-# `direction` is the RDF 1.2 literal base direction ("ltr"/"rtl") and is APPENDED
-# rather than placed beside `lang`: callers unpack this row positionally, so the
-# row grows only at the end.
+# (term_id, kind, value, datatype_id, lang, reifier_id, triple).
+#
+# RDF 1.2 base direction is NOT a field here — it is the parallel `directions`
+# column on `GtsRelationalRows`, index-aligned with `terms`. Callers unpack this
+# row positionally, so widening it would break them at runtime with no type
+# boundary to catch it.
 _TermRow = tuple[
-    int,
-    int,
-    str | None,
-    int | None,
-    str | None,
-    int | None,
-    tuple[int, int, int] | None,
-    str | None,
+    int, int, str | None, int | None, str | None, int | None, tuple[int, int, int] | None
 ]
 _QuadRow = tuple[int, int, int, int | None]
 _ReifierRow = tuple[int, int, int, int, int | None]
@@ -1099,6 +1094,8 @@ _InputTermRow = tuple[
 
 class GtsRelationalRows(TypedDict):
     terms: list[_TermRow]
+    # RDF 1.2 base direction ("ltr"/"rtl"), positionally parallel to `terms`.
+    directions: list[str | None]
     quads: list[_QuadRow]
     reifiers: list[_ReifierRow]
     annotations: list[_AnnotationRow]
