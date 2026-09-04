@@ -176,7 +176,11 @@ pub(crate) fn severity_from_term(t: &Term) -> Option<Severity> {
 /// Substitute SHACL message templates of the form `{?varName}` and `{$varName}`
 /// with the string rendering of the first matching binding. Unbound variables are
 /// left unchanged.
-fn substitute_message_templates(msg: &str, bindings: &[(String, Term)]) -> String {
+///
+/// SHACL-SPARQL §5.3.3 defines this for every SPARQL-based constraint, not only
+/// for custom components, so [`crate::sparql::eval_sparql_constraint_view`] calls
+/// it too — hence `pub(crate)` rather than private to this module.
+pub(crate) fn substitute_message_templates(msg: &str, bindings: &[(String, Term)]) -> String {
     static TEMPLATE_RE: OnceLock<regex::Regex> = OnceLock::new();
     let re = TEMPLATE_RE.get_or_init(|| {
         regex::Regex::new(r"\{([$?])([A-Za-z_][A-Za-z0-9_]*)\}")

@@ -817,6 +817,17 @@ pub(crate) enum Command {
         /// shapes graph has none (stdin, or a container).
         #[arg(long = "shapes-graph", value_name = "IRI")]
         shapes_graph: Option<String>,
+        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document: the ontology
+        /// IRI the shapes document imports, then the file that is it. Repeatable, and
+        /// followed transitively — an imported document's own `owl:imports` are resolved
+        /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
+        /// import is only ever the document the operator named. Naming any pair makes the
+        /// closure MANDATORY: an `owl:imports` no pair resolves is then refused by name
+        /// rather than folded in as an empty graph, and a pair the closure never reaches is
+        /// refused as unused. With no `--import` at all the imports are reported on stderr
+        /// and the shapes graph validates alone, exactly as it did before this flag existed.
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,

@@ -401,7 +401,11 @@ triple pattern.
   dataset (`ValidationReport::to_dataset()`), so any syntax — and the CLI's
   `validate --format` — is a serialization of that dataset rather than a text
   round-trip, with the report's minted blank nodes kept distinct from every
-  blank node the data graph carries.
+  blank node the data graph carries. Where it stops: a shapes graph's
+  `owl:imports` are never fetched — the caller supplies `--import IRI=FILE`,
+  the same shape `entails` and `shex` take, and the closure is followed
+  transitively from that table. Naming no pair leaves the imports unresolved
+  and says so on stderr rather than validating against them in silence.
 - **Schema lanes: SHACL ↔ JSON Schema / OpenAPI / Pydantic / LinkML /
   TypeScript / GraphQL** (`purrdf-shapes`, **Rust only**) — `compile_schema`
   lowers a shapes graph (ontology-aware on request, with a coverage report)

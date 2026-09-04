@@ -46,6 +46,42 @@ inference** (parity with pySHACL `inference="none"`); combine with
   its adopted reading and pins it with a frozen corpus — see the
   [SHACL-AF section of docs/CONFORMANCE.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md#shacl-af-node-expressions-normative-surface-vs-owned-extensions).
 
+## `owl:imports` in a shapes graph
+
+A shapes document may carry an `owl:Ontology` header that `owl:imports` other
+documents, and the shapes it constrains with may live entirely in those imports.
+PurRDF resolves that closure — **but it never fetches it**. There is no HTTP
+client in the workspace, every release crate builds for
+`wasm32-unknown-unknown`, and a validation verdict that depends on what a URL
+served today is not reproducible. So the closure is caller-supplied
+configuration, exactly as it is for `entails` and `shex`:
+
+```bash
+purrdf validate --shapes root.ttl \
+  --import https://example.org/shapes-a=a.ttl \
+  --import https://example.org/shapes-b=b.ttl \
+  data.ttl -
+```
+
+The table is followed **transitively** — an imported document's own
+`owl:imports` are resolved from the same table — and a cycle terminates rather
+than looping, because OWL 2 §3.4 defines the imports closure as the transitive
+one and explicitly permits `A` to import `B` to import `A`. Each imported
+document's own `@prefix` declarations travel with it, so a SHACL-AF `sh:select`
+written in an imported file resolves against the prefixes that file declares.
+
+Naming **any** pair makes the closure mandatory: an `owl:imports` no pair
+resolves is refused by name rather than folded in as an empty graph, and a pair
+the closure never reaches is refused as unused rather than read and ignored.
+
+Naming **no** pair is not a refusal. Each unresolved import is reported on
+stderr and the shapes graph validates alone — a shapes document may legitimately
+carry an ontology header whose imports are irrelevant to its shapes, and
+refusing those would reject input that is valid. What is gone is the silence:
+before PurRDF 1.0.1 an unresolved `owl:imports` was ignored without a word, so a
+shapes graph whose shapes all lived in an imported document reported `conforms
+true` against no shapes at all.
+
 ## The SHACL 1.2 reifier-shape draft scope
 
 The crate implements a **scoped** SHACL 1.2 Working Draft feature:

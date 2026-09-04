@@ -100,8 +100,11 @@ pub(crate) fn eval_target_view<D: DatasetView + Sync + FocusGraphSource>(
 /// | `?path` | `result_path` (optional) |
 /// | `?value` | `value` (optional) |
 ///
-/// `component`, `source_shape`, `severity`, and `message` are taken from the caller
-/// and are the same for every row.
+/// `component`, `source_shape` and `severity` are taken from the caller and are the
+/// same for every row. `message` is taken from the caller but is rendered PER ROW:
+/// SHACL-SPARQL §5.3.3 substitutes `{?var}`/`{$var}` templates from the solution's
+/// own variable bindings, so two rows of the same constraint carry different text.
+/// A placeholder naming a variable the solution does not bind is left verbatim.
 ///
 /// Results are returned in solution order; the caller (engine) sorts the final
 /// report deterministically.
@@ -167,6 +170,15 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     let path_index = column_index(&variables, "path");
     let value_index = column_index(&variables, "value");
 
+    // Message templating (§5.3.3) needs the solution's own bindings, so the buffer
+    // is built once and refilled per row — and only when there is a message to
+    // render, so the overwhelmingly common message-less constraint pays nothing.
+    let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+        Vec::with_capacity(variables.len() + 1)
+    } else {
+        Vec::new()
+    };
+
     let mut out: Vec<ValidationResult> = Vec::with_capacity(rows.len());
     for row in &rows {
         let result_path = path_index
@@ -180,6 +192,23 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
             .and_then(Option::as_ref)
             .map(term_value_to_native)
             .or_else(|| Some(focus.clone()));
+        // §5.3.3: render the message against THIS solution. The row's own bindings
+        // come first so a projected `?this` wins; `$this` is added only as a
+        // fallback because it is pre-bound (line ~158) whether or not it is
+        // projected. Nothing else is synthesized — in particular `{$value}` is NOT
+        // filled from the focus-node default above, because that default is a rule
+        // about `sh:value`, not a variable binding the solution actually carries.
+        let message = message.map(|m| {
+            template_bindings.clear();
+            template_bindings.extend(variables.iter().zip(row.iter()).filter_map(|(var, cell)| {
+                cell.as_ref()
+                    .map(|tv| (var.clone(), term_value_to_native(tv)))
+            }));
+            if !template_bindings.iter().any(|(n, _)| n == "this") {
+                template_bindings.push(("this".to_owned(), focus.clone()));
+            }
+            crate::components::substitute_message_templates(m, &template_bindings)
+        });
         out.push(ValidationResult {
             focus_node: focus.clone(),
             result_path,
@@ -188,7 +217,7 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
             source_constraint_component: component.clone(),
             source_shape: source_shape.clone(),
             severity: severity.clone(),
-            message: message.cloned(),
+            message,
             source_box_roles: vec![],
             path_box_roles: vec![],
             result_box_roles: vec![],
@@ -1071,6 +1100,216 @@ mod tests {
         )
         .expect("eval must succeed for non-matching focus");
         assert_eq!(results_other.len(), 0);
+    }
+
+    // ── sh:message templating on the sh:sparql path (SHACL-SPARQL §5.3.3) ─────
+    //
+    // `{$path}` / `{$value}` used to ship unsubstituted in
+    // `sh:resultMessage` because the caller's message string was cloned once per
+    // row while the row's own bindings sat unread. The substitution itself has
+    // always existed (`components::substitute_message_templates`) — it was only
+    // ever reached from the CUSTOM COMPONENT path, never from `sh:sparql`.
+    //
+    // Per CLAUDE.md's refusal rule these tests pin BOTH directions: the
+    // placeholders that must now resolve, and the neighbouring ones that must
+    // still be left alone rather than blanked or refused.
+
+    /// A three-line dataset whose subject carries two typed and one plain literal.
+    fn message_template_dataset() -> Arc<RdfDataset> {
+        dataset_from_ntriples(&[
+            "<http://example.org/s> <http://www.w3.org/2000/01/rdf-schema#label> \"Stakeholder requirement\" .",
+        ])
+    }
+
+    /// The reported constraint shape, reduced to its essentials:
+    /// project `?path` and `?value`, and reference both from `sh:message`.
+    const UNTYPED_LITERAL_SELECT: &str = "SELECT $this ?path ?value WHERE { \
+         $this ?path ?value . FILTER(isLiteral(?value)) \
+         FILTER(DATATYPE(?value) = <http://www.w3.org/2001/XMLSchema#string>) }";
+
+    #[test]
+    fn eval_sparql_constraint_message_substitutes_path_and_value() {
+        let dataset = message_template_dataset();
+        let focus = named_term("http://example.org/s");
+        let message =
+            "Property {$path} contains an untyped plain string literal: '{$value}'.".to_owned();
+
+        let results = eval_sparql_constraint(
+            &dataset,
+            &focus,
+            UNTYPED_LITERAL_SELECT,
+            &dummy_component(),
+            &dummy_shape(),
+            &Severity::Violation,
+            Some(&message),
+            None,
+            None,
+        )
+        .expect("eval must succeed");
+
+        assert_eq!(results.len(), 1, "exactly one untyped literal");
+        assert_eq!(
+            results[0].message.as_deref(),
+            Some(
+                "Property http://www.w3.org/2000/01/rdf-schema#label contains an untyped \
+                 plain string literal: 'Stakeholder requirement'."
+            ),
+            "both {{$path}} and {{$value}} must be substituted from the solution"
+        );
+        // The verdict itself was never wrong; assert it did not move.
+        assert_eq!(
+            results[0].result_path,
+            Some(named_term("http://www.w3.org/2000/01/rdf-schema#label"))
+        );
+        assert_eq!(results[0].severity, Severity::Violation);
+    }
+
+    #[test]
+    fn eval_sparql_constraint_message_accepts_question_mark_sigil() {
+        // §5.3.3 defines BOTH `{?var}` and `{$var}`. The reporter used `{$…}`;
+        // a fix that only handled that sigil would silently keep half the bug.
+        let dataset = message_template_dataset();
+        let focus = named_term("http://example.org/s");
+        let message = "value is '{?value}'".to_owned();
+
+        let results = eval_sparql_constraint(
+            &dataset,
+            &focus,
+            UNTYPED_LITERAL_SELECT,
+            &dummy_component(),
+            &dummy_shape(),
+            &Severity::Violation,
+            Some(&message),
+            None,
+            None,
+        )
+        .expect("eval must succeed");
+        assert_eq!(
+            results[0].message.as_deref(),
+            Some("value is 'Stakeholder requirement'")
+        );
+    }
+
+    #[test]
+    fn eval_sparql_constraint_message_substitutes_this_even_when_unprojected() {
+        // `$this` is PRE-BOUND to the focus node before the query runs, so it is
+        // available to the template whether or not the SELECT projects it.
+        let dataset = message_template_dataset();
+        let focus = named_term("http://example.org/s");
+        let message = "focus {$this} failed".to_owned();
+
+        let results = eval_sparql_constraint(
+            &dataset,
+            &focus,
+            "SELECT ?value WHERE { $this ?path ?value }",
+            &dummy_component(),
+            &dummy_shape(),
+            &Severity::Violation,
+            Some(&message),
+            None,
+            None,
+        )
+        .expect("eval must succeed");
+        assert_eq!(
+            results[0].message.as_deref(),
+            Some("focus http://example.org/s failed"),
+            "{{$this}} resolves from the pre-binding, not from the projection"
+        );
+    }
+
+    #[test]
+    fn eval_sparql_constraint_message_leaves_unbound_placeholder_verbatim() {
+        // THE NEIGHBOURING VALID CASE. A placeholder naming a variable the
+        // solution does not bind must survive untouched — not blanked, not
+        // refused. `{$value}` is the sharp edge: `sh:value` DEFAULTS to the focus
+        // node when `?value` is unbound (§5.3.1), and it would be easy to leak
+        // that default into the message. It is a rule about the result field, not
+        // a binding the solution carries, so the template must not see it.
+        let dataset = message_template_dataset();
+        let focus = named_term("http://example.org/s");
+        let message = "unbound {$value}, absent {$nosuchvar}, literal {not-a-var}".to_owned();
+
+        let results = eval_sparql_constraint(
+            &dataset,
+            &focus,
+            "SELECT $this WHERE { $this ?p ?o }",
+            &dummy_component(),
+            &dummy_shape(),
+            &Severity::Violation,
+            Some(&message),
+            None,
+            None,
+        )
+        .expect("eval must succeed");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].message.as_deref(),
+            Some("unbound {$value}, absent {$nosuchvar}, literal {not-a-var}"),
+            "unbound and non-variable placeholders are left exactly as authored"
+        );
+        // ... while the RESULT's sh:value still defaults to the focus node.
+        assert_eq!(results[0].value, Some(focus));
+    }
+
+    #[test]
+    fn eval_sparql_constraint_message_is_rendered_per_row() {
+        // The defect in its purest form: one message string was cloned for every
+        // row. Two rows binding different values must now carry different text.
+        let dataset = dataset_from_ntriples(&[
+            "<http://example.org/s> <http://example.org/p> \"first\" .",
+            "<http://example.org/s> <http://example.org/p> \"second\" .",
+        ]);
+        let focus = named_term("http://example.org/s");
+        let message = "saw {$value}".to_owned();
+
+        let results = eval_sparql_constraint(
+            &dataset,
+            &focus,
+            "SELECT ?value WHERE { $this <http://example.org/p> ?value }",
+            &dummy_component(),
+            &dummy_shape(),
+            &Severity::Violation,
+            Some(&message),
+            None,
+            None,
+        )
+        .expect("eval must succeed");
+
+        assert_eq!(results.len(), 2);
+        let mut rendered: Vec<&str> = results
+            .iter()
+            .map(|r| r.message.as_deref().expect("message present"))
+            .collect();
+        rendered.sort_unstable();
+        assert_eq!(
+            rendered,
+            vec!["saw first", "saw second"],
+            "each row renders against its OWN bindings"
+        );
+    }
+
+    #[test]
+    fn eval_sparql_constraint_message_without_template_is_passed_through() {
+        // The overwhelmingly common case: a plain message must be byte-identical
+        // to what shipped before this change.
+        let dataset = message_template_dataset();
+        let focus = named_term("http://example.org/s");
+        let message = "Values must be typed.".to_owned();
+
+        let results = eval_sparql_constraint(
+            &dataset,
+            &focus,
+            UNTYPED_LITERAL_SELECT,
+            &dummy_component(),
+            &dummy_shape(),
+            &Severity::Violation,
+            Some(&message),
+            None,
+            None,
+        )
+        .expect("eval must succeed");
+        assert_eq!(results[0].message.as_deref(), Some("Values must be typed."));
     }
 
     // ── eval_scalar_expr ──────────────────────────────────────────────────────
