@@ -6,7 +6,71 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
-## [Unreleased]
+## [1.1.0] - 2026-09-04
+
+The first release after 1.0.0. Two reported bugs, the release fallout 1.0.0 left
+behind, and a data-conflation bug in the GTS carrier found while coordinating
+with the upstream wire-format freeze.
+
+Additive: no published API changes shape. A `TermRow` widening that would have
+forced a major bump was reworked into a parallel column before release — RDF 1.2
+base direction is now `purrdf_rdf::gts_view::term_directions()` and a
+`directions` key on the Python projection dict, so every 1.0.0 caller keeps
+working.
+
+### Bug Fixes
+
+- **shacl:** `sh:message` templates are substituted on the `sh:sparql` path.
+  `{$path}`/`{$value}` shipped as literal braces because the constraint's
+  message was resolved once and cloned into every result row; it is now rendered
+  per solution, from that solution's own bindings. Both `{?var}` and `{$var}`
+  spellings, and `{$this}` whether or not the SELECT projects it. An unbound
+  placeholder is still left verbatim rather than blanked.
+- **cli:** `purrdf validate` resolves a shapes graph's `owl:imports` from
+  `--import IRI=FILE`, transitively and cycle-safely. Previously they were
+  ignored in silence, so a shapes graph whose shapes lived in its imports
+  reported `conforms true` against no shapes at all. PurRDF fetches nothing: an
+  unresolved import with no `--import` given is reported on stderr, and with a
+  table given is refused by name.
+- **gts:** RDF 1.2 literal base direction is part of a term's identity in the
+  snapshot composer. It was absent from the intern key, so `"Cat"@en--ltr` and
+  `"Cat"@en--rtl` merged into ONE term and every quad was repointed at the
+  survivor — a different graph, not a missing column. Emitted bytes are
+  unchanged for any input without directional literals.
+- **release:** The crates.io bootstrap script packages and publishes its PLAN
+  rather than the whole ledger; a deferred crate no longer reaches `cargo
+  package`. Its self-test asserts the arguments handed to the irreversible step,
+  and the arm that had been failing since the ledger emptied is fixed — that arm
+  runs before `cargo test` in `make check`, so it had been failing the gate for
+  every contributor.
+
+### Features
+
+- **python:** `gts_to_sqlite`, `gts_to_duckdb` and `gts_to_parquet` are
+  implemented. They previously raised unconditionally. Five tables in the
+  projection's own row order, so the same container exports to the same content
+  twice. SQLite needs only the standard library; the other two take the
+  `[duckdb]` / `[parquet]` extras.
+- **rdf:** `gts_view::term_directions()` exposes RDF 1.2 base direction from the
+  relational projection, which previously dropped it.
+- **entail:** `entails::imports::imported_iris()` is public, so a consumer can
+  read a document's `owl:imports` without re-deriving which objects count.
+
+### Documentation
+
+- **pack:** The pack identity digest is no longer captioned "RDFC-1.0". It is
+  computed through the `purrdf-rdfc12` profile, which agrees with RDFC-1.0 byte
+  for byte only on the RDF 1.1 subset. Labelling only — no digest bytes change.
+
+### Build
+
+- **ci:** Benchmarks moved off the per-push path to a weekly schedule plus
+  `workflow_dispatch`, and its `uv` installer is pinned.
+- **make:** `make doctor` reports which build pins the local machine actually
+  enforces, and the wasm gate distinguishes "rustup absent" from "target not
+  installed" instead of printing the same line for both.
+- **python:** `bench = false` on the binding lib, so `cargo bench --workspace`
+  links.
 
 ## [1.0.0] - 2026-09-02
 
