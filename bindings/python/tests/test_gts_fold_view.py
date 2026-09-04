@@ -113,9 +113,12 @@ def test_a_quoted_triple_terms_own_components_survive_the_fold_view() -> None:
     assert view.term_tuple(10) == (3, None, None, None, None, None, (0, 1, 5))
     assert view.reifier_count() == 2, "both bindings of the one reifier id are kept"
 
+    # The projection row is `(term_id, kind, value, datatype_id, lang, reifier_id,
+    # triple, direction)`. The trailing `direction` is `None` here because a quoted
+    # triple term is not a literal and has no base direction.
     rows = view.relational_rows()
-    assert rows["terms"][9] == (9, 3, None, None, None, None, (0, 1, 2))
-    assert rows["terms"][10] == (10, 3, None, None, None, None, (0, 1, 5))
+    assert rows["terms"][9] == (9, 3, None, None, None, None, (0, 1, 2), None)
+    assert rows["terms"][10] == (10, 3, None, None, None, None, (0, 1, 5), None)
 
 
 def test_an_out_of_range_triple_component_is_refused() -> None:
