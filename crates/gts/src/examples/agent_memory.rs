@@ -993,15 +993,7 @@ fn literal_with_datatype(value: &str, datatype: usize) -> Term {
 fn shift_terms(terms: &[Term], base: usize) -> Vec<Term> {
     terms
         .iter()
-        .map(|term| Term {
-            kind: term.kind,
-            value: term.value.clone(),
-            datatype: term.datatype.map(|id| id + base),
-            lang: term.lang.clone(),
-            direction: term.direction.clone(),
-            reifier: term.reifier.map(|id| id + base),
-            triple: None,
-        })
+        .map(|term| term.map_term_ids(|id| id + base))
         .collect()
 }
 

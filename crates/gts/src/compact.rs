@@ -797,16 +797,13 @@ fn streaming_index(
 }
 
 /// Shift a term's id references into the output id space.
+///
+/// Delegates the column list to [`Term::map_term_ids`] rather than restating it:
+/// this enumeration was correct, but it was the SECOND copy in this crate, and
+/// the other one had already gone stale (it dropped `triple`). One enumeration,
+/// owned by the type that adds the columns.
 fn shift_term(t: &Term, base: usize) -> Term {
-    Term {
-        kind: t.kind,
-        value: t.value.clone(),
-        datatype: t.datatype.map(|d| d + base),
-        lang: t.lang.clone(),
-        direction: t.direction.clone(),
-        reifier: t.reifier.map(|r| r + base),
-        triple: t.triple.map(|(s, p, o)| (s + base, p + base, o + base)),
-    }
+    t.map_term_ids(|id| id + base)
 }
 
 /// Carry suppressions forward, one output suppression per input (§10.1).
