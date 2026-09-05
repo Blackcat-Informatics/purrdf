@@ -89,6 +89,70 @@ pub struct Term {
     pub triple: Option<Triple3>,
 }
 
+impl Term {
+    /// Apply `f` to every TERM ID this term carries, leaving value-bearing
+    /// columns untouched.
+    ///
+    /// The id columns are `datatype`, `reifier`, and each component of `triple`.
+    /// `kind`, `value`, `lang` and `direction` are values, not references into the
+    /// term table, and are copied through unchanged.
+    ///
+    /// # Use this instead of a struct-update expression
+    ///
+    /// If you relocate terms — appending a frame into an open segment, merging
+    /// term tables, compacting — shift ids with this rather than
+    /// `Term { datatype: …, reifier: …, ..t.clone() }`. That form keeps compiling
+    /// when a new id column is added and carries it through UNSHIFTED: a typed
+    /// literal whose datatype id stayed frame-local resolves to whatever term
+    /// happens to sit at that index, and a self-describing triple term resolves to
+    /// three unrelated terms. Nothing fails; the bytes are just wrong.
+    ///
+    /// The body below destructures `Term` exhaustively, with no `..` rest pattern,
+    /// so adding an id column is a compile error HERE — in the one place that
+    /// knows whether the new column is an id — rather than a silent wrong answer
+    /// at every call site.
+    ///
+    /// ```
+    /// use purrdf_gts::model::{Term, TermKind};
+    ///
+    /// let t = Term {
+    ///     kind: TermKind::Triple,
+    ///     value: None,
+    ///     datatype: Some(1),
+    ///     lang: None,
+    ///     direction: None,
+    ///     reifier: Some(2),
+    ///     triple: Some((3, 4, 5)),
+    /// };
+    /// let shifted = t.map_term_ids(|id| id + 10);
+    /// assert_eq!(shifted.datatype, Some(11));
+    /// assert_eq!(shifted.reifier, Some(12));
+    /// assert_eq!(shifted.triple, Some((13, 14, 15)));
+    /// ```
+    #[must_use]
+    pub fn map_term_ids(&self, f: impl Fn(usize) -> usize) -> Self {
+        // EXHAUSTIVE on purpose — see the doc comment. Do not add `..`.
+        let Self {
+            kind,
+            value,
+            datatype,
+            lang,
+            direction,
+            reifier,
+            triple,
+        } = self;
+        Self {
+            kind: *kind,
+            value: value.clone(),
+            datatype: datatype.map(&f),
+            lang: lang.clone(),
+            direction: direction.clone(),
+            reifier: reifier.map(&f),
+            triple: triple.map(|ids| map_triple_ids(ids, &f)),
+        }
+    }
+}
+
 /// A quad of term-ids; the graph slot is `None` for the default graph.
 pub type Quad = (usize, usize, usize, Option<usize>);
 /// A `(subject, predicate, object)` triple of term-ids.
@@ -97,6 +161,59 @@ pub type Triple3 = (usize, usize, usize);
 pub type ReifierRow = (usize, Triple3, Option<usize>);
 /// An annotation row: `(reifier, predicate, value, graph?)`.
 pub type AnnotationRow = (usize, usize, usize, Option<usize>);
+
+// ── Relocating term ids ──────────────────────────────────────────────────────
+//
+// Term ids are SEGMENT-SCOPED (§7.5). Anything that relocates terms — appending
+// a frame into an open segment, merging two term tables, compacting — has to
+// shift every id-bearing column by the same base. Which columns those are is
+// knowledge that belongs to this module, because this module is what adds them.
+//
+// Re-deriving that list at each call site is the hazard. A relocating remap is
+// idiomatically written as a struct-update expression:
+//
+// ```ignore
+// Term { datatype: t.datatype.map(shift), reifier: t.reifier.map(shift), ..t.clone() }
+// ```
+//
+// which keeps compiling when a new id column arrives and carries it through
+// UNSHIFTED — a typed literal whose datatype id stayed frame-local resolves to
+// whatever term happens to sit at that index, and a self-describing triple term
+// resolves to three unrelated terms. Silent, and green on every gate.
+//
+// The helpers below are the single enumeration. Each destructures its shape
+// EXHAUSTIVELY, with no `..` rest pattern, so adding an id column to `Term` is a
+// compile error here — in the one place that knows what to do about it — rather
+// than a silent wrong answer at every consumer.
+
+/// Apply `f` to every term id in a [`Quad`], graph slot included.
+#[must_use]
+pub fn map_quad_ids(quad: Quad, f: impl Fn(usize) -> usize) -> Quad {
+    let (s, p, o, g) = quad;
+    (f(s), f(p), f(o), g.map(&f))
+}
+
+/// Apply `f` to every term id in a [`Triple3`].
+#[must_use]
+pub fn map_triple_ids(triple: Triple3, f: impl Fn(usize) -> usize) -> Triple3 {
+    let (s, p, o) = triple;
+    (f(s), f(p), f(o))
+}
+
+/// Apply `f` to every term id in a [`ReifierRow`] — the reifier, its triple, and
+/// the graph the declaration was asserted in.
+#[must_use]
+pub fn map_reifier_row_ids(row: ReifierRow, f: impl Fn(usize) -> usize) -> ReifierRow {
+    let (reifier, triple, graph) = row;
+    (f(reifier), map_triple_ids(triple, &f), graph.map(&f))
+}
+
+/// Apply `f` to every term id in an [`AnnotationRow`].
+#[must_use]
+pub fn map_annotation_row_ids(row: AnnotationRow, f: impl Fn(usize) -> usize) -> AnnotationRow {
+    let (reifier, predicate, value, graph) = row;
+    (f(reifier), f(predicate), f(value), graph.map(&f))
+}
 
 /// A quad with term ids resolved to borrowed [`Term`] values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -557,5 +674,103 @@ impl IntoIterator for Graph {
 
     fn into_iter(self) -> Self::IntoIter {
         self.into_quads()
+    }
+}
+
+#[cfg(test)]
+mod term_id_remap_tests {
+    //! Term ids are segment-scoped, so relocating terms has to shift EVERY
+    //! id-bearing column. These pin which columns those are, from the outside.
+
+    use super::{
+        AnnotationRow, Quad, ReifierRow, Term, TermKind, Triple3, map_annotation_row_ids,
+        map_quad_ids, map_reifier_row_ids, map_triple_ids,
+    };
+
+    /// A term carrying every id column at once, so a dropped column is visible.
+    fn loaded() -> Term {
+        Term {
+            kind: TermKind::Triple,
+            value: Some("lex".to_owned()),
+            datatype: Some(1),
+            lang: Some("en".to_owned()),
+            direction: Some("ltr".to_owned()),
+            reifier: Some(2),
+            triple: Some((3, 4, 5)),
+        }
+    }
+
+    #[test]
+    fn every_id_column_shifts_and_no_value_column_does() {
+        let shifted = loaded().map_term_ids(|id| id + 10);
+
+        assert_eq!(shifted.datatype, Some(11));
+        assert_eq!(shifted.reifier, Some(12));
+        // `triple` is the column a second, hand-written copy of this enumeration
+        // in this crate had silently dropped — it set `triple: None` — which is
+        // the whole reason the remap lives on the type now.
+        assert_eq!(shifted.triple, Some((13, 14, 15)));
+
+        // Values are not references into the term table and must NOT move.
+        let original = loaded();
+        assert_eq!(shifted.kind, original.kind);
+        assert_eq!(shifted.value, original.value);
+        assert_eq!(shifted.lang, original.lang);
+        assert_eq!(shifted.direction, original.direction);
+    }
+
+    #[test]
+    fn a_term_with_no_ids_is_carried_through_unchanged() {
+        // THE NEIGHBOURING CASE. A plain IRI term has no id columns at all, and a
+        // remap that touched it — or refused it — would corrupt the common case
+        // while the loaded one above still passed.
+        let plain = Term {
+            kind: TermKind::Iri,
+            value: Some("http://example.org/s".to_owned()),
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+            triple: None,
+        };
+        let shifted = plain.map_term_ids(|id| id + 10);
+        assert_eq!(shifted, plain, "no id columns means nothing to shift");
+    }
+
+    #[test]
+    fn the_identity_remap_is_the_identity() {
+        // Guards against a helper that shifts something twice, or shifts a value
+        // column by coincidence of type: with `f = identity` the term must be
+        // byte-equal however many columns it carries.
+        let t = loaded();
+        assert_eq!(t.map_term_ids(|id| id), t);
+    }
+
+    #[test]
+    fn the_tuple_shapes_shift_every_slot_including_the_graph() {
+        // The graph slot IS a term id — the statement layer is keyed per graph, so
+        // a relocation that left it frame-local would move rows into the wrong
+        // named graph rather than dangling, which is the quieter failure.
+        let quad: Quad = (1, 2, 3, Some(4));
+        assert_eq!(map_quad_ids(quad, |id| id + 10), (11, 12, 13, Some(14)));
+        assert_eq!(
+            map_quad_ids((1, 2, 3, None), |id| id + 10),
+            (11, 12, 13, None)
+        );
+
+        let triple: Triple3 = (1, 2, 3);
+        assert_eq!(map_triple_ids(triple, |id| id + 10), (11, 12, 13));
+
+        let reifier: ReifierRow = (1, (2, 3, 4), Some(5));
+        assert_eq!(
+            map_reifier_row_ids(reifier, |id| id + 10),
+            (11, (12, 13, 14), Some(15))
+        );
+
+        let annotation: AnnotationRow = (1, 2, 3, Some(4));
+        assert_eq!(
+            map_annotation_row_ids(annotation, |id| id + 10),
+            (11, 12, 13, Some(14))
+        );
     }
 }
