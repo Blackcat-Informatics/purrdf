@@ -420,8 +420,7 @@ impl purrdf_sparql_eval::PropertyFunction for SubjectBoundRelation {
     }
 }
 
-#[test]
-fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
+fn subject_bound_registry() -> PropertyFunctionRegistry {
     use purrdf_core::{TermValue, binding_pattern::BindingPattern};
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
@@ -439,6 +438,12 @@ fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
             modes: [BindingPattern::from_code("bf")],
         }),
     );
+    registry
+}
+
+#[test]
+fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
+    let registry = subject_bound_registry();
     let options = QueryOptions {
         property_functions: &registry,
         ..QueryOptions::EMPTY
@@ -497,6 +502,49 @@ fn rewrites_reorder_feasible_calls_and_public_mutations_must_be_reprepared() {
             .unwrap(),
         SparqlResult::Boolean(true)
     ));
+}
+
+#[test]
+fn aggregate_sort_keys_reorder_a_binding_before_a_bound_only_relation() {
+    let registry = subject_bound_registry();
+    let options = QueryOptions {
+        property_functions: &registry,
+        ..QueryOptions::EMPTY
+    };
+    let query = "SELECT (FOLD(?v ORDER BY ASC(EXISTS { \
+                 ?s <http://example.org/relation> ?o . \
+                 ?s <http://example.org/binding> ?bound \
+                 })) AS ?list) WHERE { VALUES ?v { 1 } }";
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("http://example.org/value");
+    let predicate = builder.intern_iri("http://example.org/binding");
+    builder.push_quad(subject, predicate, subject, None);
+    let data = builder.freeze().unwrap();
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query_with_options(query, None, options)
+        .unwrap();
+    let typed = engine
+        .prepare_algebra(prepared.query.clone(), options)
+        .unwrap();
+    for prepared in [&prepared, &typed] {
+        let result = engine
+            .query_prepared(&data, prepared, &[], options)
+            .unwrap();
+        let SparqlResult::Solutions {
+            variables, rows, ..
+        } = result
+        else {
+            panic!("FOLD must return a solution");
+        };
+        assert_eq!(variables, vec!["list"]);
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(
+            &rows[0][0],
+            Some(purrdf_core::TermValue::Literal { lexical_form, .. })
+                if lexical_form == "[\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>]"
+        ));
+    }
 }
 
 #[test]

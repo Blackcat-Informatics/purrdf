@@ -939,26 +939,32 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     aggregates: &[(Variable, AggregateExpression)],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    // The output schema is syntactic, including when the input is truncated.
+    // Check aggregate targets once before either path can publish its columns.
+    let mut out_schema = VarSchema::from_vars(variables.iter().cloned());
+    let var_count = out_schema.len();
+    for (out_var, _) in aggregates {
+        let next = out_schema.len();
+        if out_schema.push(out_var.clone()) != next {
+            return Err(EvalError::config(
+                "aggregate output collides with another group output",
+            ));
+        }
+    }
+    let out_schema = Arc::new(out_schema);
     let mut lift = Lift::at(node);
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         // No rows cross an opaque edge, but the COLUMNS still do: a `GROUP BY`'s output
         // schema is syntactic — the grouping variables followed by the aggregate output
         // variables — so it costs nothing to report the columns this node would have
         // produced rather than the columns of the input it withheld.
-        let mut out_schema = VarSchema::from_vars(variables.iter().cloned());
-        for (out_var, _) in aggregates {
-            out_schema.push(out_var.clone());
-        }
-        return Ok(lift.finish(SolutionSeq::empty(Arc::new(out_schema))));
+        return Ok(lift.finish(SolutionSeq::empty(out_schema)));
     };
     let in_schema = seq.schema.clone();
     // Redundant GROUP BY keys do not create extra output columns. Derive both
     // partition keys and row offsets from the same first-seen schema, so adding
     // an aggregate after a repeated key cannot index past the output row.
-    let mut out_schema = VarSchema::from_vars(variables.iter().cloned());
-    let var_count = out_schema.len();
-    let key_cols: Vec<Option<usize>> = out_schema
-        .vars()
+    let key_cols: Vec<Option<usize>> = out_schema.vars()[..var_count]
         .iter()
         .map(|v| in_schema.index_of(v))
         .collect();
@@ -985,15 +991,6 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         .collect();
     groups.sort_unstable_by_key(|(ordinal, _, _)| *ordinal);
 
-    for (out_var, _) in aggregates {
-        let next = out_schema.len();
-        if out_schema.push(out_var.clone()) != next {
-            return Err(EvalError::config(
-                "aggregate output collides with another group output",
-            ));
-        }
-    }
-    let out_schema = Arc::new(out_schema);
     let out_width = out_schema.len();
 
     // Every aggregate expression must be parallel-safe (no RAND/UUID/STRUUID/

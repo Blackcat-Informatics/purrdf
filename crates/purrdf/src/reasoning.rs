@@ -18,7 +18,7 @@ use purrdf_rdf::{
 };
 use purrdf_sparql_algebra::{
     BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal, NamedNodePattern,
-    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    OrderExpression, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 use purrdf_sparql_eval::{
     BudgetExhausted, EvalError, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
@@ -889,9 +889,10 @@ fn withhold_surrogates_from_outcome(
 ///   `Extend` expression READS (a `BIND`/select-expression turns a binding into a returned
 ///   term), the `GROUP BY` key variables (the grouping decides how many rows come back), and
 ///   the variables an aggregate reads (`COUNT(?y)` turns `?y`'s multiplicity into a returned
-///   number, which is why the aggregate must see the restricted sequence rather than the raw
-///   one). A `COUNT(*)` reads no variable and still counts ROWS, so it makes every variable of
-///   the grouped pattern observable — row multiplicity is a function of all of them.
+///   number, and `FOLD`'s own `ORDER BY` determines the encoded list value). Aggregates must
+///   therefore see the restricted sequence. A `COUNT(*)` reads no variable and still counts
+///   ROWS, so it makes every variable of the grouped pattern observable — row multiplicity
+///   is a function of all of them.
 /// * `CONSTRUCT` — the TEMPLATE's variables. Every one of them becomes a term of the emitted
 ///   graph.
 /// * `DESCRIBE` — the target variables. The triples themselves are scrubbed separately (see
@@ -902,8 +903,8 @@ fn withhold_surrogates_from_outcome(
 ///
 /// Two things are deliberately NOT observable. A `FILTER` reads a variable to decide a row's
 /// fate without returning its value, and constraining an existential variable is what a
-/// filter over a non-distinguished variable means. `ORDER BY` reads one to decide row ORDER;
-/// the rows it orders are certain answers either way, and the witness labels are content
+/// filter over a non-distinguished variable means. An outer `ORDER BY` reads one to decide
+/// row ORDER; the rows it orders are certain answers either way, and the witness labels are content
 /// digests, so the order is deterministic rather than arbitrary. Neither puts a witness in
 /// front of the caller.
 fn observable_variables(query: &Query) -> BTreeSet<String> {
@@ -1017,6 +1018,13 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
                     for arg in aggregate.args() {
                         collect_expression_variables(arg, names);
                     }
+                }
+                // Aggregate sort keys determine a returned composite value, so
+                // their witness bindings must be restricted before aggregation.
+                for key in aggregate.order_by() {
+                    let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) =
+                        key;
+                    collect_expression_variables(expression, names);
                 }
             }
             collect_returned_value_variables(inner, names);
