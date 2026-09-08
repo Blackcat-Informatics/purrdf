@@ -14,10 +14,32 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::BuildHasher;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 type LocalId = DeltaViewId;
 type Pattern<I> = (Option<I>, Option<I>, Option<I>, GraphMatch<I>);
+
+// Physical plans depend only on four bound-axis bits. Cache the small, fixed
+// set once, including graph-unbound variants needed by placement and the
+// all-SPO-bound variants used to suppress duplicates. No RDF values are retained.
+fn physical_plan([s, p, o, graph_bound]: [bool; 4]) -> QuadProbePlan {
+    static PLANS: LazyLock<[QuadProbePlan; 16]> = LazyLock::new(|| {
+        std::array::from_fn(|mask| {
+            RdfDataset::probe_plan(
+                mask & 1 != 0,
+                mask & 2 != 0,
+                mask & 4 != 0,
+                if mask & 8 == 0 {
+                    GraphMatch::Any
+                } else {
+                    GraphMatch::Default
+                },
+            )
+        })
+    });
+    PLANS
+        [usize::from(s) | usize::from(p) << 1 | usize::from(o) << 2 | usize::from(graph_bound) << 3]
+}
 
 #[derive(Debug, Clone, Copy)]
 enum SourceGraph {
@@ -358,10 +380,8 @@ impl CompositeSource {
     fn probe(
         &self,
         table: Table,
-        s: Option<LocalId>,
-        p: Option<LocalId>,
-        o: Option<LocalId>,
-        g: GraphMatch<LocalId>,
+        plan: QuadProbePlan,
+        (s, p, o, g): Pattern<LocalId>,
     ) -> impl Iterator<Item = QuadIds<LocalId>> + '_ {
         let ordinary = matches!(table, Table::Ordinary);
         let native_pattern = local_native_pattern(s, p, o, g);
@@ -372,14 +392,14 @@ impl CompositeSource {
             .flat_map(move |ds| {
                 native_pattern
                     .into_iter()
-                    .flat_map(move |(s, p, o, g)| ds.quads_for_pattern(s, p, o, g))
+                    .flat_map(move |(s, p, o, g)| ds.quads_for_pattern_with_plan(&plan, s, p, o, g))
                     .map(|q| map_quad(q, LocalId::Base))
             });
         let delta = self
             .delta_ref()
             .filter(move |_| ordinary)
             .into_iter()
-            .flat_map(move |ds| ds.quads_for_pattern(s, p, o, g));
+            .flat_map(move |ds| ds.quads_for_pattern_with_plan(&plan, s, p, o, g));
         native.chain(delta).chain(
             self.metadata_rows(table, s)
                 .filter(move |q| matches_pattern(*q, s, p, o, g)),
@@ -675,30 +695,61 @@ impl CompositeDatasetView {
         )
         .is_some_and(|(s, p, o, g)| {
             self.sources[index]
-                .probe(table, s, p, o, g)
+                .probe(
+                    table,
+                    physical_plan([true, true, true, !matches!(g, GraphMatch::Any)]),
+                    (s, p, o, g),
+                )
                 .next()
                 .is_some()
         })
     }
-    fn probe(
+    /// Query with a plan prepared for these bound axes and graph constraint.
+    ///
+    /// The plan is copied into the cursor, which borrows only this view. Results
+    /// and iteration order match [`DatasetView::quads_for_pattern`].
+    pub fn quads_for_pattern_with_plan(
         &self,
-        table: Table,
+        plan: &QuadProbePlan,
         s: Option<CompositeViewId>,
         p: Option<CompositeViewId>,
         o: Option<CompositeViewId>,
         g: GraphMatch<CompositeViewId>,
+    ) -> impl Iterator<Item = QuadIds<CompositeViewId>> + '_ + use<'_> {
+        self.probe(Table::Ordinary, *plan, (s, p, o, g))
+    }
+
+    fn probe(
+        &self,
+        table: Table,
+        plan: QuadProbePlan,
+        (s, p, o, g): Pattern<CompositeViewId>,
     ) -> impl Iterator<Item = QuadIds<CompositeViewId>> + '_ {
         self.sources[..self.user_sources]
             .iter()
             .enumerate()
             .flat_map(move |(index, source)| {
+                // Placement removes the logical graph constraint from the physical
+                // pattern. A graph-bound prefix would be invalid for that source;
+                // retain the caller's plan everywhere the bound axes stay intact.
+                let source_plan = if matches!(self.placement[index], SourceGraph::Replace(_))
+                    && !matches!(g, GraphMatch::Any)
+                {
+                    physical_plan([s.is_some(), p.is_some(), o.is_some(), false])
+                } else {
+                    plan
+                };
                 self.pattern(index, s, p, o, g)
                     .into_iter()
-                    .flat_map(move |(s, p, o, g)| source.probe(table, s, p, o, g))
+                    .flat_map(move |pattern| source.probe(table, source_plan, pattern))
                     .filter(move |q| {
                         matches!(self.placement[index], SourceGraph::Preserve)
                             || source
-                                .probe(table, Some(q.s), Some(q.p), Some(q.o), GraphMatch::Any)
+                                .probe(
+                                    table,
+                                    physical_plan([true, true, true, false]),
+                                    (Some(q.s), Some(q.p), Some(q.o), GraphMatch::Any),
+                                )
                                 .next()
                                 .is_some_and(|first| first == *q)
                     })
@@ -946,7 +997,7 @@ impl DatasetView for CompositeDatasetView {
     type Id = CompositeViewId;
     type ProbePlan = QuadProbePlan;
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
-        self.probe(Table::Ordinary, None, None, None, GraphMatch::Any)
+        self.quads_for_pattern(None, None, None, GraphMatch::Any)
     }
     fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_, Self::Id>> + '_ {
         self.quads().map(|q| QuadRef {
@@ -984,16 +1035,7 @@ impl DatasetView for CompositeDatasetView {
         self.unique_terms
     }
     fn probe_plan(&self, s: bool, p: bool, o: bool, g: GraphMatch<Self::Id>) -> Self::ProbePlan {
-        RdfDataset::probe_plan(
-            s,
-            p,
-            o,
-            if matches!(g, GraphMatch::Any) {
-                GraphMatch::Any
-            } else {
-                GraphMatch::Default
-            },
-        )
+        physical_plan([s, p, o, !matches!(g, GraphMatch::Any)])
     }
     fn quads_for_pattern(
         &self,
@@ -1002,17 +1044,18 @@ impl DatasetView for CompositeDatasetView {
         o: Option<Self::Id>,
         g: GraphMatch<Self::Id>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
-        self.probe(Table::Ordinary, s, p, o, g)
+        let plan = self.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        self.probe(Table::Ordinary, plan, (s, p, o, g))
     }
     fn quads_for_pattern_with_plan(
         &self,
-        _plan: &Self::ProbePlan,
+        plan: &Self::ProbePlan,
         s: Option<Self::Id>,
         p: Option<Self::Id>,
         o: Option<Self::Id>,
         g: GraphMatch<Self::Id>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
-        self.probe(Table::Ordinary, s, p, o, g)
+        Self::quads_for_pattern_with_plan(self, plan, s, p, o, g)
     }
     fn cardinality_estimate(
         &self,
@@ -1035,20 +1078,36 @@ impl DatasetView for CompositeDatasetView {
         (self.stats.retained_rows as u64).rotate_left(32) ^ self.unique_terms as u64
     }
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
-        self.probe(Table::Reifier, None, None, None, GraphMatch::Any)
+        self.probe(
+            Table::Reifier,
+            physical_plan([false, false, false, false]),
+            (None, None, None, GraphMatch::Any),
+        )
     }
     fn reifier_quads_of(&self, s: Self::Id) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
-        self.probe(Table::Reifier, Some(s), None, None, GraphMatch::Any)
+        self.probe(
+            Table::Reifier,
+            physical_plan([true, false, false, false]),
+            (Some(s), None, None, GraphMatch::Any),
+        )
     }
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
-        self.probe(Table::Annotation, None, None, None, GraphMatch::Any)
+        self.probe(
+            Table::Annotation,
+            physical_plan([false, false, false, false]),
+            (None, None, None, GraphMatch::Any),
+        )
     }
     fn annotations_of_with_graph(
         &self,
         s: Self::Id,
     ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
-        self.probe(Table::Annotation, Some(s), None, None, GraphMatch::Any)
-            .map(|q| (q.p, q.o, q.g))
+        self.probe(
+            Table::Annotation,
+            physical_plan([true, false, false, false]),
+            (Some(s), None, None, GraphMatch::Any),
+        )
+        .map(|q| (q.p, q.o, q.g))
     }
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
         self.sources[..self.user_sources]

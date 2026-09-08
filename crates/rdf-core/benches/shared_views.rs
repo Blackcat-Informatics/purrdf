@@ -83,6 +83,36 @@ fn benches(c: &mut Criterion) {
             .count(),
         1
     );
+    let native_plan = frozen.probe_plan(true, false, false, GraphMatch::Any);
+    let composite_plan = shared.probe_plan(true, false, false, GraphMatch::Any);
+    assert_eq!(
+        frozen
+            .quads_for_pattern_with_plan(
+                &native_plan,
+                Some(frozen_subject),
+                None,
+                None,
+                GraphMatch::Any
+            )
+            .collect::<Vec<_>>(),
+        frozen
+            .quads_for_pattern(Some(frozen_subject), None, None, GraphMatch::Any)
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        shared
+            .quads_for_pattern_with_plan(
+                &composite_plan,
+                Some(shared_subject),
+                None,
+                None,
+                GraphMatch::Any
+            )
+            .collect::<Vec<_>>(),
+        shared
+            .quads_for_pattern(Some(shared_subject), None, None, GraphMatch::Any)
+            .collect::<Vec<_>>(),
+    );
     let mutable = changed(base.clone());
     let snapshot = mutable.snapshot_view().unwrap();
     assert_eq!(snapshot.quads().count(), base.quad_count() + 1);
@@ -115,6 +145,36 @@ fn benches(c: &mut Criterion) {
             black_box(
                 shared
                     .quads_for_pattern(Some(shared_subject), None, None, GraphMatch::Any)
+                    .count(),
+            )
+        });
+    });
+    group.bench_function("prepared_native_probe", |b| {
+        b.iter(|| {
+            black_box(
+                frozen
+                    .quads_for_pattern_with_plan(
+                        &native_plan,
+                        Some(frozen_subject),
+                        None,
+                        None,
+                        GraphMatch::Any,
+                    )
+                    .count(),
+            )
+        });
+    });
+    group.bench_function("prepared_composite_probe", |b| {
+        b.iter(|| {
+            black_box(
+                shared
+                    .quads_for_pattern_with_plan(
+                        &composite_plan,
+                        Some(shared_subject),
+                        None,
+                        None,
+                        GraphMatch::Any,
+                    )
                     .count(),
             )
         });

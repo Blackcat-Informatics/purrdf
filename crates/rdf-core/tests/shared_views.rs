@@ -268,6 +268,113 @@ fn graph_projection_deduplicates_within_and_between_sources() {
 }
 
 #[test]
+fn prepared_composite_probes_reuse_plans_across_rows_and_graph_placements() {
+    let mut builder = RdfDatasetBuilder::new();
+    let subjects = ["s", "t"].map(|name| builder.intern_iri(&format!("http://example.org/{name}")));
+    let predicates =
+        ["p", "q"].map(|name| builder.intern_iri(&format!("http://example.org/{name}")));
+    let objects = ["o", "v"].map(|name| builder.intern_iri(&format!("http://example.org/{name}")));
+    let graphs = ["g", "h"].map(|name| builder.intern_iri(&format!("http://example.org/{name}")));
+    for (index, (s, p)) in subjects.into_iter().zip(predicates).enumerate() {
+        for g in [None, Some(graphs[0]), Some(graphs[1])] {
+            builder.push_quad(s, p, objects[index], g);
+        }
+    }
+    let native = builder.freeze().unwrap();
+    let mut mutable = MutableDataset::new(native.clone());
+    assert!(mutable.remove(&QuadValues {
+        s: iri("s"),
+        p: iri("p"),
+        o: iri("o"),
+        g: Some(iri("g")),
+    }));
+    mutable
+        .insert(QuadValues::triple(iri("added"), iri("p"), iri("o")))
+        .unwrap();
+    mutable
+        .insert(QuadValues {
+            s: iri("added"),
+            p: iri("q"),
+            o: iri("v"),
+            g: Some(iri("h")),
+        })
+        .unwrap();
+    let delta = Arc::new(mutable.snapshot_view().unwrap());
+    let placements = [
+        GraphPlacement::Preserve,
+        GraphPlacement::Default,
+        GraphPlacement::Named(iri("placed")),
+    ];
+    for native_placement in &placements {
+        for delta_placement in &placements {
+            let view = CompositeDatasetView::from_sources(
+                vec![
+                    CompositeSource::new(native.clone())
+                        .with_graph_placement(native_placement.clone()),
+                    CompositeSource::from_delta(delta.clone())
+                        .with_graph_placement(delta_placement.clone()),
+                ],
+                ViewLimits::default(),
+            )
+            .unwrap();
+            let rows: Vec<_> = view.quads().collect();
+            let named: Vec<_> = ["g", "h", "placed", "s"]
+                .into_iter()
+                .filter_map(|name| view.term_id_by_value(&iri(name)))
+                .map(GraphMatch::Named)
+                .collect();
+            for mask in 0..8 {
+                for graph_queries in [&[GraphMatch::Any][..], &[GraphMatch::Default], &named] {
+                    // One plan is reused across different bound term values and
+                    // named graphs, as in an index-nested-loop join slot.
+                    let plan = view.probe_plan(
+                        mask & 1 != 0,
+                        mask & 2 != 0,
+                        mask & 4 != 0,
+                        graph_queries[0],
+                    );
+                    for &g in graph_queries {
+                        for quad in &rows {
+                            let s = (mask & 1 != 0).then_some(quad.s);
+                            let p = (mask & 2 != 0).then_some(quad.p);
+                            let o = (mask & 4 != 0).then_some(quad.o);
+                            let expected: BTreeSet<_> = rows
+                                .iter()
+                                .copied()
+                                .filter(|q| {
+                                    s.is_none_or(|s| s == q.s)
+                                        && p.is_none_or(|p| p == q.p)
+                                        && o.is_none_or(|o| o == q.o)
+                                        && g.matches(q.g)
+                                })
+                                .map(|q| (q.s, q.p, q.o, q.g))
+                                .collect();
+                            let actual: Vec<_> =
+                                DatasetView::quads_for_pattern_with_plan(&view, &plan, s, p, o, g)
+                                    .collect();
+                            assert_eq!(
+                                actual,
+                                view.quads_for_pattern(s, p, o, g).collect::<Vec<_>>(),
+                                "prepared probes retain exact iteration order"
+                            );
+                            assert_eq!(actual.len(), expected.len(), "projected rows are unique");
+                            assert_eq!(
+                                actual
+                                    .into_iter()
+                                    .map(|q| (q.s, q.p, q.o, q.g))
+                                    .collect::<BTreeSet<_>>(),
+                                expected,
+                                "{native_placement:?} / {delta_placement:?}, mask {mask}, graph {g:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn declaration_only_projection_and_named_blank_scope_do_not_collide() {
     let source = complete_source();
     let graph = TermValue::Blank {

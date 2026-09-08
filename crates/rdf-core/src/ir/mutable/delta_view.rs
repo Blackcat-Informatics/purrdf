@@ -334,6 +334,21 @@ impl DeltaDatasetView {
         map_quad(q, |id| self.delta_id(id))
     }
 
+    /// Query with a plan prepared for these bound axes and graph constraint.
+    ///
+    /// The plan is copied into the cursor, which borrows only this view. Results
+    /// and iteration order match [`DatasetView::quads_for_pattern`].
+    pub fn quads_for_pattern_with_plan(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<DeltaViewId>,
+        p: Option<DeltaViewId>,
+        o: Option<DeltaViewId>,
+        g: GraphMatch<DeltaViewId>,
+    ) -> impl Iterator<Item = QuadIds<DeltaViewId>> + '_ + use<'_> {
+        self.probe(*plan, s, p, o, g)
+    }
+
     fn probe(
         &self,
         plan: QuadProbePlan,
@@ -586,7 +601,7 @@ impl DatasetView for DeltaDatasetView {
         o: Option<Self::Id>,
         g: GraphMatch<Self::Id>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
-        self.probe(*plan, s, p, o, g)
+        Self::quads_for_pattern_with_plan(self, plan, s, p, o, g)
     }
 
     fn cardinality_estimate(
