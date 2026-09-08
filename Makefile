@@ -190,6 +190,9 @@ book-po-update: book-pot ## Refresh docs/book/po/zh-Hans.po against the current 
 	msgmerge --quiet --update --backup=none docs/book/po/zh-Hans.po docs/book/po/messages.pot
 
 bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on O3/full-LTO code (report-only).
+	CARGO_PROFILE_RELEASE_OPT_LEVEL=3 CARGO_PROFILE_RELEASE_LTO=fat \
+	CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_INCREMENTAL=false \
+	CARGO_PROFILE_RELEASE_DEBUG=false \
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run criterion benchmarks (report-only; never a gate).

@@ -125,7 +125,7 @@ impl PreparedQuery {
 /// everything else but differ there must not share a plan.
 #[derive(Debug)]
 pub struct PlanCache {
-    entries: BoundedCache<Arc<str>, Arc<PreparedQuery>>,
+    entries: BoundedCache<Arc<[u8]>, Arc<PreparedQuery>>,
 }
 
 impl Default for PlanCache {
@@ -239,7 +239,7 @@ impl PlanCache {
         let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates)
             .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
         let key = plan_cache_key(query, base_iri, options, &fingerprint, &agg_fingerprint);
-        if let Some(prepared) = self.entries.get(&key) {
+        if let Some(prepared) = self.entries.get(key.as_slice()) {
             return Ok(prepared);
         }
         let mut parser = SparqlParser::new();
@@ -268,7 +268,7 @@ impl PlanCache {
             )
             .saturating_add(prepared.relations.capacity())
             .saturating_add(prepared.aggregates.capacity());
-        self.entries.insert(key, prepared.clone(), bytes);
+        self.entries.insert(key.into(), prepared.clone(), bytes);
         Ok(prepared)
     }
 }
@@ -281,20 +281,33 @@ fn plan_cache_key(
     options: &ParserOptions,
     relations: &str,
     aggregates: &str,
-) -> Arc<str> {
-    use std::fmt::Write as _;
-    fn field(out: &mut String, value: &str) {
-        write!(out, "{}:{value}", value.len()).expect("writing to String");
+) -> Vec<u8> {
+    fn length(out: &mut Vec<u8>, value: usize) {
+        out.extend_from_slice(&(value as u64).to_le_bytes());
     }
-    let mut key = String::new();
-    key.push(if base_iri.is_some() { '1' } else { '0' });
-    field(&mut key, base_iri.unwrap_or(""));
-    for list in [
+    fn field(out: &mut Vec<u8>, value: &str) {
+        length(out, value.len());
+        out.extend_from_slice(value.as_bytes());
+    }
+    let lists = [
         &options.extension_fn_namespaces,
         &options.property_fn_namespaces,
         &options.property_fn_iris,
-    ] {
-        write!(key, "{}:", list.len()).expect("writing to String");
+    ];
+    let mut capacity = 1 + 7 * size_of::<u64>();
+    for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
+        capacity += value.len();
+    }
+    for list in lists {
+        for value in list {
+            capacity += size_of::<u64>() + value.len();
+        }
+    }
+    let mut key = Vec::with_capacity(capacity);
+    key.push(u8::from(base_iri.is_some()));
+    field(&mut key, base_iri.unwrap_or(""));
+    for list in lists {
+        length(&mut key, list.len());
         for value in list {
             field(&mut key, value);
         }
@@ -302,7 +315,7 @@ fn plan_cache_key(
     for value in [relations, aggregates, query] {
         field(&mut key, value);
     }
-    key.into()
+    key
 }
 
 /// The native, RDF-1.2-first multiset SPARQL engine (purrdf S6).

@@ -3,6 +3,7 @@
 
 //! Bounded deterministic LRU storage for prepared plans and join orders.
 
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
@@ -114,17 +115,30 @@ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
         stamp
     }
 
-    pub(crate) fn get(&mut self, key: &K) -> Option<V> {
-        if !self.entries.contains_key(key) {
+    pub(crate) fn get<Q: ?Sized + Eq + Hash>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+    {
+        let Some((stored_key, entry)) = self.entries.get_key_value(key) else {
             self.stats.misses = self.stats.misses.saturating_add(1);
             return None;
+        };
+        self.stats.hits = self.stats.hits.saturating_add(1);
+        // Repeated hits on the newest entry do not change LRU order. Avoid
+        // rebuilding the recency tree and bumping its clock on this hot path.
+        if self
+            .recency
+            .last_key_value()
+            .is_some_and(|(&stamp, _)| stamp == entry.stamp)
+        {
+            return Some(entry.value.clone());
         }
+        let stored_key = stored_key.clone();
         let stamp = self.tick();
         let entry = self.entries.get_mut(key).expect("checked cache entry");
         self.recency.remove(&entry.stamp);
         entry.stamp = stamp;
-        self.recency.insert(stamp, key.clone());
-        self.stats.hits = self.stats.hits.saturating_add(1);
+        self.recency.insert(stamp, stored_key);
         Some(entry.value.clone())
     }
 
