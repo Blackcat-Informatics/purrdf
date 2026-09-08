@@ -24,11 +24,11 @@ pub mod canon;
 // The `RdfDataset`-direct, blank-aware structural comparator (C1/C2): the
 // equality oracle for importer equivalence — explicitly NOT oxigraph.
 pub mod compare;
+pub mod composite;
 pub mod dataset;
 /// Deterministic, mmap-native embedding companions bound to exact pack bytes.
 pub mod embedding;
 // The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl (P5).
-pub mod composite;
 pub mod mutable;
 pub mod view_accounting;
 // Evented, ID-addressed OUTPUT of a frozen dataset (C6): the dual of the

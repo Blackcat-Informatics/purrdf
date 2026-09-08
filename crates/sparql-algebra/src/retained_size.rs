@@ -19,13 +19,17 @@ impl Query {
     /// Shared strings are charged per occurrence, including Arc counters; allocator
     /// metadata and rounding are excluded. This is a cache accounting unit, not a
     /// canonical identity or a process-memory measurement. No text is serialized.
-    /// Arithmetic saturates; nesting beyond 256 allocated containers returns `usize::MAX`,
+    /// Arithmetic saturates; nesting beyond the internal `MAX_NESTING` container bound
+    /// returns `usize::MAX`,
     /// refusing finite-cache retention without overflowing the accounting stack.
     #[must_use]
     pub fn retained_size_bytes(&self) -> usize {
         size_of::<Self>().saturating_add(self.heap_bytes(0))
     }
 }
+
+// Allocated-container nesting beyond this depth refuses finite-cache retention.
+const MAX_NESTING: usize = 256;
 
 trait HeapBytes {
     fn heap_bytes(&self, depth: usize) -> usize;
@@ -35,7 +39,7 @@ fn sum(parts: impl IntoIterator<Item = usize>) -> usize {
 }
 impl<T: HeapBytes> HeapBytes for Vec<T> {
     fn heap_bytes(&self, depth: usize) -> usize {
-        if depth >= 256 {
+        if depth >= MAX_NESTING {
             return usize::MAX;
         }
         self.capacity()
@@ -50,7 +54,7 @@ impl<T: HeapBytes> HeapBytes for Option<T> {
 }
 impl<T: HeapBytes> HeapBytes for Box<T> {
     fn heap_bytes(&self, depth: usize) -> usize {
-        if depth >= 256 {
+        if depth >= MAX_NESTING {
             return usize::MAX;
         }
         size_of::<T>().saturating_add((**self).heap_bytes(depth + 1))

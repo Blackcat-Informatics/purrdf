@@ -362,6 +362,83 @@ def test_direction_participates_in_term_identity(compat: ModuleType) -> None:
     assert hash(ltr) != hash(rtl)
 
 
+def test_native_direction_participates_in_term_identity() -> None:
+    """Native Python equality and container keys preserve base direction."""
+    import purrdf
+
+    ltr = purrdf.Literal("x", language="en", direction="ltr")
+    rtl = purrdf.Literal("x", language="en", direction="rtl")
+    assert ltr != rtl
+    assert len({ltr, rtl}) == 2
+    assert {ltr: "left", rtl: "right"}[rtl] == "right"
+    upper = purrdf.Literal("x", language="EN", direction="rtl")
+    assert upper == rtl
+    assert hash(upper) == hash(rtl)
+    subject = purrdf.NamedNode(EX + "s")
+    predicate = purrdf.NamedNode(EX + "p")
+    assert purrdf.Triple(subject, predicate, ltr) != purrdf.Triple(subject, predicate, rtl)
+    for constructor in (purrdf.Triple, purrdf.Quad):
+        lower_row = constructor(subject, predicate, rtl)
+        upper_row = constructor(subject, predicate, upper)
+        assert lower_row == upper_row
+        assert hash(lower_row) == hash(upper_row)
+        assert len({lower_row, upper_row}) == 1
+    for datatype in ("langString", "dirLangString"):
+        with pytest.raises(ValueError, match="requires a language tag"):
+            purrdf.Literal("x", datatype=purrdf.NamedNode(
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#" + datatype
+            ))
+
+
+def test_native_row_identity_preserves_opaque_blank_labels() -> None:
+    """Opaque blank labels cannot shift a row key's field boundaries."""
+    import purrdf
+
+    for constructor in (purrdf.Triple, purrdf.Quad):
+        first = constructor(
+            purrdf.BlankNode("a"), purrdf.NamedNode("urn:p"),
+            purrdf.BlankNode("b\x02urn:q\x02_:c"),
+        )
+        second = constructor(
+            purrdf.BlankNode("a\x02urn:p\x02_:b"), purrdf.NamedNode("urn:q"),
+            purrdf.BlankNode("c"),
+        )
+        assert first != second
+        assert len({first, second}) == 2
+
+
+@pytest.mark.parametrize("store_name", ["Store", "MutableDataset"])
+@pytest.mark.parametrize("direction", [None, "rtl"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_native_language_identity_survives_store_operations(
+    store_name: str, direction: str | None, nested: bool,
+) -> None:
+    """Insertion, lookup, prebinding and removal share canonical language identity."""
+    import purrdf
+
+    store = getattr(purrdf, store_name)()
+    subject, predicate = purrdf.NamedNode(EX + "s"), purrdf.NamedNode(EX + "p")
+    upper = purrdf.Literal("x", language="EN", direction=direction)
+    lower = purrdf.Literal("x", language="en", direction=direction)
+    if nested:
+        upper = purrdf.Triple(subject, predicate, upper)
+        lower = purrdf.Triple(subject, predicate, lower)
+    upper_quad = purrdf.Quad(subject, predicate, upper)
+    lower_quad = purrdf.Quad(subject, predicate, lower)
+    store.add(upper_quad)
+    if store_name == "Store":
+        assert lower_quad in store
+    else:
+        assert store.contains(lower_quad)
+        assert len(store.quads_for_pattern(object=lower)) == 1
+    for value in (upper, lower):
+        assert bool(store.query(
+            "ASK { ?s ?p ?o }", substitutions={purrdf.Variable("o"): value},
+        ))
+    store.remove(lower_quad)
+    assert not bool(store.query("ASK { ?s ?p ?o }"))
+
+
 # ── RDF 1.2 triple term boundary ────────────────────────────────────────────────
 
 

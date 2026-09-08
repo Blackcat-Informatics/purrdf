@@ -689,11 +689,24 @@ fn visit_exists_patterns<'a, F>(expr: &'a Expression, visit: &mut F) -> bool
 where
     F: FnMut(&'a GraphPattern) -> bool,
 {
-    visit_expression_parts(expr, &mut |part| match part {
-        ExpressionPart::Sub(sub) => visit_exists_patterns(sub, visit),
-        ExpressionPart::Call(_) => false,
-        ExpressionPart::Exists(pattern) => visit(pattern),
-    })
+    let mut pending = vec![ExpressionPart::Sub(expr)];
+    while let Some(part) = pending.pop() {
+        match part {
+            ExpressionPart::Sub(sub) => {
+                let start = pending.len();
+                visit_expression_parts(sub, &mut |child| {
+                    pending.push(child);
+                    false
+                });
+                // Preserve the recursive visitor's left-to-right order: child
+                // ordinals are part of soundness certificates, not a work hint.
+                pending[start..].reverse();
+            }
+            ExpressionPart::Exists(pattern) if visit(pattern) => return true,
+            ExpressionPart::Exists(_) | ExpressionPart::Call(_) => {}
+        }
+    }
+    false
 }
 
 /// Visit every pattern that is a child of `pattern` for classification purposes: its

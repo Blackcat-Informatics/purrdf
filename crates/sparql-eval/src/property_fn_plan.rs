@@ -178,11 +178,13 @@ pub(crate) fn plan_where_pattern(
     // aggregate and no property-function call would otherwise skip this pass
     // entirely on the property-function-only check, and its admission (below,
     // via `plan_aggregate`) would never happen.
-    if !crate::property_fn_eval::pattern_reaches_property_function(pattern)
-        && !crate::property_fn_eval::pattern_reaches_custom_aggregate(pattern)
-    {
+    if !crate::property_fn_eval::pattern_needs_admission(pattern) {
         return Ok(None);
     }
+    // The rewriting walk is recursive just like evaluation. Apply its existing
+    // execution envelope before cloning or traversing an admitted call chain.
+    crate::governor::soundness::validate_graph_pattern_depth(pattern)
+        .map_err(PlanError::property_function)?;
     plan_pattern(pattern, relations, agg_registry, &DetHashSet::default()).map(Some)
 }
 

@@ -38,6 +38,9 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
     //    every positional check below would report a downstream symptom of it.
     require_absolute_iris(builder)?;
+    if let Some(message) = builder.invalid_literal() {
+        return Err(diag("rdf-ir-literal-shape", message.to_owned()));
+    }
 
     // 1. Every interned triple term references in-range ids, has an IRI predicate
     //    and a non-literal subject, and the whole nesting forest is acyclic and

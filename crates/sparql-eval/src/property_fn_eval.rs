@@ -703,42 +703,14 @@ fn unify_term(arg: &Arg, value: &TermValue, values: &mut [Option<TermValue>]) ->
 /// are not the relation's. That is a wrong answer with no symptom, so the forwarding
 /// refuses instead.
 pub(crate) fn pattern_reaches_property_function(pattern: &GraphPattern) -> bool {
-    if matches!(pattern, GraphPattern::PropertyFunction(_)) {
-        return true;
-    }
-    let mut found = false;
-    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
-        found |= match part {
-            crate::governor::soundness::PatternPart::Child(child, _edge) => {
-                pattern_reaches_property_function(child)
-            }
-            crate::governor::soundness::PatternPart::Expression(expr) => {
-                expression_reaches_property_function(expr)
-            }
-        };
-        found
-    });
-    found
+    reaches(ReachNode::Pattern(pattern), ReachKind::PropertyFunction)
 }
 
 /// [`pattern_reaches_property_function`] through an expression's embedded patterns.
 pub(crate) fn expression_reaches_property_function(
     expr: &purrdf_sparql_algebra::Expression,
 ) -> bool {
-    let mut found = false;
-    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
-        found |= match part {
-            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
-                pattern_reaches_property_function(pattern)
-            }
-            crate::governor::soundness::ExpressionPart::Sub(inner) => {
-                expression_reaches_property_function(inner)
-            }
-            crate::governor::soundness::ExpressionPart::Call(_) => false,
-        };
-        found
-    });
-    found
+    reaches(ReachNode::Expression(expr), ReachKind::PropertyFunction)
 }
 
 /// Whether `pattern` reaches a `GROUP BY` with an [`AggregateFunction::Custom`]
@@ -760,26 +732,7 @@ pub(crate) fn expression_reaches_property_function(
 ///   cannot know, or worse, an `AGG(<iri>, …)` textual form it silently mishandles
 ///   — either way a wrong answer with no local symptom.
 pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
-    if let GraphPattern::Group { aggregates, .. } = pattern
-        && aggregates
-            .iter()
-            .any(|(_, aggregate)| matches!(aggregate.function(), AggregateFunction::Custom(_)))
-    {
-        return true;
-    }
-    let mut found = false;
-    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
-        found |= match part {
-            crate::governor::soundness::PatternPart::Child(child, _edge) => {
-                pattern_reaches_custom_aggregate(child)
-            }
-            crate::governor::soundness::PatternPart::Expression(expr) => {
-                expression_reaches_custom_aggregate(expr)
-            }
-        };
-        found
-    });
-    found
+    reaches(ReachNode::Pattern(pattern), ReachKind::Aggregate)
 }
 
 /// [`pattern_reaches_custom_aggregate`] through an expression's embedded patterns
@@ -794,20 +747,7 @@ pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
 pub(crate) fn expression_reaches_custom_aggregate(
     expr: &purrdf_sparql_algebra::Expression,
 ) -> bool {
-    let mut found = false;
-    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
-        found |= match part {
-            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
-                pattern_reaches_custom_aggregate(pattern)
-            }
-            crate::governor::soundness::ExpressionPart::Sub(inner) => {
-                expression_reaches_custom_aggregate(inner)
-            }
-            crate::governor::soundness::ExpressionPart::Call(_) => false,
-        };
-        found
-    });
-    found
+    reaches(ReachNode::Expression(expr), ReachKind::Aggregate)
 }
 
 /// Whether `pattern` reaches a [`Function::Custom`] scalar-function call anywhere
@@ -826,37 +766,80 @@ pub(crate) fn expression_reaches_custom_aggregate(
 /// `crate::property_fn_plan` to close the way there is for a relation's predicate
 /// or a `Custom` aggregate's registry mismatch.
 pub(crate) fn pattern_reaches_custom_function(pattern: &GraphPattern) -> bool {
-    let mut found = false;
-    crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
-        found |= match part {
-            crate::governor::soundness::PatternPart::Child(child, _edge) => {
-                pattern_reaches_custom_function(child)
-            }
-            crate::governor::soundness::PatternPart::Expression(expr) => {
-                expression_reaches_custom_function(expr)
-            }
-        };
-        found
-    });
-    found
+    reaches(ReachNode::Pattern(pattern), ReachKind::ScalarFunction)
 }
 
-/// [`pattern_reaches_custom_function`] through an expression's embedded patterns.
-fn expression_reaches_custom_function(expr: &purrdf_sparql_algebra::Expression) -> bool {
-    let mut found = false;
-    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
-        found |= match part {
-            crate::governor::soundness::ExpressionPart::Sub(inner) => {
-                expression_reaches_custom_function(inner)
+/// Whether the admission pass has any registered call to check.
+pub(crate) fn pattern_needs_admission(pattern: &GraphPattern) -> bool {
+    reaches(ReachNode::Pattern(pattern), ReachKind::Admission)
+}
+
+enum ReachNode<'a> {
+    Pattern(&'a GraphPattern),
+    Expression(&'a purrdf_sparql_algebra::Expression),
+}
+
+#[derive(Clone, Copy)]
+enum ReachKind {
+    PropertyFunction,
+    Aggregate,
+    ScalarFunction,
+    Admission,
+}
+
+// Use the exhaustive shallow visitors with a borrowed work stack. Flat parser
+// combinator spines can be much deeper than brace nesting; recursive visitor
+// callbacks consumed the native stack before the preparation pass could return.
+fn reaches(root: ReachNode<'_>, kind: ReachKind) -> bool {
+    use crate::governor::soundness::{
+        ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
+    };
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        match node {
+            ReachNode::Pattern(pattern) => {
+                if matches!(kind, ReachKind::PropertyFunction | ReachKind::Admission)
+                    && matches!(pattern, GraphPattern::PropertyFunction(_))
+                {
+                    return true;
+                }
+                if matches!(kind, ReachKind::Aggregate | ReachKind::Admission)
+                    && let GraphPattern::Group { aggregates, .. } = pattern
+                    && aggregates.iter().any(|(_, aggregate)| {
+                        matches!(aggregate.function(), AggregateFunction::Custom(_))
+                    })
+                {
+                    return true;
+                }
+                visit_pattern_parts(pattern, &mut |part| {
+                    pending.push(match part {
+                        PatternPart::Child(child, _) => ReachNode::Pattern(child),
+                        PatternPart::Expression(expr) => ReachNode::Expression(expr),
+                    });
+                    false
+                });
             }
-            crate::governor::soundness::ExpressionPart::Exists(pattern) => {
-                pattern_reaches_custom_function(pattern)
+            ReachNode::Expression(expr) => {
+                let found = visit_expression_parts(expr, &mut |part| {
+                    match part {
+                        ExpressionPart::Exists(pattern) => {
+                            pending.push(ReachNode::Pattern(pattern));
+                        }
+                        ExpressionPart::Sub(inner) => pending.push(ReachNode::Expression(inner)),
+                        ExpressionPart::Call(function) => {
+                            return matches!(kind, ReachKind::ScalarFunction)
+                                && matches!(function, Function::Custom(_));
+                        }
+                    }
+                    false
+                });
+                if found {
+                    return true;
+                }
             }
-            crate::governor::soundness::ExpressionPart::Call(f) => matches!(f, Function::Custom(_)),
-        };
-        found
-    });
-    found
+        }
+    }
+    false
 }
 
 #[cfg(test)]

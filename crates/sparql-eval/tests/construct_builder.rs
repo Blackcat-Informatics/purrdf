@@ -394,3 +394,57 @@ fn typed_publication_preserves_nested_directional_terms_and_named_statement_meta
             .is_some()
     );
 }
+
+#[test]
+fn mutated_construct_literal_is_refused_before_spending_or_publication() {
+    use purrdf_sparql_algebra::{Literal, Query, TermPattern};
+    use purrdf_sparql_eval::PreparedQuery;
+
+    let engine = NativeSparqlEngine::new();
+    let data = dataset();
+    let original = engine.prepare_query(
+        "CONSTRUCT { ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }",
+        None,
+    ).expect("plan");
+    let mut prepared = PreparedQuery::rewritten(original.query.clone(), QueryOptions::EMPTY)
+        .expect("admitted plan");
+    let Query::Construct { template, .. } = &mut prepared.query else {
+        panic!("construct")
+    };
+    template[0].triple.object = TermPattern::Literal(Literal::new_lang("claim", "en--rtl", None));
+    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+    let before = state.evidence();
+    let mut target = RdfDatasetBuilder::new();
+    let existing = target.intern_iri("https://example.org/existing");
+    let predicate = target.intern_iri(VALUE);
+    target.push_quad(existing, predicate, existing, None);
+    let result = engine.construct_prepared_in_operation_into_view(
+        data.as_ref(),
+        &prepared,
+        &[("s".to_owned(), TermValue::blank("c1"))],
+        QueryOptions::EMPTY,
+        &state,
+        &mut target,
+    );
+    let Err(GraphBuildError::Query(diagnostic)) = result else {
+        panic!("malformed public algebra must be refused")
+    };
+    assert_eq!(diagnostic.code, "native-sparql-algebra");
+    assert_eq!(
+        state.evidence(),
+        before,
+        "admission must precede governor work"
+    );
+    let output = target.freeze().expect("unchanged destination");
+    assert_eq!(
+        output.term_count(),
+        2,
+        "no staged terms reached the destination"
+    );
+    assert_eq!(output.quad_count(), 1);
+    assert!(
+        output
+            .quads()
+            .all(|quad| quad.s == existing && quad.o == existing)
+    );
+}
