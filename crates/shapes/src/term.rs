@@ -28,7 +28,7 @@
 
 use std::cmp::Ordering;
 
-use ::purrdf::{RdfDataset, TermRef};
+use ::purrdf::{RdfDataset, RdfLiteral, TermRef};
 use ::purrdf::{RdfTextDirection, TermId, TermValue};
 use smallvec::SmallVec;
 
@@ -147,7 +147,7 @@ impl Literal {
     ) -> Self {
         Self {
             lexical: value.into(),
-            datatype: RDF_LANG_STRING.to_owned(),
+            datatype: RdfLiteral::language_datatype_iri(Some(direction)).to_owned(),
             language: Some(language.into()),
             direction: Some(direction),
         }

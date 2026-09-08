@@ -18,9 +18,9 @@
 //! distinguishes a complete result from an exhausted budget with certified partial
 //! answers. No governor state is ever held on the engine.
 //!
-//! The [`PlanCache`] memoizes parsing so the static generated query corpus compiles
-//! to algebra once, not per run. Full cost-based planning is out of scope here; the
-//! cache holds only the parsed [`Query`].
+//! The bounded [`PlanCache`] memoizes parsing and registry admission. Callers can
+//! also prepare compiler-produced algebra directly and share its immutable plan
+//! across worker-local engines without retaining a global evaluation lock.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -32,21 +32,22 @@ use purrdf_core::{
 };
 use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
 
-use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{
-    BgpOrderCache, EvalCtx, EvalOptions, EvaluatedOutcome, LossVocabulary, Outcome,
-    StandpointPredicates, evaluate_query, evaluate_query_evaluated, query_pattern,
+    EvalCtx, EvalOptions, EvaluatedOutcome, LossVocabulary, Outcome, StandpointPredicates,
+    evaluate_query, evaluate_query_evaluated, query_pattern,
 };
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
 use crate::governor::{GovernorState, NonMonotoneBarrier, QueryExplanation, QueryGovernors};
+use crate::plan_cache::{BoundedCache, BoundedOrderCache};
 use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
     GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers, PartialSparqlResult,
     RelationIdentity,
 };
+use crate::{CacheLimits, CacheStats};
 
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
@@ -122,35 +123,51 @@ impl PreparedQuery {
 /// set itself: it too decides which triples become calls
 /// ([`ParserOptions::property_fn_iris`]), so two configurations that agree on
 /// everything else but differ there must not share a plan.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PlanCache {
-    entries: DetHashMap<String, Arc<PreparedQuery>>,
+    entries: BoundedCache<Arc<str>, Arc<PreparedQuery>>,
+}
+
+impl Default for PlanCache {
+    fn default() -> Self {
+        Self::with_limits(CacheLimits::default())
+    }
 }
 
 impl PlanCache {
     /// The number of memoized plans held.
     ///
-    /// The cache is keyed on query TEXT and is never evicted, which is right for
-    /// a static query corpus (one entry per distinct query a host issues) and
-    /// wrong for any caller that would splice operand DATA into the text it
-    /// prepares — each such call is a distinct key, so the cache would grow with
-    /// the input rather than with the program. This makes that growth OBSERVABLE,
-    /// so a caller can pin "my evaluation path does not manufacture query text"
-    /// as a test rather than as a comment.
+    /// Retention is bounded by both entry and byte ceilings. Pass changing data
+    /// as substitutions to a prepared plan instead of splicing it into query text.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.stats().entries
     }
 
     /// Whether no plan is memoized.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.len() == 0
     }
 
     /// A fresh, empty cache.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty cache with explicit retention ceilings. A miss always prepares
+    /// the complete query; disabled retention never disables execution.
+    #[must_use]
+    pub fn with_limits(limits: CacheLimits) -> Self {
+        Self {
+            entries: BoundedCache::new(limits),
+        }
+    }
+
+    /// Retained storage and lifetime hit/miss/eviction counters.
+    #[must_use]
+    pub fn stats(&self) -> CacheStats {
+        self.entries.stats()
     }
 
     /// Parse `query` (memoized) into a [`PreparedQuery`], under
@@ -221,18 +238,9 @@ impl PlanCache {
             .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
         let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates)
             .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
-        let key = format!(
-            "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
-            base_iri.unwrap_or(""),
-            options.extension_fn_namespaces.join("\u{1}"),
-            options.property_fn_namespaces.join("\u{1}"),
-            options.property_fn_iris.join("\u{1}"),
-            fingerprint,
-            agg_fingerprint,
-            query
-        );
+        let key = plan_cache_key(query, base_iri, options, &fingerprint, &agg_fingerprint);
         if let Some(prepared) = self.entries.get(&key) {
-            return Ok(prepared.clone());
+            return Ok(prepared);
         }
         let mut parser = SparqlParser::new();
         if let Some(base) = base_iri {
@@ -248,9 +256,53 @@ impl PlanCache {
             relations: fingerprint,
             aggregates: agg_fingerprint,
         });
-        self.entries.insert(key, prepared.clone());
+        let bytes = key
+            .len()
+            .saturating_add(4 * size_of::<usize>()) // Key and plan Arc counters.
+            .saturating_add(size_of::<PreparedQuery>())
+            .saturating_add(
+                prepared
+                    .query
+                    .retained_size_bytes()
+                    .saturating_sub(size_of::<Query>()),
+            )
+            .saturating_add(prepared.relations.capacity())
+            .saturating_add(prepared.aggregates.capacity());
+        self.entries.insert(key, prepared.clone(), bytes);
         Ok(prepared)
     }
+}
+
+/// Length-prefixed fields cannot alias when a caller's configuration contains
+/// separator characters. List lengths distinguish namespace-set boundaries.
+fn plan_cache_key(
+    query: &str,
+    base_iri: Option<&str>,
+    options: &ParserOptions,
+    relations: &str,
+    aggregates: &str,
+) -> Arc<str> {
+    use std::fmt::Write as _;
+    fn field(out: &mut String, value: &str) {
+        write!(out, "{}:{value}", value.len()).expect("writing to String");
+    }
+    let mut key = String::new();
+    key.push(if base_iri.is_some() { '1' } else { '0' });
+    field(&mut key, base_iri.unwrap_or(""));
+    for list in [
+        &options.extension_fn_namespaces,
+        &options.property_fn_namespaces,
+        &options.property_fn_iris,
+    ] {
+        write!(key, "{}:", list.len()).expect("writing to String");
+        for value in list {
+            field(&mut key, value);
+        }
+    }
+    for value in [relations, aggregates, query] {
+        field(&mut key, value);
+    }
+    key.into()
 }
 
 /// The native, RDF-1.2-first multiset SPARQL engine (purrdf S6).
@@ -273,8 +325,8 @@ impl PlanCache {
 pub struct NativeSparqlEngine {
     cache: RefCell<PlanCache>,
     /// The dataset-aware BGP join-order cache, shared across this engine's queries so
-    /// the static query corpus re-plans each BGP once per dataset (see [`BgpOrderCache`]).
-    order_cache: BgpOrderCache,
+    /// the static query corpus re-plans each BGP once per dataset.
+    order_cache: BoundedOrderCache,
     resolver: Option<Arc<dyn GraphResolver>>,
     /// Parse-time configuration (the extension-function namespace set), applied to
     /// every query and update this engine parses. Defaults to empty (no extension
@@ -317,6 +369,60 @@ impl std::fmt::Debug for NativeSparqlEngine {
 }
 
 impl NativeSparqlEngine {
+    /// Configure prepared-plan retention on a new engine. Existing plans held by
+    /// callers remain valid; replacing cache policy drops only cache ownership.
+    #[must_use]
+    pub fn with_plan_cache_limits(mut self, limits: CacheLimits) -> Self {
+        self.cache = RefCell::new(PlanCache::with_limits(limits));
+        self
+    }
+
+    /// Prepared-plan retention and lifetime lookup counters.
+    #[must_use]
+    pub fn plan_cache_stats(&self) -> CacheStats {
+        self.cache.borrow().stats()
+    }
+
+    /// Configure bounded join-order retention, independently of prepared plans.
+    #[must_use]
+    pub fn with_order_cache_limits(mut self, limits: CacheLimits) -> Self {
+        self.order_cache = std::sync::Mutex::new(BoundedCache::new(limits));
+        self
+    }
+
+    /// Join-order retention and lifetime lookup counters. Statistics fingerprints
+    /// key ordering hints only; they never authorize reuse of query answers.
+    #[must_use]
+    pub fn order_cache_stats(&self) -> CacheStats {
+        self.order_cache
+            .lock()
+            .expect("order cache lock poisoned")
+            .stats()
+    }
+
+    /// Prepare typed compiler-produced algebra without serialization or parsing.
+    ///
+    /// Resolves and feasibility-orders property-function calls and admits custom
+    /// aggregates against the supplied registries, just like text preparation.
+    /// Dataset/version/governor admission still runs at execution. The caller
+    /// retains the returned immutable plan; it is not inserted in the text cache.
+    ///
+    /// # Errors
+    /// Returns a diagnostic for a registry fingerprint or call-admission failure.
+    pub fn prepare_algebra(
+        &self,
+        query: Query,
+        options: QueryOptions<'_>,
+    ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        let planned = crate::property_fn_plan::plan_query(
+            &query,
+            options.property_functions,
+            options.aggregates,
+        )
+        .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
+        PreparedQuery::rewritten(planned.unwrap_or(query), options).map(Arc::new)
+    }
+
     /// The number of plans this engine's cache currently memoizes — see
     /// [`PlanCache::len`] for what a growing count means.
     #[must_use]
@@ -758,10 +864,38 @@ impl NativeSparqlEngine {
             options.property_functions,
             options.aggregates,
         )?;
-        self.query_governed_prepared_in_state(
+        self.query_prepared_governed_in_operation(
             dataset,
             &prepared,
             request.substitutions,
+            options,
+            state,
+        )
+    }
+
+    /// Execute a prepared plan under a caller-owned multi-query operation budget.
+    ///
+    /// This is the prepared sibling of [`Self::query_governed_in_operation`]. It
+    /// performs the same registry and execution admission without query text,
+    /// parsing, or a plan-cache lookup. Worker-local engines can share the plan
+    /// and governor state. Substitutions, prebinding, graph scope and deterministic
+    /// blank-node mint prefixes remain per invocation in `options`.
+    ///
+    /// # Errors
+    /// Propagates registry mismatch, admission and evaluation diagnostics. Budget
+    /// exhaustion remains a typed [`GovernedOutcome`], never a complete result.
+    pub fn query_prepared_governed_in_operation<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
+        options: QueryOptions<'d>,
+        state: &Arc<GovernorState>,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        self.query_governed_prepared_in_state(
+            dataset,
+            prepared,
+            substitutions,
             options,
             None,
             state,
@@ -1221,7 +1355,7 @@ impl NativeSparqlEngine {
     /// and OS entropy itself.
     fn eval_ctx<'d, D: DatasetView + Sync>(&'d self, dataset: &'d D) -> EvalCtx<'d, D> {
         let mut ctx = EvalCtx::new(dataset)
-            .with_order_cache(&self.order_cache)
+            .with_bounded_order_cache(&self.order_cache)
             .with_eval_options(self.eval_options);
         if let Some(predicates) = &self.standpoint_predicates {
             ctx = ctx.with_standpoint_predicates(predicates.clone());
@@ -4725,9 +4859,7 @@ mod tests {
     const TWO_PATTERN_BGP: &str = "SELECT ?o ?n WHERE { \
          <http://ex/a> <http://ex/knows> ?o . <http://ex/a> <http://ex/name> ?n }";
 
-    /// A repeated query against the same dataset plans its BGP once and reuses the
-    /// cached order: the engine holds a single entry whose `Arc` is the *same
-    /// allocation* before and after the second run (a cache miss would replace it).
+    /// A repeated query reuses its join-order entry without another planning miss.
     #[test]
     fn order_cache_populates_and_reuses() {
         let ds = social();
@@ -4737,49 +4869,13 @@ mod tests {
             base_iri: None,
             substitutions: &[],
         };
-
         engine.query(&ds, req()).expect("first query");
-        assert_eq!(
-            engine
-                .order_cache
-                .read()
-                .expect("order cache lock poisoned")
-                .len(),
-            1,
-            "one BGP cached"
-        );
-        let first = engine
-            .order_cache
-            .read()
-            .expect("order cache lock poisoned")
-            .values()
-            .next()
-            .expect("cached order")
-            .clone();
-
+        let first = engine.order_cache_stats();
+        assert_eq!((first.entries, first.hits, first.misses), (1, 0, 1));
         engine.query(&ds, req()).expect("second query");
-        assert_eq!(
-            engine
-                .order_cache
-                .read()
-                .expect("order cache lock poisoned")
-                .len(),
-            1,
-            "no duplicate entry"
-        );
-        let second = engine
-            .order_cache
-            .read()
-            .expect("order cache lock poisoned")
-            .values()
-            .next()
-            .expect("cached order")
-            .clone();
-
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "the second run reused the cached order, not re-planned"
-        );
+        let second = engine.order_cache_stats();
+        assert_eq!((second.entries, second.hits, second.misses), (1, 1, 1));
+        assert_eq!(first.bytes, second.bytes);
     }
 
     /// The same query text against two datasets with different stats fingerprints keys
@@ -4809,11 +4905,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
 
         assert_eq!(
-            engine
-                .order_cache
-                .read()
-                .expect("order cache lock poisoned")
-                .len(),
+            engine.order_cache_stats().entries,
             2,
             "distinct datasets ⇒ distinct fingerprints ⇒ two cache entries"
         );

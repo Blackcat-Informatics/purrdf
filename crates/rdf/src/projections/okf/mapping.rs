@@ -1325,7 +1325,6 @@ mod tests {
     };
 
     const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
     const CLASS: &str = "https://example.org/Class";
     const PROPERTY: &str = "https://example.org/Property";
@@ -1522,7 +1521,7 @@ mod tests {
             }),
             object: Box::new(ProjectionTerm::Literal {
                 lexical: "hello".to_owned(),
-                datatype: RDF_LANG_STRING.to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
                 language: Some("en".to_owned()),
                 direction: Some(crate::projections::ProjectionDirection::Ltr),
             }),

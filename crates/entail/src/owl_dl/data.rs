@@ -206,8 +206,9 @@ pub(crate) enum LiteralValue {
     /// The literal denotes this XSD value.
     Value(XsdValue),
     /// The literal is language-tagged, so its value is the `(lexical form, language,
-    /// direction)` triple the TERM already is: `rdf:langString`'s value space is exactly
-    /// those triples, and the IR lower-cases the language tag as part of a literal's
+    /// direction)` identity the term already carries. Nondirectional tags use
+    /// `rdf:langString`, directional tags use `rdf:dirLangString`. The IR lowercases
+    /// the language tag as part of a literal's
     /// identity, so two distinct term ids here denote two distinct values. Value identity is
     /// term identity, and no XSD value is needed to decide it.
     TermIdentified,
@@ -674,7 +675,7 @@ mod tests {
 
     /// A functional data property over two LANGUAGE-TAGGED literals.
     ///
-    /// `rdf:langString`'s value space is the `(lexical form, language, direction)` triples,
+    /// `rdf:langString`'s value space consists of `(lexical form, language)` pairs,
     /// so `"hello"@en` and `"goodbye"@en` are two values and a functional property may not
     /// hold both. This case is separated ONLY by value-class distinctness: unlike two
     /// numeric literals, whose incompatible ranges make the merged node's constraint set

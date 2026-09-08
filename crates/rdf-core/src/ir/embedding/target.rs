@@ -1327,7 +1327,7 @@ mod tests {
     fn rdf_triple_terms_and_directional_literals_are_first_class() {
         let literal = RdfTermTarget::Literal {
             lexical: "chat".to_owned(),
-            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
             language: Some("fr".to_owned()),
             direction: Some(RdfTextDirection::Ltr),
         }

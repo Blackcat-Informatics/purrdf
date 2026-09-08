@@ -251,7 +251,7 @@ impl DatasetSink {
                 // rejects them (the protocol flags, never auto-rejects).
                 let literal = RdfLiteral {
                     lexical_form: lexical,
-                    // A language tag forces rdf:langString at intern time (C0.1); an
+                    // Language and direction determine the datatype at intern time; an
                     // explicit datatype is otherwise carried through by value.
                     datatype: if language.is_some() {
                         None

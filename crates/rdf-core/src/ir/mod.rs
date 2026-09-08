@@ -39,6 +39,7 @@ pub mod global;
 // The permissive-ingestion adapter (purrdf P6): an `RdfEventSink` (the
 // `purrdf-events` protocol) that buffers forward references and freezes a dataset
 // at `finish()`, plus the frozen-IR-replay `RdfEventSource` that drives it.
+pub mod import;
 pub mod ingest;
 // A reference, in-memory, demand-paged dataset (backend seam): `PagedDataset`
 // composes many frozen `RdfDataset` pages into one logical `DatasetView` keyed on

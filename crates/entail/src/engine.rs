@@ -1318,7 +1318,7 @@ impl Terms {
 ///   and the label is the verbatim remainder;
 /// * a literal's lexical form is escaped so it carries no bare `"`, so the closing quote
 ///   is unambiguous, and what follows is either `@` (a language tag, hence the datatype
-///   `rdf:langString` by C0.1) or `^^<` (a datatype IRI) or nothing (`xsd:string`);
+///   `rdf:langString` or `rdf:dirLangString` by C0.1) or `^^<` (a datatype IRI) or nothing (`xsd:string`);
 /// * a triple term's three components are separated by the spaces its delimiters reserve,
 ///   and each recurses through the same argument.
 pub(crate) fn surface_of(value: &TermValue) -> String {
@@ -1352,8 +1352,8 @@ fn write_surface(value: &TermValue, out: &mut String) {
             write_literal_escaped(lexical_form, out);
             out.push('"');
             if let Some(language) = language {
-                // A language-tagged literal's datatype is `rdf:langString` by C0.1 — the
-                // builder re-derives it — so the tag determines it and spelling it out
+                // Language and direction determine the datatype by C0.1 — the
+                // builder re-derives it — so spelling it out
                 // would add bytes that carry no identity.
                 out.push('@');
                 out.push_str(language);
@@ -1589,13 +1589,13 @@ mod tests {
             TermValue::lang_literal("cat", "en"),
             TermValue::Literal {
                 lexical_form: "cat".to_owned(),
-                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
                 language: Some("en".to_owned()),
                 direction: Some(RdfTextDirection::Ltr),
             },
             TermValue::Literal {
                 lexical_form: "cat".to_owned(),
-                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
                 language: Some("en".to_owned()),
                 direction: Some(RdfTextDirection::Rtl),
             },

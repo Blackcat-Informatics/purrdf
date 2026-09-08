@@ -1209,7 +1209,7 @@ mod tests {
         let lang = TermValue::lang_literal("bonjour", "FR");
         let directional = TermValue::Literal {
             lexical_form: "hello".to_string(),
-            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_string(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_string(),
             language: Some("en".to_string()),
             direction: Some(RdfTextDirection::Rtl),
         };

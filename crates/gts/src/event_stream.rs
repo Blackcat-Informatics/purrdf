@@ -309,17 +309,22 @@ impl<'s> EventEmitter<'s> {
     ///
     /// A `Some` datatype id that never resolved to an IRI is a hard error (a
     /// literal cannot be typed by a non-IRI). Absence defaults per RDF §7.1:
-    /// `rdf:langString` with a language tag, else `xsd:string`.
+    /// `rdf:dirLangString` with a directional language tag, `rdf:langString`
+    /// with a language tag alone, else `xsd:string`.
     fn datatype_iri(
         &self,
         datatype: Option<EventTermId>,
         lang: Option<&str>,
+        direction: Option<&str>,
     ) -> Result<String, EventError> {
         match datatype {
             Some(dt) => {
                 self.iri_map.get(&dt).cloned().ok_or_else(|| {
                     EventError::message("GTS literal datatype must resolve to an IRI")
                 })
+            }
+            None if lang.is_some() && direction.is_some() => {
+                Ok(crate::model::RDF_DIR_LANG_STRING.to_owned())
             }
             None if lang.is_some() => Ok(RDF_LANG_STRING.to_owned()),
             None => Ok(XSD_STRING.to_owned()),
@@ -396,7 +401,7 @@ impl ResolvedSink for EventEmitter<'_> {
         self.ensure_scope(segment_index)?;
         // Clone the datatype IRI into a local so the `sink.term` call below does
         // not hold a borrow of `self.iri_map` while it borrows `self.sink`.
-        let datatype_iri = self.datatype_iri(datatype, lang.as_deref())?;
+        let datatype_iri = self.datatype_iri(datatype, lang.as_deref(), direction.as_deref())?;
         let direction = parse_direction(direction.as_deref(), lang.as_deref())?;
         let id = self.mint();
         self.emit_term(

@@ -79,7 +79,7 @@ pub(crate) const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::Blank
 /// rather than refusing a document.
 pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
     let datatype = lit.datatype().as_str();
-    // C0.1: a language tag forces `rdf:langString`, and such a literal is never
+    // C0.1: a language tag determines a string datatype, so the literal is never
     // composite — so the binding is only ever reached for an untagged literal.
     let lexical_form = match lit.language() {
         None => purrdf_core::cdt_blank::bind_cdt_blank_labels_unchecked(

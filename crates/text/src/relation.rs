@@ -59,6 +59,8 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// The datatype of a language-tagged string.
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+/// The datatype of a directional language-tagged string.
+const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
 /// [`TextSearchRelation`]'s `?doc` position.
 const SEARCH_DOC: usize = 0;
@@ -110,10 +112,17 @@ fn needle_text(value: &TermValue, position: usize) -> Result<&str, EvalError> {
             lexical_form,
             datatype,
             ..
-        } if datatype == XSD_STRING || datatype == RDF_LANG_STRING => Ok(lexical_form),
+        } if matches!(
+            datatype.as_str(),
+            XSD_STRING | RDF_LANG_STRING | RDF_DIR_LANG_STRING
+        ) =>
+        {
+            Ok(lexical_form)
+        }
         TermValue::Literal { datatype, .. } => Err(EvalError::function(format!(
             "the needle at position {position} is a literal of datatype <{datatype}>; a text \
-             search reads a string, so the needle must be an xsd:string or an rdf:langString"
+             search reads a string, so the needle must be an xsd:string, rdf:langString or \
+             rdf:dirLangString"
         ))),
         other => Err(EvalError::function(format!(
             "the needle at position {position} is {other:?}; only a literal carries text, so an \
@@ -577,7 +586,7 @@ impl PropertyFunction for TextSearchRelation {
     ///
     /// * the needle at position 1 is free — this relation cannot enumerate
     ///   needles;
-    /// * the needle is not an `xsd:string` or `rdf:langString` literal;
+    /// * the needle is not an `xsd:string`, `rdf:langString` or `rdf:dirLangString` literal;
     /// * `?rank` is bound to something other than an `xsd:integer`, or to an
     ///   integer below one, which is outside a 1-based domain;
     /// * `?lang` is bound to something other than an `xsd:string`.
@@ -996,7 +1005,7 @@ impl PropertyFunction for TermOccurrenceRelation {
     /// # Refusals
     ///
     /// * the term at position 1 is free, or is not an `xsd:string` or
-    ///   `rdf:langString` literal;
+    ///   `rdf:langString` or `rdf:dirLangString` literal;
     /// * the term analyzes to more than one term — see the type's docs;
     /// * `?lang` is bound to something other than an `xsd:string`.
     ///
@@ -1257,8 +1266,8 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 
     use super::{
-        OCCURRENCE_MODE, SEARCH_MODE, TermOccurrenceRelation, TextSearchRelation, XSD_DECIMAL,
-        XSD_INTEGER, verify_binding,
+        OCCURRENCE_MODE, RDF_DIR_LANG_STRING, SEARCH_MODE, TermOccurrenceRelation,
+        TextSearchRelation, XSD_DECIMAL, XSD_INTEGER, verify_binding,
     };
     use crate::error::TextError;
     use crate::index::{GraphSelector, TextIndex, TextIndexConfig};
@@ -1584,6 +1593,28 @@ mod tests {
         bound[1] = Some(TermValue::lang_literal("alpha", "en"));
         let rows = invoke(&search, &bound, None).expect("an rdf:langString is a needle");
         assert_eq!(rows.len(), 2, "the golden holds `alpha` in two documents");
+
+        bound[1] = Some(TermValue::Literal {
+            lexical_form: "alpha".to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(purrdf_core::model::RdfTextDirection::Ltr),
+        });
+        let directional_rows = invoke(&search, &bound, None).expect("directional text is a needle");
+        assert_eq!(directional_rows.len(), rows.len());
+        for (directional, plain) in directional_rows.iter().zip(&rows) {
+            assert_eq!(directional[0], plain[0], "the same document matches");
+            assert_eq!(
+                &directional[2..],
+                &plain[2..],
+                "ranking and language are unchanged"
+            );
+            assert_eq!(
+                Some(&directional[1]),
+                bound[1].as_ref(),
+                "the bound needle keeps its identity"
+            );
+        }
     }
 
     /// A needle of pure punctuation analyzes to no terms. That is a well-formed

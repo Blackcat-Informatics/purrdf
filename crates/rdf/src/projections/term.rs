@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use purrdf_core::{BlankScope, DatasetView, RdfTextDirection, TermRef, TermValue};
+use purrdf_core::{BlankScope, DatasetView, RdfLiteral, RdfTextDirection, TermRef, TermValue};
 use serde::{Deserialize, Serialize};
 
 use super::util::canonical_json_bounded;
@@ -348,14 +348,17 @@ impl ProjectionTerm {
                             "language tag must use lowercase canonical form",
                         ));
                     }
-                    if datatype != RDF_LANG_STRING {
+                    let expected = RdfLiteral::language_datatype_iri(direction.map(Into::into));
+                    if datatype != expected {
                         return Err(ProjectionError::term(format!(
-                            "language-tagged literals must use datatype {RDF_LANG_STRING}"
+                            "language-tagged literals must use datatype {expected}"
                         )));
                     }
-                } else if datatype == RDF_LANG_STRING {
+                } else if datatype == RDF_LANG_STRING
+                    || datatype == RdfLiteral::language_datatype_iri(Some(RdfTextDirection::Ltr))
+                {
                     return Err(ProjectionError::term(
-                        "rdf:langString literals require a language tag",
+                        "language string datatypes require a language tag",
                     ));
                 }
                 Ok(())

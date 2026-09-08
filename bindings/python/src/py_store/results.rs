@@ -28,8 +28,8 @@ use crate::sparql::{
 };
 use crate::{BlankScope, RdfDatasetBuilder, RdfTerm, SparqlResult, TermValue};
 
+#[cfg(test)]
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 /// Map the short format id (`json`/`xml`/`csv`/`tsv`) to the crate's format enum.
 fn parse_format(name: &str) -> PyResult<SparqlResultsFormat> {
@@ -56,11 +56,7 @@ fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
         },
         RdfTerm::Literal(lit) => TermValue::Literal {
             lexical_form: lit.lexical_form.clone(),
-            datatype: match (&lit.datatype, &lit.language) {
-                (Some(dt), _) => dt.clone(),
-                (None, Some(_)) => RDF_LANG_STRING.to_owned(),
-                (None, None) => XSD_STRING.to_owned(),
-            },
+            datatype: lit.datatype_iri().to_owned(),
             language: lit.language.clone(),
             direction: lit.direction,
         },

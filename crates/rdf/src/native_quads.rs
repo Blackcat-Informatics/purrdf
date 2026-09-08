@@ -107,26 +107,29 @@ pub fn dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, String> 
 /// unscoped every graph-scoped `rdf:reifies` edge on the flat quad surface.
 #[must_use]
 pub fn flat_rdf_quads_from_dataset(dataset: &RdfDataset) -> Vec<RdfQuad> {
-    let mut quads: Vec<RdfQuad> = dataset.owned_quads().collect();
-    for reifier in dataset.owned_reifiers() {
-        quads.push(RdfQuad {
-            subject: reifier.reifier,
-            predicate: RDF_REIFIES.to_owned(),
-            object: RdfTerm::triple(reifier.statement),
-            graph_name: reifier.graph,
-            location: None,
-        });
-    }
-    for annotation in dataset.owned_annotations() {
-        quads.push(RdfQuad {
-            subject: annotation.reifier,
-            predicate: annotation.predicate,
-            object: annotation.object,
-            graph_name: annotation.graph,
-            location: None,
-        });
-    }
-    quads
+    flat_rdf_quads(dataset).collect()
+}
+
+/// Iterate the complete flat RDF assertion surface without allocating an intermediate
+/// quad vector. Preserves the same base, reifier, annotation order and graph scopes as
+/// [`flat_rdf_quads_from_dataset`]. Each yielded quad owns its terms; consumers that
+/// require stable native IDs should retain the dataset and use its typed views.
+pub fn flat_rdf_quads(dataset: &RdfDataset) -> impl Iterator<Item = RdfQuad> + '_ {
+    let reifiers = dataset.owned_reifiers().map(|reifier| RdfQuad {
+        subject: reifier.reifier,
+        predicate: RDF_REIFIES.to_owned(),
+        object: RdfTerm::triple(reifier.statement),
+        graph_name: reifier.graph,
+        location: None,
+    });
+    let annotations = dataset.owned_annotations().map(|annotation| RdfQuad {
+        subject: annotation.reifier,
+        predicate: annotation.predicate,
+        object: annotation.object,
+        graph_name: annotation.graph,
+        location: None,
+    });
+    dataset.owned_quads().chain(reifiers).chain(annotations)
 }
 
 /// Freeze several independently-parsed flat owned-[`RdfQuad`] streams into ONE dataset

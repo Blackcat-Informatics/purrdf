@@ -1541,9 +1541,8 @@ fn term_to_value(graph: &SerGraph, term: &SerTerm) -> Result<CarrierTerm, RdfDia
         SerTermKind::Literal => {
             let datatype = datatype_iri(graph, term);
             // Key @language / @direction off the carrier's FIRST-CLASS language /
-            // direction fields, not solely the datatype IRI: the native model carries a
-            // directional-language string as `rdf:langString` + a separate `direction`,
-            // so a datatype-only test would drop @direction.
+            // direction fields: the datatype identifies a directional string but does
+            // not distinguish ltr from rtl. Both fields must survive the projection.
             let language = term.lang.clone();
             let direction = term.direction.clone();
             let datatype = if datatype == RDF_DIR_LANG_STRING

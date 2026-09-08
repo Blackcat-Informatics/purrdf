@@ -27,8 +27,6 @@ use crate::status::PurrdfStatus;
 
 /// The IRI of `xsd:string`, the default datatype for a literal with no language.
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// The IRI of `rdf:langString`, the datatype of a language-tagged literal.
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 /// The kind tag of a [`PurrdfTermView`].
 ///
@@ -381,20 +379,20 @@ pub(crate) unsafe fn view_to_value(view: &PurrdfTermView) -> Result<TermValue, P
                 let language = if view.language.len == 0 {
                     None
                 } else {
-                    Some(view.language.as_str()?.to_owned())
-                };
-                let datatype_in = view.datatype.as_str()?;
-                let datatype = if !datatype_in.is_empty() {
-                    datatype_in.to_owned()
-                } else if language.is_some() {
-                    RDF_LANG_STRING.to_owned()
-                } else {
-                    XSD_STRING.to_owned()
+                    Some(view.language.as_str()?.to_lowercase())
                 };
                 let direction = match PurrdfDirection::try_from(view.direction)? {
                     PurrdfDirection::None => None,
                     PurrdfDirection::Ltr => Some(RdfTextDirection::Ltr),
                     PurrdfDirection::Rtl => Some(RdfTextDirection::Rtl),
+                };
+                let datatype_in = view.datatype.as_str()?;
+                let datatype = if language.is_some() {
+                    RdfLiteral::language_datatype_iri(direction).to_owned()
+                } else if !datatype_in.is_empty() {
+                    datatype_in.to_owned()
+                } else {
+                    XSD_STRING.to_owned()
                 };
                 Ok(TermValue::Literal {
                     lexical_form: lexical.to_owned(),

@@ -26,6 +26,27 @@ once, solutions are a single integer compare apart, and computed FILTER/BIND
 values that already exist in the dataset are promoted to the interned id at
 mint time.
 
+For repeated work, retain an `Arc<PreparedQuery>` from `prepare_query` or
+`prepare_algebra` and pass data through substitutions. Compiler-produced algebra
+goes directly through registry admission without rendering or parsing query text.
+`query_prepared_governed_in_operation` charges a caller-owned governor across
+multiple queries; immutable plans and the governor can be shared by worker-local
+engines without locking evaluation globally.
+
+The engine's prepared-plan and join-order caches each default to 4096 entries and
+64 MiB of charged payload. Configure them independently with
+`with_plan_cache_limits` and `with_order_cache_limits`; `PlanCache::with_limits`
+serves standalone callers. Retention uses LRU eviction and observable
+`CacheStats`. Zero capacity or an oversized plan causes recomputation, never
+weaker execution. Byte accounting covers keys, owned algebra, vector capacities,
+and shared-string storage charged per occurrence; it excludes allocator overhead
+and caller-retained handles. It is not an RSS measurement. Dataset statistics key
+join-order hints only, never result reuse. The existing caller-owned
+`eval::BgpOrderCache` alias remains available with its original type.
+
+`make bench-prepared-reuse` measures cold/warm preparation and prepared execution
+using the release profile (O3/full LTO). It is report-only and uses synthetic data.
+
 Design pillars:
 
 - **Multiset (bag) semantics** — solutions are a bag, preserved until

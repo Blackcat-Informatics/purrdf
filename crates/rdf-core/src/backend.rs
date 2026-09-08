@@ -251,7 +251,7 @@ mod tests {
         };
         let directional = TermValue::Literal {
             lexical_form: "مرحبا".to_owned(),
-            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
             language: Some("ar".to_owned()),
             direction: Some(RdfTextDirection::Rtl),
         };

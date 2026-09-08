@@ -189,6 +189,9 @@ book-pot: ## Extract the translation template docs/book/po/messages.pot (ignored
 book-po-update: book-pot ## Refresh docs/book/po/zh-Hans.po against the current English source (msgmerge; fuzzy/obsolete entries render as English until retranslated).
 	msgmerge --quiet --update --backup=none docs/book/po/zh-Hans.po docs/book/po/messages.pot
 
+bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on O3/full-LTO code (report-only).
+	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
+
 bench: ## Run criterion benchmarks (report-only; never a gate).
 	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
 

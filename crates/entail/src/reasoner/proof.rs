@@ -3595,7 +3595,7 @@ mod tests {
         };
         let literal = TermValue::Literal {
             lexical_form: "\u{1f}separator\u{1e}soup".to_owned(),
-            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
             language: Some("en".to_owned()),
             direction: Some(purrdf_core::RdfTextDirection::Rtl),
         };

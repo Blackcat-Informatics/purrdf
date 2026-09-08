@@ -1068,9 +1068,9 @@ pub(crate) fn term_value_to_rdf(value: TermValue) -> RdfTerm {
             direction,
         } => RdfTerm::Literal(crate::RdfLiteral {
             // The native IR carries the datatype IRI by value (always present); the
-            // owned model keeps a plain `xsd:string` / lang `rdf:langString` literal
+            // owned model keeps a plain or language-tagged literal
             // datatype-less, so collapse those back to `None` for term parity.
-            datatype: collapse_synthetic_datatype(&datatype, language.as_ref()),
+            datatype: collapse_synthetic_datatype(&datatype, language.as_ref(), direction),
             lexical_form,
             language,
             direction,
@@ -1084,14 +1084,18 @@ pub(crate) fn term_value_to_rdf(value: TermValue) -> RdfTerm {
 }
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 /// Drop the `TermValue` synthetic datatype IRI when it is the one the owned model
-/// leaves implicit: `xsd:string` for a plain literal, `rdf:langString` for a
-/// language-tagged one. Any other datatype is kept verbatim.
-fn collapse_synthetic_datatype(datatype: &str, language: Option<&String>) -> Option<String> {
+/// leaves implicit: `xsd:string` for a plain literal, and the language datatype
+/// selected by base direction for a tagged literal. Other datatypes stay verbatim.
+fn collapse_synthetic_datatype(
+    datatype: &str,
+    language: Option<&String>,
+    direction: Option<purrdf_core::model::RdfTextDirection>,
+) -> Option<String> {
     if language.is_some() {
-        return (datatype != RDF_LANG_STRING).then(|| datatype.to_owned());
+        return (datatype != crate::RdfLiteral::language_datatype_iri(direction))
+            .then(|| datatype.to_owned());
     }
     (datatype != XSD_STRING).then(|| datatype.to_owned())
 }

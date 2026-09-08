@@ -480,28 +480,7 @@ impl Parser<'_> {
         let mut components: Vec<&Component> = self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
         for component in components {
-            let mut bindings: Vec<(String, Term)> = Vec::new();
-            let mut missing_required = false;
-            for param in &component.parameters {
-                let values = self.objects_of(id, param.path.as_str());
-                if values.len() > 1 {
-                    return Err(format!(
-                        "shape {id} declares {count} values for parameter <{path}> of component <{component}>, only one is allowed",
-                        count = values.len(),
-                        path = param.path,
-                        component = component.id
-                    ));
-                }
-                if let Some(value) = values.into_iter().next() {
-                    bindings.push((param.name.clone(), value));
-                } else if !param.optional {
-                    missing_required = true;
-                    break;
-                }
-            }
-            if missing_required {
-                continue;
-            }
+            let binding_groups = self.component_binding_groups(id, component)?;
 
             let matching: Vec<&Validator> = if is_property_shape {
                 component
@@ -520,37 +499,85 @@ impl Parser<'_> {
                 continue;
             }
 
-            for validator in matching {
-                let component_validator = match &validator.kind {
-                    ValidatorKind::Ask => ComponentValidator::Ask {
-                        ask: validator.query_text.clone(),
-                    },
-                    ValidatorKind::Select => ComponentValidator::Select {
-                        select: validator.query_text.clone(),
-                    },
-                };
+            for bindings in binding_groups {
+                for validator in &matching {
+                    let component_validator = match &validator.kind {
+                        ValidatorKind::Ask => ComponentValidator::Ask {
+                            ask: validator.query_text.clone(),
+                        },
+                        ValidatorKind::Select => ComponentValidator::Select {
+                            select: validator.query_text.clone(),
+                        },
+                    };
 
-                let severity = shape_severity
-                    .clone()
-                    .or_else(|| validator.severity.clone())
-                    .or_else(|| component.severity.clone());
-                let message = shape_message
-                    .clone()
-                    .or_else(|| validator.message.clone())
-                    .or_else(|| component.message.clone());
+                    let severity = shape_severity
+                        .clone()
+                        .or_else(|| validator.severity.clone())
+                        .or_else(|| component.severity.clone());
+                    let message = shape_message
+                        .clone()
+                        .or_else(|| validator.message.clone())
+                        .or_else(|| component.message.clone());
 
-                constraints.push(Constraint::Component {
-                    component: component.id.clone(),
-                    source_shape: id.clone(),
-                    bindings: bindings.clone(),
-                    validator: component_validator,
-                    message,
-                    severity,
-                });
+                    constraints.push(Constraint::Component {
+                        component: component.id.clone(),
+                        source_shape: id.clone(),
+                        bindings: bindings.clone(),
+                        validator: component_validator,
+                        message,
+                        severity,
+                    });
+                }
             }
         }
 
         Ok(constraints)
+    }
+
+    /// SHACL 1.2 Core section 3.1.1 (and SHACL 2017 section 2.1.1): each
+    /// value of a single-parameter component declares an independent constraint.
+    /// Multi-parameter components still require at most one value per parameter.
+    /// https://www.w3.org/TR/shacl12-core/#constraints
+    fn component_binding_groups(
+        &self,
+        id: &Term,
+        component: &Component,
+    ) -> Result<Vec<Vec<(String, Term)>>, String> {
+        if let [param] = component.parameters.as_slice() {
+            let mut values = self.objects_of(id, param.path.as_str());
+            crate::term::sort_terms_canonical(&mut values);
+            if values.is_empty() && param.optional {
+                return Ok(vec![vec![]]);
+            }
+            return Ok(values
+                .into_iter()
+                .map(|value| vec![(param.name.clone(), value)])
+                .collect());
+        }
+        let mut bindings: Vec<(String, Term)> = Vec::new();
+        let mut missing_required = false;
+        for param in &component.parameters {
+            let values = self.objects_of(id, param.path.as_str());
+            if values.len() > 1 {
+                return Err(format!(
+                    "shape {id} declares {count} values for parameter <{path}> of component <{component}>, only one is allowed",
+                    count = values.len(),
+                    path = param.path,
+                    component = component.id
+                ));
+            }
+            if let Some(value) = values.into_iter().next() {
+                bindings.push((param.name.clone(), value));
+            } else if !param.optional {
+                missing_required = true;
+                break;
+            }
+        }
+        if missing_required {
+            return Ok(vec![]);
+        }
+
+        Ok(vec![bindings])
     }
 
     /// Parse the qualified-value-shape constraint(s) declared on `id`.

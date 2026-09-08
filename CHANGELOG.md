@@ -6,6 +6,18 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **core:** Directional language-tagged literals now intern with
+  `rdf:dirLangString`, as required by RDF 1.2. Previously the builder used
+  `rdf:langString`, so prepared SPARQL constants could not find those terms.
+  The corrected datatype can change newly emitted carrier bytes and content
+  identities for datasets containing directional literals. Regenerate derived
+  artifacts from canonical inputs; previously authenticated bytes remain their
+  original artifacts and must not be rewritten under an old identity.
+
 ## [1.1.0] - 2026-09-04
 
 The first release after 1.0.0. Two reported bugs, the release fallout 1.0.0 left
@@ -2339,5 +2351,4 @@ called out below with what a consumer must do.
 ### Other
 
 - First commit
-
 

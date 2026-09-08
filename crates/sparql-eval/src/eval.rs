@@ -542,7 +542,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// via [`EvalCtx::with_order_cache`] so the static query corpus re-plans once per
     /// dataset. The order itself is computed, never materialised as triples
     /// (Principle 12).
-    pub(crate) bgp_order_cache: Option<&'d BgpOrderCache>,
+    pub(crate) bgp_order_cache: Option<crate::plan_cache::OrderCacheRef<'d>>,
     /// Quads invented during evaluation by value-constructing builtins
     /// (`listSlice`/`listConcat` mint fresh `rdf:List` cells). A SPARQL
     /// expression returns one term, so the new cells are buffered here and surface at
@@ -1025,7 +1025,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// re-plans each BGP (identical result, just not memoised).
     #[must_use]
     pub fn with_order_cache(mut self, cache: &'d BgpOrderCache) -> Self {
-        self.bgp_order_cache = Some(cache);
+        self.bgp_order_cache = Some(crate::plan_cache::OrderCacheRef::Legacy(cache));
+        self
+    }
+
+    pub(crate) fn with_bounded_order_cache(
+        mut self,
+        cache: &'d crate::plan_cache::BoundedOrderCache,
+    ) -> Self {
+        self.bgp_order_cache = Some(crate::plan_cache::OrderCacheRef::Bounded(cache));
         self
     }
 

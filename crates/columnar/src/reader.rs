@@ -20,8 +20,6 @@ use crate::schema::Table;
 type QuadRow = (usize, usize, usize, Option<usize>);
 type ReifierRow = (usize, usize, usize, usize, Option<usize>);
 
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-
 /// The result of a complete Parquet-to-RDF conversion.
 #[derive(Debug, Clone)]
 pub struct ColumnarRead {
@@ -388,10 +386,11 @@ fn resolve_term_record(
                         format!("literal row {index} has a non-canonical language tag"),
                     ));
                 }
-                if datatype != RDF_LANG_STRING {
+                let expected = RdfLiteral::language_datatype_iri(direction);
+                if datatype != expected {
                     return Err(ColumnarError::malformed(
                         "terms.datatype",
-                        format!("language literal row {index} does not use rdf:langString"),
+                        format!("language literal row {index} must use {expected}"),
                     ));
                 }
             } else if direction.is_some() {

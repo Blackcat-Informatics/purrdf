@@ -79,6 +79,7 @@ pub mod ast;
 pub mod error;
 pub mod lexer;
 pub mod parser;
+mod retained_size;
 pub mod serialize;
 pub mod substitute;
 

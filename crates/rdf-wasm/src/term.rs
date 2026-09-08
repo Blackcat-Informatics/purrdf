@@ -20,8 +20,10 @@ use wasm_bindgen::prelude::*;
 /// `xsd:string` — the datatype of a plain literal (RDF 1.1 §3.3).
 pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// `rdf:langString` — the datatype of a language-tagged literal.
+#[cfg(test)]
 pub(crate) const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 /// `rdf:dirLangString` — the datatype of a directional language-tagged literal (RDF 1.2).
+#[cfg(test)]
 pub(crate) const RDF_DIR_LANG_STRING: &str =
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
@@ -50,46 +52,15 @@ pub struct Term {
     pub(crate) inner: TermInner,
 }
 
-/// Canonicalize a literal's datatype to match the engine's intern-time normalization
-/// (C0.1): a language tag forces `rdf:langString` with a lowercased tag — INCLUDING a
-/// *directional* language-tagged literal, which the engine ALSO interns as
-/// `rdf:langString`, carrying the base direction in a SEPARATE identity field rather
-/// than in the datatype IRI (see `purrdf::ir::RdfDatasetBuilder::intern_literal`).
-/// No language keeps the explicit datatype, defaulting to `xsd:string`.
-///
-/// ## Why a directional literal stays `rdf:langString` here (NOT `rdf:dirLangString`)
-///
-/// This `RdfLiteral` is the LOOKUP key: `convert.rs` (`rdf_term_to_term_value`) and
-/// `stream.rs` (the Sink) feed its `datatype` field into the engine's value→id lookup
-/// (`TermValue` / `EventTerm`), where it is compared BY STRING against the interned
-/// datatype IRI — which is `rdf:langString` for every language-tagged literal,
-/// directional or not. Stamping `rdf:dirLangString` here would make a factory-built
-/// directional literal MISS a parse-interned one (a datatype-string mismatch), breaking
-/// cross-path `has`/`match`. What distinguishes a directional literal from a plain one
-/// is the `direction` field (carried verbatim below — and itself part of the engine's
-/// identity key), NOT the datatype string.
-///
-/// The RDF-1.2 *effective* datatype `rdf:dirLangString` is surfaced separately and
-/// purely as a DERIVED view by [`Term::literal_datatype_iri`] (which keys off
-/// `direction.is_some()`), so the JS `.datatype` getter reports `rdf:dirLangString`
-/// without that ever entering the lookup key. Storage stays `rdf:langString`; reporting
-/// derives `rdf:dirLangString`. The two surfaces are deliberately distinct.
+/// Expand the datatype through the native RDF 1.2 identity rule and lowercase
+/// the language tag. Factory terms, parsed terms and reported datatypes share
+/// the same identity, including directional literals.
 pub(crate) fn canonicalize_literal(lit: RdfLiteral) -> RdfLiteral {
-    let RdfLiteral {
-        lexical_form,
-        datatype,
-        language,
-        direction,
-    } = lit;
-    let (datatype, language) = match language {
-        Some(lang) => (RDF_LANG_STRING.to_owned(), Some(lang.to_lowercase())),
-        None => (datatype.unwrap_or_else(|| XSD_STRING.to_owned()), None),
-    };
+    let datatype = lit.datatype_iri().to_owned();
     RdfLiteral {
-        lexical_form,
         datatype: Some(datatype),
-        language,
-        direction,
+        language: lit.language.map(|language| language.to_lowercase()),
+        ..lit
     }
 }
 
@@ -147,15 +118,7 @@ impl Term {
     /// base direction is present, `rdf:langString` for a plain language tag, the
     /// explicit datatype otherwise, falling back to `xsd:string`.
     fn literal_datatype_iri(lit: &RdfLiteral) -> String {
-        if lit.direction.is_some() {
-            RDF_DIR_LANG_STRING.to_owned()
-        } else if lit.language.is_some() {
-            RDF_LANG_STRING.to_owned()
-        } else {
-            lit.datatype
-                .clone()
-                .unwrap_or_else(|| XSD_STRING.to_owned())
-        }
+        lit.datatype_iri().to_owned()
     }
 }
 
@@ -394,38 +357,24 @@ mod tests {
         assert_eq!(t.datatype().unwrap().value(), RDF_DIR_LANG_STRING);
     }
 
-    /// `canonicalize_literal` must keep `rdf:langString` in the STORED `datatype` field
-    /// for a directional literal — NOT `rdf:dirLangString`. The stored field is the
-    /// engine LOOKUP key (`convert.rs`/`stream.rs` feed it into `TermValue`/`EventTerm`,
-    /// compared by string against the engine's interned datatype, which is always
-    /// `rdf:langString` for a language-tagged literal). What distinguishes a directional
-    /// literal in the lookup is the preserved `direction` field, part of the engine's
-    /// identity key. The RDF-1.2 effective datatype `rdf:dirLangString` is a DERIVED
-    /// view ([`Term::literal_datatype_iri`]), tested separately by
-    /// [`directional_literal_reports_dir_lang_string_and_direction`].
+    /// Factory lookup keys and datatype accessors agree with native RDF 1.2 identity.
     #[test]
-    fn canonicalize_literal_keeps_lang_string_stored_for_directional() {
+    fn canonicalize_literal_stores_directional_datatype() {
         let lit = RdfLiteral {
             lexical_form: "مرحبا".to_owned(),
             datatype: None,
-            language: Some("AR".to_owned()), // uppercase — must be lowercased by canon
+            language: Some("AR".to_owned()),
             direction: Some(RdfTextDirection::Rtl),
         };
         let canonical = canonicalize_literal(lit);
-        // The STORED datatype field stays langString (the lookup key the engine matches
-        // by string). dirLangString is derived by the getter, never stored.
-        assert_eq!(
-            canonical.datatype.as_deref(),
-            Some(RDF_LANG_STRING),
-            "directional literal: stored datatype must stay rdf:langString (the lookup key)"
-        );
+        assert_eq!(canonical.datatype.as_deref(), Some(RDF_DIR_LANG_STRING));
         // Language tag must be lowercased.
         assert_eq!(canonical.language.as_deref(), Some("ar"));
         // Direction is preserved (this is what distinguishes it in the identity key).
         assert_eq!(canonical.direction, Some(RdfTextDirection::Rtl));
         // Lexical form is unchanged.
         assert_eq!(canonical.lexical_form, "مرحبا");
-        // But the DERIVED getter still reports the RDF-1.2 effective datatype.
+        // The getter reports that same stored datatype.
         let t = Term::literal(RdfLiteral {
             lexical_form: "مرحبا".to_owned(),
             datatype: None,
@@ -435,7 +384,7 @@ mod tests {
         assert_eq!(
             t.datatype().unwrap().value(),
             RDF_DIR_LANG_STRING,
-            "the getter derives rdf:dirLangString even though storage is rdf:langString"
+            "the getter and stored identity agree"
         );
     }
 

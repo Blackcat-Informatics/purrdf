@@ -212,6 +212,22 @@ fn plan_pattern(
     agg_registry: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
 ) -> Result<GraphPattern, PlanError> {
+    // Compiler-produced algebra may be a bare call, without the parser's Lateral
+    // wrapper. Apply the same admission as a chain member before cloning it.
+    if let GraphPattern::PropertyFunction(call) = pattern {
+        if admitted_row_bound(call, relations, outer)?.is_none() {
+            return Err(stuck(
+                &[Atom {
+                    pattern,
+                    call: Some(call),
+                    position: 0,
+                }],
+                relations,
+                outer,
+            ));
+        }
+        return Ok(pattern.clone());
+    }
     // A chain is a left-deep spine of `Lateral`s (a call's join) and `Join`s (the
     // residual data written between two calls), which is exactly the shape the parser
     // assembles a triples block containing calls into. Anything else recurses
@@ -315,25 +331,9 @@ fn order_chain(
                 }
                 continue;
             };
-            let relation = resolve(call, relations)?;
-            let declared_arity =
-                crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())
-                    .map_err(PlanError::property_function)?;
-            check_arity(call, declared_arity)?;
-            let mode = invocation_mode(call, &bound);
-            let modes =
-                crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
-                    relation.modes().to_vec()
-                })
-                .map_err(PlanError::property_function)?;
-            if !modes.iter().any(|declared| declared.subsumes(mode)) {
+            let Some(rows_bound) = admitted_row_bound(call, relations, &bound)? else {
                 continue;
-            }
-            let rows_bound =
-                crate::property_fn::declaration_contained(&call.iri, "row bound", || {
-                    relation.rows_per_invocation(mode)
-                })
-                .map_err(PlanError::property_function)?;
+            };
             let key = (rows_bound, call.iri.as_str(), atom.position);
             if best.is_none_or(|(_, current)| key < current) {
                 best = Some((index, key));
@@ -485,6 +485,35 @@ fn resolve<'r>(
             call.iri
         )))
     })
+}
+
+/// Resolve and admit a call under its actual lexical binding scope. `None` means
+/// its access mode is infeasible; a chain may first bind more variables.
+fn admitted_row_bound(
+    call: &PropertyFunctionCall,
+    relations: &PropertyFunctionRegistry,
+    bound: &DetHashSet<Variable>,
+) -> Result<Option<u64>, PlanError> {
+    let relation = resolve(call, relations)?;
+    let arity = crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())
+        .map_err(PlanError::property_function)?;
+    check_arity(call, arity)?;
+    let mode = invocation_mode(call, bound);
+    let admitted = crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
+        relation
+            .modes()
+            .iter()
+            .any(|declared| declared.subsumes(mode))
+    })
+    .map_err(PlanError::property_function)?;
+    if !admitted {
+        return Ok(None);
+    }
+    crate::property_fn::declaration_contained(&call.iri, "row bound", || {
+        relation.rows_per_invocation(mode)
+    })
+    .map(Some)
+    .map_err(PlanError::property_function)
 }
 
 /// Check a call site's argument counts against the relation's declaration.

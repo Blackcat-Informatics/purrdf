@@ -25,7 +25,9 @@ use pyo3::prelude::*;
 
 use crate::{BlankScope, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple, TermValue};
 
+#[cfg(test)]
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+#[cfg(test)]
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 // ── Term model ──────────────────────────────────────────────────────────────────
@@ -36,15 +38,9 @@ fn hash_str(value: &str) -> u64 {
     hasher.finish()
 }
 
-/// The datatype IRI of a native literal, expanded per the oxigraph Python `Literal`
-/// API: a plain (datatype-less) literal reports `xsd:string`, a language-tagged one
-/// reports `rdf:langString`, and a typed one reports its explicit datatype.
+/// The native RDF 1.2 expanded datatype, shared by lookup, hashing and accessors.
 fn literal_datatype_iri(lit: &RdfLiteral) -> &str {
-    match (&lit.datatype, &lit.language) {
-        (Some(dt), _) => dt.as_str(),
-        (None, Some(_)) => RDF_LANG_STRING,
-        (None, None) => XSD_STRING,
-    }
+    lit.datatype_iri()
 }
 
 /// Parse the optional RDF 1.2 base-direction argument (`"ltr"`/`"rtl"`) into the
@@ -232,7 +228,7 @@ impl PyLiteral {
     }
 
     /// The datatype IRI (always present — `xsd:string` for a plain literal,
-    /// `rdf:langString` for a language-tagged one), matching the oxigraph Python API.
+    /// `rdf:langString` for a language tag, `rdf:dirLangString` with base direction).
     #[getter]
     fn datatype(&self) -> PyNamedNode {
         PyNamedNode {
