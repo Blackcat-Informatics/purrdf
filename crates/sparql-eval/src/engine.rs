@@ -22,6 +22,9 @@
 //! also prepare compiler-produced algebra directly and share its immutable plan
 //! across worker-local engines without retaining a global evaluation lock.
 
+mod graph_build;
+pub use graph_build::{FallibleGraphBuildResult, GraphBuildError, GraphBuildStats};
+
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::Arc;

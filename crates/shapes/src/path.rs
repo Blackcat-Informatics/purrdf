@@ -3,7 +3,7 @@
 
 //! SHACL property path evaluation.
 //!
-//! Evaluates a [`Path`] against a frozen [`RdfDataset`], returning the set of
+//! Evaluates a [`Path`] against a frozen [`::purrdf::RdfDataset`], returning the set of
 //! value nodes reachable from a given focus node. All six SHACL §2.3.1 path forms
 //! are supported: predicate, inverse, sequence, alternative, and the three closure
 //! paths (`zeroOrMore`, `oneOrMore`, `zeroOrOne`). Pattern lookups are ID-native
@@ -17,7 +17,9 @@
 //! Constant), in which case non-reflexive steps yield nothing while a reflexive
 //! closure step still yields the focus itself.
 
-use ::purrdf::{IdSet, IdVec, RdfDataset, TermId, smallvec};
+use crate::data_view::ShaclRead;
+
+use ::purrdf::{IdSet, IdVec, TermId, smallvec};
 
 use crate::data::{GraphFilter, quads_for_pattern_ids, resolve_id};
 use crate::shapes::Path;
@@ -46,7 +48,7 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 /// a path can yield is the focus itself via reflexive inclusion
 /// (`sh:zeroOrMore` / `sh:zeroOrOne`). That case keeps the native [`Term`]
 /// traversal so the reflexive focus term is returned verbatim.
-pub fn eval(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
+pub fn eval(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Vec<Term> {
     let Some(focus_id) = resolve_id(ds, focus) else {
         // Non-interned focus: it has no id and therefore no incoming/outgoing
         // quads, so every predicate/inverse STEP is empty. The only value a path
@@ -84,7 +86,7 @@ pub fn eval(ds: &RdfDataset, focus: &Term, path: &Path) -> Vec<Term> {
 /// drive evaluation from a `sh:this` Constant that never appears in the data). Its
 /// value nodes have no id and must be produced in the owned-[`Term`] model by
 /// [`eval`]; that owned-term fallback is a genuine necessity, not optionality.
-pub fn eval_ids(ds: &RdfDataset, focus: &Term, path: &Path) -> Option<IdVec> {
+pub fn eval_ids(ds: &impl ShaclRead, focus: &Term, path: &Path) -> Option<IdVec> {
     let focus_id = resolve_id(ds, focus)?;
     Some(eval_ids_from_id(ds, focus_id, path))
 }
@@ -95,7 +97,7 @@ pub fn eval_ids(ds: &RdfDataset, focus: &Term, path: &Path) -> Option<IdVec> {
 /// This is the validation hot-path entry point: a focus node is resolved once
 /// when its shape evaluation begins, then every property shape reuses the same
 /// [`TermId`] instead of repeating an interner lookup.
-pub(crate) fn eval_ids_from_id(ds: &RdfDataset, focus_id: TermId, path: &Path) -> IdVec {
+pub(crate) fn eval_ids_from_id(ds: &impl ShaclRead, focus_id: TermId, path: &Path) -> IdVec {
     let ids = eval_inner_ids(ds, focus_id, path);
     let mut seen: IdSet = IdSet::default();
     let mut out: IdVec = IdVec::with_capacity(ids.len());
@@ -132,7 +134,7 @@ fn admits_empty_path(path: &Path) -> bool {
 /// Direct IRI lookup — exactly `resolve_id`'s `Term::NamedNode` arm — without
 /// cloning the predicate into a temporary owned `Term` per path step.
 #[inline]
-fn resolve_pred(ds: &RdfDataset, predicate: &NamedNode) -> Option<TermId> {
+fn resolve_pred(ds: &impl ShaclRead, predicate: &NamedNode) -> Option<TermId> {
     ds.term_id_by_iri(predicate.as_str())
 }
 
@@ -250,7 +252,7 @@ fn invert(path: &Path) -> Path {
 // terms.
 
 /// The recursive id-native path evaluator, for an interned `focus`.
-fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> IdVec {
+fn eval_inner_ids(ds: &impl ShaclRead, focus: TermId, path: &Path) -> IdVec {
     match path {
         Path::Predicate(p) => match resolve_pred(ds, p) {
             Some(p_id) => {
@@ -318,7 +320,7 @@ fn eval_inner_ids(ds: &RdfDataset, focus: TermId, path: &Path) -> IdVec {
 /// `reflexive` includes the focus node itself (`zeroOrMore`); otherwise the walk
 /// starts from the focus's direct step values (`oneOrMore`). The visited set is an
 /// [`IdSet`] over `Copy` [`TermId`]s; first-seen order is preserved.
-fn closure_ids(ds: &RdfDataset, focus: TermId, inner: &Path, reflexive: bool) -> IdVec {
+fn closure_ids(ds: &impl ShaclRead, focus: TermId, inner: &Path, reflexive: bool) -> IdVec {
     let mut seen: IdSet = IdSet::default();
     let mut order: IdVec = IdVec::new();
     let mut worklist: IdVec = IdVec::new();

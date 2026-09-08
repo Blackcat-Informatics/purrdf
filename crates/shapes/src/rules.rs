@@ -620,7 +620,7 @@ pub fn apply_rules(data: &ShaclData, shapes: &Shapes) -> Result<Arc<RdfDataset>,
 
     let base = data.core_arc();
 
-    // Mirror the validation path (`build_sparql_dataset`): expose the shapes graph
+    // Mirror the validation path (`build_projected_data`): expose the shapes graph
     // as a named graph under its IRI so a `sh:SPARQLRule` CONSTRUCT can pre-bind and
     // dereference `$shapesGraph`. The IRI comes from the holder (an explicit
     // override) or the shapes document's own graph IRI — never fabricated — and only
@@ -869,7 +869,7 @@ fn sparql_rule_producer(
 
 /// Resolve the focus nodes of `shape` against the current dataset.
 fn focus_nodes(data: &ShaclData, shape: &Shape) -> Result<Vec<Term>, String> {
-    let plan = ValidationPlan::for_shape(data.core(), shape);
+    let plan = ValidationPlan::for_shape(data.core_view(), shape);
     resolve_focus_nodes(data, &shape.targets, &plan)
         .map(|nodes| nodes.into_iter().map(FocusNode::into_term).collect())
 }
@@ -1014,7 +1014,7 @@ fn push_fact(builder: &mut RdfDatasetBuilder, triple: &[Term; 3]) -> Result<(), 
 /// Build the per-round base dataset: the projected data (default graph) plus the
 /// shapes graph exposed as a named graph under `graph_iri`, when known.
 ///
-/// This mirrors the validation path's `build_sparql_dataset` so a `sh:SPARQLRule`
+/// This mirrors the validation path's `build_projected_data` so a `sh:SPARQLRule`
 /// CONSTRUCT sees the shapes graph under `$shapesGraph`. When no shapes-graph IRI
 /// is known (or the shapes dataset is empty) the base is returned unchanged.
 fn build_round_base(

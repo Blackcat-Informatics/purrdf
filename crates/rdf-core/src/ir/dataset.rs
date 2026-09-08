@@ -1668,6 +1668,31 @@ impl RdfDataset {
         self.quads.len()
     }
 
+    /// Number of RDF records across ordinary, reifier, and annotation tables.
+    #[must_use]
+    pub fn rdf_row_count(&self) -> usize {
+        self.quads.len() + self.reifiers.len() + self.annotations.len()
+    }
+
+    /// UTF-8 arena bytes retained by the RDF term dictionary.
+    #[must_use]
+    pub fn rdf_text_bytes(&self) -> usize {
+        self.arena.len()
+    }
+
+    /// Bytes occupied by the immutable RDF arena, term/record tables and graph
+    /// declarations. Excludes allocator overhead, lookup indexes and non-RDF
+    /// sidecars; this is a payload measurement, not process RSS.
+    #[must_use]
+    pub fn rdf_payload_bytes(&self) -> usize {
+        self.arena.len()
+            + size_of_val(self.terms.as_ref())
+            + size_of_val(self.quads.as_ref())
+            + size_of_val(self.reifiers.as_ref())
+            + size_of_val(self.annotations.as_ref())
+            + size_of_val(self.named_graphs.as_ref())
+    }
+
     /// A cheap, deterministic fingerprint of this frozen dataset's size, for a
     /// dataset-aware cache key (e.g. a SPARQL join-order cache). Hashes the quad and
     /// term counts only — enough to discriminate distinct datasets in practice. It is

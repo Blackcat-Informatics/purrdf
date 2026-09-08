@@ -275,8 +275,7 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
             Some(g) => Some(interner.resolve_row_term(g, "quad graph name", &location)?),
             None => None,
         };
-        let handle = interner.builder.next_quad_handle();
-        interner.builder.push_quad(s, p, o, g);
+        let handle = interner.builder.push_quad_with_handle(s, p, o, g);
         interner.builder.attach_location(handle, location);
     }
 
@@ -356,6 +355,44 @@ mod tests {
         match q.s {
             TermRef::Iri(s) => assert_eq!(s, "http://example.org/s"),
             other => panic!("expected iri, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn duplicate_quads_keep_locations_on_their_actual_rows() {
+        let mut graph = Graph::default();
+        graph.terms.push(iri_term("http://example.org/p"));
+        graph.terms.push(iri_term("http://example.org/o"));
+        for index in 0..64 {
+            graph
+                .terms
+                .push(iri_term(&format!("http://example.org/s{index}")));
+        }
+        // Reverse push order forces location handles through the frozen sort;
+        // duplicates cannot lend their source index to the next distinct row.
+        for index in (2..66).rev() {
+            graph.quads.extend([(index, 0, 1, None); 3]);
+        }
+        let original_subjects: Vec<_> = graph
+            .quads
+            .iter()
+            .map(|quad| graph.terms[quad.0].value.clone().expect("IRI value"))
+            .collect();
+        let bundle = import_gts_graph(graph).expect("duplicate rows are valid RDF");
+        assert_eq!(bundle.dataset.quad_count(), 64);
+        for (index, quad) in bundle.dataset.quads().enumerate() {
+            let handle = crate::ir::QuadHandle::from_index(u32::try_from(index).expect("index"));
+            let original = bundle
+                .dataset
+                .location_of(handle)
+                .expect("every imported row has a location")
+                .gts_quad_index
+                .expect("the location identifies a GTS row");
+            assert_eq!(
+                bundle.dataset.resolve(quad.s),
+                TermRef::Iri(&original_subjects[original]),
+                "a source location must identify a matching input statement"
+            );
         }
     }
 

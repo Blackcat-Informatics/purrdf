@@ -131,17 +131,17 @@ pub use ir::embedding::*;
 pub use ir::{
     BlankScope, BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION,
     CanonError, CanonHash, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
-    FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary, GlobalTermId, GtsBundle,
-    HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset, PageFault, PageFaultKind,
-    PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
-    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
-    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle, PipelineBundleError,
-    QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT,
-    RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope,
-    ReservedVocabulary, SkolemError, SubsetPageProvider, TermId, TermPosition, TermRef, TermValue,
-    ValidatedRdfDatasetBuilder, canonical_relabel, canonicalize, canonicalize_with,
-    check_admissible, dataset_diff, datasets_isomorphic, deskolemize, skolemize, try_canonicalize,
-    try_canonicalize_with,
+    DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary,
+    GlobalTermId, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset,
+    PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagePart, PageProvider,
+    PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
+    PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle,
+    PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef,
+    QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
+    RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError, SubsetPageProvider, TermId,
+    TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonical_relabel, canonicalize,
+    canonicalize_with, check_admissible, dataset_diff, datasets_isomorphic, deskolemize, skolemize,
+    try_canonicalize, try_canonicalize_with,
 };
 pub use ir::{
     PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
@@ -214,3 +214,8 @@ pub mod prelude {
     };
     pub use crate::store::RdfStoreCapabilities;
 }
+
+pub use ir::{
+    CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ViewLimits, ViewStats,
+    ViewWork,
+};

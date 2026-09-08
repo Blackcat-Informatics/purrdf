@@ -142,7 +142,10 @@ pub use agg_fn::{
     AggDescriptor, AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate,
     ScalarvalKind, ScalarvalSpec,
 };
-pub use engine::{NativeSparqlEngine, PlanCache, PreparedQuery, QueryOptions, ShaclPrebinding};
+pub use engine::{
+    FallibleGraphBuildResult, GraphBuildError, GraphBuildStats, NativeSparqlEngine, PlanCache,
+    PreparedQuery, QueryOptions, ShaclPrebinding,
+};
 pub use error::{EvalError, UnsupportedKind};
 pub use eval::{
     EvalCtx, EvalOptions, LossVocabulary, Outcome, StandpointPredicates, eval, evaluate_query,

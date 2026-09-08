@@ -1137,6 +1137,24 @@ pub fn eval_node_expr_in_scope(
     result
 }
 
+// Keep the class-view iterator out of the recursive expression dispatch frame.
+// Deep legal paging expressions do not enumerate classes at every nesting level.
+fn eval_instances_of(store: &ShaclData, class: &NamedNode) -> Vec<Term> {
+    store.prepare_class_membership();
+    let class_term = Term::NamedNode(class.clone());
+    let Some(class_id) = crate::data::resolve_id(store.core_view(), &class_term) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Term> = store
+        .class_view()
+        .instances_of(class_id)
+        .map(|id| crate::term::term_id_to_native(store.core_view(), id))
+        .collect();
+    crate::term::sort_terms_canonical(&mut out);
+    out.dedup();
+    out
+}
+
 /// One structural level of [`eval_node_expr_in_scope`], with the depth already charged.
 #[expect(
     clippy::too_many_lines,
@@ -1158,7 +1176,7 @@ fn eval_node_expr_at_depth(
             // sh:offset / sh:limit applied directly to a bare Path set are
             // deterministic. `path::eval`'s crate-wide first-seen iteration order
             // is left untouched (it is used elsewhere for path traversal).
-            let mut v = path::eval(store.core(), focus, p);
+            let mut v = path::eval(store.core_view(), focus, p);
             crate::term::sort_terms_canonical(&mut v);
             v.dedup();
             Ok(v)
@@ -1439,7 +1457,7 @@ fn eval_node_expr_at_depth(
             match starts.as_slice() {
                 [] => Ok(Vec::new()),
                 [start] => {
-                    let mut v = path::eval(store.core(), start, walk);
+                    let mut v = path::eval(store.core_view(), start, walk);
                     crate::term::sort_terms_canonical(&mut v);
                     v.dedup();
                     Ok(v)
@@ -1509,23 +1527,7 @@ fn eval_node_expr_at_depth(
         // subclasses. The shared class-membership view already answers exactly that
         // question (it is what `sh:class` and `sh:targetClass` consult), so this
         // reuses it rather than walking `rdfs:subClassOf` a second time.
-        NodeExpr::InstancesOf(class) => {
-            store.prepare_class_membership();
-            let class_term = Term::NamedNode(class.clone());
-            let Some(class_id) = crate::data::resolve_id(store.core(), &class_term) else {
-                // A class IRI absent from the data graph has no instances. That is
-                // an empty answer, not a malformed expression.
-                return Ok(Vec::new());
-            };
-            let mut out: Vec<Term> = store
-                .class_view()
-                .instances_of(class_id)
-                .map(|id| crate::term::term_id_to_native(store.core(), id))
-                .collect();
-            crate::term::sort_terms_canonical(&mut out);
-            out.dedup();
-            Ok(out)
-        }
+        NodeExpr::InstancesOf(class) => Ok(eval_instances_of(store, class)),
         // §4.5.2 NodesMatching expression: every node of the focus graph that
         // conforms to `shape`. The spec itself warns this output "may be very
         // large"; the candidate set is every subject and object of the graph,
@@ -1534,7 +1536,7 @@ fn eval_node_expr_at_depth(
         NodeExpr::NodesMatching(shape) => {
             let mut candidates: Vec<Term> = Vec::new();
             for (subject, _, object) in crate::data::native_quads(
-                store.core(),
+                store.core_view(),
                 None,
                 None,
                 None,

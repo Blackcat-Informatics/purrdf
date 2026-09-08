@@ -1903,7 +1903,7 @@ pub fn jsonld_to_statement_metadata_nquads(
             } else {
                 vocab.q_object
             };
-            out.push(RdfQuad::new(r.clone(), q_object_pred, o.clone()));
+            out.push(RdfQuad::new(r, q_object_pred, o.clone()));
         } else if reifier_quotes.contains_key(&quad.subject) {
             // Annotation triple on a reifier: keep it, but in the default graph so the
             // downstream rdflib-compat graph (single-graph) sees it.

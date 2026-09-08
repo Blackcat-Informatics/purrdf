@@ -20,6 +20,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Bug Fixes
 
+- **core/rdf:** Located duplicate quads keep their source locations on the
+  deduplicated row during owned insertion, row remapping and GTS import.
+  Unrealized location handles cannot attach to a later unrelated row, and
+  validated append safely ignores unmatched handles. `push_quad_with_handle`
+  returns the actual row
+  handle for callers attaching locations; existing `push_quad` calls remain valid.
+- **core:** Mutation suppression and reinsertion apply to ordinary quads,
+  reifiers and annotations, including overlapping records. Statement-layer
+  classification uses the reifier's graph as part of its identity. Snapshots and
+  compaction preserve annotation-only rows and declaration-only named graphs.
+  Independent dataset imports reserve explicitly interned blank scopes, including
+  those referenced only inside composite literals.
+- **shapes:** Borrowed statement projections deduplicate metadata overlapping
+  ordinary rows, preserving graph-set semantics in SPARQL counts and validation.
+  Disabled statement projection skips metadata reads, and bound subject probes
+  use the source's metadata indexes. Property-pair constraints read shared views
+  without materializing them, and validation shares one class index when Core
+  and SPARQL use the same data view.
+- **rdf/viz:** Properties of a known reifier render as annotation relations even
+  when their graph differs from the reification declaration. Every relation keeps
+  its original graph, and parsed and incrementally built datasets produce the
+  same visual model. Corrected cross-graph visual models change newly generated
+  visualization JSON, SVG and model hashes; RDF carrier records are unchanged.
 - **sparql:** Compiler-built, rewritten and caller-mutated prepared algebra now
   passes structural and registry validation before execution. Malformed binding
   rows and excessively deep execution plans return diagnostics instead of
@@ -81,6 +104,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **core:** Typed dataset import memoizes source terms and streams flat quads;
   canonical relabeling avoids building an unused text representation. Existing
   scope, metadata and deterministic output contracts are preserved.
+- **core:** Immutable composite and mutation views retain native source
+  dictionaries and indexes. Independent-document composition standardizes blank
+  scopes apart, including nested triple and composite-literal references; an
+  explicit shared-scope constructor preserves already-established identities.
+  Graph placement covers all RDF record tables and graph declarations. Finite
+  retention limits and copy/freeze/materialization counters make ownership costs
+  observable without changing deterministic RDF identities. Composite, delta and
+  SHACL adapters reuse prepared physical probe plans across bindings, accounting
+  for graph placement and union projection.
+- **shapes:** `PreparedShapes` shares immutable shape and class-reference analysis
+  across exact dataset bindings. Borrowed native, composite and delta views avoid
+  rebuilding a base dataset for constraint, path and target evaluation. Each
+  binding resolves its own dataset IDs and targets; concrete dataset compatibility
+  getters materialize lazily.
+- **sparql:** Typed prepared CONSTRUCT methods stage and validate graph results
+  directly into a destination builder, with destination-aware fresh blank nodes
+  and explicit copy counters. Shared-governor and fallible-view variants withhold
+  publication after errors, cancellation or exhausted budgets. UPDATE WHERE
+  evaluation reads mutation snapshots without compacting the whole base.
 
 ## [1.1.0] - 2026-09-04
 

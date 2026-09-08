@@ -9,6 +9,7 @@
 //! reachable through one or more asserted default-graph `rdfs:subClassOf`
 //! edges. No subclass row or other RDFS/OWL consequence is virtualized.
 
+use crate::data_view::{ShaclDatasetView, ShaclRead};
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::ir::QuadProbePlan;
@@ -112,7 +113,7 @@ struct SharedIndex {
 /// A validation-scoped view over a frozen dataset.
 #[derive(Debug, Clone)]
 pub(crate) struct ClassMembershipView {
-    base: Arc<RdfDataset>,
+    base: Arc<ShaclDatasetView>,
     rdf_type: Option<TermId>,
     subclass_of: Option<TermId>,
     shared: Arc<SharedIndex>,
@@ -120,6 +121,10 @@ pub(crate) struct ClassMembershipView {
 
 impl ClassMembershipView {
     pub(crate) fn new(base: Arc<RdfDataset>) -> Self {
+        Self::from_view(Arc::new(ShaclDatasetView::native(base)))
+    }
+
+    pub(crate) fn from_view(base: Arc<ShaclDatasetView>) -> Self {
         let rdf_type = base.term_id_by_iri(rdf::TYPE);
         let subclass_of = base.term_id_by_iri(rdfs::SUB_CLASS_OF);
         Self {
@@ -139,7 +144,7 @@ impl ClassMembershipView {
     #[inline]
     #[cfg(test)]
     pub(crate) fn base(&self) -> &Arc<RdfDataset> {
-        &self.base
+        self.base.materialized()
     }
 
     /// Whether `subject` is directly or transitively an asserted SHACL instance
@@ -569,7 +574,7 @@ impl crate::sparql::FocusGraphSource for ClassMembershipView {
     /// caller building a fresh view over this graph therefore gets the same answers
     /// this one gives.
     fn focus_graph(&self) -> Option<&Arc<RdfDataset>> {
-        Some(&self.base)
+        Some(self.base.materialized())
     }
 }
 
@@ -621,7 +626,7 @@ impl DatasetView for ClassMembershipView {
 
     fn len_hint(&self) -> Option<usize> {
         if self.rdf_type.is_none() || self.subclass_of.is_none() || self.index().is_none() {
-            Some(self.base.quad_count())
+            self.base.len_hint()
         } else {
             None
         }
@@ -635,7 +640,7 @@ impl DatasetView for ClassMembershipView {
         o_bound: bool,
         g: GraphMatch,
     ) -> QuadProbePlan {
-        RdfDataset::probe_plan(s_bound, p_bound, o_bound, g)
+        self.base.probe_plan(s_bound, p_bound, o_bound, g)
     }
 
     fn quads_for_pattern_with_plan(
@@ -713,7 +718,7 @@ impl DatasetView for ClassMembershipView {
 }
 
 fn build_index(
-    dataset: &RdfDataset,
+    dataset: &impl ShaclRead,
     rdf_type: TermId,
     subclass_of: TermId,
 ) -> Option<ClassMembershipIndex> {

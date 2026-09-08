@@ -68,6 +68,37 @@ cargo build -p purrdf-shapes
 cargo test -p purrdf-shapes
 ```
 
+## Reusing shape preparation
+
+`engine::PreparedShapes::new(Arc<Shapes>)` analyzes the parsed shape tree once.
+Keep it for a batch and call `bind_projected_dataset(Arc<RdfDataset>)` for each
+already-projected snapshot, or `bind_dataset(&RdfDataset)` when projection is
+still required. Each binding returns a `PreparedValidator` that shares the
+class-reference catalog and its input dataset. It resolves fresh dataset-local
+IDs, class membership and SPARQL targets before validation.
+
+`bind_shared_dataset` projects a retained native dataset through borrowed reads;
+`bind_view` accepts a shared `data_view::ShaclDatasetView` adapter over native,
+composite or delta sources, and
+`bind_delta_with_shapes_graph` binds a mutation snapshot with its shapes graph.
+These paths read the original dictionaries and indexes through one SHACL adapter.
+They do not rebuild the base dataset to evaluate ordinary constraints, paths or
+SPARQL targets. Dataset-specific identities and target analysis are rebound for
+each immutable snapshot. Compatibility getters that require a concrete native
+dataset materialize it lazily once.
+
+When data and shapes are contributions from the same identity space,
+`bind_shared_dataset_with_shapes_graph` preserves their supplied blank scopes and
+places the shapes graph under its caller-provided name. Independently parsed
+documents must establish their separate blank scopes before shape preparation;
+retaining raw local IDs across datasets is never an identity rule.
+
+This reuse does not authorize skipping targets after a data change. Paths,
+SPARQL and custom expressions can depend on nodes beyond the changed triples;
+call `validate()` for a complete report unless the caller has established the
+complete affected focus set. Target sets and validation answers belong to the
+exact bound snapshot.
+
 ## Ontology-complete developer schemas
 
 `compile_schema` makes the developer-schema surface an explicit choice.

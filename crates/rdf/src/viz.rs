@@ -14,7 +14,7 @@ use std::fmt::{self, Write as _};
 use serde::{Deserialize, Serialize};
 
 use crate::native_codecs::ser_model::{escape_iri, escape_literal};
-use crate::{QuadRef, RdfDataset, RdfTextDirection, TermRef, TermValue};
+use crate::{QuadIds, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
 mod layout;
 mod scene;
@@ -336,7 +336,8 @@ pub struct VizInputStatement {
 /// Graph-like visualization input for callers that do not hold an [`RdfDataset`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VizGraphInput {
-    /// Asserted quads.
+    /// Asserted quads. Properties of an explicitly declared reifier are rendered
+    /// as annotation relations, retaining the quad's own graph context.
     pub quads: Vec<VizInputQuad>,
     /// Reification relations.
     pub reifiers: Vec<VizInputReifier>,
@@ -693,10 +694,15 @@ impl fmt::Display for VizError {
 impl std::error::Error for VizError {}
 
 /// Project a dataset into the renderer-neutral Statement Incidence Model.
+///
+/// A reifier's properties are visual annotation relations even when their graph
+/// differs from the reifier declaration's graph. This role projection preserves
+/// each quad's graph and does not change the carrier's graph-scoped RDF tables.
+/// Graph filtering selects occurrences; it does not erase known reifier identity.
 pub fn project_dataset(dataset: &RdfDataset, spec: &VizSpec) -> Result<VizProjection, VizError> {
     let mut builder = ProjectionBuilder::new(spec);
     builder.add_default_graph();
-    for quad in dataset.quad_refs() {
+    for quad in dataset.quads() {
         builder.add_dataset_quad(dataset, quad)?;
     }
     for (reifier, triple, graph) in dataset.reifiers_with_graph() {
@@ -732,12 +738,14 @@ pub fn project_graph_input(
 ) -> Result<VizProjection, VizError> {
     let mut builder = ProjectionBuilder::new(spec);
     builder.add_default_graph();
+    let reifiers: BTreeSet<_> = input.reifiers.iter().map(|row| &row.reifier).collect();
     for quad in &input.quads {
-        builder.add_assertion(
+        builder.add_quad(
             quad.subject.clone(),
             quad.predicate.clone(),
             quad.object.clone(),
             quad.graph_name.clone(),
+            reifiers.contains(&quad.subject),
         )?;
     }
     for reifier in &input.reifiers {
@@ -834,30 +842,36 @@ impl<'a> ProjectionBuilder<'a> {
         }
     }
 
-    fn add_dataset_quad(
-        &mut self,
-        dataset: &RdfDataset,
-        quad: QuadRef<'_>,
-    ) -> Result<(), VizError> {
-        let subject = term_ref_value(dataset, quad.s);
-        let predicate = match quad.p {
+    fn add_dataset_quad(&mut self, dataset: &RdfDataset, quad: QuadIds) -> Result<(), VizError> {
+        let subject = dataset.term_value(quad.s);
+        let predicate = match dataset.resolve(quad.p) {
             TermRef::Iri(iri) => iri.to_owned(),
             other => return Err(VizError::InvalidPredicate(format!("{other:?}"))),
         };
-        let object = term_ref_value(dataset, quad.o);
-        let graph = quad.g.map(|g| term_ref_value(dataset, g));
-        self.add_assertion(subject, predicate, object, graph)
+        let object = dataset.term_value(quad.o);
+        let graph = quad.g.map(|g| dataset.term_value(g));
+        self.add_quad(
+            subject,
+            predicate,
+            object,
+            graph,
+            dataset.reifier_quads_of(quad.s).next().is_some(),
+        )
     }
 
-    fn add_assertion(
+    fn add_quad(
         &mut self,
         subject: TermValue,
         predicate: String,
         object: TermValue,
         graph_name: Option<TermValue>,
+        subject_is_reifier: bool,
     ) -> Result<(), VizError> {
         if !self.graph_selected(graph_name.as_ref()) {
             return Ok(());
+        }
+        if subject_is_reifier {
+            return self.add_annotation(subject, &predicate, object, graph_name);
         }
         let graph = self.graph_id(graph_name)?;
         let statement = self.statement_id(subject, predicate, object)?;
@@ -1562,38 +1576,6 @@ fn incoming_reference_counts<'a>(
         *count = count.saturating_add(1);
     }
     counts
-}
-
-fn term_ref_value(dataset: &RdfDataset, term: TermRef<'_>) -> TermValue {
-    match term {
-        TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match dataset.resolve(datatype) {
-                TermRef::Iri(iri) => iri.to_owned(),
-                other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(dataset.term_value(s)),
-            p: Box::new(dataset.term_value(p)),
-            o: Box::new(dataset.term_value(o)),
-        },
-    }
 }
 
 fn predicate_iri(value: TermValue) -> Result<String, VizError> {

@@ -17,7 +17,7 @@
 //!   never errors here (there is no missing-graph condition to fail on).
 //! - **Snapshot per WHERE op + value-space round-trip.** A `DELETE/INSERT … WHERE`
 //!   evaluates its `WHERE` against a *frozen snapshot* of the current effective set
-//!   (`m.freeze()`), because the evaluator reads a concrete [`RdfDataset`]. Each
+//!   (`m.snapshot_view()`), retaining the immutable base and freezing only its delta. Each
 //!   solution term is resolved to a dataset-independent [`TermValue`] (the template
 //!   helpers do this), so the resulting quads stay valid after the snapshot is
 //!   dropped and are applied back to `m` by value. DELETE is applied before INSERT
@@ -500,7 +500,7 @@ fn delete_insert(
     // QuadPattern.graph is None (template target — independent of the WHERE dataset).
     let with_value = with.map(named_node_to_value);
 
-    let snap = m.freeze()?;
+    let snap = m.snapshot_view()?;
 
     // The `prepare_for`-equivalent for an UPDATE's `WHERE`: an UPDATE `WHERE` is a
     // triple-pattern context exactly like a query's, so a registered relation's
@@ -516,7 +516,7 @@ fn delete_insert(
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
-    let ctx = EvalCtx::new(&*snap).with_bounded_order_cache(cfg.order_cache);
+    let ctx = EvalCtx::new(&snap).with_bounded_order_cache(cfg.order_cache);
     // The property-function registry, the SHACL-AF function registry and the
     // blank-mint prefix, applied through the SAME seam a governed/ungoverned query
     // applies them — see `crate::engine::apply_query_options`. This is what lets a
@@ -685,10 +685,10 @@ fn observe_staged_mutation(
 /// consumption it did not measure — latched through [`GovernorState::record_trip`] so a
 /// stop signal that was already firing keeps precedence and the evidence names one governor
 /// rather than two.
-fn admit_where(
+fn admit_where<D: purrdf_core::DatasetView + Sync>(
     pattern: &purrdf_sparql_algebra::GraphPattern,
-    snap: &RdfDataset,
-    active_dataset: &ActiveDataset<purrdf_core::TermId>,
+    snap: &D,
+    active_dataset: &ActiveDataset<D::Id>,
     governors: Option<&Arc<GovernorState>>,
     relations: &crate::property_fn::PropertyFunctionRegistry,
 ) -> Result<(), UpdateAbort> {
@@ -949,12 +949,12 @@ fn instantiate_ground_quad(
 /// variable, or the result is positionally ill-formed (a non-IRI/blank asserted
 /// subject, a non-IRI predicate, or an ill-formed object triple term), or the graph
 /// slot is a variable bound to a non-IRI.
-fn instantiate_quad_with_default(
+fn instantiate_quad_with_default<D: purrdf_core::DatasetView + Sync>(
     qp: &QuadPattern,
-    row: &Solution,
+    row: &Solution<D::Id>,
     schema: &VarSchema,
     blanks: &mut DetHashMap<String, String>,
-    ctx: &mut EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_, D>,
     default_graph: Option<&TermValue>,
 ) -> Option<QuadValues> {
     let s = instantiate_term(&qp.triple.subject, row, schema, blanks, ctx)?;

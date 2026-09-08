@@ -576,7 +576,7 @@ fn build_work_graph(
             let id = anchor_work_id(&edge.id, &anchor.id);
             let (width, height) = measure_anchor(anchor);
             nodes.insert(
-                id.clone(),
+                id,
                 WorkNode {
                     kind: WorkNodeKind::Anchor,
                     width,

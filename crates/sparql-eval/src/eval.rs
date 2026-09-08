@@ -2855,6 +2855,22 @@ pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalErro
     Ok(())
 }
 
+/// Shared admission and dataset/base setup for all graph publication forms.
+pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
+    query: &Query,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(), EvalError> {
+    admit_version(AdmittedRequest::Query(query))?;
+    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
+    // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
+    ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
+    // Install the query's effective base IRI so IRI()/URI() can resolve a relative
+    // string argument against it (SPARQL 1.1 §17.4.2.6).
+    ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
+    install_answer_cap_pushdown(query, ctx);
+    Ok(())
+}
+
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
 ///
 /// `SELECT`/`ASK` walk the modifier-wrapped pattern; `CONSTRUCT` and `DESCRIBE` emit
@@ -2872,8 +2888,6 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
-    admit_version(AdmittedRequest::Query(query))?;
-    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Criterion and differential tests can hold the operation on the sequential branch;
     // production keeps the ordered parallel fold. The guard is operation-scoped so every
     // recursive fork gate sees the same decision.
@@ -2881,12 +2895,7 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
         .options
         .force_sequential
         .then(crate::parallel::force_sequential_operation);
-    // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
-    ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
-    // Install the query's effective base IRI so IRI()/URI() can resolve a relative
-    // string argument against it (SPARQL 1.1 §17.4.2.6).
-    ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
-    install_answer_cap_pushdown(query, ctx);
+    prepare_query_context(query, ctx)?;
     match query {
         Query::Select { pattern, .. } => {
             match commit_answer_rows(eval_evaluated(pattern, ctx)?, ctx) {

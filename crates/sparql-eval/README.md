@@ -64,6 +64,16 @@ activity, plan lifetimes and governor work. Measurements are report-only and use
 synthetic data. Allocator-requested bytes and governor intermediate cells are
 different denominations, recorded separately.
 
+`construct_prepared_into_view` appends a complete typed CONSTRUCT graph to an
+existing `RdfDatasetBuilder`, using the ordinary template and projection-loss
+machinery. It stages and validates terms without freezing or serializing an
+intermediate dataset. Repeated appends mint destination-disjoint blank nodes
+while preserving blank identities carried by input bindings. The operation and
+fallible-view variants publish nothing after an error, cancellation or exhausted
+governor. `GraphBuildStats` records staged statements and payload, actual copied
+payload, intermediate freezes and supplied governor evidence independently of
+the graph's identity.
+
 Design pillars:
 
 - **Multiset (bag) semantics** — solutions are a bag, preserved until
