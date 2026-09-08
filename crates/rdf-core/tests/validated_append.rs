@@ -117,3 +117,72 @@ fn validated_append_rebinds_locations_after_deduplication_and_sorting() {
         }
     }
 }
+
+#[test]
+fn validated_append_drops_unrealized_handles_and_preserves_real_locations() {
+    let first = purrdf_core::RdfLocation::file("source.ttl").with_line(7);
+    let second = purrdf_core::RdfLocation::file("source.ttl").with_line(11);
+    let destination = purrdf_core::RdfLocation::file("destination.ttl").with_line(3);
+    let source = || {
+        let mut builder = RdfDatasetBuilder::new();
+        let z = builder.intern_iri("https://example.org/z");
+        let a = builder.intern_iri("https://example.org/a");
+        let p = builder.intern_iri("https://example.org/p");
+        let handle = builder.next_quad_handle();
+        builder.push_quad(z, p, a, None);
+        builder.attach_location(handle, first.clone());
+        let handle = builder.next_quad_handle();
+        builder.push_quad(a, p, z, None);
+        builder.attach_location(handle, second.clone());
+
+        // Deduplication never realizes this proposed next-row handle.
+        let stale = builder.next_quad_handle();
+        builder.push_quad(z, p, a, None);
+        builder.attach_location(
+            stale,
+            purrdf_core::RdfLocation::file("duplicate.ttl").with_line(99),
+        );
+        builder
+    };
+    let assert_locations =
+        |graph: &purrdf_core::RdfDataset, expected: &[(&str, &purrdf_core::RdfLocation)]| {
+            assert_eq!(graph.quad_count(), expected.len());
+            for &(subject, location) in expected {
+                let subject = graph.term_id_by_iri(subject).expect("subject is present");
+                let (index, _) = graph
+                    .quads()
+                    .enumerate()
+                    .find(|(_, quad)| quad.s == subject)
+                    .expect("subject has a quad");
+                let handle =
+                    purrdf_core::QuadHandle::from_index(u32::try_from(index).expect("index"));
+                assert_eq!(graph.location_of(handle), Some(location));
+            }
+        };
+
+    let expected = [
+        ("https://example.org/z", &first),
+        ("https://example.org/a", &second),
+    ];
+    assert_locations(&source().freeze().expect("direct freeze"), &expected);
+
+    let mut target = RdfDatasetBuilder::new();
+    let a = target.intern_iri("https://example.org/a");
+    let p = target.intern_iri("https://example.org/p");
+    let z = target.intern_iri("https://example.org/z");
+    target.push_quad(a, p, z, None);
+    let x = target.intern_iri("https://example.org/x");
+    let handle = target.next_quad_handle();
+    target.push_quad(x, p, a, None);
+    target.attach_location(handle, destination.clone());
+    target.append_validated(source().validate().expect("source is structurally valid"));
+    let graph = target.freeze().expect("validated append");
+    assert_locations(
+        &graph,
+        &[
+            expected[0],
+            expected[1],
+            ("https://example.org/x", &destination),
+        ],
+    );
+}

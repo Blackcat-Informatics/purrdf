@@ -867,7 +867,6 @@ impl RdfDatasetBuilder {
     /// discipline [`push_dataset`](Self::push_dataset) applies internally. Direct
     /// [`push_owned_quad`](Self::push_owned_quad) uses [`BlankScope::DEFAULT`].
     pub fn push_owned_quad_scoped(&mut self, quad: &RdfQuad, scope: BlankScope) {
-        let handle = self.next_quad_handle();
         let s = self.intern_owned_term_scoped(&quad.subject, scope);
         let p = self.intern_iri(&quad.predicate);
         let o = self.intern_owned_term_scoped(&quad.object, scope);
@@ -875,7 +874,7 @@ impl RdfDatasetBuilder {
             .graph_name
             .as_ref()
             .map(|graph_name| self.intern_owned_term_scoped(graph_name, scope));
-        self.push_quad(s, p, o, g);
+        let handle = self.push_quad_with_handle(s, p, o, g);
         if let Some(location) = &quad.location {
             self.attach_location(handle, location.clone());
         }
@@ -1052,7 +1051,11 @@ impl RdfDatasetBuilder {
             self.declare_named_graph(mapped(graph));
         }
         for (handle, location) in source.locations {
-            self.attach_location(quad_map[handle.index()], location);
+            // As in materialize, a proposed next-row handle may never have
+            // acquired a quad because its following push was a duplicate.
+            if let Some(&mapped) = quad_map.get(handle.index()) {
+                self.attach_location(mapped, location);
+            }
         }
         self.interner.arena.len() - before
     }
@@ -1156,12 +1159,31 @@ impl RdfDatasetBuilder {
     }
 
     /// Push a quad. Duplicate quads collapse to a single row (C0.5); `g == None`
-    /// names the default graph. Returns nothing — the quad's ordinal is reflected
-    /// by [`attach_location`](Self::attach_location), which keys off the pushed
-    /// (deduped) order via [`QuadHandle`].
+    /// names the default graph. Use [`push_quad_with_handle`](Self::push_quad_with_handle)
+    /// when attaching a source location: it identifies the actual row even when
+    /// the quad was already present.
     pub fn push_quad(&mut self, s: TermId, p: TermId, o: TermId, g: Option<TermId>) {
+        let _ = self.push_quad_with_handle(s, p, o, g);
+    }
+
+    /// Push a quad and return its actual deduplicated-row handle.
+    ///
+    /// A duplicate returns the existing row's handle; a new quad returns its
+    /// newly assigned handle. The handle is immediately valid for
+    /// [`attach_location`](Self::attach_location), and remains in builder push
+    /// order until freezing remaps source locations to the frozen row order.
+    /// `g == None` names the default graph, and graph identity participates in
+    /// deduplication.
+    #[must_use]
+    pub fn push_quad_with_handle(
+        &mut self,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+    ) -> QuadHandle {
         let row = QuadRow { s, p, o, g };
-        store_once(&mut self.quads, &mut self.quad_index, row);
+        QuadHandle::from_index(store_once(&mut self.quads, &mut self.quad_index, row))
     }
 
     /// Bind a reifier resource to a triple term (C0.4). Several reifiers MAY bind
@@ -1217,16 +1239,19 @@ impl RdfDatasetBuilder {
     /// Attach a source location to a previously pushed quad, identified by its
     /// [`QuadHandle`] (the dense ordinal of the deduplicated quad). Sparse: only
     /// quads with a recorded location are stored. An empty location is ignored.
+    /// A handle that names no current row is also ignored; it cannot attach a
+    /// location to a different row inserted later.
     pub fn attach_location(&mut self, handle: QuadHandle, loc: RdfLocation) {
-        if !loc.is_empty() {
+        if handle.index() < self.quads.len() && !loc.is_empty() {
             self.locations.push((handle, loc));
         }
     }
 
     /// The [`QuadHandle`] that the next [`push_quad`](Self::push_quad) call will
     /// assign to a *newly seen* quad — i.e. the current deduplicated-quad count.
-    /// Callers that need to attach a location pair this with the immediately
-    /// following push.
+    /// A duplicate push does not realize this proposed handle. Use
+    /// [`push_quad_with_handle`](Self::push_quad_with_handle) when the next quad
+    /// might already be present and its source location needs attaching.
     pub fn next_quad_handle(&self) -> QuadHandle {
         QuadHandle::from_index(self.quads.len() as u32)
     }

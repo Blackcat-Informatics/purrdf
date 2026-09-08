@@ -553,7 +553,6 @@ pub(crate) fn rebuild_dataset<M: TermMapper>(
         None => RdfDatasetBuilder::new(),
     };
     for (index, q) in ds.quads().enumerate() {
-        let handle = builder.next_quad_handle();
         let s = reintern(ds, &mut builder, q.s, mapper, false)?;
         let p = reintern(ds, &mut builder, q.p, mapper, true)?;
         let o = reintern(ds, &mut builder, q.o, mapper, false)?;
@@ -561,7 +560,7 @@ pub(crate) fn rebuild_dataset<M: TermMapper>(
             Some(g) => Some(reintern(ds, &mut builder, g, mapper, false)?),
             None => None,
         };
-        builder.push_quad(s, p, o, g);
+        let handle = builder.push_quad_with_handle(s, p, o, g);
         if let Some(loc) = ds.location_of(QuadHandle::from_index(index as u32)) {
             builder.attach_location(handle, loc.clone());
         }
@@ -1090,6 +1089,62 @@ mod tests {
     // -------------------------------------------------------------------
     // The two recourses agree on what they preserve
     // -------------------------------------------------------------------
+
+    #[test]
+    fn coalescing_rewrite_keeps_locations_on_the_deduplicated_row() {
+        struct CoalescingMapper;
+
+        impl TermMapper for CoalescingMapper {
+            type Error = std::convert::Infallible;
+
+            fn map_blank(
+                &mut self,
+                builder: &mut RdfDatasetBuilder,
+                _id: TermId,
+                label: &str,
+                scope: BlankScope,
+            ) -> Result<TermId, Self::Error> {
+                Ok(builder.intern_blank(label, scope))
+            }
+
+            fn map_iri(
+                &mut self,
+                builder: &mut RdfDatasetBuilder,
+                iri: &str,
+                _iri_only: bool,
+            ) -> Result<TermId, Self::Error> {
+                let mapped = if iri == "http://example.org/second" {
+                    "http://example.org/first"
+                } else {
+                    iri
+                };
+                Ok(builder.intern_iri(mapped))
+            }
+        }
+
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        let first = builder.intern_iri("http://example.org/first");
+        let second = builder.intern_iri("http://example.org/second");
+        let next = builder.intern_iri("http://example.org/next");
+        builder.push_quad(s, p, first, None);
+        let located = builder.push_quad_with_handle(s, p, second, None);
+        let location = crate::RdfLocation::file("source.ttl").with_line(7);
+        builder.attach_location(located, location.clone());
+        builder.push_quad(s, p, next, None);
+        let source = builder.freeze().expect("valid source");
+        let rewritten = rebuild_dataset(&source, &mut CoalescingMapper).expect("valid rewrite");
+        assert_eq!(rewritten.quad_count(), 2);
+        let first = rewritten
+            .term_id_by_iri("http://example.org/first")
+            .expect("coalesced object");
+        for (index, quad) in rewritten.quads().enumerate() {
+            let handle = QuadHandle::from_index(u32::try_from(index).expect("index"));
+            let expected = (quad.o == first).then_some(&location);
+            assert_eq!(rewritten.location_of(handle), expected);
+        }
+    }
 
     #[test]
     fn the_rewrite_preserves_quad_source_locations() {
