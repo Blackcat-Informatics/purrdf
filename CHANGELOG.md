@@ -6,6 +6,36 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+### Breaking Changes
+
+- **BREAKING** **shapes:** `PropertyShape` now carries its declaring RDF node
+  in `id: Term`. Rust callers constructing a property-shape struct literal must
+  supply that identity; callers using `from_dataset` or `parse_shapes` receive
+  it automatically. This requires a major release under the suite's versioning
+  policy. The field preserves correct `sh:sourceShape` reports and
+  SHACL-SPARQL `$currentShape` bindings even when property shapes share a path,
+  are nested, or are cloned and validated independently.
+
+### Bug Fixes
+
+- **shapes:** Repeated values of single-parameter constraint components apply
+  independently and conjunctively. Importing standard SHACL component
+  declarations no longer rejects legal repeated properties or executes native
+  constraints twice. Multi-parameter components and native singleton parameters
+  reject distinct competing values; identical statements in multiple graphs
+  count once. Parameter declarations and validator attachments are checked
+  without discarding malformed values.
+- **shapes:** Optional target parameters remain unbound when omitted, and target
+  instances missing mandatory parameters contribute no focus nodes. Subjects of
+  `sh:target` are discovered as shapes even without explicit node-shape typing,
+  including standalone property shapes. Scoped
+  component validators take precedence over generic ASK validators. Property
+  reports name their declaring shape, and reifier-constraint results use the
+  enclosing property's severity. First-party report goldens deliberately correct
+  34 source-shape references and one severity; conformance outcomes are unchanged.
+
 ## [1.1.0] - 2026-09-04
 
 The first release after 1.0.0. Two reported bugs, the release fallout 1.0.0 left

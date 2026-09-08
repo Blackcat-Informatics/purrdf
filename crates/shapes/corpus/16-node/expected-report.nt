@@ -1,6 +1,6 @@
 _:r0 <http://www.w3.org/ns/shacl#value> <http://example.org/ns#kid> .
 _:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/ns#child> .
-_:r0 <http://www.w3.org/ns/shacl#sourceShape> <http://example.org/ns#ParentShape> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000001 .
 _:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#NodeConstraintComponent> .
 _:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
 _:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/ns#parent> .

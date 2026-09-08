@@ -3,16 +3,26 @@
 
 //! Parsing for SHACL-AF `sh:SPARQLTargetType` declarations.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ::purrdf::FastSet;
 
 use purrdf_sparql_algebra::{Query, SparqlParser};
 
-use crate::model::{rdf, sh};
+use crate::model::{rdf, sh, xsd};
 use crate::term::{NamedNode, Term};
 
 use crate::shapes::{Parser, SparqlTargetType, TargetTypeParam};
+
+/// A public declaration plus metadata needed only while binding its instances.
+///
+/// Optionality is resolved into each target's substitutions before evaluation,
+/// so it does not widen the published target declaration structs.
+#[derive(Clone)]
+pub(crate) struct ParsedTargetType {
+    pub(crate) declaration: SparqlTargetType,
+    pub(crate) optional_predicates: BTreeSet<NamedNode>,
+}
 
 impl Parser<'_> {
     /// Parse every `sh:SPARQLTargetType` declaration in the shapes graph into a
@@ -23,7 +33,7 @@ impl Parser<'_> {
     /// declaration. Malformed declarations are hard failures.
     pub(crate) fn parse_sparql_target_types(
         &self,
-    ) -> Result<BTreeMap<String, SparqlTargetType>, String> {
+    ) -> Result<BTreeMap<String, ParsedTargetType>, String> {
         let mut ids: Vec<Term> = self
             .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_TARGET_TYPE))
             .into_iter()
@@ -32,7 +42,7 @@ impl Parser<'_> {
         crate::term::sort_terms_canonical(&mut ids);
         ids.dedup();
 
-        let mut registry: BTreeMap<String, SparqlTargetType> = BTreeMap::new();
+        let mut registry: BTreeMap<String, ParsedTargetType> = BTreeMap::new();
         for id in ids {
             let iri = match &id {
                 Term::NamedNode(n) => n.as_str().to_owned(),
@@ -51,9 +61,10 @@ impl Parser<'_> {
         &self,
         id: &Term,
         iri: &str,
-    ) -> Result<SparqlTargetType, String> {
+    ) -> Result<ParsedTargetType, String> {
         // Parameters, ordered by (sh:order, predicate IRI).
-        let mut raw: Vec<(f64, NamedNode, String)> = Vec::new();
+        let mut raw: Vec<(f64, TargetTypeParam)> = Vec::new();
+        let mut optional_predicates = BTreeSet::new();
         for p_node in self.objects_of(id, sh::PARAMETER_PROPERTY) {
             let predicate = self
                 .first_object_of(&p_node, sh::PATH)
@@ -101,28 +112,31 @@ impl Parser<'_> {
                     ));
                 }
             };
-            raw.push((order, predicate, var));
+            let optional =
+                target_parameter_optional(self.first_object_of(&p_node, sh::OPTIONAL), iri, &var)?;
+            if optional {
+                optional_predicates.insert(predicate.clone());
+            }
+            raw.push((order, TargetTypeParam { predicate, var }));
         }
         raw.sort_by(|a, b| {
             a.0.partial_cmp(&b.0)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.1.as_str().cmp(b.1.as_str()))
+                .then_with(|| a.1.predicate.as_str().cmp(b.1.predicate.as_str()))
         });
 
         // Reject colliding derived variable names.
         let mut seen: FastSet<&str> = FastSet::default();
-        for (_, _, var) in &raw {
-            if !seen.insert(var.as_str()) {
+        for (_, param) in &raw {
+            if !seen.insert(param.var.as_str()) {
                 return Err(format!(
-                    "sh:SPARQLTargetType <{iri}> has two parameters whose variable name ?{var} collides"
+                    "sh:SPARQLTargetType <{iri}> has two parameters whose variable name ?{} collides",
+                    param.var,
                 ));
             }
         }
 
-        let params: Vec<TargetTypeParam> = raw
-            .into_iter()
-            .map(|(_, predicate, var)| TargetTypeParam { predicate, var })
-            .collect();
+        let params: Vec<TargetTypeParam> = raw.into_iter().map(|(_, param)| param).collect();
 
         // sh:select is required and must be a SELECT query.
         let raw_select = self
@@ -149,10 +163,30 @@ impl Parser<'_> {
             }
         }
 
-        Ok(SparqlTargetType {
-            id: id.clone(),
-            params,
-            select: raw_select,
+        Ok(ParsedTargetType {
+            declaration: SparqlTargetType {
+                id: id.clone(),
+                params,
+                select: raw_select,
+            },
+            optional_predicates,
         })
+    }
+}
+
+/// Parse the optional marker without coercing strings or other RDF datatypes.
+fn target_parameter_optional(value: Option<Term>, iri: &str, var: &str) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(Term::Literal(lit)) if lit.datatype_str() == xsd::BOOLEAN => match lit.value() {
+            "true" | "1" => Ok(true),
+            "false" | "0" => Ok(false),
+            other => Err(format!(
+                "sh:SPARQLTargetType <{iri}> parameter ?{var} has an invalid sh:optional boolean {other:?}"
+            )),
+        },
+        Some(other) => Err(format!(
+            "sh:SPARQLTargetType <{iri}> parameter ?{var} requires an xsd:boolean sh:optional value, got {other}"
+        )),
     }
 }

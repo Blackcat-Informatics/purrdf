@@ -1021,14 +1021,15 @@ fn shapes_are_required() {
 // no base at all, so relative IRIs in a shapes graph could not resolve while the data
 // graph in the same invocation resolved fine. These pin that the two routes agree.
 
-/// A shapes graph whose shape node and constrained path are RELATIVE IRI references.
+/// A shapes graph whose node and property shapes are RELATIVE IRI references.
 ///
-/// `<PersonShape>` and `<name>` only mean something once resolved against a base.
+/// `<PersonShape>` and `<NamePropertyShape>` resolve against the shapes graph's base.
 const RELATIVE_SHAPES: &str = concat!(
     "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
     "<PersonShape> a sh:NodeShape ;\n",
     "  sh:targetClass <http://example.org/Person> ;\n",
-    "  sh:property [ sh:path <http://example.org/name> ; sh:minCount 1 ] .\n",
+    "  sh:property <NamePropertyShape> .\n",
+    "<NamePropertyShape> sh:path <http://example.org/name> ; sh:minCount 1 .\n",
 );
 
 /// One `ex:Person` with no `ex:name`: exactly one violation, but ONLY if the shape's
@@ -1059,21 +1060,23 @@ fn a_turtle_shapes_graph_resolves_relative_iris_against_its_retrieval_iri() {
     );
 
     // The source shape is named by its RESOLVED IRI — the shapes file's own `file://`
-    // IRI with the last segment replaced — not by the bare `PersonShape` token. The IRI
+    // IRI with the last segment replaced — not by the bare `NamePropertyShape` token. The IRI
     // comes from the binary's OWN derivation (`purrdf_cli::file_retrieval_iri`), never a
     // second transcription of it in this harness: a local `format!("file://{path}")`
     // percent-encodes nothing and has no Windows answer at all, so it would agree with
     // itself while the binary emitted something else.
     let resolved =
         purrdf_cli::file_retrieval_iri(&shapes).expect("fixture has a file:// retrieval IRI");
-    let resolved = resolved.replace("/shapes.ttl", "/PersonShape");
+    let resolved = resolved.replace("/shapes.ttl", "/NamePropertyShape");
     assert!(
-        stdout(&out).contains(&format!("<{resolved}>")),
-        "the source shape must be the resolved absolute IRI:\n{}",
+        stdout(&out).contains(&format!(
+            "<http://www.w3.org/ns/shacl#sourceShape> <{resolved}> ."
+        )),
+        "the source shape must be the resolved property shape IRI:\n{}",
         stdout(&out)
     );
     assert!(
-        !stdout(&out).contains("<PersonShape>"),
+        !stdout(&out).contains("<NamePropertyShape>"),
         "a bare relative reference must never reach the report:\n{}",
         stdout(&out)
     );
@@ -1096,11 +1099,20 @@ fn the_turtle_and_non_turtle_shapes_routes_resolve_a_relative_iri_identically() 
     assert_eq!(code(&turtle), 0, "{}", stderr(&turtle));
     assert_eq!(code(&trig), 0, "{}", stderr(&trig));
 
-    // Each resolves against its OWN file name, so compare with that difference removed.
-    let normalize = |text: String, name: &str| text.replace(name, "SHAPES");
+    // The relative property shape resolves to the same sibling IRI for both files.
+    let resolved =
+        purrdf_cli::file_retrieval_iri(&as_turtle).expect("fixture has a file:// retrieval IRI");
+    let resolved = resolved.replace("/shapes.ttl", "/NamePropertyShape");
+    assert!(
+        stdout(&turtle).contains(&format!(
+            "<http://www.w3.org/ns/shacl#sourceShape> <{resolved}> ."
+        )),
+        "the report must identify the resolved property shape:\n{}",
+        stdout(&turtle)
+    );
     assert_eq!(
-        normalize(stdout(&turtle), "shapes.ttl"),
-        normalize(stdout(&trig), "shapes.trig"),
+        stdout(&turtle),
+        stdout(&trig),
         "the two shapes routes must produce the identical report"
     );
     assert_eq!(stderr(&turtle), stderr(&trig), "and the identical verdict");
@@ -1167,7 +1179,10 @@ fn an_at_base_in_the_shapes_graph_wins_over_the_retrieval_iri() {
     let from_file = run(&["validate", "--shapes", &shapes, &data]);
     assert_eq!(code(&from_file), 0, "{}", stderr(&from_file));
     assert!(
-        stdout(&from_file).contains("<http://example.org/shapes/PersonShape>"),
+        stdout(&from_file).contains(concat!(
+            "<http://www.w3.org/ns/shacl#sourceShape> ",
+            "<http://example.org/shapes/NamePropertyShape> ."
+        )),
         "the in-document base must win over the retrieval IRI:\n{}",
         stdout(&from_file)
     );
@@ -1191,9 +1206,22 @@ fn an_at_base_in_the_shapes_graph_wins_over_the_retrieval_iri() {
     );
     assert_eq!(code(&from_stdin), 0, "{}", stderr(&from_stdin));
     assert!(
-        stdout(&from_stdin).contains("<http://example.org/shapes/PersonShape>"),
+        stdout(&from_stdin).contains(concat!(
+            "<http://www.w3.org/ns/shacl#sourceShape> ",
+            "<http://example.org/shapes/NamePropertyShape> ."
+        )),
         "a self-contained shapes graph needs no retrieval IRI:\n{}",
         stdout(&from_stdin)
+    );
+    assert_eq!(
+        stdout(&from_file),
+        stdout(&from_stdin),
+        "file and stdin must produce the identical report under the document base"
+    );
+    assert_eq!(
+        stderr(&from_file),
+        stderr(&from_stdin),
+        "and the identical verdict"
     );
 }
 

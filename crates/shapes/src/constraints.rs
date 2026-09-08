@@ -306,7 +306,6 @@ fn validate_shape_with_depth(
             focus,
             focus_id,
             ps,
-            &shape.id,
             &shape.box_roles,
         )?);
     }
@@ -452,7 +451,6 @@ fn eval_property_shape(
     focus: &Term,
     focus_id: Option<TermId>,
     ps: &PropertyShape,
-    source_shape: &Term,
     parent_box_roles: &[NamedNode],
 ) -> Result<Vec<ValidationResult>, String> {
     let store = context.store;
@@ -482,7 +480,7 @@ fn eval_property_shape(
     let source_roles = merge_box_roles(parent_box_roles, &ps.box_roles);
     let path_roles = path_box_roles(store, &ps.path, context.box_role_vocab);
     let constraint_source = ConstraintSource {
-        id: source_shape,
+        id: &ps.id,
         severity: &ps.severity,
         message: &ps.message,
     };
@@ -538,7 +536,6 @@ fn eval_property_shape(
                 &value.to_term(store.core()),
                 value.as_id(store.core()),
                 nested,
-                source_shape,
                 &source_roles,
             )?);
         }
@@ -557,7 +554,6 @@ fn eval_property_shape(
             focus,
             value_nodes: &value_terms,
             ps,
-            source_shape,
             source_roles: &source_roles,
             path_roles: &path_roles,
             path_term: path_term.get_or_init(|| path::path_to_term(&ps.path)),
@@ -575,7 +571,6 @@ struct ReifierEvalContext<'a> {
     focus: &'a Term,
     value_nodes: &'a [Term],
     ps: &'a PropertyShape,
-    source_shape: &'a Term,
     source_roles: &'a [NamedNode],
     path_roles: &'a [NamedNode],
     path_term: &'a Term,
@@ -590,7 +585,6 @@ fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResu
         focus,
         value_nodes,
         ps,
-        source_shape,
         source_roles,
         path_roles,
         path_term,
@@ -621,7 +615,7 @@ fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResu
                 source_constraint_component: NamedNode::from(
                     sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                 ),
-                source_shape: source_shape.clone(),
+                source_shape: ps.id.clone(),
                 severity: ps.severity.clone(),
                 message: ps.message.clone(),
                 source_box_roles: vec![],
@@ -657,8 +651,8 @@ fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResu
                         source_constraint_component: NamedNode::from(
                             sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                         ),
-                        source_shape: inner.source_shape.clone(),
-                        severity: inner.severity.clone(),
+                        source_shape: ps.id.clone(),
+                        severity: ps.severity.clone(),
                         message: inner
                             .message
                             .clone()
@@ -2589,6 +2583,7 @@ mod tests {
             targets: vec![],
             constraints: vec![],
             property_shapes: vec![PropertyShape {
+                id: ex(&format!("{id}-property")),
                 path: Path::Predicate(NamedNode::new_unchecked(path_iri)),
                 constraints,
                 property_shapes: vec![],
@@ -2698,6 +2693,7 @@ mod tests {
             targets: vec![],
             constraints: vec![],
             property_shapes: vec![PropertyShape {
+                id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
@@ -2748,6 +2744,7 @@ mod tests {
             targets: vec![],
             constraints: vec![],
             property_shapes: vec![PropertyShape {
+                id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
@@ -2801,6 +2798,7 @@ mod tests {
             targets: vec![],
             constraints: vec![],
             property_shapes: vec![PropertyShape {
+                id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
                 constraints: vec![],
                 property_shapes: vec![],
@@ -3537,6 +3535,7 @@ mod tests {
             targets: vec![],
             constraints: vec![],
             property_shapes: vec![PropertyShape {
+                id: ex("Property"),
                 path: Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
                     format!("{EX}parent"),
                 )))),
@@ -3571,6 +3570,7 @@ mod tests {
             targets: vec![],
             constraints: vec![],
             property_shapes: vec![PropertyShape {
+                id: ex("Property"),
                 path: Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
                     format!("{EX}parent"),
                 )))),
@@ -3852,7 +3852,9 @@ mod tests {
         use crate::shapes::Path;
         let property_shapes = path_iris
             .iter()
-            .map(|p| PropertyShape {
+            .enumerate()
+            .map(|(index, p)| PropertyShape {
+                id: ex(&format!("Property-{index}")),
                 path: Path::Predicate(NamedNode::new_unchecked(*p)),
                 constraints: vec![],
                 property_shapes: vec![],
@@ -4266,6 +4268,7 @@ mod tests {
             targets: vec![],
             constraints: vec![],
             property_shapes: vec![PropertyShape {
+                id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
@@ -4296,6 +4299,7 @@ mod tests {
             targets: vec![],
             constraints: vec![],
             property_shapes: vec![PropertyShape {
+                id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
