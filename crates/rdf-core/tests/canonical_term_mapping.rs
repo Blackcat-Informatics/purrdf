@@ -12,6 +12,7 @@ use purrdf_core::{
 const P: &str = "https://example.org/p";
 const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
 
+/// Require an output handle for a fixture term reached by the native rewrite.
 fn mapped(result: &CanonicalRelabeling, source: TermId) -> TermId {
     result.map_term(source).expect("retained source term")
 }
@@ -44,6 +45,7 @@ fn assert_original_api_output(source: &RdfDataset, result: &CanonicalRelabeling)
     );
 }
 
+/// Check every source record through the map, including its exact source location.
 fn assert_mapped_records(source: &RdfDataset, result: &CanonicalRelabeling) {
     let target = result.dataset();
     let m = |id| mapped(result, id);
@@ -86,6 +88,7 @@ fn assert_mapped_records(source: &RdfDataset, result: &CanonicalRelabeling) {
     }
 }
 
+/// Check resolved native term identity with canonical blanks and mapped components.
 fn assert_mapped_term(source: &RdfDataset, result: &CanonicalRelabeling, id: TermId) {
     let output = result.dataset().resolve(mapped(result, id));
     match source.resolve(id) {
@@ -122,6 +125,7 @@ fn assert_mapped_term(source: &RdfDataset, result: &CanonicalRelabeling, id: Ter
     }
 }
 
+/// Independent document blanks and all RDF 1.2 records retain their source mapping.
 #[test]
 fn mapped_records_preserve_native_identity_and_source_locations() {
     let mut builder = RdfDatasetBuilder::new();
@@ -170,6 +174,7 @@ fn mapped_records_preserve_native_identity_and_source_locations() {
     assert_eq!(result.into_dataset().term_count(), count);
 }
 
+/// Terms reached only inside a composite lexical form still name the correct nodes.
 #[test]
 fn composite_only_blanks_and_interned_iris_are_mapped() {
     let mut builder = RdfDatasetBuilder::new();
@@ -216,6 +221,7 @@ fn composite_only_blanks_and_interned_iris_are_mapped() {
     assert_original_api_output(&source, &result);
 }
 
+/// Unused dictionary entries stay absent while an empty graph declaration survives.
 #[test]
 fn unused_dictionary_terms_are_not_fabricated_by_mapping() {
     let mut builder = RdfDatasetBuilder::new();
@@ -256,6 +262,7 @@ fn unused_dictionary_terms_are_not_fabricated_by_mapping() {
     assert_original_api_output(&source, &result);
 }
 
+/// Configured content identities and predecessor links follow the actual mapped IDs.
 #[test]
 fn mapped_content_ids_and_predecessors_keep_the_configured_scheme() {
     let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
@@ -290,6 +297,7 @@ fn mapped_content_ids_and_predecessors_keep_the_configured_scheme() {
     assert_original_api_output(&source, &result);
 }
 
+/// Asking for mappings cannot admit a dataset rejected by canonical relabeling.
 #[test]
 fn mapping_does_not_change_admission_refusals() {
     let mut builder = RdfDatasetBuilder::new();
