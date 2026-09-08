@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use ciborium::value::Value;
-use purrdf_gts::model::{Term, TermKind};
+use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind};
 use purrdf_gts::wire::{blake3_256, canonical, hex};
 use purrdf_gts::writer::{Writer, term_to_wire};
 
@@ -44,16 +44,12 @@ pub const DIST_ZSTD_LEVEL: i32 = 12;
 
 /// A remapped quad row in canonical term ids (`g == None` is the default graph).
 type CanonQuad = (usize, usize, usize, Option<usize>);
-/// A remapped `(reifier, (s, p, o))` reifies binding in canonical term ids.
-type CanonReifies = (usize, (usize, usize, usize));
-/// A remapped `(reifier, predicate, object)` annotation in canonical term ids.
-type CanonAnnot = (usize, usize, usize);
 /// The fully canonical snapshot tables (`_Builder._canonical_tables`).
 type CanonTables = (
     Vec<Term>,
     Vec<CanonQuad>,
-    Vec<CanonReifies>,
-    Vec<CanonAnnot>,
+    Vec<ReifierRow>,
+    Vec<AnnotationRow>,
 );
 
 /// One interned term plus its content-sort key. Mirrors `gts.model.Term` rows
@@ -90,9 +86,9 @@ pub struct SnapshotBuilder {
     /// labels in different ingest scopes stay distinct terms.
     bnode_index: HashMap<(Option<String>, String), usize>,
     quads: Vec<(usize, usize, usize, Option<usize>)>,
-    /// reifier-id → (s, p, o); a `Vec` preserving first-bind, dedup on rebind.
-    reifies: Vec<(usize, (usize, usize, usize))>,
-    annot: Vec<(usize, usize, usize)>,
+    /// Graph-qualified bindings; canonicalization deduplicates complete rows.
+    reifies: Vec<ReifierRow>,
+    annot: Vec<AnnotationRow>,
 }
 
 impl SnapshotBuilder {
@@ -185,21 +181,6 @@ impl SnapshotBuilder {
         id
     }
 
-    /// Record a reifier binding, idempotent on an identical rebind.
-    ///
-    /// `rdf:reifies` is NOT a functional property, so one reifier id may bind
-    /// several distinct triples; refusing the second binding would refuse
-    /// ordinary RDF 1.2. Every binding is emitted as its own `reifies` row.
-    fn bind_reifier(&mut self, rid: usize, spo: (usize, usize, usize)) {
-        if !self
-            .reifies
-            .iter()
-            .any(|&(r, existing)| r == rid && existing == spo)
-        {
-            self.reifies.push((rid, spo));
-        }
-    }
-
     /// Ingest a native [`RdfDataset`](crate::RdfDataset) carrier DIRECTLY — interning
     /// its quads and its folded RDF-1.2 reifier/annotation side-tables — without the
     /// oxigraph quad round-trip. This is how the in-memory carrier is serialized at the
@@ -209,21 +190,22 @@ impl SnapshotBuilder {
     /// `rdf:reifies` re-materialization (the native parse already folded them).
     ///
     /// # Errors
-    /// A conflicting reifier rebind (one reifier id bound to two different statements).
+    /// A term cannot be represented by the snapshot's native tables.
     pub fn add_dataset(&mut self, dataset: &crate::RdfDataset) -> Result<(), String> {
         self.add_dataset_scoped(dataset, None, None)
     }
 
     /// Ingest a native [`RdfDataset`](crate::RdfDataset) with the same source-partitioning
     /// hooks the legacy oxigraph ingestion exposed: `default_graph_name` assigns base
-    /// quads carrying no graph of their own to a named graph, and `scope` prefixes
+    /// quads, reifiers and annotations carrying no graph of their own to a named graph,
+    /// and `scope` prefixes
     /// blank-node labels (`"{scope}-{label}"`) so two equal labels in different ingest
     /// scopes stay distinct terms. With both `None` this is the plain carrier ingestion
     /// ([`Self::add_dataset`]). The blank scope applies to EVERY blank position (quads,
     /// reifiers, annotations) exactly as the old `add_quads`/`add_rdf12` did.
     ///
     /// # Errors
-    /// A conflicting reifier rebind (one reifier id bound to two different statements).
+    /// A term cannot be represented by the snapshot's native tables.
     pub fn add_dataset_scoped(
         &mut self,
         dataset: &crate::RdfDataset,
@@ -262,7 +244,13 @@ impl SnapshotBuilder {
                 scope,
                 "reified object",
             )?;
-            self.bind_reifier(rid, (qs, qp, qo));
+            let gid = match &reifier.graph {
+                None => default_gid,
+                Some(graph) => {
+                    Some(self.intern_required_native_term(graph, scope, "reifier graph name")?)
+                }
+            };
+            self.reifies.push((rid, (qs, qp, qo), gid));
         }
         for annot in dataset.owned_annotations() {
             let rid =
@@ -270,7 +258,13 @@ impl SnapshotBuilder {
             let pid = self.intern_iri(&annot.predicate);
             let oid =
                 self.intern_required_native_term(&annot.object, scope, "annotation object")?;
-            self.annot.push((rid, pid, oid));
+            let gid = match &annot.graph {
+                None => default_gid,
+                Some(graph) => {
+                    Some(self.intern_required_native_term(graph, scope, "annotation graph name")?)
+                }
+            };
+            self.annot.push((rid, pid, oid, gid));
         }
         Ok(())
     }
@@ -381,21 +375,27 @@ impl SnapshotBuilder {
         // several bindings (`rdf:reifies` is not functional), so sorting by the
         // reifier id alone would leave their order to the ingestion order —
         // and the emitted bytes must be a pure function of the content.
-        let mut reifies: Vec<(usize, (usize, usize, usize))> = self
+        let mut reifies: Vec<ReifierRow> = self
             .reifies
             .iter()
-            .map(|&(rid, (s, p, o))| (remap[rid], (remap[s], remap[p], remap[o])))
+            .map(|&(rid, (s, p, o), g)| {
+                (
+                    remap[rid],
+                    (remap[s], remap[p], remap[o]),
+                    g.map(|g| remap[g]),
+                )
+            })
             .collect();
         reifies.sort_unstable();
         reifies.dedup();
 
         // Annot: remap, dedup, sort.
-        let mut annot_set: std::collections::BTreeSet<(usize, usize, usize)> =
+        let mut annot_set: std::collections::BTreeSet<AnnotationRow> =
             std::collections::BTreeSet::new();
-        for &(r, p, v) in &self.annot {
-            annot_set.insert((remap[r], remap[p], remap[v]));
+        for &(r, p, v, g) in &self.annot {
+            annot_set.insert((remap[r], remap[p], remap[v], g.map(|g| remap[g])));
         }
-        let annot: Vec<(usize, usize, usize)> = annot_set.into_iter().collect();
+        let annot: Vec<AnnotationRow> = annot_set.into_iter().collect();
 
         (wire_terms, quads, reifies, annot)
     }
@@ -437,16 +437,20 @@ impl SnapshotBuilder {
             ),
         ];
         if !reifies.is_empty() {
-            // purrdf-gts 0.9.11 wire: `reifies` is a row-array `[[rid, s, p, o, g?], …]`
-            // (was a reifier-id map). purrdf reification is standpoint-scoped, never
-            // graph-scoped, so no row carries the optional trailing graph term-id —
-            // matching the gts writer's `add_reifies` / snapshot payload byte-for-byte.
+            // The optional trailing graph term-id is part of each binding's identity.
+            // Default-graph rows retain their existing four-item encoding.
             entries.push((
                 "reifies".into(),
                 Value::Array(
                     reifies
                         .iter()
-                        .map(|&(rid, (s, p, o))| Value::Array(vec![iv(rid), iv(s), iv(p), iv(o)]))
+                        .map(|&(rid, (s, p, o), g)| {
+                            let mut row = vec![iv(rid), iv(s), iv(p), iv(o)];
+                            if let Some(g) = g {
+                                row.push(iv(g));
+                            }
+                            Value::Array(row)
+                        })
                         .collect(),
                 ),
             ));
@@ -457,7 +461,13 @@ impl SnapshotBuilder {
                 Value::Array(
                     annot
                         .iter()
-                        .map(|&(r, p, v)| Value::Array(vec![iv(r), iv(p), iv(v)]))
+                        .map(|&(r, p, v, g)| {
+                            let mut row = vec![iv(r), iv(p), iv(v)];
+                            if let Some(g) = g {
+                                row.push(iv(g));
+                            }
+                            Value::Array(row)
+                        })
                         .collect(),
                 ),
             ));
@@ -978,6 +988,113 @@ mod tests {
         let mut again = SnapshotBuilder::default();
         again.add_dataset(&ds).expect("ingest");
         assert_eq!(again.canonical_tables().2, reifies);
+    }
+
+    #[test]
+    fn statement_layer_graphs_survive_snapshot_composition() {
+        let graphs = ["", "<https://example.org/world-a>", "_:world-b"];
+        let sources: Vec<_> = graphs
+            .iter()
+            .map(|graph| {
+                parse_dataset(
+                    format!(
+                        r#"{graph} {{
+                            <https://example.org/claim>
+                                <{RDF_REIFIES}>
+                                <<( <https://example.org/s> <https://example.org/p> "مرحبا"@ar--rtl )>> ;
+                                <https://example.org/accordingTo> <https://example.org/observer> .
+                            <https://example.org/record> <https://example.org/cites> <https://example.org/claim> .
+                        }}"#
+                    )
+                    .as_bytes(),
+                    "application/trig",
+                    None,
+                )
+                .expect("parse statement graph")
+            })
+            .collect();
+        let mut builder = SnapshotBuilder::new();
+        let mut reversed = SnapshotBuilder::new();
+        for source in &sources {
+            builder.add_dataset(source).unwrap();
+        }
+        for source in sources.iter().rev() {
+            reversed.add_dataset(source).unwrap();
+            reversed.add_dataset(source).unwrap();
+        }
+        assert_eq!(builder.snapshot_payload(), reversed.snapshot_payload());
+        let (_, quads, reifiers, annotations) = builder.canonical_tables();
+        assert_eq!(quads.len(), 3);
+        assert_eq!(
+            reifiers.len(),
+            3,
+            "the same binding belongs to three graphs"
+        );
+        assert_eq!(annotations.len(), 3);
+        let bytes = emit_gts(
+            &builder,
+            "dist",
+            Some(vec!["identity".to_owned()]),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+            &MediumPlan::undicted(None),
+        )
+        .unwrap();
+        let actual =
+            crate::gts::dataset_from_gts_graph(&purrdf_gts::reader::read(&bytes, true, None))
+                .unwrap();
+        let expected =
+            crate::RdfDataset::union(&sources.iter().map(AsRef::as_ref).collect::<Vec<_>>());
+        assert_eq!(
+            crate::canonical_flat_nquads(&actual).unwrap(),
+            crate::canonical_flat_nquads(&expected).unwrap(),
+        );
+    }
+
+    #[test]
+    fn scoped_ingestion_relocates_all_default_graph_record_kinds() {
+        let source = parse_dataset(
+            format!(
+                r"_:claim <{RDF_REIFIES}> <<( _:s <https://example.org/p> _:o )>> ;
+                    <https://example.org/evidence> _:s .
+                _:record <https://example.org/cites> _:claim .
+                _:world {{
+                    _:claim <{RDF_REIFIES}> <<( _:s <https://example.org/p> _:o )>> ;
+                        <https://example.org/evidence> _:s .
+                    _:record <https://example.org/cites> _:claim .
+                }}"
+            )
+            .as_bytes(),
+            "application/trig",
+            None,
+        )
+        .unwrap();
+        let mut builder = SnapshotBuilder::new();
+        builder
+            .add_dataset_scoped(
+                &source,
+                Some("https://example.org/selected"),
+                Some("source"),
+            )
+            .unwrap();
+        let (terms, quads, reifiers, annotations) = builder.canonical_tables();
+        let graph_ids: std::collections::BTreeSet<_> = quads.iter().map(|q| q.3).collect();
+        assert!(!graph_ids.contains(&None));
+        assert_eq!(graph_ids.len(), 2);
+        assert_eq!(graph_ids, reifiers.iter().map(|r| r.2).collect());
+        assert_eq!(graph_ids, annotations.iter().map(|a| a.3).collect());
+        assert!(
+            terms
+                .iter()
+                .filter(|t| t.kind == TermKind::Bnode)
+                .all(|t| { t.value.as_deref().unwrap().starts_with("source-") })
+        );
+        assert!(reifiers.iter().all(|r| r.0 == reifiers[0].0));
+        assert!(annotations.iter().all(|a| a.0 == reifiers[0].0));
     }
 
     #[test]
