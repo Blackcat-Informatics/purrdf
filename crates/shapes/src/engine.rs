@@ -1711,12 +1711,13 @@ mod tests {
 
     // ── The shapes graph's base ────────────────────────────────────────────────
 
-    /// A shapes graph whose shape node is a RELATIVE IRI reference.
+    /// A shapes graph whose node and property shapes are RELATIVE IRI references.
     const RELATIVE_SHAPES: &str = concat!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
         "<PersonShape> a sh:NodeShape ;\n",
         "  sh:targetClass <http://example.org/Person> ;\n",
-        "  sh:property [ sh:path <http://example.org/name> ; sh:minCount 1 ] .\n",
+        "  sh:property <NamePropertyShape> .\n",
+        "<NamePropertyShape> sh:path <http://example.org/name> ; sh:minCount 1 .\n",
     );
 
     #[test]
@@ -1780,14 +1781,15 @@ mod tests {
         assert_eq!(report.results.len(), 1, "the shape applies");
         assert_eq!(
             report.results[0].source_shape.to_string(),
-            "<http://a.example/PersonShape>"
+            "<http://a.example/NamePropertyShape>"
         );
 
         let other = validate_graphs(data, RELATIVE_SHAPES, Some("http://b.example/s.ttl"))
             .expect("validation runs under a different base");
+        assert_eq!(other.results.len(), 1, "the same constraint still applies");
         assert_eq!(
             other.results[0].source_shape.to_string(),
-            "<http://b.example/PersonShape>",
+            "<http://b.example/NamePropertyShape>",
             "a different base must produce a different resolved shape IRI — proving the \
              parameter is read rather than accepted and dropped"
         );
@@ -2483,7 +2485,7 @@ mod tests {
             r#"
             ex:AskClassComponent a sh:ConstraintComponent ;
                 sh:parameter [ sh:path ex:requiredClass ] ;
-                sh:nodeValidator [
+                sh:validator [
                     a sh:SPARQLAskValidator ;
                     sh:ask "ASK { $this a $requiredClass }" ;
                 ] .

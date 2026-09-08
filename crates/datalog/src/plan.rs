@@ -1731,7 +1731,7 @@ mod tests {
         for seed in 0..32u64 {
             let order = permute(&identity, seed);
             let swaps = restore_body_order_swaps(&order);
-            let mut applied = order.clone();
+            let mut applied = order;
             for &(a, b) in &swaps {
                 applied.swap(a, b);
             }

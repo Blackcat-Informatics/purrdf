@@ -320,6 +320,9 @@ pub enum Constraint {
 /// A property shape, reached via `sh:property` from a node shape.
 #[derive(Debug, Clone)]
 pub struct PropertyShape {
+    /// The property shape's own RDF identity, preserved for result provenance
+    /// and SHACL-SPARQL `currentShape` bindings.
+    pub id: Term,
     /// The property path this shape applies to.
     pub path: Path,
     /// Constraints on values reached via the path.
@@ -557,7 +560,7 @@ pub(crate) struct Parser<'s> {
     /// Registry of SHACL-AF `sh:SPARQLTargetType` declarations declared in the
     /// shapes graph. Populated before shape parsing so target-type instances can
     /// be resolved during target parsing.
-    target_types: std::collections::BTreeMap<String, SparqlTargetType>,
+    target_types: std::collections::BTreeMap<String, parser::target_types::ParsedTargetType>,
     /// The shared top-level-shape index handed to every `sh:nodeByExpression`
     /// constraint (SHACL 1.2 Node Expressions §7.2).
     ///
@@ -723,6 +726,8 @@ impl<'s> Parser<'s> {
     }
 
     fn parse(&mut self) -> Result<Shapes, String> {
+        self.check_builtin_cardinalities()?;
+
         // --- collect all top-level shape node terms ---
         let mut shape_ids: FastSet<Term> = FastSet::default();
         // Track which nodes are property-shape-only (reachable only via sh:property)
@@ -739,12 +744,13 @@ impl<'s> Parser<'s> {
             property_shape_nodes.insert(subject);
         }
 
-        // 3. Subjects of sh:targetClass / sh:targetSubjectsOf / sh:targetObjectsOf / sh:targetNode
+        // 3. Subjects of Core target predicates and SHACL-AF sh:target.
         for pred in [
             sh::TARGET_CLASS,
             sh::TARGET_SUBJECTS_OF,
             sh::TARGET_OBJECTS_OF,
             sh::TARGET_NODE,
+            sh::TARGET,
         ] {
             for (subject, _, _) in self.quads_with(None, Some(pred), None) {
                 shape_ids.insert(subject);
@@ -862,7 +868,11 @@ impl<'s> Parser<'s> {
             box_role_vocab: self.box_role_vocab.clone(),
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::new()),
-            target_types: self.target_types.clone(),
+            target_types: self
+                .target_types
+                .iter()
+                .map(|(iri, parsed)| (iri.clone(), parsed.declaration.clone()))
+                .collect(),
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
         })
@@ -974,19 +984,22 @@ impl<'s> Parser<'s> {
 
     /// Return all objects for `(subject, predicate, ?)`.
     fn objects_of(&self, subject: &Term, predicate: &str) -> Vec<Term> {
-        if !subject.is_subject() {
+        let Some(subject_id) = crate::data::resolve_id(self.data, subject) else {
             return vec![];
-        }
-        let pred = Term::NamedNode(NamedNode::from(predicate));
-        native_quads(
+        };
+        let Some(predicate_id) = self.data.term_id_by_iri(predicate) else {
+            return vec![];
+        };
+        let mut seen = ::purrdf::IdSet::default();
+        crate::data::quads_for_pattern_ids(
             self.data,
-            Some(subject),
-            Some(&pred),
+            Some(subject_id),
+            Some(predicate_id),
             None,
             GraphFilter::AnyGraph,
         )
-        .into_iter()
-        .map(|(_, _, object)| object)
+        .filter(|quad| seen.insert(quad.o))
+        .map(|quad| crate::term::term_id_to_native(self.data, quad.o))
         .collect()
     }
 
@@ -1227,7 +1240,7 @@ impl<'s> Parser<'s> {
             // Not a plain SPARQLTarget: look for an rdf:type that names a declared
             // sh:SPARQLTargetType.
             let type_terms: Vec<Term> = self.objects_of(&t_node, rdf::TYPE);
-            let mut matched: Option<(NamedNode, SparqlTargetType)> = None;
+            let mut matched: Option<(NamedNode, parser::target_types::ParsedTargetType)> = None;
             for t in type_terms {
                 if let Term::NamedNode(n) = &t
                     && let Some(target_type) = self.target_types.get(n.as_str())
@@ -1242,9 +1255,14 @@ impl<'s> Parser<'s> {
                      is neither typed sh:SPARQLTarget nor a declared sh:SPARQLTargetType"
                 ));
             };
+            let parser::target_types::ParsedTargetType {
+                declaration: target_type,
+                optional_predicates,
+            } = target_type;
 
             // Collect parameter bindings from the target instance.
             let mut substitutions: Vec<(String, Term)> = Vec::new();
+            let mut missing_required = false;
             for param in &target_type.params {
                 let values = self.objects_of(&t_node, param.predicate.as_str());
                 if values.len() > 1 {
@@ -1255,12 +1273,22 @@ impl<'s> Parser<'s> {
                     ));
                 }
                 let Some(value) = values.into_iter().next() else {
+                    missing_required |= !optional_predicates.contains(&param.predicate);
+                    continue;
+                };
+                if matches!(value, Term::BlankNode(_)) {
                     return Err(format!(
-                        "sh:target instance of <{type_iri}> on shape {id} is missing required parameter <{pred}>",
+                        "sh:target instance of <{type_iri}> on shape {id} has a blank node value for parameter <{pred}>, which is not allowed",
                         pred = param.predicate.as_str()
                     ));
-                };
+                }
                 substitutions.push((param.var.clone(), value));
+            }
+            // SHACL-AF target instances lacking any mandatory parameter
+            // contribute no focus nodes. Check every supplied parameter before
+            // applying this activation rule so malformed values still fail.
+            if missing_required {
+                continue;
             }
 
             // Build the query with prefixes from the shape, the target instance,
@@ -1380,6 +1408,7 @@ impl<'s> Parser<'s> {
         }
 
         Ok(PropertyShape {
+            id: ps_node.clone(),
             path,
             constraints,
             property_shapes,
