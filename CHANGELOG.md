@@ -30,6 +30,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   ordinary rows, preserving graph-set semantics in SPARQL counts and validation.
   Disabled statement projection skips metadata reads, and bound subject probes
   use the source's metadata indexes.
+- **rdf/viz:** Properties of a known reifier render as annotation relations even
+  when their graph differs from the reification declaration. Every relation keeps
+  its original graph, and parsed and incrementally built datasets produce the
+  same visual model. Corrected cross-graph visual models change newly generated
+  visualization JSON, SVG and model hashes; RDF carrier records are unchanged.
 - **sparql:** Compiler-built, rewritten and caller-mutated prepared algebra now
   passes structural and registry validation before execution. Malformed binding
   rows and excessively deep execution plans return diagnostics instead of

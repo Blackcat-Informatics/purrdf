@@ -2538,10 +2538,10 @@ fn invalid_term_kind_yields_invalid_argument() {
 #[test]
 fn invalid_direction_yields_invalid_argument() {
     unsafe {
-        for direction in [
-            99,
-            purrdf::term::PurrdfDirection::Ltr as i32,
-            purrdf::term::PurrdfDirection::Rtl as i32,
+        for (direction, language) in [
+            (99, "en"),
+            (purrdf::term::PurrdfDirection::Ltr as i32, ""),
+            (purrdf::term::PurrdfDirection::Rtl as i32, ""),
         ] {
             let lex = "hello";
             let dt = "http://www.w3.org/2001/XMLSchema#string";
@@ -2556,8 +2556,8 @@ fn invalid_direction_yields_invalid_argument() {
                     len: dt.len(),
                 },
                 language: PurrdfStr {
-                    ptr: std::ptr::null(),
-                    len: 0,
+                    ptr: language.as_ptr(),
+                    len: language.len(),
                 },
                 direction,
                 blank_scope: 0,
@@ -2574,7 +2574,7 @@ fn invalid_direction_yields_invalid_argument() {
             assert_eq!(
                 status,
                 PurrdfStatus::InvalidArgument as i32,
-                "expected InvalidArgument for direction {direction} without language"
+                "expected InvalidArgument for direction {direction} and language {language:?}"
             );
             assert!(buffer.is_null());
             assert!(!error.is_null());

@@ -398,7 +398,7 @@ fn reconcile_schema(
                             ),
                         ));
                     }
-                    column.titles = embedded.clone();
+                    column.titles = embedded;
                 } else if !titles_compatible(&column.titles, &embedded) {
                     warnings.push(CsvwWarning::new(
                         CsvwWarningKind::Validation,

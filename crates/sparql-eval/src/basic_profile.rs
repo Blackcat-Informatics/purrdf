@@ -293,7 +293,11 @@ fn check_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
 }
 
 fn check_aggregate(agg: &AggregateExpression) -> Result<(), EvalError> {
-    for e in agg.args() {
+    for e in agg
+        .args()
+        .iter()
+        .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+    {
         check_expression(e)?;
     }
     Ok(())

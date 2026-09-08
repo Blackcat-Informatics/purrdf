@@ -822,6 +822,47 @@ mod tests {
     }
 
     #[test]
+    fn visualization_preserves_cross_graph_roles_after_quad_insertion() {
+        let parsed = Dataset::parse(
+            concat!(
+                "<https://example.org/alice> <https://example.org/knows> <https://example.org/bob> <https://example.org/facts> .\n",
+                "<https://example.org/claim> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/alice> <https://example.org/knows> <https://example.org/bob> )>> <https://example.org/claims> .\n",
+                "<https://example.org/claim> <https://example.org/confidence> \"0.8\"^^<http://www.w3.org/2001/XMLSchema#decimal> <https://example.org/provenance> .\n",
+            ),
+            "nquads",
+            None,
+        )
+        .expect("parse");
+        let mut added = Dataset::new().expect("empty");
+        for quad in parsed.quads().expect("quads") {
+            added.add(&quad).expect("add");
+        }
+        let model: serde_json::Value =
+            serde_json::from_str(&added.visual_model_json(None).expect("model")).expect("JSON");
+        assert_eq!(model["statements"].as_array().map(Vec::len), Some(1));
+        assert_eq!(model["assertions"].as_array().map(Vec::len), Some(1));
+        assert_eq!(model["relations"].as_array().map(Vec::len), Some(2));
+        for options in [
+            None,
+            Some(r#"{"graph":"https://example.org/facts"}"#.to_owned()),
+            Some(r#"{"graph":"https://example.org/claims"}"#.to_owned()),
+            Some(r#"{"graph":"https://example.org/provenance"}"#.to_owned()),
+        ] {
+            assert_eq!(
+                added
+                    .visual_model_json(options.clone())
+                    .expect("added model"),
+                parsed.visual_model_json(options).expect("parsed model"),
+            );
+        }
+        assert_eq!(added.size(), 3);
+        assert_eq!(
+            added.serialize("nquads", None).expect("serialize added"),
+            parsed.serialize("nquads", None).expect("serialize parsed"),
+        );
+    }
+
+    #[test]
     fn parse_then_serialize_round_trips_ntriples() {
         let input = "<https://e/s> <https://e/p> <https://e/o> .\n";
         let ds = Dataset::parse(input, "ntriples", None).unwrap();
