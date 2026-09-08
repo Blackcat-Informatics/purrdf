@@ -9,7 +9,7 @@ use super::{
     Arc, Cow, DatasetView, FallibleDatasetView, FallibleSparqlError, GovernedEvidence,
     GovernorState, NativeSparqlEngine, PreparedQuery, Query, QueryOptions, RdfDiagnostic,
     ShaclPrebinding, TermValue, ViewOperationStatus, apply_query_options, certain_partial,
-    check_plan_matches_relations, empty_result_for, eval_diagnostic_code, query_pattern,
+    check_plan_matches_relations, empty_result_for, eval_diagnostic_code,
 };
 
 /// Work performed when a complete typed graph is appended to its destination.
@@ -249,8 +249,6 @@ impl NativeSparqlEngine {
         state: Option<&Arc<GovernorState>>,
     ) -> Result<(), GraphBuildError> {
         check_plan_matches_relations(prepared, options)?;
-        crate::governor::soundness::validate_graph_pattern_depth(query_pattern(&prepared.query))
-            .map_err(|error| query_error(&error))?;
         if !matches!(prepared.query, Query::Construct { .. }) {
             return Err(RdfDiagnostic::error(
                 "native-sparql-construct",

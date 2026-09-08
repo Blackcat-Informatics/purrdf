@@ -320,13 +320,20 @@ fn mutated_construct_is_depth_admitted_before_survey_or_substitution() {
             }),
         };
     }
+    algebra
+        .validate()
+        .expect("structurally valid algebra still requires execution-depth admission");
     // Public algebra remains mutable, so the publication entry must re-admit it.
     let mut prepared =
         purrdf_sparql_eval::PreparedQuery::rewritten(prepared.query.clone(), QueryOptions::EMPTY)
             .expect("owned admitted plan");
     prepared.query = algebra;
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+    let before = state.evidence();
     let mut target = RdfDatasetBuilder::new();
+    let existing = target.intern_iri("https://example.org/existing");
+    let predicate = target.intern_iri(VALUE);
+    target.push_quad(existing, predicate, existing, None);
     let result = engine.construct_prepared_in_operation_into_view(
         data.as_ref(),
         &prepared,
@@ -335,8 +342,22 @@ fn mutated_construct_is_depth_admitted_before_survey_or_substitution() {
         &state,
         &mut target,
     );
-    assert!(matches!(result, Err(GraphBuildError::Query(_))));
-    assert_eq!(target.freeze().expect("untouched").quad_count(), 0);
+    let Err(GraphBuildError::Query(diagnostic)) = result else {
+        panic!("excessive execution depth must be refused")
+    };
+    assert_eq!(
+        diagnostic.code,
+        "native-sparql-graph-pattern-depth-exceeded"
+    );
+    assert_eq!(state.evidence(), before, "admission precedes governor work");
+    let output = target.freeze().expect("untouched destination");
+    assert_eq!(output.term_count(), 2);
+    assert_eq!(output.quad_count(), 1);
+    assert!(
+        output
+            .quads()
+            .all(|quad| quad.s == existing && quad.o == existing)
+    );
 }
 
 #[test]
