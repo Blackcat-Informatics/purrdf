@@ -806,17 +806,17 @@ fn license(
                 match constraint {
                     Constraint::Values { predicate, class } => {
                         licences.push(Membership::Class.establish(closure, class)?);
-                        minted.push([node.clone(), TermValue::iri(*predicate), class.clone()]);
+                        minted.push([node, TermValue::iri(*predicate), class.clone()]);
                     }
                     // Every IRI denotes a resource, so `owl:hasValue` over a named
                     // individual carries no further condition to establish.
                     Constraint::HasValue(value) => {
-                        minted.push([node.clone(), TermValue::iri(OWL_HASVALUE), value.clone()]);
+                        minted.push([node, TermValue::iri(OWL_HASVALUE), value.clone()]);
                     }
                     // The count's membership of the non-negative integers was decided by
                     // VALUE when the constraint was read, and no closure triple states it.
                     Constraint::Cardinality { predicate, count } => {
-                        minted.push([node.clone(), TermValue::iri(*predicate), count.clone()]);
+                        minted.push([node, TermValue::iri(*predicate), count.clone()]);
                     }
                 }
             }

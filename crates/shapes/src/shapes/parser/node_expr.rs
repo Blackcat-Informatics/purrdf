@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 
-use crate::components::{Component, Validator, ValidatorKind, severity_from_term};
+use crate::components::{Component, ValidatorKind, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -460,9 +460,9 @@ impl Parser<'_> {
         // for all required parameters of a declared component is treated as a
         // usage of that component. Components are processed in deterministic
         // order; parameter bindings follow the component's declared parameter
-        // order. All validators applicable to the current shape scope are
-        // emitted as separate constraints; if none apply, the component is
-        // skipped silently.
+        // order. Each parameter instance is independent. Scope-specific
+        // validators take precedence over generic validators; if none apply,
+        // SHACL-SPARQL requires that the component be ignored.
         let shape_severity = self
             .first_object_of(id, sh::SEVERITY)
             .and_then(|t| severity_from_term(&t));
@@ -480,104 +480,58 @@ impl Parser<'_> {
         let mut components: Vec<&Component> = self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
         for component in components {
-            let binding_groups = self.component_binding_groups(id, component)?;
-
-            let matching: Vec<&Validator> = if is_property_shape {
-                component
-                    .property_validators
-                    .iter()
-                    .chain(component.validators.iter())
-                    .collect()
-            } else {
-                component
-                    .node_validators
-                    .iter()
-                    .chain(component.validators.iter())
-                    .collect()
-            };
-            if matching.is_empty() {
+            let instances = component.instantiate(id, |path| self.objects_of(id, path))?;
+            if instances.is_empty() {
                 continue;
             }
 
-            for bindings in binding_groups {
-                for validator in &matching {
-                    let component_validator = match &validator.kind {
-                        ValidatorKind::Ask => ComponentValidator::Ask {
-                            ask: validator.query_text.clone(),
-                        },
-                        ValidatorKind::Select => ComponentValidator::Select {
-                            select: validator.query_text.clone(),
-                        },
-                    };
+            // Scope-specific validators take precedence over the generic ASK
+            // fallback (SHACL-SPARQL §4.2.3).
+            let scoped = if is_property_shape {
+                &component.property_validators
+            } else {
+                &component.node_validators
+            };
+            let matching = if scoped.is_empty() {
+                &component.validators
+            } else {
+                scoped
+            };
+            let Some(validator) = matching.first() else {
+                continue;
+            };
 
-                    let severity = shape_severity
-                        .clone()
-                        .or_else(|| validator.severity.clone())
-                        .or_else(|| component.severity.clone());
-                    let message = shape_message
-                        .clone()
-                        .or_else(|| validator.message.clone())
-                        .or_else(|| component.message.clone());
+            for bindings in instances {
+                let component_validator = match &validator.kind {
+                    ValidatorKind::Ask => ComponentValidator::Ask {
+                        ask: validator.query_text.clone(),
+                    },
+                    ValidatorKind::Select => ComponentValidator::Select {
+                        select: validator.query_text.clone(),
+                    },
+                };
 
-                    constraints.push(Constraint::Component {
-                        component: component.id.clone(),
-                        source_shape: id.clone(),
-                        bindings: bindings.clone(),
-                        validator: component_validator,
-                        message,
-                        severity,
-                    });
-                }
+                let severity = shape_severity
+                    .clone()
+                    .or_else(|| validator.severity.clone())
+                    .or_else(|| component.severity.clone());
+                let message = shape_message
+                    .clone()
+                    .or_else(|| validator.message.clone())
+                    .or_else(|| component.message.clone());
+
+                constraints.push(Constraint::Component {
+                    component: component.id.clone(),
+                    source_shape: id.clone(),
+                    bindings,
+                    validator: component_validator,
+                    message,
+                    severity,
+                });
             }
         }
 
         Ok(constraints)
-    }
-
-    /// SHACL 1.2 Core section 3.1.1 (and SHACL 2017 section 2.1.1): each
-    /// value of a single-parameter component declares an independent constraint.
-    /// Multi-parameter components still require at most one value per parameter.
-    /// https://www.w3.org/TR/shacl12-core/#constraints
-    fn component_binding_groups(
-        &self,
-        id: &Term,
-        component: &Component,
-    ) -> Result<Vec<Vec<(String, Term)>>, String> {
-        if let [param] = component.parameters.as_slice() {
-            let mut values = self.objects_of(id, param.path.as_str());
-            crate::term::sort_terms_canonical(&mut values);
-            if values.is_empty() && param.optional {
-                return Ok(vec![vec![]]);
-            }
-            return Ok(values
-                .into_iter()
-                .map(|value| vec![(param.name.clone(), value)])
-                .collect());
-        }
-        let mut bindings: Vec<(String, Term)> = Vec::new();
-        let mut missing_required = false;
-        for param in &component.parameters {
-            let values = self.objects_of(id, param.path.as_str());
-            if values.len() > 1 {
-                return Err(format!(
-                    "shape {id} declares {count} values for parameter <{path}> of component <{component}>, only one is allowed",
-                    count = values.len(),
-                    path = param.path,
-                    component = component.id
-                ));
-            }
-            if let Some(value) = values.into_iter().next() {
-                bindings.push((param.name.clone(), value));
-            } else if !param.optional {
-                missing_required = true;
-                break;
-            }
-        }
-        if missing_required {
-            return Ok(vec![]);
-        }
-
-        Ok(vec![bindings])
     }
 
     /// Parse the qualified-value-shape constraint(s) declared on `id`.

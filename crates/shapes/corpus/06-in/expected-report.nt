@@ -1,6 +1,6 @@
 _:r0 <http://www.w3.org/ns/shacl#value> "#800080" .
 _:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/ns#hex> .
-_:r0 <http://www.w3.org/ns/shacl#sourceShape> <http://example.org/ns#ColorShape> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
 _:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#InConstraintComponent> .
 _:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
 _:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/ns#purple> .

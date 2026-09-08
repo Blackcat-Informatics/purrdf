@@ -1,6 +1,6 @@
 _:r0 <http://www.w3.org/ns/shacl#value> "123"^^<http://www.w3.org/2001/XMLSchema#integer> .
 _:r0 <http://www.w3.org/ns/shacl#resultPath> <http://example.org/ns#p> .
-_:r0 <http://www.w3.org/ns/shacl#sourceShape> <http://example.org/ns#ValShape> .
+_:r0 <http://www.w3.org/ns/shacl#sourceShape> _:gts_00000000000000000000000000 .
 _:r0 <http://www.w3.org/ns/shacl#sourceConstraintComponent> <http://www.w3.org/ns/shacl#OrConstraintComponent> .
 _:r0 <http://www.w3.org/ns/shacl#resultSeverity> <http://www.w3.org/ns/shacl#Violation> .
 _:r0 <http://www.w3.org/ns/shacl#focusNode> <http://example.org/ns#val> .

@@ -821,12 +821,8 @@ fn a_non_integer_count_is_refused_and_a_derived_integer_type_is_not() {
         TermValue::typed_literal("two", "http://www.w3.org/2001/XMLSchema#string"),
         iri("a"),
     ] {
-        let error = invoke(
-            &relation,
-            &[None, Some(iri("a")), Some(bad.clone()), None],
-            None,
-        )
-        .expect_err("there is no number of neighbours that names");
+        let error = invoke(&relation, &[None, Some(iri("a")), Some(bad), None], None)
+            .expect_err("there is no number of neighbours that names");
         assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
     }
 
