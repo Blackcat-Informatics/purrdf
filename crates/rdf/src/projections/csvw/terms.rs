@@ -684,7 +684,10 @@ impl CsvwTermsConfig {
                             column.name
                         )));
                     }
-                    if datatype.base == self.csvw.vocabulary().rdf("langString") {
+                    if ["langString", "dirLangString"]
+                        .iter()
+                        .any(|local| datatype.base == self.csvw.vocabulary().rdf(local))
+                    {
                         return Err(ProjectionError::configuration(format!(
                             "CSVW terms literal column `{}` must express language through the CSVW lang property, not an RDF langString datatype",
                             column.name
@@ -1346,7 +1349,13 @@ fn cell_value(
         ) if actual_datatype
             == &language.as_ref().map_or_else(
                 || datatype.base.clone(),
-                |_| config.vocabulary().rdf("langString"),
+                |_| {
+                    config.vocabulary().rdf(if direction.is_some() {
+                        "dirLangString"
+                    } else {
+                        "langString"
+                    })
+                },
             )
             && actual_language == language
             && actual_direction == direction =>

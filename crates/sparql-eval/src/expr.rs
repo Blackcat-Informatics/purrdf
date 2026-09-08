@@ -1141,7 +1141,11 @@ fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
             out.extend(variables.iter().cloned());
             for (v, agg) in aggregates {
                 out.insert(v.clone());
-                for arg in agg.args() {
+                for arg in agg
+                    .args()
+                    .iter()
+                    .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                {
                     expr_vars(arg, out);
                 }
             }
@@ -8274,6 +8278,24 @@ mod tests {
     // (never an expression position of its own) was invisible to the
     // enclosing `exists()` call's correlation test, which then wrongly took
     // the evaluate-once-and-probe fast path.
+
+    #[test]
+    fn nested_aggregate_sort_key_variables_participate_in_values_insertion() {
+        let query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query(
+                "SELECT (FOLD(?v ORDER BY ASC(?sort_only) \
+                 DESC(EXISTS { ?nested_only <http://example.org/p> ?o })) AS ?list) \
+                 WHERE { VALUES ?v { 1 } }",
+            )
+            .unwrap();
+        let purrdf_sparql_algebra::Query::Select { pattern, .. } = query else {
+            panic!("SELECT fixture");
+        };
+        let mut variables = DetHashSet::default();
+        expr_vars(&Expression::Exists(Box::new(pattern)), &mut variables);
+        assert!(variables.contains(&Variable::new("sort_only")));
+        assert!(variables.contains(&Variable::new("nested_only")));
+    }
 
     fn f3_nested_exists_ds() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();

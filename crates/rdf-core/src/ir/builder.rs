@@ -17,7 +17,6 @@
 //! no-optionality doctrine, malformed structure is a HARD failure (`Err`), never a
 //! silent default.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -32,10 +31,7 @@ use crate::{
 };
 
 use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
-use super::term::{
-    BlankScope, InternedLiteral, InternedTerm, RDF_LANG_STRING, StrRange, TermId, XSD_STRING,
-    arena_str,
-};
+use super::term::{BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str};
 use crate::RdfLocation;
 
 /// A fixed-key hash of a value, so the store-once tables are deterministic across
@@ -229,6 +225,8 @@ struct Interner {
     /// other structural invariant too, and once one is recorded the dataset can
     /// never be frozen, so later ones cannot change the outcome.
     relative_iri: Option<(String, IriError)>,
+    /// First invalid literal shape, refused at the existing validation boundary.
+    invalid_literal: Option<&'static str>,
 }
 
 impl Interner {
@@ -240,6 +238,7 @@ impl Interner {
             content_scheme: None,
             content_ids: HashMap::default(),
             relative_iri: None,
+            invalid_literal: None,
         }
     }
 
@@ -582,13 +581,16 @@ impl RdfDatasetBuilder {
 
     /// Intern a literal, applying the C0.1 identity policy:
     ///
-    /// - A language tag → datatype `rdf:langString`; the language is lowercased
-    ///   for the key.
+    /// - A language tag → datatype `rdf:dirLangString` with a base direction,
+    ///   otherwise `rdf:langString`; the language is lowercased for the key.
     /// - Otherwise an explicit datatype → that datatype.
     /// - Otherwise → `xsd:string`.
     ///
     /// The datatype is always stored as an interned IRI [`TermId`]. The lexical
     /// form is preserved byte-for-byte; base direction participates in identity.
+    /// Invalid language/datatype/direction combinations are recorded and refused
+    /// by [`validate`](Self::validate) or [`freeze`](Self::freeze), preserving this
+    /// method's infallible builder interface without publishing invalid RDF.
     ///
     /// # A composite literal also interns the blank nodes it names
     ///
@@ -610,37 +612,29 @@ impl RdfDatasetBuilder {
     /// The scan is guarded by the datatype IRI, so an ordinary literal pays two
     /// string comparisons and nothing more.
     pub fn intern_literal(&mut self, lit: RdfLiteral) -> TermId {
-        let RdfLiteral {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } = lit;
-
-        // C0.1: a language tag forces rdf:langString and a lowercased language key,
-        // regardless of any (illegal) explicit datatype on the input literal.
-        // Borrowed for the two constant datatypes, moved (not copied) for an
-        // explicit one: no per-literal `String` is minted for the datatype IRI.
-        let (datatype_iri, language_key): (Cow<'static, str>, Option<String>) = match language {
-            Some(lang) => (Cow::Borrowed(RDF_LANG_STRING), Some(lang.to_lowercase())),
-            None => match datatype {
-                Some(dt) => (Cow::Owned(dt), None),
-                None => (Cow::Borrowed(XSD_STRING), None),
-            },
-        };
-
-        let datatype_id = self.intern_iri(&datatype_iri);
+        let datatype_iri = lit.datatype_iri();
+        if self.interner.invalid_literal.is_none() {
+            self.interner.invalid_literal = RdfLiteral::validate_components(
+                datatype_iri,
+                lit.language.as_deref(),
+                lit.direction,
+            )
+            .err();
+        }
+        let datatype_id = self.intern_iri(datatype_iri);
 
         // A composite literal's embedded labels are blank nodes of this dataset.
-        for (label, scope) in crate::cdt_blank::cdt_embedded_blanks(&lexical_form, &datatype_iri) {
+        for (label, scope) in crate::cdt_blank::cdt_embedded_blanks(&lit.lexical_form, datatype_iri)
+        {
             self.intern_blank(&label, scope);
         }
 
+        let language_key = lit.language.map(|lang| lang.to_lowercase());
         self.interner.intern(TermLookup::Literal {
-            lexical: &lexical_form,
+            lexical: &lit.lexical_form,
             datatype: datatype_id,
             language: language_key.as_deref(),
-            direction,
+            direction: lit.direction,
         })
     }
 
@@ -677,11 +671,7 @@ impl RdfDatasetBuilder {
         // The C0.1 datatype the literal will actually carry: a language tag wins
         // over any explicit datatype, and a language-tagged literal is never
         // composite.
-        let datatype_iri = match (&lit.language, &lit.datatype) {
-            (Some(_), _) => RDF_LANG_STRING,
-            (None, Some(dt)) => dt.as_str(),
-            (None, None) => XSD_STRING,
-        };
+        let datatype_iri = lit.datatype_iri();
         if !crate::cdt_blank::is_cdt_datatype(datatype_iri) {
             return Ok(self.intern_literal(lit));
         }
@@ -1017,6 +1007,11 @@ impl RdfDatasetBuilder {
             .map(|(iri, err)| (iri.as_str(), err))
     }
 
+    /// Read the first literal-shape failure recorded by the infallible interner.
+    pub(crate) fn invalid_literal(&self) -> Option<&'static str> {
+        self.interner.invalid_literal
+    }
+
     /// Push a quad. Duplicate quads collapse to a single row (C0.5); `g == None`
     /// names the default graph. Returns nothing — the quad's ordinal is reflected
     /// by [`attach_location`](Self::attach_location), which keys off the pushed
@@ -1250,11 +1245,7 @@ fn owned_binding(scope: BlankScope) -> crate::cdt_blank::BlankBinding {
 /// Bind the blank labels a composite literal from the OWNED model embeds, and
 /// return the literal ready to intern. Any other literal is returned unchanged.
 fn bind_owned_literal(literal: &RdfLiteral, scope: BlankScope) -> RdfLiteral {
-    let datatype_iri = match (&literal.language, &literal.datatype) {
-        (Some(_), _) => RDF_LANG_STRING,
-        (None, Some(dt)) => dt.as_str(),
-        (None, None) => XSD_STRING,
-    };
+    let datatype_iri = literal.datatype_iri();
     if !crate::cdt_blank::is_cdt_datatype(datatype_iri) {
         return literal.clone();
     }
@@ -1298,6 +1289,7 @@ fn compute_capabilities(
 mod tests {
     use super::*;
     use crate::RdfTextDirection;
+    use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
     use proptest::prelude::*;
 
     fn lit_simple(s: &str) -> RdfLiteral {
@@ -1468,6 +1460,21 @@ mod tests {
         assert_ne!(ltr, rtl);
         assert_ne!(ltr, no_dir);
         assert_ne!(rtl, no_dir);
+        let dataset = b.freeze().unwrap();
+        for (id, direction, datatype) in [
+            (ltr, Some(RdfTextDirection::Ltr), RDF_DIR_LANG_STRING),
+            (rtl, Some(RdfTextDirection::Rtl), RDF_DIR_LANG_STRING),
+            (no_dir, None, RDF_LANG_STRING),
+        ] {
+            let expected = crate::TermValue::Literal {
+                lexical_form: "x".into(),
+                datatype: datatype.into(),
+                language: Some("en".into()),
+                direction,
+            };
+            assert_eq!(dataset.term_value(id), expected);
+            assert_eq!(dataset.term_id_by_value(&expected), Some(id));
+        }
     }
 
     /// C0.1: language tags are lowercased for the key, so `@EN` and `@en` are equal.

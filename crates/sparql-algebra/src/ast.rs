@@ -169,11 +169,12 @@ pub enum BaseDirection {
     Rtl,
 }
 
-/// An RDF literal: a lexical form plus a datatype, and (for `rdf:langString`)
-/// an optional language tag and RDF 1.2 base direction.
+/// An RDF literal: a lexical form plus a datatype, language tag and RDF 1.2
+/// base direction where required by that datatype.
 ///
 /// The datatype is **always** materialized: a plain string literal carries
-/// `xsd:string`, a language-tagged one `rdf:langString`. This matches the
+/// `xsd:string`, a language-tagged one `rdf:langString`, and a directional
+/// language-tagged one `rdf:dirLangString`. This matches the
 /// consumer contract `literal.datatype().as_str()` (the only thing the existing
 /// IRI-extraction walker reads off a literal).
 ///

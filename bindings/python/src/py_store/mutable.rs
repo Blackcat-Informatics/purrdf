@@ -37,7 +37,6 @@ use crate::{
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 /// A COW mutable RDF dataset over the native `purrdf-core` IR.
 #[pyclass(name = "MutableDataset")]
@@ -857,7 +856,7 @@ fn value_to_rdf_term(value: &TermValue) -> RdfTerm {
             language,
             direction,
         } => RdfTerm::Literal(RdfLiteral {
-            datatype: collapse_synthetic_datatype(datatype, language.as_ref()),
+            datatype: collapse_synthetic_datatype(datatype, language.as_ref(), *direction),
             lexical_form: lexical_form.clone(),
             language: language.clone(),
             direction: *direction,
@@ -870,9 +869,14 @@ fn value_to_rdf_term(value: &TermValue) -> RdfTerm {
     }
 }
 
-fn collapse_synthetic_datatype(datatype: &str, language: Option<&String>) -> Option<String> {
+fn collapse_synthetic_datatype(
+    datatype: &str,
+    language: Option<&String>,
+    direction: Option<purrdf_core::model::RdfTextDirection>,
+) -> Option<String> {
     if language.is_some() {
-        return (datatype != RDF_LANG_STRING).then(|| datatype.to_owned());
+        return (datatype != RdfLiteral::language_datatype_iri(direction))
+            .then(|| datatype.to_owned());
     }
     (datatype != XSD_STRING).then(|| datatype.to_owned())
 }

@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -188,6 +188,12 @@ book-pot: ## Extract the translation template docs/book/po/messages.pot (ignored
 
 book-po-update: book-pot ## Refresh docs/book/po/zh-Hans.po against the current English source (msgmerge; fuzzy/obsolete entries render as English until retranslated).
 	msgmerge --quiet --update --backup=none docs/book/po/zh-Hans.po docs/book/po/messages.pot
+
+bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on O3/full-LTO code (report-only).
+	CARGO_PROFILE_RELEASE_OPT_LEVEL=3 CARGO_PROFILE_RELEASE_LTO=fat \
+	CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_INCREMENTAL=false \
+	CARGO_PROFILE_RELEASE_DEBUG=false \
+	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
 	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results

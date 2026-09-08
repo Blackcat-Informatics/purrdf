@@ -930,6 +930,63 @@ mod tests {
     }
 
     #[test]
+    fn repeated_single_parameter_components_conjoin_every_value() {
+        let ttl = r#"
+            @prefix ex: <http://example.org/> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            ex:Required a sh:ConstraintComponent ;
+                sh:parameter [ sh:path ex:required ] ;
+                sh:validator [ a sh:SPARQLAskValidator ;
+                    sh:ask "ASK { $this <http://example.org/p> $required }" ] .
+            ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ;
+                ex:required ex:a, ex:b, ex:c .
+            ex:focus ex:p ex:a .
+        "#;
+        let report = validate_fixture(ttl, "http://example.org/");
+        assert!(!report.conforms);
+        assert_eq!(report.results.len(), 2, "both absent requirements must run");
+    }
+
+    #[test]
+    fn imported_core_component_does_not_reject_repeated_property_shapes() {
+        use std::fmt::Write as _;
+        let mut ttl = String::from(
+            r"
+            @prefix ex: <http://example.org/> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            sh:PropertyConstraintComponent a sh:ConstraintComponent ;
+                sh:parameter [ sh:path sh:property ] .
+            ex:Shape a sh:NodeShape ; sh:targetNode ex:focus .
+        ",
+        );
+        for index in 0..15 {
+            writeln!(ttl, "ex:Shape sh:property ex:property{index} .\nex:property{index} sh:path ex:p{index} ; sh:minCount 1 .").unwrap();
+        }
+        let report = validate_fixture(&ttl, "http://example.org/");
+        assert!(!report.conforms);
+        assert_eq!(
+            report.results.len(),
+            15,
+            "every native property constraint must run"
+        );
+    }
+
+    #[test]
+    fn multiple_parameter_components_still_refuse_multiple_values() {
+        let ttl = r#"
+            @prefix ex: <http://example.org/> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            ex:Required a sh:ConstraintComponent ;
+                sh:parameter [ sh:path ex:required ], [ sh:path ex:other ] ;
+                sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { }" ] .
+            ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ;
+                ex:required ex:a, ex:b ; ex:other ex:c .
+        "#;
+        let error = crate::engine::parse_shapes(ttl, None).unwrap_err();
+        assert!(error.contains("only one is allowed"), "{error}");
+    }
+
+    #[test]
     fn eval_ask_validator_001() {
         let ttl = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),

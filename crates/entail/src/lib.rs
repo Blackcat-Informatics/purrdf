@@ -2446,7 +2446,7 @@ mod tests {
             });
             let expected = TermValue::Literal {
                 lexical_form: "hello".to_owned(),
-                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
                 language: Some("en".to_owned()),
                 direction: Some(direction),
             };

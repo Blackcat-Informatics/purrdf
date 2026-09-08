@@ -1089,7 +1089,7 @@ mod tests {
         assert_eq!(
             literal_datatypes,
             [
-                "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString",
                 "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
                 "http://www.w3.org/2001/XMLSchema#integer",
                 "http://www.w3.org/2001/XMLSchema#string",

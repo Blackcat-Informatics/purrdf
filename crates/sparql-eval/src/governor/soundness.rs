@@ -401,7 +401,8 @@ pub(crate) enum PatternPart<'a> {
     /// A directly-nested sub-pattern, and how a truncation there propagates.
     Child(&'a GraphPattern, ChildEdge),
     /// An expression this node evaluates: a `FILTER` predicate, a `BIND` expression, an
-    /// `OPTIONAL` join condition, an `ORDER BY` sort key, or an aggregate's argument.
+    /// `OPTIONAL` join condition, an `ORDER BY` sort key, or an aggregate's argument
+    /// or sort key.
     Expression(&'a Expression),
 }
 
@@ -627,6 +628,12 @@ where
                 aggregate
                     .args()
                     .iter()
+                    .chain(
+                        aggregate
+                            .order_by()
+                            .iter()
+                            .map(crate::modifier::order_sort_key),
+                    )
                     .any(|e| visit(PatternPart::Expression(e)))
             })
         }
@@ -689,11 +696,24 @@ fn visit_exists_patterns<'a, F>(expr: &'a Expression, visit: &mut F) -> bool
 where
     F: FnMut(&'a GraphPattern) -> bool,
 {
-    visit_expression_parts(expr, &mut |part| match part {
-        ExpressionPart::Sub(sub) => visit_exists_patterns(sub, visit),
-        ExpressionPart::Call(_) => false,
-        ExpressionPart::Exists(pattern) => visit(pattern),
-    })
+    let mut pending = vec![ExpressionPart::Sub(expr)];
+    while let Some(part) = pending.pop() {
+        match part {
+            ExpressionPart::Sub(sub) => {
+                let start = pending.len();
+                visit_expression_parts(sub, &mut |child| {
+                    pending.push(child);
+                    false
+                });
+                // Preserve the recursive visitor's left-to-right order: child
+                // ordinals are part of soundness certificates, not a work hint.
+                pending[start..].reverse();
+            }
+            ExpressionPart::Exists(pattern) if visit(pattern) => return true,
+            ExpressionPart::Exists(_) | ExpressionPart::Call(_) => {}
+        }
+    }
+    false
 }
 
 /// Visit every pattern that is a child of `pattern` for classification purposes: its
@@ -1739,7 +1759,11 @@ pub(crate) fn analyze_pattern(
             for (v, agg) in aggregates {
                 free_vars.insert(v.clone());
                 certainly_bound.insert(v.clone());
-                for arg in agg.args() {
+                for arg in agg
+                    .args()
+                    .iter()
+                    .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                {
                     let (f, s, h) = analyze_expr(arg, table);
                     free_vars.extend(f);
                     stateful |= s;
@@ -2898,6 +2922,48 @@ mod tests {
     }
 
     // ---- the pushdown licence --------------------------------------------
+
+    #[test]
+    fn aggregate_sort_keys_keep_their_edges_variables_and_effects() {
+        let grouped = GraphPattern::Group {
+            inner: boxed(GraphPattern::Bgp { patterns: vec![] }),
+            variables: vec![],
+            aggregates: vec![(
+                Variable::new("list"),
+                AggregateExpression::new(
+                    AggregateFunction::Fold,
+                    vec![Expression::Literal(Literal::new_simple("value"))],
+                    vec![],
+                    vec![
+                        OrderExpression::Asc(Expression::Variable(Variable::new("sort_only"))),
+                        OrderExpression::Desc(Expression::FunctionCall(Function::Rand, vec![])),
+                        OrderExpression::Asc(Expression::FunctionCall(
+                            Function::Custom(
+                                NamedNode::new("http://example.org/undefined").unwrap(),
+                            ),
+                            vec![],
+                        )),
+                        OrderExpression::Desc(Expression::Exists(boxed(other_bgp()))),
+                    ],
+                    false,
+                )
+                .unwrap(),
+            )],
+        };
+        assert_eq!(context_at(&grouped, &[1]).class(), SpineClass::Unknown);
+        let analysis = analyze_pattern(&grouped, &mut NodeAnalysisTable::default());
+        assert!(analysis.free_vars.contains(&Variable::new("sort_only")));
+        assert!(analysis.has_stateful_builtin);
+        assert!(analysis.can_hard_error);
+        assert!(!crate::parallel::is_parallel_safe_pattern(
+            &grouped,
+            crate::parallel::SafetyRegistries {
+                functions: &crate::user_fn::UserFunctionRegistry::EMPTY,
+                relations: &crate::property_fn::PropertyFunctionRegistry::EMPTY,
+                aggregates: &crate::agg_fn::AggregateRegistry::EMPTY,
+            },
+        ));
+    }
 
     #[test]
     fn cap_pushdown_is_licensed_exactly_when_certain_and_ordered() {

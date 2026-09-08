@@ -375,13 +375,19 @@ pub fn try_canonicalize_with(
 /// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] on a pathologically
 /// symmetric blank graph (adversarial input never panics here).
 pub fn canonical_relabel(ds: &RdfDataset) -> Result<RdfDataset, CanonError> {
-    let canonical = try_canonicalize(ds)?;
+    // The typed consumer needs the issued labels, not a serialized document.
+    // Keep the exact admission/search algorithm shared with text canonicalization
+    // and move its label table without rendering or cloning it.
+    let labels = CanonState::new(ds, CanonHash::Sha256)
+        .issue_labels()?
+        .canonical
+        .issued;
     // Declaration-only blank graphs are invisible to canonicalization (they own
     // no statement), so continue the canonical numbering over them in a
     // value-deterministic order.
     let mut unseen: Vec<(&str, BlankScope, TermId)> = ds
         .named_graphs()
-        .filter(|g| !canonical.labels.contains_key(g))
+        .filter(|g| !labels.contains_key(g))
         .filter_map(|g| match ds.resolve(g) {
             TermRef::Blank { label, scope } => Some((label, scope, g)),
             _ => None,
@@ -392,14 +398,14 @@ pub fn canonical_relabel(ds: &RdfDataset) -> Result<RdfDataset, CanonError> {
         .iter()
         .enumerate()
         .map(|(i, &(_, _, id))| {
-            let label = format!("{CANON_PREFIX}{}", canonical.labels.len() + i);
+            let label = format!("{CANON_PREFIX}{}", labels.len() + i);
             (id, label.into_boxed_str())
         })
         .collect();
     rebuild_dataset(
         ds,
         &mut CanonicalRelabeler {
-            labels: &canonical.labels,
+            labels: &labels,
             extra,
         },
     )
@@ -965,7 +971,15 @@ impl<'a> CanonState<'a> {
     /// is deliberate: a dataset that is both inadmissible and pathologically
     /// symmetric must be refused for the reason that makes it dangerous, and it
     /// must be refused without spending the poison budget deciding so.
-    fn run_fallible(mut self) -> Result<Canonicalized, CanonError> {
+    fn run_fallible(self) -> Result<Canonicalized, CanonError> {
+        let canonical = self.issue_labels()?;
+        let nquads = canonical.serialize_canonical();
+        let labels = canonical.canonical.issued;
+        Ok(Canonicalized { nquads, labels })
+    }
+
+    /// Admit and issue labels once for both typed relabeling and canonical text.
+    fn issue_labels(mut self) -> Result<Self, CanonError> {
         if let Some(violation) = reserved_vocabulary(self.ds) {
             return Err(CanonError::ReservedVocabulary(violation));
         }
@@ -976,14 +990,7 @@ impl<'a> CanonState<'a> {
                 return Err(CanonError::BudgetExceeded(BudgetExceeded { blank_count }));
             }
         }
-        let nquads = self.serialize_canonical();
-        let labels = self
-            .canonical
-            .issued
-            .iter()
-            .map(|(&id, label)| (id, label.clone()))
-            .collect();
-        Ok(Canonicalized { nquads, labels })
+        Ok(self)
     }
 
     fn run_inner(&mut self) -> Result<(), Exhausted> {

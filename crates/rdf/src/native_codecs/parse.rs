@@ -859,12 +859,12 @@ mod tests {
             "\"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar--rtl .\n",
         );
         let ds = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("parse");
-        // The IR expands a language-tagged literal's datatype to rdf:langString (C0.1)
-        // and keeps the base direction in the literal identity key (NOT dirLangString).
+        // RDF 1.2 gives a directional language-tagged literal rdf:dirLangString;
+        // its base direction also participates in the literal identity key.
         assert!(
             ds.term_id_by_value(&TermValue::Literal {
                 lexical_form: "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}".to_owned(),
-                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
                 language: Some("ar".to_owned()),
                 direction: Some(RdfTextDirection::Rtl),
             })

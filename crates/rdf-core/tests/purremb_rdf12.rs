@@ -127,7 +127,7 @@ fn rdf_fixture() -> RdfFixture {
             .expect("annotation predicate target");
     let literal_target = RdfTermTarget::Literal {
         lexical: "bonjour".into(),
-        datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".into(),
+        datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".into(),
         language: Some("fr".into()),
         direction: Some(RdfTextDirection::Ltr),
     }

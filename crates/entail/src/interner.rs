@@ -112,7 +112,8 @@ impl Interner {
 ///   public fields, so it is built as a struct literal rather than through one of the
 ///   `simple`/`typed`/`language_tagged` constructors: every one of those hard-codes
 ///   `direction: None`, which is exactly the loss this arm exists to prevent. (The
-///   builder re-derives `rdf:langString` and lowercases the tag when a language is
+///   builder derives the language datatype from the tag and direction, and lowercases
+///   the tag when a language is
 ///   present, so passing the already-expanded datatype through is a no-op, not a
 ///   conflict.)
 /// * A triple term is rebuilt **recursively**, component by component. Its subject,
@@ -168,8 +169,8 @@ mod tests {
     const EX_O: &str = "http://example.org/o";
     /// The predicate the round-trip fixtures hang their object term under.
     const EX_HOLDS: &str = "http://example.org/holds";
-    /// `rdf:langString`, the datatype every language-tagged literal carries (C0.1).
-    const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+    /// RDF 1.2 datatype for language-tagged literals with a base direction.
+    const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
     /// A triple term over three IRIs, by value.
     fn quoted(s: &str, p: &str, o: &str) -> TermValue {
@@ -184,7 +185,7 @@ mod tests {
     fn directional(lexical: &str, language: &str, direction: RdfTextDirection) -> TermValue {
         TermValue::Literal {
             lexical_form: lexical.to_owned(),
-            datatype: RDF_LANG_STRING.to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
             language: Some(language.to_owned()),
             direction: Some(direction),
         }

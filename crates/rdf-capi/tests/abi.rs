@@ -2534,47 +2534,52 @@ fn invalid_term_kind_yields_invalid_argument() {
     }
 }
 
-/// A PurrdfTermView with `kind = Literal` but `direction = 99` (unknown) must
-/// return `InvalidArgument`.
+/// Unknown directions and directions without a language refuse publication.
 #[test]
 fn invalid_direction_yields_invalid_argument() {
     unsafe {
-        let lex = "hello";
-        let dt = "http://www.w3.org/2001/XMLSchema#string";
-        let view = PurrdfTermView {
-            kind: PurrdfTermKind::Literal as i32,
-            lexical: PurrdfStr {
-                ptr: lex.as_ptr(),
-                len: lex.len(),
-            },
-            datatype: PurrdfStr {
-                ptr: dt.as_ptr(),
-                len: dt.len(),
-            },
-            language: PurrdfStr {
-                ptr: std::ptr::null(),
-                len: 0,
-            },
-            direction: 99, // out-of-range discriminant
-            blank_scope: 0,
-            term_id: 0,
-        };
-        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
-        let mut error: *mut PurrdfError = std::ptr::null_mut();
-        let status = purrdf_term_to_ntriples(
-            std::ptr::null(),
-            &raw const view,
-            &raw mut buffer,
-            &raw mut error,
-        );
-        assert_eq!(
-            status,
-            PurrdfStatus::InvalidArgument as i32,
-            "expected InvalidArgument for unknown direction 99"
-        );
-        assert!(buffer.is_null());
-        assert!(!error.is_null());
-        purrdf_error_free(error);
+        for (direction, language) in [
+            (99, "en"),
+            (purrdf::term::PurrdfDirection::Ltr as i32, ""),
+            (purrdf::term::PurrdfDirection::Rtl as i32, ""),
+        ] {
+            let lex = "hello";
+            let dt = "http://www.w3.org/2001/XMLSchema#string";
+            let view = PurrdfTermView {
+                kind: PurrdfTermKind::Literal as i32,
+                lexical: PurrdfStr {
+                    ptr: lex.as_ptr(),
+                    len: lex.len(),
+                },
+                datatype: PurrdfStr {
+                    ptr: dt.as_ptr(),
+                    len: dt.len(),
+                },
+                language: PurrdfStr {
+                    ptr: language.as_ptr(),
+                    len: language.len(),
+                },
+                direction,
+                blank_scope: 0,
+                term_id: 0,
+            };
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_term_to_ntriples(
+                std::ptr::null(),
+                &raw const view,
+                &raw mut buffer,
+                &raw mut error,
+            );
+            assert_eq!(
+                status,
+                PurrdfStatus::InvalidArgument as i32,
+                "expected InvalidArgument for direction {direction} and language {language:?}"
+            );
+            assert!(buffer.is_null());
+            assert!(!error.is_null());
+            purrdf_error_free(error);
+        }
     }
 }
 

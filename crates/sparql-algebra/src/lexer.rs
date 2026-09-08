@@ -864,7 +864,7 @@ fn is_pn_chars(c: char) -> bool {
     is_pn_chars_base(c) || c.is_ascii_digit() || c == '-'
 }
 
-fn is_varname_char(c: char) -> bool {
+pub(crate) fn is_varname_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || (c as u32) > 0x7F
 }
 

@@ -470,11 +470,8 @@ impl RdfTermTargetRef<'_> {
                 if let Some(language) = language {
                     validate_language_tag(language)?;
                 }
-                if direction.is_some() && language.is_none() {
-                    return Err(EmbeddingError::Malformed(
-                        "literal direction requires a language tag",
-                    ));
-                }
+                crate::RdfLiteral::validate_components(datatype, language, direction)
+                    .map_err(EmbeddingError::Malformed)?;
                 u32_field(&mut block, 1, 3)?;
                 utf8_field(&mut block, 2, lexical)?;
                 utf8_field(&mut block, 3, datatype)?;
@@ -1094,7 +1091,8 @@ fn validate_rdf_term_identity(bytes: &[u8]) -> Result<(), EmbeddingError> {
                     required_target_rule(5, TlvWireType::U32),
                 ],
             )?;
-            validate_absolute_iri(required_target_text(bytes, 3, "literal datatype IRI")?)?;
+            let datatype = required_target_text(bytes, 3, "literal datatype IRI")?;
+            validate_absolute_iri(datatype)?;
             let language = optional_target_tlv(bytes, 4)?;
             if let Some(language) = language {
                 let language = core::str::from_utf8(language.value)
@@ -1110,6 +1108,17 @@ fn validate_rdf_term_identity(bytes: &[u8]) -> Result<(), EmbeddingError> {
             if direction > 2 || (direction != 0 && language.is_none()) {
                 return Err(EmbeddingError::Malformed("literal direction"));
             }
+            let direction = match direction {
+                1 => Some(RdfTextDirection::Ltr),
+                2 => Some(RdfTextDirection::Rtl),
+                _ => None,
+            };
+            let language = language
+                .map(|entry| core::str::from_utf8(entry.value))
+                .transpose()
+                .map_err(|_| EmbeddingError::InvalidUtf8("language tag"))?;
+            crate::RdfLiteral::validate_components(datatype, language, direction)
+                .map_err(EmbeddingError::Malformed)?;
         }
         4 => validate_target_schema(
             bytes,
@@ -1327,7 +1336,7 @@ mod tests {
     fn rdf_triple_terms_and_directional_literals_are_first_class() {
         let literal = RdfTermTarget::Literal {
             lexical: "chat".to_owned(),
-            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
             language: Some("fr".to_owned()),
             direction: Some(RdfTextDirection::Ltr),
         }
@@ -1341,6 +1350,45 @@ mod tests {
         .into_target(true, None)
         .expect("triple target");
         assert_ne!(literal.id, triple.id);
+    }
+
+    #[test]
+    fn literal_shape_is_checked_for_targets_and_received_identity_bytes() {
+        let lang = crate::RdfLiteral::language_datatype_iri(None);
+        let directional = crate::RdfLiteral::language_datatype_iri(Some(RdfTextDirection::Ltr));
+        for (datatype, language, direction) in [
+            (
+                "http://www.w3.org/2001/XMLSchema#string",
+                None,
+                Some(RdfTextDirection::Ltr),
+            ),
+            (lang, None, None),
+            (directional, Some("en"), None),
+            (lang, Some("en"), Some(RdfTextDirection::Rtl)),
+            ("http://www.w3.org/2001/XMLSchema#string", Some("en"), None),
+        ] {
+            let target = RdfTermTarget::Literal {
+                lexical: "x".to_owned(),
+                datatype: datatype.to_owned(),
+                language: language.map(str::to_owned),
+                direction,
+            };
+            assert!(target.into_target(true, None).is_err());
+            let mut bytes = Vec::new();
+            u32_field(&mut bytes, 1, 3).expect("kind");
+            utf8_field(&mut bytes, 2, "x").expect("lexical");
+            utf8_field(&mut bytes, 3, datatype).expect("datatype");
+            if let Some(language) = language {
+                utf8_field(&mut bytes, 4, language).expect("language");
+            }
+            let code = match direction {
+                None => 0,
+                Some(RdfTextDirection::Ltr) => 1,
+                Some(RdfTextDirection::Rtl) => 2,
+            };
+            u32_field(&mut bytes, 5, code).expect("direction");
+            assert!(validate_rdf_term_identity(&bytes).is_err());
+        }
     }
 
     #[test]

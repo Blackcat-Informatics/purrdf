@@ -44,9 +44,8 @@ use std::sync::Arc;
 use sha2::{Digest, Sha256};
 
 use crate::dataset_view::DatasetView;
-use crate::{
-    CanonHash, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId, TermRef, TermValue,
-};
+use crate::ir::import::DatasetImporter;
+use crate::{CanonHash, RdfDataset, RdfDatasetBuilder, RdfDiagnostic};
 
 use super::container::{PackError, PackView};
 
@@ -105,122 +104,13 @@ impl std::fmt::Display for PackDigest {
 // Reconstruction: PackView -> RdfDatasetBuilder
 // ---------------------------------------------------------------------------
 
-/// Resolve a [`DatasetView`] id to its dataset-INDEPENDENT [`TermValue`],
-/// recursing through a literal's datatype and a triple term's `(s, p, o)`
-/// components. Mirrors the `to_value` helper `tests/paged_backend.rs` uses to
-/// compare a `PagedDataset` against a plain `RdfDataset` by value — the same
-/// by-value bridge lets this module compare a `PackView`'s reconstruction
-/// against the pack's own claimed identity.
-fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
-    match v.resolve(id) {
-        TermRef::Iri(s) => TermValue::iri(s),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype = match v.resolve(datatype) {
-                TermRef::Iri(s) => s.to_owned(),
-                _ => unreachable!("a literal's datatype always resolves to an IRI"),
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype,
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(to_value(v, s)),
-            p: Box::new(to_value(v, p)),
-            o: Box::new(to_value(v, o)),
-        },
-    }
-}
-
-/// Intern one dataset-independent value into a builder, recursing for triple
-/// terms — the by-value inverse of [`to_value`], and the reconstruction step
-/// that re-mints a builder-local [`TermId`] for a value read off the pack.
-fn intern_value(b: &mut RdfDatasetBuilder, v: &TermValue) -> TermId {
-    match v {
-        TermValue::Iri(s) => b.intern_iri(s),
-        TermValue::Blank { label, scope } => b.intern_blank(label, *scope),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => b.intern_literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_value(b, s);
-            let p = intern_value(b, p);
-            let o = intern_value(b, o);
-            b.intern_triple(s, p, o)
-        }
-    }
-}
-
-/// Resolve a view id straight to a freshly interned builder-local [`TermId`],
-/// composing [`to_value`] and [`intern_value`] for the common one-shot case.
-fn reintern<V: DatasetView>(b: &mut RdfDatasetBuilder, v: &V, id: V::Id) -> TermId {
-    let value = to_value(v, id);
-    intern_value(b, &value)
-}
-
-/// Independently reconstruct an `RdfDatasetBuilder` from ANY [`DatasetView`]'s
-/// surface: every base quad, then every reifier binding, then every statement
-/// annotation — the exact three components
-/// [`crate::ir::canon::collect_components`] folds into the RDFC-1.0 digest (see
-/// the [module docs](self)). Each blank's original `(label, scope)` (C0.2)
-/// round-trips through [`to_value`]/[`intern_value`] unchanged; that choice is
-/// moot for the digest either way, since RDFC-1.0 canonicalizes blank labels
-/// away entirely (structure alone drives the canonical `_:c14nN` assignment).
-///
-/// This is the SOLE re-intern loop: [`verify_pack`] (which reconstructs, freezes,
-/// and recomputes the digest) and the public [`dataset_from_view`] (which
-/// reconstructs and freezes into an `Arc<RdfDataset>`) both drive it, so there is
-/// exactly one place the base-quad / reifier / annotation replay lives.
+/// Reconstruct the RDF surface through the shared typed import. Each source
+/// term is transferred once, without an intermediate owned term tree. The
+/// source view is independent of the claimed certificate being checked.
 fn reconstruct<D: DatasetView>(view: &D) -> RdfDatasetBuilder {
-    let mut b = RdfDatasetBuilder::new();
-
-    for q in view.quads() {
-        let s = reintern(&mut b, view, q.s);
-        let p = reintern(&mut b, view, q.p);
-        let o = reintern(&mut b, view, q.o);
-        let g = q.g.map(|g| reintern(&mut b, view, g));
-        b.push_quad(s, p, o, g);
-    }
-
-    // `reifier_quads` projects each `(reifier, triple, graph)` side-table row as a
-    // virtual `reifier rdf:reifies triple` quad (predicate fixed at `rdf:reifies`);
-    // push it back through the dedicated reifier entry point, NOT `push_quad` — see
-    // the [module docs](self).
-    for q in view.reifier_quads() {
-        let reifier = reintern(&mut b, view, q.s);
-        let triple = reintern(&mut b, view, q.o);
-        let g = q.g.map(|g| reintern(&mut b, view, g));
-        b.push_reifier_in_graph(reifier, triple, g);
-    }
-
-    for q in view.annotation_quads() {
-        let reifier = reintern(&mut b, view, q.s);
-        let p = reintern(&mut b, view, q.p);
-        let o = reintern(&mut b, view, q.o);
-        let g = q.g.map(|g| reintern(&mut b, view, g));
-        b.push_annotation_in_graph(reifier, p, o, g);
-    }
-
-    b
+    let mut builder = RdfDatasetBuilder::new();
+    DatasetImporter::new(&mut builder, view).append();
+    builder
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +135,9 @@ fn reconstruct<D: DatasetView>(view: &D) -> RdfDatasetBuilder {
 /// ([`DatasetView::annotation_quads`]) — so the RDF-1.2 overlay survives the round
 /// trip losslessly (a view with no side-tables simply replays zero of them). Blank
 /// `(label, scope)` identity round-trips unchanged; RDFC-1.0 isomorphism is
-/// therefore preserved (see the [module docs](self)).
+/// therefore preserved (see the [module docs](self)). Declaration-only named
+/// graphs are replayed too. Source locations and non-RDF lookaside records are
+/// outside `DatasetView`; their owners must carry them separately.
 ///
 /// # Errors
 ///

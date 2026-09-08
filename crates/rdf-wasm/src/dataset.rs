@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     /// CROSS-PATH regression (the adversarial case): a directional literal PARSED
-    /// from text (the engine interns it as `rdf:langString` + a separate `direction`)
+    /// from text (the engine interns its `rdf:dirLangString` datatype and direction)
     /// must be found by a `has` whose query literal is built via the SAME path a
     /// `DataFactory` literal would take — `rdf_term_to_term_value` →
     /// `canonicalize_literal`. The whole point of `canonicalize_literal` is byte
@@ -1014,9 +1014,8 @@ mod tests {
         use purrdf::{RdfLiteral, RdfTextDirection};
 
         // Parse a directional language-tagged literal from N-Triples text. The native
-        // codec interns it with `direction = Some(Rtl)` and datatype `rdf:langString`
-        // (see crates/rdf/src/native_codecs/parse.rs: a language tag forces
-        // rdf:langString at intern time, direction kept separately).
+        // codec interns it with `direction = Some(Rtl)` and datatype `rdf:dirLangString`.
+        // The factory uses the same native datatype expansion rule.
         let input =
             "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar--rtl .\n";
         let ds = Dataset::parse(input, "ntriples", None).unwrap();

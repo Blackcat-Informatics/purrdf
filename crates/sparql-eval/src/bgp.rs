@@ -41,7 +41,7 @@ use crate::DetHashSet;
 use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
 use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
-use crate::eval::{BgpOrderCache, EvalCtx};
+use crate::eval::EvalCtx;
 use crate::governor::ledger::PlanEstimate;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -436,25 +436,47 @@ fn plan_or_cached_order<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
     scope: &GraphScope<D::Id>,
-    cache: Option<&BgpOrderCache>,
+    cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
 ) -> Arc<[usize]> {
     let Some(cache) = cache else {
         return Arc::from(cost_based_order(compiled, dataset, scope));
     };
     let key = (dataset.stats_fingerprint(), bgp_shape_key(compiled, scope));
-    if let Some(order) = cache.read().expect("order cache lock poisoned").get(&key) {
+    use crate::plan_cache::OrderCacheRef;
+    let cached = match cache {
+        OrderCacheRef::Legacy(cache) => cache
+            .read()
+            .expect("order cache lock poisoned")
+            .get(&key)
+            .cloned(),
+        OrderCacheRef::Bounded(cache) => cache.lock().expect("order cache lock poisoned").get(&key),
+    };
+    if let Some(order) = cached {
         // A shape-key collision is NOT licensed by the stats-fingerprint safety
         // argument: a wrong-length order would index out of bounds in the join loop.
         // Guard it — on a length mismatch fall through and re-plan.
         if order.len() == compiled.len() {
-            return Arc::clone(order);
+            return order;
         }
     }
     let order: Arc<[usize]> = Arc::from(cost_based_order(compiled, dataset, scope));
-    cache
-        .write()
-        .expect("order cache lock poisoned")
-        .insert(key, Arc::clone(&order));
+    match cache {
+        OrderCacheRef::Legacy(cache) => {
+            cache
+                .write()
+                .expect("order cache lock poisoned")
+                .insert(key, Arc::clone(&order));
+        }
+        OrderCacheRef::Bounded(cache) => {
+            let bytes = size_of_val(order.as_ref())
+                .saturating_add(2 * size_of::<usize>())
+                .saturating_add(2 * size_of_val(&key));
+            cache
+                .lock()
+                .expect("order cache lock poisoned")
+                .insert(key, Arc::clone(&order), bytes);
+        }
+    }
     order
 }
 

@@ -96,10 +96,9 @@ use crate::DetHashMap;
 use crate::convert::named_node_to_value;
 use crate::dataset_spec::ActiveDataset;
 use crate::engine::{QueryOptions, apply_query_options};
-use crate::eval::{
-    AdmittedRequest, BgpOrderCache, EvalCtx, StandpointPredicates, admit_version, eval_evaluated,
-};
+use crate::eval::{AdmittedRequest, EvalCtx, StandpointPredicates, admit_version, eval_evaluated};
 use crate::governor::{ChargePoint, GovernorState, StopSignal};
+use crate::plan_cache::BoundedOrderCache;
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
     instantiate_ground_term, instantiate_predicate, instantiate_term, positionally_ill_formed,
@@ -151,7 +150,7 @@ fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
 /// `DELETE/INSERT … WHERE` evaluates identically to a `SELECT`.
 pub(crate) struct UpdateEvalConfig<'e> {
     pub(crate) standpoint_predicates: Option<&'e StandpointPredicates>,
-    pub(crate) order_cache: &'e BgpOrderCache,
+    pub(crate) order_cache: &'e BoundedOrderCache,
     /// This request's live governor accounting, or `None` for an ungoverned request.
     ///
     /// `None` is not "unbounded": it is the *absence* of the state, which is what keeps an
@@ -517,7 +516,7 @@ fn delete_insert(
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
-    let ctx = EvalCtx::new(&*snap).with_order_cache(cfg.order_cache);
+    let ctx = EvalCtx::new(&*snap).with_bounded_order_cache(cfg.order_cache);
     // The property-function registry, the SHACL-AF function registry and the
     // blank-mint prefix, applied through the SAME seam a governed/ungoverned query
     // applies them — see `crate::engine::apply_query_options`. This is what lets a
@@ -1076,7 +1075,7 @@ mod tests {
     /// The ungoverned WHERE-evaluation config every test in this module runs under: the
     /// governed surface is exercised from the public API (`tests/governed_update.rs`),
     /// because that is the only vantage a consumer has on it.
-    fn ungoverned(order_cache: &BgpOrderCache) -> UpdateEvalConfig<'_> {
+    fn ungoverned(order_cache: &BoundedOrderCache) -> UpdateEvalConfig<'_> {
         UpdateEvalConfig {
             standpoint_predicates: None,
             order_cache,
@@ -1100,7 +1099,7 @@ mod tests {
     }
 
     fn run(text: &str, m: &mut MutableDataset) {
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         eval_update(&parse(text), m, None, &cfg).expect("update applies");
     }
@@ -1468,7 +1467,7 @@ mod tests {
             base_iri: None,
             version: None,
         };
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         let code = failure_code(eval_update(&upd, &mut m, None, &cfg).unwrap_err());
         assert_eq!(code, "native-sparql-update-bad-destination");
@@ -1483,7 +1482,7 @@ mod tests {
     fn unrecognized_version_refused_and_leaves_dataset_unchanged() {
         let mut m = mut_with(&[("a", "p", "b")]);
         let before = quad_set(&m);
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         let code = failure_code(
             eval_update(
@@ -1504,7 +1503,7 @@ mod tests {
     fn recognized_versions_still_apply() {
         for version in ["1.2", "1.2-basic"] {
             let mut m = mut_with(&[]);
-            let cache = BgpOrderCache::default();
+            let cache = BoundedOrderCache::default();
             let cfg = ungoverned(&cache);
             eval_update(
                 &parse(&format!(
@@ -1523,7 +1522,7 @@ mod tests {
     fn basic_profile_gate_refuses_triple_term_and_leaves_dataset_unchanged() {
         let mut m = mut_with(&[("a", "p", "b")]);
         let before = quad_set(&m);
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         let code = failure_code(
             eval_update(
@@ -1545,7 +1544,7 @@ mod tests {
     #[test]
     fn basic_profile_gate_admits_a_within_profile_update() {
         let mut m = mut_with(&[]);
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         eval_update(
             &parse("VERSION \"1.2-basic\" INSERT DATA { ex:x ex:y ex:z }"),
@@ -1584,7 +1583,7 @@ mod tests {
     fn load_with_resolver_imports_into_default_graph() {
         let mut m = mut_with(&[]);
         let resolver = TestResolver { ds: loadable() };
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         eval_update(&parse("LOAD ex:doc"), &mut m, Some(&resolver), &cfg).expect("load");
         let frozen = m.freeze().expect("freeze");
@@ -1596,7 +1595,7 @@ mod tests {
     fn load_into_named_graph_rekeys_to_destination() {
         let mut m = mut_with(&[]);
         let resolver = TestResolver { ds: loadable() };
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         eval_update(
             &parse("LOAD ex:doc INTO GRAPH ex:g"),
@@ -1617,7 +1616,7 @@ mod tests {
     #[test]
     fn load_without_resolver_is_a_hard_error() {
         let mut m = mut_with(&[]);
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         let code =
             failure_code(eval_update(&parse("LOAD ex:doc"), &mut m, None, &cfg).unwrap_err());
@@ -1627,7 +1626,7 @@ mod tests {
     #[test]
     fn load_silent_without_resolver_is_a_noop_ok() {
         let mut m = mut_with(&[("a", "p", "b")]);
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
         eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).expect("silent load no-ops");
         assert_eq!(quad_set(&m).len(), 1, "unchanged");
@@ -1759,7 +1758,7 @@ mod tests {
     fn unregistered_aggregate_in_update_where_is_refused_with_the_aggregate_code_and_zero_charge() {
         let mut m = mut_with(&[]);
         let before = quad_set(&m);
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let state = Arc::new(GovernorState::new(
             &crate::governor::QueryGovernors::METERED,
         ));
@@ -1803,7 +1802,7 @@ mod tests {
     #[test]
     fn unregistered_property_function_in_update_where_still_reports_the_property_function_code() {
         let mut m = mut_with(&[]);
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         // A namespace-declared relation with NOTHING registered under it: the
         // specific IRI still parses as a call node (the namespace claims it), and
         // is refused as unregistered — see
@@ -1842,7 +1841,7 @@ mod tests {
     #[test]
     fn custom_aggregate_arity_mismatch_in_update_where_carries_the_aggregate_code() {
         let mut m = mut_with(&[]);
-        let cache = BgpOrderCache::default();
+        let cache = BoundedOrderCache::default();
         let mut registry = crate::agg_fn::AggregateRegistry::new();
         registry.register_statistical_aggregates("http://ex/agg#");
         let options = QueryOptions {

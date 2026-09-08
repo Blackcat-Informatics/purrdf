@@ -580,6 +580,18 @@ enum DictEntry {
     },
 }
 
+impl DictEntry {
+    /// Match `TermValue::canonical_tag`, which differs from the record wire tags.
+    const fn canonical_tag(self) -> u8 {
+        match self {
+            Self::Iri(_) => 0,
+            Self::Literal { .. } => 1,
+            Self::Blank { .. } => 2,
+            Self::Triple { .. } => 3,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // EncodedDict — the self-contained, versioned on-disk form.
 // ---------------------------------------------------------------------------
@@ -650,7 +662,9 @@ impl EncodedDict {
     /// out-of-range id reference, or carries an IRI record that is not absolute
     /// ([`PackDictError::RelativeIri`]) — pack bytes are an untrusted ingress, so the
     /// IR-boundary absoluteness invariant is enforced on decode rather than assumed
-    /// from whichever writer produced the file.
+    /// from whichever writer produced the file. Noncanonical language tags and
+    /// entries outside strict canonical term order are also refused: normalizing or
+    /// sorting decoded entries would invalidate ids referenced by other pack sections.
     pub fn decode(&self) -> Result<PackDict, PackDictError> {
         let mut dict = PackDict {
             arena: Vec::new(),
@@ -663,6 +677,7 @@ impl EncodedDict {
             ));
         }
         dict.validate_references()?;
+        dict.validate_canonical_order()?;
         Ok(dict)
     }
 }
@@ -1009,15 +1024,36 @@ impl PackDict {
         let in_range = |id: PackTermId| id >= 1 && id <= n;
         for entry in &self.entries {
             match entry {
-                DictEntry::Literal { datatype, .. } => {
+                DictEntry::Literal {
+                    datatype,
+                    language,
+                    direction,
+                    ..
+                } => {
                     if !in_range(*datatype) {
                         return Err(PackDictError::Malformed(
                             "dict: literal datatype id out of range",
                         ));
                     }
-                    if !matches!(self.entry(*datatype), DictEntry::Iri(_)) {
+                    let DictEntry::Iri(datatype) = self.entry(*datatype) else {
                         return Err(PackDictError::Malformed(
                             "dict: literal datatype id does not reference an IRI",
+                        ));
+                    };
+                    let language = language.map(|range| arena_str(&self.arena, range));
+                    crate::RdfLiteral::validate_components(
+                        arena_str(&self.arena, *datatype),
+                        language,
+                        *direction,
+                    )
+                    .map_err(PackDictError::Malformed)?;
+                    // Test the lowercase fixed point without allocating a second
+                    // tag. Ingress lowercases language tags for RDF term identity.
+                    if language.is_some_and(|tag| {
+                        !tag.chars().flat_map(char::to_lowercase).eq(tag.chars())
+                    }) {
+                        return Err(PackDictError::Malformed(
+                            "dict: language tag is not lowercase",
                         ));
                     }
                 }
@@ -1043,6 +1079,80 @@ impl PackDict {
         // triple term's object may itself be a triple term that sorts after it — so a
         // plain id-comparison cannot stand in for this reachability check.)
         self.validate_triple_terms_bounded()
+    }
+
+    /// Check the canonical order required by binary value lookup, after references
+    /// and their acyclic, bounded structure have been validated.
+    ///
+    /// Compact keys compare referenced ids instead of expanding nested term trees.
+    /// Strict adjacent order implies strict order for every pair of compact keys.
+    /// That order agrees with `TermValue::Ord` by induction on the pair's combined
+    /// structural depth: leaf keys compare their values directly; the first unequal
+    /// datatype or triple component ids refer to a shallower pair, whose values are
+    /// already strictly ordered by the inductive hypothesis. This also rules out
+    /// duplicate values. A component may precede OR follow its parent in id order;
+    /// acyclicity, rather than backward-only references, makes the induction valid.
+    ///
+    /// No owned term trees are built, so a shared triple DAG costs one compact
+    /// comparison per adjacent entry, rather than exponential subtree expansion.
+    fn validate_canonical_order(&self) -> Result<(), PackDictError> {
+        for pair in self.entries.windows(2) {
+            if self.compare_entries(pair[0], pair[1]) != Ordering::Less {
+                return Err(PackDictError::Malformed(
+                    "dict: entries are not in strict canonical term order",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Mirror `TermValue::Ord` with borrowed strings and compact component ids.
+    fn compare_entries(&self, left: DictEntry, right: DictEntry) -> Ordering {
+        let text = |range| arena_str(&self.arena, range);
+        match (left, right) {
+            (DictEntry::Iri(a), DictEntry::Iri(b)) => text(a).cmp(text(b)),
+            (
+                DictEntry::Literal {
+                    lexical: la,
+                    datatype: da,
+                    language: ga,
+                    direction: dira,
+                },
+                DictEntry::Literal {
+                    lexical: lb,
+                    datatype: db,
+                    language: gb,
+                    direction: dirb,
+                },
+            ) => da
+                .cmp(&db)
+                .then_with(|| ga.map(text).cmp(&gb.map(text)))
+                .then_with(|| text(la).cmp(text(lb)))
+                .then_with(|| dira.cmp(&dirb)),
+            (
+                DictEntry::Blank {
+                    label: la,
+                    scope: sa,
+                },
+                DictEntry::Blank {
+                    label: lb,
+                    scope: sb,
+                },
+            ) => text(la).cmp(text(lb)).then_with(|| sa.cmp(&sb)),
+            (
+                DictEntry::Triple {
+                    s: sa,
+                    p: pa,
+                    o: oa,
+                },
+                DictEntry::Triple {
+                    s: sb,
+                    p: pb,
+                    o: ob,
+                },
+            ) => (sa, pa, oa).cmp(&(sb, pb, ob)),
+            _ => left.canonical_tag().cmp(&right.canonical_tag()),
+        }
     }
 
     /// Reject a cyclic or over-deep triple-term reference graph — see the tail of
@@ -1209,7 +1319,7 @@ mod tests {
         let lang = TermValue::lang_literal("bonjour", "FR");
         let directional = TermValue::Literal {
             lexical_form: "hello".to_string(),
-            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_string(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_string(),
             language: Some("en".to_string()),
             direction: Some(RdfTextDirection::Rtl),
         };
@@ -1233,6 +1343,214 @@ mod tests {
             panic!("expected a literal");
         };
         assert_eq!(language, Some("fr"));
+    }
+
+    #[test]
+    fn decoding_rejects_inconsistent_literal_components() {
+        use crate::ir::term::XSD_STRING;
+        let lang = RdfLiteral::language_datatype_iri(None);
+        let directional = RdfLiteral::language_datatype_iri(Some(RdfTextDirection::Ltr));
+        for (datatype, language, direction) in [
+            (XSD_STRING, None, Some(RdfTextDirection::Ltr)),
+            (lang, None, None),
+            (directional, Some("en"), None),
+            (lang, Some("en"), Some(RdfTextDirection::Rtl)),
+            (XSD_STRING, Some("en"), None),
+            (lang, Some(""), None),
+        ] {
+            let values = vec![
+                TermValue::Iri(datatype.to_owned()),
+                TermValue::Literal {
+                    lexical_form: "x".to_owned(),
+                    datatype: datatype.to_owned(),
+                    language: language.map(str::to_owned),
+                    direction,
+                },
+            ];
+            let ids = values
+                .iter()
+                .enumerate()
+                .map(|(i, value)| (value.clone(), i as u64 + 1))
+                .collect();
+            let encoded = EncodedDict {
+                n_terms: 2,
+                values_bytes: encode_values(&values, &ids),
+            };
+            assert!(
+                PackDict::open(&encoded.to_bytes()).is_err(),
+                "{datatype} {language:?} {direction:?}"
+            );
+        }
+    }
+
+    /// Encode deliberately supplied id order without the native writer's sorting
+    /// and deduplication, so these tests exercise untrusted dictionary admission.
+    fn encode_test_values(values: &[TermValue]) -> EncodedDict {
+        let ids = values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| (value.clone(), i as u64 + 1))
+            .collect();
+        EncodedDict {
+            n_terms: values.len() as u64,
+            values_bytes: encode_values(values, &ids),
+        }
+    }
+
+    #[test]
+    fn decoding_rejects_noncanonical_language_tags() {
+        for direction in [
+            None,
+            Some(RdfTextDirection::Ltr),
+            Some(RdfTextDirection::Rtl),
+        ] {
+            for language in ["EN", "en-US", "\u{01c5}"] {
+                let datatype = RdfLiteral::language_datatype_iri(direction);
+                let values = [
+                    TermValue::iri(datatype),
+                    TermValue::Literal {
+                        lexical_form: "x".to_owned(),
+                        datatype: datatype.to_owned(),
+                        language: Some(language.to_owned()),
+                        direction,
+                    },
+                ];
+                assert_eq!(
+                    PackDict::open(&encode_test_values(&values).to_bytes()).unwrap_err(),
+                    PackDictError::Malformed("dict: language tag is not lowercase"),
+                    "{language} {direction:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decoding_requires_strict_canonical_order_for_every_term_kind() {
+        let directional = |direction| TermValue::Literal {
+            lexical_form: "x".to_owned(),
+            datatype: RdfLiteral::language_datatype_iri(Some(direction)).to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(direction),
+        };
+        let triple = |s, p, o| TermValue::Triple {
+            s: Box::new(s),
+            p: Box::new(p),
+            o: Box::new(o),
+        };
+        let objects = [
+            TermValue::typed_literal("z", "http://example.org/a"),
+            TermValue::typed_literal("a", "http://example.org/z"),
+            TermValue::lang_literal("a", "en"),
+            TermValue::lang_literal("z", "en"),
+            TermValue::lang_literal("a", "fr"),
+            directional(RdfTextDirection::Ltr),
+            directional(RdfTextDirection::Rtl),
+            TermValue::Blank {
+                label: "a".to_owned(),
+                scope: BlankScope(0),
+            },
+            TermValue::Blank {
+                label: "a".to_owned(),
+                scope: BlankScope(1),
+            },
+            TermValue::blank("z"),
+            triple(iri("a"), iri("a"), iri("a")),
+            triple(iri("a"), iri("a"), iri("z")),
+            triple(iri("a"), iri("z"), iri("a")),
+            triple(iri("z"), iri("a"), iri("a")),
+        ];
+        let triples: Vec<_> = objects
+            .into_iter()
+            .map(|object| (iri("s"), iri("p"), object))
+            .collect();
+        let dataset = build_dataset(&triples);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("canonical");
+        let values: Vec<_> = (1..=dict.n_terms()).map(|id| dict.term_value(id)).collect();
+
+        for (i, left) in dict.entries.iter().enumerate() {
+            for (j, right) in dict.entries.iter().enumerate() {
+                assert_eq!(
+                    dict.compare_entries(*left, *right),
+                    values[i].cmp(&values[j]),
+                    "compact order differs at {i}, {j}"
+                );
+            }
+        }
+        for index in 0..values.len() {
+            let mut duplicate = values.clone();
+            duplicate.insert(index, values[index].clone());
+            assert_eq!(
+                PackDict::open(&encode_test_values(&duplicate).to_bytes()).unwrap_err(),
+                PackDictError::Malformed("dict: entries are not in strict canonical term order"),
+                "duplicate at {index}"
+            );
+            if index + 1 < values.len() {
+                let mut reversed = values.clone();
+                reversed.swap(index, index + 1);
+                assert_eq!(
+                    PackDict::open(&encode_test_values(&reversed).to_bytes()).unwrap_err(),
+                    PackDictError::Malformed(
+                        "dict: entries are not in strict canonical term order"
+                    ),
+                    "reversed pair at {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decoding_accepts_canonical_nested_forward_references() {
+        let inner = TermValue::Triple {
+            s: Box::new(iri("z")),
+            p: Box::new(iri("p")),
+            o: Box::new(TermValue::lang_literal("x", "en")),
+        };
+        let middle = TermValue::Triple {
+            s: Box::new(iri("m")),
+            p: Box::new(iri("p")),
+            o: Box::new(inner.clone()),
+        };
+        let outer = TermValue::Triple {
+            s: Box::new(iri("a")),
+            p: Box::new(iri("p")),
+            o: Box::new(middle.clone()),
+        };
+        let dataset = build_dataset(&[(iri("s"), iri("p"), outer.clone())]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("canonical");
+        let outer_id = dict.id_by_value(&outer).expect("outer");
+        let middle_id = dict.id_by_value(&middle).expect("middle");
+        let inner_id = dict.id_by_value(&inner).expect("inner");
+        assert!(outer_id < middle_id && middle_id < inner_id);
+        assert_eq!(dict.term_value(outer_id), outer);
+        assert!(matches!(dict.entry(outer_id), DictEntry::Triple { o, .. } if *o == middle_id));
+        assert!(matches!(dict.entry(middle_id), DictEntry::Triple { o, .. } if *o == inner_id));
+    }
+
+    #[test]
+    fn canonical_admission_does_not_expand_shared_triple_trees() {
+        let mut dict = PackDict {
+            arena: Vec::new(),
+            entries: Vec::new(),
+        };
+        push_entry(&mut dict, RawRecord::Iri("http://example.org/a".to_owned()))
+            .expect("absolute IRI");
+        for _ in 0..MAX_TRIPLE_TERM_DEPTH {
+            let child = dict.n_terms();
+            push_entry(
+                &mut dict,
+                RawRecord::Triple {
+                    s: child,
+                    p: child,
+                    o: child,
+                },
+            )
+            .expect("compact triple");
+        }
+        // The compact DAG has one row per level; its expanded tree has three
+        // copies of every child subtree. Neither admission pass may expand it.
+        dict.validate_references().expect("acyclic bounded DAG");
+        dict.validate_canonical_order().expect("canonical DAG");
+        assert_eq!(dict.n_terms() as usize, MAX_TRIPLE_TERM_DEPTH + 1);
     }
 
     #[test]

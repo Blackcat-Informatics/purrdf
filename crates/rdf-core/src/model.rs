@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::RdfLocation;
+use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
 
 /// RDF term category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,9 +42,9 @@ impl RdfTextDirection {
 pub struct RdfLiteral {
     /// The lexical form, byte-for-byte as authored.
     pub lexical_form: String,
-    /// The datatype IRI; `None` means the implied default (`rdf:langString`
-    /// when a language tag is present, otherwise `xsd:string`), expanded at
-    /// intern time.
+    /// The datatype IRI; `None` means the implied default (`rdf:dirLangString`
+    /// for a directional language tag, `rdf:langString` for a language tag
+    /// without direction, otherwise `xsd:string`), expanded at intern time.
     pub datatype: Option<String>,
     /// The language tag, for language-tagged strings.
     pub language: Option<String>,
@@ -52,6 +53,61 @@ pub struct RdfLiteral {
 }
 
 impl RdfLiteral {
+    /// Validate the relationship between an expanded datatype, language and direction.
+    ///
+    /// Call after applying any ingress-specific implied datatype rules. This checks
+    /// RDF term shape, not datatype lexical validity or language-tag grammar.
+    ///
+    /// # Errors
+    /// Refuses missing language tags, empty tags and datatype/direction mismatches.
+    pub fn validate_components(
+        datatype: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> Result<(), &'static str> {
+        if let Some(language) = language {
+            if language.is_empty() {
+                return Err("a language tag must not be empty");
+            }
+            if datatype != Self::language_datatype_iri(direction) {
+                return Err("literal datatype does not match its language and base direction");
+            }
+        } else {
+            if direction.is_some() {
+                return Err("a base direction requires a language tag");
+            }
+            if matches!(datatype, RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
+                return Err("a language-string datatype requires a language tag");
+            }
+        }
+        Ok(())
+    }
+
+    /// The RDF datatype implied by a language tag and its optional base direction.
+    #[must_use]
+    pub const fn language_datatype_iri(direction: Option<RdfTextDirection>) -> &'static str {
+        match direction {
+            Some(_) => RDF_DIR_LANG_STRING,
+            None => RDF_LANG_STRING,
+        }
+    }
+
+    /// The expanded datatype used when this owned literal is interned.
+    ///
+    /// A language tag determines the datatype, regardless of an explicit
+    /// datatype field: `rdf:dirLangString` with a base direction, otherwise
+    /// `rdf:langString`. Without a language tag, an explicit datatype is
+    /// preserved and an absent datatype expands to `xsd:string`.
+    /// This borrows the existing IRI or a constant and does not allocate.
+    #[must_use]
+    pub fn datatype_iri(&self) -> &str {
+        match (&self.language, self.direction, &self.datatype) {
+            (Some(_), direction, _) => Self::language_datatype_iri(direction),
+            (None, _, Some(datatype)) => datatype,
+            (None, _, None) => XSD_STRING,
+        }
+    }
+
     /// A simple literal: bare lexical form with no datatype, language, or
     /// direction.
     pub fn simple(lexical_form: impl Into<String>) -> Self {

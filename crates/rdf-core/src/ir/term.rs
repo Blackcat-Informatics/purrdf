@@ -9,7 +9,7 @@
 //! - [`TermId`] is opaque and **local to one frozen `RdfDataset`** — never
 //!   serialized, never merge-stable, never meaningful across datasets (C0.8).
 //! - Literal identity is defined by the IR, not a backend (C0.1): the datatype is
-//!   always expanded (`xsd:string` / `rdf:langString`), the language tag is
+//!   always expanded (`xsd:string` / `rdf:langString` / `rdf:dirLangString`), the language tag is
 //!   lowercased for the key, base direction participates in identity, and the
 //!   lexical spelling is preserved verbatim.
 //! - Blank-node scope participates in the interning key (C0.2).
@@ -25,6 +25,10 @@ pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// The `rdf:langString` datatype IRI — the default datatype of a language-tagged
 /// literal (C0.1).
 pub(crate) const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+
+/// The datatype of an RDF 1.2 directional language-tagged literal.
+pub(crate) const RDF_DIR_LANG_STRING: &str =
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
 /// Opaque term identity, LOCAL to one frozen `RdfDataset`. Deliberately NOT
 /// `Serialize`/`Deserialize`, not merge-stable, not meaningful across datasets
@@ -228,8 +232,8 @@ pub(crate) fn arena_str(arena: &[u8], range: StrRange) -> &str {
 pub(crate) struct InternedLiteral {
     /// The lexical form, byte-for-byte as authored — never canonicalized (C0.1).
     pub lexical_form: StrRange,
-    /// The expanded datatype, always present (`xsd:string` / `rdf:langString`
-    /// expanded at intern time), stored as the id of its interned IRI term.
+    /// The expanded datatype, always present (including `rdf:dirLangString` for
+    /// directional literals), stored as the id of its interned IRI term.
     pub datatype: TermId,
     /// The language tag, lowercased for the identity key (C0.1).
     pub language: Option<StrRange>,

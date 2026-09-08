@@ -5420,7 +5420,7 @@ fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>
 }
 
 /// The language half of `LANG_DIR`: `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`.
-fn is_langtag(lang: &str) -> bool {
+pub(crate) fn is_langtag(lang: &str) -> bool {
     let mut subtags = lang.split('-');
     let primary_ok = subtags.next().is_some_and(|primary| {
         !primary.is_empty() && primary.bytes().all(|b| b.is_ascii_alphabetic())
