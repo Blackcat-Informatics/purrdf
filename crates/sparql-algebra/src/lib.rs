@@ -82,6 +82,7 @@ pub mod parser;
 mod retained_size;
 pub mod serialize;
 pub mod substitute;
+mod validate;
 
 pub use algebra::{
     AggregateArityError, AggregateExpression, AggregateExpressionError, AggregateFunction,

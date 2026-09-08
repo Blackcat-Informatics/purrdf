@@ -41,6 +41,7 @@ use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
 use crate::governor::{GovernorState, NonMonotoneBarrier, QueryExplanation, QueryGovernors};
 use crate::plan_cache::{BoundedCache, BoundedOrderCache};
+use crate::plan_memory::{PlanCharge, PlanMemoryObserver};
 use crate::update::{GraphResolver, UpdateAbort, eval_update};
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleSparqlError, FallibleSparqlResult,
@@ -48,6 +49,8 @@ use crate::{
     RelationIdentity,
 };
 use crate::{CacheLimits, CacheStats};
+
+mod prepared_fallible;
 
 /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
 #[derive(Debug)]
@@ -76,38 +79,110 @@ pub struct PreparedQuery {
     /// `check_plan_matches_relations`, which now checks this alongside
     /// [`Self::relations`].
     aggregates: String,
+    memory: PlanCharge,
 }
 
 impl PreparedQuery {
-    /// A plan for an algebra a caller built or rewrote itself, tagged with the
-    /// registry identity the plan is valid under.
+    /// Structurally admit and feasibility-order algebra a caller built or rewrote.
     ///
-    /// The ordinary way to get a [`PreparedQuery`] is
-    /// [`NativeSparqlEngine::prepare_query`] or
-    /// [`NativeSparqlEngine::prepare_query_with_options`]; this is for a caller that
-    /// rewrites a prepared plan's algebra (the entailment lane restricts chase-minted
-    /// witnesses) and must hand the rewrite back to a governed entry. `options` must be
-    /// the options the ORIGINAL plan was prepared under, and the same options the
-    /// rewrite will be evaluated under.
+    /// This uses the same term, row, registry and call checks as
+    /// [`NativeSparqlEngine::prepare_algebra`]. It neither renders query text nor
+    /// reparses it. Pass the registries under which the rewrite will execute;
+    /// their identities are retained with the admitted plan.
+    ///
+    /// The public [`Self::query`] field remains mutable for compatibility.
+    /// Prepared execution revalidates its current contents before charging any
+    /// governor and refuses changes that need feasibility replanning. Call this
+    /// constructor again to admit and order such a changed query.
     ///
     /// # Errors
     ///
-    /// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a relation in
-    /// `options.property_functions`, or an aggregate in `options.aggregates`, panics
-    /// while its declaration is read to compute its registry's fingerprint.
+    /// Refuses malformed algebra, unregistered or invalid calls, infeasible
+    /// property-function orders, and registry declaration panics. Diagnostics
+    /// identify the algebra, property-function or aggregate admission failure.
     pub fn rewritten(query: Query, options: QueryOptions<'_>) -> Result<Self, RdfDiagnostic> {
+        Self::from_algebra(query, options, &PlanMemoryObserver::default())
+    }
+
+    fn from_algebra(
+        query: Query,
+        options: QueryOptions<'_>,
+        memory: &PlanMemoryObserver,
+    ) -> Result<Self, RdfDiagnostic> {
+        let planned = admit_algebra(&query, options.property_functions, options.aggregates)?;
         let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions)
             .map_err(|e| {
             RdfDiagnostic::error("native-sparql-property-function", e.to_string())
         })?;
         let aggregates = crate::agg_fn::registry_fingerprint(options.aggregates)
             .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
-        Ok(Self {
+        Ok(Self::admitted(
+            planned.unwrap_or(query),
+            relations,
+            aggregates,
+            memory,
+        ))
+    }
+
+    fn admitted(
+        query: Query,
+        relations: String,
+        aggregates: String,
+        memory: &PlanMemoryObserver,
+    ) -> Self {
+        let bytes = plan_payload_bytes(&query, relations.capacity(), aggregates.capacity());
+        Self {
             query,
             relations,
             aggregates,
-        })
+            memory: PlanCharge::new(memory, bytes),
+        }
     }
+
+    /// Conservative current payload charge, including caller changes to the algebra.
+    /// Shared strings are charged per occurrence. Excludes allocator overhead,
+    /// the outer plan's `Arc` header, and shared accounting storage.
+    #[must_use]
+    pub fn retained_size_bytes(&self) -> usize {
+        plan_payload_bytes(
+            &self.query,
+            self.relations.capacity(),
+            self.aggregates.capacity(),
+        )
+    }
+
+    /// Observe admitted allocations even after the preparing cache is dropped.
+    #[must_use]
+    pub fn memory_observer(&self) -> PlanMemoryObserver {
+        self.memory.observer()
+    }
+}
+
+fn plan_payload_bytes(
+    query: &Query,
+    relations_capacity: usize,
+    aggregates_capacity: usize,
+) -> usize {
+    size_of::<PreparedQuery>()
+        .saturating_add(
+            query
+                .retained_size_bytes()
+                .saturating_sub(size_of::<Query>()),
+        )
+        .saturating_add(relations_capacity)
+        .saturating_add(aggregates_capacity)
+}
+
+fn admit_algebra(
+    query: &Query,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
+    aggregates: &crate::agg_fn::AggregateRegistry,
+) -> Result<Option<Query>, RdfDiagnostic> {
+    query
+        .validate()
+        .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))?;
+    crate::property_fn_plan::plan_query(query, relations, aggregates)
+        .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
 }
 
 /// A parse-memoizing cache keyed on `(base IRI, extension-function namespace set,
@@ -126,6 +201,15 @@ impl PreparedQuery {
 #[derive(Debug)]
 pub struct PlanCache {
     entries: BoundedCache<Arc<[u8]>, Arc<PreparedQuery>>,
+    memory: PlanMemoryObserver,
+}
+
+impl Drop for PlanCache {
+    fn drop(&mut self) {
+        for plan in self.entries.values() {
+            plan.memory.detach();
+        }
+    }
 }
 
 impl Default for PlanCache {
@@ -161,6 +245,7 @@ impl PlanCache {
     pub fn with_limits(limits: CacheLimits) -> Self {
         Self {
             entries: BoundedCache::new(limits),
+            memory: PlanMemoryObserver::default(),
         }
     }
 
@@ -168,6 +253,12 @@ impl PlanCache {
     #[must_use]
     pub fn stats(&self) -> CacheStats {
         self.entries.stats()
+    }
+
+    /// Observe live admitted allocations separately from retained cache bytes.
+    #[must_use]
+    pub fn memory_observer(&self) -> PlanMemoryObserver {
+        self.memory.clone()
     }
 
     /// Parse `query` (memoized) into a [`PreparedQuery`], under
@@ -249,26 +340,25 @@ impl PlanCache {
         let parsed = parser
             .parse_query_with(query, options)
             .map_err(|e| RdfDiagnostic::error("native-sparql-query-parse", e.to_string()))?;
-        let planned = crate::property_fn_plan::plan_query(&parsed, relations, aggregates)
-            .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
-        let prepared = Arc::new(PreparedQuery {
-            query: planned.unwrap_or(parsed),
-            relations: fingerprint,
-            aggregates: agg_fingerprint,
-        });
+        let planned = admit_algebra(&parsed, relations, aggregates)?;
+        let prepared = Arc::new(PreparedQuery::admitted(
+            planned.unwrap_or(parsed),
+            fingerprint,
+            agg_fingerprint,
+            &self.memory,
+        ));
         let bytes = key
             .len()
             .saturating_add(4 * size_of::<usize>()) // Key and plan Arc counters.
-            .saturating_add(size_of::<PreparedQuery>())
-            .saturating_add(
-                prepared
-                    .query
-                    .retained_size_bytes()
-                    .saturating_sub(size_of::<Query>()),
-            )
-            .saturating_add(prepared.relations.capacity())
-            .saturating_add(prepared.aggregates.capacity());
-        self.entries.insert(key.into(), prepared.clone(), bytes);
+            .saturating_add(prepared.retained_size_bytes());
+        if self
+            .entries
+            .insert_with_eviction(key.into(), prepared.clone(), bytes, |plan| {
+                plan.memory.detach();
+            })
+        {
+            prepared.memory.retain();
+        }
         Ok(prepared)
     }
 }
@@ -396,6 +486,12 @@ impl NativeSparqlEngine {
         self.cache.borrow().stats()
     }
 
+    /// Observe admitted plan lifetimes independently of cache ownership.
+    #[must_use]
+    pub fn plan_memory_observer(&self) -> PlanMemoryObserver {
+        self.cache.borrow().memory_observer()
+    }
+
     /// Configure bounded join-order retention, independently of prepared plans.
     #[must_use]
     pub fn with_order_cache_limits(mut self, limits: CacheLimits) -> Self {
@@ -421,19 +517,14 @@ impl NativeSparqlEngine {
     /// retains the returned immutable plan; it is not inserted in the text cache.
     ///
     /// # Errors
-    /// Returns a diagnostic for a registry fingerprint or call-admission failure.
+    /// Returns a diagnostic for malformed algebra, invalid or infeasible calls,
+    /// or registry declaration failures.
     pub fn prepare_algebra(
         &self,
         query: Query,
         options: QueryOptions<'_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        let planned = crate::property_fn_plan::plan_query(
-            &query,
-            options.property_functions,
-            options.aggregates,
-        )
-        .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
-        PreparedQuery::rewritten(planned.unwrap_or(query), options).map(Arc::new)
+        PreparedQuery::from_algebra(query, options, &self.plan_memory_observer()).map(Arc::new)
     }
 
     /// The number of plans this engine's cache currently memoizes — see
@@ -2081,6 +2172,34 @@ fn check_plan_matches_relations(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
 ) -> Result<(), RdfDiagnostic> {
+    prepared
+        .query
+        .validate()
+        .map_err(|e| RdfDiagnostic::error("native-sparql-algebra", e.to_string()))?;
+    // The evaluator's existing recursive-depth guard must precede the governor's
+    // survey and substitution cloning, which also traverse the plan recursively.
+    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(&prepared.query))
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-query-eval"),
+                e.to_string(),
+            )
+        })?;
+    let planned = crate::property_fn_plan::plan_query(
+        &prepared.query,
+        options.property_functions,
+        options.aggregates,
+    )
+    .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
+    if planned
+        .as_ref()
+        .is_some_and(|query| query != &prepared.query)
+    {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-algebra",
+            "prepared algebra requires feasibility replanning; prepare the changed algebra before execution",
+        ));
+    }
     let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions)
         .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
     if supplied != prepared.relations {

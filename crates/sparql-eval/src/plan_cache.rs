@@ -95,6 +95,10 @@ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
         self.stats
     }
 
+    pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
+        self.entries.values().map(|entry| &entry.value)
+    }
+
     fn tick(&mut self) -> u64 {
         if self.clock == u64::MAX {
             // Preserve LRU order at counter rollover; never introduce a timestamp
@@ -143,15 +147,26 @@ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
     }
 
     pub(crate) fn insert(&mut self, key: K, value: V, bytes: usize) {
+        self.insert_with_eviction(key, value, bytes, |_| {});
+    }
+
+    pub(crate) fn insert_with_eviction(
+        &mut self,
+        key: K,
+        value: V,
+        bytes: usize,
+        mut evicted: impl FnMut(&V),
+    ) -> bool {
         if self.limits.entries == 0
             || self.limits.bytes == 0
             || bytes == usize::MAX
             || bytes > self.limits.bytes
         {
             self.stats.unretained = self.stats.unretained.saturating_add(1);
-            return;
+            return false;
         }
         if let Some(previous) = self.entries.remove(&key) {
+            evicted(&previous.value);
             self.recency.remove(&previous.stamp);
             self.stats.bytes -= previous.bytes;
         }
@@ -160,6 +175,7 @@ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
         {
             let (_, oldest) = self.recency.pop_first().expect("nonempty cache to evict");
             let entry = self.entries.remove(&oldest).expect("recency entry exists");
+            evicted(&entry.value);
             self.stats.bytes -= entry.bytes;
             self.stats.evictions = self.stats.evictions.saturating_add(1);
         }
@@ -175,6 +191,7 @@ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
         );
         self.stats.bytes += bytes;
         self.stats.entries = self.entries.len();
+        true
     }
 }
 

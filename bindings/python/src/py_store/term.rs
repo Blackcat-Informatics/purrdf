@@ -18,6 +18,7 @@
 //! matching the oxigraph Python `Literal` API the codebase relies on.
 
 use std::collections::hash_map::DefaultHasher;
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -206,6 +207,12 @@ impl PyLiteral {
                 }
             }
         };
+        RdfLiteral::validate_components(
+            inner.datatype_iri(),
+            inner.language.as_deref(),
+            inner.direction,
+        )
+        .map_err(PyValueError::new_err)?;
         Ok(Self { inner })
     }
 
@@ -250,7 +257,16 @@ impl PyLiteral {
         // the SAME term (matching the prior oxigraph `Literal` equality, where a
         // plain literal's datatype IS `xsd:string`). The native model keeps a plain
         // literal datatype-less, so normalize both sides through the datatype IRI.
-        literal_key(&self.inner) == literal_key(&other.inner)
+        let (lex, dt, lang, direction) = literal_key(&self.inner);
+        let (other_lex, other_dt, other_lang, other_direction) = literal_key(&other.inner);
+        lex == other_lex
+            && dt == other_dt
+            && direction == other_direction
+            && match (lang, other_lang) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                (None, None) => true,
+                _ => false,
+            }
     }
 
     fn __hash__(&self) -> u64 {
@@ -258,20 +274,35 @@ impl PyLiteral {
     }
 }
 
-/// The RDF-term-equality key of a native literal: `(lexical, datatype-IRI, language)`
+/// The RDF-term-equality key: lexical form, datatype IRI, language and direction,
 /// with a plain literal's datatype normalized to `xsd:string`, so a plain literal and
 /// an explicit `xsd:string` literal compare equal (oxigraph `Literal` parity).
-fn literal_key(lit: &RdfLiteral) -> (&str, &str, Option<&str>) {
+fn literal_key(lit: &RdfLiteral) -> (&str, &str, Option<&str>, Option<RdfTextDirection>) {
     (
         &lit.lexical_form,
         literal_datatype_iri(lit),
         lit.language.as_deref(),
+        lit.direction,
     )
 }
 
 fn literal_key_string(lit: &RdfLiteral) -> String {
-    let (lex, dt, lang) = literal_key(lit);
-    format!("{lex}\u{1}{dt}\u{1}{}", lang.unwrap_or(""))
+    let (lex, dt, lang, direction) = literal_key(lit);
+    framed_key(&[
+        lex,
+        dt,
+        &lang.unwrap_or("").to_ascii_lowercase(),
+        direction.map_or("", RdfTextDirection::as_str),
+    ])
+}
+
+/// Length framing keeps embedded separator characters out of identity decisions.
+fn framed_key(parts: &[&str]) -> String {
+    let mut key = String::new();
+    for part in parts {
+        write!(key, "{}:{part}", part.len()).expect("writing to a String cannot fail");
+    }
+    key
 }
 
 /// A quoted triple term (RDF 1.2 / RDF-star). Mirrors the oxigraph Python `Triple`.
@@ -334,7 +365,7 @@ impl PyTriple {
     }
 
     fn __hash__(&self) -> u64 {
-        hash_str(&triple_term_to_string(&self.inner))
+        hash_str(&triple_key(&self.inner))
     }
 }
 
@@ -403,7 +434,7 @@ impl PyQuad {
     }
 
     fn __hash__(&self) -> u64 {
-        hash_str(&quad_to_string(&self.inner))
+        hash_str(&quad_key(&self.inner))
     }
 }
 
@@ -509,24 +540,20 @@ fn term_key(term: &RdfTerm) -> String {
 }
 
 fn triple_key(triple: &RdfTriple) -> String {
-    format!(
-        "{}\u{2}{}\u{2}{}",
-        term_key(&triple.subject),
-        triple.predicate,
-        term_key(&triple.object)
-    )
+    framed_key(&[
+        &term_key(&triple.subject),
+        &triple.predicate,
+        &term_key(&triple.object),
+    ])
 }
 
 fn quad_key(quad: &RdfQuad) -> String {
-    format!(
-        "{}\u{3}{}",
-        triple_key(&RdfTriple::new(
-            quad.subject.clone(),
-            quad.predicate.clone(),
-            quad.object.clone(),
-        )),
-        quad.graph_name.as_ref().map_or(String::new(), term_key)
-    )
+    framed_key(&[
+        &term_key(&quad.subject),
+        &quad.predicate,
+        &term_key(&quad.object),
+        &quad.graph_name.as_ref().map_or(String::new(), term_key),
+    ])
 }
 
 // ── cross-crate constructors ──────────────────────────────────────────────────────
@@ -659,7 +686,7 @@ pub(super) fn rdf_term_to_value_scoped(term: &RdfTerm, scope: BlankScope) -> Ter
         RdfTerm::Literal(lit) => TermValue::Literal {
             lexical_form: lit.lexical_form.clone(),
             datatype: literal_datatype_iri(lit).to_owned(),
-            language: lit.language.clone(),
+            language: lit.language.as_deref().map(str::to_ascii_lowercase),
             direction: lit.direction,
         },
         RdfTerm::Triple(t) => TermValue::Triple {
@@ -797,6 +824,13 @@ mod tests {
             .expect("dirLangString constructs");
         assert_eq!(lit.language(), Some("ar"));
         assert_eq!(lit.direction(), Some("rtl"));
+        let other = PyLiteral::new("مرحبا".to_owned(), None, Some("ar".to_owned()), Some("ltr"))
+            .expect("opposite direction");
+        assert!(!lit.__eq__(&other));
+        assert_ne!(
+            literal_key_string(&lit.inner),
+            literal_key_string(&other.inner)
+        );
 
         // A direction without a language tag is rejected (not a dirLangString).
         assert!(PyLiteral::new("x".to_owned(), None, None, Some("ltr")).is_err());

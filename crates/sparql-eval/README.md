@@ -28,10 +28,16 @@ mint time.
 
 For repeated work, retain an `Arc<PreparedQuery>` from `prepare_query` or
 `prepare_algebra` and pass data through substitutions. Compiler-produced algebra
-goes directly through registry admission without rendering or parsing query text.
+goes directly through structural and registry admission without rendering or parsing
+query text. `PreparedQuery::rewritten` also admits and feasibility-orders its input.
+The public `query` field remains accessible; execution revalidates caller changes
+and refuses any that require replanning.
 `query_prepared_governed_in_operation` charges a caller-owned governor across
 multiple queries; immutable plans and the governor can be shared by worker-local
-engines without locking evaluation globally.
+engines without locking evaluation globally. Its fallible-view sibling
+`query_prepared_governed_fallible_in_operation` preserves operational failure
+precedence and publishes only after the final ready checkpoint; a federation
+variant accepts a service resolver under the same governor.
 
 The engine's prepared-plan and join-order caches each default to 4096 entries and
 64 MiB of charged payload. Configure them independently with
@@ -40,12 +46,23 @@ serves standalone callers. Retention uses LRU eviction and observable
 `CacheStats`. Zero capacity or an oversized plan causes recomputation, never
 weaker execution. Byte accounting covers keys, owned algebra, vector capacities,
 and shared-string storage charged per occurrence; it excludes allocator overhead
-and caller-retained handles. It is not an RSS measurement. Dataset statistics key
+and caller-retained handles. `PlanMemoryObserver` separately reports all live
+admitted plan payloads and the portions retained by a cache or held exclusively
+by callers, even after cache replacement or destruction. Each allocation is counted
+once regardless of `Arc` clones. Its admission estimates do not track later
+public-field mutations; `PreparedQuery::retained_size_bytes` computes the current
+payload. Public totals saturate without losing internal lifetime accounting.
+Neither counter is an RSS measurement. Dataset statistics key
 join-order hints only, never result reuse. The existing caller-owned
 `eval::BgpOrderCache` alias remains available with its original type.
 
 `make bench-prepared-reuse` measures cold/warm preparation and prepared execution
-using the release profile (O3/full LTO). It is report-only and uses synthetic data.
+using the release profile (O3/full LTO). The `prepared_admission` benchmark isolates
+structural revalidation and minimal repeated execution; the
+`prepared_reuse_counters` example separately records allocator requests, cache
+activity, plan lifetimes and governor work. Measurements are report-only and use
+synthetic data. Allocator-requested bytes and governor intermediate cells are
+different denominations, recorded separately.
 
 Design pillars:
 

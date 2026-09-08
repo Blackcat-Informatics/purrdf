@@ -53,6 +53,36 @@ pub struct RdfLiteral {
 }
 
 impl RdfLiteral {
+    /// Validate the relationship between an expanded datatype, language and direction.
+    ///
+    /// Call after applying any ingress-specific implied datatype rules. This checks
+    /// RDF term shape, not datatype lexical validity or language-tag grammar.
+    ///
+    /// # Errors
+    /// Refuses missing language tags, empty tags and datatype/direction mismatches.
+    pub fn validate_components(
+        datatype: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> Result<(), &'static str> {
+        if let Some(language) = language {
+            if language.is_empty() {
+                return Err("a language tag must not be empty");
+            }
+            if datatype != Self::language_datatype_iri(direction) {
+                return Err("literal datatype does not match its language and base direction");
+            }
+        } else {
+            if direction.is_some() {
+                return Err("a base direction requires a language tag");
+            }
+            if matches!(datatype, RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
+                return Err("a language-string datatype requires a language tag");
+            }
+        }
+        Ok(())
+    }
+
     /// The RDF datatype implied by a language tag and its optional base direction.
     #[must_use]
     pub const fn language_datatype_iri(direction: Option<RdfTextDirection>) -> &'static str {

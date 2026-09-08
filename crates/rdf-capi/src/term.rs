@@ -394,6 +394,8 @@ pub(crate) unsafe fn view_to_value(view: &PurrdfTermView) -> Result<TermValue, P
                 } else {
                     XSD_STRING.to_owned()
                 };
+                RdfLiteral::validate_components(&datatype, language.as_deref(), direction)
+                    .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
                 Ok(TermValue::Literal {
                     lexical_form: lexical.to_owned(),
                     datatype,

@@ -225,6 +225,8 @@ struct Interner {
     /// other structural invariant too, and once one is recorded the dataset can
     /// never be frozen, so later ones cannot change the outcome.
     relative_iri: Option<(String, IriError)>,
+    /// First invalid literal shape, refused at the existing validation boundary.
+    invalid_literal: Option<&'static str>,
 }
 
 impl Interner {
@@ -236,6 +238,7 @@ impl Interner {
             content_scheme: None,
             content_ids: HashMap::default(),
             relative_iri: None,
+            invalid_literal: None,
         }
     }
 
@@ -585,6 +588,9 @@ impl RdfDatasetBuilder {
     ///
     /// The datatype is always stored as an interned IRI [`TermId`]. The lexical
     /// form is preserved byte-for-byte; base direction participates in identity.
+    /// Invalid language/datatype/direction combinations are recorded and refused
+    /// by [`validate`](Self::validate) or [`freeze`](Self::freeze), preserving this
+    /// method's infallible builder interface without publishing invalid RDF.
     ///
     /// # A composite literal also interns the blank nodes it names
     ///
@@ -607,6 +613,14 @@ impl RdfDatasetBuilder {
     /// string comparisons and nothing more.
     pub fn intern_literal(&mut self, lit: RdfLiteral) -> TermId {
         let datatype_iri = lit.datatype_iri();
+        if self.interner.invalid_literal.is_none() {
+            self.interner.invalid_literal = RdfLiteral::validate_components(
+                datatype_iri,
+                lit.language.as_deref(),
+                lit.direction,
+            )
+            .err();
+        }
         let datatype_id = self.intern_iri(datatype_iri);
 
         // A composite literal's embedded labels are blank nodes of this dataset.
@@ -991,6 +1005,11 @@ impl RdfDatasetBuilder {
             .relative_iri
             .as_ref()
             .map(|(iri, err)| (iri.as_str(), err))
+    }
+
+    /// Read the first literal-shape failure recorded by the infallible interner.
+    pub(crate) fn invalid_literal(&self) -> Option<&'static str> {
+        self.interner.invalid_literal
     }
 
     /// Push a quad. Duplicate quads collapse to a single row (C0.5); `g == None`

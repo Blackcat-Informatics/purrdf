@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes

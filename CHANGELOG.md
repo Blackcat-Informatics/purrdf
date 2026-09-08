@@ -20,6 +20,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Bug Fixes
 
+- **sparql:** Compiler-built, rewritten and caller-mutated prepared algebra now
+  passes structural and registry validation before execution. Malformed binding
+  rows and excessively deep execution plans return diagnostics instead of
+  panicking or overflowing the stack. Rewrites that need a different property
+  function plan must be admitted again before execution.
+- **sparql:** Repeated grouping variables use the same normalized columns as
+  their result schema, preventing an aggregate after duplicate `GROUP BY` keys
+  from indexing outside its output row. Repeated bare projection variables retain
+  their existing normalization behavior.
+- **gts:** Snapshot composition preserves the graph identity of reifiers and
+  annotations during ingestion, canonicalization, deduplication and emission.
+  Explicit default-graph relocation applies to all three RDF record tables.
+  Named-graph metadata uses the existing graph fields in the wire format;
+  default-graph record encodings and frozen vectors are unchanged.
 - **core:** Directional language-tagged literals now intern with
   `rdf:dirLangString`, as required by RDF 1.2. Previously the builder used
   `rdf:langString`, so prepared SPARQL constants could not find those terms.
@@ -27,6 +41,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   identities for datasets containing directional literals. Regenerate derived
   artifacts from canonical inputs; previously authenticated bytes remain their
   original artifacts and must not be rewritten under an old identity.
+- **core/bindings:** Native validation, pack and embedding readers, and C/Python
+  literal inputs reject inconsistent datatype, language and direction fields.
+  Python native literal equality and hashing distinguish opposite base directions
+  and compare language tags without ASCII case sensitivity, including inside
+  triple and quad keys. Length-framed keys preserve embedded control characters.
+  Typed Python store operations and query prebindings normalize language tags
+  consistently. Pack admission rejects noncanonical language tags, duplicate
+  terms and unordered dictionaries before exposing lookup indexes.
 - **shapes:** Repeated values of single-parameter constraint components apply
   independently and conjunctively. Importing standard SHACL component
   declarations no longer rejects legal repeated properties or executes native
@@ -42,6 +64,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   reports name their declaring shape, and reifier-constraint results use the
   enclosing property's severity. First-party report goldens deliberately correct
   34 source-shape references and one severity; conformance outcomes are unchanged.
+
+### Features
+
+- **sparql:** Prepared-query and join-order caches have deterministic entry and
+  byte limits, configurable independently through additive policy APIs. Existing
+  constructors use finite defaults. Cache counters expose retention and eviction;
+  `PlanMemoryObserver` separately tracks admitted allocations still held by
+  callers after eviction or cache destruction. These payload estimates exclude
+  allocator overhead and do not claim to measure process memory.
+- **sparql:** Immutable prepared plans can execute under a shared operation
+  governor, including fallible dataset views and federated sources. Typed
+  substitutions, registry checks, cancellation, completeness and operational
+  failure precedence retain the existing evaluator's behavior. Evaluation state
+  stays local to each worker.
+- **core:** Typed dataset import memoizes source terms and streams flat quads;
+  canonical relabeling avoids building an unused text representation. Existing
+  scope, metadata and deterministic output contracts are preserved.
 
 ## [1.1.0] - 2026-09-04
 
@@ -2376,5 +2415,3 @@ called out below with what a consumer must do.
 ### Other
 
 - First commit
-
-

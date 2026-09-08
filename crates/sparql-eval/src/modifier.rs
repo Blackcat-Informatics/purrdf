@@ -952,7 +952,16 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         return Ok(lift.finish(SolutionSeq::empty(Arc::new(out_schema))));
     };
     let in_schema = seq.schema.clone();
-    let key_cols: Vec<Option<usize>> = variables.iter().map(|v| in_schema.index_of(v)).collect();
+    // Redundant GROUP BY keys do not create extra output columns. Derive both
+    // partition keys and row offsets from the same first-seen schema, so adding
+    // an aggregate after a repeated key cannot index past the output row.
+    let mut out_schema = VarSchema::from_vars(variables.iter().cloned());
+    let var_count = out_schema.len();
+    let key_cols: Vec<Option<usize>> = out_schema
+        .vars()
+        .iter()
+        .map(|v| in_schema.index_of(v))
+        .collect();
 
     // Partition rows into groups, keeping groups in first-seen order.
     let mut groups: DetHashMap<Solution<D::Id>, (usize, Vec<usize>)> = DetHashMap::default();
@@ -976,13 +985,16 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         .collect();
     groups.sort_unstable_by_key(|(ordinal, _, _)| *ordinal);
 
-    let mut out_schema = VarSchema::from_vars(variables.iter().cloned());
     for (out_var, _) in aggregates {
-        out_schema.push(out_var.clone());
+        let next = out_schema.len();
+        if out_schema.push(out_var.clone()) != next {
+            return Err(EvalError::config(
+                "aggregate output collides with another group output",
+            ));
+        }
     }
     let out_schema = Arc::new(out_schema);
     let out_width = out_schema.len();
-    let var_count = variables.len();
 
     // Every aggregate expression must be parallel-safe (no RAND/UUID/STRUUID/
     // BNODE/list-mint reachable) for the per-group compute below to run under

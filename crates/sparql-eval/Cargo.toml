@@ -144,6 +144,10 @@ name = "prepared_reuse"
 harness = false
 
 [[bench]]
+name = "prepared_admission"
+harness = false
+
+[[bench]]
 # Large exact property-path ranges over disjoint coprime cycles. This is the
 # regression watch for binary relation powering: runtime must follow graph size
 # and exponent bits, not the period of frontier sets or the numeric range value.
