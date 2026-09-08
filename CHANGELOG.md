@@ -20,6 +20,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Bug Fixes
 
+- **core/rdf:** Located duplicate quads keep their source locations on the
+  deduplicated row during owned insertion, row remapping and GTS import.
+  Unrealized location handles cannot attach to a later unrelated row, and
+  validated append safely ignores unmatched handles. `push_quad_with_handle`
+  returns the actual row
+  handle for callers attaching locations; existing `push_quad` calls remain valid.
 - **core:** Mutation suppression and reinsertion apply to ordinary quads,
   reifiers and annotations, including overlapping records. Statement-layer
   classification uses the reifier's graph as part of its identity. Snapshots and
@@ -29,7 +35,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **shapes:** Borrowed statement projections deduplicate metadata overlapping
   ordinary rows, preserving graph-set semantics in SPARQL counts and validation.
   Disabled statement projection skips metadata reads, and bound subject probes
-  use the source's metadata indexes.
+  use the source's metadata indexes. Property-pair constraints read shared views
+  without materializing them, and validation shares one class index when Core
+  and SPARQL use the same data view.
 - **rdf/viz:** Properties of a known reifier render as annotation relations even
   when their graph differs from the reification declaration. Every relation keeps
   its original graph, and parsed and incrementally built datasets produce the
@@ -102,7 +110,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   explicit shared-scope constructor preserves already-established identities.
   Graph placement covers all RDF record tables and graph declarations. Finite
   retention limits and copy/freeze/materialization counters make ownership costs
-  observable without changing deterministic RDF identities.
+  observable without changing deterministic RDF identities. Composite, delta and
+  SHACL adapters reuse prepared physical probe plans across bindings, accounting
+  for graph placement and union projection.
 - **shapes:** `PreparedShapes` shares immutable shape and class-reference analysis
   across exact dataset bindings. Borrowed native, composite and delta views avoid
   rebuilding a base dataset for constraint, path and target evaluation. Each
