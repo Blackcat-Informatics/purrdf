@@ -332,6 +332,18 @@ pub(crate) trait TermMapper {
         iri: &str,
         iri_only: bool,
     ) -> Result<TermId, Self::Error>;
+
+    /// Observe a completed term rewrite without bypassing any positional check.
+    /// Most callers need no mapping, so the default does no work.
+    fn record_term(&mut self, _source: TermId, _target: TermId) {}
+
+    /// Observe an IRI reached inside a composite literal. It may have no term
+    /// ID in the source dictionary; only an interested recorder looks it up.
+    fn record_embedded_iri(&mut self, _iri: &str, _target: TermId) {}
+
+    /// Observe the implicit predicate after all reifier records have been
+    /// inserted. Callers without mappings need no builder lookup.
+    fn record_reifier_predicate(&mut self, _builder: &RdfDatasetBuilder) {}
 }
 
 /// Re-intern the term at `id` into `builder`, routing blanks and IRIs through
@@ -343,7 +355,7 @@ fn reintern<M: TermMapper>(
     mapper: &mut M,
     iri_only: bool,
 ) -> Result<TermId, M::Error> {
-    match ds.resolve(id) {
+    let mapped = match ds.resolve(id) {
         TermRef::Iri(iri) => mapper.map_iri(builder, iri, iri_only),
         TermRef::Blank { label, scope } => mapper.map_blank(builder, id, label, scope),
         TermRef::Literal {
@@ -359,7 +371,8 @@ fn reintern<M: TermMapper>(
             // Route the datatype through the mapper so an IRI-rewriting mapper
             // gets to refuse it (`iri_only`); the returned id is the same one
             // `intern_literal` re-derives from the string below.
-            let _ = mapper.map_iri(builder, dt, true)?;
+            let mapped_datatype = mapper.map_iri(builder, dt, true)?;
+            mapper.record_term(datatype, mapped_datatype);
             let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, mapper)?;
             Ok(builder.intern_literal(RdfLiteral {
                 lexical_form,
@@ -374,7 +387,9 @@ fn reintern<M: TermMapper>(
             let o = reintern(ds, builder, o, mapper, false)?;
             Ok(builder.intern_triple(s, p, o))
         }
-    }
+    }?;
+    mapper.record_term(id, mapped);
+    Ok(mapped)
 }
 
 /// Rewrite the terms a composite (`cdt:List` / `cdt:Map`) literal EMBEDS in its
@@ -419,6 +434,7 @@ fn remap_composite_lexical<M: TermMapper>(
             continue;
         };
         let mapped = mapper.map_blank(builder, id, &label, scope)?;
+        mapper.record_term(id, mapped);
         blanks.insert((label, scope), element_text(builder, mapped));
     }
 
@@ -440,6 +456,7 @@ fn remap_composite_lexical<M: TermMapper>(
             }
             match mapper.map_iri(builder, iri, iri_only) {
                 Ok(mapped) => {
+                    mapper.record_embedded_iri(iri, mapped);
                     let text = element_text(builder, mapped);
                     iris.insert(iri.to_owned(), text.clone());
                     Some(text)
@@ -574,6 +591,7 @@ pub(crate) fn rebuild_dataset<M: TermMapper>(
         };
         builder.push_reifier_in_graph(r, t, g);
     }
+    mapper.record_reifier_predicate(&builder);
     for (r, p, o, g) in ds.annotations_with_graph() {
         let r = reintern(ds, &mut builder, r, mapper, false)?;
         let p = reintern(ds, &mut builder, p, mapper, true)?;

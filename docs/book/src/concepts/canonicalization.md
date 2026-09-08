@@ -32,6 +32,38 @@ let canon = canonicalize(&ds);
 Use canonicalization when you need a content identity for a graph: hashing,
 signing, deduplication, or comparing datasets produced by different writers.
 
+## Native relabeling with source attribution
+
+Use `canonical_relabel` when the next stage consumes a native dataset. It keeps
+RDF 1.2 terms, reifiers, annotations, graph declarations and source locations
+without rendering and reparsing a canonical document.
+
+When a compiler or analyzer must associate source nodes with that result, use
+`canonical_relabel_with_mapping`. It records the actual term mapping during
+the same rebuild, after one canonical-label search:
+
+```rust,ignore
+use purrdf::canonical_relabel_with_mapping;
+
+let result = canonical_relabel_with_mapping(&source)?;
+let output_node = result.map_term(source_node).ok_or("source node not retained")?;
+let canonical_value = result.dataset().resolve(output_node);
+// Associate source receipts and owner metadata with canonical_value here.
+let canonical_dataset = result.into_dataset();
+```
+
+`source_node` must belong to the exact input dataset; `output_node` belongs to
+this result. A same-index ID from another dataset cannot be detected. The map
+includes nested triple components, literal datatypes, composite embedded blanks
+and already-interned IRIs, reifier and annotation terms, and empty named graphs.
+Unused dictionary entries omitted by the rewrite return `None`.
+
+The map uses four bytes per source term, with constant-time lookup. The existing
+`canonical_relabel` API does not allocate it. The map is not a durable identity
+or proof certificate: persist resolved RDF identities with authenticated input
+and output receipts, never raw `TermId` values. Source roles and standpoint
+ownership remain the caller's metadata, not consequences of canonical labels.
+
 ## Over RDF 1.2 constructs: two forms, named apart
 
 RDFC-1.0 has no notion of reifiers, annotations or triple terms. A dataset that
