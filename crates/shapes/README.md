@@ -68,6 +68,21 @@ cargo build -p purrdf-shapes
 cargo test -p purrdf-shapes
 ```
 
+## Reusing shape preparation
+
+`engine::PreparedShapes::new(Arc<Shapes>)` analyzes the parsed shape tree once.
+Keep it for a batch and call `bind_projected_dataset(Arc<RdfDataset>)` for each
+already-projected snapshot, or `bind_dataset(&RdfDataset)` when projection is
+still required. Each binding returns a `PreparedValidator` that shares the
+class-reference catalog and its input dataset. It resolves fresh dataset-local
+IDs, class membership and SPARQL targets before validation.
+
+This reuse does not authorize skipping targets after a data change. Paths,
+SPARQL and custom expressions can depend on nodes beyond the changed triples;
+call `validate()` for a complete report unless the caller has established the
+complete affected focus set. Target sets and validation answers belong to the
+exact bound snapshot.
+
 ## Ontology-complete developer schemas
 
 `compile_schema` makes the developer-schema surface an explicit choice.

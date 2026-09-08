@@ -37,7 +37,6 @@
 //! 4. reinsert-after-removal is consistent with both orders (insert→remove→insert
 //!    and remove→insert→… both return to "present").
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use purrdf_iri::IriError;
@@ -49,6 +48,9 @@ use crate::model::RdfLiteral;
 
 use super::dataset::{QuadHandle, TermRef};
 use super::term::TermId;
+
+mod delta_view;
+pub use delta_view::{DeltaDatasetView, DeltaViewId};
 
 /// The `rdf:reifies` predicate IRI — mirrors [`super::dataset`]'s private copy (kept
 /// local rather than exported: both classify the SAME fold, independently, from a
@@ -593,15 +595,10 @@ impl MutableDataset {
 
         let _ = new_ord; // last value consumed by the base loop; delta quads add none.
 
-        // Carry the base's reifiers + annotations through the same path BEFORE the
-        // delta quads, so `reifier_subjects` (built next) already knows about every
-        // reifier the base declared — an UPDATE may add a fresh annotation onto a
-        // Turtle-loaded reifier, and that added row must route through
-        // `push_annotation`, not land as a flat quad. Their term ids are BASE ids, so
-        // resolve each to a value and re-intern into the builder.
-        let mut reifier_subjects: HashSet<TermValue> = HashSet::new();
+        // Carry the base's statement metadata independently of quad suppression.
+        // The shared delta classifier probes the original base reifier index when
+        // routing added annotations, so it needs no owned copy of that subject set.
         for (reifier, triple, graph) in base.reifiers_with_graph() {
-            reifier_subjects.insert(self.base_value(reifier));
             let reifier = self.intern_base(&mut builder, &mut memo, reifier);
             let triple = self.intern_base(&mut builder, &mut memo, triple);
             let graph = graph.map(|g| self.intern_base(&mut builder, &mut memo, g));
@@ -615,30 +612,61 @@ impl MutableDataset {
             builder.push_annotation_in_graph(reifier, pred, obj, graph);
         }
 
-        // 2. DELTA-added quads (no source location — they were minted in memory, not
-        //    parsed from a source, so the `new_ord` mapping ends here). Remapped via
-        //    value re-intern.
-        //
-        // The RDF 1.2 statement layer is invisible to `MutableDataset`'s own delta
-        // model (§ module docs: it is a flat quad store) — an `INSERT`/`INSERT DATA`
-        // template that asserts `reifier rdf:reifies <<( s p o )>>` (or annotates an
-        // existing reifier) lands in `added` as an ordinary quad. Left unclassified,
-        // it would freeze as a plain default-graph quad instead of a reifier/
-        // annotation side-table row, so it would canonicalize DIFFERENTLY from the
-        // byte-identical statement loaded straight from Turtle — this is the fold
-        // `fold_statement_layer` (native codec ingest) already applies at PARSE time;
-        // this mirrors it at UPDATE-freeze time so both paths agree.
-        //
-        // Pass 1: resolve every added quad to its value ONCE, in call order (never
-        // `added`'s hash-iteration order — see `added_in_order`), and bind any
-        // reifier declaration (`_ rdf:reifies <<( … )>>`) among them — recording its
-        // subject so pass 2 can route that reifier's OTHER added triples to
-        // `push_annotation`.
+        self.append_delta(&mut builder);
+
+        // Carry the base's explicitly-declared (possibly empty) named graphs
+        // through the same re-intern path so `GRAPH ?g` enumeration survives a
+        // mutation freeze even when a declared graph gained/kept zero quads.
+        for g in base.named_graphs() {
+            let g = self.intern_base(&mut builder, &mut memo, g);
+            builder.declare_named_graph(g);
+        }
+
+        builder.freeze()
+    }
+
+    /// Publish an immutable read view by freezing only the added delta. The base
+    /// dataset and its indexes remain shared; later mutations cannot affect the
+    /// snapshot. This is a mutation of one RDF identity space, not a union of
+    /// independently parsed documents (blank scopes are preserved).
+    ///
+    /// # Errors
+    /// The delta fails the same RDF admission checks as [`Self::freeze`].
+    pub fn snapshot_view(&self) -> Result<DeltaDatasetView, crate::RdfDiagnostic> {
+        let mut builder = RdfDatasetBuilder::new();
+        self.append_delta(&mut builder);
+        let delta = builder.freeze()?;
+        let base_id = |id| match id {
+            MutTermId::Base(id) => id,
+            MutTermId::Delta(_) => unreachable!("only base quads can be suppressed"),
+        };
+        let suppressed = self
+            .suppressed
+            .iter()
+            .map(|q| super::QuadIds {
+                s: base_id(q.s),
+                p: base_id(q.p),
+                o: base_id(q.o),
+                g: q.g.map(base_id),
+            })
+            .collect();
+        Ok(DeltaDatasetView::new(
+            Arc::clone(&self.base),
+            delta,
+            suppressed,
+        ))
+    }
+
+    /// One RDF 1.2 delta classifier shared by compaction and snapshot publication.
+    /// Only added subjects probe the base reifier index; a small delta never builds
+    /// a base-sized set of owned reifier values.
+    fn append_delta(&self, builder: &mut RdfDatasetBuilder) {
         let added_values: Vec<QuadValues> = self
             .added_in_order()
             .into_iter()
             .map(|k| self.quad_values_of(&k))
             .collect();
+        let mut reifier_subjects = FastSet::default();
         let mut reifier_decl: Vec<bool> = Vec::with_capacity(added_values.len());
         for q in &added_values {
             let is_decl = matches!(&q.p, TermValue::Iri(iri) if iri == RDF_REIFIES)
@@ -657,41 +685,36 @@ impl MutableDataset {
             let TermValue::Triple { s, p, o } = &q.o else {
                 unreachable!("is_decl implies a triple-term object");
             };
-            let reifier = intern_value(&mut builder, &q.s);
-            let s = intern_value(&mut builder, s);
-            let p = intern_value(&mut builder, p);
-            let o = intern_value(&mut builder, o);
+            let reifier = intern_value(builder, &q.s);
+            let s = intern_value(builder, s);
+            let p = intern_value(builder, p);
+            let o = intern_value(builder, o);
             let triple = builder.intern_triple(s, p, o);
-            let g = q.g.as_ref().map(|g| intern_value(&mut builder, g));
+            let g = q.g.as_ref().map(|g| intern_value(builder, g));
             builder.push_reifier_in_graph(reifier, triple, g);
         }
         for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
             if is_decl {
                 continue;
             }
-            let s = intern_value(&mut builder, &q.s);
-            let p = intern_value(&mut builder, &q.p);
-            let o = intern_value(&mut builder, &q.o);
-            let g = q.g.as_ref().map(|g| intern_value(&mut builder, g));
+            let s = intern_value(builder, &q.s);
+            let p = intern_value(builder, &q.p);
+            let o = intern_value(builder, &q.o);
+            let g = q.g.as_ref().map(|g| intern_value(builder, g));
             // A quad whose subject is a reifier is that reifier's annotation, in its
             // own graph — mirroring `fold_statement_layer`'s pass 2 so an UPDATE freeze
             // and a parse of the same statement agree.
-            if reifier_subjects.contains(&q.s) {
+            if reifier_subjects.contains(&q.s)
+                || self
+                    .base
+                    .term_id_by_value(&q.s)
+                    .is_some_and(|id| self.base.reifier_quads_of(id).next().is_some())
+            {
                 builder.push_annotation_in_graph(s, p, o, g);
             } else {
                 builder.push_quad(s, p, o, g);
             }
         }
-
-        // Carry the base's explicitly-declared (possibly empty) named graphs
-        // through the same re-intern path so `GRAPH ?g` enumeration survives a
-        // mutation freeze even when a declared graph gained/kept zero quads.
-        for g in base.named_graphs() {
-            let g = self.intern_base(&mut builder, &mut memo, g);
-            builder.declare_named_graph(g);
-        }
-
-        builder.freeze()
     }
 
     /// Resolve a BASE term id to its value and re-intern it into `builder`, returning
@@ -995,6 +1018,7 @@ mod tests {
     use crate::ir::RdfDatasetBuilder;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
+    use std::collections::HashSet;
 
     // -- helpers ----------------------------------------------------------------------
 
@@ -1517,7 +1541,6 @@ mod tests {
                 0..60,
             )
         ) {
-            use std::collections::HashSet;
 
             let names = ["a", "b", "c", "d", "e", "f"];
             let preds = ["p", "q", "r"];

@@ -82,7 +82,8 @@ fn objects_of(ds: &RdfDataset, pred: &NamedNode) -> Vec<TermId> {
 /// membership is answered by [`ShaclData`]'s shared immutable class view.
 #[derive(Debug)]
 pub(crate) struct ValidationPlan {
-    class_ids: FastMap<NamedNode, Option<TermId>>,
+    classes: Arc<ClassCatalog>,
+    class_ids: Box<[Option<TermId>]>,
 }
 
 impl ValidationPlan {
@@ -95,27 +96,48 @@ impl ValidationPlan {
     }
 
     fn from_shape_iter<'a>(ds: &RdfDataset, shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
-        let mut scan = ClassScan::default();
-        for shape in shapes {
-            collect_shape_classes(shape, &mut scan);
+        Self::bind(ds, Arc::new(ClassCatalog::for_shapes(shapes)))
+    }
+
+    fn bind(ds: &RdfDataset, classes: Arc<ClassCatalog>) -> Self {
+        let mut class_ids = vec![None; classes.indices.len()].into_boxed_slice();
+        for (class, &position) in &classes.indices {
+            class_ids[position] = ds.term_id_by_iri(class.as_str());
         }
-        let class_ids = scan
-            .classes
-            .into_iter()
-            .map(|class| {
-                let id = ds.term_id_by_iri(class.as_str());
-                (class, id)
-            })
-            .collect();
-        Self { class_ids }
+        Self { classes, class_ids }
     }
 
     #[inline]
     pub(crate) fn class_id(&self, class: &NamedNode) -> Option<TermId> {
-        *self
-            .class_ids
+        self.class_ids[*self
+            .classes
+            .indices
             .get(class)
-            .expect("every reachable sh:class and sh:targetClass is planned")
+            .expect("every reachable sh:class and sh:targetClass is planned")]
+    }
+}
+
+/// Dataset-independent class references from the complete, cycle-aware shape walk.
+/// Dataset bindings retain only resolved IDs; class names are owned here once.
+#[derive(Debug)]
+struct ClassCatalog {
+    indices: FastMap<NamedNode, usize>,
+}
+
+impl ClassCatalog {
+    fn for_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
+        let mut scan = ClassScan::default();
+        for shape in shapes {
+            collect_shape_classes(shape, &mut scan);
+        }
+        let mut classes: Vec<_> = scan.classes.into_iter().collect();
+        classes.sort_unstable();
+        let indices = classes
+            .into_iter()
+            .enumerate()
+            .map(|(position, class)| (class, position))
+            .collect();
+        Self { indices }
     }
 }
 
@@ -735,6 +757,71 @@ where
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Immutable shape preparation reusable across independent dataset snapshots.
+///
+/// The parsed shapes and cycle-aware class-reference analysis are shared. Each
+/// binding resolves IDs, class membership and every active target against its own
+/// exact dataset. No target set, validation answer or negative dependency proof
+/// is reused across bindings. Keep this value for a batch of related validations;
+/// its storage is bounded by the supplied shape tree and released with its owners.
+#[derive(Debug, Clone)]
+pub struct PreparedShapes {
+    shapes: Arc<Shapes>,
+    classes: Arc<ClassCatalog>,
+}
+
+impl PreparedShapes {
+    /// Analyze the complete parsed shape tree once, without inspecting any data.
+    #[must_use]
+    pub fn new(shapes: Arc<Shapes>) -> Self {
+        let classes = Arc::new(ClassCatalog::for_shapes(shapes.node_shapes.iter()));
+        Self { shapes, classes }
+    }
+
+    /// Bind shared shape analysis to a new data holder. All dataset-dependent
+    /// preparation is performed again, including SHACL-SPARQL target evaluation.
+    ///
+    /// # Errors
+    /// Returns an error when an active target cannot be evaluated.
+    pub fn bind(&self, data: ShaclData) -> Result<PreparedValidator, String> {
+        PreparedValidator::bind(data, self)
+    }
+
+    /// Project a dataset and bind the shared shape analysis to that snapshot.
+    ///
+    /// # Errors
+    /// Returns an error when projection or target evaluation fails.
+    pub fn bind_dataset(&self, data: &RdfDataset) -> Result<PreparedValidator, String> {
+        self.bind_projected_dataset(project_dataset(data)?)
+    }
+
+    /// Bind an already-projected snapshot; Core and SPARQL share its `Arc`.
+    ///
+    /// # Errors
+    /// Returns an error when an active target cannot be evaluated.
+    pub fn bind_projected_dataset(
+        &self,
+        projected: Arc<RdfDataset>,
+    ) -> Result<PreparedValidator, String> {
+        self.bind(ShaclData::new(Arc::clone(&projected), projected, None))
+    }
+
+    /// Bind a projected snapshot with the shapes graph exposed to SPARQL under
+    /// `shapes_graph_iri`, or the graph IRI declared by the parsed shapes.
+    ///
+    /// # Errors
+    /// Returns an error when shapes-graph assembly or target evaluation fails.
+    pub fn bind_projected_dataset_with_shapes_graph(
+        &self,
+        projected: Arc<RdfDataset>,
+        shapes_graph_iri: Option<&str>,
+    ) -> Result<PreparedValidator, String> {
+        let (sparql, shapes_graph_iri) =
+            build_sparql_dataset(Arc::clone(&projected), &self.shapes, shapes_graph_iri)?;
+        self.bind(ShaclData::new(projected, sparql, shapes_graph_iri))
+    }
+}
+
 /// Reusable validation state for one immutable projected dataset and shapes graph.
 ///
 /// Preparation builds the shared class-membership view, resolves target
@@ -745,7 +832,8 @@ where
 /// surface for realtime validation over a large immutable snapshot.
 ///
 /// A prepared validator is tied to the exact dataset snapshot it owns. Prepare a
-/// new value after publishing an overlay or replacement snapshot.
+/// new value after publishing an overlay or replacement snapshot. [`PreparedShapes`]
+/// shares shape analysis across these bindings while rebuilding data-dependent state.
 ///
 /// # Example
 ///
@@ -805,10 +893,15 @@ impl PreparedValidator {
     ///
     /// Returns an error when an active SHACL-SPARQL target cannot be evaluated.
     pub fn new(data: ShaclData, shapes: Arc<Shapes>) -> Result<Self, String> {
+        PreparedShapes::new(shapes).bind(data)
+    }
+
+    fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, String> {
+        let shapes = Arc::clone(&prepared.shapes);
         let _function_scope = crate::sparql::enter_function_scope(Arc::clone(&shapes.functions));
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         data.prepare_class_membership();
-        let plan = ValidationPlan::for_shapes(data.core(), &shapes);
+        let plan = ValidationPlan::bind(data.core(), Arc::clone(&prepared.classes));
         let targets = shapes
             .node_shapes
             .iter()
@@ -1511,6 +1604,53 @@ mod tests {
         let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl, None)
             .expect("shapes Turtle must parse");
         crate::shapes::from_dataset(&dataset).expect("shapes parse must succeed")
+    }
+
+    #[test]
+    fn shared_shape_analysis_rebinds_class_ids_and_sparql_targets_per_dataset() {
+        use rayon::prelude::*;
+
+        let shapes = Arc::new(load_shapes_ttl(&format!(
+            r#"{PREFIXES}
+            ex:ClassShape a sh:NodeShape ; sh:targetClass ex:Person ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            ex:QueryShape a sh:NodeShape ;
+                sh:target [ a sh:SPARQLTarget ; sh:select
+                    "SELECT ?this WHERE {{ ?this <http://example.org/ns#active> true }}" ] ;
+                sh:property [ sh:path ex:required ; sh:minCount 1 ] .
+            "#
+        )));
+        let prepared = PreparedShapes::new(Arc::clone(&shapes));
+        let cases = [
+            (
+                "ex:alice a ex:Child ; ex:active true . ex:Child rdfs:subClassOf ex:Person .",
+                2,
+            ),
+            ("ex:bob a ex:Other ; ex:active false .", 0),
+            (
+                "ex:carol a ex:Person ; ex:active true ; ex:required ex:present .",
+                0,
+            ),
+            ("ex:dave a ex:Person ; ex:active false .", 1),
+        ];
+        cases.par_iter().for_each(|(source, expected)| {
+            let data =
+                crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES} {source}"), None)
+                    .unwrap();
+            let data = project_dataset(&data).unwrap();
+            let binding = prepared.bind_projected_dataset(Arc::clone(&data)).unwrap();
+            assert!(Arc::ptr_eq(&prepared.classes, &binding.plan.classes));
+            assert!(Arc::ptr_eq(&data, &binding.data.core_arc()));
+            let report = binding.validate().unwrap();
+            assert_eq!(report.results.len(), *expected, "{source}");
+            assert_eq!(
+                report.to_ntriples(),
+                validate_projected_dataset(data, &shapes)
+                    .unwrap()
+                    .to_ntriples(),
+                "independent binding must equal full validation: {source}",
+            );
+        });
     }
 
     /// Validate native: the in-crate tests historically called `validate(&store, …)`;

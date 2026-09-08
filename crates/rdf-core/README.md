@@ -67,6 +67,18 @@ let ds = b.freeze().expect("well-formed dataset");
 assert_eq!(ds.quad_count(), 1);
 ```
 
+For repeated queries after a small mutation, `MutableDataset::snapshot_view()`
+returns an immutable `DeltaDatasetView` without compacting the base. It shares
+the base dictionary and indexes, freezes only added rows, and applies the
+suppression set during indexed reads. `DeltaViewId` keeps base and delta handles
+distinct while giving shared values one identity. Subsequent mutations do not
+change an earlier snapshot. `freeze()` remains the explicit compaction boundary.
+
+A mutation snapshot preserves the existing blank-node identity space; it is not
+an independent-document union. RDF 1.2 reifiers, annotations and empty named
+graphs survive. Source locations and other sidecars remain on `view.base()`;
+generic RDF materialization does not transfer those sidecars automatically.
+
 Text codecs are *not* here — parsing and serialization live one layer up in
 [`purrdf-rdf`](https://crates.io/crates/purrdf-rdf). This split keeps the
 kernel small and its invariants enforceable at the crate boundary.
