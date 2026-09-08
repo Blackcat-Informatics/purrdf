@@ -375,6 +375,98 @@ pub fn try_canonicalize_with(
 /// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] on a pathologically
 /// symmetric blank graph (adversarial input never panics here).
 pub fn canonical_relabel(ds: &RdfDataset) -> Result<RdfDataset, CanonError> {
+    relabel_recording(ds, |_, _| {})
+}
+
+/// A native canonical relabeling paired with the term mapping established by
+/// its rebuild. Constructed by [`canonical_relabel_with_mapping`].
+///
+/// The mapping is local to the exact input dataset and this output. It is not a
+/// persistent identifier, provenance certificate, or assertion of semantic
+/// equivalence beyond the relabeling operation.
+#[derive(Debug)]
+pub struct CanonicalRelabeling {
+    /// The canonical native dataset; never rendered or reparsed.
+    dataset: RdfDataset,
+    /// Source-indexed output IDs; dictionary-only unused terms remain absent.
+    terms: Box<[Option<TermId>]>,
+}
+
+impl CanonicalRelabeling {
+    /// Borrow the rewritten dataset, including its RDF 1.2 record surfaces.
+    #[must_use]
+    pub const fn dataset(&self) -> &RdfDataset {
+        &self.dataset
+    }
+
+    /// Map a term from the **exact input dataset** into [`Self::dataset`].
+    ///
+    /// Returns `None` for unused dictionary entries that were not reached by
+    /// the rebuild, or IDs beyond the input dictionary. Datatype terms, nested
+    /// triple components, composite embedded blanks and already-interned IRIs,
+    /// reifier/annotation terms and declaration-only graphs are included.
+    ///
+    /// Like other [`TermId`] APIs, this cannot detect a same-index ID belonging
+    /// to another dataset. Neither input nor output IDs may be persisted as
+    /// portable identities. Resolve them and bind any durable records to the
+    /// identity of the exact source and output datasets.
+    #[must_use]
+    pub fn map_term(&self, source: TermId) -> Option<TermId> {
+        self.terms.get(source.index()).copied().flatten()
+    }
+
+    /// Consume the result, discarding its dataset-local mapping.
+    /// Translate source handles before calling this method if needed.
+    #[must_use]
+    pub fn into_dataset(self) -> RdfDataset {
+        self.dataset
+    }
+}
+
+/// Canonically relabel a native dataset and retain its exact term mapping.
+///
+/// Shares [`canonical_relabel`]'s one canonical-label search and one native
+/// rebuild. No canonical document is rendered, parsed or searched again to
+/// recover term correspondence. Recording uses four bytes per input term and
+/// constant-time lookup; the existing [`canonical_relabel`] allocates no map.
+/// All native records and side tables preserved by that function are preserved
+/// here as well. Mapping is observational: it never skips positional checks.
+///
+/// # Errors
+/// Returns exactly [`canonical_relabel`]'s admission and search-budget refusals.
+pub fn canonical_relabel_with_mapping(ds: &RdfDataset) -> Result<CanonicalRelabeling, CanonError> {
+    let mut terms = vec![None; ds.term_count()].into_boxed_slice();
+    let dataset = relabel_recording(ds, |source, target| {
+        let source = match source {
+            RelabelSource::Term(id) => Some(id),
+            RelabelSource::IndirectIri(iri) => ds.term_id_by_iri(iri),
+        };
+        if let Some(source) = source {
+            let slot = &mut terms[source.index()];
+            assert!(
+                slot.is_none_or(|previous| previous == target),
+                "a canonical term rewrite must agree across occurrences"
+            );
+            *slot = Some(target);
+        }
+    })?;
+    Ok(CanonicalRelabeling { dataset, terms })
+}
+
+/// A source term reached either directly or inside a composite literal.
+enum RelabelSource<'a> {
+    /// A source dictionary ID encountered by the native rebuild.
+    Term(TermId),
+    /// A lexical or implicit reifier IRI; only the mapping consumer looks it up.
+    IndirectIri(&'a str),
+}
+
+/// Shared label search and native traversal. The no-op recorder monomorphizes
+/// away, including the embedded-IRI lookup needed only by the mapped result.
+fn relabel_recording(
+    ds: &RdfDataset,
+    record: impl FnMut(RelabelSource<'_>, TermId),
+) -> Result<RdfDataset, CanonError> {
     // The typed consumer needs the issued labels, not a serialized document.
     // Keep the exact admission/search algorithm shared with text canonicalization
     // and move its label table without rendering or cloning it.
@@ -407,20 +499,23 @@ pub fn canonical_relabel(ds: &RdfDataset) -> Result<RdfDataset, CanonError> {
         &mut CanonicalRelabeler {
             labels: &labels,
             extra,
+            record,
         },
     )
 }
 
 /// The [`canonical_relabel`] mapper: blanks take their issued `c14n{n}` label
 /// at [`BlankScope::DEFAULT`]; every other term passes through unchanged.
-struct CanonicalRelabeler<'a> {
+struct CanonicalRelabeler<'a, R> {
     /// The canonicalization's issued labels ([`Canonicalized::labels`]).
     labels: &'a BTreeMap<TermId, Box<str>>,
     /// Continuation labels for declaration-only blank graphs.
     extra: BTreeMap<TermId, Box<str>>,
+    /// Receives actual term pairs during the same rebuild traversal.
+    record: R,
 }
 
-impl TermMapper for CanonicalRelabeler<'_> {
+impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, R> {
     type Error = CanonError;
 
     fn map_blank(
@@ -445,6 +540,23 @@ impl TermMapper for CanonicalRelabeler<'_> {
         _iri_only: bool,
     ) -> Result<TermId, CanonError> {
         Ok(builder.intern_iri(iri))
+    }
+
+    fn record_term(&mut self, source: TermId, target: TermId) {
+        (self.record)(RelabelSource::Term(source), target);
+    }
+
+    fn record_embedded_iri(&mut self, iri: &str, target: TermId) {
+        (self.record)(RelabelSource::IndirectIri(iri), target);
+    }
+
+    fn record_reifier_predicate(&mut self, builder: &super::builder::RdfDatasetBuilder) {
+        if let Some(target) = builder.reifies_predicate() {
+            (self.record)(
+                RelabelSource::IndirectIri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"),
+                target,
+            );
+        }
     }
 }
 

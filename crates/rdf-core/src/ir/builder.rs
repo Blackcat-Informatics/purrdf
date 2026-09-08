@@ -1212,6 +1212,12 @@ impl RdfDatasetBuilder {
         store_once(&mut self.reifiers, &mut self.reifier_index, binding);
     }
 
+    /// The predicate implicitly interned by reifier insertion, if any. Native
+    /// rewrite observers use this actual ID without changing allocation order.
+    pub(crate) const fn reifies_predicate(&self) -> Option<TermId> {
+        self.reifies_predicate
+    }
+
     /// Push a statement annotation `(reifier, predicate, object)`. Duplicate
     /// annotations collapse to one (C0.5).
     pub fn push_annotation(&mut self, reifier: TermId, p: TermId, o: TermId) {
