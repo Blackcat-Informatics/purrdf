@@ -534,7 +534,7 @@ mod tests {
             .expect("dict-primed zstd encodes");
 
             let mut codec = Codec::new("zstd", "compress");
-            codec.dct = Some(dict.clone());
+            codec.dct = Some(dict);
             let decoded = decode_chain(&[codec], &encoded).expect("dict-primed zstd decodes");
             assert_eq!(decoded, payload);
         }

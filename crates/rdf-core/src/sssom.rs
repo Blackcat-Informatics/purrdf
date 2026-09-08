@@ -1211,7 +1211,7 @@ pub fn to_rdf(set: &SssomMappingSet) -> Vec<RdfQuad> {
         }
         if let Some(comment) = &mapping.comment {
             quads.push(RdfQuad::new(
-                node.clone(),
+                node,
                 format!("{SSSOM_NS}comment"),
                 RdfTerm::literal(RdfLiteral::simple(comment.clone())),
             ));
