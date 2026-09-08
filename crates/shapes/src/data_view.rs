@@ -174,22 +174,6 @@ impl<D: DatasetView> Dense<D> {
             },
         }
     }
-    fn probe(
-        &self,
-        s: Option<TermId>,
-        p: Option<TermId>,
-        o: Option<TermId>,
-        g: GraphMatch,
-    ) -> impl Iterator<Item = QuadIds> + '_ {
-        self.source
-            .quads_for_pattern(
-                s.map(|id| self.source_id(id)),
-                p.map(|id| self.source_id(id)),
-                o.map(|id| self.source_id(id)),
-                self.graph(g),
-            )
-            .map(|row| self.quad(row))
-    }
 }
 
 #[derive(Debug)]
@@ -306,17 +290,80 @@ impl ShaclDatasetView {
         }
     }
 
+    /// Probe with a plan prepared by [`DatasetView::probe_plan`]. The source
+    /// pattern, including any graph-union transformation, is planned once and
+    /// the supplied plan is forwarded to the retained native indexes.
+    pub fn quads_for_pattern_with_plan(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ + use<'_> {
+        let source_graph = if self.projected { GraphMatch::Any } else { g };
+        let allowed = !self.projected || !matches!(g, GraphMatch::Named(_));
+        let overlays = self
+            .statements_projected
+            .then(|| self.raw_overlay_probe(s, p, o, source_graph))
+            .into_iter()
+            .flatten();
+        let mut seen = FastSet::default();
+        self.raw_probe(*plan, s, p, o, source_graph)
+            .chain(overlays)
+            .filter_map(move |mut q| {
+                if !allowed {
+                    return None;
+                }
+                if self.projected {
+                    q.g = None;
+                }
+                if self.statements_projected && !seen.insert(q) {
+                    return None;
+                }
+                Some(q)
+            })
+    }
     fn raw_probe(
         &self,
+        plan: QuadProbePlan,
         s: Option<TermId>,
         p: Option<TermId>,
         o: Option<TermId>,
         g: GraphMatch,
     ) -> impl Iterator<Item = QuadIds> + '_ {
         match &self.source {
-            Source::Native(source) => Either::Left(source.quads_for_pattern(s, p, o, g)),
-            Source::Composite(dense) => Either::Right(boxed(dense.probe(s, p, o, g))),
-            Source::Delta(dense) => Either::Right(boxed(dense.probe(s, p, o, g))),
+            Source::Native(source) => Either::Left(
+                source
+                    .as_ref()
+                    .quads_for_pattern_with_plan(&plan, s, p, o, g),
+            ),
+            Source::Composite(dense) => Either::Right(boxed(
+                dense
+                    .source
+                    .as_ref()
+                    .quads_for_pattern_with_plan(
+                        &plan,
+                        s.map(|id| dense.source_id(id)),
+                        p.map(|id| dense.source_id(id)),
+                        o.map(|id| dense.source_id(id)),
+                        dense.graph(g),
+                    )
+                    .map(|row| dense.quad(row)),
+            )),
+            Source::Delta(dense) => Either::Right(boxed(
+                dense
+                    .source
+                    .as_ref()
+                    .quads_for_pattern_with_plan(
+                        &plan,
+                        s.map(|id| dense.source_id(id)),
+                        p.map(|id| dense.source_id(id)),
+                        o.map(|id| dense.source_id(id)),
+                        dense.graph(g),
+                    )
+                    .map(|row| dense.quad(row)),
+            )),
         }
     }
     fn raw_overlay_probe(
@@ -466,28 +513,8 @@ impl DatasetView for ShaclDatasetView {
         o: Option<TermId>,
         g: GraphMatch,
     ) -> impl Iterator<Item = QuadIds> + '_ {
-        let source_graph = if self.projected { GraphMatch::Any } else { g };
-        let allowed = !self.projected || !matches!(g, GraphMatch::Named(_));
-        let overlays = self
-            .statements_projected
-            .then(|| self.raw_overlay_probe(s, p, o, source_graph))
-            .into_iter()
-            .flatten();
-        let mut seen = FastSet::default();
-        self.raw_probe(s, p, o, source_graph)
-            .chain(overlays)
-            .filter_map(move |mut q| {
-                if !allowed {
-                    return None;
-                }
-                if self.projected {
-                    q.g = None;
-                }
-                if self.statements_projected && !seen.insert(q) {
-                    return None;
-                }
-                Some(q)
-            })
+        let plan = self.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        self.quads_for_pattern_with_plan(&plan, s, p, o, g)
     }
     fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
         match &self.source {
@@ -504,17 +531,20 @@ impl DatasetView for ShaclDatasetView {
         }
     }
     fn probe_plan(&self, s: bool, p: bool, o: bool, g: GraphMatch) -> QuadProbePlan {
-        RdfDataset::probe_plan(s, p, o, g)
+        // The union projection removes the physical graph constraint. Plan for
+        // that source pattern once, before the plan is reused across probe rows.
+        let source_graph = if self.projected { GraphMatch::Any } else { g };
+        RdfDataset::probe_plan(s, p, o, source_graph)
     }
     fn quads_for_pattern_with_plan(
         &self,
-        _: &QuadProbePlan,
+        plan: &QuadProbePlan,
         s: Option<TermId>,
         p: Option<TermId>,
         o: Option<TermId>,
         g: GraphMatch,
     ) -> impl Iterator<Item = QuadIds> + '_ {
-        self.quads_for_pattern(s, p, o, g)
+        Self::quads_for_pattern_with_plan(self, plan, s, p, o, g)
     }
     fn len_hint(&self) -> Option<usize> {
         if self.projected || self.statements_projected {

@@ -640,7 +640,7 @@ impl DatasetView for ClassMembershipView {
         o_bound: bool,
         g: GraphMatch,
     ) -> QuadProbePlan {
-        RdfDataset::probe_plan(s_bound, p_bound, o_bound, g)
+        self.base.probe_plan(s_bound, p_bound, o_bound, g)
     }
 
     fn quads_for_pattern_with_plan(

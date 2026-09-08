@@ -883,13 +883,11 @@ impl PreparedShapes {
         projected: Arc<RdfDataset>,
         shapes_graph_iri: Option<&str>,
     ) -> Result<PreparedValidator, String> {
-        let (sparql, shapes_graph_iri) =
-            build_sparql_dataset(Arc::clone(&projected), &self.shapes, shapes_graph_iri)?;
-        self.bind(ShaclData::from_views(
-            Arc::new(ShaclDatasetView::native(projected)),
-            sparql,
+        self.bind(build_projected_data(
+            projected,
+            &self.shapes,
             shapes_graph_iri,
-        ))
+        )?)
     }
 }
 
@@ -1048,16 +1046,8 @@ impl PreparedValidator {
         shapes: Arc<Shapes>,
         shapes_graph_iri: Option<&str>,
     ) -> Result<Self, String> {
-        let (sparql, shapes_graph_iri) =
-            build_sparql_dataset(Arc::clone(&projected), &shapes, shapes_graph_iri)?;
-        Self::new(
-            ShaclData::from_views(
-                Arc::new(ShaclDatasetView::native(projected)),
-                sparql,
-                shapes_graph_iri,
-            ),
-            shapes,
-        )
+        let data = build_projected_data(projected, &shapes, shapes_graph_iri)?;
+        Self::new(data, shapes)
     }
 
     /// Validate every target node using the prepared target plan.
@@ -1323,13 +1313,7 @@ pub fn validate_dataset_with_governors(
     governors: &QueryGovernors,
 ) -> Result<GovernedValidation, String> {
     let projected = project_dataset(data)?;
-    let (sparql_dataset, shapes_graph_iri) =
-        build_sparql_dataset(Arc::clone(&projected), shapes, shapes_graph_iri)?;
-    let data = ShaclData::from_views(
-        Arc::new(ShaclDatasetView::native(projected)),
-        sparql_dataset,
-        shapes_graph_iri,
-    );
+    let data = build_projected_data(projected, shapes, shapes_graph_iri)?;
     validate_with_governors(&data, shapes, governors)
 }
 
@@ -1411,26 +1395,25 @@ where
     validate_with_focus_filter(&data, shapes, include_focus)
 }
 
-/// Build the dataset exposed to SHACL-SPARQL paths.
+/// Assemble the Core and SHACL-SPARQL views of an already-projected dataset.
 ///
-/// Data quads stay in their original graphs (the projected default graph). When
-/// a shapes-graph IRI is known, every quad from [`Shapes::shapes_dataset`] is
-/// placed into a named graph with that IRI.
-///
-/// Returns the combined dataset and the shapes-graph IRI actually used, if any.
-fn build_sparql_dataset(
+/// Without a shapes graph both consumers retain the same view, sharing its lazy
+/// class-membership analysis. When a shapes-graph IRI is known, SPARQL receives a
+/// composite with every shapes row placed into that named graph.
+fn build_projected_data(
     data: Arc<RdfDataset>,
     shapes: &Shapes,
     override_graph: Option<&str>,
-) -> Result<(Arc<ShaclDatasetView>, Option<String>), String> {
+) -> Result<ShaclData, String> {
     let core = Arc::new(ShaclDatasetView::native(Arc::clone(&data)));
-    build_sparql_view(
+    let (sparql, graph) = build_sparql_view(
         ::purrdf::ir::CompositeSource::new(data),
-        core,
+        Arc::clone(&core),
         shapes,
         override_graph,
         ::purrdf::ir::ViewLimits::default(),
-    )
+    )?;
+    Ok(ShaclData::from_views(core, sparql, graph))
 }
 
 fn build_sparql_view(
@@ -1484,15 +1467,7 @@ pub fn validate_projected_dataset_with_shapes_graph(
     shapes: &Shapes,
     shapes_graph_iri: Option<&str>,
 ) -> Result<ValidationReport, String> {
-    let (sparql_dataset, shapes_graph_iri) =
-        build_sparql_dataset(Arc::clone(&projected), shapes, shapes_graph_iri)?;
-    // Core lookups read the projected data graph (default graph only); the SPARQL
-    // paths see the combined data(+shapes) dataset under `shapes_graph_iri`.
-    let data = ShaclData::from_views(
-        Arc::new(ShaclDatasetView::native(projected)),
-        sparql_dataset,
-        shapes_graph_iri,
-    );
+    let data = build_projected_data(projected, shapes, shapes_graph_iri)?;
     validate_with(&data, shapes)
 }
 
@@ -2419,6 +2394,127 @@ mod tests {
         assert!(
             plan.class_id(&NamedNode::from("http://example.org/ns#Nested"))
                 .is_none()
+        );
+    }
+
+    fn membership_reuse_fixture() -> (Arc<RdfDataset>, Arc<Shapes>) {
+        let data = load_data_nt(concat!(
+            "<http://example.org/ns#Employee> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Person> .\n",
+            "<http://example.org/ns#alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Employee> .\n",
+        ));
+        let shapes = Arc::new(load_shapes_ttl(&format!(
+            r#"{PREFIXES}
+            ex:MembershipShape a sh:NodeShape;
+                sh:targetClass ex:Person;
+                sh:target [ a sh:SPARQLTarget;
+                    sh:select "SELECT ?this WHERE {{ ?this a <http://example.org/ns#Person> }}" ];
+                sh:property [ sh:path ex:required; sh:minCount 1 ] .
+            "#,
+        )));
+        (data, shapes)
+    }
+
+    #[test]
+    fn projected_preparation_without_shapes_graph_builds_one_shared_class_index() {
+        use crate::class_membership::{reset_thread_index_builds, thread_index_builds};
+
+        let (data, shapes) = membership_reuse_fixture();
+        let mut previous = None;
+        for reuse_shapes in [false, true] {
+            reset_thread_index_builds();
+            let prepared = if reuse_shapes {
+                PreparedShapes::new(Arc::clone(&shapes))
+                    .bind_projected_dataset_with_shapes_graph(Arc::clone(&data), None)
+            } else {
+                PreparedValidator::from_projected_dataset_with_shapes_graph(
+                    Arc::clone(&data),
+                    Arc::clone(&shapes),
+                    None,
+                )
+            }
+            .expect("prepare");
+            assert_eq!(
+                thread_index_builds(),
+                1,
+                "Core and SPARQL share one initialization"
+            );
+            assert_eq!(prepared.data.class_view().build_count(), 1);
+            assert_eq!(prepared.data.sparql_view().build_count(), 1);
+            let report = prepared.validate().expect("validate");
+            assert_eq!(
+                report.results.len(),
+                1,
+                "both targets resolve the same derived instance"
+            );
+            let serialized = report.to_ntriples();
+            if let Some(expected) = &previous {
+                assert_eq!(&serialized, expected);
+            }
+            previous = Some(serialized);
+            assert_eq!(
+                thread_index_builds(),
+                1,
+                "validation reuses the prepared analysis"
+            );
+            assert!(
+                prepared
+                    .view_stats()
+                    .iter()
+                    .all(|stats| stats.materializations == 0)
+            );
+        }
+    }
+
+    #[test]
+    fn projected_and_governed_validation_without_shapes_graph_reuse_class_analysis() {
+        use crate::class_membership::{reset_thread_index_builds, thread_index_builds};
+
+        let (data, shapes) = membership_reuse_fixture();
+        reset_thread_index_builds();
+        let ordinary =
+            validate_projected_dataset_with_shapes_graph(Arc::clone(&data), &shapes, None)
+                .expect("ordinary validation");
+        assert_eq!(ordinary.results.len(), 1);
+        assert_eq!(thread_index_builds(), 1);
+        reset_thread_index_builds();
+        let outcome =
+            validate_dataset_with_governors(&data, &shapes, None, &QueryGovernors::UNBOUNDED)
+                .expect("governed validation");
+        let GovernedValidation::Complete { report, .. } = outcome else {
+            panic!("unbounded validation must complete");
+        };
+        assert_eq!(report.to_ntriples(), ordinary.to_ntriples());
+        assert_eq!(thread_index_builds(), 1);
+    }
+
+    #[test]
+    fn an_exposed_shapes_graph_keeps_its_own_class_index_and_term_ids() {
+        use crate::class_membership::{reset_thread_index_builds, thread_index_builds};
+
+        let (data, shapes) = membership_reuse_fixture();
+        reset_thread_index_builds();
+        let prepared = PreparedValidator::from_projected_dataset_with_shapes_graph(
+            data,
+            shapes,
+            Some("https://example.org/shapes"),
+        )
+        .expect("prepare composite");
+        assert_eq!(
+            thread_index_builds(),
+            2,
+            "distinct carriers require their own local IDs"
+        );
+        assert_eq!(
+            prepared.data.shapes_graph_iri(),
+            Some("https://example.org/shapes")
+        );
+        assert_eq!(prepared.validate().expect("validate").results.len(), 1);
+        assert_eq!(thread_index_builds(), 2);
+        assert!(
+            prepared
+                .view_stats()
+                .iter()
+                .all(|stats| stats.materializations == 0)
         );
     }
 

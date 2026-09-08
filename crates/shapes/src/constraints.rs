@@ -2245,7 +2245,7 @@ fn pair_values(store: &ShaclData, focus: &Term, pred: &NamedNode) -> Vec<Term> {
     let mut out: Vec<Term> = Vec::new();
     let mut seen: FastSet<Term> = FastSet::default();
     for (_, _, object) in native_quads(
-        store.core(),
+        store.core_view(),
         Some(focus),
         Some(&predicate),
         None,

@@ -189,3 +189,262 @@ fn sparql_statement_projection_deduplicates_without_flattening_shapes_graph() {
             .all(|stats| stats.materializations == 0)
     );
 }
+
+fn property_pair_views() -> (Arc<RdfDataset>, Vec<(&'static str, Arc<ShaclDatasetView>)>) {
+    let mut builder = RdfDatasetBuilder::new();
+    let focus = builder.intern_iri("https://example.org/focus");
+    let left = builder.intern_iri("https://example.org/left");
+    let right = builder.intern_iri("https://example.org/right");
+    let graph = builder.intern_iri("https://example.org/original");
+    for (predicate, values) in [(left, &[1, 2, 4][..]), (right, &[2, 3][..])] {
+        for value in values {
+            let object = builder.intern_literal(RdfLiteral::typed(
+                value.to_string(),
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ));
+            builder.push_quad(focus, predicate, object, Some(graph));
+            // Duplicate statement metadata must still represent one projected value.
+            builder.push_annotation_in_graph(focus, predicate, object, Some(graph));
+        }
+    }
+    let source = builder.freeze().expect("pair data");
+    let composite = Arc::new(
+        CompositeDatasetView::new(
+            vec![Arc::clone(&source), Arc::clone(&source)],
+            ViewLimits::default(),
+        )
+        .expect("composite"),
+    );
+    let mut mutable = MutableDataset::new(Arc::clone(&source));
+    mutable
+        .insert(QuadValues {
+            s: TermValue::iri("https://example.org/focus"),
+            p: TermValue::iri("https://example.org/left"),
+            o: TermValue::Literal {
+                lexical_form: "4".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                language: None,
+                direction: None,
+            },
+            g: Some(TermValue::iri("https://example.org/added")),
+        })
+        .expect("delta quad");
+    let delta = Arc::new(mutable.snapshot_view().expect("snapshot"));
+    let views = vec![
+        (
+            "native",
+            Arc::new(ShaclDatasetView::project(Arc::clone(&source))),
+        ),
+        (
+            "composite",
+            Arc::new(
+                ShaclDatasetView::composite(composite, true, ViewLimits::default())
+                    .expect("composite validation view"),
+            ),
+        ),
+        (
+            "delta",
+            Arc::new(
+                ShaclDatasetView::delta(delta, true, ViewLimits::default())
+                    .expect("delta validation view"),
+            ),
+        ),
+    ];
+    (source, views)
+}
+
+#[test]
+fn property_pair_constraints_borrow_every_shared_carrier_without_materialization() {
+    let (source, views) = property_pair_views();
+    for (constraint, violations) in [
+        ("equals", 3),
+        ("disjoint", 1),
+        ("lessThan", 3),
+        ("lessThanOrEquals", 2),
+    ] {
+        let shapes = Arc::new(
+            parse_shapes(
+                &format!(
+                    "{PREFIX} ex:PairShape a sh:NodeShape; sh:targetNode ex:focus; \
+                     sh:property [ sh:path ex:left; sh:{constraint} ex:right ] ."
+                ),
+                None,
+            )
+            .expect("pair shape"),
+        );
+        let prepared = PreparedShapes::new(shapes);
+        let expected = prepared
+            .bind_dataset(&source)
+            .expect("owned oracle")
+            .validate()
+            .expect("owned report");
+        assert_eq!(expected.results.len(), violations, "{constraint}");
+        for (kind, view) in &views {
+            let bound = prepared.bind_view(Arc::clone(view)).expect("bind view");
+            let report = bound.validate().expect("view report");
+            assert_eq!(
+                report.to_ntriples(),
+                expected.to_ntriples(),
+                "{kind} {constraint}"
+            );
+            assert_eq!(view.stats().materializations, 0, "{kind} {constraint}");
+            assert!(
+                bound
+                    .view_stats()
+                    .iter()
+                    .all(|stats| stats.materializations == 0),
+                "{kind} {constraint}"
+            );
+        }
+    }
+}
+
+#[test]
+fn prepared_sparql_constraints_probe_the_shared_graph_union() {
+    let (source, views) = property_pair_views();
+    let shapes = Arc::new(parse_shapes(&format!(r#"{PREFIX}
+        ex:S a sh:NodeShape; sh:targetNode ex:focus;
+            sh:sparql [ sh:select "SELECT $this ?value WHERE {{ $this <https://example.org/left> ?value }}" ] .
+    "#), None).expect("SPARQL shape"));
+    let prepared = PreparedShapes::new(shapes);
+    let expected = prepared
+        .bind_dataset(&source)
+        .expect("owned")
+        .validate()
+        .expect("owned report");
+    assert_eq!(expected.results.len(), 3);
+    for (kind, view) in views {
+        let report = prepared
+            .bind_view(Arc::clone(&view))
+            .expect("bind")
+            .validate()
+            .expect("shared report");
+        assert_eq!(report.to_ntriples(), expected.to_ntriples(), "{kind}");
+        assert_eq!(view.stats().materializations, 0, "{kind}");
+    }
+}
+
+#[test]
+fn prepared_probe_plans_preserve_graph_patterns_and_union_duplicates() {
+    let (source, projected) = property_pair_views();
+    let mut views: Vec<_> = projected
+        .into_iter()
+        .map(|(kind, view)| (kind, view, true))
+        .collect();
+    views.push((
+        "native graphs",
+        Arc::new(ShaclDatasetView::native(Arc::clone(&source))),
+        false,
+    ));
+    let composite = Arc::new(
+        CompositeDatasetView::new(
+            vec![Arc::clone(&source), Arc::clone(&source)],
+            ViewLimits::default(),
+        )
+        .expect("composite"),
+    );
+    views.push((
+        "composite graphs",
+        Arc::new(
+            ShaclDatasetView::composite(composite, false, ViewLimits::default()).expect("view"),
+        ),
+        false,
+    ));
+    let delta = Arc::new(
+        MutableDataset::new(Arc::clone(&source))
+            .snapshot_view()
+            .expect("snapshot"),
+    );
+    views.push((
+        "delta graphs",
+        Arc::new(ShaclDatasetView::delta(delta, false, ViewLimits::default()).expect("view")),
+        false,
+    ));
+    for (kind, view, projected) in views {
+        assert_probe_pattern_matrix(&source, kind, &view, projected);
+    }
+}
+
+fn assert_probe_pattern_matrix(
+    source: &RdfDataset,
+    kind: &str,
+    view: &ShaclDatasetView,
+    projected: bool,
+) {
+    use purrdf::GraphMatch;
+    use std::collections::BTreeSet;
+
+    let id = |local| {
+        view.term_id_by_value(&TermValue::iri(format!("https://example.org/{local}")))
+            .expect("IRI")
+    };
+    let subjects = [id("focus"), id("original")];
+    let predicates = [id("left"), id("right")];
+    let objects: Vec<_> = source
+        .quads()
+        .map(|q| {
+            view.term_id_by_value(&source.term_value(q.o))
+                .expect("object")
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let rows: BTreeSet<_> = source
+        .quads()
+        .map(|q| {
+            let map = |term| {
+                view.term_id_by_value(&source.term_value(term))
+                    .expect("term")
+            };
+            (
+                map(q.s),
+                map(q.p),
+                map(q.o),
+                if projected { None } else { q.g.map(map) },
+            )
+        })
+        .collect();
+    for mask in 0..8 {
+        for graph in [
+            GraphMatch::Any,
+            GraphMatch::Default,
+            GraphMatch::Named(id("original")),
+        ] {
+            let plan = view.probe_plan(mask & 1 != 0, mask & 2 != 0, mask & 4 != 0, graph);
+            for &subject in &subjects {
+                for &predicate in &predicates {
+                    for &object in &objects {
+                        let s = (mask & 1 != 0).then_some(subject);
+                        let p = (mask & 2 != 0).then_some(predicate);
+                        let o = (mask & 4 != 0).then_some(object);
+                        let expected: BTreeSet<_> = rows
+                            .iter()
+                            .copied()
+                            .filter(|&(rs, rp, ro, rg)| {
+                                s.is_none_or(|s| s == rs)
+                                    && p.is_none_or(|p| p == rp)
+                                    && o.is_none_or(|o| o == ro)
+                                    && graph.matches(rg)
+                            })
+                            .collect();
+                        let actual: Vec<_> =
+                            DatasetView::quads_for_pattern_with_plan(view, &plan, s, p, o, graph)
+                                .map(|q| (q.s, q.p, q.o, q.g))
+                                .collect();
+                        assert_eq!(
+                            actual.len(),
+                            expected.len(),
+                            "{kind} mask={mask} graph={graph:?}"
+                        );
+                        assert_eq!(
+                            actual.into_iter().collect::<BTreeSet<_>>(),
+                            expected,
+                            "{kind} mask={mask} graph={graph:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(view.stats().materializations, 0, "{kind}");
+}
