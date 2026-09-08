@@ -146,7 +146,6 @@ PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
         ("crates/rdf-wasm/src/lib.rs", 4),
         ("crates/rdf-wasm/src/query.rs", 3),
         ("crates/rdf/benches/native_codecs.rs", 1),
-        ("crates/rdf/src/gts_compose.rs", 1),
         ("crates/rdf/src/gts_view.rs", 1),
         ("crates/rdf/src/gts_write.rs", 3),
         ("crates/rdf/src/lib.rs", 2),
