@@ -407,6 +407,24 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// An imported property has no source RDF node. Preserve its source shape and
+/// JSON Pointer as a collision-free blank-node label instead of minting an IRI.
+/// This uses no shared counter, so adding a property does not renumber existing
+/// nested node shapes.
+fn property_shape_id(source: &Term, path: &str) -> Term {
+    use std::fmt::Write as _;
+
+    let source = source.to_string();
+    let mut label = String::from("schema-property");
+    for part in [source.as_str(), path] {
+        label.push('-');
+        for byte in part.bytes() {
+            write!(label, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+    }
+    Term::blank(label)
+}
+
 impl ImportContext<'_> {
     fn audit_root(
         &mut self,
@@ -565,6 +583,7 @@ impl ImportContext<'_> {
                 constraints.push(Constraint::MinCount(1));
             }
             property_shapes.push(PropertyShape {
+                id: property_shape_id(&id, &property_path),
                 path: Path::Predicate(predicate),
                 constraints,
                 property_shapes: Vec::new(),
@@ -597,6 +616,7 @@ impl ImportContext<'_> {
                 )));
             }
             property_shapes.push(PropertyShape {
+                id: property_shape_id(&id, &format!("{path}/properties/{}", pointer_escape(key))),
                 path: Path::Predicate(NamedNode::new_unchecked(predicate_iri)),
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: Vec::new(),

@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 
-use crate::components::{Component, Validator, ValidatorKind, severity_from_term};
+use crate::components::{Component, ValidatorKind, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -460,9 +460,9 @@ impl Parser<'_> {
         // for all required parameters of a declared component is treated as a
         // usage of that component. Components are processed in deterministic
         // order; parameter bindings follow the component's declared parameter
-        // order. All validators applicable to the current shape scope are
-        // emitted as separate constraints; if none apply, the component is
-        // skipped silently.
+        // order. Each parameter instance is independent. Scope-specific
+        // validators take precedence over generic validators; if none apply,
+        // SHACL-SPARQL requires that the component be ignored.
         let shape_severity = self
             .first_object_of(id, sh::SEVERITY)
             .and_then(|t| severity_from_term(&t));
@@ -480,47 +480,28 @@ impl Parser<'_> {
         let mut components: Vec<&Component> = self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
         for component in components {
-            let mut bindings: Vec<(String, Term)> = Vec::new();
-            let mut missing_required = false;
-            for param in &component.parameters {
-                let values = self.objects_of(id, param.path.as_str());
-                if values.len() > 1 {
-                    return Err(format!(
-                        "shape {id} declares {count} values for parameter <{path}> of component <{component}>, only one is allowed",
-                        count = values.len(),
-                        path = param.path,
-                        component = component.id
-                    ));
-                }
-                if let Some(value) = values.into_iter().next() {
-                    bindings.push((param.name.clone(), value));
-                } else if !param.optional {
-                    missing_required = true;
-                    break;
-                }
-            }
-            if missing_required {
+            let instances = component.instantiate(id, |path| self.objects_of(id, path))?;
+            if instances.is_empty() {
                 continue;
             }
 
-            let matching: Vec<&Validator> = if is_property_shape {
-                component
-                    .property_validators
-                    .iter()
-                    .chain(component.validators.iter())
-                    .collect()
+            // Scope-specific validators take precedence over the generic ASK
+            // fallback (SHACL-SPARQL §4.2.3).
+            let scoped = if is_property_shape {
+                &component.property_validators
             } else {
-                component
-                    .node_validators
-                    .iter()
-                    .chain(component.validators.iter())
-                    .collect()
+                &component.node_validators
             };
-            if matching.is_empty() {
+            let matching = if scoped.is_empty() {
+                &component.validators
+            } else {
+                scoped
+            };
+            let Some(validator) = matching.first() else {
                 continue;
-            }
+            };
 
-            for validator in matching {
+            for bindings in instances {
                 let component_validator = match &validator.kind {
                     ValidatorKind::Ask => ComponentValidator::Ask {
                         ask: validator.query_text.clone(),
@@ -542,7 +523,7 @@ impl Parser<'_> {
                 constraints.push(Constraint::Component {
                     component: component.id.clone(),
                     source_shape: id.clone(),
-                    bindings: bindings.clone(),
+                    bindings,
                     validator: component_validator,
                     message,
                     severity,

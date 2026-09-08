@@ -11,6 +11,9 @@
 //! parsed and is later consulted by the engine to bind component parameters and
 //! run the matching ASK or SELECT query for each shape usage.
 
+mod parameters;
+
+use parameters::parse_parameter;
 use std::sync::OnceLock;
 
 use ::purrdf::TermValue;
@@ -18,7 +21,7 @@ use ::purrdf::{DatasetView, RdfDataset};
 use ::purrdf::{FastMap, FastSet};
 
 use crate::data::{GraphFilter, native_quads};
-use crate::model::{rdf, rdfs, sh};
+use crate::model::{rdf, rdfs, sh, xsd};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
 use crate::shapes::{ComponentValidator, Path, build_prefix_header};
@@ -131,6 +134,11 @@ impl ComponentRegistry {
             let Term::NamedNode(component) = subject else {
                 continue;
             };
+            // Built-in components already have native parsing and evaluation.
+            // Importing their RDF declarations must not add a second dispatch.
+            if is_native_component(component.as_str()) {
+                continue;
+            }
             if seen.insert(component.as_str().to_owned()) {
                 component_iris.push(component.as_str().to_owned());
             }
@@ -157,6 +165,48 @@ impl ComponentRegistry {
         }
         Ok(registry)
     }
+}
+
+/// Components executed by the native SHACL engines, even when their vocabulary
+/// declarations occur in the input dataset. Custom IRIs in the SHACL namespace
+/// remain discoverable; this list identifies implementations, not namespaces.
+fn is_native_component(iri: &str) -> bool {
+    matches!(
+        iri,
+        "http://www.w3.org/ns/shacl#PropertyConstraintComponent"
+            | sh::SPARQL_CONSTRAINT_COMPONENT
+            | sh::EXPRESSION_CONSTRAINT_COMPONENT
+            | sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT
+            | sh::MIN_COUNT_CONSTRAINT_COMPONENT
+            | sh::MAX_COUNT_CONSTRAINT_COMPONENT
+            | sh::CLASS_CONSTRAINT_COMPONENT
+            | sh::DATATYPE_CONSTRAINT_COMPONENT
+            | sh::NODE_KIND_CONSTRAINT_COMPONENT
+            | sh::IN_CONSTRAINT_COMPONENT
+            | sh::HAS_VALUE_CONSTRAINT_COMPONENT
+            | sh::PATTERN_CONSTRAINT_COMPONENT
+            | sh::MIN_LENGTH_CONSTRAINT_COMPONENT
+            | sh::UNIQUE_LANG_CONSTRAINT_COMPONENT
+            | sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT
+            | sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT
+            | sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT
+            | sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT
+            | sh::AND_CONSTRAINT_COMPONENT
+            | sh::OR_CONSTRAINT_COMPONENT
+            | sh::XONE_CONSTRAINT_COMPONENT
+            | sh::NODE_CONSTRAINT_COMPONENT
+            | sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT
+            | sh::MAX_LENGTH_CONSTRAINT_COMPONENT
+            | sh::NOT_CONSTRAINT_COMPONENT
+            | sh::LANGUAGE_IN_CONSTRAINT_COMPONENT
+            | sh::CLOSED_CONSTRAINT_COMPONENT
+            | sh::EQUALS_CONSTRAINT_COMPONENT
+            | sh::DISJOINT_CONSTRAINT_COMPONENT
+            | sh::LESS_THAN_CONSTRAINT_COMPONENT
+            | sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT
+            | sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT
+            | sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT
+    )
 }
 
 /// Map an `sh:severity` object term to a [`Severity`]: the three built-in
@@ -392,19 +442,22 @@ pub(crate) fn sparql_local_name(iri: &str) -> String {
 
 /// Return all objects for `(subject, predicate, ?)`.
 fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    if !subject.is_subject() {
-        return vec![];
-    }
-    let pred = Term::NamedNode(NamedNode::from(predicate));
-    native_quads(
+    let Some(subject_id) = crate::data::resolve_id(data, subject) else {
+        return Vec::new();
+    };
+    let Some(predicate_id) = data.term_id_by_iri(predicate) else {
+        return Vec::new();
+    };
+    let mut seen = ::purrdf::IdSet::default();
+    crate::data::quads_for_pattern_ids(
         data,
-        Some(subject),
-        Some(&pred),
+        Some(subject_id),
+        Some(predicate_id),
         None,
         GraphFilter::AnyGraph,
     )
-    .into_iter()
-    .map(|(_, _, object)| object)
+    .filter(|quad| seen.insert(quad.o))
+    .map(|quad| crate::term::term_id_to_native(data, quad.o))
     .collect()
 }
 
@@ -508,43 +561,6 @@ fn is_valid_varname(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Parse a single `sh:parameter` declaration for a component.
-fn parse_parameter(
-    data: &RdfDataset,
-    param_node: &Term,
-    component_iri: &str,
-) -> Result<Parameter, String> {
-    let paths: Vec<NamedNode> = objects_of(data, param_node, sh::PATH)
-        .into_iter()
-        .filter_map(|t| match t {
-            Term::NamedNode(n) => Some(n),
-            _ => None,
-        })
-        .collect();
-    if paths.len() != 1 {
-        return Err(format!(
-            "component {component_iri} parameter {param_node} must have exactly one sh:path IRI"
-        ));
-    }
-    let path = paths.into_iter().next().expect("paths length checked");
-    let name = sparql_local_name(path.as_str());
-    if !is_valid_varname(&name) {
-        return Err(format!(
-            "component {component_iri} parameter path <{}> yields invalid SPARQL variable name \
-             {name:?}",
-            path.as_str()
-        ));
-    }
-    let optional = objects_of(data, param_node, sh::OPTIONAL)
-        .iter()
-        .any(|t| matches!(t, Term::Literal(lit) if lit.value() == "true"));
-    Ok(Parameter {
-        path,
-        name,
-        optional,
-    })
-}
-
 /// Parse a single SPARQL validator node attached to a component.
 fn parse_validator(
     data: &RdfDataset,
@@ -565,23 +581,19 @@ fn parse_validator(
         ValidatorKind::Ask => sh::ASK,
         ValidatorKind::Select => sh::SELECT,
     };
-    let raw_queries: Vec<String> = objects_of(data, validator, query_pred)
-        .into_iter()
-        .filter_map(|t| match t {
-            Term::Literal(lit) => Some(lit.value().to_owned()),
-            _ => None,
-        })
-        .collect();
-    if raw_queries.len() != 1 {
-        return Err(format!(
-            "component {component_iri} validator {validator} must have exactly one {} literal",
-            match kind {
-                ValidatorKind::Ask => "sh:ask",
-                ValidatorKind::Select => "sh:select",
-            }
-        ));
-    }
-    let raw_query = raw_queries.into_iter().next().expect("length checked");
+    let raw_queries = objects_of(data, validator, query_pred);
+    let raw_query = match raw_queries.as_slice() {
+        [Term::Literal(literal)] if literal.datatype_str() == xsd::STRING => literal.value(),
+        _ => {
+            return Err(format!(
+                "component {component_iri} validator {validator} must have exactly one {} xsd:string literal",
+                match kind {
+                    ValidatorKind::Ask => "sh:ask",
+                    ValidatorKind::Select => "sh:select",
+                }
+            ));
+        }
+    };
     let query_text = format!(
         "{}{raw_query}",
         build_prefix_header(data, doc_prefixes, &[component, validator])
@@ -662,6 +674,20 @@ fn parse_component(
         parameters.push(parse_parameter(data, &param_node, component_iri)?);
     }
     parameters.sort_by(|a, b| a.path.as_str().cmp(b.path.as_str()));
+    if parameters.iter().all(|parameter| parameter.optional) {
+        return Err(format!(
+            "component {component_iri} must declare at least one non-optional parameter"
+        ));
+    }
+    let mut names = FastSet::default();
+    for parameter in &parameters {
+        if !names.insert(parameter.name.as_str()) {
+            return Err(format!(
+                "component {component_iri} declares duplicate parameter name ?{}",
+                parameter.name,
+            ));
+        }
+    }
     let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
 
     let mut node_validator_nodes: Vec<Term> = objects_of(data, component, sh::NODE_VALIDATOR);
@@ -710,6 +736,22 @@ fn parse_component(
             )
         })
         .collect::<Result<Vec<Validator>, _>>()?;
+
+    for (attachment, parsed, expect_ask) in [
+        (sh::NODE_VALIDATOR, &node_validators, false),
+        (sh::PROPERTY_VALIDATOR, &property_validators, false),
+        (sh::VALIDATOR, &validators, true),
+    ] {
+        if parsed
+            .iter()
+            .any(|validator| matches!(validator.kind, ValidatorKind::Ask) != expect_ask)
+        {
+            return Err(format!(
+                "component {component_iri} {attachment} requires {} validators",
+                if expect_ask { "ASK" } else { "SELECT" },
+            ));
+        }
+    }
 
     let mut component_messages: Vec<String> = objects_of(data, component, sh::MESSAGE)
         .into_iter()
