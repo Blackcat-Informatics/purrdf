@@ -26,9 +26,11 @@
 //! Literal lexical forms escape `\\ \" \n \r \t` plus C0 control chars as `\u00XX`,
 //! exactly as oxigraph's N-Triples literal writer.
 
+use crate::data_view::ShaclRead;
+
 use std::cmp::Ordering;
 
-use ::purrdf::{RdfDataset, RdfLiteral, TermRef};
+use ::purrdf::{RdfLiteral, TermRef};
 use ::purrdf::{RdfTextDirection, TermId, TermValue};
 use smallvec::SmallVec;
 
@@ -588,13 +590,13 @@ fn escape_literal(s: &str) -> String {
 }
 
 /// Convert a resolved IR [`TermRef`] into a native [`Term`], recursing into triple
-/// components via the dataset's [`resolve`](RdfDataset::resolve).
+/// components via the dataset's [`resolve`](::purrdf::RdfDataset::resolve).
 ///
 /// Blank labels are scope-qualified so two same-label blanks from different
 /// [`BlankScope`](::purrdf::BlankScope)s never conflate (C0.2); a DEFAULT-scope
 /// label outside the reserved marker namespace stays bare so single-scope data
 /// is byte-unchanged.
-pub fn term_ref_to_native(dataset: &RdfDataset, term: TermRef<'_>) -> Term {
+pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
     match term {
         TermRef::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),
         TermRef::Blank { label, scope } => Term::BlankNode(scope.qualify_label(label).into_owned()),
@@ -629,7 +631,7 @@ pub fn term_ref_to_native(dataset: &RdfDataset, term: TermRef<'_>) -> Term {
 
 /// Convert a resolved IR term id into a native [`Term`].
 #[inline]
-pub fn term_id_to_native(dataset: &RdfDataset, id: TermId) -> Term {
+pub fn term_id_to_native(dataset: &impl ShaclRead, id: TermId) -> Term {
     term_ref_to_native(dataset, dataset.resolve(id))
 }
 

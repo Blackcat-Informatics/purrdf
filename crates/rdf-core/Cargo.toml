@@ -171,3 +171,7 @@ harness = false
 # distort the Criterion timings above.
 name = "purremb_alloc"
 harness = false
+
+[[bench]]
+name = "shared_views"
+harness = false

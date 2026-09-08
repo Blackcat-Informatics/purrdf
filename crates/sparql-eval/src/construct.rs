@@ -27,7 +27,8 @@ use purrdf_core::loss::{
     LOSS_ANNOTATION_LAYER_DROPPED, LOSS_REIFIER_LAYER_DROPPED, LOSS_STANDPOINT_SCOPE_DROPPED,
 };
 use purrdf_core::{
-    DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermRef, TermValue,
+    DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermRef,
+    TermValue, ValidatedRdfDatasetBuilder,
 };
 use purrdf_sparql_algebra::{
     GraphPattern, NamedNodePattern, QuadPattern, TermPattern, TriplePattern,
@@ -210,6 +211,33 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<ConstructedGraph<D::Id>, EvalError> {
+    let StagedConstruct {
+        builder,
+        rows,
+        certificate,
+    } = eval_construct_staged(template, pattern, ctx)?;
+    Ok(commit_answer_triples(
+        builder.freeze(),
+        certificate,
+        &rows,
+        ctx,
+    ))
+}
+
+/// Validated graph plus the WHERE rows and their completeness certificate.
+pub(crate) struct StagedConstruct<I: purrdf_core::ViewTermId> {
+    pub(crate) builder: ValidatedRdfDatasetBuilder,
+    pub(crate) rows: crate::solution::SolutionSeq<I>,
+    pub(crate) certificate: Option<Truncation<I>>,
+}
+
+/// Instantiate and validate a graph while retaining its unfrozen builder.
+/// Publication decides whether it needs an owned dataset or a direct builder append.
+pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
+    template: &[QuadPattern],
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<StagedConstruct<D::Id>, EvalError> {
     let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
         Evaluated::Complete(seq) => (seq, None),
         Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
@@ -293,7 +321,11 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
             build_construct_graph(&plan, &seq, ctx, &mut tracker)?
         }
     };
-    Ok(commit_answer_triples(graph, certificate, &seq, ctx))
+    Ok(StagedConstruct {
+        builder: graph,
+        rows: seq,
+        certificate,
+    })
 }
 
 /// The immutable inputs of one CONSTRUCT template pass, bundled so the pass can
@@ -446,7 +478,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
     seq: &crate::solution::SolutionSeq<D::Id>,
     ctx: &mut EvalCtx<'_, D>,
     tracker: &mut MintTracker,
-) -> Result<Arc<RdfDataset>, EvalError> {
+) -> Result<ValidatedRdfDatasetBuilder, EvalError> {
     let schema = &seq.schema;
     let template = plan.template;
     let mut builder = RdfDatasetBuilder::new();
@@ -637,8 +669,8 @@ fn build_construct_graph<D: DatasetView + Sync>(
     }
 
     builder
-        .freeze()
-        .map_err(|d| EvalError::internal(format!("CONSTRUCT output failed to freeze: {d:?}")))
+        .validate()
+        .map_err(|d| EvalError::internal(format!("CONSTRUCT output failed validation: {d:?}")))
 }
 
 /// Blank-label bookkeeping for SPARQL §16.2 template freshness across one
@@ -699,12 +731,26 @@ impl MintTracker {
     /// another replacement, whatever the mint prefix was. The `r{k}` suffix is
     /// ASCII-alphanumeric, so a legal label stays inside the
     /// `BLANK_NODE_LABEL` alphabet.
-    fn freshness_remap(&self, graph: &RdfDataset) -> Option<DetHashMap<String, String>> {
+    fn freshness_remap(
+        &self,
+        graph: &ValidatedRdfDatasetBuilder,
+    ) -> Option<DetHashMap<String, String>> {
         let colliding: Vec<&String> = self.minted.intersection(&self.data).collect();
         if colliding.is_empty() {
             return None;
         }
-        let mut used = graph_blank_labels(graph);
+        let mut used: BTreeSet<String> = (0..graph.term_count())
+            .filter_map(|index| {
+                let id =
+                    TermId::from_index(u32::try_from(index).expect("validated term index fits"));
+                match graph.resolve(id) {
+                    TermRef::Blank { label, scope } => {
+                        Some(scope.qualify_label(label).into_owned())
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
         let mut remap = DetHashMap::default();
         for label in colliding {
             let mut k = 0u64;
@@ -720,38 +766,6 @@ impl MintTracker {
         }
         Some(remap)
     }
-}
-
-/// Every blank-node label appearing anywhere in `graph` (quads, reifier bindings,
-/// annotations, and inside nested triple terms) — the freshness universe a
-/// replacement label must avoid.
-fn graph_blank_labels(graph: &RdfDataset) -> BTreeSet<String> {
-    let mut labels = BTreeSet::new();
-    for quad in graph.quads() {
-        for id in [Some(quad.s), Some(quad.p), Some(quad.o), quad.g]
-            .into_iter()
-            .flatten()
-        {
-            collect_value_blank_labels(&graph.term_value(id), &mut labels);
-        }
-    }
-    for (reifier, triple, graph_id) in graph.reifiers_with_graph() {
-        for id in [Some(reifier), Some(triple), graph_id]
-            .into_iter()
-            .flatten()
-        {
-            collect_value_blank_labels(&graph.term_value(id), &mut labels);
-        }
-    }
-    for (reifier, predicate, object, graph_id) in graph.annotations_with_graph() {
-        for id in [Some(reifier), Some(predicate), Some(object), graph_id]
-            .into_iter()
-            .flatten()
-        {
-            collect_value_blank_labels(&graph.term_value(id), &mut labels);
-        }
-    }
-    labels
 }
 
 /// Recursively collect every blank-node label inside an owned term value.

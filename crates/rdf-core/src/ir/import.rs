@@ -6,6 +6,49 @@
 use crate::hash::FastMap;
 use crate::{DatasetView, RdfDatasetBuilder, RdfLiteral, TermId, TermRef};
 
+/// Resolve a source term in another native dictionary without an owned term
+/// tree. The memo belongs to this exact source/target/scope translation.
+pub(crate) fn lookup_native_term(
+    source: &crate::RdfDataset,
+    target: &crate::RdfDataset,
+    id: TermId,
+    scope: impl Fn(crate::BlankScope) -> Option<crate::BlankScope> + Copy,
+    memo: &mut FastMap<TermId, Option<TermId>>,
+) -> Option<TermId> {
+    if let Some(found) = memo.get(&id) {
+        return *found;
+    }
+    let found = match source.resolve(id) {
+        TermRef::Iri(iri) => target.term_id_by_iri(iri),
+        TermRef::Blank {
+            label,
+            scope: original,
+        } => scope(original).and_then(|scope| target.term_id_by_blank(label, scope)),
+        TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            let TermRef::Iri(datatype) = source.resolve(datatype) else {
+                unreachable!("native datatype is an IRI")
+            };
+            target.term_id_by_literal(lexical, datatype, language, direction)
+        }
+        TermRef::Triple { s, p, o } => {
+            let s = lookup_native_term(source, target, s, scope, memo);
+            let p = lookup_native_term(source, target, p, scope, memo);
+            let o = lookup_native_term(source, target, o, scope, memo);
+            match (s, p, o) {
+                (Some(s), Some(p), Some(o)) => target.term_id_by_triple(s, p, o),
+                _ => None,
+            }
+        }
+    };
+    memo.insert(id, found);
+    found
+}
+
 /// Operational counts for a typed import. These describe work performed, never
 /// a content identity, correctness certificate, or cache key.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

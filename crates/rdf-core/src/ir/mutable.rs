@@ -208,6 +208,8 @@ pub struct MutableDataset {
     /// NOT in this set. Fixed-key hashed; only ever probed by membership, never
     /// iterated for order.
     suppressed: FastSet<QuadKey>,
+    suppressed_rows: usize,
+    work: super::view_accounting::WorkCounter,
 }
 
 impl MutableDataset {
@@ -222,6 +224,8 @@ impl MutableDataset {
             added_ord: FastMap::default(),
             next_added_ord: 0,
             suppressed: FastSet::default(),
+            suppressed_rows: 0,
+            work: super::view_accounting::WorkCounter::default(),
         }
     }
 
@@ -375,20 +379,34 @@ impl MutableDataset {
     }
 
     /// Whether a base [`QuadKey`] (all components `Base`) names a quad in the base.
-    fn base_contains(&self, key: &QuadKey) -> bool {
+    fn base_occurrences(&self, key: &QuadKey) -> usize {
         let (MutTermId::Base(s), MutTermId::Base(p), MutTermId::Base(o)) = (key.s, key.p, key.o)
         else {
-            return false;
+            return 0;
         };
         let g = match key.g {
             None => GraphMatch::Default,
             Some(MutTermId::Base(g)) => GraphMatch::Named(g),
             // A delta graph id can never name a base quad.
-            Some(MutTermId::Delta(_)) => return false,
+            Some(MutTermId::Delta(_)) => return 0,
         };
-        RdfDataset::quads_for_pattern_indexed(&self.base, Some(s), Some(p), Some(o), g)
-            .next()
-            .is_some()
+        usize::from(
+            RdfDataset::quads_for_pattern_indexed(&self.base, Some(s), Some(p), Some(o), g)
+                .next()
+                .is_some(),
+        ) + usize::from(
+            self.base
+                .reifier_quads_of(s)
+                .any(|q| q.p == p && q.o == o && g.matches(q.g)),
+        ) + usize::from(
+            self.base
+                .annotations_of_with_graph(s)
+                .any(|(pred, obj, graph)| pred == p && obj == o && g.matches(graph)),
+        )
+    }
+
+    fn base_contains(&self, key: &QuadKey) -> bool {
+        self.base_occurrences(key) > 0
     }
 
     // -- mutation core ----------------------------------------------------------------
@@ -399,6 +417,7 @@ impl MutableDataset {
         // Rule 1: inserting a currently-suppressed base quad un-suppresses it (and
         // does NOT also push to `added`).
         if self.suppressed.remove(&key) {
+            self.suppressed_rows -= self.base_occurrences(&key);
             return true;
         }
         // Already effective (present in base-and-not-suppressed, or already added)?
@@ -428,8 +447,10 @@ impl MutableDataset {
         }
         // Rule 3: removing a base quad (not in `added`) creates a suppression — but
         // only if it is actually an effective base quad and not already suppressed.
-        if self.base_contains(&key) && !self.suppressed.contains(&key) {
-            return self.suppressed.insert(key);
+        let occurrences = self.base_occurrences(&key);
+        if occurrences > 0 && self.suppressed.insert(key) {
+            self.suppressed_rows += occurrences;
+            return true;
         }
         false
     }
@@ -477,7 +498,7 @@ impl MutableDataset {
     #[must_use]
     pub fn should_compact(&self) -> bool {
         let churn = self.added.len() + self.suppressed.len();
-        let base = self.base.quad_count();
+        let base = self.base.rdf_row_count();
         churn * 2 > base
     }
 
@@ -501,7 +522,12 @@ impl MutableDataset {
     fn effective_value_quads(&self) -> Vec<QuadValues> {
         let mut out: Vec<QuadValues> = Vec::new();
         // Base quads that are not suppressed.
-        for q in self.base.quads() {
+        for q in self
+            .base
+            .quads()
+            .chain(self.base.reifier_quads())
+            .chain(self.base.annotation_quads())
+        {
             let key = QuadKey {
                 s: MutTermId::Base(q.s),
                 p: MutTermId::Base(q.p),
@@ -535,14 +561,11 @@ impl MutableDataset {
     /// EVERYTHING** — terms, reifiers, annotations, graph names, and source locations
     /// — into dense [`TermId`]s. `MutTermId`/`DeltaTermId` never leak past this point.
     ///
-    /// The mechanism re-uses the existing compaction/validation engine: every
-    /// effective quad's component is RESOLVED to its dataset-independent value and
-    /// RE-INTERNED into a fresh [`RdfDatasetBuilder`] (recursively for triple terms),
-    /// then pushed. The base's reifiers/annotations are carried through the SAME
-    /// resolve→re-intern path so they survive compaction with remapped ids; a base
-    /// annotation whose reifier binds a triple-term that is no longer effective is
-    /// still carried (reification metadata is independent of quad suppression, matching
-    /// the base's own freeze semantics).
+    /// The shared typed importer re-interns surviving RDF rows, retaining the
+    /// statement tables and declaration-only graphs. Suppressed statement rows stay
+    /// absent. Removing a reifier declaration demotes its surviving annotations to
+    /// ordinary quads when no other declaration remains in that graph. Non-RDF
+    /// sidecars remain owned by the original base.
     ///
     /// Source LOCATIONS of the surviving base quads are carried too: a base quad is
     /// pushed in base order (so a base ordinal maps to a running new ordinal), and its
@@ -551,78 +574,35 @@ impl MutableDataset {
     /// (the `attach_location` contract). Delta-added quads were minted in memory, not
     /// parsed from a source, so they carry no location.
     pub fn freeze(&self) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
+        let view = self.snapshot_view()?;
         let mut builder = RdfDatasetBuilder::new();
-        let base = &*self.base;
-        // Base id -> builder id, filled on first use. Base ids are dense, so a
-        // flat table indexed by `TermId::index` is the memo: every later
-        // occurrence of a base term (a predicate, a class, a graph name) is one
-        // slot read instead of an owned `TermValue` rebuild + re-intern.
-        let mut memo: Vec<Option<TermId>> = vec![None; base.term_count()];
-
-        // Running count of quads PUSHED so far == the next quad's builder ordinal.
-        // Base quads are distinct and `added` quads are non-base, so no push collapses
-        // by dedup; the counter therefore tracks the pre-freeze pushed-quad ordinal
-        // that `attach_location` keys off (freeze's own sort then remaps it to the
-        // dense frozen position — see `location_follows_quad_through_freeze_sort`).
-        let mut new_ord: u32 = 0;
-
-        // 1. Surviving BASE quads, remapped via value re-intern, carrying any source
-        //    location across the base-ordinal -> new-handle mapping.
-        for (base_ord, q) in base.quads().enumerate() {
-            // The base quad's effective key (all components are `Base`). Skip it if it
-            // is suppressed — gone from the effective set.
-            let key = QuadKey {
-                s: MutTermId::Base(q.s),
-                p: MutTermId::Base(q.p),
-                o: MutTermId::Base(q.o),
-                g: q.g.map(MutTermId::Base),
-            };
-            if self.suppressed.contains(&key) {
+        super::import::DatasetImporter::new(&mut builder, &view).append();
+        let mut ordinal = 0;
+        for (old, quad) in self.base.quads().enumerate() {
+            if !view.base_quad_is_ordinary(quad) {
                 continue;
             }
-            let s = self.intern_base(&mut builder, &mut memo, q.s);
-            let p = self.intern_base(&mut builder, &mut memo, q.p);
-            let o = self.intern_base(&mut builder, &mut memo, q.o);
-            let g = q.g.map(|g| self.intern_base(&mut builder, &mut memo, g));
-            builder.push_quad(s, p, o, g);
-            // Carry the base quad's source location, if any, keyed to its NEW pushed
-            // ordinal (`new_ord`), not its base ordinal.
-            if let Some(loc) = base.location_of(QuadHandle::from_index(base_ord as u32)) {
-                builder.attach_location(QuadHandle::from_index(new_ord), loc.clone());
+            if let Some(location) = self.base.location_of(QuadHandle::from_index(old as u32)) {
+                builder.attach_location(QuadHandle::from_index(ordinal), location.clone());
             }
-            new_ord += 1;
+            ordinal += 1;
         }
+        let dataset = builder.freeze()?;
+        self.work.add(super::view_accounting::ViewWork {
+            copied_terms: dataset.term_count(),
+            copied_rows: dataset.rdf_row_count(),
+            freezes: 1,
+            materializations: 1,
+            copied_text_bytes: dataset.rdf_text_bytes(),
+            ..Default::default()
+        });
+        Ok(dataset)
+    }
 
-        let _ = new_ord; // last value consumed by the base loop; delta quads add none.
-
-        // Carry the base's statement metadata independently of quad suppression.
-        // The shared delta classifier probes the original base reifier index when
-        // routing added annotations, so it needs no owned copy of that subject set.
-        for (reifier, triple, graph) in base.reifiers_with_graph() {
-            let reifier = self.intern_base(&mut builder, &mut memo, reifier);
-            let triple = self.intern_base(&mut builder, &mut memo, triple);
-            let graph = graph.map(|g| self.intern_base(&mut builder, &mut memo, g));
-            builder.push_reifier_in_graph(reifier, triple, graph);
-        }
-        for (reifier, pred, obj, graph) in base.annotations_with_graph() {
-            let reifier = self.intern_base(&mut builder, &mut memo, reifier);
-            let pred = self.intern_base(&mut builder, &mut memo, pred);
-            let obj = self.intern_base(&mut builder, &mut memo, obj);
-            let graph = graph.map(|g| self.intern_base(&mut builder, &mut memo, g));
-            builder.push_annotation_in_graph(reifier, pred, obj, graph);
-        }
-
-        self.append_delta(&mut builder);
-
-        // Carry the base's explicitly-declared (possibly empty) named graphs
-        // through the same re-intern path so `GRAPH ?g` enumeration survives a
-        // mutation freeze even when a declared graph gained/kept zero quads.
-        for g in base.named_graphs() {
-            let g = self.intern_base(&mut builder, &mut memo, g);
-            builder.declare_named_graph(g);
-        }
-
-        builder.freeze()
+    /// Successful work across snapshots and compactions created by this owner.
+    #[must_use]
+    pub fn work_stats(&self) -> super::view_accounting::ViewWork {
+        self.work.get()
     }
 
     /// Publish an immutable read view by freezing only the added delta. The base
@@ -633,12 +613,41 @@ impl MutableDataset {
     /// # Errors
     /// The delta fails the same RDF admission checks as [`Self::freeze`].
     pub fn snapshot_view(&self) -> Result<DeltaDatasetView, crate::RdfDiagnostic> {
+        self.snapshot_view_with_limits(super::view_accounting::ViewLimits::default())
+    }
+
+    /// Snapshot publication under caller-selected finite retention ceilings.
+    ///
+    /// # Errors
+    /// Refuses retention overflow or invalid delta records before publication.
+    pub fn snapshot_view_with_limits(
+        &self,
+        limits: super::view_accounting::ViewLimits,
+    ) -> Result<DeltaDatasetView, crate::RdfDiagnostic> {
+        let mut stats = super::view_accounting::ViewStats::default();
+        stats.retain(&self.base);
+        stats.retained_sources += 1;
+        stats.retained_terms = stats.retained_terms.saturating_add(self.delta.values.len());
+        stats.retained_rows = stats.retained_rows.saturating_add(self.added.len());
+        stats.auxiliary_bytes = self
+            .suppressed
+            .len()
+            .saturating_mul(4 * size_of::<super::QuadIds>());
+        limits.check(&stats)?;
         let mut builder = RdfDatasetBuilder::new();
         self.append_delta(&mut builder);
         let delta = builder.freeze()?;
+        // A later view-retention refusal does not undo a completed native freeze.
+        self.work.add(super::view_accounting::ViewWork {
+            copied_terms: delta.term_count(),
+            copied_rows: delta.rdf_row_count(),
+            copied_text_bytes: delta.rdf_text_bytes(),
+            freezes: 1,
+            ..Default::default()
+        });
         let base_id = |id| match id {
             MutTermId::Base(id) => id,
-            MutTermId::Delta(_) => unreachable!("only base quads can be suppressed"),
+            MutTermId::Delta(_) => unreachable!("only base rows can be suppressed"),
         };
         let suppressed = self
             .suppressed
@@ -650,11 +659,12 @@ impl MutableDataset {
                 g: q.g.map(base_id),
             })
             .collect();
-        Ok(DeltaDatasetView::new(
-            Arc::clone(&self.base),
-            delta,
-            suppressed,
-        ))
+        let view = DeltaDatasetView::new(Arc::clone(&self.base), delta, suppressed, limits)?;
+        self.work.add(super::view_accounting::ViewWork {
+            copied_index_bytes: view.stats().work.copied_index_bytes,
+            ..Default::default()
+        });
+        Ok(view)
     }
 
     /// One RDF 1.2 delta classifier shared by compaction and snapshot publication.
@@ -672,7 +682,7 @@ impl MutableDataset {
             let is_decl = matches!(&q.p, TermValue::Iri(iri) if iri == RDF_REIFIES)
                 && matches!(q.o, TermValue::Triple { .. });
             if is_decl {
-                reifier_subjects.insert(q.s.clone());
+                reifier_subjects.insert((q.g.clone(), q.s.clone()));
             }
             reifier_decl.push(is_decl);
         }
@@ -704,38 +714,24 @@ impl MutableDataset {
             // A quad whose subject is a reifier is that reifier's annotation, in its
             // own graph — mirroring `fold_statement_layer`'s pass 2 so an UPDATE freeze
             // and a parse of the same statement agree.
-            if reifier_subjects.contains(&q.s)
-                || self
-                    .base
-                    .term_id_by_value(&q.s)
-                    .is_some_and(|id| self.base.reifier_quads_of(id).next().is_some())
+            if reifier_subjects.contains(&(q.g.clone(), q.s.clone()))
+                || self.base.term_id_by_value(&q.s).is_some_and(|id| {
+                    self.base.reifier_quads_of(id).any(|row| {
+                        row.g.map(|graph| self.base_value(graph)) == q.g
+                            && !self.suppressed.contains(&QuadKey {
+                                s: MutTermId::Base(row.s),
+                                p: MutTermId::Base(row.p),
+                                o: MutTermId::Base(row.o),
+                                g: row.g.map(MutTermId::Base),
+                            })
+                    })
+                })
             {
                 builder.push_annotation_in_graph(s, p, o, g);
             } else {
                 builder.push_quad(s, p, o, g);
             }
         }
-    }
-
-    /// Resolve a BASE term id to its value and re-intern it into `builder`, returning
-    /// the builder's dense id. Memoized per base id in `memo` (see `freeze`): the
-    /// builder's intern is idempotent and a pure function of the value, so the id
-    /// the first occurrence minted is exactly the id every re-intern would return —
-    /// the builder's term table and its allocation order are unchanged by the memo.
-    fn intern_base(
-        &self,
-        builder: &mut RdfDatasetBuilder,
-        memo: &mut [Option<TermId>],
-        id: TermId,
-    ) -> TermId {
-        let slot = &mut memo[id.index()];
-        if let Some(mapped) = *slot {
-            return mapped;
-        }
-        let value = self.base_value(id);
-        let mapped = intern_value(builder, &value);
-        *slot = Some(mapped);
-        mapped
     }
 }
 
@@ -968,15 +964,20 @@ impl MutableDataset {
     /// yielded lazily: base quads in frozen order, then the delta. The sole caller
     /// filters and maps them once, so no base-sized `Vec` is materialized.
     fn effective_keys(&self) -> impl Iterator<Item = QuadKey> + '_ {
-        let base = self.base.quads().filter_map(|q| {
-            let key = QuadKey {
-                s: MutTermId::Base(q.s),
-                p: MutTermId::Base(q.p),
-                o: MutTermId::Base(q.o),
-                g: q.g.map(MutTermId::Base),
-            };
-            (!self.suppressed.contains(&key)).then_some(key)
-        });
+        let base = self
+            .base
+            .quads()
+            .chain(self.base.reifier_quads())
+            .chain(self.base.annotation_quads())
+            .filter_map(|q| {
+                let key = QuadKey {
+                    s: MutTermId::Base(q.s),
+                    p: MutTermId::Base(q.p),
+                    o: MutTermId::Base(q.o),
+                    g: q.g.map(MutTermId::Base),
+                };
+                (!self.suppressed.contains(&key)).then_some(key)
+            });
         // Delta-added quads, in call order (never `added`'s hash-iteration order) —
         // `quads_for_pattern` (the sole caller) filters this sequence, so its own
         // output order inherits the same call-order guarantee.
@@ -990,13 +991,13 @@ impl MutableDataset {
     #[doc(hidden)]
     pub fn effective_count(&self) -> usize {
         // O(1) from the mutation invariants (no base scan):
-        //   • every key in `suppressed` is a base quad (rule 3 inserts only when
-        //     `base_contains`), so `suppressed.len()` base quads are removed;
+        //   • `suppressed_rows` counts all native table occurrences hidden by
+        //     suppression keys, including equal rows in different tables;
         //   • every key in `added` is a non-base, non-suppressed quad (insert adds
         //     only when `!contains_key`), so `added.len()` quads are net-new;
         //   • `added` and `suppressed` are disjoint.
         // Hence effective = base ∪ added − suppressed has exactly this cardinality.
-        self.base.quad_count() + self.added.len() - self.suppressed.len()
+        self.base.rdf_row_count() + self.added.len() - self.suppressed_rows
     }
 }
 
@@ -1309,6 +1310,8 @@ mod tests {
         // The frozen quad set equals the effective set (compared by value).
         let frozen_set: std::collections::BTreeSet<String> = frozen
             .quads()
+            .chain(frozen.reifier_quads())
+            .chain(frozen.annotation_quads())
             .map(|qd| {
                 let s = MutableDataset::base_value_of(&frozen, qd.s);
                 let p = MutableDataset::base_value_of(&frozen, qd.p);
@@ -1517,12 +1520,13 @@ mod tests {
 
     #[test]
     fn should_compact_signals_on_churn() {
-        let mut m = MutableDataset::new(base3()); // base of 3 quads
+        let mut m = MutableDataset::new(base3()); // 3 ordinary + 2 statement rows
         assert!(!m.should_compact());
-        // Add 2 quads: churn 2, base 3 → 2*2=4 > 3 → signal.
         ins(&mut m, q("e1", "p", "o"));
         ins(&mut m, q("e2", "p", "o"));
-        assert!(m.should_compact());
+        assert!(!m.should_compact()); // 2 * 2 <= 5 retained RDF rows
+        ins(&mut m, q("e3", "p", "o"));
+        assert!(m.should_compact()); // 3 * 2 > 5
     }
 
     // -- differential proptest --------------------------------------------------------
@@ -1544,13 +1548,13 @@ mod tests {
 
             let names = ["a", "b", "c", "d", "e", "f"];
             let preds = ["p", "q", "r"];
-            let mut m = MutableDataset::new(base3());
-            // The reference model: the effective set of (s,p,o) string tuples. Seed it
-            // with the base's three quads.
-            let mut model: HashSet<(String, String, String)> = HashSet::new();
-            model.insert(("a".into(), "p".into(), "b".into()));
-            model.insert(("a".into(), "p".into(), "c".into()));
-            model.insert(("b".into(), "p".into(), "c".into()));
+            let base = base3();
+            // Independent native-table oracle includes every RDF statement row.
+            let mut model: HashSet<(String, String, String)> = base.quads()
+                .chain(base.reifier_quads()).chain(base.annotation_quads())
+                .map(|q| (val_str(&base.term_value(q.s)), val_str(&base.term_value(q.p)), val_str(&base.term_value(q.o))))
+                .collect();
+            let mut m = MutableDataset::new(base);
 
             for (is_insert, s, p, o) in ops {
                 let (sn, pn, on) =
@@ -1593,7 +1597,7 @@ mod tests {
             // freeze()'s quad-value set equals the model too.
             let frozen = m.freeze().expect("freeze");
             let frozen_set: HashSet<(String, String, String)> = frozen
-                .quads()
+                .quads().chain(frozen.reifier_quads()).chain(frozen.annotation_quads())
                 .map(|qd| (
                     iri_local(&MutableDataset::base_value_of(&frozen, qd.s)),
                     iri_local(&MutableDataset::base_value_of(&frozen, qd.p)),

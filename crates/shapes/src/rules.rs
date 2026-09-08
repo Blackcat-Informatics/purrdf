@@ -869,7 +869,7 @@ fn sparql_rule_producer(
 
 /// Resolve the focus nodes of `shape` against the current dataset.
 fn focus_nodes(data: &ShaclData, shape: &Shape) -> Result<Vec<Term>, String> {
-    let plan = ValidationPlan::for_shape(data.core(), shape);
+    let plan = ValidationPlan::for_shape(data.core_view(), shape);
     resolve_focus_nodes(data, &shape.targets, &plan)
         .map(|nodes| nodes.into_iter().map(FocusNode::into_term).collect())
 }

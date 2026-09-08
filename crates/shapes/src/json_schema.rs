@@ -1679,7 +1679,7 @@ fn members_of(
     let mut blank_labels: BTreeSet<String> = BTreeSet::new();
     for ds in datasets {
         for (subject, _pred, _obj) in native_quads(
-            ds,
+            *ds,
             None,
             Some(&type_term),
             Some(&class_term),
@@ -1744,9 +1744,13 @@ fn first_literal(
     let pred = Term::NamedNode(NamedNode::from(predicate));
     let mut min: Option<String> = None;
     for ds in datasets {
-        for (_subject, _pred, obj) in
-            native_quads(ds, Some(&subject), Some(&pred), None, GraphFilter::AnyGraph)
-        {
+        for (_subject, _pred, obj) in native_quads(
+            *ds,
+            Some(&subject),
+            Some(&pred),
+            None,
+            GraphFilter::AnyGraph,
+        ) {
             if let Term::Literal(lit) = obj {
                 let value = lit.value();
                 if min.as_deref().is_none_or(|current| value < current) {

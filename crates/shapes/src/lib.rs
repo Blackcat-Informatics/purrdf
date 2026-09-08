@@ -32,6 +32,7 @@ pub(crate) mod class_membership;
 pub(crate) mod components;
 pub mod constraints;
 pub mod data;
+pub mod data_view;
 pub mod engine;
 pub mod expression;
 pub mod graphql;

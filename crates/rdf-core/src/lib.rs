@@ -214,3 +214,8 @@ pub mod prelude {
     };
     pub use crate::store::RdfStoreCapabilities;
 }
+
+pub use ir::{
+    CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ViewLimits, ViewStats,
+    ViewWork,
+};

@@ -652,7 +652,10 @@ fn run_query_view<D: DatasetView + Sync + FocusGraphSource>(
         // The graph THIS query is reading, handed to any expression-bodied function
         // it calls (SHACL 1.2 SPARQL Extensions §7.3). Per-query, so a fixpoint round
         // that rebuilt its dataset supplies the rebuilt one.
-        focus_graph: dataset.focus_graph(),
+        focus_graph: registry
+            .requires_focus_graph()
+            .then(|| dataset.focus_graph())
+            .flatten(),
         // The custom-function call depth in force, so a recursion that reaches SPARQL
         // and comes back keeps counting instead of restarting at zero.
         call_depth: current_call_depth(),

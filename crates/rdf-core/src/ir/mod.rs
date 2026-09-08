@@ -28,7 +28,9 @@ pub mod dataset;
 /// Deterministic, mmap-native embedding companions bound to exact pack bytes.
 pub mod embedding;
 // The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl (P5).
+pub mod composite;
 pub mod mutable;
+pub mod view_accounting;
 // Evented, ID-addressed OUTPUT of a frozen dataset (C6): the dual of the
 // permissive ingestion protocol, for chase / SHACL-result / projection consumers.
 pub mod event_sink;
@@ -87,3 +89,6 @@ pub use paged::{
 pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, TermId, TermValue};
+
+pub use composite::{CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement};
+pub use view_accounting::{ViewLimits, ViewStats, ViewWork};

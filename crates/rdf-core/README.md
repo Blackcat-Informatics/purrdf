@@ -79,6 +79,27 @@ an independent-document union. RDF 1.2 reifiers, annotations and empty named
 graphs survive. Source locations and other sidecars remain on `view.base()`;
 generic RDF materialization does not transfer those sidecars automatically.
 
+`CompositeDatasetView::from_sources` composes independently parsed documents from
+`CompositeSource` handles, including delta snapshots. It standardizes their blank
+scopes apart in source order, including references inside nested triple terms and
+composite literals. Equal non-blank values receive one view identity; local
+`TermId`s from different sources never establish equality. Use
+`from_shared_sources` only when the supplied scopes already describe one shared
+identity space. Adding the same handle twice in independent mode represents two
+document occurrences, each with its own blank identities.
+
+`GraphPlacement` explicitly preserves, flattens or relocates all three RDF record
+tables and graph declarations. View construction retains source dictionaries and
+indexes, copies alias mappings, and owns rewritten composite literal text only
+when blank scopes change. `materialize()` is the explicit native output boundary.
+Original source handles remain available for locations and non-RDF sidecars.
+
+`ViewLimits` bounds retained sources, terms, rows, native payload and charged
+auxiliary storage. `stats()` separates those retention estimates from copy,
+freeze and materialization work shared across view clones. Payload excludes
+allocator overhead, native indexes and sidecars; these figures are not RSS.
+Operational counters never contribute to RDF identities or serialized bytes.
+
 Text codecs are *not* here — parsing and serialization live one layer up in
 [`purrdf-rdf`](https://crates.io/crates/purrdf-rdf). This split keeps the
 kernel small and its invariants enforceable at the crate boundary.

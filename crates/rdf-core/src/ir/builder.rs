@@ -417,6 +417,8 @@ pub struct RdfDatasetBuilder {
     /// blank nodes from different source datasets can never collide even when their
     /// labels are identical (standardize-apart, C0.2).
     next_merge_scope: u32,
+    /// Explicit and imported blank scopes reserved against independent merges.
+    used_scopes: std::collections::BTreeSet<BlankScope>,
     /// The caller-supplied predicate IRI that marks a derivation edge between a
     /// content-addressed term and the term(s) it was derived from. `None` (the
     /// default) means no derivation predicate is configured — no fabricated
@@ -441,6 +443,30 @@ pub struct ValidatedRdfDatasetBuilder {
 }
 
 impl ValidatedRdfDatasetBuilder {
+    /// Number of interned terms in this validated, unfrozen graph.
+    #[must_use]
+    pub fn term_count(&self) -> usize {
+        self.inner.term_count()
+    }
+
+    /// Resolve one staged term without materializing a dataset.
+    #[must_use]
+    pub fn resolve(&self, id: TermId) -> TermRef<'_> {
+        self.inner.resolve(id)
+    }
+
+    /// Number of distinct statements, including both RDF 1.2 overlay tables.
+    #[must_use]
+    pub fn statement_count(&self) -> usize {
+        self.inner.quads.len() + self.inner.reifiers.len() + self.inner.annotations.len()
+    }
+
+    /// Bytes occupied by the staged term payload, excluding indexes and rows.
+    #[must_use]
+    pub fn payload_bytes(&self) -> usize {
+        self.inner.interner.arena.len()
+    }
+
     /// Materialize the already-validated builder into an immutable dataset.
     #[must_use]
     pub fn freeze(self) -> Arc<RdfDataset> {
@@ -501,6 +527,7 @@ impl RdfDatasetBuilder {
             declared_graphs: Vec::new(),
             // Merge scopes start at 1; scope 0 is BlankScope::DEFAULT (local pushes).
             next_merge_scope: 1,
+            used_scopes: std::collections::BTreeSet::new(),
             derivation_predicate: None,
             reifies_predicate: None,
         }
@@ -546,7 +573,20 @@ impl RdfDatasetBuilder {
     /// Intern a blank node. Identity is `(label, scope)` (C0.2): same label + same
     /// scope → same id; same label + different scope → different id.
     pub fn intern_blank(&mut self, label: &str, scope: BlankScope) -> TermId {
+        if scope != BlankScope::DEFAULT {
+            self.used_scopes.insert(scope);
+        }
         self.interner.intern(TermLookup::Blank { label, scope })
+    }
+
+    /// Borrow every blank identity currently interned by this builder.
+    /// Includes unused terms, so a publication boundary can choose a mint
+    /// namespace disjoint from every identity the destination already owns.
+    pub fn blank_identities(&self) -> impl Iterator<Item = (&str, BlankScope)> + '_ {
+        self.interner.terms.iter().filter_map(|term| match term {
+            InternedTerm::Blank { label, scope } => Some((self.interned_str(*label), *scope)),
+            _ => None,
+        })
     }
 
     /// Intern a blank node from a **text codec's** parsed `_:` token, decoding the
@@ -901,7 +941,17 @@ impl RdfDatasetBuilder {
     /// [`BlankScope::qualify_label`] (C0.2).
     pub fn push_dataset(&mut self, other: &RdfDataset) {
         // Allocate one fresh scope for this entire `other` dataset.
+        while self
+            .used_scopes
+            .contains(&BlankScope(self.next_merge_scope))
+        {
+            self.next_merge_scope = self
+                .next_merge_scope
+                .checked_add(1)
+                .expect("merge scope counter exceeded u32::MAX");
+        }
         let scope = BlankScope(self.next_merge_scope);
+        self.used_scopes.insert(scope);
         self.next_merge_scope = self
             .next_merge_scope
             .checked_add(1)
@@ -935,6 +985,99 @@ impl RdfDatasetBuilder {
             let g = self.intern_owned_term_scoped(&graph, scope);
             self.declare_named_graph(g);
         }
+    }
+
+    /// Append a validated graph directly, without an intermediate frozen dataset.
+    ///
+    /// Terms are imported once by borrowed value, with a compact ID remap. Blank
+    /// scopes are preserved: this is composition within a shared identity space,
+    /// rather than an independent-document merge. Quads, graph-qualified overlays,
+    /// declaration-only graphs and source locations all retain their identity.
+    /// Validation happens before this method receives its input, so no fallible
+    /// operation can publish a prefix of the staged graph.
+    ///
+    /// The destination's content-address recognition and derivation configuration
+    /// remains authoritative. RDF terms and derivation triples are preserved;
+    /// source-side recognition caches are recomputed using the destination's
+    /// configured scheme rather than silently changing its policy.
+    ///
+    /// Returns the number of newly copied term-payload bytes. This operational
+    /// counter is independent of deterministic dataset content and ordering.
+    pub fn append_validated(&mut self, source: ValidatedRdfDatasetBuilder) -> usize {
+        let source = source.inner;
+        let before = self.interner.arena.len();
+        let mut remap = vec![None; source.term_count()];
+        for index in 0..source.term_count() {
+            let id = TermId::from_index(u32::try_from(index).expect("validated term index fits"));
+            self.import_builder_term(&source, id, &mut remap);
+        }
+        let mapped = |id: TermId| remap[id.index()].expect("all validated terms were mapped");
+        let mut quad_map = Vec::with_capacity(source.quads.len());
+        for quad in &source.quads {
+            let row = QuadRow {
+                s: mapped(quad.s),
+                p: mapped(quad.p),
+                o: mapped(quad.o),
+                g: quad.g.map(mapped),
+            };
+            let index = store_once(&mut self.quads, &mut self.quad_index, row);
+            quad_map.push(QuadHandle::from_index(index));
+        }
+        for &(reifier, triple, graph) in &source.reifiers {
+            self.push_reifier_in_graph(mapped(reifier), mapped(triple), graph.map(mapped));
+        }
+        for &(reifier, predicate, object, graph) in &source.annotations {
+            self.push_annotation_in_graph(
+                mapped(reifier),
+                mapped(predicate),
+                mapped(object),
+                graph.map(mapped),
+            );
+        }
+        for graph in source.declared_graphs {
+            self.declare_named_graph(mapped(graph));
+        }
+        for (handle, location) in source.locations {
+            self.attach_location(quad_map[handle.index()], location);
+        }
+        self.interner.arena.len() - before
+    }
+
+    fn import_builder_term(
+        &mut self,
+        source: &Self,
+        id: TermId,
+        remap: &mut [Option<TermId>],
+    ) -> TermId {
+        if let Some(mapped) = remap[id.index()] {
+            return mapped;
+        }
+        let mapped = match source.resolve(id) {
+            TermRef::Iri(iri) => self.intern_iri(iri),
+            TermRef::Blank { label, scope } => self.intern_blank(label, scope),
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype = self.import_builder_term(source, datatype, remap);
+                self.interner.intern(TermLookup::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                })
+            }
+            TermRef::Triple { s, p, o } => {
+                let s = self.import_builder_term(source, s, remap);
+                let p = self.import_builder_term(source, p, remap);
+                let o = self.import_builder_term(source, o, remap);
+                self.intern_triple(s, p, o)
+            }
+        };
+        remap[id.index()] = Some(mapped);
+        mapped
     }
 
     /// Crate-internal read access to an interned term. [`freeze`](Self::freeze) and

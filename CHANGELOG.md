@@ -20,6 +20,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Bug Fixes
 
+- **core:** Mutation suppression and reinsertion apply to ordinary quads,
+  reifiers and annotations, including overlapping records. Statement-layer
+  classification uses the reifier's graph as part of its identity. Snapshots and
+  compaction preserve annotation-only rows and declaration-only named graphs.
+  Independent dataset imports reserve explicitly interned blank scopes, including
+  those referenced only inside composite literals.
+- **shapes:** Borrowed statement projections deduplicate metadata overlapping
+  ordinary rows, preserving graph-set semantics in SPARQL counts and validation.
+  Disabled statement projection skips metadata reads, and bound subject probes
+  use the source's metadata indexes.
 - **core:** Directional language-tagged literals now intern with
   `rdf:dirLangString`, as required by RDF 1.2. Previously the builder used
   `rdf:langString`, so prepared SPARQL constants could not find those terms.
@@ -42,6 +52,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   reports name their declaring shape, and reifier-constraint results use the
   enclosing property's severity. First-party report goldens deliberately correct
   34 source-shape references and one severity; conformance outcomes are unchanged.
+
+### Features
+
+- **core:** Immutable composite and mutation views retain native source
+  dictionaries and indexes. Independent-document composition standardizes blank
+  scopes apart, including nested triple and composite-literal references; an
+  explicit shared-scope constructor preserves already-established identities.
+  Graph placement covers all RDF record tables and graph declarations. Finite
+  retention limits and copy/freeze/materialization counters make ownership costs
+  observable without changing deterministic RDF identities.
+- **shapes:** `PreparedShapes` shares immutable shape and class-reference analysis
+  across exact dataset bindings. Borrowed native, composite and delta views avoid
+  rebuilding a base dataset for constraint, path and target evaluation. Each
+  binding resolves its own dataset IDs and targets; concrete dataset compatibility
+  getters materialize lazily.
+- **sparql:** Typed prepared CONSTRUCT methods stage and validate graph results
+  directly into a destination builder, with destination-aware fresh blank nodes
+  and explicit copy counters. Shared-governor and fallible-view variants withhold
+  publication after errors, cancellation or exhausted budgets. UPDATE WHERE
+  evaluation reads mutation snapshots without compacting the whole base.
 
 ## [1.1.0] - 2026-09-04
 
@@ -2376,5 +2406,4 @@ called out below with what a consumer must do.
 ### Other
 
 - First commit
-
 

@@ -6,9 +6,11 @@
 //! Evaluates all non-SPARQL SHACL Core constraint components plus the
 //! recursive shape evaluator.  PyO3-free.
 
+use crate::data_view::ShaclRead;
+
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, RdfDataset, TermId, TermRef};
+use ::purrdf::{FastMap, FastSet, TermId, TermRef};
 use smallvec::SmallVec;
 
 use crate::data::{GraphFilter, ShaclData, native_quads, resolve_id};
@@ -44,7 +46,7 @@ enum ValueNode {
 impl ValueNode {
     /// Resolve to an owned native [`Term`] (the report boundary and content-check
     /// input): materialize an interned id, or clone the foreign term.
-    fn to_term(&self, ds: &RdfDataset) -> Term {
+    fn to_term(&self, ds: &impl ShaclRead) -> Term {
         match self {
             Self::Interned(id) => term_id_to_native(ds, *id),
             Self::Foreign(term) => term.clone(),
@@ -53,7 +55,7 @@ impl ValueNode {
 
     /// The interned id of this value node, if it has one. A `Foreign` term is
     /// resolved against `ds` in case it happens to be interned (usually it is not).
-    fn as_id(&self, ds: &RdfDataset) -> Option<TermId> {
+    fn as_id(&self, ds: &impl ShaclRead) -> Option<TermId> {
         match self {
             Self::Interned(id) => Some(*id),
             Self::Foreign(term) => resolve_id(ds, term),
@@ -62,7 +64,7 @@ impl ValueNode {
 
     /// Borrow the lexical surface used by `sh:pattern`/length constraints
     /// without materializing an interned value node.
-    fn lexical<'a>(&'a self, ds: &'a RdfDataset) -> Option<&'a str> {
+    fn lexical<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<&'a str> {
         match self {
             Self::Interned(id) => match ds.resolve(*id) {
                 TermRef::Iri(iri) => Some(iri),
@@ -78,7 +80,7 @@ impl ValueNode {
     /// The node kind of this value node without materializing an interned id.
     /// Mirrors `term_ref_to_native` one-to-one: `Iri`→`NamedNode`,
     /// `Blank`→`BlankNode`, `Literal`→`Literal`, `Triple`→`Triple`.
-    fn kind(&self, ds: &RdfDataset) -> ValueKind {
+    fn kind(&self, ds: &impl ShaclRead) -> ValueKind {
         match self {
             Self::Interned(id) => match ds.resolve(*id) {
                 TermRef::Iri(_) => ValueKind::Iri,
@@ -92,7 +94,7 @@ impl ValueNode {
 
     /// Borrow the language tag of a language-tagged literal value node without
     /// materializing an interned id; `None` for any other node.
-    fn language<'a>(&'a self, ds: &'a RdfDataset) -> Option<&'a str> {
+    fn language<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<&'a str> {
         match self {
             Self::Interned(id) => match ds.resolve(*id) {
                 TermRef::Literal { language, .. } => language,
@@ -104,7 +106,7 @@ impl ValueNode {
     }
 
     /// Borrow `(lexical, datatype IRI)` for a literal value node.
-    fn literal_parts<'a>(&'a self, ds: &'a RdfDataset) -> Option<(&'a str, &'a str)> {
+    fn literal_parts<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<(&'a str, &'a str)> {
         match self {
             Self::Interned(id) => {
                 let TermRef::Literal {
@@ -219,7 +221,7 @@ pub fn validate_shape_with(
     shape: &Shape,
     box_role_vocab: Option<&BoxRoleVocab>,
 ) -> Result<Vec<ValidationResult>, String> {
-    let plan = ValidationPlan::for_shape(store.core(), shape);
+    let plan = ValidationPlan::for_shape(store.core_view(), shape);
     validate_shape_with_plan(store, focus, shape, box_role_vocab, &plan)
 }
 
@@ -230,7 +232,7 @@ pub(crate) fn validate_shape_with_plan(
     box_role_vocab: Option<&BoxRoleVocab>,
     plan: &ValidationPlan,
 ) -> Result<Vec<ValidationResult>, String> {
-    let focus_id = resolve_id(store.core(), focus);
+    let focus_id = resolve_id(store.core_view(), focus);
     validate_shape_with_plan_at(store, focus, focus_id, shape, box_role_vocab, plan)
 }
 
@@ -360,7 +362,13 @@ fn eval_closed(
     }
 
     let mut results = Vec::new();
-    let quads = native_quads(store.core(), Some(focus), None, None, GraphFilter::AnyGraph);
+    let quads = native_quads(
+        store.core_view(),
+        Some(focus),
+        None,
+        None,
+        GraphFilter::AnyGraph,
+    );
     for (_subject, predicate, object) in quads {
         if permitted.contains(predicate.as_str()) {
             continue;
@@ -397,11 +405,11 @@ fn eval_closed(
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
 pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, String> {
-    let plan = ValidationPlan::for_shape(store.core(), shape);
+    let plan = ValidationPlan::for_shape(store.core_view(), shape);
     conforms_with_id_depth(
         store,
         focus,
-        resolve_id(store.core(), focus),
+        resolve_id(store.core_view(), focus),
         shape,
         &plan,
         0,
@@ -427,8 +435,8 @@ pub(crate) fn conforms_with_depth(
     shape: &Shape,
     depth: u32,
 ) -> Result<bool, String> {
-    let plan = ValidationPlan::for_shape(store.core(), shape);
-    let focus_id = resolve_id(store.core(), focus);
+    let plan = ValidationPlan::for_shape(store.core_view(), shape);
+    let focus_id = resolve_id(store.core_view(), focus);
     conforms_with_id_depth(store, focus, focus_id, shape, &plan, depth)
 }
 
@@ -464,11 +472,11 @@ fn eval_property_shape(
     // without materializing, and only the value nodes a violation records — or a
     // content constraint inspects — are resolved to owned terms.
     let value_nodes: SmallVec<[ValueNode; 4]> = match focus_id {
-        Some(id) => path::eval_ids_from_id(store.core(), id, &ps.path)
+        Some(id) => path::eval_ids_from_id(store.core_view(), id, &ps.path)
             .into_iter()
             .map(ValueNode::Interned)
             .collect(),
-        None => path::eval(store.core(), focus, &ps.path)
+        None => path::eval(store.core_view(), focus, &ps.path)
             .into_iter()
             .map(ValueNode::Foreign)
             .collect(),
@@ -533,8 +541,8 @@ fn eval_property_shape(
             // conforming path).
             results.extend(eval_property_shape(
                 context,
-                &value.to_term(store.core()),
-                value.as_id(store.core()),
+                &value.to_term(store.core_view()),
+                value.as_id(store.core_view()),
                 nested,
                 &source_roles,
             )?);
@@ -547,7 +555,7 @@ fn eval_property_shape(
     if !ps.reifier_shapes.is_empty() || ps.reification_required {
         let value_terms: Vec<Term> = value_nodes
             .iter()
-            .map(|v| v.to_term(store.core()))
+            .map(|v| v.to_term(store.core_view()))
             .collect();
         results.extend(eval_reifier_shapes(ReifierEvalContext {
             store,
@@ -633,7 +641,7 @@ fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResu
                 let inner_results = validate_shape_with_depth(
                     store,
                     reifier,
-                    resolve_id(store.core(), reifier),
+                    resolve_id(store.core_view(), reifier),
                     reifier_shape,
                     box_role_vocab,
                     plan,
@@ -689,7 +697,7 @@ fn triple_term(focus: &Term, predicate: &NamedNode, value: &Term) -> Option<Term
 fn reifiers_for(store: &ShaclData, triple_term: &Term) -> Vec<Term> {
     let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
     let reifiers_set: FastSet<Term> = native_quads(
-        store.core(),
+        store.core_view(),
         None,
         Some(&reifies),
         Some(triple_term),
@@ -720,7 +728,7 @@ fn path_box_roles(
     let predicate_term = Term::NamedNode(predicate.clone());
     let box_role = Term::NamedNode(NamedNode::from(vocab.graph_box_role.as_str()));
     let mut roles: Vec<NamedNode> = native_quads(
-        store.core(),
+        store.core_view(),
         Some(&predicate_term),
         Some(&box_role),
         None,
@@ -779,7 +787,7 @@ fn eval_constraint(
     let store = context.store;
     let plan = context.plan;
     let depth = context.depth;
-    let ds = store.core();
+    let ds = store.core_view();
     let result_path = || path.map(path::path_to_term);
     // The full SHACL path structure travels alongside a COMPLEX result path
     // (its result_path term is a deterministic blank node) so the report
@@ -1952,7 +1960,7 @@ fn check_datatype(value: &Term, dt_iri: &NamedNode) -> bool {
     check_datatype_parts(lit.value(), lit.datatype_str(), dt_iri)
 }
 
-fn check_value_datatype(value: &ValueNode, ds: &RdfDataset, dt_iri: &NamedNode) -> bool {
+fn check_value_datatype(value: &ValueNode, ds: &impl ShaclRead, dt_iri: &NamedNode) -> bool {
     value
         .literal_parts(ds)
         .is_some_and(|(lexical, datatype)| check_datatype_parts(lexical, datatype, dt_iri))

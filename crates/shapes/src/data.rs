@@ -3,13 +3,12 @@
 
 //! The SHACL engine's data-access surface (C4).
 //!
-//! The SHACL Core engine reads the data graph DIRECTLY from a frozen
-//! [`::purrdf::RdfDataset`]'s id-native iteration surface — there is no trait
-//! object and no owned per-lookup quad materialization on the hot path. Pattern
-//! lookups answer in interned [`TermId`]s ([`quads_for_pattern_ids`], returning
-//! `Copy` [`QuadIds`]); the hot traversal (path evaluation, focus resolution)
-//! stays in id space and resolves to the engine's native [`Term`] value model
-//! only at the boundary. There is NO oxigraph store on this path.
+//! SHACL Core reads shared immutable carriers through id-native iteration.
+//! Native datasets preserve their local handles; composite and delta sources use
+//! compact validation-local handle mappings while borrowing their dictionaries.
+//! Pattern lookups answer in [`TermId`]s ([`quads_for_pattern_ids`], returning
+//! `Copy` [`QuadIds`]); traversal stays in id space and resolves to the engine's
+//! [`Term`] values only at a consumer boundary.
 //!
 //! [`ShaclData`] is the concrete holder threaded through the engine: it carries
 //! the projected and SPARQL datasets, their shared asserted-subclass membership
@@ -17,9 +16,10 @@
 //! [`NativeSparqlEngine`](purrdf_sparql_eval::NativeSparqlEngine) can run
 //! SHACL-SPARQL paths over the combined data(+shapes) dataset.
 
+use crate::data_view::{ShaclDatasetView, ShaclRead};
 use std::sync::Arc;
 
-use ::purrdf::{DatasetView, GraphMatch, QuadIds};
+use ::purrdf::{GraphMatch, QuadIds};
 use ::purrdf::{RdfDataset, TermId};
 
 use crate::class_membership::ClassMembershipView;
@@ -29,7 +29,7 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 /// lookups, recursively resolving the components of a quoted triple. Returns
 /// `None` if the term (including any quoted-triple component) is not interned
 /// in this dataset, in which case the pattern matches nothing.
-pub(crate) fn resolve_id(dataset: &RdfDataset, term: &Term) -> Option<TermId> {
+pub(crate) fn resolve_id(dataset: &impl ShaclRead, term: &Term) -> Option<TermId> {
     match term {
         Term::NamedNode(node) => dataset.term_id_by_iri(node.as_str()),
         // The native term carries the SCOPE-QUALIFIED label `term_id_to_native`
@@ -96,9 +96,9 @@ impl GraphFilter {
 #[derive(Debug)]
 pub struct ShaclData {
     /// The projected data graph, read for Core pattern lookups.
-    core: Arc<RdfDataset>,
+    core: Arc<ShaclDatasetView>,
     /// The combined data(+shapes) dataset handed to the native SPARQL engine.
-    sparql: Arc<RdfDataset>,
+    sparql: Arc<ShaclDatasetView>,
     /// The effective SHACL instance relation over the Core data graph.
     class_membership: ClassMembershipView,
     /// The same relation over the dataset visible to SHACL-SPARQL.
@@ -115,11 +115,29 @@ impl ShaclData {
         sparql: Arc<RdfDataset>,
         shapes_graph_iri: Option<String>,
     ) -> Self {
-        let class_membership = ClassMembershipView::new(Arc::clone(&core));
+        let same = Arc::ptr_eq(&core, &sparql);
+        let core = Arc::new(ShaclDatasetView::native(core));
+        let sparql = if same {
+            Arc::clone(&core)
+        } else {
+            Arc::new(ShaclDatasetView::native(sparql))
+        };
+        Self::from_views(core, sparql, shapes_graph_iri)
+    }
+
+    /// Retain complete immutable carriers for native and SPARQL validation.
+    /// Both views must use compatible typed RDF identities; local term handles
+    /// remain private to each view. No owned dataset is materialized here.
+    pub fn from_views(
+        core: Arc<ShaclDatasetView>,
+        sparql: Arc<ShaclDatasetView>,
+        shapes_graph_iri: Option<String>,
+    ) -> Self {
+        let class_membership = ClassMembershipView::from_view(Arc::clone(&core));
         let sparql_view = if Arc::ptr_eq(&core, &sparql) {
             class_membership.clone()
         } else {
-            ClassMembershipView::new(Arc::clone(&sparql))
+            ClassMembershipView::from_view(Arc::clone(&sparql))
         };
         Self {
             core,
@@ -130,10 +148,22 @@ impl ShaclData {
         }
     }
 
-    /// The projected data graph used for Core pattern lookups.
+    /// Materialize the projected data graph at an explicit compatibility boundary.
+    /// Native validation uses [`Self::core_view`] and does not require this copy.
     #[inline]
     pub fn core(&self) -> &RdfDataset {
+        self.core.materialized()
+    }
+
+    /// Borrow the native validation carrier without materializing its dataset.
+    #[inline]
+    pub fn core_view(&self) -> &ShaclDatasetView {
         &self.core
+    }
+
+    /// Retain the native validation carrier for repeated prepared bindings.
+    pub fn core_view_arc(&self) -> Arc<ShaclDatasetView> {
+        Arc::clone(&self.core)
     }
 
     /// A cloned handle to the projected Core dataset `Arc`.
@@ -143,17 +173,23 @@ impl ShaclData {
     /// rebuilt dataset (the round driver freezes a fresh graph per round).
     #[inline]
     pub fn core_arc(&self) -> Arc<RdfDataset> {
-        Arc::clone(&self.core)
+        Arc::clone(self.core.materialized())
     }
 
     /// The combined dataset for native SHACL-SPARQL evaluation.
     ///
-    /// Borrows the held `Arc` rather than cloning it: the native SPARQL engine
-    /// entry points take `&Arc<RdfDataset>` and never take ownership, so a
-    /// read-only caller needs no per-call refcount bump.
+    /// This compatibility accessor lazily materializes a view once. Native
+    /// SHACL-SPARQL validation reads the retained carrier directly.
     #[inline]
     pub fn sparql(&self) -> &Arc<RdfDataset> {
-        &self.sparql
+        self.sparql.materialized()
+    }
+
+    /// Operational carrier measurements for Core and SPARQL, respectively.
+    /// Counters never enter shape, graph or validation-result identity.
+    #[must_use]
+    pub fn view_stats(&self) -> [crate::data_view::ShaclViewStats; 2] {
+        [self.core.stats(), self.sparql.stats()]
     }
 
     /// The effective asserted-subclass instance relation used by native SHACL
@@ -193,7 +229,7 @@ impl ShaclData {
 /// position does not resolve (a term not interned in `ds` matches nothing).
 #[inline]
 pub fn quads_for_pattern_ids(
-    ds: &RdfDataset,
+    ds: &impl ShaclRead,
     s: Option<TermId>,
     p: Option<TermId>,
     o: Option<TermId>,
@@ -213,7 +249,7 @@ pub fn quads_for_pattern_ids(
 /// ([`crate::path`], [`crate::engine`]) stays in id space via
 /// [`quads_for_pattern_ids`].
 pub fn native_quads(
-    ds: &RdfDataset,
+    ds: &impl ShaclRead,
     subject: Option<&Term>,
     predicate: Option<&Term>,
     object: Option<&Term>,

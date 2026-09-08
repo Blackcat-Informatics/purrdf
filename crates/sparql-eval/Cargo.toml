@@ -201,3 +201,7 @@ harness = false
 # `make bench` lane only — excluded from `make check`.
 name = "lateral_substitution"
 harness = false
+
+[[bench]]
+name = "construct_builder"
+harness = false

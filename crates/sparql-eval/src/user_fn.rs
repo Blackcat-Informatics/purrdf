@@ -604,6 +604,12 @@ impl UserFunctionRegistry {
         self.exprs.get(iri)
     }
 
+    /// Whether a registered expression-bodied function requires an owned focus graph.
+    #[must_use]
+    pub fn requires_focus_graph(&self) -> bool {
+        !self.exprs.is_empty()
+    }
+
     /// Whether the registry holds no functions of any kind (the common case: no
     /// `sh:SPARQLFunction` declared and nothing registered, so evaluation carries
     /// no registry at all).
