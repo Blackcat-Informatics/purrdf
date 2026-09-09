@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+#![cfg(not(target_arch = "wasm32"))]
+
 //! Streaming blob limits remain effective when a content key is supplied.
 
 use purrdf_gts::reader::{
@@ -8,7 +10,16 @@ use purrdf_gts::reader::{
 };
 use purrdf_gts::writer::{Encrypt0Options, FrameOptions, Writer};
 
-const KEY: [u8; 32] = [7; 32];
+fn fresh_bytes<const N: usize>() -> [u8; N] {
+    let mut bytes = [0; N];
+    getrandom::fill(&mut bytes).expect("test encryption randomness");
+    bytes
+}
+
+fn wrong_key(mut key: [u8; 32]) -> [u8; 32] {
+    key[0] ^= 1;
+    key
+}
 
 #[derive(Default)]
 struct Sink {
@@ -36,7 +47,7 @@ impl StreamingSink for Sink {
     }
 }
 
-fn blob(data: &[u8], transforms: &[&str], encrypted: bool) -> Vec<u8> {
+fn blob(data: &[u8], transforms: &[&str], key: Option<[u8; 32]>) -> Vec<u8> {
     let mut writer = Writer::new("generic");
     writer
         .add_frame_with_options(
@@ -44,10 +55,10 @@ fn blob(data: &[u8], transforms: &[&str], encrypted: bool) -> Vec<u8> {
             FrameOptions {
                 raw: Some(data.to_vec()),
                 transform: transforms.iter().map(|name| (*name).into()).collect(),
-                encrypt: encrypted.then(|| Encrypt0Options {
+                encrypt: key.map(|key| Encrypt0Options {
                     kid: "recipient".into(),
-                    key: KEY,
-                    iv: [3; 12],
+                    key,
+                    iv: fresh_bytes(),
                 }),
                 ..FrameOptions::default()
             },
@@ -86,7 +97,8 @@ fn encrypted_plaintext_accepts_exact_and_empty_limits() {
             decoded_limit: Some(data.len()),
             ..Sink::default()
         };
-        let result = read(&blob(data, &[], true), &mut sink, Some(KEY));
+        let key = fresh_bytes();
+        let result = read(&blob(data, &[], Some(key)), &mut sink, Some(key));
         assert!(
             !result.diagnostics.iter().any(|diagnostic| {
                 matches!(diagnostic.code.as_str(), "DamagedFrame" | "MissingKey")
@@ -100,8 +112,9 @@ fn encrypted_plaintext_accepts_exact_and_empty_limits() {
 
 #[test]
 fn encrypted_plaintext_limit_is_checked_before_authentication_or_emission() {
-    let bytes = blob(b"bounded", &[], true);
-    for key in [KEY, [8; 32]] {
+    let key = fresh_bytes();
+    let bytes = blob(b"bounded", &[], Some(key));
+    for key in [key, wrong_key(key)] {
         let mut sink = Sink {
             decoded_limit: Some(6),
             ..Sink::default()
@@ -117,12 +130,13 @@ fn supplied_key_does_not_unbound_compression_with_or_without_encryption() {
     let data = [b'x'; 4096];
     for codec in ["gzip", "zstd"] {
         for encrypted in [false, true] {
-            let bytes = blob(&data, &[codec], encrypted);
+            let key = fresh_bytes();
+            let bytes = blob(&data, &[codec], encrypted.then_some(key));
             let mut sink = Sink {
                 decoded_limit: Some(4095),
                 ..Sink::default()
             };
-            let result = read(&bytes, &mut sink, Some(KEY));
+            let result = read(&bytes, &mut sink, Some(key));
             assert_limit(
                 &result,
                 &sink,
@@ -132,7 +146,7 @@ fn supplied_key_does_not_unbound_compression_with_or_without_encryption() {
                 decoded_limit: Some(4096),
                 ..Sink::default()
             };
-            read(&bytes, &mut exact, Some(KEY));
+            read(&bytes, &mut exact, Some(key));
             assert_eq!(exact.payloads, vec![data.to_vec()]);
         }
     }
@@ -140,34 +154,37 @@ fn supplied_key_does_not_unbound_compression_with_or_without_encryption() {
 
 #[test]
 fn encrypted_intermediate_limit_applies_even_when_final_plaintext_fits() {
-    let bytes = blob(b"x", &["gzip"], true);
+    let key = fresh_bytes();
+    let bytes = blob(b"x", &["gzip"], Some(key));
     let mut sink = Sink {
         decoded_limit: Some(1),
         ..Sink::default()
     };
-    let result = read(&bytes, &mut sink, Some(KEY));
+    let result = read(&bytes, &mut sink, Some(key));
     assert_limit(&result, &sink, "decoded transform output exceeds 1 bytes");
     let mut unbounded = Sink::default();
-    read(&bytes, &mut unbounded, Some(KEY));
+    read(&bytes, &mut unbounded, Some(key));
     assert_eq!(unbounded.payloads, vec![b"x".to_vec()]);
 }
 
 #[test]
 fn keyed_blob_still_enforces_original_encoded_limit() {
-    let bytes = blob(b"bounded", &[], true);
+    let key = fresh_bytes();
+    let bytes = blob(b"bounded", &[], Some(key));
     let mut sink = Sink {
         decoded_limit: Some(7),
         encoded_limit: Some(7),
         ..Sink::default()
     };
-    let result = read(&bytes, &mut sink, Some(KEY));
+    let result = read(&bytes, &mut sink, Some(key));
     assert_limit(&result, &sink, "encoded blob exceeds 7 bytes");
 }
 
 #[test]
 fn bounded_decryption_preserves_missing_and_wrong_key_failures() {
-    let bytes = blob(b"bounded", &[], true);
-    for key in [None, Some([8; 32])] {
+    let key = fresh_bytes();
+    let bytes = blob(b"bounded", &[], Some(key));
+    for key in [None, Some(wrong_key(key))] {
         let mut sink = Sink {
             decoded_limit: Some(7),
             ..Sink::default()

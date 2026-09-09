@@ -73,6 +73,10 @@ criterion = { workspace = true }
 # expectation states. Test-only: the library itself never parses JSON.
 serde_json = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Fresh keys/nonces for native encryption tests; absent from every library target.
+getrandom = { workspace = true }
+
 [[bench]]
 # GTS writer/codec authoring hot paths: rsyncable zstd block compression and
 # deterministic graph snapshot emission. Report-only; excluded from check.
