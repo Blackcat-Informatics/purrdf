@@ -46,6 +46,7 @@ pub mod gts;
 // the certifying authoring wrapper `compact_and_certify`.
 pub mod gts_certify;
 mod gts_core;
+mod gts_import_blobs;
 mod gts_import_graph;
 mod gts_import_sink;
 mod gts_resolve;
@@ -102,6 +103,10 @@ mod nesting;
 // `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two
 // IR import helpers are re-exported here.
 pub use dataset_io::dataset_from_bytes;
+pub use gts_import_blobs::{
+    GtsBlobLimits, GtsBlobMetadataSource, GtsBlobSelector, GtsImportWithBlobs, GtsImportedBlob,
+    import_gts_events_with_blobs,
+};
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::import_gts_events;
 pub use native_codecs::jsonld::{

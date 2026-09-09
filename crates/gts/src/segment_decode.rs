@@ -60,7 +60,7 @@ use ciborium::value::Value;
 use crate::model::{
     Diagnostic, OpaqueNode, Quad, Signature, StreamableInfo, Suppression, Term, TermKind, Triple3,
 };
-use crate::reader::{FrameContext, StreamingSink};
+use crate::reader::{BlobPayload, FrameContext, StreamingSink};
 
 /// A [`std::collections::HashMap`] keyed by the workspace's fixed-key `ahash`
 /// policy (`crates/rdf-core/src/hash.rs`'s `FastHasher`) — no runtime RNG
@@ -198,6 +198,21 @@ pub trait ResolvedSink {
         _digest: &str,
         _meta: Option<&Value>,
     ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Original encoded blob bound passthrough (default unbounded).
+    fn blob_encoded_limit(&self) -> Option<usize> {
+        None
+    }
+
+    /// Eager blob decoding bound passthrough (default unbounded).
+    fn blob_decode_limit(&self) -> Option<usize> {
+        None
+    }
+
+    /// Borrowed blob payload passthrough (default no-op).
+    fn blob_payload(&mut self, _payload: BlobPayload<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -664,6 +679,23 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
             return;
         }
         if let Err(error) = self.sink.blob(segment_index, digest, meta) {
+            self.fail(error);
+        }
+    }
+
+    fn blob_encoded_limit(&self) -> Option<usize> {
+        self.sink.blob_encoded_limit()
+    }
+
+    fn blob_decode_limit(&self) -> Option<usize> {
+        self.sink.blob_decode_limit()
+    }
+
+    fn blob_payload(&mut self, payload: BlobPayload<'_>) {
+        if self.error.is_some() {
+            return;
+        }
+        if let Err(error) = self.sink.blob_payload(payload) {
             self.fail(error);
         }
     }

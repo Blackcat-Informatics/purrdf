@@ -34,9 +34,11 @@
 //! seen — is an `Err`, never a silent skip. Only the merely out-of-order case
 //! resolves.
 
+use crate::gts_import_blobs::BlobCollector;
 use ciborium::value::Value;
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
+use purrdf_gts::reader::{BlobPayload, FrameContext};
 use purrdf_gts::segment_decode::{ResolvedSink, SegmentResolver};
 
 use crate::{
@@ -50,7 +52,8 @@ use crate::{
 /// GTS-frame decode and two-phase resolution that drive it live once in
 /// [`purrdf_gts::segment_decode`]; this type only interns resolved terms, pushes
 /// resolved rows, and maps decode failures onto [`RdfDiagnostic`] locations.
-struct SinkImporter {
+struct SinkImporter<'a> {
+    blobs: Option<BlobCollector<'a>>,
     /// The fallible IR builder we intern terms and push structure into.
     builder: RdfDatasetBuilder,
     /// Out-of-band material accumulated from blob / signature / suppression /
@@ -58,16 +61,17 @@ struct SinkImporter {
     lookaside: RdfLookaside,
 }
 
-impl SinkImporter {
+impl SinkImporter<'_> {
     fn new() -> Self {
         Self {
+            blobs: None,
             builder: RdfDatasetBuilder::new(),
             lookaside: RdfLookaside::default(),
         }
     }
 }
 
-impl ResolvedSink for SinkImporter {
+impl ResolvedSink for SinkImporter<'_> {
     type Id = TermId;
     type Error = RdfDiagnostic;
 
@@ -281,6 +285,9 @@ impl ResolvedSink for SinkImporter {
         digest: &str,
         meta: Option<&Value>,
     ) -> Result<(), RdfDiagnostic> {
+        if let Some(blobs) = &self.blobs {
+            blobs.check_metadata_before_retention(digest, meta)?;
+        }
         let metadata = match meta.map(metadata_value_from_cbor) {
             Some(RdfMetadataValue::Map(map)) => map,
             Some(value) => {
@@ -313,6 +320,28 @@ impl ResolvedSink for SinkImporter {
         Ok(())
     }
 
+    fn frame(&mut self, ctx: FrameContext<'_>) -> Result<(), RdfDiagnostic> {
+        if let Some(blobs) = &mut self.blobs {
+            blobs.frame(ctx);
+        }
+        Ok(())
+    }
+
+    fn blob_encoded_limit(&self) -> Option<usize> {
+        self.blobs.as_ref().map(BlobCollector::encoded_limit)
+    }
+
+    fn blob_decode_limit(&self) -> Option<usize> {
+        self.blobs.as_ref().map(BlobCollector::decode_limit)
+    }
+
+    fn blob_payload(&mut self, payload: BlobPayload<'_>) -> Result<(), RdfDiagnostic> {
+        if let Some(blobs) = &mut self.blobs {
+            blobs.payload(payload)?;
+        }
+        Ok(())
+    }
+
     fn opaque(&mut self, _segment_index: usize, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
         self.lookaside.opaque_nodes.push(RdfOpaqueNodeRecord {
             id: hex_bytes(&opaque.id),
@@ -339,6 +368,9 @@ impl ResolvedSink for SinkImporter {
     }
 
     fn segment_head(&mut self, segment_index: usize, head: &[u8]) -> Result<(), RdfDiagnostic> {
+        if let Some(blobs) = &mut self.blobs {
+            blobs.segment_head(segment_index, head);
+        }
         // Grow/patch the per-segment record with its head id.
         self.ensure_segment_record(segment_index).head = Some(hex_bytes(head));
         Ok(())
@@ -418,7 +450,7 @@ fn metadata_value_from_cbor(value: &Value) -> RdfMetadataValue {
     }
 }
 
-impl SinkImporter {
+impl SinkImporter<'_> {
     /// Ensure a [`RdfSegmentRecord`] exists for `segment_index`, returning it.
     fn ensure_segment_record(&mut self, segment_index: usize) -> &mut RdfSegmentRecord {
         if let Some(position) = self
@@ -458,7 +490,16 @@ impl SinkImporter {
 /// the interned terms are frozen via [`RdfDatasetBuilder::freeze`] and paired with
 /// the envelope.
 pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
-    let mut resolver = SegmentResolver::new(SinkImporter::new());
+    import_with_collector(bytes, None).map(|(bundle, _)| bundle)
+}
+
+pub(crate) fn import_with_collector<'a>(
+    bytes: &[u8],
+    blobs: Option<BlobCollector<'a>>,
+) -> Result<(GtsBundle, Option<BlobCollector<'a>>), RdfDiagnostic> {
+    let mut importer = SinkImporter::new();
+    importer.blobs = blobs;
+    let mut resolver = SegmentResolver::new(importer);
     let _ = purrdf_gts::reader::read_to_sink(bytes, true, None, &mut resolver);
 
     // A latched streaming error (e.g. a reader diagnostic) precedes phase-2.
@@ -472,7 +513,10 @@ pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
     let importer = resolver.into_sink();
     let lookaside = importer.lookaside;
     let dataset = importer.builder.freeze()?;
-    Ok(GtsBundle::new(dataset, RdfEnvelope::new(lookaside)))
+    Ok((
+        GtsBundle::new(dataset, RdfEnvelope::new(lookaside)),
+        importer.blobs,
+    ))
 }
 
 #[cfg(test)]
@@ -543,7 +587,7 @@ mod tests {
     /// the same blank label resolves to different ids"). Holding that map here,
     /// in the test harness, is fine — it is not the hot streaming path.
     struct RecordingSink {
-        inner: SinkImporter,
+        inner: SinkImporter<'static>,
         ids: std::collections::HashMap<(usize, usize), TermId>,
     }
 

@@ -491,18 +491,14 @@ impl Dataset {
     fn flat_quads(&self) -> Vec<RdfQuad> {
         let mut quads: Vec<RdfQuad> = self.ds.owned_quads().collect();
         for reifier in self.ds.owned_reifiers() {
-            let statement = RdfTerm::triple(reifier.statement.clone());
-            quads.push(RdfQuad::new(
-                reifier.reifier.clone(),
-                RDF_REIFIES,
-                statement,
-            ));
+            let statement = RdfTerm::triple(reifier.statement);
+            quads.push(RdfQuad::new(reifier.reifier, RDF_REIFIES, statement));
         }
         for annotation in self.ds.owned_annotations() {
             quads.push(RdfQuad::new(
-                annotation.reifier.clone(),
-                annotation.predicate.clone(),
-                annotation.object.clone(),
+                annotation.reifier,
+                annotation.predicate,
+                annotation.object,
             ));
         }
         quads

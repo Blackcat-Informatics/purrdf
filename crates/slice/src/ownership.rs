@@ -397,7 +397,7 @@ impl<'a> OwnershipAnalyzer<'a> {
                         term: term.clone(),
                         claimants: owners_vec.clone(),
                     });
-                    OwnershipStatus::Conflict(owners_vec.clone())
+                    OwnershipStatus::Conflict(owners_vec)
                 } else {
                     match &physical_origin {
                         Some(origin) if origin.slice == declared_owner => {

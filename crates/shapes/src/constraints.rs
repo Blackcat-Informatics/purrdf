@@ -379,7 +379,7 @@ fn eval_closed(
         let path_roles = path_box_roles(store, &Path::Predicate(predicate.clone()), box_role_vocab);
         let mut result = ValidationResult {
             focus_node: focus.clone(),
-            result_path: Some(Term::NamedNode(predicate.clone())),
+            result_path: Some(Term::NamedNode(predicate)),
             path_structure: None,
             value: Some(object),
             source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
@@ -619,7 +619,7 @@ fn eval_reifier_shapes(ctx: ReifierEvalContext<'_>) -> Result<Vec<ValidationResu
                 focus_node: focus.clone(),
                 result_path: Some(path_term.clone()),
                 path_structure: None,
-                value: Some(triple_term.clone()),
+                value: Some(triple_term),
                 source_constraint_component: NamedNode::from(
                     sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                 ),
