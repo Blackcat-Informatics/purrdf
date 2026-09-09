@@ -157,7 +157,7 @@ test: ## Run the workspace test suite.
 	cargo test --workspace --locked
 
 lint-native-import-blobs: ## Lint the selected native-import production and test surfaces only.
-	cargo clippy -p purrdf-gts --lib --locked -- -D warnings
+	cargo clippy -p purrdf-gts --lib --test bounded_keyed_blobs --locked -- -D warnings
 	cargo clippy -p purrdf-rdf --lib --test gts_selected_blobs --locked -- -D warnings
 	cargo clippy -p purrdf-shapes --lib --locked -- -D warnings
 
@@ -166,6 +166,7 @@ doc-native-import-blobs: ## Check the native-import and shared shape-dataset pub
 
 test-native-import-blobs: ## Check bounded selected-blob import and native scope contracts only.
 	cargo test -p purrdf-gts --lib codec::tests:: --locked
+	cargo test -p purrdf-gts --test bounded_keyed_blobs --locked
 	cargo test -p purrdf-rdf --lib gts_import_sink::tests:: --locked
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 

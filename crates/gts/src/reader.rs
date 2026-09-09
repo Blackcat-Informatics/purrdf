@@ -17,7 +17,7 @@ use std::io::Read;
 use ciborium::value::Value;
 
 use crate::codec::{
-    Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt,
+    Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded,
 };
 use crate::model::{
     AnnotationRow, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow, Signature,
@@ -183,6 +183,7 @@ fn decrypt_codec(
     codec: &Codec,
     data: &[u8],
     content_key: &ContentKeyResolver<'_>,
+    limit: usize,
 ) -> Result<Vec<u8>, CodecError> {
     if codec.name != "cose-encrypt0" {
         return Err(CodecError::Unavailable {
@@ -190,9 +191,14 @@ fn decrypt_codec(
             detail: format!("no decryptor for encrypt codec '{}'", codec.name),
         });
     }
-    crate::cose::decrypt0(data, |kid| content_key(kid)).map_err(|err| CodecError::Unavailable {
-        reason: "missing-key",
-        detail: format!("{} decrypt failed: {err}", codec.name),
+    crate::cose::decrypt0_bounded(data, content_key, limit).map_err(|err| match err {
+        crate::cose::BoundedDecrypt0Error::Crypto(err) => CodecError::Unavailable {
+            reason: "missing-key",
+            detail: format!("{} decrypt failed: {err}", codec.name),
+        },
+        crate::cose::BoundedDecrypt0Error::Limit => {
+            CodecError::Failed(format!("decoded transform output exceeds {limit} bytes"))
+        }
     })
 }
 
@@ -319,18 +325,19 @@ pub trait StreamingSink {
     /// Called after the legacy metadata-only [`Self::blob`] event. The metadata
     /// is repeated here so consumers need not pair callbacks by arrival order.
     fn blob_payload(&mut self, _payload: BlobPayload<'_>) {}
-    /// Optional encoded-byte bound before eager decoding without a public digest.
+    /// Optional encoded-byte bound before eager blob decoding, including decryption.
     ///
     /// Existing sinks leave the reader behavior unchanged. This does not bound
     /// ordinary RDF frame decoding or reader frame buffers.
     fn blob_encoded_limit(&self) -> Option<usize> {
         None
     }
-    /// Optional bound for eager blob decoding when no public digest is present.
+    /// Optional bound for each intermediate and final eager blob decode output.
     ///
     /// Existing sinks leave the reader behavior unchanged. Bounded collectors
-    /// apply their per-blob limit before this otherwise unavoidable decode.
-    /// This does not bound ordinary RDF frame decoding or keyed decryption.
+    /// apply their per-blob limit before decoding without a public digest or
+    /// decrypting with a content key. This does not bound ordinary RDF frame
+    /// decoding, encoded COSE parsing buffers, or codec dictionary storage.
     fn blob_decode_limit(&self) -> Option<usize> {
         None
     }
@@ -587,17 +594,19 @@ impl Folder<'_, '_, '_> {
                 ));
             };
             let chain = self.resolve_codecs(ids)?;
-            let decoded = if let Some(content_key) = self.content_key {
-                let decrypt = |codec: &Codec, data: &[u8]| decrypt_codec(codec, data, content_key);
-                decode_chain_with_decrypt(&chain, db, Some(&decrypt))?
-            } else if let Some(limit) = blob
+            let limit = blob
                 .then(|| {
                     self.sink
                         .as_deref()
                         .and_then(StreamingSink::blob_decode_limit)
                 })
-                .flatten()
-            {
+                .flatten();
+            let decoded = if let Some(content_key) = self.content_key {
+                let limit = limit.unwrap_or(usize::MAX);
+                let decrypt =
+                    |codec: &Codec, data: &[u8]| decrypt_codec(codec, data, content_key, limit);
+                decode_chain_with_decrypt_bounded(&chain, db, Some(&decrypt), limit)?
+            } else if let Some(limit) = limit {
                 decode_chain_bounded(&chain, db, limit)?
             } else {
                 decode_chain(&chain, db)?

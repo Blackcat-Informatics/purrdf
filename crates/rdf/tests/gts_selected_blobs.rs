@@ -326,6 +326,7 @@ fn malformed_selected_metadata_and_declared_lengths_fail() {
     let data = b"native";
     for (key, value, expected) in [
         ("len", Value::from(99), "rdf-ir-gts-blob-length"),
+        // A second "rep" entry makes the metadata map ambiguous.
         ("rep", Value::from("wanted"), "rdf-ir-gts-blob-metadata"),
         ("mt", Value::from(99), "rdf-ir-gts-blob-metadata"),
     ] {

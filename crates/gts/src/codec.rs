@@ -397,16 +397,7 @@ pub fn decode_chain_bounded(
     data: &[u8],
     limit: usize,
 ) -> Result<Vec<u8>, CodecError> {
-    let mut current = Cow::Borrowed(data);
-    for codec in chain.iter().rev() {
-        if let Cow::Owned(decoded) = decode_one(codec, current.as_ref(), limit)? {
-            current = Cow::Owned(decoded);
-        }
-    }
-    if current.len() > limit {
-        return Err(decoded_limit(limit));
-    }
-    Ok(current.into_owned())
+    decode_chain_with_decrypt_bounded(chain, data, None, limit)
 }
 
 /// A caller-supplied encrypt-class transform resolver.
@@ -417,6 +408,19 @@ pub fn decode_chain_with_decrypt(
     chain: &[Codec],
     data: &[u8],
     decrypt: Option<&Decryptor<'_>>,
+) -> Result<Vec<u8>, CodecError> {
+    decode_chain_with_decrypt_bounded(chain, data, decrypt, usize::MAX)
+}
+
+/// Reverse a chain with a decryptor that enforces `limit` before allocating output.
+///
+/// This internal callback contract is stronger than the public unbounded
+/// decryptor API. Each decrypted output is checked again before the next transform.
+pub(crate) fn decode_chain_with_decrypt_bounded(
+    chain: &[Codec],
+    data: &[u8],
+    decrypt: Option<&Decryptor<'_>>,
+    limit: usize,
 ) -> Result<Vec<u8>, CodecError> {
     let mut current = Cow::Borrowed(data);
     for codec in chain.iter().rev() {
@@ -430,11 +434,17 @@ pub fn decode_chain_with_decrypt(
                     });
                 }
             });
-        } else if let Cow::Owned(decoded) = decode_one(codec, current.as_ref(), usize::MAX)? {
+        } else if let Cow::Owned(decoded) = decode_one(codec, current.as_ref(), limit)? {
             // `identity` returns a borrow of `current`; leave `current` untouched
             // instead of copying the payload once per identity step.
             current = Cow::Owned(decoded);
         }
+        if current.len() > limit {
+            return Err(decoded_limit(limit));
+        }
+    }
+    if current.len() > limit {
+        return Err(decoded_limit(limit));
     }
     Ok(current.into_owned())
 }
