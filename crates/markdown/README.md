@@ -23,6 +23,33 @@ paragraph — and the byte bound only acts on a unit that is too large to
 stand alone. The output is a graph you can query, index, embed, and read
 back to the exact bytes it came from.
 
+The whole law is written out, clause by clause, in the specification that
+ships beside the crate:
+[`crates/markdown/SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/markdown/SPEC.md).
+
+## Stand-off first, claims second
+
+The crate is a stand-off markup engine: the document's bytes are never
+touched, and everything it knows is a typed annotation over a *range* of
+them. `analyze` returns that layer as a `Document` — sections, units,
+citations, and the concordance rows that lifted nothing — and `render`
+projects it into claims. `slice_markdown` is the two in a row, and stays
+the whole surface a caller who only wants triples needs.
+
+The model answers what the flat graph cannot: which unit covers byte
+4,821 (`unit_at`), which units a byte range touches (`covering`), which
+units sit under a section by containment (`units_under`), how two spans
+lie against each other (`span_relation` — the thirteen Allen interval
+relations, so *meets* and *overlaps* are told apart at the endpoints), a
+unit's span counted in Unicode scalars rather than bytes (`scalar_span`),
+its content digest, its exact quote with bounded prefix/suffix context
+for re-anchoring across revisions (`anchor`), and which concordance rows
+named verses this document does not carry
+(`unmatched_citations`) or could not be read at all (`malformed_rows`).
+The claim projection is deliberately lossy — it cannot state which
+anchors a row named beside which sources — and the model is where the
+loss is not.
+
 ## What comes out
 
 For one document the slicer emits one claim per node, each claim a small
@@ -50,6 +77,12 @@ set of N-Triples lines (valid Turtle):
   IRI it would mint before anything is rendered (see [The anchor lift is
   checked](#the-anchor-lift-is-checked)). Without a base an anchor is a
   typed literal, never a guess, and nothing about its bytes is refused.
+  A concordance may cover a canon wider than the document that carries it:
+  a row whose verses are all elsewhere lifts nothing here and is **not** an
+  error, and neither is a row too malformed to read. Both are reported as
+  data on the model (`unmatched_citations`, `malformed_rows`) rather than
+  refused or dropped — a table's own header and `|---|---|---|` are frame,
+  not defects.
 
 Horizontal rules and table rows are structure, not units. Spans are
 verbatim: the literal's bytes are `source[start..end]`, with no trimming,
@@ -106,6 +139,15 @@ slicer emits, and the base it mints node IRIs under, is configuration the
 caller supplies in a `Vocabulary`. `Vocabulary::under(base)` derives a whole
 vocabulary from one base with the crate's local names (`Document`, `Unit`,
 `byteStart`, `text`, ...); every field is public, so any IRI can be replaced.
+`Vocabulary::standard()` derives that same term set under the one namespace
+the specification designates for documents meant to be *exchanged*
+(`https://w3id.org/purrdf/markdown#`) — an opinion about interchange, asked
+for by name and never reached for on a caller's behalf, because two
+deployments that each mint their own namespace publish two graphs nobody can
+join without a mapping, and the mapping is the part that never gets written.
+A deployment sovereign over its own terms keeps `under(base)` and loses
+nothing: the law, the identities, and the split are the same either way, and
+the profile's contract id tells the two apart.
 An empty, unwritable, or merely *relative* IRI is a typed error naming the
 field, not a default: the crate asks the workspace IRI law — reached through
 `purrdf-core`, so it is the same law the kernel interns under — and refuses up

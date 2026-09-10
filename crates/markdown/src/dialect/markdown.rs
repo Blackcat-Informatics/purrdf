@@ -1,98 +1,59 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The structural pass: lines to sections, units, and concordance rows,
-//! then the oversize split. Pure over the text and the profile.
+//! The Markdown dialect reader: lines to sections, units, and
+//! concordance rows.
+//!
+//! Everything Markdown-specific in this crate is here — ATX headings,
+//! the U+2042 movement marker, `N.` verses, blank-line paragraphs,
+//! horizontal rules, the `## Concordance` table — and nothing else in
+//! the crate reads a line. See [`crate::dialect`] for the contract this
+//! reader satisfies.
 
-use crate::Profile;
+use super::{DefectiveRow, RawRow, RawSection, RawUnit, Reading};
+use crate::model::RowDefect;
 
 /// The byte order mark, `EF BB BF`: a statement about the encoding when
 /// it opens a document, ordinary content anywhere else.
 const BYTE_ORDER_MARK: char = '\u{feff}';
 
-/// A heading or movement section.
-#[derive(Clone, Debug)]
-pub(crate) struct Section {
-    /// First byte of the heading line.
-    pub(crate) start: usize,
-    /// One past the last byte of the section's content.
-    pub(crate) end: usize,
-    /// One past the last byte of the heading line (no newline).
-    pub(crate) line_end: usize,
-    pub(crate) level: u32,
-    pub(crate) ordinal: u64,
-    pub(crate) parent: Option<usize>,
-    pub(crate) heading: String,
-    pub(crate) movement: bool,
-}
+/// The heading that opens a concordance table, matched without regard
+/// to case.
+const CONCORDANCE: &str = "Concordance";
 
-/// A verse, a paragraph, or one piece of an oversize unit.
-#[derive(Clone, Debug)]
-pub(crate) struct Unit {
-    pub(crate) start: usize,
-    pub(crate) end: usize,
-    pub(crate) section: Option<usize>,
-    pub(crate) verse: Option<u64>,
-    pub(crate) lineage: Vec<String>,
-    /// The index of the previous piece, for a split unit.
-    pub(crate) continues: Option<usize>,
-    pub(crate) ordinal: u64,
-}
+/// The cells a concordance data row states: the verse range, the canon
+/// sources, the anchors.
+const CONCORDANCE_CELLS: usize = 3;
 
-/// One concordance row: the verses it covers, the canon sources, the
-/// anchors.
-#[derive(Clone, Debug)]
-pub(crate) struct Citation {
-    pub(crate) first: u64,
-    pub(crate) last: u64,
-    pub(crate) sources: Vec<String>,
-    pub(crate) anchors: Vec<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Structure {
-    pub(crate) title: Option<String>,
-    pub(crate) sections: Vec<Section>,
-    pub(crate) units: Vec<Unit>,
-    pub(crate) citations: Vec<Citation>,
-}
-
-/// A unit before the oversize split.
-#[derive(Clone, Debug)]
-struct RawUnit {
-    start: usize,
-    end: usize,
-    section: Option<usize>,
-    verse: Option<u64>,
-    lineage: Vec<String>,
-}
-
-#[derive(Default)]
-struct Walker {
-    sections: Vec<Section>,
-    /// Indices into `sections`: the headings in force.
-    stack: Vec<usize>,
-    raw: Vec<RawUnit>,
-    open: Option<RawUnit>,
-    citations: Vec<Citation>,
-    title: Option<String>,
-}
-
-pub(crate) fn parse(text: &str, profile: &Profile) -> Structure {
+/// Reads a Markdown document into the structure the law then works on.
+pub(crate) fn read(text: &str) -> Reading {
     let mut w = Walker::default();
     for (start, end) in lines(text) {
         w.line(text, start, end);
     }
     w.close_unit();
-    let mut sections = w.sections;
-    close_sections(&mut sections, text.len());
-    let units = split_all(text, &w.raw, profile);
-    Structure {
+    Reading {
         title: w.title,
-        sections,
-        units,
-        citations: w.citations,
+        sections: w.sections,
+        units: w.units,
+        rows: w.rows,
+        defective_rows: w.defective_rows,
     }
+}
+
+#[derive(Default)]
+struct Walker {
+    sections: Vec<RawSection>,
+    /// Indices into `sections`: the headings in force.
+    stack: Vec<usize>,
+    units: Vec<RawUnit>,
+    open: Option<RawUnit>,
+    rows: Vec<RawRow>,
+    defective_rows: Vec<DefectiveRow>,
+    title: Option<String>,
+    /// How many table rows have run without a break since the last
+    /// line that was not one: row 0 of a table is its header.
+    table_row_index: usize,
 }
 
 /// Byte ranges of each line, excluding the terminating newline.
@@ -141,6 +102,10 @@ impl Walker {
     /// bytes at the span will find it.
     fn line(&mut self, text: &str, start: usize, end: usize) {
         let line = &text[start..end];
+        if !line.trim_start().starts_with('|') {
+            // A table ended, so the next one starts its rows afresh.
+            self.table_row_index = 0;
+        }
         if let Some((level, heading)) = atx_heading(line) {
             self.close_unit();
             self.open_section(start, end, level, heading, false);
@@ -159,7 +124,7 @@ impl Walker {
             self.close_unit();
         } else if line.trim_start().starts_with('|') {
             self.close_unit();
-            self.table_row(line);
+            self.table_row(line, start, end);
         } else if let Some(number) = verse_number(line) {
             self.close_unit();
             self.open = Some(self.raw_unit(start, end, Some(number)));
@@ -186,7 +151,7 @@ impl Walker {
 
     fn close_unit(&mut self) {
         if let Some(open) = self.open.take() {
-            self.raw.push(open);
+            self.units.push(open);
         }
     }
 
@@ -209,13 +174,10 @@ impl Walker {
             self.title = Some(heading.clone());
         }
         let index = self.sections.len();
-        self.sections.push(Section {
+        self.sections.push(RawSection {
             start,
-            end,
             line_end: end,
             level,
-            ordinal: index as u64,
-            parent: self.stack.last().copied(),
             heading,
             movement,
         });
@@ -225,26 +187,49 @@ impl Walker {
     fn in_concordance(&self) -> bool {
         self.stack
             .last()
-            .is_some_and(|&i| self.sections[i].heading.eq_ignore_ascii_case("Concordance"))
+            .is_some_and(|&i| self.sections[i].heading.eq_ignore_ascii_case(CONCORDANCE))
     }
 
-    fn table_row(&mut self, line: &str) {
+    /// One `| a | b | c |` line inside a concordance section.
+    ///
+    /// A row that states a verse range and three cells is a citation.
+    /// A row that does not is either the table's own frame — its header
+    /// line, or the `|---|---|---|` that separates the header from the
+    /// body — or a defect, and the two are told apart without ever
+    /// touching a row that would have lifted: the frame test is asked
+    /// only of a row that could not be read as data. Everything else is
+    /// reported, because a row that names verses and anchors and lifts
+    /// nothing is exactly the failure a silent parser hides.
+    fn table_row(&mut self, line: &str, start: usize, end: usize) {
         if !self.in_concordance() {
             return;
         }
+        let index = self.table_row_index;
+        self.table_row_index += 1;
         let cells = cells(line);
-        if cells.len() < 3 {
+        if cells.len() >= CONCORDANCE_CELLS
+            && let Some((first, last)) = verse_range(&cells[0])
+        {
+            self.rows.push(RawRow {
+                first,
+                last,
+                sources: backticked(&cells[1]),
+                anchors: backticked(&cells[2]),
+                start,
+                end,
+            });
             return;
         }
-        let Some((first, last)) = verse_range(&cells[0]) else {
+        if index == 0 || is_delimiter_row(&cells) {
             return;
+        }
+        let defect = if cells.len() < CONCORDANCE_CELLS {
+            RowDefect::TooFewCells { found: cells.len() }
+        } else {
+            RowDefect::UnreadableVerseRange
         };
-        self.citations.push(Citation {
-            first,
-            last,
-            sources: backticked(&cells[1]),
-            anchors: backticked(&cells[2]),
-        });
+        self.defective_rows
+            .push(DefectiveRow { start, end, defect });
     }
 }
 
@@ -310,6 +295,16 @@ fn cells(line: &str) -> Vec<String> {
     t.split('|').map(|c| c.trim().to_owned()).collect()
 }
 
+/// `|---|---|---|`, `|:--|--:|`: the line that separates a table's
+/// header from its body, in any of its alignment spellings.
+fn is_delimiter_row(cells: &[String]) -> bool {
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let body = cell.trim_start_matches(':').trim_end_matches(':');
+            !body.is_empty() && body.bytes().all(|b| b == b'-')
+        })
+}
+
 /// `2–5` (en dash), `2-5`, or `4`.
 fn verse_range(cell: &str) -> Option<(u64, u64)> {
     let (a, b) = cell
@@ -335,113 +330,6 @@ fn backticked(cell: &str) -> Vec<String> {
         rest = &after[close + 1..];
     }
     out
-}
-
-/// A section ends where the next section at its level or above begins.
-fn close_sections(sections: &mut [Section], len: usize) {
-    for i in 0..sections.len() {
-        let level = sections[i].level;
-        let end = sections[i + 1..]
-            .iter()
-            .find(|s| s.level <= level)
-            .map_or(len, |s| s.start);
-        sections[i].end = end;
-    }
-}
-
-fn split_all(text: &str, raw: &[RawUnit], profile: &Profile) -> Vec<Unit> {
-    let mut units = Vec::new();
-    for r in raw {
-        let mut previous = None;
-        for (start, end) in split_spans(text, r.start, r.end, profile) {
-            let index = units.len();
-            units.push(Unit {
-                start,
-                end,
-                section: r.section,
-                verse: r.verse,
-                lineage: r.lineage.clone(),
-                continues: previous,
-                ordinal: index as u64,
-            });
-            previous = Some(index);
-        }
-    }
-    units
-}
-
-/// The split law: pieces of at most `max_bytes`, cut at the last
-/// newline at or before the bound, else at the last scalar boundary; a
-/// continuation reaches back `overlap` bytes, snapped backward to a
-/// newline, never before the unit's start.
-///
-/// The bound holds with no exception, and the seam is what makes it
-/// hold. [`slice_markdown`](crate::slice_markdown) refuses a
-/// `max_bytes` under [`MIN_MAX_BYTES`](crate::MIN_MAX_BYTES) before a
-/// byte of the document is read, so a unit only ever arrives here under
-/// a bound of four or more. The widest UTF-8 scalar is four bytes, so
-/// the scalar opening a piece ends at or before `ps + 4`, which is at
-/// or before `ps + max_bytes` — the bound itself. The fallback's
-/// `ceil_boundary(ps + 1)` therefore cannot climb past the bound, the
-/// newline branch cuts at an offset the bound already covers, and every
-/// cut is at or before the bound. The same fact is what puts `bytes[cut]`
-/// in range: a piece is only cut when the unit runs past the bound, so
-/// the cut is under the unit's end and under the text's length.
-fn split_spans(text: &str, start: usize, end: usize, profile: &Profile) -> Vec<(usize, usize)> {
-    let bytes = text.as_bytes();
-    let mut pieces = Vec::new();
-    let mut ps = start;
-    while ps < end {
-        if end - ps <= profile.max_bytes {
-            pieces.push((ps, end));
-            break;
-        }
-        let bound = ps + profile.max_bytes;
-        let cut = match bytes[ps..=bound].iter().rposition(|b| *b == b'\n') {
-            Some(i) if i > 0 => ps + i,
-            _ => floor_boundary(text, bound).max(ceil_boundary(text, ps + 1)),
-        };
-        debug_assert!(
-            cut <= bound,
-            "a cut is never past the bound: the widest scalar is four bytes and the bound is at least four"
-        );
-        pieces.push((ps, cut));
-        let resume = if bytes[cut] == b'\n' { cut + 1 } else { cut };
-        ps = overlap_start(text, ps, cut, profile.overlap).unwrap_or(resume);
-    }
-    pieces
-}
-
-/// The continuation start: `cut - overlap` snapped backward to the
-/// byte after a newline (else a scalar boundary), if that is still
-/// inside the piece; otherwise none, and the caller resumes at the cut.
-fn overlap_start(text: &str, ps: usize, cut: usize, overlap: usize) -> Option<usize> {
-    if overlap == 0 {
-        return None;
-    }
-    let candidate = cut.checked_sub(overlap)?;
-    if candidate <= ps {
-        return None;
-    }
-    let snapped = text.as_bytes()[ps..candidate]
-        .iter()
-        .rposition(|b| *b == b'\n')
-        .map_or_else(|| floor_boundary(text, candidate), |i| ps + i + 1);
-    (snapped > ps).then_some(snapped)
-}
-
-fn floor_boundary(text: &str, mut i: usize) -> usize {
-    while !text.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-fn ceil_boundary(text: &str, mut i: usize) -> usize {
-    while i < text.len() && !text.is_char_boundary(i) {
-        i += 1;
-    }
-    i
 }
 
 #[cfg(test)]
@@ -477,20 +365,12 @@ mod tests {
     }
 
     #[test]
-    fn the_split_never_cuts_inside_a_scalar_and_always_progresses() {
-        let text = "\u{2042}".repeat(10);
-        let mut profile = Profile::new(
-            "test",
-            1,
-            crate::Vocabulary::under("urn:test:").expect("a vocabulary"),
-        );
-        profile.max_bytes = 4;
-        profile.overlap = 0;
-        let pieces = split_spans(&text, 0, text.len(), &profile);
-        assert!(pieces.iter().all(|&(s, e)| text.is_char_boundary(s)
-            && text.is_char_boundary(e)
-            && e > s
-            && e - s <= 4));
-        assert_eq!(pieces.last(), Some(&(27, 30)));
+    fn a_delimiter_row_is_frame_in_every_alignment_spelling_and_a_verse_row_is_not() {
+        for row in ["|---|---|---|", "| :--- | ---: | :---: |", "|-|-|-|"] {
+            assert!(is_delimiter_row(&cells(row)), "{row}");
+        }
+        for row in ["| 1 | `a` | `b` |", "| Verses | Canon source | Anchors |"] {
+            assert!(!is_delimiter_row(&cells(row)), "{row}");
+        }
     }
 }
