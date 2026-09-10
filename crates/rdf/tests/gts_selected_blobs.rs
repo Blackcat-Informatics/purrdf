@@ -1796,3 +1796,37 @@ fn an_oversized_description_is_neither_retained_nor_lost_for_matching() {
         "{unreachable:?}"
     );
 }
+
+/// The selection projection keeps exactly what a selector can carry.
+///
+/// Discarding a longer representation is only lossless if the two bounds agree
+/// on the same unit and the same boundary. They are both byte lengths, and both
+/// admit a value of exactly the maximum, so the longest nameable representation
+/// still matches and the shortest unnameable one could never have matched.
+#[test]
+fn the_longest_nameable_representation_still_matches() {
+    let longest = "n".repeat(4096);
+    let mut writer = Writer::new("generic");
+    writer.add_blob(b"at the boundary", None, Some(&longest));
+    let result = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation(&longest)],
+        limits(),
+    )
+    .expect("a representation of exactly the maximum length is nameable");
+    assert_eq!(&*result.blobs[0].bytes, b"at the boundary");
+
+    // One byte further, the selector itself is refused at construction, so no
+    // blob could have matched it and dropping such a representation loses
+    // nothing that was ever reachable.
+    let beyond = "n".repeat(4097);
+    let mut writer = Writer::new("generic");
+    writer.add_blob(b"unreachable", None, Some(&beyond));
+    let error = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation(&beyond)],
+        limits(),
+    )
+    .expect_err("no selector may carry more than the maximum");
+    assert_eq!(error.code, "rdf-ir-gts-blob-selection", "{error:?}");
+}
