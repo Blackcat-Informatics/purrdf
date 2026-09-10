@@ -408,6 +408,11 @@ impl ResolvedSink for SinkImporter<'_> {
         // emitted, so a caller who *did* name it still fails closed — the
         // selector resolves to no blob. Importers with no collector are
         // unaffected and keep the hard-fail below.
+        //
+        // This covers a refused *payload* only. A refused frame is a different
+        // fact: its rows are gone, so the dataset no longer matches what the
+        // authoritative importer would build, and returning Ok would hand back
+        // a silently truncated graph. That falls through to the hard failure.
         if self.blobs.is_some() && is_blob_budget_refusal(diagnostic) {
             return Ok(());
         }

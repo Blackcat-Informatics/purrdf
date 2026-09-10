@@ -167,6 +167,15 @@ fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> b
 /// Only a sink that supplies a blob byte limit can provoke it.
 pub const BLOB_BUDGET_DIAGNOSTIC: &str = "BlobBudget";
 
+/// Diagnostic code for a whole non-blob frame refused by a caller-supplied
+/// byte ceiling.
+///
+/// Deliberately distinct from [`BLOB_BUDGET_DIAGNOSTIC`]: declining one blob
+/// payload leaves the RDF dataset intact, whereas dropping a frame removes rows
+/// the caller was relying on. A consumer that treats the first as recoverable
+/// must not silently treat the second the same way.
+pub const FRAME_BUDGET_DIAGNOSTIC: &str = "FrameBudget";
+
 enum PayloadError {
     /// Missing capability — degrade to an opaque node with this reason.
     Unavailable {
@@ -738,7 +747,7 @@ impl Folder<'_, '_, '_> {
             }
             Err(PayloadError::Budget(detail)) => {
                 self.opaque(frame, ftype, "over-budget");
-                self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
+                self.diag(FRAME_BUDGET_DIAGNOSTIC, detail, Some(index));
                 return;
             }
             Ok(p) => p,
@@ -1007,7 +1016,19 @@ impl Folder<'_, '_, '_> {
                 }
                 Ok(_) => {}
                 Err(PayloadError::Budget(detail)) => {
-                    let refused_digest = pub_meta.as_ref().and_then(public_blob_digest);
+                    let refused_digest = pub_meta
+                        .as_ref()
+                        .and_then(public_blob_digest)
+                        // With no transform chain the wire bytes are the decoded
+                        // bytes, so hashing them is exact and costs no memory.
+                        // Knowing the identity of a refused payload is what lets
+                        // a consumer tell one blob stored twice from two blobs.
+                        .or_else(|| {
+                            chain
+                                .is_empty()
+                                .then(|| d.and_then(Value::as_bytes).map(|raw| digest_str(raw)))
+                                .flatten()
+                        });
                     self.emit_blob_refusal(
                         refused_digest.as_deref(),
                         declared_metadata,
@@ -1084,7 +1105,19 @@ impl Folder<'_, '_, '_> {
             }
             Ok(_) => {}
             Err(PayloadError::Budget(detail)) => {
-                let refused_digest = pub_meta.as_ref().and_then(public_blob_digest);
+                let refused_digest = pub_meta
+                    .as_ref()
+                    .and_then(public_blob_digest)
+                    // With no transform chain the wire bytes are the decoded
+                    // bytes, so hashing them is exact and costs no memory.
+                    // Knowing the identity of a refused payload is what lets a
+                    // consumer tell one blob stored twice from two blobs.
+                    .or_else(|| {
+                        chain
+                            .is_empty()
+                            .then(|| d.and_then(Value::as_bytes).map(|raw| digest_str(raw)))
+                            .flatten()
+                    });
                 self.emit_blob_refusal(
                     refused_digest.as_deref(),
                     declared_metadata,

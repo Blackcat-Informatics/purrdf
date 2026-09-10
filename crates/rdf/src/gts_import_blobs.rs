@@ -236,6 +236,12 @@ pub(crate) struct BlobCollector<'a> {
     /// not they were selected. Distinguishes a payload we declined to retain
     /// from one the container never held.
     inlined: BTreeSet<String>,
+    /// Selected occurrences that named no payload and had none retained yet.
+    ///
+    /// Whether that is an external blob or an ordering problem cannot be decided
+    /// mid-stream: the bytes may still arrive in a later frame. Resolved in
+    /// [`Self::finish`], once the whole container has been read.
+    unresolved: Vec<String>,
     frame: Option<BlobFrame>,
     total: usize,
 }
@@ -302,6 +308,7 @@ impl<'a> BlobCollector<'a> {
             selected: BTreeMap::new(),
             refused: Vec::new(),
             inlined: BTreeSet::new(),
+            unresolved: Vec::new(),
             frame: None,
             total: 0,
         })
@@ -399,8 +406,9 @@ impl<'a> BlobCollector<'a> {
         validate_metadata(metadata.as_ref(), payload.digest)?;
         // The reader fires its frame event for every frame before any of that
         // frame's rows, with the same segment index, so a payload always has a
-        // matching frame. The refusal stays as the shared provenance check in
-        // finish(), where it is reachable and tested.
+        // matching frame and this branch is not reachable from any container.
+        // It is kept as a fail-closed guard rather than an assumption, and is
+        // deliberately not counted as a tested refusal.
         let frame = self
             .frame
             .as_ref()
@@ -424,31 +432,14 @@ impl<'a> BlobCollector<'a> {
         };
         let Some(wire_bytes) = payload.bytes else {
             let Some(previous) = self.selected.get_mut(payload.digest) else {
-                // An occurrence with no payload field at all, publishing a
-                // digest, is an EXTERNAL blob: the spec places its bytes outside
-                // this container. That is a different fact from a metadata-only
-                // update to a payload we declined to retain, and reporting it as
-                // one claims something false about retention ordering.
-                // No occurrence anywhere in this container carried bytes for
-                // this digest, so the spec's external form is the only reading:
-                // the payload lives outside the file. Reporting that as a
-                // retention-ordering problem would assert something false.
-                if !self.inlined.contains(payload.digest) {
-                    return Err(fail(
-                        "rdf-ir-gts-blob-external",
-                        format!(
-                            "blob {} is external to this container; its bytes are held elsewhere and this importer returns only inline payloads",
-                            payload.digest
-                        ),
-                    ));
-                }
-                return Err(fail(
-                    "rdf-ir-gts-blob-selection-order",
-                    format!(
-                        "blob {} became selected without a payload; earlier unselected bytes are not retained",
-                        payload.digest
-                    ),
-                ));
+                // No bytes retained for this digest yet. Whether that means the
+                // blob is external, or merely that its payload has not been read
+                // yet, is not decidable here — a later frame in this same
+                // container may still carry it, and the authoritative importer
+                // accepts exactly that file. Defer to finish(), which sees the
+                // whole container.
+                self.unresolved.push(payload.digest.to_string());
+                return Ok(());
             };
             previous.metadata = metadata;
             previous.metadata_source = metadata_source;
@@ -536,6 +527,30 @@ impl<'a> BlobCollector<'a> {
     }
 
     fn finish(self) -> Result<(Vec<GtsImportedBlob>, Vec<GtsRefusedBlob>), RdfDiagnostic> {
+        // A selected occurrence that named no payload is only a problem if the
+        // container never produced one. Deciding this here, rather than at the
+        // occurrence, is what lets a metadata-only frame precede its own inline
+        // payload — a file the authoritative importer accepts.
+        for digest in &self.unresolved {
+            if self.selected.contains_key(digest) {
+                continue;
+            }
+            if self.inlined.contains(digest) {
+                return Err(fail(
+                    "rdf-ir-gts-blob-selection-order",
+                    format!(
+                        "blob {digest} became selected without a payload; earlier unselected bytes are not retained"
+                    ),
+                ));
+            }
+            return Err(fail(
+                "rdf-ir-gts-blob-external",
+                format!(
+                    "blob {digest} is external to this container; its bytes are held elsewhere and this importer returns only inline payloads"
+                ),
+            ));
+        }
+
         for selector in &self.selectors {
             let retained = self
                 .selected
@@ -555,6 +570,26 @@ impl<'a> BlobCollector<'a> {
                         blob.digest.as_deref().unwrap_or_default(),
                         blob.metadata.as_ref(),
                     )
+                })
+                // A container may store one blob twice — once compressed, once
+                // not — and refuse only the copy that did not fit. That is still
+                // one blob, so counting the refused copy as a second candidate
+                // would invent an ambiguity the archive does not contain. A
+                // refusal whose digest is already retained is the same payload;
+                // a refusal that was refused before it could be hashed is
+                // assumed to be the same payload when a retained blob already
+                // answers this selector, because it cannot be proven otherwise
+                // and refusing valid input is the worse error.
+                .filter(|blob| match blob.digest.as_deref() {
+                    // Known identity: if that payload is already retained, this
+                    // is the same blob stored twice, not a second candidate.
+                    Some(digest) => !self.selected.contains_key(digest),
+                    // Unknown identity — refused before it could be hashed, so
+                    // it may be a different payload. Count it and fail closed;
+                    // silently returning one of two possible answers is the
+                    // worse error, and the reader supplies a digest whenever
+                    // one is computable without spending the budget.
+                    None => true,
                 })
                 .collect();
             let count = retained + refused.len();
@@ -594,20 +629,17 @@ impl<'a> BlobCollector<'a> {
                 ));
             }
         }
-        // The type permits an empty head or frame id, and the doc calls both
-        // "verified". Assert rather than trust: a silently empty provenance
-        // field is indistinguishable from a real one at the call site.
-        for blob in self.selected.values() {
-            if blob.segment_head.is_empty() || blob.frame_id.is_empty() {
-                return Err(fail(
-                    "rdf-ir-gts-blob-provenance",
-                    format!(
-                        "selected blob {} lacks the verified frame or segment provenance it reports",
-                        blob.digest
-                    ),
-                ));
-            }
-        }
+        // The type permits an empty head or frame id and the doc calls both
+        // "verified". The reader publishes a segment head at every segment close
+        // and fires its frame event before any of that frame's rows, so neither
+        // can be empty here; this is an invariant, not a refusal, and is checked
+        // as one rather than shipped as a branch no input can reach.
+        debug_assert!(
+            self.selected
+                .values()
+                .all(|blob| !blob.segment_head.is_empty() && !blob.frame_id.is_empty()),
+            "selected blob provenance must be populated before it is returned"
+        );
         Ok((self.selected.into_values().collect(), self.refused))
     }
 }

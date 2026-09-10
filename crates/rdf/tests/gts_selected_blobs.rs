@@ -923,12 +923,9 @@ fn a_snapshot_cannot_smuggle_payloads_past_the_ceilings() {
     // The enclosing frame ceiling bounds the decode that spends the memory.
     let mut framed = limits();
     framed.max_frame_decoded_bytes = 1_000;
-    let bounded =
-        import_gts_events_with_blobs(&bytes, &[], framed).expect("a refused frame is not fatal");
-    assert!(
-        bounded.bundle.envelope.lookaside.blobs.is_empty(),
-        "an unbounded frame decode never happened"
-    );
+    let error = import_gts_events_with_blobs(&bytes, &[], framed)
+        .expect_err("a refused frame removes rows, so it cannot be reported as success");
+    assert_eq!(error.code, "rdf-ir-gts-fold-diagnostic", "{error:?}");
 }
 
 /// An unknown extension key never refuses a payload.
@@ -1133,4 +1130,141 @@ fn an_untransformed_payload_obeys_the_decoded_ceiling() {
     )
     .expect("an exact decoded ceiling admits the payload");
     assert_eq!(&*ok.blobs[0].bytes, &data[..]);
+}
+
+/// A frame ceiling must never hand back a silently truncated graph.
+///
+/// Refusing one blob payload leaves the dataset intact, so the import can
+/// continue. Refusing a whole frame removes rows the caller was relying on, and
+/// returning `Ok` there would answer a question about the archive's contents
+/// with a graph that is missing part of it.
+#[test]
+fn a_refused_frame_fails_rather_than_truncating_the_dataset() {
+    // Terms declared through the writer, then a COMPRESSED quads frame: the
+    // frame ceiling only reaches transformed frames, and this one carries rows
+    // whose loss would be visible in the dataset.
+    let mut writer = Writer::new("generic");
+    let mut declared = Vec::new();
+    for index in 0..150_u32 {
+        declared.push(term(TermKind::Iri, &format!("http://example.org/t{index}")));
+    }
+    writer.add_terms(&declared);
+    let rows: Vec<Value> = (0..50_u64)
+        .map(|index| {
+            Value::Array(vec![
+                Value::from(index * 3),
+                Value::from(index * 3 + 1),
+                Value::from(index * 3 + 2),
+            ])
+        })
+        .collect();
+    writer
+        .add_frame_with_options(
+            "quads",
+            purrdf_gts::writer::FrameOptions {
+                payload: Some(Value::Array(rows)),
+                transform: vec!["zstd".into()],
+                ..purrdf_gts::writer::FrameOptions::default()
+            },
+        )
+        .expect("compressed quads frame");
+    let bytes = writer.into_bytes();
+
+    let plain = import_gts_events(&bytes).expect("authoritative import");
+    assert!(plain.dataset.quad_count() > 0, "the fixture carries rows");
+
+    // Neighbouring valid case: a frame ceiling that admits it returns the same
+    // dataset the authoritative importer builds.
+    let admitted =
+        import_gts_events_with_blobs(&bytes, &[], limits()).expect("an in-budget frame imports");
+    assert_eq!(
+        admitted.bundle.dataset.owned_quads().collect::<Vec<_>>(),
+        plain.dataset.owned_quads().collect::<Vec<_>>()
+    );
+
+    // A ceiling that refuses the frame is terminal, not a quiet truncation.
+    let mut tight = limits();
+    tight.max_frame_decoded_bytes = 64;
+    let error = import_gts_events_with_blobs(&bytes, &[], tight)
+        .expect_err("a dropped frame cannot be reported as success");
+    assert_eq!(error.code, "rdf-ir-gts-fold-diagnostic", "{error:?}");
+}
+
+/// One blob stored twice is still one blob, whichever copy the budget refuses.
+///
+/// A container may hold the same payload compressed and uncompressed. Refusing
+/// the copy that does not fit must not invent a second candidate and turn a
+/// unique selector into an ambiguous one.
+#[test]
+fn a_refused_duplicate_copy_does_not_invent_an_ambiguity() {
+    let data = vec![b'x'; 50_000];
+    let digest = digest_str(&data);
+    let mut writer = Writer::new("generic");
+    // Copy A: compressed, so it fits a tight encoded ceiling.
+    writer
+        .add_blob_transformed(data.clone(), None, Some("wanted"), &["zstd".into()], None)
+        .expect("compressed copy");
+    // Copy B: the same bytes uncompressed, which a tight ceiling refuses.
+    writer.add_frame("blob", None, Some(data.clone()), None, None);
+    let bytes = writer.into_bytes();
+
+    // Generous: both copies are admitted, and they are one blob.
+    let generous = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("one blob stored twice is not ambiguous");
+    assert_eq!(generous.blobs.len(), 1);
+    assert_eq!(generous.blobs[0].digest, digest);
+    assert_eq!(generous.refused.len(), 0);
+
+    // Tight: an encoded ceiling that admits the compressed copy and refuses the
+    // uncompressed one. The refusal must actually happen, or this proves nothing.
+    let mut tight = limits();
+    tight.max_encoded_bytes = data.len() / 2;
+    let result =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Representation("wanted")], tight)
+            .expect("refusing the second copy of one blob is not an ambiguity");
+    assert_eq!(
+        result.refused.len(),
+        1,
+        "the uncompressed copy must really be refused: {:?}",
+        result.refused
+    );
+    assert_eq!(
+        result.refused[0].digest.as_deref(),
+        Some(digest.as_str()),
+        "an untransformed refusal knows its own identity"
+    );
+    assert_eq!(result.blobs.len(), 1);
+    assert_eq!(result.blobs[0].digest, digest);
+}
+
+/// A metadata-only frame may precede its own inline payload.
+///
+/// Whether a blob is external is only decidable once the container has been
+/// read: the bytes may be two frames further on. Deciding at the occurrence
+/// reported a file the authoritative importer accepts as external.
+#[test]
+fn a_metadata_frame_may_precede_the_payload_it_describes() {
+    let data = b"arrives later";
+    let digest = digest_str(data);
+
+    let mut writer = Writer::new("generic");
+    writer.add_frame("blob", None, None, None, Some(meta(&digest, "wanted")));
+    writer.add_blob(data, None, Some("wanted"));
+    let bytes = writer.into_bytes();
+
+    assert!(
+        import_gts_events(&bytes).is_ok(),
+        "the authoritative importer accepts a forward reference"
+    );
+    let result = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("a forward inline reference is not an external blob");
+    assert_eq!(&*result.blobs[0].bytes, data);
 }
