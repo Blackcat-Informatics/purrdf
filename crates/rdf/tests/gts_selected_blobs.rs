@@ -325,7 +325,6 @@ fn retained_total_wire_and_metadata_budgets_are_independent() {
 fn malformed_selected_metadata_and_declared_lengths_fail() {
     let data = b"native";
     for (key, value, expected) in [
-        ("len", Value::from(99), "rdf-ir-gts-blob-length"),
         // A second "rep" entry makes the metadata map ambiguous.
         ("rep", Value::from("wanted"), "rdf-ir-gts-blob-metadata"),
         ("mt", Value::from(99), "rdf-ir-gts-blob-metadata"),
@@ -930,4 +929,101 @@ fn a_snapshot_cannot_smuggle_payloads_past_the_ceilings() {
         bounded.bundle.envelope.lookaside.blobs.is_empty(),
         "an unbounded frame decode never happened"
     );
+}
+
+/// An unknown extension key never refuses a payload.
+///
+/// `blob-pub` admits `* extension-key => any`, and the spec is explicit that a
+/// reader must not reject a payload map merely because it carries a key the
+/// reader does not know. `len` is one such key: nothing in this workspace emits
+/// it, and no profile here assigns it meaning, so a value that disagrees with
+/// the decoded length is a claim this reader has no standing to police.
+#[test]
+fn an_unknown_extension_key_does_not_refuse_a_payload() {
+    let data = b"payload";
+    for value in [Value::from(99), Value::from("not even a number")] {
+        let mut writer = Writer::new("generic");
+        writer.add_frame(
+            "blob",
+            None,
+            Some(data.to_vec()),
+            None,
+            Some(Value::Map(vec![
+                ("digest".into(), digest_str(data).into()),
+                ("rep".into(), "wanted".into()),
+                ("len".into(), value.clone()),
+            ])),
+        );
+        let result = import_gts_events_with_blobs(
+            &writer.into_bytes(),
+            &[GtsBlobSelector::Representation("wanted")],
+            limits(),
+        )
+        .unwrap_or_else(|error| panic!("len={value:?} must not refuse the payload: {error:?}"));
+        assert_eq!(&*result.blobs[0].bytes, data);
+    }
+}
+
+/// A digest selector names the canonical spelling, and says so when it does not.
+///
+/// The reader normalizes the three wire spellings of a published digest to
+/// `blake3:<hex>`. A selector is matched against that canonical form, so bare
+/// hex resolves to nothing — a refusal worth pinning, because the neighbouring
+/// canonical spelling must keep working.
+#[test]
+fn a_digest_selector_requires_the_canonical_spelling() {
+    let data = b"payload";
+    let mut writer = Writer::new("generic");
+    writer.add_blob(data, None, Some("wanted"));
+    let bytes = writer.into_bytes();
+
+    let canonical = digest_str(data);
+    let found =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Digest(&canonical)], limits())
+            .expect("the canonical spelling resolves");
+    assert_eq!(&*found.blobs[0].bytes, data);
+
+    let bare = canonical
+        .strip_prefix("blake3:")
+        .expect("digest_str publishes the prefixed spelling");
+    let error = import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Digest(bare)], limits())
+        .expect_err("bare hex is not the selector spelling");
+    assert_eq!(error.code, "rdf-ir-gts-blob-selection", "{error:?}");
+}
+
+/// An external blob is refused for the reason it is actually refused.
+///
+/// The spec makes external blobs first class: the payload field is absent and
+/// `pub.digest` names bytes held elsewhere. That is not the same fact as a
+/// metadata-only update naming a payload this import declined to retain, and
+/// reporting it as one asserts something false about retention ordering.
+#[test]
+fn an_external_blob_is_distinguished_from_a_metadata_only_update() {
+    let data = b"held elsewhere";
+    let digest = digest_str(data);
+
+    // External: no payload field anywhere in the container.
+    let mut writer = Writer::new("generic");
+    writer.add_frame("blob", None, None, None, Some(meta(&digest, "wanted")));
+    let external = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect_err("external bytes cannot be produced by an inline read");
+    assert_eq!(external.code, "rdf-ir-gts-blob-external", "{external:?}");
+    assert!(external.message.contains("held elsewhere"), "{external:?}");
+
+    // Neighbouring valid case: an inline payload followed by a metadata-only
+    // update to the same digest still resolves, and still returns the bytes.
+    let mut writer = Writer::new("generic");
+    writer.add_blob(data, None, Some("wanted"));
+    writer.add_frame("blob", None, None, None, Some(meta(&digest, "wanted")));
+    let updated = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("a metadata-only update reuses the retained payload");
+    assert_eq!(&*updated.blobs[0].bytes, data);
 }

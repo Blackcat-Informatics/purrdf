@@ -3,7 +3,7 @@
 
 //! Explicit, bounded blob selection alongside the authoritative native import.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use ciborium::Value;
@@ -15,7 +15,11 @@ use crate::{GtsBundle, RdfDiagnostic};
 /// A required inline blob, selected independently of RDF statement order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GtsBlobSelector<'a> {
-    /// Match the exact content digest.
+    /// Match the exact content digest, in the canonical `blake3:<hex>` spelling.
+    ///
+    /// The reader normalizes the wire's three published spellings to this one
+    /// before matching, so a bare hex selector resolves to nothing rather than
+    /// to the blob it looks like. Use [`purrdf_gts::wire::digest_str`].
     Digest(&'a str),
     /// Match the final public metadata's `rep` text value.
     Representation(&'a str),
@@ -185,7 +189,10 @@ pub struct GtsImportWithBlobs {
 /// # Errors
 /// Returns a diagnostic for invalid selection, missing or ambiguous final blobs,
 /// selected malformed metadata, absent payloads, corrupt decoded digests, reader
-/// or codec failures, or a retention/decode bound violation.
+/// or codec failures, or a retention/decode bound violation. Selecting a blob
+/// the container declares as external — published digest, no payload field —
+/// returns `rdf-ir-gts-blob-external`: its bytes are held outside this file, so
+/// no inline read can produce them.
 pub fn import_gts_events_with_blobs(
     bytes: &[u8],
     selectors: &[GtsBlobSelector<'_>],
@@ -217,6 +224,10 @@ pub(crate) struct BlobCollector<'a> {
     limits: GtsBlobLimits,
     selected: BTreeMap<String, GtsImportedBlob>,
     refused: Vec<GtsRefusedBlob>,
+    /// Digests some occurrence in this container carried bytes for, whether or
+    /// not they were selected. Distinguishes a payload we declined to retain
+    /// from one the container never held.
+    inlined: BTreeSet<String>,
     frame: Option<BlobFrame>,
     total: usize,
 }
@@ -282,6 +293,7 @@ impl<'a> BlobCollector<'a> {
             limits,
             selected: BTreeMap::new(),
             refused: Vec::new(),
+            inlined: BTreeSet::new(),
             frame: None,
             total: 0,
         })
@@ -330,6 +342,9 @@ impl<'a> BlobCollector<'a> {
     }
 
     pub(crate) fn payload(&mut self, payload: BlobPayload<'_>) -> Result<(), RdfDiagnostic> {
+        if payload.payload_present {
+            self.inlined.insert(payload.digest.to_string());
+        }
         let previous = self.selected.get(payload.digest);
         let metadata = payload
             .metadata
@@ -375,6 +390,24 @@ impl<'a> BlobCollector<'a> {
         };
         let Some(wire_bytes) = payload.bytes else {
             let Some(previous) = self.selected.get_mut(payload.digest) else {
+                // An occurrence with no payload field at all, publishing a
+                // digest, is an EXTERNAL blob: the spec places its bytes outside
+                // this container. That is a different fact from a metadata-only
+                // update to a payload we declined to retain, and reporting it as
+                // one claims something false about retention ordering.
+                // No occurrence anywhere in this container carried bytes for
+                // this digest, so the spec's external form is the only reading:
+                // the payload lives outside the file. Reporting that as a
+                // retention-ordering problem would assert something false.
+                if !self.inlined.contains(payload.digest) {
+                    return Err(fail(
+                        "rdf-ir-gts-blob-external",
+                        format!(
+                            "blob {} is external to this container; its bytes are held elsewhere and this importer returns only inline payloads",
+                            payload.digest
+                        ),
+                    ));
+                }
                 return Err(fail(
                     "rdf-ir-gts-blob-selection-order",
                     format!(
@@ -383,7 +416,6 @@ impl<'a> BlobCollector<'a> {
                     ),
                 ));
             };
-            validate_length(metadata.as_ref(), previous.bytes.len())?;
             previous.metadata = metadata;
             previous.metadata_source = metadata_source;
             return Ok(());
@@ -421,7 +453,6 @@ impl<'a> BlobCollector<'a> {
                 ),
             ));
         }
-        validate_length(metadata.as_ref(), bytes.len())?;
         self.total = other_bytes + bytes.len();
         self.selected.insert(
             digest.clone(),
@@ -557,21 +588,6 @@ fn validate_metadata(meta: Option<&Value>, digest: &str) -> Result<(), RdfDiagno
                     format!("selected blob metadata {key} must be text"),
                 )
             })?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_length(meta: Option<&Value>, length: usize) -> Result<(), RdfDiagnostic> {
-    if let Some(value) = metadata_field(meta, "len")? {
-        let declared = value
-            .as_integer()
-            .and_then(|value| usize::try_from(value).ok());
-        if declared != Some(length) {
-            return Err(fail(
-                "rdf-ir-gts-blob-length",
-                "selected blob declared length differs from decoded length",
-            ));
         }
     }
     Ok(())
