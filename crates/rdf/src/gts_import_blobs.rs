@@ -311,6 +311,20 @@ impl<'a> BlobCollector<'a> {
         self.limits.max_encoded_bytes
     }
 
+    /// Bound and validate a selected blob's metadata before the sink keeps it.
+    ///
+    /// Deliberately runs earlier than, and in addition to, the check inside
+    /// [`Self::payload`]. The importer deep-copies public metadata into its
+    /// lookaside when the legacy blob event arrives, which is before any payload
+    /// event; bounding it only in `payload` would let an unbounded metadata map
+    /// be copied first and bounded afterwards, which is not a bound.
+    ///
+    /// The two see different snapshots on purpose. This one inherits from what
+    /// has been *retained* so far, because that is all that exists at this point
+    /// in the read; `payload` inherits from the occurrence it is processing,
+    /// which is more specific. Where they disagree, `payload` is authoritative:
+    /// it decides what is returned to the caller, while this one exists solely
+    /// to keep the earlier copy bounded.
     pub(crate) fn check_metadata_before_retention(
         &self,
         digest: &str,
