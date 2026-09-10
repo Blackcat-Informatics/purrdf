@@ -23,9 +23,11 @@ pub enum GtsBlobSelector<'a> {
 
 /// Explicit retention and decode budgets for selected inline blobs.
 ///
-/// These bounds cover selected payloads and their metadata, not the native RDF
-/// dataset, input file, reader frame buffers or codec working memory. Every
-/// decoded intermediate is bounded, including compression-chain intermediates.
+/// These bounds cover selected payloads, their metadata, and the frames that
+/// carry them — not the native RDF dataset, the input file, reader frame
+/// buffers or codec working memory. Every decoded intermediate is bounded,
+/// including compression-chain intermediates and the enclosing frame decode
+/// that a `snapshot` uses to reach its embedded blobs.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct GtsBlobLimits {
@@ -37,7 +39,27 @@ pub struct GtsBlobLimits {
     pub max_total_decoded_bytes: usize,
     /// Maximum CBOR-encoded public metadata bytes retained for one blob.
     pub max_metadata_bytes: usize,
+    /// Maximum decoded bytes for one enclosing, non-blob frame.
+    ///
+    /// A `snapshot` frame carries embedded blob bytes inside an RDF frame, so
+    /// the blob ceilings alone would leave the decode that actually spends the
+    /// memory unbounded. This bounds that decode. It applies to every non-blob
+    /// frame, so it must be large enough for the caller's legitimate RDF frames;
+    /// the default matches the 1 GiB retained-payload ceiling this workspace
+    /// already uses for immutable views.
+    pub max_frame_decoded_bytes: usize,
 }
+
+/// Default per-blob public-metadata ceiling: 64 KiB.
+pub const DEFAULT_MAX_METADATA_BYTES: usize = 64 * 1024;
+
+/// Default enclosing-frame decode ceiling: 1 GiB.
+///
+/// Matches the retained-payload ceiling `purrdf-core` already uses for immutable
+/// views, so one workspace-wide number governs "how many bytes may one thing
+/// cost". Finite by design: an unbounded frame decode is how a compressed
+/// snapshot defeats every blob ceiling beneath it.
+pub const DEFAULT_MAX_FRAME_DECODED_BYTES: usize = 1_073_741_824;
 
 impl GtsBlobLimits {
     /// Set payload budgets; metadata defaults to a bounded 64 KiB per blob.
@@ -50,7 +72,8 @@ impl GtsBlobLimits {
             max_encoded_bytes: max_decoded_bytes,
             max_decoded_bytes,
             max_total_decoded_bytes,
-            max_metadata_bytes: 64 * 1024,
+            max_metadata_bytes: DEFAULT_MAX_METADATA_BYTES,
+            max_frame_decoded_bytes: DEFAULT_MAX_FRAME_DECODED_BYTES,
         }
     }
 }
@@ -142,11 +165,13 @@ pub struct GtsImportWithBlobs {
 /// Each selector must resolve to exactly one final blob; multiple selectors may
 /// name the same blob, which is decoded and retained once per occurrence. At most
 /// 1024 nonempty, distinct selectors of at most 4096 bytes each are accepted.
-/// Unselected payloads are neither copied nor decoded by this collector. Blobs
-/// without a public digest require the reader to decode before selection and
-/// obey both the encoded and decoded per-blob limits before eager decoding,
-/// including when ultimately unselected. Snapshot-entry bounds cover their
-/// embedded blob bytes; enclosing RDF frame decoding remains the reader's scope.
+/// Unselected payloads are neither copied nor decoded by this collector. A blob
+/// without a public digest cannot be selected before it is decoded, so it obeys
+/// the encoded and decoded per-blob ceilings first; exceeding either refuses
+/// that payload without failing the import, and the refusal is reported through
+/// [`GtsImportWithBlobs::refused`] and still counts as a selection candidate.
+/// Snapshot entries obey the same per-blob ceiling, and the enclosing frame
+/// decode obeys [`GtsBlobLimits::max_frame_decoded_bytes`].
 ///
 /// Later public metadata replaces earlier metadata for that digest; absent
 /// metadata preserves it, including across segment boundaries. A newly selected
@@ -289,6 +314,10 @@ impl<'a> BlobCollector<'a> {
 
     pub(crate) const fn decode_limit(&self) -> usize {
         self.limits.max_decoded_bytes
+    }
+
+    pub(crate) const fn frame_decode_limit(&self) -> usize {
+        self.limits.max_frame_decoded_bytes
     }
 
     pub(crate) fn frame(&mut self, ctx: FrameContext<'_>) {

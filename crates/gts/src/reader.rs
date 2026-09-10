@@ -385,6 +385,15 @@ pub trait StreamingSink {
     fn blob_decode_limit(&self) -> Option<usize> {
         None
     }
+    /// Optional bound for decoding an ordinary (non-blob) frame's payload.
+    ///
+    /// A `snapshot` frame carries embedded blob bytes *inside* an RDF frame, so
+    /// a blob ceiling alone leaves the real bomb unbounded: the memory is spent
+    /// decoding the enclosing frame, long before any embedded entry is seen.
+    /// Sinks that set no bound keep the previous unbounded behavior.
+    fn frame_decode_limit(&self) -> Option<usize> {
+        None
+    }
     /// Opaque frame produced by unknown, encrypted, or damaged payloads.
     fn opaque(&mut self, _segment_index: usize, _opaque: &OpaqueNode) {}
     /// Signature status observed on a frame.
@@ -659,13 +668,16 @@ impl Folder<'_, '_, '_> {
                 ));
             };
             let chain = self.resolve_codecs(ids)?;
-            let limit = blob
-                .then(|| {
-                    self.sink
-                        .as_deref()
-                        .and_then(StreamingSink::blob_decode_limit)
-                })
-                .flatten();
+            // A blob frame is bounded by the blob ceiling; every other frame by
+            // the frame ceiling, which is what keeps an embedded snapshot blob
+            // map from decoding without limit.
+            let limit = self.sink.as_deref().and_then(|sink| {
+                if blob {
+                    sink.blob_decode_limit()
+                } else {
+                    sink.frame_decode_limit()
+                }
+            });
             let decoded = if let Some(content_key) = self.content_key {
                 let limit = limit.unwrap_or(usize::MAX);
                 let decrypt =
@@ -1191,9 +1203,24 @@ impl Folder<'_, '_, '_> {
             self.h_annot(&Value::Array(annot.iter().map(sh_row).collect()), index);
         }
         if let Some(Value::Map(blobs)) = map_get(entries, "blobs") {
+            let ceiling = self
+                .sink
+                .as_deref()
+                .and_then(StreamingSink::blob_decode_limit);
             for (_, b) in blobs {
                 if let Value::Bytes(bytes) = b {
                     let digest = digest_str(bytes);
+                    // An embedded entry obeys the same ceiling as a standalone
+                    // payload; without this a snapshot is a way to hand a
+                    // bounded consumer arbitrarily many unbounded blobs.
+                    if let Some(limit) = ceiling
+                        && bytes.len() > limit
+                    {
+                        let detail = format!("snapshot blob exceeds {limit} bytes");
+                        self.emit_blob_refusal(Some(&digest), None, bytes.len(), &detail);
+                        self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
+                        continue;
+                    }
                     if self.materialize {
                         self.g.set_blob(digest.clone(), bytes.clone());
                     }

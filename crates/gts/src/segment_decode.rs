@@ -211,6 +211,11 @@ pub trait ResolvedSink {
         None
     }
 
+    /// Enclosing (non-blob) frame decode bound (default: unbounded).
+    fn frame_decode_limit(&self) -> Option<usize> {
+        None
+    }
+
     /// Borrowed blob payload passthrough (default no-op).
     fn blob_payload(&mut self, _payload: BlobPayload<'_>) -> Result<(), Self::Error> {
         Ok(())
@@ -694,6 +699,10 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
 
     fn blob_decode_limit(&self) -> Option<usize> {
         self.sink.blob_decode_limit()
+    }
+
+    fn frame_decode_limit(&self) -> Option<usize> {
+        self.sink.frame_decode_limit()
     }
 
     fn blob_payload(&mut self, payload: BlobPayload<'_>) {

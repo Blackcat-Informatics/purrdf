@@ -872,3 +872,62 @@ fn an_unselected_refusal_is_reported_rather_than_dropped() {
     assert_eq!(refused.encoded_len, 100_000_usize.min(refused.encoded_len));
     assert_ne!(refused.detail, "");
 }
+
+/// A snapshot must not be a way around the blob ceilings.
+///
+/// A snapshot frame carries blob bytes *inside* an RDF frame. Bounding only the
+/// blob path leaves the decode that actually spends the memory unbounded, so a
+/// compressed snapshot could hand a bounded consumer arbitrarily many bytes.
+/// Both ceilings are exercised here, each against a neighbouring case that must
+/// still import.
+#[test]
+fn a_snapshot_cannot_smuggle_payloads_past_the_ceilings() {
+    let embedded = vec![b'x'; 100_000];
+    let snapshot = Value::Map(vec![(
+        "blobs".into(),
+        Value::Map(vec![("0".into(), Value::Bytes(embedded.clone()))]),
+    )]);
+    let mut writer = Writer::new("generic");
+    writer
+        .add_frame_with_options(
+            "snapshot",
+            purrdf_gts::writer::FrameOptions {
+                payload: Some(snapshot),
+                transform: vec!["zstd".into()],
+                ..purrdf_gts::writer::FrameOptions::default()
+            },
+        )
+        .expect("compressed snapshot frame");
+    let bytes = writer.into_bytes();
+
+    // Neighbouring valid case: ceilings that admit it still import it.
+    let generous = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Digest(&digest_str(&embedded))],
+        limits(),
+    )
+    .expect("an in-budget snapshot payload is selectable");
+    assert_eq!(&*generous.blobs[0].bytes, &embedded[..]);
+
+    // The per-blob ceiling refuses the embedded entry rather than retaining it.
+    let mut tight = limits();
+    tight.max_decoded_bytes = 1_000;
+    let refused = import_gts_events_with_blobs(&bytes, &[], tight).expect("import still succeeds");
+    assert_eq!(
+        refused.refused.len(),
+        1,
+        "the embedded entry is refused, not retained: {:?}",
+        refused.refused
+    );
+    assert!(refused.blobs.is_empty());
+
+    // The enclosing frame ceiling bounds the decode that spends the memory.
+    let mut framed = limits();
+    framed.max_frame_decoded_bytes = 1_000;
+    let bounded =
+        import_gts_events_with_blobs(&bytes, &[], framed).expect("a refused frame is not fatal");
+    assert!(
+        bounded.bundle.envelope.lookaside.blobs.is_empty(),
+        "an unbounded frame decode never happened"
+    );
+}

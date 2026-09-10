@@ -335,6 +335,10 @@ impl ResolvedSink for SinkImporter<'_> {
         self.blobs.as_ref().map(BlobCollector::decode_limit)
     }
 
+    fn frame_decode_limit(&self) -> Option<usize> {
+        self.blobs.as_ref().map(BlobCollector::frame_decode_limit)
+    }
+
     fn blob_payload(&mut self, payload: BlobPayload<'_>) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
             blobs.payload(payload)?;
