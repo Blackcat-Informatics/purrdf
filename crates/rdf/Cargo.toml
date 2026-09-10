@@ -148,6 +148,13 @@ proptest = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]
+# One-pass selected GTS import against the two-reader path it replaces: the
+# capability exists to remove a second container fold, so the pair of curves is
+# the evidence. Report-only; asserts nothing.
+name = "gts_selected_blobs"
+harness = false
+
+[[bench]]
 # Native RDF text codec hot paths: N-Quads parse into frozen IR and serialize back
 # out through the first-party serializer. Report-only; excluded from check.
 name = "native_codecs"

@@ -38,7 +38,7 @@ use crate::gts_import_blobs::BlobCollector;
 use ciborium::value::Value;
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
-use purrdf_gts::reader::{BlobPayload, FrameContext};
+use purrdf_gts::reader::{BlobPayload, BlobRefusal, FrameContext};
 use purrdf_gts::segment_decode::{ResolvedSink, SegmentResolver};
 
 use crate::{
@@ -335,9 +335,20 @@ impl ResolvedSink for SinkImporter<'_> {
         self.blobs.as_ref().map(BlobCollector::decode_limit)
     }
 
+    fn frame_decode_limit(&self) -> Option<usize> {
+        self.blobs.as_ref().map(BlobCollector::frame_decode_limit)
+    }
+
     fn blob_payload(&mut self, payload: BlobPayload<'_>) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
             blobs.payload(payload)?;
+        }
+        Ok(())
+    }
+
+    fn blob_refused(&mut self, refusal: BlobRefusal<'_>) -> Result<(), RdfDiagnostic> {
+        if let Some(blobs) = &mut self.blobs {
+            blobs.refused(refusal);
         }
         Ok(())
     }
@@ -389,9 +400,25 @@ impl ResolvedSink for SinkImporter<'_> {
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
-        // A reader diagnostic is a hard fold failure on the IR path (the IR is
-        // the authority, no degraded fold). The `SegmentResolver` latches the
-        // first one returned here.
+        // A selected import's byte budget names what *this import will retain*,
+        // not what the container is allowed to contain. A payload refused by that
+        // budget is therefore not a fold failure: the archive is intact and its
+        // dataset is admissible, so refusing the whole import would reject valid
+        // input over bytes the caller never asked for. The payload is simply not
+        // emitted, so a caller who *did* name it still fails closed — the
+        // selector resolves to no blob. Importers with no collector are
+        // unaffected and keep the hard-fail below.
+        //
+        // This covers a refused *payload* only. A refused frame is a different
+        // fact: its rows are gone, so the dataset no longer matches what the
+        // authoritative importer would build, and returning Ok would hand back
+        // a silently truncated graph. That falls through to the hard failure.
+        if self.blobs.is_some() && is_blob_budget_refusal(diagnostic) {
+            return Ok(());
+        }
+        // Any other reader diagnostic is a hard fold failure on the IR path (the
+        // IR is the authority, no degraded fold). The `SegmentResolver` latches
+        // the first one returned here.
         Err(RdfDiagnostic::error(
             "rdf-ir-gts-fold-diagnostic",
             format!(
@@ -491,6 +518,17 @@ impl SinkImporter<'_> {
 /// the envelope.
 pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
     import_with_collector(bytes, None).map(|(bundle, _)| bundle)
+}
+
+/// Whether a reader diagnostic reports a blob refused by the sink's byte budget.
+///
+/// Matches the reader's dedicated code, never its prose. A diagnostic detail can
+/// embed container-supplied text — a header's `gts` field, a codec name — so
+/// deciding a payload's fate by searching that string lets the input choose
+/// whether it is admitted. [`purrdf_gts::reader::BLOB_BUDGET_DIAGNOSTIC`] is
+/// emitted only by the reader's own byte ceilings, which no input can spoof.
+fn is_blob_budget_refusal(diagnostic: &Diagnostic) -> bool {
+    diagnostic.code == purrdf_gts::reader::BLOB_BUDGET_DIAGNOSTIC
 }
 
 pub(crate) fn import_with_collector<'a>(

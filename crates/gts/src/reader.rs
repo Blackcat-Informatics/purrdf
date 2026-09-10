@@ -160,6 +160,43 @@ fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> b
         })
 }
 
+/// Diagnostic code for a payload refused by a caller-supplied byte ceiling.
+///
+/// Distinct from `DamagedFrame` so a consumer can tell "I declined to spend the
+/// bytes" from "the container is corrupt" without parsing the detail string.
+/// Only a sink that supplies a blob byte limit can provoke it.
+pub const BLOB_BUDGET_DIAGNOSTIC: &str = "BlobBudget";
+
+/// Diagnostic code for a whole non-blob frame refused by a caller-supplied
+/// byte ceiling.
+///
+/// Deliberately distinct from [`BLOB_BUDGET_DIAGNOSTIC`]: declining one blob
+/// payload leaves the RDF dataset intact, whereas dropping a frame removes rows
+/// the caller was relying on. A consumer that treats the first as recoverable
+/// must not silently treat the second the same way.
+pub const FRAME_BUDGET_DIAGNOSTIC: &str = "FrameBudget";
+
+/// Identity for a payload a ceiling refused, and whether this reader proved it.
+///
+/// With no transform chain the wire bytes are the decoded bytes, so hashing them
+/// is exact and costs no memory — that identity is *proved*. Otherwise the only
+/// candidate is the container's own `pub.digest`, which cannot be checked
+/// against a payload that was never decoded. The distinction matters downstream:
+/// acting on an unverified claim lets a container assert a refused payload's
+/// identity, and so decide how a selector resolves.
+fn refused_identity(
+    chain: &[Codec],
+    d: Option<&Value>,
+    pub_meta: Option<&Value>,
+) -> (Option<String>, bool) {
+    if chain.is_empty()
+        && let Some(raw) = d.and_then(Value::as_bytes)
+    {
+        return (Some(digest_str(raw)), true);
+    }
+    (pub_meta.and_then(public_blob_digest), false)
+}
+
 enum PayloadError {
     /// Missing capability — degrade to an opaque node with this reason.
     Unavailable {
@@ -168,6 +205,8 @@ enum PayloadError {
     },
     /// Anything else — the frame is damaged.
     Damaged(String),
+    /// A caller-supplied byte ceiling refused an otherwise well-formed payload.
+    Budget(String),
 }
 
 impl From<CodecError> for PayloadError {
@@ -175,6 +214,7 @@ impl From<CodecError> for PayloadError {
         match e {
             CodecError::Unavailable { reason, detail } => Self::Unavailable { reason, detail },
             CodecError::Failed(detail) => Self::Damaged(detail),
+            CodecError::Limit(detail) => Self::Budget(detail),
         }
     }
 }
@@ -197,7 +237,7 @@ fn decrypt_codec(
             detail: format!("{} decrypt failed: {err}", codec.name),
         },
         crate::cose::BoundedDecrypt0Error::Limit => {
-            CodecError::Failed(format!("decoded transform output exceeds {limit} bytes"))
+            CodecError::Limit(format!("decoded transform output exceeds {limit} bytes"))
         }
     })
 }
@@ -298,6 +338,37 @@ pub struct BlobPayload<'a> {
     pub codecs: &'a [Codec],
 }
 
+/// One inline blob occurrence a sink's byte ceiling refused before decoding.
+///
+/// Reported so a selecting consumer still learns a candidate was present. It
+/// carries everything decidable without spending the bytes: the container's
+/// declared public metadata (so a representation selector can still match), the
+/// physical source, and the encoded length that was rejected.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug)]
+pub struct BlobRefusal<'a> {
+    /// Zero-based segment containing this occurrence.
+    pub segment_index: usize,
+    /// Declared content digest, when the container published one.
+    ///
+    /// `None` for a payload with no public digest: refusing happens before the
+    /// decode that would compute it, so no identity is available. Such a blob is
+    /// matchable by representation and provenance, never by digest.
+    pub digest: Option<&'a str>,
+    /// Public metadata available at this occurrence, independent of RDF rows.
+    pub metadata: Option<&'a Value>,
+    /// Whether this reader computed [`Self::digest`] from the payload itself.
+    ///
+    /// False means the value is the container's unverified claim, which no
+    /// consumer should treat as identity: the payload was refused before any
+    /// decode, so nothing checked it.
+    pub digest_computed: bool,
+    /// Original blob byte-string length that was refused.
+    pub encoded_len: usize,
+    /// Which ceiling fired, in the reader's own words.
+    pub detail: &'a str,
+}
+
 /// Sink for [`read_to_sink`] events.
 ///
 /// Term ids in events are segment-local ids. A sink that needs a file-level
@@ -325,6 +396,15 @@ pub trait StreamingSink {
     /// Called after the legacy metadata-only [`Self::blob`] event. The metadata
     /// is repeated here so consumers need not pair callbacks by arrival order.
     fn blob_payload(&mut self, _payload: BlobPayload<'_>) {}
+    /// A blob this sink's own byte ceiling refused, before it was decoded.
+    ///
+    /// Fires instead of [`Self::blob_payload`], and only for a sink that set a
+    /// ceiling. A refused payload is reported rather than dropped so a selecting
+    /// consumer can still see that a candidate existed: silently omitting it
+    /// would let a ceiling change which blob a selector resolves to, turning a
+    /// retention bound into a selection rule. The digest is absent whenever the
+    /// container did not declare one, because refusing precedes hashing.
+    fn blob_refused(&mut self, _refusal: BlobRefusal<'_>) {}
     /// Optional encoded-byte bound before eager blob decoding, including decryption.
     ///
     /// Existing sinks leave the reader behavior unchanged. This does not bound
@@ -339,6 +419,15 @@ pub trait StreamingSink {
     /// decrypting with a content key. This does not bound ordinary RDF frame
     /// decoding, encoded COSE parsing buffers, or codec dictionary storage.
     fn blob_decode_limit(&self) -> Option<usize> {
+        None
+    }
+    /// Optional bound for decoding an ordinary (non-blob) frame's payload.
+    ///
+    /// A `snapshot` frame carries embedded blob bytes *inside* an RDF frame, so
+    /// a blob ceiling alone leaves the real bomb unbounded: the memory is spent
+    /// decoding the enclosing frame, long before any embedded entry is seen.
+    /// Sinks that set no bound keep the previous unbounded behavior.
+    fn frame_decode_limit(&self) -> Option<usize> {
         None
     }
     /// Opaque frame produced by unknown, encrypted, or damaged payloads.
@@ -505,6 +594,29 @@ impl Folder<'_, '_, '_> {
         );
     }
 
+    /// Report a payload the sink's own ceiling refused, before any decode.
+    fn emit_blob_refusal(
+        &mut self,
+        digest: Option<&str>,
+        digest_computed: bool,
+        declared_metadata: Option<&Value>,
+        encoded_len: usize,
+        detail: &str,
+    ) {
+        let segment_index = self.segment_index;
+        let Some(sink) = self.sink.as_deref_mut() else {
+            return;
+        };
+        sink.blob_refused(BlobRefusal {
+            segment_index,
+            digest,
+            digest_computed,
+            metadata: declared_metadata,
+            encoded_len,
+            detail,
+        });
+    }
+
     fn emit_blob(
         &mut self,
         digest: &str,
@@ -581,7 +693,7 @@ impl Folder<'_, '_, '_> {
                 .and_then(StreamingSink::blob_encoded_limit)
             && bytes.len() > limit
         {
-            return Err(PayloadError::Damaged(format!(
+            return Err(PayloadError::Budget(format!(
                 "encoded blob exceeds {limit} bytes"
             )));
         }
@@ -594,13 +706,16 @@ impl Folder<'_, '_, '_> {
                 ));
             };
             let chain = self.resolve_codecs(ids)?;
-            let limit = blob
-                .then(|| {
-                    self.sink
-                        .as_deref()
-                        .and_then(StreamingSink::blob_decode_limit)
-                })
-                .flatten();
+            // A blob frame is bounded by the blob ceiling; every other frame by
+            // the frame ceiling, which is what keeps an embedded snapshot blob
+            // map from decoding without limit.
+            let limit = self.sink.as_deref().and_then(|sink| {
+                if blob {
+                    sink.blob_decode_limit()
+                } else {
+                    sink.frame_decode_limit()
+                }
+            });
             let decoded = if let Some(content_key) = self.content_key {
                 let limit = limit.unwrap_or(usize::MAX);
                 let decrypt =
@@ -625,7 +740,7 @@ impl Folder<'_, '_, '_> {
                 .and_then(StreamingSink::blob_decode_limit)
             && bytes.len() > limit
         {
-            return Err(PayloadError::Damaged(format!(
+            return Err(PayloadError::Budget(format!(
                 "decoded blob exceeds {limit} bytes"
             )));
         }
@@ -657,6 +772,11 @@ impl Folder<'_, '_, '_> {
                     format!("payload decode failed: {detail}"),
                     Some(index),
                 );
+                return;
+            }
+            Err(PayloadError::Budget(detail)) => {
+                self.opaque(frame, ftype, "over-budget");
+                self.diag(FRAME_BUDGET_DIAGNOSTIC, detail, Some(index));
                 return;
             }
             Ok(p) => p,
@@ -884,7 +1004,9 @@ impl Folder<'_, '_, '_> {
                     self.diag(diag_code_for(reason), detail, Some(index));
                     return;
                 }
-                Err(PayloadError::Damaged(detail)) => {
+                // Codec-id resolution reads the catalog and decodes nothing, so
+                // it cannot exceed a byte ceiling; handled for exhaustiveness.
+                Err(PayloadError::Damaged(detail) | PayloadError::Budget(detail)) => {
                     self.opaque(frame, "blob", "damaged");
                     self.diag(
                         "DamagedFrame",
@@ -922,6 +1044,19 @@ impl Folder<'_, '_, '_> {
                     }
                 }
                 Ok(_) => {}
+                Err(PayloadError::Budget(detail)) => {
+                    let (refused_digest, digest_computed) =
+                        refused_identity(&chain, d, pub_meta.as_ref());
+                    self.emit_blob_refusal(
+                        refused_digest.as_deref(),
+                        digest_computed,
+                        declared_metadata,
+                        encoded_len,
+                        &detail,
+                    );
+                    self.opaque(frame, "blob", "over-budget");
+                    self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
+                }
                 Err(PayloadError::Unavailable { reason, detail }) => {
                     self.opaque(frame, "blob", reason);
                     self.diag(diag_code_for(reason), detail, Some(index));
@@ -988,6 +1123,19 @@ impl Folder<'_, '_, '_> {
                 }
             }
             Ok(_) => {}
+            Err(PayloadError::Budget(detail)) => {
+                let (refused_digest, digest_computed) =
+                    refused_identity(&chain, d, pub_meta.as_ref());
+                self.emit_blob_refusal(
+                    refused_digest.as_deref(),
+                    digest_computed,
+                    declared_metadata,
+                    encoded_len,
+                    &detail,
+                );
+                self.opaque(frame, "blob", "over-budget");
+                self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
+            }
             Err(PayloadError::Unavailable { reason, detail }) => {
                 self.opaque(frame, "blob", reason);
                 self.diag(diag_code_for(reason), detail, Some(index));
@@ -1097,9 +1245,24 @@ impl Folder<'_, '_, '_> {
             self.h_annot(&Value::Array(annot.iter().map(sh_row).collect()), index);
         }
         if let Some(Value::Map(blobs)) = map_get(entries, "blobs") {
+            let ceiling = self
+                .sink
+                .as_deref()
+                .and_then(StreamingSink::blob_decode_limit);
             for (_, b) in blobs {
                 if let Value::Bytes(bytes) = b {
                     let digest = digest_str(bytes);
+                    // An embedded entry obeys the same ceiling as a standalone
+                    // payload; without this a snapshot is a way to hand a
+                    // bounded consumer arbitrarily many unbounded blobs.
+                    if let Some(limit) = ceiling
+                        && bytes.len() > limit
+                    {
+                        let detail = format!("snapshot blob exceeds {limit} bytes");
+                        self.emit_blob_refusal(Some(&digest), true, None, bytes.len(), &detail);
+                        self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
+                        continue;
+                    }
                     if self.materialize {
                         self.g.set_blob(digest.clone(), bytes.clone());
                     }

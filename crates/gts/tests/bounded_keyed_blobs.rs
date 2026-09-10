@@ -83,7 +83,8 @@ fn assert_limit(result: &StreamingReadResult, sink: &Sink, detail: &str) {
     );
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "DamagedFrame" && diagnostic.detail.contains(detail)
+            diagnostic.code == purrdf_gts::reader::BLOB_BUDGET_DIAGNOSTIC
+                && diagnostic.detail.contains(detail)
         }),
         "expected {detail}: {:?}",
         result.diagnostics

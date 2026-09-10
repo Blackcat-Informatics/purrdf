@@ -104,7 +104,8 @@ mod nesting;
 // IR import helpers are re-exported here.
 pub use dataset_io::dataset_from_bytes;
 pub use gts_import_blobs::{
-    GtsBlobLimits, GtsBlobMetadataSource, GtsBlobSelector, GtsImportWithBlobs, GtsImportedBlob,
+    DEFAULT_MAX_FRAME_DECODED_BYTES, DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits,
+    GtsBlobMetadataSource, GtsBlobSelector, GtsImportWithBlobs, GtsImportedBlob, GtsRefusedBlob,
     import_gts_events_with_blobs,
 };
 pub use gts_import_graph::import_gts_graph;

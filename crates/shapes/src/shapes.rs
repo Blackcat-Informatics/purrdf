@@ -429,9 +429,11 @@ pub struct Shapes {
 impl Shapes {
     /// Borrow the original frozen dataset retained when these shapes were parsed.
     ///
-    /// This returns the existing shared owner without reparsing, copying the
-    /// dataset, or incrementing its reference count. Use `Arc::clone(shapes.dataset())`
-    /// to retain the same immutable dataset independently of the `Shapes` value.
+    /// The same allocation `parse_shapes` interned, not a copy of it, so a
+    /// consumer needing the RDF behind a shapes graph never has to reparse the
+    /// source text. Borrowing leaves the choice of paying for retention with the
+    /// caller: `Arc::clone(shapes.dataset())` keeps the dataset alive
+    /// independently of the `Shapes` value.
     ///
     /// Document-prefix handling remains part of [`crate::engine::parse_shapes`]:
     /// the dataset contains RDF statements, not the source document's prefix map.

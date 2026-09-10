@@ -274,29 +274,6 @@ pub fn recipient_kid(blob: &[u8]) -> Option<String> {
     parse_encrypt0(blob).map(|p| p.kid)
 }
 
-/// Open a COSE_Encrypt0 using a content key resolved by `kid` (§9.3).
-pub fn decrypt0(
-    blob: &[u8],
-    resolve: impl Fn(&str) -> Option<[u8; 32]>,
-) -> Result<Vec<u8>, Encrypt0Error> {
-    let parts = parse_encrypt0(blob).ok_or(Encrypt0Error::Malformed)?;
-    let key = resolve(&parts.kid).ok_or(Encrypt0Error::MissingKey)?;
-    if parts.iv.len() != 12 {
-        return Err(Encrypt0Error::Malformed);
-    }
-    let aad = enc_structure(&parts.protected);
-    let cipher = Aes256Gcm::new((&key).into());
-    cipher
-        .decrypt(
-            Nonce::from_slice(&parts.iv),
-            Payload {
-                msg: &parts.ciphertext,
-                aad: &aad,
-            },
-        )
-        .map_err(|_| Encrypt0Error::AuthFailed)
-}
-
 /// Internal bounded decryption failures, without extending the public error enum.
 #[derive(Debug)]
 pub(crate) enum BoundedDecrypt0Error {

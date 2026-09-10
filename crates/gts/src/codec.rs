@@ -66,13 +66,21 @@ pub enum CodecError {
     },
     /// The codec is known but the data is corrupt — the frame is damaged.
     Failed(String),
+    /// The data is well-formed but a caller-supplied byte ceiling refused it.
+    ///
+    /// Distinct from [`Self::Failed`] because refusing to *spend* bytes is not
+    /// evidence that the bytes are corrupt: a caller that set the ceiling may
+    /// legitimately skip this payload and keep reading, whereas corruption is a
+    /// statement about the container. Only a decode given an explicit limit can
+    /// produce this.
+    Limit(String),
 }
 
 impl fmt::Display for CodecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unavailable { reason, detail } => write!(f, "{reason}: {detail}"),
-            Self::Failed(detail) => f.write_str(detail),
+            Self::Failed(detail) | Self::Limit(detail) => f.write_str(detail),
         }
     }
 }
@@ -379,7 +387,7 @@ pub fn decode_chain(chain: &[Codec], data: &[u8]) -> Result<Vec<u8>, CodecError>
 }
 
 fn decoded_limit(limit: usize) -> CodecError {
-    CodecError::Failed(format!("decoded transform output exceeds {limit} bytes"))
+    CodecError::Limit(format!("decoded transform output exceeds {limit} bytes"))
 }
 
 /// Reverse a codec chain, bounding every decoded intermediate and final buffer.
