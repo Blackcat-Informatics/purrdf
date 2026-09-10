@@ -389,9 +389,20 @@ impl ResolvedSink for SinkImporter<'_> {
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
-        // A reader diagnostic is a hard fold failure on the IR path (the IR is
-        // the authority, no degraded fold). The `SegmentResolver` latches the
-        // first one returned here.
+        // A selected import's byte budget names what *this import will retain*,
+        // not what the container is allowed to contain. A payload refused by that
+        // budget is therefore not a fold failure: the archive is intact and its
+        // dataset is admissible, so refusing the whole import would reject valid
+        // input over bytes the caller never asked for. The payload is simply not
+        // emitted, so a caller who *did* name it still fails closed — the
+        // selector resolves to no blob. Importers with no collector are
+        // unaffected and keep the hard-fail below.
+        if self.blobs.is_some() && is_blob_budget_refusal(diagnostic) {
+            return Ok(());
+        }
+        // Any other reader diagnostic is a hard fold failure on the IR path (the
+        // IR is the authority, no degraded fold). The `SegmentResolver` latches
+        // the first one returned here.
         Err(RdfDiagnostic::error(
             "rdf-ir-gts-fold-diagnostic",
             format!(
@@ -491,6 +502,19 @@ impl SinkImporter<'_> {
 /// the envelope.
 pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
     import_with_collector(bytes, None).map(|(bundle, _)| bundle)
+}
+
+/// Whether a reader diagnostic reports a blob refused by the sink's byte budget.
+///
+/// The reader reports these as ordinary damaged-frame diagnostics because a
+/// streaming consumer still wants to hear about them; only the selected-import
+/// path treats them as non-fatal. The three phrasings come from
+/// [`purrdf_gts::reader`]'s encoded and decoded blob checks and from the bounded
+/// codec chain's intermediate check.
+fn is_blob_budget_refusal(diagnostic: &Diagnostic) -> bool {
+    diagnostic.code == "DamagedFrame"
+        && (diagnostic.detail.contains("blob exceeds")
+            || diagnostic.detail.contains("transform output exceeds"))
 }
 
 pub(crate) fn import_with_collector<'a>(

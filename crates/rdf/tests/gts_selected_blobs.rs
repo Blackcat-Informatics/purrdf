@@ -436,6 +436,20 @@ fn selection_count_and_unadvertised_blob_expansion_are_bounded() {
         .code,
         "rdf-ir-gts-blob-limit"
     );
+}
+
+/// An oversized *unrelated* payload must not refuse the archive.
+///
+/// The byte budget names what this import will retain, not what the container is
+/// allowed to contain. A caller asking for one small blob out of an archive that
+/// also holds a large one it never named must still get its dataset — the large
+/// payload is simply neither decoded nor retained. Both sides are exercised here:
+/// the unrelated payload is admitted past, and a payload the caller *did* name
+/// still fails closed when it exceeds the same budget.
+#[test]
+fn oversized_unselected_payload_does_not_refuse_the_import() {
+    // A digest-less compressed payload far over budget, alongside a small named
+    // one. Only the digest-less frame reaches the reader's byte checks.
     let mut writer = Writer::new("generic");
     writer.add_frame(
         "blob",
@@ -444,13 +458,50 @@ fn selection_count_and_unadvertised_blob_expansion_are_bounded() {
         Some(&["zstd".into()]),
         None,
     );
+    writer.add_blob(b"small", None, Some("wanted"));
     let bytes = writer.into_bytes();
+
+    // The authoritative importer has always accepted these bytes.
     assert!(import_gts_events(&bytes).is_ok());
+
+    let tight = GtsBlobLimits::new(100, 100);
+
+    // Neighbouring valid case 1: no selectors at all. This previously failed
+    // with `rdf-ir-gts-fold-diagnostic`.
+    let none = import_gts_events_with_blobs(&bytes, &[], tight).expect("empty selection imports");
+    assert!(
+        none.blobs.is_empty(),
+        "nothing was selected, so nothing is retained"
+    );
+
+    // Neighbouring valid case 2: select only the small blob. The oversized
+    // payload is skipped rather than fatal, and is not retained.
+    let selected =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Representation("wanted")], tight)
+            .expect("selecting a small blob past a large one imports");
+    assert_eq!(selected.blobs.len(), 1);
+    assert_eq!(&*selected.blobs[0].bytes, b"small");
+
+    // The dataset is identical to the one the unbudgeted importer produces.
+    let plain = import_gts_events(&bytes).expect("plain import");
     assert_eq!(
-        import_gts_events_with_blobs(&bytes, &[], GtsBlobLimits::new(100, 100))
-            .unwrap_err()
-            .code,
-        "rdf-ir-gts-fold-diagnostic"
+        selected.bundle.dataset.owned_quads().collect::<Vec<_>>(),
+        plain.dataset.owned_quads().collect::<Vec<_>>()
+    );
+
+    // Invalid case: a payload the caller *named* that exceeds the same budget
+    // still fails closed.
+    let mut writer = Writer::new("generic");
+    writer.add_blob(&[b'z'; 4096], None, Some("too-big"));
+    assert_eq!(
+        import_gts_events_with_blobs(
+            &writer.into_bytes(),
+            &[GtsBlobSelector::Representation("too-big")],
+            tight
+        )
+        .unwrap_err()
+        .code,
+        "rdf-ir-gts-blob-limit"
     );
 }
 
@@ -560,8 +611,11 @@ fn eager_digest_resolution_enforces_the_original_encoded_length() {
                 too_small,
             )
             .unwrap_err();
-            assert_eq!(error.code, "rdf-ir-gts-fold-diagnostic");
-            assert!(error.message.contains("encoded blob exceeds"), "{error:?}");
+            // The payload is refused before it can be retained, so the selector
+            // finds nothing to resolve against. Still terminal — a caller never
+            // receives a blob it asked for and did not get.
+            assert_eq!(error.code, "rdf-ir-gts-blob-selection");
+            assert!(error.message.contains("resolves to 0 blobs"), "{error:?}");
         }
     }
 }
