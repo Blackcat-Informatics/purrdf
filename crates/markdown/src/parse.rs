@@ -6,6 +6,10 @@
 
 use crate::Profile;
 
+/// The byte order mark, `EF BB BF`: a statement about the encoding when
+/// it opens a document, ordinary content anywhere else.
+const BYTE_ORDER_MARK: char = '\u{feff}';
+
 /// A heading or movement section.
 #[derive(Clone, Debug)]
 pub(crate) struct Section {
@@ -92,9 +96,23 @@ pub(crate) fn parse(text: &str, profile: &Profile) -> Structure {
 }
 
 /// Byte ranges of each line, excluding the terminating newline.
+///
+/// A byte order mark at the very start of the document is not part of
+/// the first line: the mark is a statement about the encoding, so a
+/// heading or a verse that opens the document is read as if it began
+/// the line, and a document that carries one slices into the same
+/// structure as the one that does not. It is skipped for structure
+/// only. Every span still counts the document's own bytes, so the mark
+/// falls before the first span and no unit's literal is ever anything
+/// but the verbatim bytes of its span. At any other offset the mark is
+/// ordinary content and stays inside the unit that holds it.
 fn lines(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
-    let mut start = 0;
+    let mut start = if text.starts_with(BYTE_ORDER_MARK) {
+        BYTE_ORDER_MARK.len_utf8()
+    } else {
+        0
+    };
     for (i, b) in text.bytes().enumerate() {
         if b == b'\n' {
             out.push((start, i));

@@ -16,7 +16,10 @@
 //! into citation triples from each verse in a range to its anchors and
 //! source paths. A unit over a byte bound splits at a newline, else at a
 //! scalar boundary, with a snapped overlap, never inside a scalar and
-//! never across a heading.
+//! never across a heading. A byte order mark opening the document is a
+//! statement about the encoding, so the first line's structure is read
+//! after it while every span still counts the document's own bytes;
+//! anywhere else the mark is ordinary content.
 //!
 //! The output is a pure, deterministic function of the bytes and a
 //! declared [`Profile`]: the same input slices to byte-identical claims
@@ -64,6 +67,10 @@ use purrdf_core::embedding::{ChunkingContractId, derive_chunking_contract_id};
 
 /// The default byte bound: a unit over this many bytes splits.
 pub const DEFAULT_MAX_BYTES: usize = 2048;
+/// The least byte bound a profile may declare: the widest UTF-8 scalar
+/// is four bytes, and no piece is ever over the bound, so a smaller
+/// bound could not be honoured without cutting inside a scalar.
+pub const MIN_MAX_BYTES: usize = 4;
 /// The default overlap: the continuation of a split reaches back this
 /// many bytes, snapped backward to a newline.
 pub const DEFAULT_OVERLAP: usize = 128;
@@ -330,16 +337,22 @@ impl Vocabulary {
 /// parameter of the law, and stays outside it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
-    /// The profile's declared name, the first line of its identity.
+    /// The profile's declared name, the first line of its identity. It
+    /// is a line of [`Self::stage_bytes`], so it carries no control
+    /// character: see that method for why the format binds the name.
     pub name: String,
     /// The profile's declared version.
     pub version: u32,
     /// The IRIs the slicer emits.
     pub vocabulary: Vocabulary,
-    /// A unit over this many bytes splits.
+    /// A unit over this many bytes splits, and no piece is ever over
+    /// this many bytes. A bound under [`MIN_MAX_BYTES`] is refused: it
+    /// could not be honoured without cutting inside a scalar.
     pub max_bytes: usize,
     /// The continuation of a split reaches back this many bytes,
-    /// snapped backward to a newline.
+    /// snapped backward to a newline. It sits strictly under
+    /// [`Self::max_bytes`]; an overlap at or over the bound would let a
+    /// continuation reach back over the whole piece it continues.
     pub overlap: usize,
     /// When set, a concordance anchor becomes the IRI `base ++ anchor`;
     /// when absent, a typed anchor literal, never a guess.
@@ -364,6 +377,14 @@ impl Profile {
     /// The canonical stage description the contract id is derived over:
     /// the name, the version, the vocabulary, the split law, and the
     /// constants, one fact per line.
+    ///
+    /// The preimage is line-oriented and unframed: a newline ends one
+    /// fact and begins the next, and no field is length-prefixed or
+    /// quoted. That is why [`Self::name`] is refused a control
+    /// character — a newline inside the name would state further facts
+    /// of the law rather than name it, and two profiles could then
+    /// describe themselves the same way. The refusal is a bound of the
+    /// identity format, not a taste in names.
     #[must_use]
     pub fn stage_bytes(&self) -> Vec<u8> {
         format!(
@@ -437,12 +458,18 @@ pub struct Claim {
 
 /// Why a document could not be sliced.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MarkdownError {
     /// The bytes are not UTF-8; the offset is where decoding stopped.
     InvalidUtf8 {
         /// The byte offset of the first invalid sequence.
         valid_up_to: usize,
     },
+    /// The source id is empty. It would be written `<>`, a relative IRI
+    /// reference that names whatever document happens to hold the
+    /// claims, so every node the slicer minted would point at nothing
+    /// fixed.
+    EmptySourceId,
     /// The source id cannot be written as an IRI reference.
     InvalidSourceId {
         /// The offending character.
@@ -456,6 +483,29 @@ pub enum MarkdownError {
         /// The offending value.
         iri: String,
     },
+    /// The profile's byte bound is under [`MIN_MAX_BYTES`], so no piece
+    /// could be both within the bound and outside a scalar.
+    InvalidMaxBytes {
+        /// The declared bound.
+        max_bytes: usize,
+        /// The least bound the split law can honour.
+        least: usize,
+    },
+    /// The profile's overlap is at or over its byte bound, so a
+    /// continuation could reach back over the whole piece it continues
+    /// and advance by as little as a byte.
+    InvalidOverlap {
+        /// The declared overlap.
+        overlap: usize,
+        /// The declared bound it must sit strictly under.
+        max_bytes: usize,
+    },
+    /// The profile's name carries a control character, which the
+    /// line-oriented stage description cannot frame.
+    InvalidProfileName {
+        /// The offending character.
+        found: char,
+    },
 }
 
 impl std::fmt::Display for MarkdownError {
@@ -463,6 +513,9 @@ impl std::fmt::Display for MarkdownError {
         match self {
             Self::InvalidUtf8 { valid_up_to } => {
                 write!(f, "source bytes are not UTF-8 after byte {valid_up_to}")
+            }
+            Self::EmptySourceId => {
+                write!(f, "source id is empty: <> names no document")
             }
             Self::InvalidSourceId { found } => {
                 write!(
@@ -474,6 +527,24 @@ impl std::fmt::Display for MarkdownError {
                 write!(
                     f,
                     "vocabulary field {field} is not an IRI reference: {iri:?}"
+                )
+            }
+            Self::InvalidMaxBytes { max_bytes, least } => {
+                write!(
+                    f,
+                    "profile max_bytes {max_bytes} is under {least}, the widest UTF-8 scalar"
+                )
+            }
+            Self::InvalidOverlap { overlap, max_bytes } => {
+                write!(
+                    f,
+                    "profile overlap {overlap} is not under max_bytes {max_bytes}"
+                )
+            }
+            Self::InvalidProfileName { found } => {
+                write!(
+                    f,
+                    "profile name cannot hold a control character: contains {found:?}"
                 )
             }
         }
@@ -488,17 +559,36 @@ impl std::error::Error for MarkdownError {}
 /// come in document order: the document node first, then sections and
 /// units interleaved as they occur.
 ///
+/// Every refusal is stated before a byte of the document is read, and
+/// nothing is ever dropped quietly: a document either slices whole or
+/// names why it could not.
+///
 /// # Errors
 ///
-/// [`MarkdownError::InvalidVocabulary`] when the profile's vocabulary
-/// does not validate; [`MarkdownError::InvalidUtf8`] when the bytes are
-/// not UTF-8; [`MarkdownError::InvalidSourceId`] when the id cannot be
-/// written inside `<` and `>`.
+/// The profile is answered for first.
+/// [`MarkdownError::InvalidVocabulary`] when one of its IRIs is empty
+/// or cannot be written as an IRI reference;
+/// [`MarkdownError::InvalidProfileName`] when its name carries a
+/// control character, which the line-oriented stage description of
+/// [`Profile::stage_bytes`] cannot frame;
+/// [`MarkdownError::InvalidMaxBytes`] when its byte bound is under
+/// [`MIN_MAX_BYTES`], a bound no split could honour without cutting
+/// inside a scalar; [`MarkdownError::InvalidOverlap`] when its overlap
+/// is not strictly under that bound.
+///
+/// Then the document. [`MarkdownError::EmptySourceId`] when the id is
+/// empty, which would be written `<>` and name no document;
+/// [`MarkdownError::InvalidSourceId`] when the id cannot be written
+/// inside `<` and `>`; [`MarkdownError::InvalidUtf8`] when the bytes
+/// are not UTF-8.
 pub fn slice_markdown(
     doc: &SourceDocument<'_>,
     profile: &Profile,
 ) -> Result<Vec<Claim>, MarkdownError> {
-    profile.vocabulary.validate()?;
+    validate_profile(profile)?;
+    if doc.id.is_empty() {
+        return Err(MarkdownError::EmptySourceId);
+    }
     if let Some(found) = doc.id.chars().find(|c| render::iri_forbids(*c)) {
         return Err(MarkdownError::InvalidSourceId { found });
     }
@@ -508,6 +598,36 @@ pub fn slice_markdown(
     let contract = profile.contract_id();
     let structure = parse::parse(text, profile);
     Ok(render::render(doc, text, profile, &contract, &structure))
+}
+
+/// The profile answers for itself before any document does: its
+/// vocabulary states IRIs, its name is one line of its own identity,
+/// and its two constants describe a split that terminates and stays
+/// inside the bound.
+fn validate_profile(profile: &Profile) -> Result<(), MarkdownError> {
+    profile.vocabulary.validate()?;
+    if let Some(found) = profile.name.chars().find(|c| is_control(*c)) {
+        return Err(MarkdownError::InvalidProfileName { found });
+    }
+    if profile.max_bytes < MIN_MAX_BYTES {
+        return Err(MarkdownError::InvalidMaxBytes {
+            max_bytes: profile.max_bytes,
+            least: MIN_MAX_BYTES,
+        });
+    }
+    if profile.overlap >= profile.max_bytes {
+        return Err(MarkdownError::InvalidOverlap {
+            overlap: profile.overlap,
+            max_bytes: profile.max_bytes,
+        });
+    }
+    Ok(())
+}
+
+/// A character no line-oriented preimage can carry: the C0 controls,
+/// newline and tab among them, and the delete.
+const fn is_control(c: char) -> bool {
+    (c as u32) < 0x20 || c == '\u{7f}'
 }
 
 /// The identity of a unit, with the digest algorithm inside both the

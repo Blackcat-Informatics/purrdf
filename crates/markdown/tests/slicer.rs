@@ -337,10 +337,9 @@ fn an_oversize_unit_splits_at_the_bound_on_a_boundary_and_continues_from_the_sna
         let (start, end) = unit.span.expect("span");
         let (start, end) = (start as usize, end as usize);
         assert!(GUIDE.is_char_boundary(start) && GUIDE.is_char_boundary(end));
-        let single_line = !GUIDE[start..end].contains('\n');
         assert!(
-            end - start <= small().max_bytes || single_line,
-            "{}",
+            end - start <= small().max_bytes,
+            "no piece is over the bound, line or no line: {}",
             unit.subject
         );
         let Some(prev) = object(unit, &v().continues) else {
@@ -794,6 +793,237 @@ fn non_utf8_bytes_and_an_unwritable_source_id_refuse_typed() {
         bad,
         Err(MarkdownError::InvalidSourceId { found: ' ' })
     ));
+}
+
+/// A profile's bound and overlap, with everything else declared.
+fn bounded(max_bytes: usize, overlap: usize) -> Profile {
+    let mut profile = v1();
+    profile.max_bytes = max_bytes;
+    profile.overlap = overlap;
+    profile
+}
+
+fn slice_of(text: &str, id: &str, profile: &Profile) -> Result<Vec<Claim>, MarkdownError> {
+    slice_markdown(
+        &SourceDocument {
+            id,
+            bytes: text.as_bytes(),
+        },
+        profile,
+    )
+}
+
+#[test]
+fn a_bound_under_the_widest_scalar_refuses_and_a_bound_of_four_slices_a_four_byte_scalar() {
+    let text = "# B\n\n\u{1f41a}\u{1f41a}\u{1f41a} tail\n";
+    for max_bytes in [0, 3] {
+        assert_eq!(
+            slice_of(text, GUIDE_ID, &bounded(max_bytes, 0)),
+            Err(MarkdownError::InvalidMaxBytes {
+                max_bytes,
+                least: 4
+            })
+        );
+    }
+    // The neighbouring bound is lawful, and it is exactly the width of
+    // the scalar it must never cut.
+    let claims = slice_of(text, GUIDE_ID, &bounded(4, 0)).expect("slices");
+    let all = units(&claims);
+    assert!(all.len() > 1, "the paragraph is over the bound and splits");
+    assert_eq!(
+        unescape(&object(all[0], &v().text).expect("text")),
+        "\u{1f41a}",
+        "a four-byte scalar fills the bound whole"
+    );
+    let mut rejoined = String::new();
+    for unit in &all {
+        let (start, end) = unit.span.expect("span");
+        assert!(text.is_char_boundary(start as usize) && text.is_char_boundary(end as usize));
+        assert!(end - start <= 4, "no piece is over the bound");
+        rejoined.push_str(&unescape(&object(unit, &v().text).expect("text")));
+    }
+    assert_eq!(rejoined, "\u{1f41a}\u{1f41a}\u{1f41a} tail");
+}
+
+#[test]
+fn an_overlap_at_the_bound_refuses_and_one_byte_under_it_slices() {
+    let body: String = (0..10).map(|_| "abcdefghij\n").collect();
+    let text = format!("# B\n\n{body}");
+    assert_eq!(
+        slice_of(&text, GUIDE_ID, &bounded(20, 20)),
+        Err(MarkdownError::InvalidOverlap {
+            overlap: 20,
+            max_bytes: 20
+        })
+    );
+    assert_eq!(
+        slice_of(&text, GUIDE_ID, &bounded(20, 400)),
+        Err(MarkdownError::InvalidOverlap {
+            overlap: 400,
+            max_bytes: 20
+        })
+    );
+    // One byte under the bound is lawful, and the split still advances.
+    let claims = slice_of(&text, GUIDE_ID, &bounded(20, 19)).expect("slices");
+    let all = units(&claims);
+    assert!(all.len() > 1, "the paragraph is over the bound and splits");
+    let mut previous = 0;
+    for unit in &all {
+        let (start, end) = unit.span.expect("span");
+        assert!(end - start <= 20, "no piece is over the bound");
+        assert!(start >= previous, "every piece starts at or after the last");
+        previous = start;
+    }
+    assert_eq!(
+        all.last().and_then(|u| u.span).map(|s| s.1),
+        Some(text.len() as u64 - 1),
+        "the split reaches the end of the paragraph"
+    );
+}
+
+#[test]
+fn a_control_character_in_the_profile_name_refuses_and_a_worded_name_slices() {
+    for (name, found) in [("a\nb", '\n'), ("a\u{7f}b", '\u{7f}'), ("a\tb", '\t')] {
+        let mut profile = v1();
+        profile.name = name.to_owned();
+        assert_eq!(
+            slice_of(THREE, GUIDE_ID, &profile),
+            Err(MarkdownError::InvalidProfileName { found }),
+            "the stage description states one fact per line"
+        );
+    }
+    // A name of several words, spaces and all, is no threat to a line.
+    let mut worded = v1();
+    worded.name = "example slice md, first law".to_owned();
+    let claims = slice_of(THREE, GUIDE_ID, &worded).expect("slices");
+    assert_eq!(units(&claims).len(), 3);
+    assert_eq!(
+        object(&claims[0], &v().slice_profile).as_deref(),
+        Some(&*format!(
+            "\"{}:{}\"^^<{}>",
+            worded.name,
+            worded.contract_id().to_hex(),
+            v().dt_profile
+        ))
+    );
+}
+
+#[test]
+fn an_empty_source_id_refuses_and_an_absolute_one_slices() {
+    assert_eq!(
+        slice_of(THREE, "", &v1()),
+        Err(MarkdownError::EmptySourceId),
+        "<> is a relative reference, not a document"
+    );
+    let id = "https://example.org/doc/three";
+    let claims = slice_of(THREE, id, &v1()).expect("slices");
+    assert_eq!(claims[0].subject, id);
+    assert_eq!(units(&claims).len(), 3);
+}
+
+/// A whole small document: a title, a headnote, a verse, and a
+/// concordance row that cites it.
+const MARKED: &str = "# T\n\nA headnote.\n\n1. One line.\n\n## Concordance\n\n| Verses | Canon source | Anchors |\n| --- | --- | --- |\n| 1 | `atlas/x.logic.ttl` | `a-one` |\n";
+
+#[test]
+fn a_leading_byte_order_mark_shifts_every_span_and_changes_no_structure() {
+    let marked = format!("\u{feff}{MARKED}");
+    let plain = slice(MARKED, &v1());
+    let with_mark = slice(&marked, &v1());
+    assert_eq!(with_mark.len(), plain.len());
+    assert_eq!(
+        object(&with_mark[0], &v().title),
+        object(&plain[0], &v().title),
+        "the first line is a heading, not a paragraph"
+    );
+    assert_eq!(sections(&plain).len(), 2);
+    assert_eq!(sections(&with_mark).len(), 2);
+    // Minted over a shifted span, so a node IRI is expected to move;
+    // everything the document says about itself is expected not to.
+    let minted = [
+        v().parent,
+        v().in_section,
+        v().continues,
+        v().byte_start,
+        v().byte_end,
+    ];
+    for (a, b) in plain.iter().zip(&with_mark).skip(1) {
+        assert_eq!(a.kind, b.kind);
+        let (a_start, a_end) = a.span.expect("span");
+        let (b_start, b_end) = b.span.expect("span");
+        assert_eq!(
+            (b_start, b_end),
+            (a_start + 3, a_end + 3),
+            "the mark falls before every span"
+        );
+        let (a_pairs, b_pairs) = (pairs(a), pairs(b));
+        assert_eq!(a_pairs.len(), b_pairs.len());
+        for ((a_p, a_o), (b_p, b_o)) in a_pairs.iter().zip(&b_pairs) {
+            assert_eq!(a_p, b_p);
+            if minted.contains(a_p) {
+                continue;
+            }
+            assert_eq!(a_o, b_o, "{a_p}");
+        }
+        assert_eq!(
+            unescape_if_plain(a),
+            unescape_if_plain(b),
+            "a unit's literal is the verbatim bytes of its span"
+        );
+    }
+    let cited = units(&with_mark)
+        .into_iter()
+        .find(|u| integer(u, &v().verse) == Some(1))
+        .expect("verse 1");
+    assert_eq!(
+        objects(cited, &v().cites),
+        vec![format!("\"a-one\"^^<{}>", v().dt_anchor)],
+        "the concordance still lifts"
+    );
+    assert_eq!(
+        object(cited, &v().lineage).as_deref(),
+        Some(&*format!("\"T\"^^<{}>", v().dt_lineage))
+    );
+    assert_eq!(
+        integer(&with_mark[0], &v().byte_length),
+        Some(marked.len() as u64),
+        "the document still counts its own bytes, the mark among them"
+    );
+}
+
+/// A unit's verbatim literal, or none for a node that carries no text.
+fn unescape_if_plain(claim: &Claim) -> Option<String> {
+    object(claim, &v().text).map(|o| unescape(&o))
+}
+
+#[test]
+fn a_byte_order_mark_after_the_first_byte_is_ordinary_content() {
+    let text = "# T\n\nA line with \u{feff} inside it.\n\n\u{feff}## Not a heading\n";
+    let claims = slice(text, &v1());
+    assert_eq!(
+        sections(&claims).len(),
+        1,
+        "only the opening mark is read as encoding"
+    );
+    let literals: Vec<String> = units(&claims)
+        .iter()
+        .map(|u| unescape(&object(u, &v().text).expect("text")))
+        .collect();
+    assert_eq!(
+        literals,
+        vec![
+            "A line with \u{feff} inside it.".to_owned(),
+            "\u{feff}## Not a heading".to_owned()
+        ],
+        "a mark inside the text is content, and a mark before a heading leaves a paragraph"
+    );
+    for unit in units(&claims) {
+        let (start, end) = unit.span.expect("span");
+        assert_eq!(
+            unescape(&object(unit, &v().text).expect("text")),
+            &text[start as usize..end as usize]
+        );
+    }
 }
 
 #[test]

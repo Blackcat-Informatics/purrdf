@@ -145,15 +145,30 @@ assumed.
 
 A unit over `max_bytes` (default 2048) splits into pieces: each cut falls at
 the last newline at or before the bound, else at the last UTF-8 scalar
-boundary, and never inside a scalar. The next piece starts `overlap` bytes
-(default 128) before the cut, snapped backward to the start of a line, never
-before the unit's own start, and carries a `continues` triple to the previous
-piece. A split never crosses a heading, and every piece keeps its verse
-number and section.
+boundary, and never inside a scalar. No piece is ever over the bound, which is
+why a bound under four bytes — the width of the widest scalar — is refused.
+The next piece starts `overlap` bytes (default 128) before the cut, snapped
+backward to the start of a line, never before the unit's own start, and
+carries a `continues` triple to the previous piece. The overlap sits strictly
+under the bound. A split never crosses a heading, and every piece keeps its
+verse number and section.
+
+## A leading byte order mark
+
+A byte order mark opening the document states its encoding, so the first
+line's structure is read after it and a document that carries one slices into
+the same structure as the one that does not. Every span still counts the
+document's own bytes, so the mark falls before the first span and a unit's
+literal is always the verbatim bytes of its span. At any other offset the mark
+is ordinary content.
 
 ## Errors
 
-`slice_markdown` refuses, typed, on bytes that are not UTF-8 (naming the
-offset), on a source id that cannot be written inside `<` and `>`, and on a
-vocabulary field that is empty or cannot be an IRI reference (naming the
-field). It never guesses.
+`slice_markdown` refuses, typed, and never guesses. The profile answers first:
+a vocabulary field that is empty or cannot be an IRI reference (naming the
+field), a name carrying a control character (the stage description states one
+fact per line, so a newline in a name would state facts of the law), a
+`max_bytes` under four, and an `overlap` at or over `max_bytes`. Then the
+document: an empty source id, which would be written `<>` and name no
+document; a source id that cannot be written inside `<` and `>`; and bytes
+that are not UTF-8 (naming the offset).
