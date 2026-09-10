@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use pretty_assertions::assert_eq;
 use purrdf_core::{CanonHash, try_canonicalize_with};
 use purrdf_markdown::{
-    Claim, ClaimKind, MarkdownError, Profile, SourceDocument, Vocabulary, slice_markdown, unit_iri,
+    Claim, ClaimKind, MIN_MAX_BYTES, MarkdownError, Profile, SourceDocument, Vocabulary,
+    slice_markdown, unit_iri,
 };
 use purrdf_rdf::parse_dataset;
 
@@ -155,6 +156,79 @@ fn sections(claims: &[Claim]) -> Vec<&Claim> {
         .iter()
         .filter(|c| c.kind == ClaimKind::Section)
         .collect()
+}
+
+/// A claim's byte span as offsets into the text it was sliced from.
+fn span_of(claim: &Claim) -> (usize, usize) {
+    let (start, end) = claim.span.expect("span");
+    (start as usize, end as usize)
+}
+
+/// The lexical form of a typed literal object, without its datatype.
+fn typed_value(claim: &Claim, predicate: &str) -> Option<String> {
+    object(claim, predicate).map(|o| {
+        o.split_once("\"^^")
+            .expect("typed")
+            .0
+            .trim_start_matches('"')
+            .to_owned()
+    })
+}
+
+/// The continuation chains of a slice: the pieces of one unit in order,
+/// a new chain opening at every piece that continues nothing. A unit
+/// that never split is a chain of one.
+fn chains(claims: &[Claim]) -> Vec<Vec<&Claim>> {
+    let mut out: Vec<Vec<&Claim>> = Vec::new();
+    for unit in units(claims) {
+        if object(unit, &v().continues).is_some() {
+            out.last_mut()
+                .expect("a continuation follows the piece it continues")
+                .push(unit);
+        } else {
+            out.push(vec![unit]);
+        }
+    }
+    out
+}
+
+/// Whether a section claim is a movement marker rather than a heading.
+fn is_movement(claim: &Claim) -> bool {
+    object(claim, purrdf_markdown::RDF_TYPE).as_deref()
+        == Some(&*format!("<{}>", v().movement_class))
+}
+
+/// Every split unit the very next claim of the document is an ATX
+/// heading for, paired with that heading.
+fn split_chains_before_a_heading(claims: &[Claim]) -> Vec<(Vec<&Claim>, &Claim)> {
+    let mut out = Vec::new();
+    let mut chain: Vec<&Claim> = Vec::new();
+    for claim in claims {
+        match claim.kind {
+            ClaimKind::Unit => {
+                if object(claim, &v().continues).is_none() {
+                    chain.clear();
+                }
+                chain.push(claim);
+            }
+            ClaimKind::Section => {
+                if chain.len() > 1 && !is_movement(claim) {
+                    out.push((std::mem::take(&mut chain), claim));
+                }
+                chain.clear();
+            }
+            ClaimKind::Document => {}
+        }
+    }
+    out
+}
+
+/// The last scalar boundary at or before an offset.
+fn floor_boundary(text: &str, mut i: usize) -> usize {
+    while !text.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 #[test]
@@ -383,6 +457,43 @@ fn an_oversize_unit_splits_at_the_bound_on_a_boundary_and_continues_from_the_sna
         bound_inside_a_scalar > 0,
         "the fixture puts a four-byte scalar across a cut bound"
     );
+
+    // A unit that runs in pieces right up to a heading: each piece
+    // carries the section and the verse of the piece before it, and the
+    // heading opens the next section at the ordinal it would have held
+    // had the unit never split.
+    let mut before_a_heading = Vec::new();
+    for (chain, heading) in split_chains_before_a_heading(&claims) {
+        for piece in &chain {
+            assert_eq!(
+                object(piece, &v().in_section),
+                object(chain[0], &v().in_section),
+                "every piece sits in the section the unit opened in"
+            );
+            assert_eq!(object(piece, &v().verse), object(chain[0], &v().verse));
+            assert_ne!(
+                object(piece, &v().in_section).as_deref(),
+                Some(&*format!("<{}>", heading.subject)),
+                "no piece falls forward into the section the heading opens"
+            );
+        }
+        before_a_heading.push((
+            typed_value(heading, &v().heading).expect("a heading"),
+            integer(heading, &v().ordinal).expect("an ordinal"),
+            integer(heading, &v().level).expect("a level"),
+            chain.len(),
+        ));
+    }
+    assert_eq!(
+        before_a_heading,
+        vec![
+            ("Field notes".to_owned(), 3_u64, 2_u64, 2_usize),
+            ("Tide tables".to_owned(), 4, 3, 3),
+            ("Concordance".to_owned(), 5, 2, 5),
+        ],
+        "a split leaves the sections of the document at the ordinals and levels they already held"
+    );
+
     let whole = slice(GUIDE, &v1());
     assert!(
         units(&whole)
@@ -1278,4 +1389,371 @@ fn a_relative_source_id_refuses_and_an_absolute_one_slices() {
     let claims = slice_of(THREE, GUIDE_ID, &v1()).expect("slices");
     assert_eq!(claims[0].subject, GUIDE_ID);
     assert_eq!(units(&claims).len(), 3);
+}
+
+/// Documents of two-, three-, and four-byte scalars, with lines both
+/// under and far over a bound of four or five bytes: the shapes the
+/// split law has to answer for at the narrowest bound a profile may
+/// declare, where a single scalar can fill a whole piece.
+const NARROW: [&str; 3] = [
+    "# H\n\n\u{e9}\u{2013}\u{1f41a}\u{e9}\u{e9}\u{2013}\u{1f41a}abc\n\u{1f41a}\u{1f41a}\n\u{e9}\n",
+    "# H\n\nab\ncd\nef\ngh\nij\n",
+    "# H\n\n\u{e9}\u{e9}\n\u{2013}\u{2013}\n\u{1f41a}\u{1f41a}\nabcdefghij\n",
+];
+
+#[test]
+fn at_the_narrowest_bounds_every_piece_stays_inside_the_bound_and_the_pieces_cover_their_unit() {
+    // The sweep completing at all is half the claim: at these bounds a
+    // cut past the bound would index into the middle of a scalar.
+    let mut newline_cuts = 0;
+    let mut scalar_cuts = 0;
+    let mut bound_inside_a_scalar = 0;
+    let mut one_scalar_filled_the_bound = 0;
+    let mut reached_back = 0;
+    let mut snapped_to_a_line_start = 0;
+    let mut snapped_to_a_scalar_boundary = 0;
+    let mut cut_newlines_stepped_over = 0;
+    for text in NARROW {
+        let bytes = text.as_bytes();
+        // The same units under a bound nothing reaches: the units the
+        // pieces have to add back up to.
+        let whole: Vec<(usize, usize)> = units(&slice(text, &v1()))
+            .iter()
+            .map(|u| span_of(u))
+            .collect();
+        assert!(!whole.is_empty(), "the document has units to split");
+        for max_bytes in [MIN_MAX_BYTES, MIN_MAX_BYTES + 1] {
+            for overlap in 0..max_bytes {
+                let claims = slice(text, &bounded(max_bytes, overlap));
+                let chains = chains(&claims);
+                assert_eq!(
+                    chains.len(),
+                    whole.len(),
+                    "a split makes pieces of a unit, never another unit"
+                );
+                for (chain, &(unit_start, unit_end)) in chains.iter().zip(&whole) {
+                    assert_eq!(
+                        span_of(chain[0]).0,
+                        unit_start,
+                        "the first piece opens the unit"
+                    );
+                    assert_eq!(
+                        span_of(chain[chain.len() - 1]).1,
+                        unit_end,
+                        "the last piece closes it"
+                    );
+                    let mut covered = unit_start;
+                    let mut previous: Option<(usize, usize)> = None;
+                    for (at, piece) in chain.iter().enumerate() {
+                        let (start, end) = span_of(piece);
+                        assert!(end > start, "a piece is never empty");
+                        assert!(
+                            text.is_char_boundary(start) && text.is_char_boundary(end),
+                            "a piece never begins or ends inside a scalar"
+                        );
+                        assert!(
+                            end - start <= max_bytes,
+                            "no piece is over the bound, line or no line"
+                        );
+                        assert!(
+                            start >= unit_start && end <= unit_end,
+                            "a piece stays inside its unit"
+                        );
+                        assert_eq!(
+                            unescape(&object(piece, &v().text).expect("text")),
+                            &text[start..end]
+                        );
+                        if start > covered {
+                            assert_eq!(
+                                start,
+                                covered + 1,
+                                "a split steps over nothing but the newline it cut at"
+                            );
+                            assert_eq!(bytes[covered], b'\n');
+                            cut_newlines_stepped_over += 1;
+                        }
+                        covered = covered.max(end);
+                        if let Some((p_start, p_end)) = previous {
+                            assert!(start > p_start, "every piece starts after the one before");
+                            let resume = if bytes[p_end] == b'\n' {
+                                p_end + 1
+                            } else {
+                                p_end
+                            };
+                            assert!(start <= resume, "a continuation never skips forward");
+                            if start < resume {
+                                reached_back += 1;
+                                let candidate = p_end - overlap;
+                                assert!(
+                                    start <= candidate,
+                                    "a continuation reaches back at least the overlap"
+                                );
+                                assert!(start > p_start, "and never past the piece it continues");
+                                if bytes[p_start..candidate].contains(&b'\n') {
+                                    snapped_to_a_line_start += 1;
+                                    assert_eq!(bytes[start - 1], b'\n', "snapped to a line start");
+                                    assert!(
+                                        !bytes[start..candidate].contains(&b'\n'),
+                                        "the nearest line start at or before the candidate"
+                                    );
+                                } else {
+                                    snapped_to_a_scalar_boundary += 1;
+                                    assert_eq!(
+                                        start,
+                                        floor_boundary(text, candidate),
+                                        "with no line start to reach, the scalar boundary at or \
+                                         before the candidate"
+                                    );
+                                }
+                            }
+                        }
+                        previous = Some((start, end));
+                        if at + 1 == chain.len() {
+                            continue;
+                        }
+                        // Everything below is the law of a cut, so it is
+                        // asked only of a piece that was cut.
+                        let bound = start + max_bytes;
+                        assert!(end <= bound, "a cut is never past the bound");
+                        assert!(
+                            bound < unit_end,
+                            "a unit is only cut where it runs past the bound"
+                        );
+                        match bytes[start + 1..=bound].iter().rposition(|b| *b == b'\n') {
+                            Some(i) => {
+                                newline_cuts += 1;
+                                assert_eq!(
+                                    end,
+                                    start + 1 + i,
+                                    "the last newline at or before the bound is preferred"
+                                );
+                                assert_eq!(
+                                    bytes[end], b'\n',
+                                    "the cut lands on that newline and the piece stops short of it"
+                                );
+                            }
+                            None => {
+                                scalar_cuts += 1;
+                                assert_eq!(
+                                    end,
+                                    floor_boundary(text, bound),
+                                    "with no newline the cut is the last scalar boundary at or \
+                                     before the bound"
+                                );
+                                if !text.is_char_boundary(bound) {
+                                    bound_inside_a_scalar += 1;
+                                }
+                                let opening =
+                                    text[start..].chars().next().expect("a scalar").len_utf8();
+                                if end == start + opening {
+                                    one_scalar_filled_the_bound += 1;
+                                }
+                            }
+                        }
+                    }
+                    assert_eq!(covered, unit_end, "the pieces cover the whole unit");
+                }
+            }
+        }
+    }
+    assert!(newline_cuts > 0, "a line ends inside the bound somewhere");
+    assert!(
+        scalar_cuts > 0,
+        "and somewhere a stretch carries no newline"
+    );
+    assert!(
+        bound_inside_a_scalar > 0,
+        "a scalar straddles the bound and the cut falls back off it"
+    );
+    assert!(
+        one_scalar_filled_the_bound > 0,
+        "one scalar fills a whole piece, which is why the bound cannot go under four"
+    );
+    assert!(reached_back > 0, "an overlap is reachable somewhere");
+    assert!(
+        snapped_to_a_line_start > 0 && snapped_to_a_scalar_boundary > 0,
+        "both snaps of a continuation are exercised"
+    );
+    assert!(
+        cut_newlines_stepped_over > 0,
+        "a cut at a newline is the one place a byte is not carried into a piece"
+    );
+}
+
+/// A small document written with CRLF endings: a heading, a movement, a
+/// verse, a rule, and a paragraph.
+const CRLF: &str = "# T\r\n\r\n\u{2042} *m*\r\n\r\n1. One line.\r\n\r\n---\r\n\r\npara\r\n";
+
+#[test]
+fn a_crlf_document_states_the_structure_its_lf_twin_states_and_keeps_the_return_in_its_text() {
+    let claims = slice(CRLF, &v1());
+    let s = sections(&claims);
+    assert_eq!(s.len(), 2, "the heading and the movement are both read");
+    assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("T"));
+    assert_eq!(
+        typed_value(s[1], &v().heading).as_deref(),
+        Some("m"),
+        "a movement name is trimmed, and the return trims away with it"
+    );
+    assert!(is_movement(s[1]));
+    assert_eq!(integer(s[1], &v().level), Some(2));
+    let u = units(&claims);
+    assert_eq!(
+        integer(u[0], &v().verse),
+        Some(1),
+        "a verse number is read from the opening digits, whatever ends the line"
+    );
+    let literals: Vec<String> = u
+        .iter()
+        .map(|piece| unescape(&object(piece, &v().text).expect("text")))
+        .collect();
+    assert_eq!(
+        literals,
+        vec!["1. One line.\r".to_owned(), "para\r".to_owned()],
+        "the rule closed the verse, and every literal keeps the return its span holds"
+    );
+    for unit in &u {
+        let (start, end) = span_of(unit);
+        assert_eq!(
+            unescape(&object(unit, &v().text).expect("text")),
+            &CRLF[start..end],
+            "the literal is still the verbatim bytes of the span"
+        );
+    }
+    // The same document with LF endings states the same structure, and
+    // says it in the same order, over shorter spans.
+    let lf = CRLF.replace("\r\n", "\n");
+    let plain = slice(&lf, &v1());
+    assert_eq!(plain.len(), claims.len());
+    for (a, b) in plain.iter().zip(&claims) {
+        assert_eq!(a.kind, b.kind);
+    }
+    assert_eq!(
+        typed_value(&plain[0], &v().title),
+        typed_value(&claims[0], &v().title)
+    );
+    assert_eq!(
+        sections(&plain)
+            .iter()
+            .map(|x| typed_value(x, &v().heading))
+            .collect::<Vec<_>>(),
+        sections(&claims)
+            .iter()
+            .map(|x| typed_value(x, &v().heading))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn an_empty_document_states_one_claim_and_it_is_the_document_itself() {
+    let claims = slice_of("", GUIDE_ID, &v1()).expect("slices");
+    assert_eq!(claims.len(), 1, "there is no structure to state");
+    assert_eq!(claims[0].kind, ClaimKind::Document);
+    assert_eq!(claims[0].subject, GUIDE_ID);
+    assert_eq!(claims[0].span, None);
+    assert_eq!(integer(&claims[0], &v().byte_length), Some(0));
+    assert_eq!(
+        object(&claims[0], &v().title),
+        None,
+        "a document with no heading claims no title rather than an empty one"
+    );
+}
+
+#[test]
+fn a_heading_at_the_end_of_the_document_needs_no_trailing_newline_to_open_a_section() {
+    let claims = slice_of("# T", GUIDE_ID, &v1()).expect("slices");
+    let s = sections(&claims);
+    assert_eq!(s.len(), 1);
+    assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("T"));
+    assert_eq!(s[0].span, Some((0, 3)), "the section runs to the last byte");
+    assert_eq!(typed_value(&claims[0], &v().title).as_deref(), Some("T"));
+    assert!(
+        units(&claims).is_empty(),
+        "a heading line is a section, never a unit"
+    );
+}
+
+#[test]
+fn a_heading_of_nothing_but_hashes_states_an_empty_heading_and_still_opens_its_section() {
+    let claims = slice_of("# #\n\nbody\n", GUIDE_ID, &v1()).expect("slices");
+    let s = sections(&claims);
+    assert_eq!(s.len(), 1);
+    assert_eq!(
+        typed_value(s[0], &v().heading).as_deref(),
+        Some(""),
+        "the closing hashes are trimmed and nothing is left of the title"
+    );
+    assert_eq!(
+        typed_value(&claims[0], &v().title).as_deref(),
+        Some(""),
+        "the document's title is that same empty text, not the absence of one"
+    );
+    assert_eq!(integer(s[0], &v().level), Some(1));
+    let u = units(&claims);
+    assert_eq!(u.len(), 1);
+    assert_eq!(
+        object(u[0], &v().lineage).as_deref(),
+        Some(&*format!("\"\"^^<{}>", v().dt_lineage)),
+        "an empty heading is a heading in force all the same"
+    );
+}
+
+#[test]
+fn a_tab_after_the_hashes_and_after_the_verse_dot_opens_a_heading_and_a_verse() {
+    let claims = slice_of("#\tTitle\n\n1.\tText\n", GUIDE_ID, &v1()).expect("slices");
+    assert_eq!(
+        typed_value(sections(&claims)[0], &v().heading).as_deref(),
+        Some("Title"),
+        "the tab separates the hashes from the title and trims away with the rest"
+    );
+    let u = units(&claims);
+    assert_eq!(integer(u[0], &v().verse), Some(1));
+    assert_eq!(
+        unescape(&object(u[0], &v().text).expect("text")),
+        "1.\tText",
+        "the tab stays in the verbatim literal"
+    );
+    // With nothing at all after the hashes or the dot there is no
+    // separator, and neither is claimed: the space or tab is the mark.
+    let claims = slice_of("#Title\n\n1.Text\n", GUIDE_ID, &v1()).expect("slices");
+    assert!(
+        sections(&claims).is_empty(),
+        "hashes running straight into the text open no section"
+    );
+    assert_eq!(
+        units(&claims)
+            .iter()
+            .map(|piece| unescape(&object(piece, &v().text).expect("text")))
+            .collect::<Vec<_>>(),
+        vec!["#Title".to_owned(), "1.Text".to_owned()],
+        "both lines are ordinary paragraphs"
+    );
+    assert!(
+        units(&claims)
+            .iter()
+            .all(|piece| object(piece, &v().verse).is_none())
+    );
+}
+
+#[test]
+fn a_verse_number_over_the_bound_is_no_verse_number_and_the_largest_one_that_fits_still_is() {
+    let over = "# T\n\n99999999999999999999999. text\n";
+    let claims = slice_of(over, GUIDE_ID, &v1()).expect("slices");
+    let u = units(&claims);
+    assert_eq!(u.len(), 1);
+    assert_eq!(
+        object(u[0], &v().verse),
+        None,
+        "a run of digits no u64 carries leaves an ordinary paragraph"
+    );
+    assert_eq!(
+        unescape(&object(u[0], &v().text).expect("text")),
+        "99999999999999999999999. text",
+        "and the line is kept whole, digits and all"
+    );
+    // The neighbouring number is the largest a u64 states, and it is a
+    // verse: the bound refuses what it cannot carry, nothing more.
+    let at_the_bound = format!("# T\n\n{}. text\n", u64::MAX);
+    let claims = slice_of(&at_the_bound, GUIDE_ID, &v1()).expect("slices");
+    assert_eq!(integer(units(&claims)[0], &v().verse), Some(u64::MAX));
 }

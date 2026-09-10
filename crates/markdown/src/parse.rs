@@ -126,6 +126,19 @@ fn lines(text: &str) -> Vec<(usize, usize)> {
 }
 
 impl Walker {
+    /// One line, read for what it opens or continues.
+    ///
+    /// Recognition never looks at a line's trailing whitespace: a
+    /// heading's title, a movement's name, a rule, and a blank line are
+    /// all read from the trimmed text, and a verse number is read from
+    /// the line's opening digits. A document written with CRLF endings
+    /// therefore slices into the structure its LF twin slices into —
+    /// the `\r` a line ends with is never part of what is recognized.
+    ///
+    /// It is trimmed for recognition only. Every span still counts the
+    /// document's own bytes, so a `\r` inside a unit's span stays in
+    /// that unit's verbatim literal, where a reader who returns to the
+    /// bytes at the span will find it.
     fn line(&mut self, text: &str, start: usize, end: usize) {
         let line = &text[start..end];
         if let Some((level, heading)) = atx_heading(line) {
@@ -270,6 +283,13 @@ fn is_rule(line: &str) -> bool {
 }
 
 /// `12. text`: a numbered verse line.
+///
+/// A verse number is a `u64`, and that is the dialect's bound, not an
+/// accident of the parse. A run of digits that overflows it is not a
+/// verse number at all: the line is ordinary prose and becomes a
+/// paragraph, carrying no verse. Nothing is truncated and nothing
+/// wraps, so a number a consumer reads back is the number the document
+/// wrote.
 fn verse_number(line: &str) -> Option<u64> {
     let digits = line.bytes().take_while(u8::is_ascii_digit).count();
     if digits == 0 {
@@ -350,10 +370,23 @@ fn split_all(text: &str, raw: &[RawUnit], profile: &Profile) -> Vec<Unit> {
     units
 }
 
-/// The split law: pieces of at most `max_bytes`,
-/// cut at the last newline at or before the bound, else at the last
-/// scalar boundary; a continuation reaches back `overlap` bytes,
-/// snapped backward to a newline, never before the unit's start.
+/// The split law: pieces of at most `max_bytes`, cut at the last
+/// newline at or before the bound, else at the last scalar boundary; a
+/// continuation reaches back `overlap` bytes, snapped backward to a
+/// newline, never before the unit's start.
+///
+/// The bound holds with no exception, and the seam is what makes it
+/// hold. [`slice_markdown`](crate::slice_markdown) refuses a
+/// `max_bytes` under [`MIN_MAX_BYTES`](crate::MIN_MAX_BYTES) before a
+/// byte of the document is read, so a unit only ever arrives here under
+/// a bound of four or more. The widest UTF-8 scalar is four bytes, so
+/// the scalar opening a piece ends at or before `ps + 4`, which is at
+/// or before `ps + max_bytes` — the bound itself. The fallback's
+/// `ceil_boundary(ps + 1)` therefore cannot climb past the bound, the
+/// newline branch cuts at an offset the bound already covers, and every
+/// cut is at or before the bound. The same fact is what puts `bytes[cut]`
+/// in range: a piece is only cut when the unit runs past the bound, so
+/// the cut is under the unit's end and under the text's length.
 fn split_spans(text: &str, start: usize, end: usize, profile: &Profile) -> Vec<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut pieces = Vec::new();
@@ -368,6 +401,10 @@ fn split_spans(text: &str, start: usize, end: usize, profile: &Profile) -> Vec<(
             Some(i) if i > 0 => ps + i,
             _ => floor_boundary(text, bound).max(ceil_boundary(text, ps + 1)),
         };
+        debug_assert!(
+            cut <= bound,
+            "a cut is never past the bound: the widest scalar is four bytes and the bound is at least four"
+        );
         pieces.push((ps, cut));
         let resume = if bytes[cut] == b'\n' { cut + 1 } else { cut };
         ps = overlap_start(text, ps, cut, profile.overlap).unwrap_or(resume);

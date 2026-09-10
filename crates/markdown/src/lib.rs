@@ -16,7 +16,12 @@
 //! into citation triples from each verse in a range to its anchors and
 //! source paths. A unit over a byte bound splits at a newline, else at a
 //! scalar boundary, with a snapped overlap, never inside a scalar and
-//! never across a heading. A byte order mark opening the document is a
+//! never across a heading. Structure is recognized on a line's trimmed
+//! text, so a document written with CRLF endings slices into the
+//! structure its LF twin slices into while every span still carries the
+//! document's own bytes, the `\r` among them; and a verse number is a
+//! `u64`, so a longer run of digits is no verse number at all and the
+//! line stays a paragraph. A byte order mark opening the document is a
 //! statement about the encoding, so the first line's structure is read
 //! after it while every span still counts the document's own bytes;
 //! anywhere else the mark is ordinary content.
