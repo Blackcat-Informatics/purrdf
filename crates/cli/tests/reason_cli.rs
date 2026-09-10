@@ -304,7 +304,7 @@ fn owl_direct_materializes_the_tableau_augmentation() {
             "@prefix ex: <http://example.org/> .\n",
             "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
             "ex:Cat rdfs:subClassOf ex:Animal .\n",
-            "ex:lillith a ex:Cat .\n",
+            "ex:mittens a ex:Cat .\n",
         ),
     );
     let out = path(dir, "out.nt");
@@ -318,7 +318,7 @@ fn owl_direct_materializes_the_tableau_augmentation() {
     let text = std::fs::read_to_string(&out).expect("read output");
     assert!(
         text.contains(&format!(
-            "<http://example.org/lillith> {RDF_TYPE} <http://example.org/Animal>"
+            "<http://example.org/mittens> {RDF_TYPE} <http://example.org/Animal>"
         )),
         "the realization must state the entailed type; got: {text}"
     );
@@ -334,7 +334,7 @@ fn rif_materializes_under_the_supplied_rule_document() {
     let seed = write_file(
         dir,
         "cats.ttl",
-        "@prefix ex: <http://example.org/> .\nex:lillith a ex:Cat .\n",
+        "@prefix ex: <http://example.org/> .\nex:mittens a ex:Cat .\n",
     );
     let rules = write_file(dir, "cats.rif", RIF_RULES);
     let out = path(dir, "out.nt");
@@ -344,7 +344,7 @@ fn rif_materializes_under_the_supplied_rule_document() {
     let text = std::fs::read_to_string(&out).expect("read output");
     assert!(
         text.contains(&format!(
-            "<http://example.org/lillith> {RDF_TYPE} <http://example.org/Animal>"
+            "<http://example.org/mittens> {RDF_TYPE} <http://example.org/Animal>"
         )),
         "the caller's rule must have fired; got: {text}"
     );

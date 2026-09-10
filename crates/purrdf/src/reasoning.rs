@@ -1826,11 +1826,11 @@ mod tests {
         let mut builder = RdfDatasetBuilder::new();
         let cat = builder.intern_iri("https://example.org/Cat");
         let animal = builder.intern_iri("https://example.org/Animal");
-        let lillith = builder.intern_iri("https://example.org/lillith");
+        let mittens = builder.intern_iri("https://example.org/mittens");
         let rdf_type = builder.intern_iri(RDF_TYPE);
         let subclass = builder.intern_iri(RDFS_SUBCLASS);
         builder.push_quad(cat, subclass, animal, None);
-        builder.push_quad(lillith, rdf_type, cat, None);
+        builder.push_quad(mittens, rdf_type, cat, None);
         builder.freeze().unwrap()
     }
 
@@ -1861,7 +1861,7 @@ mod tests {
 
     /// Run the fixture ASK under `mode`, returning both halves of the answer.
     fn ask_reported(mode: QueryEntailment<'_>) -> (SparqlResult, ReasoningReport) {
-        let query = "ASK { <https://example.org/lillith> a <https://example.org/Animal> }";
+        let query = "ASK { <https://example.org/mittens> a <https://example.org/Animal> }";
         query_with_entailment(
             &NativeSparqlEngine::new(),
             &hierarchy(),

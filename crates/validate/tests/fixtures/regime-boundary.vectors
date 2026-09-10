@@ -916,17 +916,17 @@ inconsistency none
 @regime owl-direct
 @input
 <http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
-<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+<http://example.org/mittens> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
 @closure
 <http://example.org/Animal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
 <http://example.org/Animal> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
 <http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
 <http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Cat> .
 <http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Thing> .
-<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
-<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
-<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Thing> .
-<http://example.org/lillith> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/lillith> .
+<http://example.org/mittens> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
+<http://example.org/mittens> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+<http://example.org/mittens> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Thing> .
+<http://example.org/mittens> <http://www.w3.org/2002/07/owl#sameAs> <http://example.org/mittens> .
 <http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .
 <http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Cat> .
 <http://www.w3.org/2002/07/owl#Nothing> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://www.w3.org/2002/07/owl#Nothing> .
@@ -949,12 +949,12 @@ inconsistency none
 @case rif-entails-under-the-supplied-rule-set
 @regime rif
 @input
-<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+<http://example.org/mittens> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
 @program
 <Document xmlns="http://www.w3.org/2007/rif#"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type="http://www.w3.org/2007/rif#iri">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type="http://www.w3.org/2007/rif#iri">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>
 @closure
-<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
-<http://example.org/lillith> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
+<http://example.org/mittens> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .
+<http://example.org/mittens> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .
 @report
 purrdf-reasoning-report 4
 regime rif

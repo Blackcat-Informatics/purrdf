@@ -538,7 +538,7 @@ impl PagedDataset {
     ///
     /// The returned dataset keeps the ORIGINAL (now possibly oversized) dictionary: a
     /// dropped page's ids are NOT reclaimed here — that is exactly what
-    /// [`compact`](Self::compact) later does. This models lillith's real use case:
+    /// [`compact`](Self::compact) later does. This models the expected consumer's real use case:
     /// pages are evicted over time, the shared dictionary accumulates dead ids, and a
     /// periodic compaction reclaims them. The retained per-page translations are
     /// carried over verbatim (their local id spaces and the global ids they point at

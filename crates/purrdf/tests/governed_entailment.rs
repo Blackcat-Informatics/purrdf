@@ -49,7 +49,7 @@ fn hierarchy() -> Arc<RdfDataset> {
     let cat = b.intern_iri(&format!("{NS}Cat"));
     let animal = b.intern_iri(&format!("{NS}Animal"));
     b.push_quad(cat, subclass, animal, None);
-    for name in ["lillith", "tom", "mia"] {
+    for name in ["mittens", "tom", "mia"] {
         let individual = b.intern_iri(&format!("{NS}{name}"));
         b.push_quad(individual, ty, cat, None);
     }
