@@ -56,6 +56,22 @@ project. The verified capability table, the boundary of each surface, and an
 architectural before/after are in
 [One engine instead of three databases](#one-engine-instead-of-three-databases).
 
+## A document as a graph of itself
+
+PurRDF ships a structural Markdown-to-RDF 1.2 slicer,
+[`purrdf-markdown`](./crates/markdown/), under a
+[published specification](./crates/markdown/SPEC.md) with a designated
+vocabulary namespace, `https://w3id.org/purrdf/markdown#`. A document becomes a
+graph of its own headings, verses, and paragraphs: every node names a verbatim
+byte range of the source, node identities are content-addressed, and the
+profile they are minted under is content-addressed over the slicing law itself,
+so a change to the law re-mints rather than drifts. The same bytes under the
+same profile give byte-for-byte identical output on every target, and a
+concordance table lifts into RDF 1.2 reified citations. No prior standard
+combines determinism, byte-span addressability, and law-content-addressed
+identity for Markdown-to-RDF. It slices the dialect the specification writes
+out; it is not a CommonMark implementation.
+
 ## Why does this exist?
 
 RDF tooling fragments along two axes.
@@ -646,10 +662,10 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1: ShExC/ShExJ schemas and validation. |
 | [`purrdf-entail`](./crates/entail/) | Entailment regimes: the RDF/RDFS/OWL-RL/D chase, an OWL-Direct tableau, and RIF-Core rules — each closure returned with a reasoning report. |
 | [`purrdf-geo`](./crates/geo/) | GeoSPARQL 1.1: exact, float-free WKT and GeoJSON geometry, the `geof:` function family over the scalar seam, and feature-level query rewrite over the property-function seam — all under caller-supplied IRIs. |
-| [`purrdf-datalog`](./crates/datalog/) | The fixpoint substrate beneath the chase: a columnar relation store and a deterministic semi-naive evaluator over the DL-clause IR. Not re-exported by the umbrella. |
+| [`purrdf-datalog`](./crates/datalog/) | The fixpoint substrate beneath the chase: a columnar relation store and a deterministic semi-naive evaluator over the DL-clause IR. Re-exported by the umbrella as `purrdf::datalog`, because the entailment surface carries its types. |
 | [`purrdf-text`](./crates/text/) | Deterministic full-text search over RDF 1.2 literals: an in-memory inverted index and exact fixed-point BM25 ranking, reached from SPARQL through caller-supplied property-function IRIs. |
 | [`purrdf-validate`](./crates/validate/) | The shared host boundary: SARIF 2.1.0 diagnostics and the entailment-regime string surface the Python/wasm/C bindings call. |
-| [`purrdf-markdown`](./crates/markdown/) | Structural Markdown-to-RDF 1.2 slicer: a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans and concordance citations, under a caller-supplied vocabulary and a content-addressed profile. |
+| [`purrdf-markdown`](./crates/markdown/) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification ([SPEC](./crates/markdown/SPEC.md)): a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans and concordance citations, under a caller-supplied vocabulary and a content-addressed profile. Re-exported by the umbrella as `purrdf::markdown`. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
 | [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
 | [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |

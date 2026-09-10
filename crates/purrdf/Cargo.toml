@@ -58,3 +58,8 @@ purrdf-geo = { workspace = true }
 # `TextIndexConfig` and `Scored` while depending on `purrdf` alone.
 purrdf-text = { workspace = true }
 purrdf-validate = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: a consumer who
+# slices a Markdown document must be able to name `Profile`, `Vocabulary`,
+# `SourceDocument` and `Document` — and to hand the slicer's claims straight to
+# the parser at this crate's root — while depending on `purrdf` alone.
+purrdf-markdown = { workspace = true }

@@ -65,6 +65,7 @@ purrdf-events = { path = "crates/rdf-events", version = "1.1.0" }
 purrdf-geo = { path = "crates/geo", version = "1.1.0" }
 purrdf-gts = { path = "crates/gts", version = "1.1.0" }
 purrdf-iri = { path = "crates/iri", version = "1.1.0" }
+purrdf-markdown = { path = "crates/markdown", version = "1.1.0" }
 purrdf-rdf = { path = "crates/rdf", version = "1.1.0" }
 purrdf-shapes = { path = "crates/shapes", version = "1.1.0" }
 purrdf-shex = { path = "crates/shex", version = "1.1.0" }

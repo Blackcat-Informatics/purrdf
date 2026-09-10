@@ -1323,6 +1323,7 @@ dependencies = [
  "purrdf-geo",
  "purrdf-gts",
  "purrdf-iri",
+ "purrdf-markdown",
  "purrdf-rdf",
  "purrdf-shapes",
  "purrdf-shex",
