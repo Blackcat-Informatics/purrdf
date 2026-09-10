@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 **A stand-off specification for turning a written document into RDF 1.2
 along its own structure**
 
-Version 1.2.0-draft — 2026-09-10 — Blackcat Informatics® Inc.
+Version 2.0.0-draft — 2026-09-10 — Blackcat Informatics® Inc.
 
 ## Abstract
 
@@ -305,16 +305,31 @@ anchor is a typed literal, and no anchor is refused at all.
 Node IRIs are **content-addressed** and carry the whole law inside them.
 
 The **profile's contract id** is a digest over a canonical, line-oriented
-*stage description* that states, one fact per line: the profile's name;
-its version; its vocabulary (as one base where every IRI derives from
-one, else one line per IRI); the dialect's heading, movement, verse and
-paragraph rules; `max_bytes`; `overlap`; the split law in summary; the
-unit-identity formula; and the digest algorithm tag. Because the preimage
-is line-oriented and unframed, a profile's name MUST NOT carry a control
-character: a newline inside a name would state further facts of the law
-rather than name it, and two profiles could then describe themselves the
-same way. The refusal is a bound of the identity format, not a taste in
-names.
+*stage description* that states **the whole law**, one fact per line: the
+profile's name; its version; its vocabulary (as one base where every IRI
+derives from one, else one line per IRI); the dialect grammar — the
+heading, movement, verse, paragraph, rule and table-row forms, the `u64`
+verse bound, the trimmed-line rule that makes CRLF state its LF twin's
+structure, and the byte-order-mark rule; `max_bytes`; `overlap`; the
+split law with its cut, resume and snap clauses; the concordance law —
+the trigger heading, the column order, the verse-range spellings, the
+backtick rule, the report-never-refuse rule, and the anchor lift with its
+containment test; the three identity formulas; the digest algorithm tag;
+and the emission law of §11, term list and reification shape included.
+
+The description states the whole law because the contract id is the
+handle a consumer keeps: two runs that agree on the id MUST agree on
+every byte they emit. A clause left out of the description would be a
+clause a producer could change while the id stood still, and a consumer
+holding that id would have no way to learn of it. An implementation MUST
+therefore re-mint the id when it changes any clause of this
+specification, the emission law among them.
+
+Because the preimage is line-oriented and unframed, a profile's name MUST
+NOT carry a control character: a newline inside a name would state
+further facts of the law rather than name it, and two profiles could then
+describe themselves the same way. The refusal is a bound of the identity
+format, not a taste in names.
 
 The canon base is **outside** the contract id. It is an option of the
 consumer — where the anchors of a canon live — and not a parameter of the
@@ -337,8 +352,18 @@ no two field sequences share a preimage. A **section's IRI** is the same
 formula with the kind `section`, over the section's *heading span* and
 that span's bytes.
 
-Three consequences are load-bearing, and an implementation MUST
-reproduce all three:
+A **citation's IRI** is the same formula with the kind `citation`, over
+the concordance row's own line span, and with the content digest taken
+over a length-prefixed preimage of two fields: the row's line bytes, and
+the IRI of the unit the row lifted onto. A citation names a **pair**, so
+both halves of it MUST be inside the identity: one row lifting onto two
+verses is two citations, and two rows lifting onto one verse are two
+more. Because the unit's IRI is a field of the preimage, a unit that
+re-mints re-mints every citation of it, and a row copied verbatim into a
+second document mints different citations there.
+
+Four consequences are load-bearing, and an implementation MUST
+reproduce all four:
 
 * Two byte-identical paragraphs in one document are two distinct nodes,
   because the span is inside the identity.
@@ -349,6 +374,10 @@ reproduce all three:
 * The digest algorithm is inside both the preimage and the IRI, so
   another producer can mint the same shape under another algorithm
   without redefining the preimage.
+* A unit's content digest is emitted as data (§11) with the same lexical
+  hex the unit's IRI carries, so a consumer holding the source proves the
+  binding between a node and its bytes by comparison and never by
+  re-encoding.
 
 ## 6. The vocabulary
 
@@ -364,21 +393,30 @@ these local names to it, and takes the base itself as the node base:
 
 | Role | Local name | Role | Local name |
 | --- | --- | --- | --- |
-| document class | `Document` | unit ordinal, section ordinal | `ordinal` |
-| heading section class | `Section` | section heading text | `heading` |
-| movement section class | `Movement` | span start | `byteStart` |
-| unit class | `Unit` | span end | `byteEnd` |
+| document class | `Document` | span start | `byteStart` |
+| heading section class | `Section` | span end | `byteEnd` |
+| movement section class | `Movement` | unit scalar-span start | `scalarStart` |
+| unit class | `Unit` | unit scalar-span end | `scalarEnd` |
 | source digest | `sourceDigest` | unit text | `text` |
-| media type | `mediaType` | innermost section | `section` |
-| document byte length | `byteLength` | verse number | `verse` |
-| slicing profile | `sliceProfile` | heading lineage | `lineage` |
-| document title | `title` | previous piece | `continues` |
-| in-document | `document` | citation of an anchor | `cites` |
-| parent section | `parent` | canon source path | `canonSource` |
-| section level | `level` | | |
+| media type | `mediaType` | unit content digest | `contentDigest` |
+| document byte length | `byteLength` | innermost section | `section` |
+| slicing profile | `sliceProfile` | verse number | `verse` |
+| document title | `title` | heading lineage | `lineage` |
+| in-document | `document` | previous piece | `continues` |
+| parent section | `parent` | citation of an anchor | `cites` |
+| section level | `level` | canon source path | `canonSource` |
+| unit ordinal, section ordinal | `ordinal` | | |
+| section heading text | `heading` | | |
 
 with the datatype IRIs `digest`, `media`, `profile`, `heading`,
 `lineage`, `anchor` and `path`.
+
+`canonSource` is a term **about a citation**, not about a unit: it
+annotates the citation node a row's lift mints (§11), which is what keeps
+a row's paths beside that row's own anchors. Extending the term set
+therefore changes the stage description, and so re-mints every contract
+id and every node under it (§5); that is the mechanism working, and an
+implementation MUST NOT hold a term set constant to preserve an id.
 
 Two local names are deliberately **dual-role**: `heading` is both the
 predicate carrying a section's heading text and the datatype of that
@@ -406,7 +444,14 @@ designated namespace MUST NOT be reached for on a caller's behalf; an
 implementation MAY offer it, but only by name.
 
 The only IRIs this specification brings of its own are the standard's:
-`rdf:type`, and `xsd:integer` for every ordinal, level and byte offset.
+`rdf:type`; `rdf:reifies`, which binds a citation node to the triple term
+it reifies (§11); `xsd:integer` for every ordinal, level, byte offset and
+scalar offset; and `xsd:hexBinary` for a unit's content digest. None of
+the four is configuration. `rdf:type` and `rdf:reifies` are shapes of the
+RDF data model rather than terms of this vocabulary, and the two XSD
+datatypes are the standard's names for the values they carry; a
+deployment that renamed any of them would publish a graph no consumer
+could read with the data model it already has.
 
 ## 7. Ordering, and why it is not a list
 
@@ -494,9 +539,11 @@ here (§4.1) or one that is malformed (§4).
 A conforming implementation SHOULD expose the stand-off model — the
 sections, units, citations, unmatched and malformed rows, scalar spans,
 the containment lattice and content anchors — and not only the emitted
-graph. The graph is one projection of the model, and it is deliberately
-lossy: it cannot state which anchors a row named beside which sources,
-and it cannot state a row that lifted nothing.
+graph. The graph is one projection of the model. It now carries the
+pairing inside a concordance row (§11) and a unit's scalar span and
+content digest, and what it still cannot state is what names no node at
+all: a row that lifted nothing here, a row too malformed to read, and a
+unit's surrounding context.
 
 ## 10. Provenance guidance
 
@@ -512,7 +559,9 @@ it came to run.
 
 This section states the graph as it is emitted at **this version of this
 specification**. Sections 1 through 9 are the law; this is the current
-projection of it, and it is stated separately for that reason.
+projection of it, and it is stated separately for that reason. It is
+nonetheless inside the profile's identity (§5): changing it re-mints
+every contract id and every node under one.
 
 Output is one **claim** per node, in document order — the document node
 first, then sections and units interleaved as they occur, whichever
@@ -520,6 +569,11 @@ starts first. A claim is the node's triples written as N-Triples lines,
 each line terminated by `\n`, the lines **sorted bytewise** and
 de-duplicated. N-Triples is a subset of Turtle, so a claim is served as
 `text/turtle`.
+
+A claim's *subject* is the node it is about. One kind of line has another
+subject: the citation nodes of the rows that lifted onto a unit travel in
+that unit's claim, because a citation is an edge of the unit and nothing
+asks after it on its own.
 
 **The document node.** Subject: the source id. `rdf:type` the document
 class; the source digest as `sha256:<hex>` typed with the digest
@@ -539,24 +593,83 @@ predicate to the parent section's IRI.
 the unit's verbatim text as **exactly one plain literal** — an
 `xsd:string`, written with no datatype IRI — so that a full-text or
 embedding index that selects plain strings sees one text per unit and
-nothing else; the in-document predicate to the source id; the ordinal and
-the span's start and end as `xsd:integer`; where the unit sits in one,
-the section predicate to the innermost section's IRI; where the unit is a
-verse, its number as `xsd:integer`; where the heading stack is non-empty,
-the lineage as its headings joined with ` > ` and typed with the lineage
-datatype; and where the unit continues another piece, the continues
-predicate to that piece's IRI.
+nothing else; the in-document predicate to the source id; the ordinal as
+`xsd:integer`; the byte span's start and end and the **scalar** span's
+start and end as `xsd:integer`; the unit's **content digest** as the
+lowercase hex of §5's span digest, typed `xsd:hexBinary`; where the unit
+sits in one, the section predicate to the innermost section's IRI; where
+the unit is a verse, its number as `xsd:integer`; where the heading stack
+is non-empty, the lineage as its headings joined with ` > ` and typed
+with the lineage datatype; and where the unit continues another piece,
+the continues predicate to that piece's IRI.
 
-**Citations on a unit.** For each anchor of each row that lifted onto
-this unit: a `cites` triple, whose object is the IRI `base ++ anchor`
-where a canon base is declared, and otherwise the anchor as a literal
-typed with the anchor datatype. For each canon source path: a
-`canonSource` triple whose object is the path typed with the path
-datatype. Both are **flat**: the pairing of a row's anchors with that
-row's sources is not stated, and a source named by two rows is stated
-once, because the claim's lines are de-duplicated. That loss is the
-reason §9 asks an implementation to expose the model as well.
+Every one of those but the text is **typed**, which is the point: the
+scalar offsets and the digest are data a consumer needs — a UTF-16 host
+that counts characters, a reader proving a hit is bound to its bytes —
+and putting them in the graph MUST NOT cost the unit its single plain
+literal. An implementation MUST NOT emit a second plain `xsd:string` on a
+unit.
 
-Literal escaping is N-Triples': `\\`, `\"`, `\n`, `\r`, `\t`, and
-`\uXXXX` for any other control character. An IRI is written between `<`
-and `>` and MUST NOT contain a character that cannot appear there.
+### 11.1 Citations, and the pairing they keep
+
+A concordance row that lifted onto a unit states, in that unit's claim:
+
+1. **The asserted edge.** For each anchor of the row, a `cites` triple
+   from the unit, whose object is the IRI `base ++ anchor` where a canon
+   base is declared and otherwise the anchor as a literal typed with the
+   anchor datatype. These are set-valued: a unit two rows cover states
+   each distinct anchor once, because the claim's lines are
+   de-duplicated.
+
+2. **The citation node.** One node per (row, unit), its IRI minted by
+   §5's citation formula. For each anchor of the row it states
+
+   ```
+   <citation> rdf:reifies <<( <unit> <cites> <anchor> )>> .
+   ```
+
+   where `<<( … )>>` is the RDF 1.2 **triple term** — the non-asserting
+   form. The parentheses are not decoration: the bare `<< s p o >>` is
+   the reifying-triple shorthand, which *also* asserts its triple and
+   mints a reifier of its own, so re-parsing it would grow the graph. A
+   triple term denotes the triple without asserting it, which is exactly
+   what an `rdf:reifies` object requires; N-Triples admits the
+   parenthesized form only, and only in **object** position.
+
+3. **The row's sources.** For each canon source path of the row, a
+   `canonSource` triple **from the citation node**, whose object is the
+   path typed with the path datatype.
+
+The source annotates the citation edge, and that is the whole point of
+the node. A verse two rows cover keeps each row's paths beside that row's
+anchors: an N-Triples consumer groups the lines by their citation
+subject, reads each triple term for the anchor it names, and has the row
+back. The flat form — a `canonSource` on the unit — could not say it, and
+that loss is what this shape repairs. A source named by two rows is now
+stated twice, once per row, because it is two facts and not one.
+
+An implementation MUST NOT emit `canonSource` on a unit, and MUST NOT
+substitute another serialization for the triple term.
+
+### 11.2 Writing terms
+
+Term writing is the canonical N-Triples form and MUST NOT be
+re-implemented loosely.
+
+* A **literal** is written between `"` and `"`, escaping `\` and `"`,
+  the readable forms `\n`, `\r` and `\t`, and every remaining C0 control
+  character **and the DEL (U+007F)** as `\uXXXX` with uppercase hex
+  digits. The C1 block (U+0080–U+009F) is left raw: the N-Triples literal
+  grammar permits it. An implementation that leaves U+007F raw is
+  non-conforming — the grammar forbids it there, and it is the escape a
+  hand-written escaper most often misses.
+* An **IRI** is written between `<` and `>`. It MUST NOT contain a
+  character the IRIREF grammar forbids: the reserved delimiters
+  ``< > " { } | ^ ` \``, the space, and the whole control range.
+* A **triple term** is written `<<( ` subject ` ` predicate ` ` object
+  ` )>>`, each component written by these same rules.
+
+An implementation SHOULD reach these forms through one canonical writer
+rather than maintain its own escaper beside it; the divergence a second
+escaper drifts into is invisible until a document carries the one
+character the two disagree about.

@@ -27,7 +27,7 @@ pub const STANDARD_NAMESPACE: &str = "https://w3id.org/purrdf/markdown#";
 
 /// The local names [`Vocabulary::under`] appends to a base, in the
 /// order the profile's stage description lists them.
-const LOCAL_NAMES: [&str; 31] = [
+const LOCAL_NAMES: [&str; 34] = [
     "Document",
     "Section",
     "Movement",
@@ -44,7 +44,10 @@ const LOCAL_NAMES: [&str; 31] = [
     "heading",
     "byteStart",
     "byteEnd",
+    "scalarStart",
+    "scalarEnd",
     "text",
+    "contentDigest",
     "section",
     "verse",
     "lineage",
@@ -105,8 +108,15 @@ pub struct Vocabulary {
     pub byte_start: String,
     /// One past the last byte of a span.
     pub byte_end: String,
+    /// How many Unicode scalars of the document precede a unit's start.
+    pub scalar_start: String,
+    /// How many precede its end.
+    pub scalar_end: String,
     /// A unit's verbatim text: the only plain literal it carries.
     pub text: String,
+    /// A unit's content digest, as lowercase hex typed `xsd:hexBinary`:
+    /// the very digest inside the unit's identity, stated as data.
+    pub content_digest: String,
     /// The innermost section in force at a unit's start.
     pub in_section: String,
     /// A numbered verse's number.
@@ -117,7 +127,10 @@ pub struct Vocabulary {
     pub continues: String,
     /// A verse's citation of a canon anchor.
     pub cites: String,
-    /// A verse's canon source path, typed [`Self::dt_path`].
+    /// The canon source path a citation node names, typed
+    /// [`Self::dt_path`]. It annotates the citation node — the row's own
+    /// edge — and never the unit, so a verse two rows cover keeps each
+    /// row's paths beside that row's anchors.
     pub canon_source: String,
     /// Datatype of a digest literal (`sha256:<hex>`).
     pub dt_digest: String,
@@ -166,7 +179,10 @@ impl Vocabulary {
             heading: iri("heading"),
             byte_start: iri("byteStart"),
             byte_end: iri("byteEnd"),
+            scalar_start: iri("scalarStart"),
+            scalar_end: iri("scalarEnd"),
             text: iri("text"),
+            content_digest: iri("contentDigest"),
             in_section: iri("section"),
             verse: iri("verse"),
             lineage: iri("lineage"),
@@ -216,7 +232,7 @@ impl Vocabulary {
 
     /// Every field, in the order the stage description lists them, with
     /// the node base last.
-    fn fields(&self) -> [(&'static str, &str); 31] {
+    fn fields(&self) -> [(&'static str, &str); 34] {
         [
             ("Document", &self.document_class),
             ("Section", &self.section_class),
@@ -234,7 +250,10 @@ impl Vocabulary {
             ("heading", &self.heading),
             ("byteStart", &self.byte_start),
             ("byteEnd", &self.byte_end),
+            ("scalarStart", &self.scalar_start),
+            ("scalarEnd", &self.scalar_end),
             ("text", &self.text),
+            ("contentDigest", &self.content_digest),
             ("section", &self.in_section),
             ("verse", &self.verse),
             ("lineage", &self.lineage),
@@ -368,8 +387,18 @@ impl Profile {
     }
 
     /// The canonical stage description the contract id is derived over:
-    /// the name, the version, the vocabulary, the split law, and the
-    /// constants, one fact per line.
+    /// **the whole law**, one fact per line — the name, the version, the
+    /// vocabulary, the dialect grammar, the split law and its constants,
+    /// the concordance law, the identity formulas, and the emission law.
+    ///
+    /// It states the whole law because the contract id is the handle a
+    /// consumer keeps: two runs that agree on it must agree on every
+    /// byte they emit. A clause left out of this description is a clause
+    /// a producer could change while the id stood still, and a consumer
+    /// holding that id would have no way to learn it. So the emission
+    /// law is in here beside the split law: extending the vocabulary or
+    /// moving the reification shape re-mints the id, which is the
+    /// design, not a cost.
     ///
     /// The preimage is line-oriented and unframed: a newline ends one
     /// fact and begins the next, and no field is length-prefixed or
@@ -381,22 +410,47 @@ impl Profile {
     #[must_use]
     pub fn stage_bytes(&self) -> Vec<u8> {
         format!(
-            "{}\n\
-             version {}\n\
-             {}\
-             section ATX ^#{{1,6}}\\s ; movement ^\u{2042}\\s\n\
-             unit verse ^\\d+\\.\\s ; paragraph blank-line\n\
-             max_bytes {}\n\
-             overlap {}\n\
+            "{name}\n\
+             version {version}\n\
+             {vocabulary}\
+             section ATX ^#{{1,6}}[ \\t] ; title trimmed, trailing # trimmed ; seven hashes are prose\n\
+             movement ^\u{2042}[ \\t] ; name trimmed, one surrounding * or _ pair removed\n\
+             a movement's level is one under the nearest heading ; movements are siblings\n\
+             unit verse ^\\d+\\.[ \\t] ; the number is a u64 or the line is prose\n\
+             unit paragraph blank-line ; rule ^(-{{3,}}|\\*{{3,}})$ and table row ^\\| close a unit\n\
+             structure is read on a line's trimmed text ; CRLF states its LF twin's structure\n\
+             U+FEFF at byte zero is encoding, elsewhere content ; every span counts the document's own bytes\n\
+             max_bytes {max_bytes}\n\
+             overlap {overlap}\n\
              split newline > scalar boundary ; overlap snaps backward to newline\n\
+             the cut lands on that newline and no piece carries it\n\
+             with no newline the cut is the last scalar boundary at or before the bound\n\
+             a continuation snaps backward to a line start, else to a scalar boundary, never before the unit's start\n\
              never inside a scalar ; never across a heading\n\
+             concordance section heading Concordance, ASCII case-insensitive\n\
+             concordance row | verses | canon sources | anchors |\n\
+             verse range n, n-n, or n\u{2013}n ; both endpoints u64, the first at or under the last\n\
+             a cell lifts its backticked names only, in the order written\n\
+             a row that lifts nothing here and a row too malformed to read are data, never a refusal\n\
+             anchor lift is base ++ anchor ; absolute, and under the base by relativization\n\
              unit id H(source id, profile id, byte start, byte end, alg, alg(span))\n\
-             alg {DIGEST_ALGORITHM}\n",
-            self.name,
-            self.version,
-            self.vocabulary.stage_lines(),
-            self.max_bytes,
-            self.overlap
+             section id H(kind, source id, profile id, heading span, alg(heading line))\n\
+             citation id H(kind, source id, profile id, row span, alg(row line, unit id))\n\
+             alg {DIGEST_ALGORITHM}\n\
+             emit document type, sourceDigest, mediaType, byteLength, sliceProfile, title\n\
+             emit section type, document, parent, level, ordinal, heading, byteStart, byteEnd\n\
+             emit unit type, text, document, section, ordinal, verse, lineage, continues\n\
+             emit unit byteStart, byteEnd, scalarStart, scalarEnd, contentDigest\n\
+             emit unit cites anchor, once per anchor of every row that lifted onto it\n\
+             emit citation rdf:reifies <<( unit cites anchor )>> and citation canonSource path\n\
+             emit an offset as xsd:integer and a content digest as lowercase hex xsd:hexBinary\n\
+             emit one claim per node as N-Triples lines, sorted bytewise and de-duplicated\n\
+             escaping is purrdf-core's canonical writer ; C0 and DEL as \\uXXXX\n",
+            name = self.name,
+            version = self.version,
+            vocabulary = self.vocabulary.stage_lines(),
+            max_bytes = self.max_bytes,
+            overlap = self.overlap,
         )
         .into_bytes()
     }

@@ -36,19 +36,22 @@ citations, and the concordance rows that lifted nothing — and `render`
 projects it into claims. `slice_markdown` is the two in a row, and stays
 the whole surface a caller who only wants triples needs.
 
-The model answers what the flat graph cannot: which unit covers byte
+The model answers in types what the graph answers in triples, and it
+answers questions the graph does not carry at all: which unit covers byte
 4,821 (`unit_at`), which units a byte range touches (`covering`), which
 units sit under a section by containment (`units_under`), how two spans
 lie against each other (`span_relation` — the thirteen Allen interval
 relations, so *meets* and *overlaps* are told apart at the endpoints), a
-unit's span counted in Unicode scalars rather than bytes (`scalar_span`),
-its content digest, its exact quote with bounded prefix/suffix context
-for re-anchoring across revisions (`anchor`), and which concordance rows
-named verses this document does not carry
-(`unmatched_citations`) or could not be read at all (`malformed_rows`).
-The claim projection is deliberately lossy — it cannot state which
-anchors a row named beside which sources — and the model is where the
-loss is not.
+unit's exact quote with bounded prefix/suffix context for re-anchoring
+across revisions (`anchor`), and which concordance rows named verses this
+document does not carry (`unmatched_citations`) or could not be read at
+all (`malformed_rows`). A unit's scalar span (`scalar_span`) and its
+content digest (`digest`) are on both sides now: typed on the model,
+typed literals in the graph.
+The claim projection is still a projection: what it cannot state is what
+names no node at all — a row that lifted nothing here, a row too
+malformed to read, a unit's surrounding context — and the model is where
+that is not lost.
 
 ## What comes out
 
@@ -65,13 +68,21 @@ set of N-Triples lines (valid Turtle):
   runs to the next blank line and is a verse carrying its number; any other
   run of non-blank lines is a paragraph. Every unit carries **exactly one
   plain `xsd:string` literal**, the verbatim byte span of the source, plus
-  its byte span, ordinal, section, and heading lineage as *typed* literals.
-  A full-text or embedding index that selects plain strings therefore sees
-  one text per unit and nothing else.
+  its byte span, its span counted in Unicode scalars, its `xsd:hexBinary`
+  content digest, its ordinal, section, and heading lineage as *typed*
+  literals. A full-text or embedding index that selects plain strings
+  therefore sees one text per unit and nothing else, while a consumer that
+  counts characters, or that wants to prove a hit is bound to its bytes,
+  is answered from the graph rather than sent back to the source.
 - **Citations from a concordance table**: a `## Concordance` section whose
   rows are `| Verses | Canon source | Anchors |` lifts into a `cites` triple
   from every verse in the row's range (`2–5`, `2-5`, or `4`) to each
-  backticked anchor, and a `canonSource` triple to each backticked path.
+  backticked anchor. Each row's lift onto one verse is also its own
+  content-addressed **citation node**, which `rdf:reifies` the RDF 1.2
+  triple term `<<( <unit> <cites> <anchor> )>>` and carries that row's
+  backticked paths as `canonSource` — so a verse two rows cover keeps each
+  row's paths beside that row's anchors, which a flat `canonSource` on the
+  unit could not say.
   With a canon IRI base declared, an anchor becomes the IRI `base ++
   anchor` — pure concatenation, and every anchor is checked against the
   IRI it would mint before anything is rendered (see [The anchor lift is
@@ -102,20 +113,54 @@ no normalization, and nothing prepended.
 
 Sliced under `Vocabulary::under("urn:example:doc:")` with the profile
 `Profile::new("example-v1", 1, vocabulary)` and the source id
-`urn:example:book`, the second verse's claim is (the two 64-hex digests
-shortened to their first eight characters):
+`urn:example:book`, the second verse's claim is (every 64-hex digest
+shortened to its first eight characters):
 
 ```text
-<urn:example:doc:unit:sha256:7282dfbe…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
-<urn:example:doc:unit:sha256:7282dfbe…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:7282dfbe…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:7282dfbe…> <urn:example:doc:document> <urn:example:book> .
-<urn:example:doc:unit:sha256:7282dfbe…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
-<urn:example:doc:unit:sha256:7282dfbe…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:7282dfbe…> <urn:example:doc:section> <urn:example:doc:section:sha256:4ef32077…> .
-<urn:example:doc:unit:sha256:7282dfbe…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
-<urn:example:doc:unit:sha256:7282dfbe…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:fc637034…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:document> <urn:example:book> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:section> <urn:example:doc:section:sha256:4beebcd0…> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 ```
+
+The byte span and the scalar span differ by two because the document's
+`⁂` is three bytes and one scalar. The `contentDigest` is the very digest
+inside the unit's IRI, stated as data so a reader holding the source
+proves the binding by comparison rather than by re-encoding.
+
+Append a concordance to that same document —
+
+```markdown
+## Concordance
+
+| Verses | Canon source | Anchors |
+|---|---|---|
+| 2 | `atlas/crossing.logic.ttl` | `the-crossing` |
+```
+
+— and the same node (the verse's bytes and span did not move, so its IRI
+does not either) gains three lines, in the claim's bytewise order: the
+row's own **citation node**, which reifies the edge and carries the row's
+source, and then the asserted edge itself.
+
+```text
+<urn:example:doc:citation:sha256:b162a72d…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
+<urn:example:doc:citation:sha256:b162a72d…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
+<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
+```
+
+`<<( … )>>` is the RDF 1.2 **triple term** — the non-asserting form, the
+one an `rdf:reifies` object takes and the only one N-Triples admits. So a
+verse two rows cover keeps each row's sources beside that row's anchors,
+which a flat `canonSource` on the unit could not say.
 
 ```rust
 use purrdf_markdown::{Profile, SourceDocument, Vocabulary, slice_markdown};
@@ -152,8 +197,10 @@ An empty, unwritable, or merely *relative* IRI is a typed error naming the
 field, not a default: the crate asks the workspace IRI law — reached through
 `purrdf-core`, so it is the same law the kernel interns under — and refuses up
 front what would otherwise be refused a stage later. The source id answers to
-the same rule. The only IRIs the crate brings are the standard's: `rdf:type`
-and `xsd:integer`.
+the same rule. The only IRIs the crate brings are the standard's, and none of
+them is configuration: `rdf:type` and `rdf:reifies`, which are shapes of the
+RDF data model rather than terms of a vocabulary, and `xsd:integer` and
+`xsd:hexBinary`, which are the standard's names for the values they carry.
 
 ## The anchor lift is checked
 
@@ -191,11 +238,15 @@ Every emitted node's triples are sorted bytewise, one triple per line.
 A `Profile` names the law it applies: a name, a version, the vocabulary, the
 byte bound, and the overlap. Its identity is the SHA-256-derived
 chunking-contract id of `purrdf-core` over a canonical, human-readable stage
-description that lists every one of those, so a change to any of them mints a
-new profile rather than drifting under the old name. The optional canon base
-for concordance anchors is a consumer's option, not a parameter of the law,
-and stays outside the identity. The document node records the profile as
-`<name>:<hex>`.
+description that states the **whole** law, one fact per line — those five, and
+the dialect grammar, the split law, the concordance law, the identity
+formulas, and the emission law with its term list and its reification shape.
+That is deliberate: the contract id is the handle a consumer keeps, so a
+clause outside the description would be a clause a producer could change while
+the id stood still. A change to any of it mints a new profile rather than
+drifting under the old name. The optional canon base for concordance anchors
+is a consumer's option, not a parameter of the law, and stays outside the
+identity. The document node records the profile as `<name>:<hex>`.
 
 A unit's IRI is `<node base>unit:sha256:<hex>`: the hex is the SHA-256 of a
 length-prefixed preimage of the kind, the source id, the profile's contract
@@ -212,10 +263,17 @@ bytes. That has three consequences worth knowing:
   producer can mint the same shape under another algorithm without
   redefining the preimage.
 
+A citation node is minted the same way over the pair it names — the
+concordance row's own line span, and a digest of that line together with the
+unit's IRI — so one row lifting onto two verses is two nodes, two rows lifting
+onto one verse are two more, and a unit that re-mints re-mints every citation
+of it.
+
 A consumer that holds the source bytes can re-derive any unit's IRI from its
-recorded span with `unit_iri` and refuse a hit that does not re-derive: the
-binding between a search result and its text is proven on read-back, not
-assumed.
+recorded span with `unit_iri` (and any citation's with `citation_iri`) and
+refuse a hit that does not re-derive: the binding between a search result and
+its text is proven on read-back, not assumed. The unit's `contentDigest` is
+the same digest stated as data, so the check needs no re-encoding.
 
 ## Oversize units: the split law
 

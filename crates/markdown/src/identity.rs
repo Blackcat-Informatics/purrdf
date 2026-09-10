@@ -51,6 +51,47 @@ pub fn section_iri(
     )
 }
 
+/// The identity of one **citation edge**: what a concordance row lifted
+/// onto one unit.
+///
+/// A row states one edge per unit it lifted onto, and the edge is the
+/// node that carries the row's own sources beside the row's own anchors.
+/// Two rows covering one verse must therefore mint two nodes, and one
+/// row covering two verses must mint two more — so the pair is what is
+/// addressed, not the row alone.
+///
+/// It is the same discipline as [`unit_iri`], asked of a different
+/// thing. The position is the row's own line span, so an identical row
+/// written twice in one table is two edges; the content is a
+/// length-prefixed preimage of the row's line **and** the unit's IRI, so
+/// the same row lifting onto two verses is two edges, and a unit that
+/// re-mints (its text edited, its span moved) re-mints every edge that
+/// named it. Nothing else is reachable from a citation, which is why it
+/// carries no span of its own into the graph.
+#[must_use]
+pub fn citation_iri(
+    vocabulary: &Vocabulary,
+    source_id: &str,
+    contract: &ChunkingContractId,
+    row_start: u64,
+    row_end: u64,
+    row_line: &[u8],
+    unit_node: &str,
+) -> String {
+    let mut content = Vec::new();
+    push_field(&mut content, row_line);
+    push_field(&mut content, unit_node.as_bytes());
+    node_iri_of_digest(
+        vocabulary,
+        "citation",
+        source_id,
+        contract,
+        row_start,
+        row_end,
+        &ContentDigest::of(&content),
+    )
+}
+
 fn node_iri(
     vocabulary: &Vocabulary,
     kind: &str,

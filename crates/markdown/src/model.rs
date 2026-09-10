@@ -490,11 +490,13 @@ impl<'a> ContentAnchor<'a> {
 /// One concordance row, unflattened: the verse range it covers, its
 /// canon sources, its anchors, and what it lifted **in this document**.
 ///
-/// The flat projection cannot carry this. A claim states that a verse
-/// cites an anchor and that it names a source path; it cannot state
-/// that *this row* named *these* anchors beside *those* sources, and it
-/// cannot state a row that named a verse this document does not carry.
-/// The model states both.
+/// The projection carries most of this now: each lift onto a unit mints
+/// a citation node that reifies the row's `cites` edge and holds the
+/// row's own sources, so *this row named these anchors beside those
+/// sources* is a fact the graph states. What the graph still cannot
+/// state is a row that names a verse this document does not carry —
+/// there is no unit for it to be an edge of. The model states that too,
+/// verse by verse ([`Self::unmatched`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Citation {
     first: u64,

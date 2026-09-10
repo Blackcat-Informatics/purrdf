@@ -69,16 +69,22 @@ fn rendered(profile: &Profile) -> String {
         .collect()
 }
 
-/// `(predicate, object)` pairs of one claim, objects as rendered. A
-/// claim's lines are sorted bytewise, so repeated predicates come back
-/// in object order.
+/// `(predicate, object)` pairs of the lines a claim states about **its
+/// own** node, objects as rendered. A claim's lines are sorted bytewise,
+/// so repeated predicates come back in object order.
+///
+/// A unit's claim also carries the triples of the citation nodes minted
+/// for the concordance rows that lifted onto it; those are
+/// [`citation_triples`], and
+/// [`every_line_of_a_claim_is_its_own_node_or_a_citation_of_it`] is what
+/// keeps this split from hiding a line neither reader looks at.
 fn pairs(claim: &Claim) -> Vec<(String, String)> {
     let prefix = format!("<{}> ", claim.subject);
     claim
         .turtle
         .lines()
-        .map(|line| {
-            let rest = line.strip_prefix(&prefix).expect("subject prefix");
+        .filter_map(|line| line.strip_prefix(&prefix))
+        .map(|rest| {
             let rest = rest.strip_suffix(" .").expect("terminator");
             let (p, o) = rest.split_once(' ').expect("predicate then object");
             (
@@ -87,6 +93,50 @@ fn pairs(claim: &Claim) -> Vec<(String, String)> {
             )
         })
         .collect()
+}
+
+/// `(subject, predicate, object)` of every line of a claim whose
+/// subject is **not** the claim's own node: exactly the citation edges
+/// of a unit.
+fn citation_triples(claim: &Claim) -> Vec<(String, String, String)> {
+    let prefix = format!("<{}> ", claim.subject);
+    claim
+        .turtle
+        .lines()
+        .filter(|line| !line.starts_with(&prefix))
+        .map(|line| {
+            let rest = line.strip_suffix(" .").expect("terminator");
+            let (s, rest) = rest.split_once("> ").expect("a subject, then the rest");
+            let (p, o) = rest.split_once(' ').expect("predicate then object");
+            (
+                s.trim_start_matches('<').to_owned(),
+                p.trim_start_matches('<').trim_end_matches('>').to_owned(),
+                o.to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// The objects a citation node states under a predicate, in the order
+/// the claim's sorted lines give them.
+fn citation_objects(claim: &Claim, citation: &str, predicate: &str) -> Vec<String> {
+    citation_triples(claim)
+        .into_iter()
+        .filter(|(s, p, _)| s == citation && p == predicate)
+        .map(|(_, _, o)| o)
+        .collect()
+}
+
+/// The citation nodes a claim carries, in first-seen order, without
+/// repeats.
+fn citation_nodes(claim: &Claim) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (subject, _, _) in citation_triples(claim) {
+        if !out.contains(&subject) {
+            out.push(subject);
+        }
+    }
+    out
 }
 
 fn object(claim: &Claim, predicate: &str) -> Option<String> {
@@ -628,8 +678,14 @@ fn a_concordance_table_lifts_into_citations_with_and_without_a_canon_base() {
             objects(verse(n), &v().cites),
             vec![anchor("reef-shelf"), anchor("tide-line")]
         );
+        assert!(
+            object(verse(n), &v().canon_source).is_none(),
+            "a source path annotates the row's citation node, never the unit"
+        );
+        let rows = citation_nodes(verse(n));
+        assert_eq!(rows.len(), 1, "one row lifted onto this verse");
         assert_eq!(
-            objects(verse(n), &v().canon_source),
+            citation_objects(verse(n), &rows[0], &v().canon_source),
             vec![path("atlas/outer-reefs.logic.ttl")]
         );
     }
@@ -645,12 +701,24 @@ fn a_concordance_table_lifts_into_citations_with_and_without_a_canon_base() {
         "prose beside a backticked anchor lifts nothing"
     );
     assert_eq!(
-        objects(verse(3), &v().canon_source),
+        citation_nodes(verse(3)).len(),
+        2,
+        "two rows cover it, so it carries two citation nodes"
+    );
+    let mut paths_of_three: Vec<String> = citation_triples(verse(3))
+        .iter()
+        .filter(|(_, p, _)| *p == v().canon_source)
+        .map(|(_, _, o)| o.clone())
+        .collect();
+    paths_of_three.sort();
+    assert_eq!(
+        paths_of_three,
         vec![
             path("atlas/inner-lagoon.logic.ttl"),
+            path("atlas/outer-reefs.logic.ttl"),
             path("atlas/outer-reefs.logic.ttl")
         ],
-        "a source named by two rows is stated once"
+        "each row keeps its own sources, so outer-reefs is stated once per row that named it"
     );
     // Row `7–9` runs past the last verse: the verses that exist lift, the
     // one that does not lifts nothing.
@@ -692,6 +760,358 @@ fn a_concordance_table_lifts_into_citations_with_and_without_a_canon_base() {
             format!("<{CANON_BASE}tide-line>")
         ]
     );
+}
+
+/// The lexical form and the datatype IRI of a rendered typed literal.
+fn typed_parts(term: &str) -> (String, String) {
+    let (lexical, datatype) = term.split_once("\"^^<").expect("a typed literal");
+    (
+        unescape(&format!("{lexical}\"")),
+        datatype.trim_end_matches('>').to_owned(),
+    )
+}
+
+/// The `(subject, predicate, object)` a triple term states, read the
+/// way an N-Triples consumer reads the line it sits in.
+fn reified(term: &str) -> (String, String, String) {
+    let inner = term
+        .strip_prefix("<<( ")
+        .and_then(|t| t.strip_suffix(" )>>"))
+        .unwrap_or_else(|| panic!("an RDF 1.2 triple term: {term}"));
+    let (subject, rest) = inner.split_once("> ").expect("a subject");
+    let (predicate, object) = rest.split_once("> ").expect("a predicate");
+    (
+        subject.trim_start_matches('<').to_owned(),
+        predicate.trim_start_matches('<').to_owned(),
+        object.to_owned(),
+    )
+}
+
+#[test]
+fn every_line_of_a_claim_is_its_own_node_or_a_citation_of_it() {
+    // A claim is read by two helpers — `pairs` for the node's own lines
+    // and `citation_triples` for the rest — and this is what keeps a
+    // line from falling between them and being asserted by neither.
+    for profile in [&v1(), &small()] {
+        for claim in slice(GUIDE, profile) {
+            assert_eq!(
+                pairs(&claim).len() + citation_triples(&claim).len(),
+                claim.turtle.lines().count(),
+                "{}",
+                claim.subject
+            );
+            for (subject, _, _) in citation_triples(&claim) {
+                assert_eq!(
+                    claim.kind,
+                    ClaimKind::Unit,
+                    "only a unit carries a node that is not its own"
+                );
+                assert!(
+                    subject.starts_with(&format!("{SLICE_BASE}citation:sha256:")),
+                    "and that node is a citation of it: {subject}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_reification_is_spelled_the_way_purrdf_core_spells_one() {
+    // Not "resembles": the very line, from the kernel's own reifier
+    // writer. It pins both halves of the spelling at once — the
+    // `rdf:reifies` IRI, and the RDF 1.2 triple term `<<( s p o )>>`,
+    // whose parentheses are what make it non-asserting.
+    let claims = slice(GUIDE, &v1());
+    let three = *units(&claims)
+        .iter()
+        .find(|u| integer(u, &v().verse) == Some(3))
+        .expect("verse 3");
+    let reifications: Vec<(String, String, String)> = citation_triples(three)
+        .into_iter()
+        .filter(|(_, p, _)| p == purrdf_markdown::RDF_REIFIES)
+        .collect();
+    assert_eq!(reifications.len(), 4, "two rows, two anchors each");
+    for (citation, _, term) in reifications {
+        let (_, _, anchor) = reified(&term);
+        let (lexical, datatype) = typed_parts(&anchor);
+        assert_eq!(datatype, v().dt_anchor);
+        let expected = purrdf_core::emit_reifier(
+            &purrdf_core::RdfReifier {
+                reifier: purrdf_core::RdfTerm::Iri(citation),
+                statement: purrdf_core::RdfTriple::new(
+                    purrdf_core::RdfTerm::Iri(three.subject.clone()),
+                    v().cites,
+                    purrdf_core::RdfTerm::Literal(purrdf_core::RdfLiteral {
+                        lexical_form: lexical,
+                        datatype: Some(datatype),
+                        language: None,
+                        direction: None,
+                    }),
+                ),
+                graph: None,
+                location: None,
+            },
+            &[],
+        );
+        assert!(
+            claims
+                .iter()
+                .any(|c| c.turtle.contains(expected.trim_end_matches('\n'))),
+            "the kernel's own line: {expected}"
+        );
+        assert!(expected.contains(" <<( "), "the parenthesized triple term");
+        assert!(expected.contains(" )>> ."), "and its close");
+    }
+}
+
+#[test]
+fn a_verse_two_rows_cover_keeps_each_rows_sources_paired_with_that_rows_anchors() {
+    let claims = slice(GUIDE, &v1());
+    let three = *units(&claims)
+        .iter()
+        .find(|u| integer(u, &v().verse) == Some(3))
+        .expect("verse 3");
+
+    // Exactly what an N-Triples consumer reconstructs: group the lines
+    // by their citation node, read each reified triple term for the
+    // anchor it states, and collect the paths that annotate the node.
+    let mut rows: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+    for (subject, predicate, object) in citation_triples(three) {
+        let row = rows.entry(subject).or_default();
+        if predicate == purrdf_markdown::RDF_REIFIES {
+            let (unit, cites, anchor) = reified(&object);
+            assert_eq!(
+                unit, three.subject,
+                "the reified subject is the unit itself"
+            );
+            assert_eq!(cites, v().cites);
+            assert!(row.0.insert(anchor), "one reification per (row, anchor)");
+        } else {
+            assert_eq!(predicate, v().canon_source);
+            assert!(row.1.insert(object), "one path per (row, source)");
+        }
+    }
+    let anchor = |name: &str| format!("\"{name}\"^^<{}>", v().dt_anchor);
+    let path = |name: &str| format!("\"{name}\"^^<{}>", v().dt_path);
+    let reconstructed: BTreeSet<(Vec<String>, Vec<String>)> = rows
+        .values()
+        .map(|(anchors, paths)| {
+            (
+                anchors.iter().cloned().collect(),
+                paths.iter().cloned().collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        reconstructed,
+        BTreeSet::from([
+            (
+                vec![anchor("reef-shelf"), anchor("tide-line")],
+                vec![path("atlas/outer-reefs.logic.ttl")],
+            ),
+            (
+                vec![anchor("lagoon-floor"), anchor("salt-pan")],
+                vec![
+                    path("atlas/inner-lagoon.logic.ttl"),
+                    path("atlas/outer-reefs.logic.ttl"),
+                ],
+            ),
+        ]),
+        "row 1\u{2013}3's anchors keep row 1\u{2013}3's source, and row 3\u{2013}5's keep both of its own"
+    );
+
+    // And this is what the flat form could not say: on the unit itself
+    // the four anchors lie in one heap, with nothing to tell a reader
+    // that `lagoon-floor` came in beside `atlas/inner-lagoon.logic.ttl`
+    // and `reef-shelf` did not.
+    assert_eq!(objects(three, &v().cites).len(), 4);
+    assert!(object(three, &v().canon_source).is_none());
+    parses_whole(&claims);
+}
+
+#[test]
+fn a_citation_node_is_content_addressed_over_the_row_and_the_unit_it_lifted_onto() {
+    let document = model(GUIDE, &v1());
+    let claims = slice(GUIDE, &v1());
+    let contract = v1().contract_id();
+    let line_of = |row: &purrdf_markdown::Citation| {
+        let span = row.span();
+        &GUIDE.as_bytes()[span.start as usize..span.end as usize]
+    };
+    let unit_claim = |verse: u64| {
+        *units(&claims)
+            .iter()
+            .find(|u| integer(u, &v().verse) == Some(verse))
+            .expect("the verse")
+    };
+
+    let mut seen = BTreeSet::new();
+    for row in document.citations() {
+        let span = row.span();
+        for &(verse, unit) in row.lifted() {
+            assert_eq!(document.unit(unit).expect("in range").verse(), Some(verse));
+            let claim = unit_claim(verse);
+            let minted = purrdf_markdown::citation_iri(
+                &v(),
+                GUIDE_ID,
+                &contract,
+                span.start,
+                span.end,
+                line_of(row),
+                &claim.subject,
+            );
+            assert!(
+                citation_nodes(claim).contains(&minted),
+                "a consumer holding the source re-derives the node: {minted}"
+            );
+            assert!(seen.insert(minted), "one node per (row, unit)");
+        }
+    }
+    assert_eq!(seen.len(), 8, "3 + 3 + 2 lifts");
+
+    // The pair is what is addressed, and both halves of it are load
+    // bearing: one row over two verses is two nodes, and two rows over
+    // one verse are two more.
+    let (first, second) = (&document.citations()[0], &document.citations()[1]);
+    let mint = |row: &purrdf_markdown::Citation, verse: u64| {
+        let span = row.span();
+        purrdf_markdown::citation_iri(
+            &v(),
+            GUIDE_ID,
+            &contract,
+            span.start,
+            span.end,
+            line_of(row),
+            &unit_claim(verse).subject,
+        )
+    };
+    assert_ne!(mint(first, 1), mint(first, 2), "one row, two verses");
+    assert_ne!(mint(first, 3), mint(second, 3), "two rows, one verse");
+}
+
+#[test]
+fn a_units_scalar_offsets_and_content_digest_are_stated_as_data() {
+    let text = "# T\u{ed}tulo\n\n\u{2042} *el camino*\n\n1. \u{201c}Quoted\u{201d} \u{2013} \u{4e2d} \u{1f41a} and \u{2042} inside.\n\n2. Tail\n";
+    let claims = slice(text, &v1());
+    let document = model(text, &v1());
+    for (unit, claim) in document.units().iter().zip(units(&claims)) {
+        let (start, end) = span_of(claim);
+        // Counted straight off the text, not read back off the model.
+        assert_eq!(
+            integer(claim, &v().scalar_start),
+            Some(text[..start].chars().count() as u64)
+        );
+        assert_eq!(
+            integer(claim, &v().scalar_end),
+            Some(text[..end].chars().count() as u64)
+        );
+        assert_eq!(
+            typed_value(claim, &v().content_digest),
+            Some(unit.digest().to_hex()),
+            "the digest as data is the digest the model carries"
+        );
+        assert_eq!(
+            unit.digest(),
+            purrdf_core::ContentDigest::of(&text.as_bytes()[start..end])
+        );
+        // Both new facts are typed, so the unit's text stays the one
+        // plain literal a text index selects.
+        for predicate in [&v().scalar_start, &v().scalar_end] {
+            assert!(
+                object(claim, predicate)
+                    .expect("an offset")
+                    .ends_with(&format!("^^<{}>", purrdf_markdown::XSD_INTEGER))
+            );
+        }
+        assert!(
+            object(claim, &v().content_digest)
+                .expect("a digest")
+                .ends_with(&format!("^^<{}>", purrdf_markdown::XSD_HEX_BINARY))
+        );
+        assert_eq!(
+            pairs(claim)
+                .iter()
+                .filter(|(_, o)| o.starts_with('"') && !o.contains("\"^^<"))
+                .count(),
+            1,
+            "{}",
+            claim.subject
+        );
+    }
+    // The first unit, counted by hand: `# Título` is 8 scalars and 9
+    // bytes, the blank line and the marker line another 17 scalars and
+    // 19 bytes; the unit is 31 scalars and 44 bytes.
+    let first = units(&claims)[0];
+    assert_eq!(integer(first, &v().byte_start), Some(28));
+    assert_eq!(integer(first, &v().byte_end), Some(72));
+    assert_eq!(integer(first, &v().scalar_start), Some(25));
+    assert_eq!(integer(first, &v().scalar_end), Some(56));
+    // And the digest states the very hex the identity carries.
+    let hex = typed_value(first, &v().content_digest).expect("a digest");
+    assert_eq!(hex.len(), 64);
+    assert_eq!(
+        first.subject,
+        unit_iri(
+            &v(),
+            GUIDE_ID,
+            &v1().contract_id(),
+            28,
+            72,
+            &text.as_bytes()[28..72]
+        )
+    );
+    assert_eq!(
+        purrdf_core::ContentDigest::from_hex(&hex),
+        Some(purrdf_core::ContentDigest::of(&text.as_bytes()[28..72]))
+    );
+}
+
+/// Every C0 control except the newline — which would end the line and
+/// with it the unit — plus the DEL, the two characters N-Triples names
+/// an escape for, and a C1 character the literal grammar leaves raw.
+fn control_corpus() -> String {
+    let mut out = String::from("ctrl ");
+    for c in 1..0x20_u32 {
+        if c != u32::from(b'\n') {
+            out.push(char::from_u32(c).expect("a control character"));
+        }
+    }
+    out.push('\u{7f}');
+    out.push_str(" \"quoted\" \\ backslash \u{80}\u{9f} end");
+    out
+}
+
+#[test]
+fn a_literal_is_escaped_by_purrdf_cores_canonical_writer_the_delete_included() {
+    let corpus = control_corpus();
+    assert!(corpus.contains('\u{7f}'), "the DEL is in the corpus");
+    let claims = slice(&format!("# T\n\n{corpus}\n"), &v1());
+    let written = object(units(&claims)[0], &v().text).expect("text");
+    assert_eq!(
+        written,
+        purrdf_core::emit_term(&purrdf_core::RdfTerm::Literal(purrdf_core::RdfLiteral {
+            lexical_form: corpus.clone(),
+            datatype: None,
+            language: None,
+            direction: None,
+        })),
+        "the crate's literal is the kernel's literal, byte for byte"
+    );
+    assert!(
+        written.contains("\\u007F"),
+        "the DEL is escaped \u{2014} the divergence the crate's own escaper carried"
+    );
+    assert!(!written.contains('\u{7f}'), "and it is never written raw");
+    assert!(
+        written.contains('\u{80}'),
+        "while the C1 block stays raw, which the literal grammar permits"
+    );
+    assert_eq!(
+        unescape(&written),
+        corpus,
+        "and it reads back to the bytes it was written from"
+    );
+    parses_whole(&claims);
 }
 
 #[test]
@@ -783,9 +1203,32 @@ fn a_same_length_substitution_re_mints_only_the_unit_it_touches() {
     for i in [0, 2] {
         assert_eq!(b[i].subject, a[i].subject);
         assert_eq!(b[i].span, a[i].span);
+        assert_eq!(pairs(b[i]), pairs(a[i]), "not one triple of it moved");
     }
     assert_ne!(b[1].subject, a[1].subject);
     assert_eq!(b[1].span, a[1].span, "no boundary moved");
+    // The two new facts move exactly with the identity they belong to:
+    // a substitution of equal length changes the bytes and nothing else,
+    // so the digest re-mints and the offsets — byte and scalar alike —
+    // stand still.
+    assert_ne!(
+        typed_value(b[1], &v().content_digest),
+        typed_value(a[1], &v().content_digest),
+        "the digest is a statement about the bytes"
+    );
+    for offsets in [
+        &v().byte_start,
+        &v().byte_end,
+        &v().scalar_start,
+        &v().scalar_end,
+    ] {
+        assert_eq!(integer(b[1], offsets), integer(a[1], offsets));
+    }
+    assert_eq!(
+        integer(b[1], &v().scalar_end).expect("an offset")
+            - integer(b[1], &v().scalar_start).expect("an offset"),
+        "2. Two two.".chars().count() as u64
+    );
 }
 
 #[test]
@@ -805,6 +1248,23 @@ fn an_insertion_shifts_every_later_span_by_its_length_and_changes_no_content() {
         );
         assert_eq!(object(old, &v().text), object(new, &v().text));
         assert_ne!(old.subject, new.subject, "the span is inside the identity");
+        // The opposite signature, in the two new facts: the offsets all
+        // move by the insertion's length — the text is ASCII, so its
+        // scalars are its bytes — and the digest does not move at all.
+        let shift = inserted.chars().count() as u64;
+        assert_eq!(
+            integer(new, &v().scalar_start),
+            integer(old, &v().scalar_start).map(|s| s + shift)
+        );
+        assert_eq!(
+            integer(new, &v().scalar_end),
+            integer(old, &v().scalar_end).map(|s| s + shift)
+        );
+        assert_eq!(
+            typed_value(old, &v().content_digest),
+            typed_value(new, &v().content_digest),
+            "the bytes are untouched, so the digest is"
+        );
     }
 }
 
@@ -881,8 +1341,33 @@ fn the_whole_guide_slices_to_its_recorded_counts() {
             .filter(|(p, _)| p == predicate)
             .count()
     };
+    let on_citations = |predicate: &str| -> usize {
+        all.iter()
+            .flat_map(|u| citation_triples(u))
+            .filter(|(_, p, _)| p == predicate)
+            .count()
+    };
+    // Two anchors per row, and seven of the guide's verses are lifted
+    // onto by a row; verse 3 is lifted onto by two.
     assert_eq!(count(&v().cites), 16);
-    assert_eq!(count(&v().canon_source), 10);
+    assert_eq!(count(&v().scalar_start), 12);
+    assert_eq!(count(&v().scalar_end), 12);
+    assert_eq!(count(&v().content_digest), 12);
+    assert_eq!(
+        count(&v().canon_source),
+        0,
+        "no source path hangs on a unit any more"
+    );
+    // Eight (row, unit) lifts: 3 + 3 + 2. Each states one reification
+    // per anchor, and one path per source of its own row.
+    let rows: BTreeSet<String> = all.iter().flat_map(|u| citation_nodes(u)).collect();
+    assert_eq!(rows.len(), 8);
+    assert_eq!(on_citations(purrdf_markdown::RDF_REIFIES), 16);
+    assert_eq!(
+        on_citations(&v().canon_source),
+        11,
+        "3\u{d7}1 + 3\u{d7}2 + 2\u{d7}1: one more than the flat form stated, which is the loss repaired"
+    );
     assert_eq!(
         integer(&claims[0], &v().byte_length),
         Some(GUIDE.len() as u64)
@@ -1070,6 +1555,8 @@ fn a_leading_byte_order_mark_shifts_every_span_and_changes_no_structure() {
         v().continues,
         v().byte_start,
         v().byte_end,
+        v().scalar_start,
+        v().scalar_end,
     ];
     for (a, b) in plain.iter().zip(&with_mark).skip(1) {
         assert_eq!(a.kind, b.kind);
@@ -1094,6 +1581,18 @@ fn a_leading_byte_order_mark_shifts_every_span_and_changes_no_structure() {
             unescape_if_plain(b),
             "a unit's literal is the verbatim bytes of its span"
         );
+        // A citation is minted over the row's own line span, which the
+        // mark moved too, so the node re-mints while the row it states
+        // does not change at all.
+        let (a_rows, b_rows) = (citation_nodes(a), citation_nodes(b));
+        assert_eq!(a_rows.len(), b_rows.len());
+        for (a_row, b_row) in a_rows.iter().zip(&b_rows) {
+            assert_ne!(a_row, b_row, "the row's span is inside the citation's id");
+            assert_eq!(
+                citation_objects(a, a_row, &v().canon_source),
+                citation_objects(b, b_row, &v().canon_source)
+            );
+        }
     }
     let cited = units(&with_mark)
         .into_iter()
@@ -2284,6 +2783,18 @@ fn the_standard_vocabulary_is_the_designated_namespace_term_for_term_and_slices_
     assert_eq!(standard.text, format!("{STANDARD_NAMESPACE}text"));
     assert_eq!(standard.cites, format!("{STANDARD_NAMESPACE}cites"));
     assert_eq!(standard.dt_lineage, format!("{STANDARD_NAMESPACE}lineage"));
+    assert_eq!(
+        standard.scalar_start,
+        format!("{STANDARD_NAMESPACE}scalarStart")
+    );
+    assert_eq!(
+        standard.scalar_end,
+        format!("{STANDARD_NAMESPACE}scalarEnd")
+    );
+    assert_eq!(
+        standard.content_digest,
+        format!("{STANDARD_NAMESPACE}contentDigest")
+    );
     // The deliberate dual roles: one local name in two fields.
     assert_eq!(standard.heading, standard.dt_heading);
     assert_eq!(standard.lineage, standard.dt_lineage);
@@ -2319,7 +2830,7 @@ const SPEC: &str = include_str!("../SPEC.md");
 fn the_specification_states_the_law_this_suite_executes_and_carries_no_process() {
     assert!(SPEC.starts_with("<!--"), "a license header opens it");
     for clause in [
-        "Version 1.2.0-draft",
+        "Version 2.0.0-draft",
         "2026-09-10",
         STANDARD_NAMESPACE,
         "crates/markdown/tests/slicer.rs",
@@ -2334,6 +2845,19 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         "U+2042",
         "`## Concordance`",
         "lifts nothing here, and is not an error",
+        // The emission law, with the shapes the vectors pin.
+        "<citation> rdf:reifies <<( <unit> <cites> <anchor> )>>",
+        "the RDF 1.2 **triple term**",
+        "only in **object** position",
+        "MUST NOT emit `canonSource` on a unit",
+        "the DEL (U+007F)",
+        "`scalarStart`",
+        "`contentDigest`",
+        "`xsd:hexBinary`",
+        "`rdf:reifies`",
+        // Identity, now stating the whole law.
+        "A **citation's IRI**",
+        "states **the whole law**",
         // Ordering, provenance, conformance, determinism.
         "rdf:Seq",
         "gmeow",
@@ -2345,4 +2869,104 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
     for token in ["PR #", "issue #", "Issue #", "pull request"] {
         assert!(!SPEC.contains(token), "no process reference: {token:?}");
     }
+}
+
+// --- the README ------------------------------------------------------------
+
+/// The crate's front page, read from the crate: its emission examples
+/// are output of the law, and this is what keeps them so.
+const README: &str = include_str!("../README.md");
+
+/// The Markdown the README slices in its example.
+const README_BOOK: &str = "# The Book\n\n\u{2042} *the crossing*\n\n1. The first verse crosses the socket whole.\n\n\
+     2. Two sovereign stars share one trajectory.\n";
+
+/// The concordance the README appends to it.
+const README_CONCORDANCE: &str = "\n## Concordance\n\n| Verses | Canon source | Anchors |\n\
+                                  |---|---|---|\n| 2 | `atlas/crossing.logic.ttl` | \
+                                  `the-crossing` |\n";
+
+/// Every run of exactly 64 lowercase hex digits shortened to its first
+/// eight and an ellipsis: the abbreviation the README announces.
+fn shorten_digests(text: &str) -> String {
+    let hex = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
+    let bytes: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let run = bytes[i..].iter().take_while(|c| hex(**c)).count();
+        // A 64-digit run is a digest; a shorter or longer one is text.
+        if run == 64 && !bytes[..i].last().is_some_and(|c| hex(*c)) {
+            out.extend(&bytes[i..i + 8]);
+            out.push('\u{2026}');
+        } else {
+            out.extend(&bytes[i..i + run.max(1)]);
+        }
+        i += run.max(1);
+    }
+    out
+}
+
+/// The `n`th fenced block of a language in the README, without its
+/// fences.
+fn readme_block(language: &str, n: usize) -> String {
+    README
+        .split(&format!("```{language}\n"))
+        .skip(1)
+        .map(|rest| {
+            rest.split_once("```")
+                .expect("a closing fence")
+                .0
+                .to_owned()
+        })
+        .nth(n)
+        .expect("the block")
+}
+
+#[test]
+fn the_readmes_emission_examples_are_the_claims_the_law_emits() {
+    let profile = Profile::new(
+        "example-v1",
+        1,
+        Vocabulary::under("urn:example:doc:").expect("a vocabulary"),
+    );
+    let verse_two = |text: &str| {
+        let claims = slice_of(text, "urn:example:book", &profile).expect("slices");
+        let two = *units(&claims)
+            .iter()
+            .find(|u| integer(u, &profile.vocabulary.verse) == Some(2))
+            .expect("verse 2");
+        (shorten_digests(&two.turtle), two.subject.clone())
+    };
+
+    // The README's own Markdown, sliced, is the README's own claim.
+    assert_eq!(
+        readme_block("markdown", 0).trim_end(),
+        README_BOOK.trim_end()
+    );
+    let (plain, plain_subject) = verse_two(README_BOOK);
+    assert_eq!(plain, readme_block("text", 0));
+
+    // And with the concordance appended: the same node, three lines more.
+    assert_eq!(
+        readme_block("markdown", 1).trim(),
+        README_CONCORDANCE.trim()
+    );
+    let with_rows = format!("{README_BOOK}{README_CONCORDANCE}");
+    let (cited, cited_subject) = verse_two(&with_rows);
+    assert_eq!(
+        cited_subject, plain_subject,
+        "the verse's bytes and span did not move, so its IRI did not either"
+    );
+    assert_eq!(cited.lines().count(), plain.lines().count() + 3);
+    let added: Vec<&str> = cited
+        .lines()
+        .filter(|line| !plain.lines().any(|kept| kept == *line))
+        .collect();
+    assert_eq!(added, readme_block("text", 1).lines().collect::<Vec<_>>());
+    assert!(
+        added.iter().any(|line| line.contains("<<( ")),
+        "one of the three is the reified edge"
+    );
+    parses_whole(&slice_of(&with_rows, "urn:example:book", &profile).expect("slices"));
 }

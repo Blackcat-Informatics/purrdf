@@ -4,18 +4,25 @@
 //! The claim projection: a [`Document`] to one claim per node, each
 //! claim the node's triples as sorted N-Triples lines.
 //!
-//! Dialect-independent, and — deliberately — *lossy*. The model is the
-//! finding; this is one view of it, flattened for a triple store. What
-//! the flattening drops (which anchors a row named beside which
-//! sources, which rows lifted nothing, a unit's scalar span, its
-//! context) stays in the model for a consumer that wants it.
+//! Dialect-independent, and still a *projection*: the model is the
+//! finding and this is one view of it. What the view no longer drops is
+//! the pairing inside a concordance row — a row's lift onto a unit is
+//! its own node, and its sources hang on that node rather than on the
+//! unit — and a unit's scalar offsets and content digest, which are
+//! emitted as data. What stays only in the model is the part that names
+//! no node at all: the rows that lifted nothing, the rows too malformed
+//! to read, and a unit's surrounding context.
+//!
+//! Every term this module writes goes through `purrdf-core`'s canonical
+//! writers ([`emit_term`]), so the crate's escaping is the kernel's
+//! escaping by construction rather than by resemblance.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 
-use purrdf_core::ContentDigest;
+use purrdf_core::embedding::ChunkingContractId;
+use purrdf_core::{ContentDigest, RdfLiteral, RdfTerm, RdfTriple, emit_term};
 
-use crate::identity::node_iri_of_digest;
+use crate::identity::{citation_iri, node_iri_of_digest};
 use crate::model::{Document, Section, Unit};
 use crate::profile::{Profile, Vocabulary};
 use crate::{Claim, ClaimKind};
@@ -70,7 +77,7 @@ pub fn render(document: &Document<'_>, profile: &Profile) -> Vec<Claim> {
             )
         })
         .collect();
-    let citations = citations_by_unit(document);
+    let citations = citation_edges(document, &profile.vocabulary, &contract, &unit_iris);
 
     let mut claims = Vec::with_capacity(1 + section_iris.len() + unit_iris.len());
     claims.push(document_claim(document, profile));
@@ -111,16 +118,51 @@ pub fn render(document: &Document<'_>, profile: &Profile) -> Vec<Claim> {
     claims
 }
 
-/// The citations of each unit, flattened: a row states one `cites` per
-/// anchor and one `canonSource` per path on every unit it lifted onto,
-/// and the pairing between the two is what the flattening loses.
-fn citations_by_unit(document: &Document<'_>) -> BTreeMap<usize, Vec<(String, bool)>> {
-    let mut out: BTreeMap<usize, Vec<(String, bool)>> = BTreeMap::new();
-    for citation in document.citations() {
-        for &(_, unit) in citation.lifted() {
-            let entry = out.entry(unit).or_default();
-            entry.extend(citation.anchors().iter().map(|a| (a.clone(), true)));
-            entry.extend(citation.sources().iter().map(|s| (s.clone(), false)));
+/// One concordance row's lift onto one unit: the node that keeps the
+/// row's own anchors beside the row's own sources.
+struct CitationEdge<'d> {
+    /// The edge's content-addressed node IRI.
+    iri: String,
+    /// The row's canon source paths, in the order the row wrote them.
+    sources: &'d [String],
+    /// The row's anchors, in the order the row wrote them.
+    anchors: &'d [String],
+}
+
+/// One citation edge per (row, unit) the row lifted onto, indexed by
+/// unit.
+///
+/// This is where the flat projection's loss is repaired. A row that
+/// covers a verse another row also covers used to hand the unit a pile
+/// of anchors and a pile of paths with nothing to say which came from
+/// where; here each row's lift is its own node, so its paths annotate
+/// its own anchors and a consumer reading the triples back can put the
+/// row together again.
+fn citation_edges<'d>(
+    document: &'d Document<'_>,
+    vocabulary: &Vocabulary,
+    contract: &ChunkingContractId,
+    unit_iris: &[String],
+) -> BTreeMap<usize, Vec<CitationEdge<'d>>> {
+    let source = document.source().as_bytes();
+    let mut out: BTreeMap<usize, Vec<CitationEdge<'d>>> = BTreeMap::new();
+    for row in document.citations() {
+        let span = row.span();
+        let line = &source[span.start as usize..span.end as usize];
+        for &(_, unit) in row.lifted() {
+            out.entry(unit).or_default().push(CitationEdge {
+                iri: citation_iri(
+                    vocabulary,
+                    document.id(),
+                    contract,
+                    span.start,
+                    span.end,
+                    line,
+                    &unit_iris[unit],
+                ),
+                sources: row.sources(),
+                anchors: row.anchors(),
+            });
         }
     }
     out
@@ -197,11 +239,12 @@ fn unit_claim(
     unit_iris: &[String],
     section_iris: &[String],
     i: usize,
-    cites: &[(String, bool)],
+    cites: &[CitationEdge<'_>],
 ) -> Claim {
     let v = &profile.vocabulary;
     let me = &unit_iris[i];
     let span = u.span();
+    let scalars = u.scalar_span();
     let mut lines = vec![
         triple(me, crate::RDF_TYPE, &iri(&v.unit_class)),
         triple(me, &v.text, &literal(u.quote())),
@@ -209,6 +252,13 @@ fn unit_claim(
         triple(me, &v.ordinal, &integer(u.ordinal())),
         triple(me, &v.byte_start, &integer(span.start)),
         triple(me, &v.byte_end, &integer(span.end)),
+        triple(me, &v.scalar_start, &integer(scalars.start)),
+        triple(me, &v.scalar_end, &integer(scalars.end)),
+        triple(
+            me,
+            &v.content_digest,
+            &typed(&u.digest().to_hex(), crate::XSD_HEX_BINARY),
+        ),
     ];
     if let Some(s) = u.section() {
         lines.push(triple(me, &v.in_section, &iri(&section_iris[s])));
@@ -226,15 +276,26 @@ fn unit_claim(
     if let Some(p) = u.continues() {
         lines.push(triple(me, &v.continues, &iri(&unit_iris[p])));
     }
-    for (name, is_anchor) in cites {
-        if *is_anchor {
+    for edge in cites {
+        for anchor in edge.anchors {
+            // The one term, written once and stated twice: the asserted
+            // edge, and the triple term the row's node reifies. Building
+            // both from the same value is what keeps them byte-identical
+            // however the anchor is spelled.
             let object = match &profile.canon_base {
-                Some(base) => iri(&format!("{base}{name}")),
-                None => typed(name, &v.dt_anchor),
+                Some(base) => RdfTerm::Iri(format!("{base}{anchor}")),
+                None => typed_term(anchor, &v.dt_anchor),
             };
-            lines.push(triple(me, &v.cites, &object));
-        } else {
-            lines.push(triple(me, &v.canon_source, &typed(name, &v.dt_path)));
+            lines.push(triple(me, &v.cites, &emit_term(&object)));
+            let reified = RdfTerm::triple(RdfTriple::new(
+                RdfTerm::Iri(me.clone()),
+                v.cites.as_str(),
+                object,
+            ));
+            lines.push(triple(&edge.iri, crate::RDF_REIFIES, &emit_term(&reified)));
+        }
+        for path in edge.sources {
+            lines.push(triple(&edge.iri, &v.canon_source, &typed(path, &v.dt_path)));
         }
     }
     claim(
@@ -266,44 +327,47 @@ fn claim(
     }
 }
 
+/// One N-Triples line, its object already rendered.
+///
+/// The subject goes through the canonical writer; the predicate is
+/// written bare between `<` and `>`, exactly as `purrdf-core`'s own quad
+/// writer does, because a predicate is an IRI the profile already
+/// answered for.
 fn triple(subject: &str, predicate: &str, object: &str) -> String {
-    format!("<{subject}> <{predicate}> {object} .")
+    format!("{} <{predicate}> {object} .", iri(subject))
 }
 
 fn iri(value: &str) -> String {
-    format!("<{value}>")
+    emit_term(&RdfTerm::Iri(value.to_owned()))
 }
 
+/// A plain literal: an `xsd:string`, written with no datatype IRI.
 fn literal(value: &str) -> String {
-    format!("\"{}\"", escape(value))
+    emit_term(&RdfTerm::Literal(RdfLiteral {
+        lexical_form: value.to_owned(),
+        datatype: None,
+        language: None,
+        direction: None,
+    }))
+}
+
+/// A datatyped literal **term**, for a position that needs the term
+/// rather than its rendering — the object of a triple term.
+fn typed_term(value: &str, datatype: &str) -> RdfTerm {
+    RdfTerm::Literal(RdfLiteral {
+        lexical_form: value.to_owned(),
+        datatype: Some(datatype.to_owned()),
+        language: None,
+        direction: None,
+    })
 }
 
 fn typed(value: &str, datatype: &str) -> String {
-    format!("\"{}\"^^<{datatype}>", escape(value))
+    emit_term(&typed_term(value, datatype))
 }
 
 fn integer(value: u64) -> String {
-    format!("\"{value}\"^^<{}>", crate::XSD_INTEGER)
-}
-
-/// N-Triples string escaping: the five named escapes, and `\uXXXX` for
-/// any other control character.
-fn escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
+    typed(&value.to_string(), crate::XSD_INTEGER)
 }
 
 /// Characters that cannot appear inside an N-Triples IRI reference.
@@ -316,14 +380,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn escaping_covers_the_named_escapes_and_control_characters() {
+    fn escaping_covers_the_named_escapes_the_controls_and_the_delete() {
         assert_eq!(
-            escape("a\"b\\c\nd\re\tf\u{1}"),
-            "a\\\"b\\\\c\\nd\\re\\tf\\u0001"
+            literal("a\"b\\c\nd\re\tf\u{1}\u{7f}"),
+            "\"a\\\"b\\\\c\\nd\\re\\tf\\u0001\\u007F\""
         );
         assert_eq!(
-            escape("curly \u{201c}quotes\u{201d} \u{2013}"),
-            "curly \u{201c}quotes\u{201d} \u{2013}"
+            literal("curly \u{201c}quotes\u{201d} \u{2013}"),
+            "\"curly \u{201c}quotes\u{201d} \u{2013}\""
+        );
+        assert_eq!(
+            typed("a\u{7f}b", "urn:test:dt"),
+            "\"a\\u007Fb\"^^<urn:test:dt>"
         );
     }
 }

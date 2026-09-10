@@ -37,10 +37,12 @@
 //! siblings); and one unit node per numbered verse (`12. text`) or
 //! blank-line paragraph. Horizontal rules and table rows are structure,
 //! not units. A unit carries exactly one plain `xsd:string` literal, the
-//! verbatim byte span of the source, plus its byte span, ordinal,
-//! section, and heading lineage as typed literals, so a text index sees
-//! one text per unit and a reader can always get back to the exact
-//! bytes.
+//! verbatim byte span of the source, plus its byte span, its scalar
+//! span, its content digest, its ordinal, its section, and its heading
+//! lineage as typed literals, so a text index sees one text per unit and
+//! a reader can always get back to the exact bytes — and prove, from the
+//! digest, that the bytes it got back are the bytes the node was minted
+//! over.
 //!
 //! Structure is recognized on a line's trimmed text, so a document
 //! written with CRLF endings slices into the structure its LF twin
@@ -73,11 +75,16 @@
 //! # The concordance
 //!
 //! A `## Concordance` table (`| Verses | Canon source | Anchors |`)
-//! lifts into citation triples from each verse in a range to its anchors
-//! and source paths. A concordance may cover a canon wider than the
-//! document that carries it: a row whose verses are all elsewhere lifts
-//! nothing here and is **not** an error — it is reported as data, along
-//! with any row too malformed to read at all.
+//! lifts into citation triples from each verse in a range to its
+//! anchors. Each row's lift onto one verse is also its own
+//! content-addressed **citation node**, which `rdf:reifies` the RDF 1.2
+//! triple term `<<( <unit> <cites> <anchor> )>>` and carries that row's
+//! source paths — so a verse two rows cover keeps each row's paths
+//! beside that row's anchors, which a flat projection could not say. A
+//! concordance may cover a canon wider than the document that carries
+//! it: a row whose verses are all elsewhere lifts nothing here and is
+//! **not** an error — it is reported as data, along with any row too
+//! malformed to read at all.
 //!
 //! # Identity
 //!
@@ -97,6 +104,11 @@
 //! algorithm is inside both the preimage and the IRI, so another
 //! producer can mint the same shape under another algorithm without
 //! redefining the preimage.
+//!
+//! A citation node is minted the same way over the pair it names — the
+//! concordance row's own line span, and a digest of that line together
+//! with the unit's IRI — so a row that lifts onto two verses is two
+//! nodes and a unit that re-mints re-mints every citation of it.
 //!
 //! # It mints no vocabulary
 //!
@@ -141,7 +153,7 @@ use purrdf_core::{BaseIri, parse_iri};
 
 pub use crate::claims::render;
 pub use crate::error::MarkdownError;
-pub use crate::identity::{section_iri, unit_iri};
+pub use crate::identity::{citation_iri, section_iri, unit_iri};
 pub use crate::model::{
     CONTEXT_BYTES, Citation, ContentAnchor, Document, MalformedRow, RowDefect, Section, Span,
     SpanRelation, Unit, span_relation,
@@ -161,11 +173,21 @@ pub const DEFAULT_OVERLAP: usize = 128;
 /// identity, in both the preimage and the IRI.
 pub const DIGEST_ALGORITHM: &str = "sha256";
 
-/// `rdf:type`, the one IRI the slicer emits that is the standard's, not
-/// the caller's.
+/// `rdf:type`, one of the four IRIs the slicer emits that are the
+/// standard's, not the caller's.
 pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-/// `xsd:integer`, the datatype of every ordinal, level, and byte offset.
+/// `rdf:reifies`, the RDF 1.2 predicate binding a citation node to the
+/// triple term it reifies. Like [`RDF_TYPE`] it is the standard's IRI
+/// and never a vocabulary field: reification is a shape of the data
+/// model, not a term a deployment gets to rename.
+pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+/// `xsd:integer`, the datatype of every ordinal, level, byte offset, and
+/// scalar offset.
 pub const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+/// `xsd:hexBinary`, the datatype of a unit's content digest stated as
+/// data. The lexical form is the same lowercase hex the unit's IRI
+/// carries, so a consumer compares the two without re-encoding either.
+pub const XSD_HEX_BINARY: &str = "http://www.w3.org/2001/XMLSchema#hexBinary";
 
 /// Which node a claim describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +202,12 @@ pub enum ClaimKind {
 
 /// One node's triples, rendered as sorted N-Triples lines (valid
 /// Turtle; declare `text/turtle` to a consumer).
+///
+/// [`Self::subject`] names the node the claim is *about*. A unit's claim
+/// also carries the triples of the citation nodes minted for the rows
+/// that lifted onto it — a citation is an edge of the unit and nothing
+/// asks after it on its own, so it travels with the unit rather than
+/// becoming a claim a consumer has to join back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Claim {
     /// The triples, one per line, sorted bytewise, each ending in `\n`.
@@ -297,9 +325,9 @@ pub fn analyze<'a>(
 /// Every refusal is stated before a byte of the document is read, and
 /// nothing is ever dropped quietly: a document either slices whole or
 /// names why it could not. A caller who wants more of the document than
-/// the graph carries — the containment lattice, a unit's scalar span or
-/// content anchor, the unflattened concordance rows — calls [`analyze`]
-/// and keeps the model.
+/// the graph carries — the containment lattice, a unit's content anchor,
+/// the rows that lifted nothing and the rows too malformed to read —
+/// calls [`analyze`] and keeps the model.
 ///
 /// # Errors
 ///
