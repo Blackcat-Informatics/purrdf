@@ -8,7 +8,10 @@ use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::reader::FrameContext;
 use purrdf_gts::wire::digest_str;
 use purrdf_gts::writer::Writer;
-use purrdf_rdf::{GtsBlobLimits, GtsBlobSelector, import_gts_events, import_gts_events_with_blobs};
+use purrdf_rdf::{
+    DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits, GtsBlobSelector, import_gts_events,
+    import_gts_events_with_blobs,
+};
 
 fn limits() -> GtsBlobLimits {
     GtsBlobLimits::new(1024 * 1024, 2 * 1024 * 1024)
@@ -1684,5 +1687,112 @@ fn a_refused_declaration_obeys_the_metadata_ceiling() {
         under.refused[0].metadata.is_some(),
         "an in-budget declaration is retained: {:?}",
         under.refused[0]
+    );
+}
+
+/// A retention ceiling never changes how many blobs a selector counts.
+///
+/// The metadata ceiling governs how much of a blob's description this import
+/// keeps. It must not govern whether the blob is a candidate: a caller who
+/// lowers a memory budget would otherwise receive one arbitrary payload where
+/// two match, and the default ceiling would decide it silently.
+#[test]
+fn the_metadata_ceiling_does_not_decide_which_blob_a_selector_finds() {
+    let bulky = |rep: &str, filler: usize| {
+        Value::Map(vec![
+            ("rep".into(), rep.into()),
+            ("note".into(), Value::Text("z".repeat(filler))),
+        ])
+    };
+
+    // Two payloads both finally carry "wanted"; one has a huge description.
+    let mut writer = Writer::new("generic");
+    writer.add_blob(b"small and wanted", None, Some("wanted"));
+    writer.add_frame(
+        "blob",
+        None,
+        Some(vec![b'u'; 80_000]),
+        None,
+        Some(bulky("wanted", 400_000)),
+    );
+    let bytes = writer.into_bytes();
+
+    let mut tight = limits();
+    tight.max_encoded_bytes = 1_024;
+
+    // The shipped default is 64 KiB, well under this description.
+    for (label, metadata_ceiling) in [("default", DEFAULT_MAX_METADATA_BYTES), ("roomy", 1 << 20)] {
+        let mut budget = tight;
+        budget.max_metadata_bytes = metadata_ceiling;
+        let error = import_gts_events_with_blobs(
+            &bytes,
+            &[GtsBlobSelector::Representation("wanted")],
+            budget,
+        )
+        .expect_err("two payloads finally carry this representation");
+        assert_eq!(
+            error.code, "rdf-ir-gts-blob-selection",
+            "{label}: {error:?}"
+        );
+        assert!(
+            error.message.contains("resolves to 2 blobs"),
+            "{label}: the count must not depend on the metadata ceiling: {error:?}"
+        );
+    }
+}
+
+/// The selection record keeps names, not descriptions.
+///
+/// What a blob is *called* has to survive a ceiling that discards how it is
+/// *described*, and it has to do so without becoming a second unbounded copy of
+/// the metadata. A value longer than any selector cannot match one, so nothing
+/// larger than a selector is ever kept for matching.
+#[test]
+fn an_oversized_description_is_neither_retained_nor_lost_for_matching() {
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "blob",
+        None,
+        Some(vec![b'u'; 80_000]),
+        None,
+        Some(Value::Map(vec![
+            ("rep".into(), "wanted".into()),
+            ("note".into(), Value::Text("z".repeat(400_000))),
+        ])),
+    );
+    let bytes = writer.into_bytes();
+
+    let mut budget = limits();
+    budget.max_encoded_bytes = 1_024;
+    budget.max_metadata_bytes = DEFAULT_MAX_METADATA_BYTES;
+
+    // The description is dropped from what the caller gets back...
+    let observed = import_gts_events_with_blobs(&bytes, &[], budget).expect("import succeeds");
+    assert_eq!(observed.refused.len(), 1);
+    assert!(
+        observed.refused[0].metadata.is_none(),
+        "the over-budget description is not retained: {:?}",
+        observed.refused[0]
+    );
+
+    // ...and the name still names it.
+    let error =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Representation("wanted")], budget)
+            .expect_err("the caller named a payload this budget would not admit");
+    assert_eq!(error.code, "rdf-ir-gts-blob-limit", "{error:?}");
+
+    // A representation longer than any selector cannot match one, so it is not
+    // kept for matching either — the record holds names, never bulk.
+    let mut writer = Writer::new("generic");
+    writer.add_blob(b"unreachable", None, Some(&"y".repeat(8192)));
+    let unreachable = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect_err("no selector can carry that value");
+    assert_eq!(
+        unreachable.code, "rdf-ir-gts-blob-selection",
+        "{unreachable:?}"
     );
 }

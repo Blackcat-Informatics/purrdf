@@ -237,7 +237,7 @@ pub(crate) struct BlobCollector<'a> {
     selectors: Vec<GtsBlobSelector<'a>>,
     limits: GtsBlobLimits,
     selected: BTreeMap<String, GtsImportedBlob>,
-    refused: Vec<GtsRefusedBlob>,
+    refused: Vec<RefusedOccurrence>,
     /// Digests some occurrence in this container carried bytes for, whether or
     /// not they were selected. Distinguishes a payload we declined to retain
     /// from one the container never held.
@@ -252,7 +252,7 @@ pub(crate) struct BlobCollector<'a> {
     ///
     /// Selection reads the *final* metadata, so an occurrence's verdict is only
     /// provisional until the container ends.
-    final_metadata: BTreeMap<String, Value>,
+    declared: BTreeMap<String, SelectionKey>,
     frame: Option<BlobFrame>,
     total: usize,
 }
@@ -282,16 +282,59 @@ fn metadata_field<'a>(
     Ok(value)
 }
 
-fn matches(selector: GtsBlobSelector<'_>, digest: &str, meta: Option<&Value>) -> bool {
+/// Longest value a selector may carry, so anything longer cannot match one.
+const MAX_SELECTOR_BYTES: usize = 4096;
+
+/// The part of a blob's public metadata that selection is allowed to read.
+///
+/// Kept apart from the metadata a caller gets back, because the two answer
+/// different questions and only one of them is the caller's to bound. A
+/// retention ceiling says how many bytes this import will KEEP; it must never
+/// change how many blobs a selector COUNTS, or the size of a budget silently
+/// decides which payload the caller receives.
+///
+/// Bounded by construction rather than by a ceiling: a selector is at most
+/// [`MAX_SELECTOR_BYTES`], so a representation longer than that cannot equal any
+/// selector, and discarding it is lossless for matching. Nothing here is ever
+/// dropped to satisfy a budget.
+#[derive(Clone, Debug, Default)]
+struct SelectionKey {
+    rep: Option<String>,
+}
+
+/// Project the selectable part out of a public metadata map.
+///
+/// Only `rep` is carried: those are the only two selector kinds, and `digest` is
+/// matched against the blob's own identity rather than its metadata. A field a
+/// selector cannot name has no business in a structure retained for matching.
+fn selection_key(meta: Option<&Value>) -> SelectionKey {
+    let Some(Value::Map(fields)) = meta else {
+        return SelectionKey::default();
+    };
+    let rep = fields
+        .iter()
+        .find(|(key, _)| key.as_text() == Some("rep"))
+        .and_then(|(_, value)| value.as_text())
+        .filter(|text| text.len() <= MAX_SELECTOR_BYTES)
+        .map(ToString::to_string);
+    SelectionKey { rep }
+}
+
+/// A refused occurrence and the name it was published under.
+///
+/// The projection travels with the occurrence because a refusal without a
+/// computable identity has no entry in the by-digest record, and losing its name
+/// would let a ceiling decide that it never matched anything.
+struct RefusedOccurrence {
+    blob: GtsRefusedBlob,
+    key: SelectionKey,
+}
+
+fn matches(selector: GtsBlobSelector<'_>, digest: &str, key: Option<&SelectionKey>) -> bool {
     match selector {
         GtsBlobSelector::Digest(expected) => expected == digest,
         GtsBlobSelector::Representation(expected) => {
-            let Some(Value::Map(fields)) = meta else {
-                return false;
-            };
-            fields.iter().any(|(key, value)| {
-                key.as_text() == Some("rep") && value.as_text() == Some(expected)
-            })
+            key.and_then(|key| key.rep.as_deref()) == Some(expected)
         }
     }
 }
@@ -305,7 +348,9 @@ impl<'a> BlobCollector<'a> {
             || selectors.iter().enumerate().any(|(index, selector)| {
                 let (GtsBlobSelector::Digest(value) | GtsBlobSelector::Representation(value)) =
                     selector;
-                value.is_empty() || value.len() > 4096 || selectors[..index].contains(selector)
+                value.is_empty()
+                    || value.len() > MAX_SELECTOR_BYTES
+                    || selectors[..index].contains(selector)
             })
         {
             return Err(fail(
@@ -320,7 +365,7 @@ impl<'a> BlobCollector<'a> {
             refused: Vec::new(),
             inlined: BTreeSet::new(),
             unresolved: Vec::new(),
-            final_metadata: BTreeMap::new(),
+            declared: BTreeMap::new(),
             frame: None,
             total: 0,
         })
@@ -357,7 +402,7 @@ impl<'a> BlobCollector<'a> {
         if self
             .selectors
             .iter()
-            .any(|selector| matches(*selector, digest, metadata))
+            .any(|selector| matches(*selector, digest, self.declared.get(digest)))
         {
             check_metadata_bound(metadata, self.limits.max_metadata_bytes)?;
             validate_metadata(metadata, digest)?;
@@ -386,9 +431,9 @@ impl<'a> BlobCollector<'a> {
         if payload.payload_present {
             self.inlined.insert(payload.digest.to_string());
         }
-        if let Some(declared) = payload.metadata.filter(|_| payload.metadata_declared) {
-            self.final_metadata
-                .insert(payload.digest.to_string(), declared.clone());
+        if payload.metadata_declared {
+            self.declared
+                .insert(payload.digest.to_string(), selection_key(payload.metadata));
         }
         let previous = self.selected.get(payload.digest);
         // The reader's per-occurrence metadata inherits only within a segment —
@@ -400,12 +445,11 @@ impl<'a> BlobCollector<'a> {
         // it before falling back to whatever a retained copy happens to hold.
         let metadata = payload
             .metadata
-            .or_else(|| self.final_metadata.get(payload.digest))
             .or_else(|| previous.and_then(|blob| blob.metadata.as_ref()));
         if !self
             .selectors
             .iter()
-            .any(|selector| matches(*selector, payload.digest, metadata))
+            .any(|selector| matches(*selector, payload.digest, self.declared.get(payload.digest)))
         {
             if let Some(old) = self.selected.remove(payload.digest) {
                 // Release builds leave overflow checks off, so a future break of
@@ -539,9 +583,12 @@ impl<'a> BlobCollector<'a> {
         // the file's claim by construction. Proof is required for the different
         // question of whether two occurrences are the same payload, and that
         // gate stays where it belongs, on dedup.
-        if let (Some(digest), Some(declared)) = (refusal.digest, refusal.metadata) {
-            self.final_metadata
-                .insert(digest.to_string(), declared.clone());
+        // Projected from the raw declaration, before the retention bound below.
+        // The two are deliberately independent: what a blob is called must
+        // survive a ceiling that discards how it is described.
+        if let (Some(digest), Some(meta)) = (refusal.digest, refusal.metadata) {
+            self.declared
+                .insert(digest.to_string(), selection_key(Some(meta)));
         }
         // A budget bounds what this import retains, and a refused declaration is
         // retained like any other. Bounding it only on the payload path would
@@ -557,13 +604,17 @@ impl<'a> BlobCollector<'a> {
         } else {
             refusal.detail.to_string()
         };
-        self.refused.push(GtsRefusedBlob {
-            digest: refusal.digest.map(ToString::to_string),
-            digest_computed: refusal.digest_computed,
-            metadata: metadata.cloned(),
-            segment_index: refusal.segment_index,
-            encoded_len: refusal.encoded_len,
-            detail,
+        let key = selection_key(refusal.metadata);
+        self.refused.push(RefusedOccurrence {
+            key,
+            blob: GtsRefusedBlob {
+                digest: refusal.digest.map(ToString::to_string),
+                digest_computed: refusal.digest_computed,
+                metadata: metadata.cloned(),
+                segment_index: refusal.segment_index,
+                encoded_len: refusal.encoded_len,
+                detail,
+            },
         });
     }
 
@@ -594,11 +645,11 @@ impl<'a> BlobCollector<'a> {
             // retagged this one so that nothing names it any more. Refusing over
             // a blob the selection does not finally reach would reject a file
             // the authoritative importer accepts.
-            let metadata = self.final_metadata.get(digest);
+            let key = self.declared.get(digest);
             if !self
                 .selectors
                 .iter()
-                .any(|selector| matches(*selector, digest, metadata))
+                .any(|selector| matches(*selector, digest, key))
             {
                 continue;
             }
@@ -610,9 +661,9 @@ impl<'a> BlobCollector<'a> {
             if let Some(refusal) = self
                 .refused
                 .iter()
-                .find(|blob| blob.digest.as_deref() == Some(digest.as_str()))
+                .find(|refused| refused.blob.digest.as_deref() == Some(digest.as_str()))
             {
-                let identity = if refusal.digest_computed {
+                let identity = if refusal.blob.digest_computed {
                     "is present in this container"
                 } else {
                     "is declared by this container, though its identity was not verified before refusal,"
@@ -621,7 +672,7 @@ impl<'a> BlobCollector<'a> {
                     "rdf-ir-gts-blob-limit",
                     format!(
                         "blob {digest} {identity} and its {} encoded bytes exceeded this import's budget: {}",
-                        refusal.encoded_len, refusal.detail
+                        refusal.blob.encoded_len, refusal.blob.detail
                     ),
                 ));
             }
@@ -645,13 +696,13 @@ impl<'a> BlobCollector<'a> {
             let retained = self
                 .selected
                 .values()
-                .filter(|blob| matches(*selector, &blob.digest, blob.metadata.as_ref()))
+                .filter(|blob| matches(*selector, &blob.digest, self.declared.get(&blob.digest)))
                 .count();
             // A refused candidate still counts. It was in the archive; only its
             // bytes were declined. Ignoring it here would make the byte budget a
             // selection rule, so a tighter ceiling could quietly resolve an
             // ambiguous selector to one arbitrary survivor.
-            let refused: Vec<&GtsRefusedBlob> = self
+            let refused: Vec<&RefusedOccurrence> = self
                 .refused
                 .iter()
                 .filter(|blob| {
@@ -661,19 +712,13 @@ impl<'a> BlobCollector<'a> {
                     // a proved identity may reach for the container-global
                     // record; letting a claimed digest choose whose metadata to
                     // consult would hand the file that decision back.
-                    let effective = if blob.digest_computed {
-                        blob.digest
-                            .as_deref()
-                            .and_then(|digest| self.final_metadata.get(digest))
-                            .or(blob.metadata.as_ref())
-                    } else {
-                        blob.metadata.as_ref()
-                    };
-                    matches(
-                        *selector,
-                        blob.digest.as_deref().unwrap_or_default(),
-                        effective,
-                    )
+                    let digest = blob.blob.digest.as_deref().unwrap_or_default();
+                    // A later frame can retag a digest the container named, so
+                    // the by-digest record wins where it has an entry. A refusal
+                    // with no computable identity cannot be retagged, so its own
+                    // projection is the only, and final, answer.
+                    let key = self.declared.get(digest).unwrap_or(&blob.key);
+                    matches(*selector, digest, Some(key))
                 })
                 // A container may store one blob twice — once compressed, once
                 // not — and refuse only the copy that did not fit. That is still
@@ -684,7 +729,7 @@ impl<'a> BlobCollector<'a> {
                 // assumed to be the same payload when a retained blob already
                 // answers this selector, because it cannot be proven otherwise
                 // and refusing valid input is the worse error.
-                .filter(|blob| match blob.digest.as_deref() {
+                .filter(|blob| match blob.blob.digest.as_deref() {
                     // Proved identity: if that payload is already retained, this
                     // is the same blob stored twice, not a second candidate.
                     // Only a digest this reader computed counts. A declared one
@@ -693,7 +738,9 @@ impl<'a> BlobCollector<'a> {
                     // retained blob on an oversized frame and make a genuine
                     // ambiguity disappear — the same "input picks its own
                     // verdict" defect this importer already refuses to allow.
-                    Some(digest) if blob.digest_computed => !self.selected.contains_key(digest),
+                    Some(digest) if blob.blob.digest_computed => {
+                        !self.selected.contains_key(digest)
+                    }
                     // Unproved identity: it may be a different payload. Count it
                     // and fail closed; silently returning one of two possible
                     // answers is the worse error.
@@ -708,7 +755,7 @@ impl<'a> BlobCollector<'a> {
                 let unidentified = self
                     .refused
                     .iter()
-                    .filter(|blob| blob.digest.is_none())
+                    .filter(|refused| refused.blob.digest.is_none())
                     .count();
                 let note = if unidentified == 0 {
                     String::new()
@@ -732,7 +779,7 @@ impl<'a> BlobCollector<'a> {
                     "rdf-ir-gts-blob-limit",
                     format!(
                         "required selector {selector:?} matches a payload of {} encoded bytes that this import's budget refused: {}",
-                        blob.encoded_len, blob.detail
+                        blob.blob.encoded_len, blob.blob.detail
                     ),
                 ));
             }
@@ -748,7 +795,13 @@ impl<'a> BlobCollector<'a> {
                 .all(|blob| !blob.segment_head.is_empty() && !blob.frame_id.is_empty()),
             "selected blob provenance must be populated before it is returned"
         );
-        Ok((self.selected.into_values().collect(), self.refused))
+        Ok((
+            self.selected.into_values().collect(),
+            self.refused
+                .into_iter()
+                .map(|refused| refused.blob)
+                .collect(),
+        ))
     }
 }
 
