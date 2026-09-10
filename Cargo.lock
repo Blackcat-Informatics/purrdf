@@ -1496,6 +1496,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-markdown"
+version = "1.1.0"
+dependencies = [
+ "pretty_assertions",
+ "purrdf-core",
+ "purrdf-rdf",
+]
+
+[[package]]
 name = "purrdf-python"
 version = "1.1.0"
 dependencies = [

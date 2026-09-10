@@ -13,6 +13,7 @@ members = [
     "crates/geo",
     "crates/gts",
     "crates/iri",
+    "crates/markdown",
     "crates/purrdf",
     "crates/rdf",
     "crates/rdf-capi",
