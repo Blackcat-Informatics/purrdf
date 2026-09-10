@@ -528,26 +528,42 @@ impl<'a> BlobCollector<'a> {
     /// budget decide which blob a selector resolves to, so a tight ceiling could
     /// silently turn an ambiguous match into a confident wrong answer.
     pub(crate) fn refused(&mut self, refusal: BlobRefusal<'_>) {
-        // A refused occurrence never reaches `payload`, so its own declaration
-        // would otherwise be missing from the container-global record and a
+        // A refused occurrence never reaches `payload`, so without this its own
+        // declaration would be missing from the container-global record and a
         // staler one would answer for it — letting the ceiling, rather than the
-        // container, decide what a representation finally names. Only a proved
-        // identity may write here: a transformed or encrypted refusal carries
-        // the file's unverified claim, which must not choose whose metadata is
-        // read.
-        if let (Some(digest), true, Some(declared)) =
-            (refusal.digest, refusal.digest_computed, refusal.metadata)
-        {
+        // container, decide what a representation finally names.
+        //
+        // No proof gate here, deliberately. Public metadata is a container
+        // assertion at every occurrence, including the metadata-only frames the
+        // payload path already records unverified; what a digest is *called* is
+        // the file's claim by construction. Proof is required for the different
+        // question of whether two occurrences are the same payload, and that
+        // gate stays where it belongs, on dedup.
+        if let (Some(digest), Some(declared)) = (refusal.digest, refusal.metadata) {
             self.final_metadata
                 .insert(digest.to_string(), declared.clone());
         }
+        // A budget bounds what this import retains, and a refused declaration is
+        // retained like any other. Bounding it only on the payload path would
+        // leave a ceiling that a refused frame walks straight past.
+        let metadata = refusal.metadata.filter(|meta| {
+            check_metadata_bound(Some(meta), self.limits.max_metadata_bytes).is_ok()
+        });
+        let detail = if metadata.is_none() && refusal.metadata.is_some() {
+            format!(
+                "{}; its public metadata also exceeded the {}-byte metadata budget and was not retained",
+                refusal.detail, self.limits.max_metadata_bytes
+            )
+        } else {
+            refusal.detail.to_string()
+        };
         self.refused.push(GtsRefusedBlob {
             digest: refusal.digest.map(ToString::to_string),
             digest_computed: refusal.digest_computed,
-            metadata: refusal.metadata.cloned(),
+            metadata: metadata.cloned(),
             segment_index: refusal.segment_index,
             encoded_len: refusal.encoded_len,
-            detail: refusal.detail.to_string(),
+            detail,
         });
     }
 
@@ -586,16 +602,25 @@ impl<'a> BlobCollector<'a> {
             {
                 continue;
             }
-            // A proved refusal is proof the container carried these bytes. Saying
-            // they are "held elsewhere" would let the byte budget decide what
-            // this importer claims about the archive's contents.
-            if let Some(refusal) = self.refused.iter().find(|blob| {
-                blob.digest_computed && blob.digest.as_deref() == Some(digest.as_str())
-            }) {
+            // A refusal is proof the container carried a payload under this
+            // label. Calling it "held elsewhere" would let the byte budget decide
+            // what this importer claims about the archive's contents, so presence
+            // is answered from any refusal that named the digest. Identity is a
+            // separate question, and the message says which one it can vouch for.
+            if let Some(refusal) = self
+                .refused
+                .iter()
+                .find(|blob| blob.digest.as_deref() == Some(digest.as_str()))
+            {
+                let identity = if refusal.digest_computed {
+                    "is present in this container"
+                } else {
+                    "is declared by this container, though its identity was not verified before refusal,"
+                };
                 return Err(fail(
                     "rdf-ir-gts-blob-limit",
                     format!(
-                        "blob {digest} is present in this container but its {} encoded bytes exceeded this import's budget: {}",
+                        "blob {digest} {identity} and its {} encoded bytes exceeded this import's budget: {}",
                         refusal.encoded_len, refusal.detail
                     ),
                 ));

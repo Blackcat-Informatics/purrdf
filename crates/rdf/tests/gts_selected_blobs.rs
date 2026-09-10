@@ -1570,3 +1570,119 @@ fn a_ceiling_never_decides_what_a_representation_finally_names() {
         assert_eq!(&*result.blobs[0].bytes, small, "{label}");
     }
 }
+
+/// Presence and identity are separate facts, and the importer says which it has.
+///
+/// A refused frame proves the container carried a payload under some label. That
+/// is enough to stop calling the digest "held elsewhere" — the bytes are two
+/// frames back. It is not enough to treat those bytes as that digest's, which is
+/// why the message distinguishes the two and why deduplication still demands a
+/// proved hash. Nothing here may depend on the ceiling the caller chose.
+#[test]
+fn an_unverified_refusal_is_never_called_held_elsewhere() {
+    let large = vec![b'w'; 80_000];
+    let small = b"small and wanted";
+
+    // An encrypted payload is refused before decryption, so its identity is the
+    // container's claim. Its own later declaration retags it away from "wanted".
+    let key: [u8; 32] = purrdf_gts::wire::blake3_256(b"unverified refusal key")
+        .try_into()
+        .expect("a 256-bit digest is 32 bytes");
+    let iv: [u8; 12] = purrdf_gts::wire::blake3_256(b"unverified refusal nonce")[..12]
+        .try_into()
+        .expect("a 256-bit digest is at least 12 bytes");
+    let claimed = digest_str(&large);
+
+    let mut writer = Writer::new("generic");
+    writer.add_frame("blob", None, None, None, Some(meta(&claimed, "wanted")));
+    writer
+        .add_frame_with_options(
+            "blob",
+            purrdf_gts::writer::FrameOptions {
+                raw: Some(large),
+                pub_meta: Some(meta(&claimed, "other")),
+                encrypt: Some(purrdf_gts::writer::Encrypt0Options {
+                    kid: "recipient".into(),
+                    key,
+                    iv,
+                }),
+                ..purrdf_gts::writer::FrameOptions::default()
+            },
+        )
+        .expect("encrypted oversized frame");
+    writer.add_blob(small, None, Some("wanted"));
+    let bytes = writer.into_bytes();
+
+    let mut tight = limits();
+    tight.max_encoded_bytes = 1_024;
+
+    // The encrypted occurrence's own declaration says "other", so exactly one
+    // blob finally carries "wanted" and the selector must reach it.
+    let resolved =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Representation("wanted")], tight)
+            .expect("a refused occurrence retagged itself away from this representation");
+    assert_eq!(&*resolved.blobs[0].bytes, small);
+
+    // Naming the refused digest reports the budget, never "held elsewhere".
+    let refused = import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Digest(&claimed)], tight)
+        .expect_err("the caller named a payload this budget would not admit");
+    assert_eq!(refused.code, "rdf-ir-gts-blob-limit", "{refused:?}");
+    assert!(
+        !refused.message.contains("held elsewhere"),
+        "the bytes are inline, two frames back: {refused:?}"
+    );
+    assert!(
+        refused.message.contains("not verified"),
+        "an unproved identity must say so: {refused:?}"
+    );
+}
+
+/// The metadata ceiling binds the refusal path too.
+///
+/// A refused declaration is retained and handed back like any other, so a bound
+/// that only covered the payload path would be a ceiling a refused frame walks
+/// straight past — once per refused frame, with container-chosen bytes.
+#[test]
+fn a_refused_declaration_obeys_the_metadata_ceiling() {
+    let build = |filler: usize| {
+        let mut writer = Writer::new("generic");
+        writer.add_frame(
+            "blob",
+            None,
+            Some(vec![b'v'; 50_000]),
+            None,
+            Some(Value::Map(vec![
+                ("rep".into(), "wanted".into()),
+                ("note".into(), Value::Text("z".repeat(filler))),
+            ])),
+        );
+        writer.into_bytes()
+    };
+
+    let mut tight = limits();
+    tight.max_encoded_bytes = 1_024;
+    tight.max_metadata_bytes = 64 * 1024;
+
+    // Over the ceiling: the declaration is dropped, and the refusal says so.
+    let over = import_gts_events_with_blobs(&build(400_000), &[], tight).expect("import succeeds");
+    assert_eq!(over.refused.len(), 1);
+    assert!(
+        over.refused[0].metadata.is_none(),
+        "an over-budget declaration is not retained: {:?}",
+        over.refused[0]
+    );
+    assert!(
+        over.refused[0].detail.contains("metadata budget"),
+        "and the reason is stated: {:?}",
+        over.refused[0]
+    );
+
+    // Neighbouring valid case: a declaration within the ceiling is kept intact.
+    let under = import_gts_events_with_blobs(&build(1_024), &[], tight).expect("import succeeds");
+    assert_eq!(under.refused.len(), 1);
+    assert!(
+        under.refused[0].metadata.is_some(),
+        "an in-budget declaration is retained: {:?}",
+        under.refused[0]
+    );
+}
