@@ -506,15 +506,13 @@ pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
 
 /// Whether a reader diagnostic reports a blob refused by the sink's byte budget.
 ///
-/// The reader reports these as ordinary damaged-frame diagnostics because a
-/// streaming consumer still wants to hear about them; only the selected-import
-/// path treats them as non-fatal. The three phrasings come from
-/// [`purrdf_gts::reader`]'s encoded and decoded blob checks and from the bounded
-/// codec chain's intermediate check.
+/// Matches the reader's dedicated code, never its prose. A diagnostic detail can
+/// embed container-supplied text — a header's `gts` field, a codec name — so
+/// deciding a payload's fate by searching that string lets the input choose
+/// whether it is admitted. [`purrdf_gts::reader::BLOB_BUDGET_DIAGNOSTIC`] is
+/// emitted only by the reader's own byte ceilings, which no input can spoof.
 fn is_blob_budget_refusal(diagnostic: &Diagnostic) -> bool {
-    diagnostic.code == "DamagedFrame"
-        && (diagnostic.detail.contains("blob exceeds")
-            || diagnostic.detail.contains("transform output exceeds"))
+    diagnostic.code == purrdf_gts::reader::BLOB_BUDGET_DIAGNOSTIC
 }
 
 pub(crate) fn import_with_collector<'a>(

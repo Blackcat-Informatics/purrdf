@@ -388,6 +388,80 @@ fn snapshot_payload_selection_and_reader_diagnostics_remain_native() {
     }
 }
 
+/// A container cannot talk its way past the budget seam.
+///
+/// The selected importer treats a byte-ceiling refusal as non-fatal. That
+/// decision must key off the reader's own diagnostic code, never off the
+/// human-readable detail — a detail can embed text the container chose (a
+/// header's `gts` field is echoed verbatim into the unsupported-version
+/// message), so a prose match would let a crafted file pick its own verdict and
+/// be admitted by the bounded importer while the authoritative one rejects it.
+#[test]
+fn container_supplied_text_cannot_forge_a_budget_refusal() {
+    for forged in [
+        "blob exceeds",
+        "encoded blob exceeds 1 bytes",
+        "decoded transform output exceeds 1 bytes",
+    ] {
+        let bytes = container_with_header_magic(forged);
+
+        // The reader echoes the forged magic into a `DamagedFrame` detail, so
+        // the detail now contains budget prose the container chose.
+        let plain = import_gts_events(&bytes)
+            .expect_err("an unsupported header magic is a hard fold failure");
+        let selected = import_gts_events_with_blobs(&bytes, &[], limits())
+            .expect_err("the bounded importer must refuse it too");
+        assert_eq!(plain.code, selected.code, "forged magic {forged:?}");
+        assert_eq!(
+            selected.code, "rdf-ir-gts-fold-diagnostic",
+            "forged magic {forged:?} was admitted as a budget refusal"
+        );
+    }
+}
+
+/// Author a container whose header magic is `magic`, with a valid self-hash.
+///
+/// The self-hash must be recomputed or the reader stops at "header self-hash
+/// mismatch" and never reaches the magic check whose message echoes the input.
+fn container_with_header_magic(magic: &str) -> Vec<u8> {
+    // Header only: re-authoring it changes its id, which would break the `prev`
+    // of any following frame and raise a second, unforgeable `BrokenChain`
+    // diagnostic that would mask the very admission this test is probing.
+    let authored = Writer::new("generic").into_bytes();
+
+    let mut cursor = std::io::Cursor::new(&authored[..]);
+    let item: Value = ciborium::de::from_reader(&mut cursor).expect("header item");
+    let header_len = usize::try_from(cursor.position()).expect("header fits in usize");
+    let tag = match &item {
+        Value::Tag(tag, _) => Some(*tag),
+        _ => None,
+    };
+    let mut entries = purrdf_gts::wire::unwrap_header(&item)
+        .expect("authored header is a map")
+        .clone();
+    for (key, value) in &mut entries {
+        if key.as_text() == Some("gts") {
+            *value = Value::from(magic);
+        }
+    }
+    let id = purrdf_gts::wire::header_id(&entries);
+    for (key, value) in &mut entries {
+        if key.as_text() == Some("id") {
+            *value = Value::Bytes(id.clone());
+        }
+    }
+
+    let rebuilt = Value::Map(entries);
+    let rebuilt = match tag {
+        Some(tag) => Value::Tag(tag, Box::new(rebuilt)),
+        None => rebuilt,
+    };
+    let mut out = Vec::new();
+    ciborium::ser::into_writer(&rebuilt, &mut out).expect("re-encode header");
+    out.extend_from_slice(&authored[header_len..]);
+    out
+}
+
 #[test]
 fn inherited_same_segment_metadata_keeps_its_original_frame_identity() {
     let mut writer = Writer::new("generic");

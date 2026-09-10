@@ -160,6 +160,13 @@ fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> b
         })
 }
 
+/// Diagnostic code for a payload refused by a caller-supplied byte ceiling.
+///
+/// Distinct from `DamagedFrame` so a consumer can tell "I declined to spend the
+/// bytes" from "the container is corrupt" without parsing the detail string.
+/// Only a sink that supplies a blob byte limit can provoke it.
+pub const BLOB_BUDGET_DIAGNOSTIC: &str = "BlobBudget";
+
 enum PayloadError {
     /// Missing capability — degrade to an opaque node with this reason.
     Unavailable {
@@ -168,6 +175,8 @@ enum PayloadError {
     },
     /// Anything else — the frame is damaged.
     Damaged(String),
+    /// A caller-supplied byte ceiling refused an otherwise well-formed payload.
+    Budget(String),
 }
 
 impl From<CodecError> for PayloadError {
@@ -175,6 +184,7 @@ impl From<CodecError> for PayloadError {
         match e {
             CodecError::Unavailable { reason, detail } => Self::Unavailable { reason, detail },
             CodecError::Failed(detail) => Self::Damaged(detail),
+            CodecError::Limit(detail) => Self::Budget(detail),
         }
     }
 }
@@ -197,7 +207,7 @@ fn decrypt_codec(
             detail: format!("{} decrypt failed: {err}", codec.name),
         },
         crate::cose::BoundedDecrypt0Error::Limit => {
-            CodecError::Failed(format!("decoded transform output exceeds {limit} bytes"))
+            CodecError::Limit(format!("decoded transform output exceeds {limit} bytes"))
         }
     })
 }
@@ -581,7 +591,7 @@ impl Folder<'_, '_, '_> {
                 .and_then(StreamingSink::blob_encoded_limit)
             && bytes.len() > limit
         {
-            return Err(PayloadError::Damaged(format!(
+            return Err(PayloadError::Budget(format!(
                 "encoded blob exceeds {limit} bytes"
             )));
         }
@@ -625,7 +635,7 @@ impl Folder<'_, '_, '_> {
                 .and_then(StreamingSink::blob_decode_limit)
             && bytes.len() > limit
         {
-            return Err(PayloadError::Damaged(format!(
+            return Err(PayloadError::Budget(format!(
                 "decoded blob exceeds {limit} bytes"
             )));
         }
@@ -657,6 +667,11 @@ impl Folder<'_, '_, '_> {
                     format!("payload decode failed: {detail}"),
                     Some(index),
                 );
+                return;
+            }
+            Err(PayloadError::Budget(detail)) => {
+                self.opaque(frame, ftype, "over-budget");
+                self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
                 return;
             }
             Ok(p) => p,
@@ -884,7 +899,9 @@ impl Folder<'_, '_, '_> {
                     self.diag(diag_code_for(reason), detail, Some(index));
                     return;
                 }
-                Err(PayloadError::Damaged(detail)) => {
+                // Codec-id resolution reads the catalog and decodes nothing, so
+                // it cannot exceed a byte ceiling; handled for exhaustiveness.
+                Err(PayloadError::Damaged(detail) | PayloadError::Budget(detail)) => {
                     self.opaque(frame, "blob", "damaged");
                     self.diag(
                         "DamagedFrame",
@@ -922,6 +939,10 @@ impl Folder<'_, '_, '_> {
                     }
                 }
                 Ok(_) => {}
+                Err(PayloadError::Budget(detail)) => {
+                    self.opaque(frame, "blob", "over-budget");
+                    self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
+                }
                 Err(PayloadError::Unavailable { reason, detail }) => {
                     self.opaque(frame, "blob", reason);
                     self.diag(diag_code_for(reason), detail, Some(index));
@@ -988,6 +1009,10 @@ impl Folder<'_, '_, '_> {
                 }
             }
             Ok(_) => {}
+            Err(PayloadError::Budget(detail)) => {
+                self.opaque(frame, "blob", "over-budget");
+                self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
+            }
             Err(PayloadError::Unavailable { reason, detail }) => {
                 self.opaque(frame, "blob", reason);
                 self.diag(diag_code_for(reason), detail, Some(index));
