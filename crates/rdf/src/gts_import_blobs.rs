@@ -422,8 +422,8 @@ impl<'a> BlobCollector<'a> {
         validate_metadata(metadata.as_ref(), payload.digest)?;
         // The reader fires its frame event for every frame before any of that
         // frame's rows, with the same segment index, so a payload always has a
-        // matching frame and this branch is not reachable from any container.
-        // It is kept as a fail-closed guard rather than an assumption, and is
+        // matching frame and no container reaches the error arm below. It is
+        // kept as a fail-closed guard rather than an assumption, and is
         // deliberately not counted as a tested refusal.
         let frame = self
             .frame
