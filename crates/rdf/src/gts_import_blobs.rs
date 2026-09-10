@@ -391,8 +391,16 @@ impl<'a> BlobCollector<'a> {
                 .insert(payload.digest.to_string(), declared.clone());
         }
         let previous = self.selected.get(payload.digest);
+        // The reader's per-occurrence metadata inherits only within a segment —
+        // each segment starts a fresh lookaside — so an occurrence in a later
+        // segment arrives bare even though a declaration exists earlier in the
+        // container. The documented contract is that absent metadata preserves
+        // the previous declaration *including across segment boundaries*, and
+        // the last declaration for every digest is already recorded, so consult
+        // it before falling back to whatever a retained copy happens to hold.
         let metadata = payload
             .metadata
+            .or_else(|| self.final_metadata.get(payload.digest))
             .or_else(|| previous.and_then(|blob| blob.metadata.as_ref()));
         if !self
             .selectors
@@ -565,6 +573,20 @@ impl<'a> BlobCollector<'a> {
             {
                 continue;
             }
+            // A proved refusal is proof the container carried these bytes. Saying
+            // they are "held elsewhere" would let the byte budget decide what
+            // this importer claims about the archive's contents.
+            if let Some(refusal) = self.refused.iter().find(|blob| {
+                blob.digest_computed && blob.digest.as_deref() == Some(digest.as_str())
+            }) {
+                return Err(fail(
+                    "rdf-ir-gts-blob-limit",
+                    format!(
+                        "blob {digest} is present in this container but its {} encoded bytes exceeded this import's budget: {}",
+                        refusal.encoded_len, refusal.detail
+                    ),
+                ));
+            }
             if self.inlined.contains(digest) {
                 return Err(fail(
                     "rdf-ir-gts-blob-selection-order",
@@ -595,10 +617,24 @@ impl<'a> BlobCollector<'a> {
                 .refused
                 .iter()
                 .filter(|blob| {
+                    // Same rule as an unresolved digest: a representation names
+                    // the FINAL metadata, so a refused occurrence retagged away
+                    // before the container ended is no longer a candidate. Only
+                    // a proved identity may reach for the container-global
+                    // record; letting a claimed digest choose whose metadata to
+                    // consult would hand the file that decision back.
+                    let effective = if blob.digest_computed {
+                        blob.digest
+                            .as_deref()
+                            .and_then(|digest| self.final_metadata.get(digest))
+                            .or(blob.metadata.as_ref())
+                    } else {
+                        blob.metadata.as_ref()
+                    };
                     matches(
                         *selector,
                         blob.digest.as_deref().unwrap_or_default(),
-                        blob.metadata.as_ref(),
+                        effective,
                     )
                 })
                 // A container may store one blob twice — once compressed, once

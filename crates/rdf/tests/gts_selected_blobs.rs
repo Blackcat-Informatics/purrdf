@@ -1367,3 +1367,137 @@ fn an_unverified_declared_digest_cannot_collapse_two_candidates() {
         observed.refused[0]
     );
 }
+
+/// Declared metadata carries across a segment boundary, as documented.
+///
+/// The reader's per-occurrence metadata inherits only within a segment, because
+/// each segment starts a fresh lookaside. A payload arriving in a later segment
+/// than its declaration therefore reaches the collector bare, and matching on
+/// that alone refuses a container the authoritative importer accepts — while the
+/// same file selected by digest succeeds, proving the bytes were retainable all
+/// along.
+#[test]
+fn declared_metadata_is_inherited_across_segment_boundaries() {
+    let data = b"cross segment payload";
+    let digest = digest_str(data);
+
+    // Segment 0 declares the representation; segment 1 carries the bytes.
+    let mut first = Writer::new("generic");
+    first.add_frame("blob", None, None, None, Some(meta(&digest, "wanted")));
+    let mut bytes = first.into_bytes();
+    let mut second = Writer::new("generic");
+    second.add_frame("blob", None, Some(data.to_vec()), None, None);
+    bytes.extend(second.into_bytes());
+
+    assert!(
+        import_gts_events(&bytes).is_ok(),
+        "the authoritative importer accepts this container"
+    );
+
+    // Selecting by digest never depended on inheritance, and is the control
+    // proving the payload is present and retainable.
+    let by_digest =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Digest(&digest)], limits())
+            .expect("digest selection reaches the payload");
+    assert_eq!(&*by_digest.blobs[0].bytes, data);
+
+    // Selecting by the representation declared a segment earlier must too.
+    let by_rep = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("a representation declared in an earlier segment still names it");
+    assert_eq!(&*by_rep.blobs[0].bytes, data);
+}
+
+/// A refused candidate is judged by the final metadata, like every other.
+///
+/// Two payloads both tagged `wanted`, one refused by the budget: ambiguous, and
+/// must fail. Retag the refused one away before the container ends and exactly
+/// one candidate remains, so the same selector must now succeed. Returning the
+/// identical error for both files would mean the refusal carries no information.
+#[test]
+fn a_refused_candidate_retagged_away_stops_being_a_candidate() {
+    let small = b"small and wanted";
+    let large = vec![b'x'; 50_000];
+    let large_digest = digest_str(&large);
+
+    let build = |retag: bool| {
+        let mut writer = Writer::new("generic");
+        writer.add_blob(small, None, Some("wanted"));
+        // Digest-less, so the reader itself refuses it on the encoded ceiling
+        // and computes its identity from the untransformed bytes.
+        writer.add_frame(
+            "blob",
+            None,
+            Some(large.clone()),
+            None,
+            Some(Value::Map(vec![("rep".into(), "wanted".into())])),
+        );
+        if retag {
+            writer.add_frame("blob", None, None, None, Some(meta(&large_digest, "other")));
+        }
+        writer.into_bytes()
+    };
+
+    let mut tight = limits();
+    tight.max_encoded_bytes = 1_024;
+
+    let ambiguous = build(false);
+    assert!(import_gts_events(&ambiguous).is_ok());
+    let error = import_gts_events_with_blobs(
+        &ambiguous,
+        &[GtsBlobSelector::Representation("wanted")],
+        tight,
+    )
+    .expect_err("two payloads still carry the representation");
+    assert_eq!(error.code, "rdf-ir-gts-blob-selection", "{error:?}");
+
+    let retagged = build(true);
+    assert!(import_gts_events(&retagged).is_ok());
+    let result = import_gts_events_with_blobs(
+        &retagged,
+        &[GtsBlobSelector::Representation("wanted")],
+        tight,
+    )
+    .expect("the refused candidate gave up the representation before the end");
+    assert_eq!(&*result.blobs[0].bytes, small);
+}
+
+/// A payload the budget refused is present, and is reported as present.
+///
+/// Letting the ceiling decide whether the importer claims the archive contains
+/// a blob would make the answer to "is this blob here?" depend on how much
+/// memory the caller offered.
+#[test]
+fn a_refused_payload_is_not_reported_as_held_elsewhere() {
+    let data = vec![b'y'; 50_000];
+    let digest = digest_str(&data);
+
+    let mut writer = Writer::new("generic");
+    // Metadata-only occurrence first, then the oversized inline payload.
+    writer.add_frame("blob", None, None, None, Some(meta(&digest, "wanted")));
+    writer.add_frame("blob", None, Some(data.clone()), None, None);
+    let bytes = writer.into_bytes();
+
+    let mut tight = limits();
+    tight.max_encoded_bytes = 1_024;
+    let refused =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Representation("wanted")], tight)
+            .expect_err("the caller named a payload this budget would not admit");
+    assert_eq!(refused.code, "rdf-ir-gts-blob-limit", "{refused:?}");
+    assert!(
+        refused.message.contains("present in this container"),
+        "the bytes are inline, not elsewhere: {refused:?}"
+    );
+
+    // Neighbouring valid case: a budget that admits it returns the payload.
+    let ok = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("a budget that admits it returns the payload");
+    assert_eq!(&*ok.blobs[0].bytes, &data[..]);
+}
