@@ -10,6 +10,8 @@
 //! the crate reads a line. See [`crate::dialect`] for the contract this
 //! reader satisfies.
 
+use std::sync::Arc;
+
 use super::{DefectiveRow, RawRow, RawSection, RawUnit, Reading};
 use crate::model::RowDefect;
 
@@ -46,6 +48,12 @@ struct Walker {
     sections: Vec<RawSection>,
     /// Indices into `sections`: the headings in force.
     stack: Vec<usize>,
+    /// The headings of `stack`, outermost first: the lineage every unit
+    /// opened under the current stack carries. Rebuilt where the stack
+    /// changes — which is only when a section opens — so a document of
+    /// many units under few headings builds it once per heading rather
+    /// than once per unit.
+    lineage: Arc<[String]>,
     units: Vec<RawUnit>,
     open: Option<RawUnit>,
     rows: Vec<RawRow>,
@@ -141,11 +149,7 @@ impl Walker {
             end,
             section: self.stack.last().copied(),
             verse,
-            lineage: self
-                .stack
-                .iter()
-                .map(|&i| self.sections[i].heading.clone())
-                .collect(),
+            lineage: Arc::clone(&self.lineage),
         }
     }
 
@@ -182,6 +186,13 @@ impl Walker {
             movement,
         });
         self.stack.push(index);
+        // The stack has just changed, and it changes nowhere else, so
+        // this is the whole of when the lineage has to be rebuilt.
+        self.lineage = self
+            .stack
+            .iter()
+            .map(|&i| self.sections[i].heading.clone())
+            .collect();
     }
 
     fn in_concordance(&self) -> bool {

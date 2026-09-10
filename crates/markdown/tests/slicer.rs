@@ -2626,7 +2626,7 @@ fn a_row_whose_verses_are_not_in_this_document_lifts_nothing_here_and_is_not_an_
         last.lifted().iter().map(|&(v, _)| v).collect::<Vec<_>>(),
         vec![7, 8]
     );
-    assert_eq!(last.unmatched(), [9]);
+    assert_eq!(last.unmatched(), [(9, 9)], "one verse is one run of one");
     assert!(!last.is_unmatched(), "it lifted two of its three verses");
     assert_eq!(
         document.unmatched_citations().count(),
@@ -2649,7 +2649,11 @@ fn a_row_whose_verses_are_not_in_this_document_lifts_nothing_here_and_is_not_an_
         .map(purrdf_markdown::Citation::verses)
         .collect();
     assert_eq!(unmatched, vec![(40, 42)]);
-    assert_eq!(document.citations()[1].unmatched(), [40, 41, 42]);
+    assert_eq!(
+        document.citations()[1].unmatched(),
+        [(40, 42)],
+        "a row that lifted nothing states its whole range as one run"
+    );
     assert_eq!(
         document.citations()[0].lifted(),
         [(1, 0)],
@@ -2660,6 +2664,80 @@ fn a_row_whose_verses_are_not_in_this_document_lifts_nothing_here_and_is_not_an_
         verse_one_cites(&claims),
         vec![format!("\"a-one\"^^<{}>", v().dt_anchor)],
         "the row that matches lifts exactly as it would alone"
+    );
+    parses_whole(&claims);
+}
+
+/// A row's verse range is two `u64`s the **document** wrote, and a
+/// document is not trusted: `1–18446744073709551615` is a row the
+/// dialect reads without complaint, and it is not malformed — there is
+/// nothing wrong with it to report. So it has to be *answered*, in time
+/// proportional to what this document carries rather than to what the
+/// row claims. This test returning at all is that proof: a slicer that
+/// walked the range verse by verse would never reach its first
+/// assertion, and one that listed the misses verse by verse would ask
+/// for more memory than exists.
+///
+/// The neighbouring valid case rides in the same table — an ordinary
+/// small range over the same verses — and lifts exactly what it lifts
+/// alone. What is bounded here is the walk, not the answer.
+#[test]
+fn a_row_naming_the_whole_u64_range_answers_in_the_documents_own_terms() {
+    let text = "# T\n\n1. One.\n\n2. Two.\n\n4. Four.\n\n## Concordance\n\n\
+                | Verses | Canon source | Anchors |\n| --- | --- | --- |\n\
+                | 1\u{2013}18446744073709551615 | `atlas/a.ttl` | `a-all` |\n\
+                | 2\u{2013}4 | `atlas/b.ttl` | `b-some` |\n";
+    let document = model(text, &v1());
+    assert!(
+        document.malformed_rows().is_empty(),
+        "the row reads as a range, and enormous is not malformed"
+    );
+    assert_eq!(document.citations().len(), 2);
+
+    let whole = &document.citations()[0];
+    assert_eq!(
+        whole.verses(),
+        (1, u64::MAX),
+        "the row's own claim, carried out unchanged"
+    );
+    assert_eq!(
+        whole.lifted(),
+        [(1, 0), (2, 1), (4, 2)],
+        "every verse this document carries inside the range, and nothing else"
+    );
+    assert_eq!(
+        whole.unmatched(),
+        [(3, 3), (5, u64::MAX)],
+        "the gap it named and the tail past the last verse, as two runs"
+    );
+    assert!(!whole.is_unmatched(), "it lifted three verses");
+    assert_eq!(
+        document.unmatched_citations().count(),
+        0,
+        "neither row lifted nothing at all"
+    );
+
+    let small = &document.citations()[1];
+    assert_eq!(
+        small.lifted(),
+        [(2, 1), (4, 2)],
+        "the small range lifts exactly what it would lift alone"
+    );
+    assert_eq!(small.unmatched(), [(3, 3)]);
+
+    // Verse 2 is named by both rows, so the projection still keeps each
+    // row's anchor beside that row's own sources.
+    let claims = slice_of(text, GUIDE_ID, &v1()).expect("slices");
+    let two = *units(&claims)
+        .iter()
+        .find(|u| integer(u, &v().verse) == Some(2))
+        .expect("verse 2");
+    assert_eq!(
+        objects(two, &v().cites),
+        vec![
+            format!("\"a-all\"^^<{}>", v().dt_anchor),
+            format!("\"b-some\"^^<{}>", v().dt_anchor),
+        ]
     );
     parses_whole(&claims);
 }

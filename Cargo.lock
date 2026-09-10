@@ -1499,6 +1499,7 @@ dependencies = [
 name = "purrdf-markdown"
 version = "1.1.0"
 dependencies = [
+ "criterion",
  "pretty_assertions",
  "purrdf-core",
  "purrdf-rdf",

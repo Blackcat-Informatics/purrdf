@@ -261,6 +261,20 @@ report is that the same shape has a second cause, a typo in a verse
 number or a row left behind by an edit, and only the consumer knows which
 of the two its corpus is.
 
+A range, though, is two `u64`s the **document** wrote, and this law is
+total on every input it does not refuse. `| 1–18446744073709551615 |` is
+a readable row and MUST NOT be refused, so an implementation MUST NOT
+decide what a row lifted by walking its range, and MUST NOT state the
+verses it did not lift one at a time: both are bounded by what the row
+claims rather than by what the document carries, and on that row neither
+terminates. The walk goes the other way — over the verses this document
+carries that fall inside the range — and the verses of the range this
+document does not carry are stated as the **maximal runs** they form,
+each an inclusive pair, in ascending order, none of them touching. A row
+states no more runs than it lifted verses, plus one, so the cost of
+answering a row is bounded by the document. A row that lifted nothing at
+all states its whole range as one run.
+
 ### 4.2 The anchor lift
 
 Where the profile declares a **canon base**, an anchor is lifted to the

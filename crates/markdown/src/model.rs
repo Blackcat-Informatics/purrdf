@@ -29,6 +29,8 @@
 //! wrong at the endpoints.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use purrdf_core::ContentDigest;
 use purrdf_core::embedding::{ChunkingContractId, TargetId, TextChunkTarget};
@@ -329,7 +331,14 @@ pub struct Unit<'a> {
     ordinal: u64,
     verse: Option<u64>,
     section: Option<usize>,
-    lineage: Vec<String>,
+    /// The heading stack in force at the unit's start. Shared, not
+    /// copied: every unit of a section has the *same* lineage, and
+    /// every piece of a split unit has the lineage of the unit it came
+    /// from, so one heading stack per section is built and each unit
+    /// and piece holds a handle to it. The strings are immutable and
+    /// the handle is behind [`Unit::lineage`], which still answers with
+    /// a plain slice, so nothing outside this crate can tell.
+    lineage: Arc<[String]>,
     continues: Option<usize>,
     digest: ContentDigest,
 }
@@ -577,7 +586,7 @@ impl<'a> ContentAnchor<'a> {
 /// sources* is a fact the graph states. What the graph still cannot
 /// state is a row that names a verse this document does not carry —
 /// there is no unit for it to be an edge of. The model states that too,
-/// verse by verse ([`Self::unmatched`]).
+/// run by run ([`Self::unmatched`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Citation {
     first: u64,
@@ -585,7 +594,9 @@ pub struct Citation {
     sources: Vec<String>,
     anchors: Vec<String>,
     lifted: Vec<(u64, usize)>,
-    unmatched: Vec<u64>,
+    /// The verses of the range this document does not carry, as the
+    /// maximal runs they form. See [`Self::unmatched`] for why runs.
+    unmatched: Vec<(u64, u64)>,
     span: Span,
 }
 
@@ -619,10 +630,32 @@ impl Citation {
         &self.lifted
     }
 
-    /// The verses of the row's range this document does not carry, in
-    /// order. **Not an error**: see [`Document::unmatched_citations`].
+    /// The verses of the row's range this document does not carry, as
+    /// the maximal runs they form: each an inclusive `(first, last)`
+    /// pair, in ascending order, none of them touching. A row that
+    /// lifted nothing at all states its whole range as one run, and a
+    /// row that lifted every verse it named states none.
+    ///
+    /// **Not an error**: see [`Document::unmatched_citations`].
+    ///
+    /// # Why runs, and not the verses
+    ///
+    /// A row's range is a pair of `u64`s the *document* wrote, and the
+    /// document is not trusted. `| 1–18446744073709551615 |` is a
+    /// perfectly readable row naming more verses than there are bytes
+    /// in every disk ever made; listing them one at a time is a hang,
+    /// not an answer, and a slicer that is a pure function of its bytes
+    /// cannot have one input shape that never returns.
+    ///
+    /// The runs are the same fact, and they are **bounded by what this
+    /// document carries** rather than by what a row claims: there is at
+    /// most one run before each verse the row lifted and one after the
+    /// last, so a row can never state more runs than it lifted verses,
+    /// plus one. Reading a run back verse by verse is `first..=last`
+    /// where a caller wants that, and it is the caller — who knows how
+    /// many it is willing to walk — that decides to.
     #[must_use]
-    pub fn unmatched(&self) -> &[u64] {
+    pub fn unmatched(&self) -> &[(u64, u64)] {
         &self.unmatched
     }
 
@@ -934,25 +967,37 @@ impl<'a> Document<'a> {
 /// parent is the nearest section before it at a shallower level. Both
 /// are containment facts, read off the levels alone — which is why the
 /// dialect reader states a level and says nothing about either.
+///
+/// One pass over the sections answers both, off one stack of the
+/// sections still open, whose levels strictly increase. The section on
+/// top is by construction the nearest preceding shallower one, so it is
+/// the parent; and every section the arriving one closes is closed *by*
+/// it, because a section between the two at that level or above would
+/// have closed it already. So each section is pushed once and popped
+/// once and nothing is re-scanned — where searching forward for the
+/// close re-walked, for every section, every descendant it holds.
 fn assemble_sections(reading: &Reading, len: usize) -> Vec<Section> {
     let raw = &reading.sections;
     let mut sections: Vec<Section> = Vec::with_capacity(raw.len());
     let mut stack: Vec<usize> = Vec::new();
     for (index, s) in raw.iter().enumerate() {
-        while stack.last().is_some_and(|&i| raw[i].level >= s.level) {
+        while let Some(&open) = stack.last() {
+            if raw[open].level < s.level {
+                break;
+            }
             stack.pop();
+            sections[open].span.end = s.start as u64;
         }
-        let end = raw[index + 1..]
-            .iter()
-            .find(|next| next.level <= s.level)
-            .map_or(len, |next| next.start);
         sections.push(Section {
             level: s.level,
             ordinal: index as u64,
             parent: stack.last().copied(),
             children: Vec::new(),
             heading: s.heading.clone(),
-            span: Span::new(s.start as u64, end as u64),
+            // Open to the document's end; a later section that closes
+            // this one overwrites it, and one that never comes leaves
+            // the section running to the end, which is the law.
+            span: Span::new(s.start as u64, len as u64),
             heading_span: Span::new(s.start as u64, s.line_end as u64),
             movement: s.movement,
         });
@@ -983,7 +1028,7 @@ fn assemble_units<'a>(source: &'a str, reading: &Reading, profile: &Profile) -> 
                 ordinal: index as u64,
                 verse: raw.verse,
                 section: raw.section,
-                lineage: raw.lineage.clone(),
+                lineage: Arc::clone(&raw.lineage),
                 continues: previous,
                 digest: ContentDigest::of(&source.as_bytes()[start..end]),
             });
@@ -1004,18 +1049,41 @@ fn scalar_starts(source: &str) -> Vec<usize> {
 /// the **first piece** of a verse: an oversize verse's continuations
 /// carry the same number, and a citation states one fact about the
 /// verse, not one about each of its pieces.
+///
+/// The row's range is *never* walked. A range is two `u64`s a document
+/// wrote and a document is not trusted: `1–18446744073709551615` is a
+/// readable row, and walking it would be a hang rather than an answer —
+/// the one input shape from which this crate's pure function never
+/// returns. So the walk goes the other way, over the verses the
+/// document actually carries that fall in the range
+/// ([`BTreeMap::range`]), which is bounded by the document; what the
+/// row named and the document lacks is the gaps between them, stated as
+/// runs. The cost of a row is therefore what it lifted, not what it
+/// claimed.
 fn assemble_citations(reading: &Reading, units: &[Unit<'_>]) -> Vec<Citation> {
+    let first_pieces = first_pieces(units);
     reading
         .rows
         .iter()
         .map(|row| {
             let mut lifted = Vec::new();
             let mut unmatched = Vec::new();
-            for verse in row.first..=row.last {
-                match first_piece_of(units, verse) {
-                    Some(unit) => lifted.push((verse, unit)),
-                    None => unmatched.push(verse),
+            // The first verse of the range not yet accounted for, or
+            // `None` once the accounting has run off the end of `u64`.
+            let mut open = Some(row.first);
+            for (&verse, &unit) in first_pieces.range(row.first..=row.last) {
+                if let Some(gap) = open
+                    && gap < verse
+                {
+                    unmatched.push((gap, verse - 1));
                 }
+                lifted.push((verse, unit));
+                open = verse.checked_add(1);
+            }
+            if let Some(gap) = open
+                && gap <= row.last
+            {
+                unmatched.push((gap, row.last));
             }
             Citation {
                 first: row.first,
@@ -1030,12 +1098,27 @@ fn assemble_citations(reading: &Reading, units: &[Unit<'_>]) -> Vec<Citation> {
         .collect()
 }
 
-/// The index of the first piece of a numbered verse, if the document
-/// carries it.
-fn first_piece_of(units: &[Unit<'_>], verse: u64) -> Option<usize> {
-    units
-        .iter()
-        .position(|u| u.verse == Some(verse) && u.continues.is_none())
+/// The index of the first piece of every numbered verse the document
+/// carries, taken in one pass over the units.
+///
+/// Document order is what makes the map the *first* piece: a verse
+/// already in the map keeps the index it was entered with. A
+/// continuation carries the verse number of the unit it continues and
+/// is skipped here for the same reason it was skipped before — a
+/// citation states one fact about the verse, not one about each of its
+/// pieces. Taking the map once is the difference between a concordance
+/// that costs one walk of the units and one that costs a walk of them
+/// per verse named.
+fn first_pieces(units: &[Unit<'_>]) -> BTreeMap<u64, usize> {
+    let mut out = BTreeMap::new();
+    for (index, unit) in units.iter().enumerate() {
+        if let Some(verse) = unit.verse
+            && unit.continues.is_none()
+        {
+            out.entry(verse).or_insert(index);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

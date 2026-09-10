@@ -56,6 +56,8 @@
 
 pub(crate) mod markdown;
 
+use std::sync::Arc;
+
 use crate::model::RowDefect;
 
 /// What a dialect reader hands the law: the structure it recognized,
@@ -103,7 +105,12 @@ pub(crate) struct RawUnit {
     /// The verse number, when the unit opened with one.
     pub(crate) verse: Option<u64>,
     /// The heading stack in force at the unit's start, outermost first.
-    pub(crate) lineage: Vec<String>,
+    ///
+    /// Shared rather than copied. The stack changes only when a section
+    /// opens, so a reader builds it once per section and hands every
+    /// unit under that section — and, after the split, every piece of
+    /// every such unit — a handle to the same strings.
+    pub(crate) lineage: Arc<[String]>,
 }
 
 /// One concordance row the reader could read: the verses it covers, the
