@@ -8,6 +8,14 @@
 //! — before a claim exists. That is what lets the projection
 //! ([`render`](crate::render)) be infallible: a [`Document`](crate::Document)
 //! can only be obtained by passing every check this enum names.
+//!
+//! One refusal is stated after a document exists rather than before:
+//! [`MarkdownError::TamperedUnit`], which
+//! [`verify_unit`](crate::verify_unit) states about bytes handed to it
+//! *later*. It is not an exception to the rule above — nothing it
+//! refuses could have been known at slicing time.
+
+use purrdf_core::embedding::EmbeddingError;
 
 /// Why a document could not be sliced.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +92,21 @@ pub enum MarkdownError {
         /// The first and last verse of the row that named it.
         verses: (u64, u64),
     },
+    /// A unit does not answer for the bytes it was checked against: the
+    /// span lies outside them, or it cuts a scalar in half, or the bytes
+    /// at it no longer digest to the digest the unit carries.
+    ///
+    /// The finding is the kernel's own, carried through rather than
+    /// restated: [`verify_unit`](crate::verify_unit) applies
+    /// [`TextChunkTarget::verify_document`](purrdf_core::embedding::TextChunkTarget::verify_document),
+    /// which is the same law a PURREMB consumer applies to the same
+    /// target, so the two refuse the same bytes for the same reason.
+    TamperedUnit {
+        /// The unit's byte span, as the model states it.
+        span: (u64, u64),
+        /// What the kernel's verification law found.
+        cause: EmbeddingError,
+    },
 }
 
 impl std::fmt::Display for MarkdownError {
@@ -136,6 +159,13 @@ impl std::fmt::Display for MarkdownError {
                     f,
                     "concordance anchor {anchor:?} for verses {}\u{2013}{} mints no lawful IRI under the canon base",
                     verses.0, verses.1
+                )
+            }
+            Self::TamperedUnit { span, cause } => {
+                write!(
+                    f,
+                    "unit at bytes {}\u{2013}{} does not answer for these bytes: {cause}",
+                    span.0, span.1
                 )
             }
         }

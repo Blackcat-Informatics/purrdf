@@ -8,11 +8,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pretty_assertions::assert_eq;
-use purrdf_core::{CanonHash, try_canonicalize_with};
+use purrdf_core::embedding::{
+    AppliedStage, ChunkingContractId, CorpusTarget, DocumentTarget, EmbeddingError, TargetId,
+    derive_chunking_contract_id,
+};
+use purrdf_core::{CanonHash, ContentDigest, try_canonicalize_with};
 use purrdf_markdown::{
-    CONTEXT_BYTES, Claim, ClaimKind, Document, MIN_MAX_BYTES, MarkdownError, Profile, RowDefect,
-    STANDARD_NAMESPACE, SourceDocument, Span, SpanRelation, Unit, Vocabulary, analyze, render,
-    slice_markdown, span_relation, unit_iri,
+    CONTEXT_BYTES, Claim, ClaimKind, Document, MIN_MAX_BYTES, MarkdownError,
+    PURREMB_PARAMETER_ENCODING, Profile, RowDefect, STANDARD_NAMESPACE, SourceDocument, Span,
+    SpanRelation, Unit, Vocabulary, analyze, render, slice_markdown, span_relation, unit_iri,
+    verify_unit,
 };
 use purrdf_rdf::parse_dataset;
 
@@ -1012,7 +1017,7 @@ fn a_units_scalar_offsets_and_content_digest_are_stated_as_data() {
         );
         assert_eq!(
             unit.digest(),
-            purrdf_core::ContentDigest::of(&text.as_bytes()[start..end])
+            ContentDigest::of(&text.as_bytes()[start..end])
         );
         // Both new facts are typed, so the unit's text stays the one
         // plain literal a text index selects.
@@ -1061,8 +1066,8 @@ fn a_units_scalar_offsets_and_content_digest_are_stated_as_data() {
         )
     );
     assert_eq!(
-        purrdf_core::ContentDigest::from_hex(&hex),
-        Some(purrdf_core::ContentDigest::of(&text.as_bytes()[28..72]))
+        ContentDigest::from_hex(&hex),
+        Some(ContentDigest::of(&text.as_bytes()[28..72]))
     );
 }
 
@@ -2306,10 +2311,7 @@ fn analyzing_then_rendering_is_slicing_and_the_model_counts_what_the_claims_stat
         // The digest the model carries is the one the identity is minted
         // from, so a consumer re-derives an IRI without re-hashing.
         for (unit, claim) in document.units().iter().zip(units(&claims)) {
-            assert_eq!(
-                unit.digest(),
-                purrdf_core::ContentDigest::of(unit.quote().as_bytes())
-            );
+            assert_eq!(unit.digest(), ContentDigest::of(unit.quote().as_bytes()));
             assert_eq!(
                 claim.subject,
                 unit_iri(
@@ -2821,6 +2823,275 @@ fn the_standard_vocabulary_is_the_designated_namespace_term_for_term_and_slices_
     );
 }
 
+// --- the PURREMB bridge ----------------------------------------------------
+
+/// The document target and chunking id a `.purremb` producer would mint
+/// for the guide: the two ids every chunk of it is addressed under.
+///
+/// The chunking id is derived the way a family derives it — over the
+/// canonical bytes of the profile's chunking stage — and never from the
+/// profile's law id, which is the confusion the bridge exists to
+/// prevent.
+fn purremb_ids(profile: &Profile) -> (TargetId, ChunkingContractId) {
+    let corpus = CorpusTarget {
+        manifest_digest: ContentDigest::of(GUIDE.as_bytes()),
+        manifest_media_type: "application/example".to_owned(),
+        logical_id_digest: ContentDigest::of(GUIDE_ID.as_bytes()),
+    }
+    .into_target(false)
+    .expect("a corpus target");
+    let document = DocumentTarget::from_content(
+        corpus.id,
+        ContentDigest::of(GUIDE_ID.as_bytes()),
+        "text/markdown;charset=utf-8",
+        GUIDE.as_bytes(),
+    )
+    .expect("a document subject")
+    .into_target(false)
+    .expect("a document target");
+    let stage = profile
+        .purremb_chunking_stage()
+        .canonical_bytes()
+        .expect("the stage encodes");
+    (document.id, derive_chunking_contract_id(&stage))
+}
+
+#[test]
+fn the_profiles_two_identities_are_stable_and_are_never_each_other() {
+    let profile = v1();
+    let stage = profile.purremb_chunking_stage();
+    assert_eq!(
+        stage,
+        profile.purremb_chunking_stage(),
+        "the stage is a pure function of the profile"
+    );
+    let AppliedStage::Applied(implementation) = &stage else {
+        panic!("this crate always chunks, so the stage is always applied");
+    };
+    assert_eq!(implementation.identifier, STANDARD_NAMESPACE);
+    assert_eq!(
+        implementation.parameter_encoding,
+        PURREMB_PARAMETER_ENCODING
+    );
+    assert_eq!(
+        implementation.parameters,
+        profile.stage_bytes(),
+        "the whole law is the stage's parameters"
+    );
+    assert_eq!(
+        implementation.digest,
+        ContentDigest::of(&profile.stage_bytes())
+    );
+
+    // The id a family derives from that stage is stable across calls.
+    let id = |profile: &Profile| {
+        derive_chunking_contract_id(
+            &profile
+                .purremb_chunking_stage()
+                .canonical_bytes()
+                .expect("the stage encodes"),
+        )
+    };
+    assert_eq!(id(&profile), id(&profile));
+
+    // And it is not the law id: the two preimages are framed
+    // differently, so no family can ever reproduce the law id.
+    assert_ne!(
+        id(&profile).to_hex(),
+        profile.contract_id().to_hex(),
+        "the stage id and the law id are two identities, never one"
+    );
+
+    // Both still answer for the whole law: a changed clause moves each.
+    assert_ne!(id(&profile), id(&small()));
+    assert_ne!(profile.contract_id(), small().contract_id());
+}
+
+#[test]
+fn a_units_chunk_target_verifies_against_the_documents_own_bytes() {
+    let profile = v1();
+    let (document_id, chunking_id) = purremb_ids(&profile);
+    let document = model(GUIDE, &profile);
+    let mut multi_byte = 0;
+    for unit in document.units() {
+        let target = unit.text_chunk_target(document_id, chunking_id);
+        // Every field is the model's, handed over unchanged.
+        assert_eq!(target.byte_start, unit.span().start);
+        assert_eq!(target.byte_end, unit.span().end);
+        assert_eq!(target.scalar_start, unit.scalar_span().start);
+        assert_eq!(target.scalar_end, unit.scalar_span().end);
+        assert_eq!(target.content_digest, unit.digest());
+        // And the kernel's own law accepts it against the source.
+        target
+            .verify_document(GUIDE.as_bytes())
+            .expect("the kernel's verification law accepts the unit");
+        // The target is addressable: it mints a canonical chunk subject.
+        target.into_target(true).expect("a chunk target mints");
+        if unit.quote().chars().count() < unit.quote().len() {
+            multi_byte += 1;
+        }
+    }
+    assert!(
+        multi_byte > 0,
+        "the fixture carries units of multi-byte scalars, and they verified too"
+    );
+}
+
+#[test]
+fn verify_unit_accepts_the_bytes_a_unit_was_minted_over() {
+    let profile = v1();
+    let (document_id, chunking_id) = purremb_ids(&profile);
+    let document = model(GUIDE, &profile);
+    for unit in document.units() {
+        verify_unit(GUIDE.as_bytes(), unit, document_id, chunking_id)
+            .expect("the unit answers for the bytes it was minted over");
+    }
+    // The ids travel through and cannot decide the answer: another pair
+    // accepts exactly the same bytes.
+    let other = (
+        TargetId::from_raw([9; 32]),
+        ChunkingContractId::from_raw([9; 32]),
+    );
+    for unit in document.units() {
+        verify_unit(GUIDE.as_bytes(), unit, other.0, other.1)
+            .expect("the ids are carried, not consulted");
+    }
+}
+
+#[test]
+fn verify_unit_refuses_a_tampered_byte_and_the_kernel_refuses_it_too() {
+    let profile = v1();
+    let (document_id, chunking_id) = purremb_ids(&profile);
+    let document = model(GUIDE, &profile);
+    let unit = document
+        .units()
+        .iter()
+        .find(|u| u.quote().chars().count() < u.quote().len())
+        .expect("a unit of multi-byte scalars");
+
+    // One ASCII letter inside the unit, swapped for another: the same
+    // length, the same boundaries, different bytes.
+    let (start, end) = (unit.span().start as usize, unit.span().end as usize);
+    let at = start
+        + GUIDE.as_bytes()[start..end]
+            .iter()
+            .position(u8::is_ascii_alphabetic)
+            .expect("an ASCII letter inside the unit");
+    let mut tampered = GUIDE.as_bytes().to_vec();
+    tampered[at] = if tampered[at] == b'x' { b'y' } else { b'x' };
+    assert_ne!(tampered, GUIDE.as_bytes(), "a byte moved");
+
+    let refusal = verify_unit(&tampered, unit, document_id, chunking_id)
+        .expect_err("the digest no longer answers for these bytes");
+    assert_eq!(
+        refusal,
+        MarkdownError::TamperedUnit {
+            span: (unit.span().start, unit.span().end),
+            cause: EmbeddingError::ContentMismatch("chunk coordinates or digest"),
+        }
+    );
+    assert!(refusal.to_string().contains("does not answer"));
+
+    // The kernel refuses the same bytes for the same reason: one law.
+    let kernel = unit
+        .text_chunk_target(document_id, chunking_id)
+        .verify_document(&tampered)
+        .expect_err("the kernel's own law refuses it");
+    assert_eq!(
+        MarkdownError::TamperedUnit {
+            span: (unit.span().start, unit.span().end),
+            cause: kernel,
+        },
+        refusal
+    );
+
+    // A refusal is a claim: the untouched bytes still verify.
+    verify_unit(GUIDE.as_bytes(), unit, document_id, chunking_id)
+        .expect("the neighbouring valid case is still valid");
+}
+
+#[test]
+fn verify_unit_refuses_a_span_that_is_not_inside_the_bytes() {
+    let profile = v1();
+    let (document_id, chunking_id) = purremb_ids(&profile);
+    let document = model(GUIDE, &profile);
+    let unit = document.units().last().expect("a unit");
+    let (start, end) = (unit.span().start as usize, unit.span().end as usize);
+
+    // Truncated to the unit's own start, the span runs off the end.
+    let refusal = verify_unit(&GUIDE.as_bytes()[..start], unit, document_id, chunking_id)
+        .expect_err("the span is not inside these bytes");
+    let MarkdownError::TamperedUnit { span, cause } = &refusal else {
+        panic!("an out-of-bounds span is a tampered unit: {refusal:?}");
+    };
+    assert_eq!(*span, (unit.span().start, unit.span().end));
+    assert!(
+        matches!(cause, EmbeddingError::InvalidSpan { .. }),
+        "the kernel names the span: {cause:?}"
+    );
+
+    // Truncated to the unit's own end it is inside them, and verifies:
+    // the bound is exactly where it is claimed to be.
+    verify_unit(&GUIDE.as_bytes()[..end], unit, document_id, chunking_id)
+        .expect("a document that ends where the unit ends still carries it");
+}
+
+#[test]
+fn scalar_and_byte_offsets_convert_into_each_other_across_the_whole_guide() {
+    let document = model(GUIDE, &v1());
+    let scalars = GUIDE.chars().count() as u64;
+
+    // Every unit's stored scalar span is what the conversion answers.
+    for unit in document.units() {
+        assert_eq!(
+            document.byte_to_scalar(unit.span().start),
+            Some(unit.scalar_span().start)
+        );
+        assert_eq!(
+            document.byte_to_scalar(unit.span().end),
+            Some(unit.scalar_span().end)
+        );
+        assert_eq!(
+            document.scalar_to_byte(unit.scalar_span().start),
+            Some(unit.span().start)
+        );
+        assert_eq!(
+            document.scalar_to_byte(unit.scalar_span().end),
+            Some(unit.span().end)
+        );
+    }
+
+    // Both ends of the document, and one past each.
+    assert_eq!(document.byte_to_scalar(0), Some(0));
+    assert_eq!(document.scalar_to_byte(0), Some(0));
+    assert_eq!(
+        document.byte_to_scalar(document.byte_length()),
+        Some(scalars),
+        "the document's end is a boundary and is its scalar count"
+    );
+    assert_eq!(
+        document.scalar_to_byte(scalars),
+        Some(document.byte_length())
+    );
+    assert_eq!(document.byte_to_scalar(document.byte_length() + 1), None);
+    assert_eq!(document.scalar_to_byte(scalars + 1), None);
+
+    // Inside a multi-byte scalar there is no position to answer with.
+    let (at, wide) = GUIDE
+        .char_indices()
+        .find(|(_, c)| c.len_utf8() > 1)
+        .expect("the fixture carries a multi-byte scalar");
+    assert!(document.byte_to_scalar(at as u64).is_some(), "its start is");
+    for inside in 1..wide.len_utf8() as u64 {
+        assert_eq!(
+            document.byte_to_scalar(at as u64 + inside),
+            None,
+            "byte {inside} of a {}-byte scalar names no position",
+            wide.len_utf8()
+        );
+    }
+}
+
 // --- the specification ----------------------------------------------------
 
 /// The specification the conformance clause names, read from the crate.
@@ -2858,6 +3129,10 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         // Identity, now stating the whole law.
         "A **citation's IRI**",
         "states **the whole law**",
+        // The two identities, and the law that verifies a chunk.
+        "the **law id**",
+        "MUST NOT write the law id where a chunking-stage id is expected",
+        "The **verification law** for such a chunk is",
         // Ordering, provenance, conformance, determinism.
         "rdf:Seq",
         "gmeow",

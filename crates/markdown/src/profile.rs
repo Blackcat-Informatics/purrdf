@@ -9,8 +9,10 @@
 //! emitted and how an oversize unit is cut; the Markdown dialect reader
 //! ([`crate::dialect`]) never reads it except for those two constants.
 
-use purrdf_core::BaseIri;
-use purrdf_core::embedding::{ChunkingContractId, derive_chunking_contract_id};
+use purrdf_core::embedding::{
+    AppliedStage, ChunkingContractId, StageImplementation, derive_chunking_contract_id,
+};
+use purrdf_core::{BaseIri, ContentDigest};
 
 use crate::error::MarkdownError;
 use crate::{DIGEST_ALGORITHM, MIN_MAX_BYTES, claims};
@@ -24,6 +26,17 @@ use crate::{DIGEST_ALGORITHM, MIN_MAX_BYTES, claims};
 /// surface is deliberately opinionated while [`Vocabulary::under`]
 /// stays open.
 pub const STANDARD_NAMESPACE: &str = "https://w3id.org/purrdf/markdown#";
+
+/// The parameter encoding [`Profile::purremb_chunking_stage`] declares:
+/// the stage's parameters are exactly the bytes of
+/// [`Profile::stage_bytes`], which are UTF-8 plain text, one fact of the
+/// law per line.
+///
+/// It is stated as a constant because a producer in another language
+/// reproducing that stage has to write this same string: the encoding
+/// identifier is inside the canonical stage block, so a different
+/// spelling of it is a different chunking id.
+pub const PURREMB_PARAMETER_ENCODING: &str = "text/plain;charset=utf-8";
 
 /// The local names [`Vocabulary::under`] appends to a base, in the
 /// order the profile's stage description lists them.
@@ -456,10 +469,80 @@ impl Profile {
     }
 
     /// The profile's identity under the chunking-contract domain of
-    /// `purrdf-core`.
+    /// `purrdf-core`: **this crate's own law id**, derived over the
+    /// line-oriented preimage of [`Self::stage_bytes`].
+    ///
+    /// # It is not a PURREMB family chunking id
+    ///
+    /// The type is shared with PURREMB and the id is not. A PURREMB
+    /// [`EmbeddingFamily`](purrdf_core::embedding::EmbeddingFamily)
+    /// derives its `chunking_id` over
+    /// [`AppliedStage::canonical_bytes`], which is TLV-framed: tagged,
+    /// length-delimited, eight-byte aligned. This id is derived over an
+    /// unframed run of newline-separated lines. The two preimages cannot
+    /// coincide, so **no family contract can ever reproduce this id**,
+    /// and the two ids of one profile are always different — which
+    /// [`Self::purremb_chunking_stage`] exists to make usable rather
+    /// than merely true.
+    ///
+    /// Wire this id where the *law* is meant: the `sliceProfile`
+    /// literal on the document node, the third field of every node
+    /// identity ([`unit_iri`](crate::unit_iri) and its siblings), a
+    /// cache key over which law sliced which bytes. Wire
+    /// [`Self::purremb_chunking_stage`] into a family's `chunking`
+    /// stage. A `.purremb` consumer that writes this id into a family
+    /// expecting a stage id has named an id that family's own contract
+    /// cannot derive, and every chunk target checked against the family
+    /// will disagree with it.
     #[must_use]
     pub fn contract_id(&self) -> ChunkingContractId {
         derive_chunking_contract_id(&self.stage_bytes())
+    }
+
+    /// The profile as a PURREMB chunking stage: the second identity,
+    /// and the one an
+    /// [`EmbeddingFamilyContract`](purrdf_core::embedding::EmbeddingFamilyContract)
+    /// **can** reproduce.
+    ///
+    /// The stage is always [`AppliedStage::Applied`] — this crate always
+    /// chunks; there is no profile under which it does not — and its
+    /// four fields are:
+    ///
+    /// * `identifier`: [`STANDARD_NAMESPACE`], naming whose chunking law
+    ///   this is. It mints nothing new: it is the one namespace the
+    ///   specification already designates.
+    /// * `digest`: the SHA-256 of [`Self::stage_bytes`], a manifest
+    ///   digest of the exact law applied, which is the whole of what
+    ///   this stage *is*.
+    /// * `parameter_encoding`: [`PURREMB_PARAMETER_ENCODING`].
+    /// * `parameters`: [`Self::stage_bytes`], verbatim — so every clause
+    ///   inside the law id of [`Self::contract_id`] is inside this stage
+    ///   too, and neither id can move while the other stands still.
+    ///
+    /// # Which id a consumer uses where
+    ///
+    /// Put this stage in the `chunking` field of the family contract.
+    /// The family's derived `chunking_id` is then exactly
+    /// `derive_chunking_contract_id(&stage.canonical_bytes()?)`, and
+    /// **that** is the id every
+    /// [`TextChunkTarget`](purrdf_core::embedding::TextChunkTarget)
+    /// minted from this document carries — the id
+    /// [`Unit::text_chunk_target`](crate::Unit::text_chunk_target) is
+    /// handed. [`Self::contract_id`] stays where the graph states it and
+    /// never enters a family.
+    #[must_use]
+    pub fn purremb_chunking_stage(&self) -> AppliedStage {
+        let parameters = self.stage_bytes();
+        let digest = ContentDigest::of(&parameters);
+        AppliedStage::Applied(
+            StageImplementation::new(
+                STANDARD_NAMESPACE,
+                digest,
+                PURREMB_PARAMETER_ENCODING,
+                parameters,
+            )
+            .expect("both identifiers are non-empty crate constants carrying no NUL"),
+        )
     }
 
     /// The literal recorded on the document node: `<name>:<hex>`.

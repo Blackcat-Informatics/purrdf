@@ -110,6 +110,27 @@
 //! with the unit's IRI — so a row that lifts onto two verses is two
 //! nodes and a unit that re-mints re-mints every citation of it.
 //!
+//! # Two identities, and which is which
+//!
+//! A profile states **two** ids and they are never equal.
+//! [`Profile::contract_id`] is this crate's own law id, derived over the
+//! line-oriented preimage of [`Profile::stage_bytes`]; it is what the
+//! graph states and what every node identity carries.
+//! [`Profile::purremb_chunking_stage`] is the same law as a PURREMB
+//! chunking stage, whose canonical form is TLV-framed and which an
+//! embedding family therefore *can* reproduce — the id derived from it
+//! is the one a chunk target carries. The law id is not a chunking-stage
+//! id and no family can derive it; a consumer that wires it into one has
+//! named an id nothing on the other side can check.
+//!
+//! [`Unit::text_chunk_target`] hands a unit over as the kernel's own
+//! chunk subject, and [`verify_unit`] proves a unit against bytes by
+//! delegating to the kernel's reference verification law, so this crate
+//! and a `.purremb` consumer refuse the same bytes for the same reason.
+//! [`Document::byte_to_scalar`] and [`Document::scalar_to_byte`] convert
+//! between the bytes the identities are in and the scalars a host
+//! indexes text by.
+//!
 //! # It mints no vocabulary
 //!
 //! PurRDF is not an ontology. Every class, predicate, and datatype IRI
@@ -156,9 +177,11 @@ pub use crate::error::MarkdownError;
 pub use crate::identity::{citation_iri, section_iri, unit_iri};
 pub use crate::model::{
     CONTEXT_BYTES, Citation, ContentAnchor, Document, MalformedRow, RowDefect, Section, Span,
-    SpanRelation, Unit, span_relation,
+    SpanRelation, Unit, span_relation, verify_unit,
 };
-pub use crate::profile::{Profile, STANDARD_NAMESPACE, SourceDocument, Vocabulary};
+pub use crate::profile::{
+    PURREMB_PARAMETER_ENCODING, Profile, STANDARD_NAMESPACE, SourceDocument, Vocabulary,
+};
 
 /// The default byte bound: a unit over this many bytes splits.
 pub const DEFAULT_MAX_BYTES: usize = 2048;

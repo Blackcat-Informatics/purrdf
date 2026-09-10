@@ -31,8 +31,10 @@
 use std::cmp::Ordering;
 
 use purrdf_core::ContentDigest;
+use purrdf_core::embedding::{ChunkingContractId, TargetId, TextChunkTarget};
 
 use crate::dialect::Reading;
+use crate::error::MarkdownError;
 use crate::profile::Profile;
 use crate::split::{floor_boundary, split_spans};
 
@@ -450,6 +452,85 @@ impl<'a> Unit<'a> {
             suffix: self.suffix(),
         }
     }
+
+    /// The unit as the kernel's own chunk subject: the
+    /// [`TextChunkTarget`] a `.purremb` pack addresses this unit by.
+    ///
+    /// Every field is the model's, handed over unchanged — the byte span
+    /// of [`Self::span`], the scalar span of [`Self::scalar_span`], and
+    /// the digest of [`Self::digest`] — so nothing is re-derived here
+    /// and the two views of the unit cannot drift apart.
+    ///
+    /// `document_id` is the target the unit's *document* was minted as
+    /// (a [`DocumentTarget`](purrdf_core::embedding::DocumentTarget)
+    /// over the same bytes), and `chunking_id` is the family's chunking
+    /// id — the one derived from
+    /// [`Profile::purremb_chunking_stage`](crate::Profile::purremb_chunking_stage),
+    /// never the profile's law id. Both are the caller's to supply
+    /// because both are facts about the pack, not about the document.
+    ///
+    /// # The verification law
+    ///
+    /// [`TextChunkTarget::verify_document`] is the kernel's **reference
+    /// verification law** for these targets: given the document's exact
+    /// bytes it re-derives the span's digest and both scalar
+    /// coordinates and refuses anything that disagrees, an out-of-bounds
+    /// span and a cut scalar among it. [`verify_unit`] is this crate's
+    /// mirror of that law and delegates to it, so there is one law and
+    /// not two.
+    #[must_use]
+    pub const fn text_chunk_target(
+        &self,
+        document_id: TargetId,
+        chunking_id: ChunkingContractId,
+    ) -> TextChunkTarget {
+        TextChunkTarget {
+            document_id,
+            chunking_id,
+            content_digest: self.digest,
+            byte_start: self.span.start,
+            byte_end: self.span.end,
+            scalar_start: self.scalars.start,
+            scalar_end: self.scalars.end,
+        }
+    }
+}
+
+/// Proves a unit against the bytes it claims to annotate: the span is
+/// inside them, it falls on scalar boundaries at both ends, and the
+/// bytes at it still digest to the digest the unit carries.
+///
+/// This is the one question a [`Document`] cannot answer at slicing
+/// time. A unit is minted over bytes that were what they were *then*;
+/// this asks whether the bytes in hand *now* are still those. A consumer
+/// that stored spans and later re-read the file, or received a claim and
+/// a document from two places, asks here before trusting that the two
+/// belong together.
+///
+/// The law applied is the kernel's own — the target of
+/// [`Unit::text_chunk_target`] handed to
+/// [`TextChunkTarget::verify_document`] — so this crate and a PURREMB
+/// consumer refuse the same bytes for the same reason. `document_id` and
+/// `chunking_id` travel through unchanged and cannot affect the answer;
+/// they are asked for so that what is proved is the very target a
+/// consumer would ship, rather than a stand-in for it.
+///
+/// # Errors
+///
+/// [`MarkdownError::TamperedUnit`], naming the unit's span and carrying
+/// the kernel's own finding.
+pub fn verify_unit(
+    bytes: &[u8],
+    unit: &Unit<'_>,
+    document_id: TargetId,
+    chunking_id: ChunkingContractId,
+) -> Result<(), MarkdownError> {
+    unit.text_chunk_target(document_id, chunking_id)
+        .verify_document(bytes)
+        .map_err(|cause| MarkdownError::TamperedUnit {
+            span: (unit.span.start, unit.span.end),
+            cause,
+        })
 }
 
 /// A unit's text with bounded context on each side: the anchor a
@@ -655,6 +736,57 @@ impl<'a> Document<'a> {
     #[must_use]
     pub fn span(&self) -> Span {
         Span::new(0, self.byte_length())
+    }
+
+    /// How many Unicode scalars of the document precede a byte offset.
+    ///
+    /// `None` when the offset is past the document's end, and `None`
+    /// when it falls **inside** a scalar. A byte offset that is not a
+    /// boundary names no position in the text at all, and answering with
+    /// a rounded one is exactly how a consumer moves a span without
+    /// learning that it did. The document's own end *is* a boundary, and
+    /// answers with the document's whole scalar count.
+    ///
+    /// Byte offsets are this crate's ground truth and its identities;
+    /// scalar offsets are what every JS, Python, and wasm consumer
+    /// indexes text by. The conversion is offered here so it is written
+    /// once, against the document that has the bytes, rather than
+    /// reimplemented in each host — [`Unit::scalar_span`] is this same
+    /// count, taken once for every unit at analysis.
+    ///
+    /// It scans: O(n) in the bytes before the offset.
+    #[must_use]
+    pub fn byte_to_scalar(&self, byte_offset: u64) -> Option<u64> {
+        let offset = usize::try_from(byte_offset).ok()?;
+        // `is_char_boundary` is false past the end and false inside a
+        // scalar, which are the two refusals, and true at the end.
+        if !self.source.is_char_boundary(offset) {
+            return None;
+        }
+        Some(self.source[..offset].chars().count() as u64)
+    }
+
+    /// The byte offset a scalar offset names: the inverse of
+    /// [`Self::byte_to_scalar`], and its exact inverse wherever either
+    /// answers.
+    ///
+    /// Total on `0..=` the document's scalar count — the count itself
+    /// answers with the document's byte length, so a half-open scalar
+    /// range ending at the document's end converts — and `None` past
+    /// it.
+    ///
+    /// It scans: O(n) in the scalars before the offset.
+    #[must_use]
+    pub fn scalar_to_byte(&self, scalar_offset: u64) -> Option<u64> {
+        let wanted = usize::try_from(scalar_offset).ok()?;
+        // Every scalar's start, then the end: the boundaries in order,
+        // which is precisely what a scalar offset indexes.
+        self.source
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .chain(std::iter::once(self.source.len()))
+            .nth(wanted)
+            .map(|byte| byte as u64)
     }
 
     /// The document's title: the first heading that is not a movement

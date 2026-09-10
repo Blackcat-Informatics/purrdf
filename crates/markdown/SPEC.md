@@ -379,6 +379,32 @@ reproduce all four:
   binding between a node and its bytes by comparison and never by
   re-encoding.
 
+### 5.1 The two identities, and the verification law
+
+A profile states **two** identities and they are never equal. The
+contract id above is the **law id**: a digest over the unframed,
+line-oriented stage description, and the id this specification writes
+into node identities and into the `sliceProfile` literal of §11. The
+second is the **chunking-stage id** of an embedding family, derived over
+that family's canonical stage encoding, which is tag-and-length framed
+rather than line-oriented. Because the two preimages are framed
+differently, no family can reproduce the law id, and an implementation
+MUST NOT write the law id where a chunking-stage id is expected. An
+implementation that offers a document to an embedding pipeline MUST offer
+the law as a stage in that pipeline's own encoding — carrying the same
+stage description as its parameters, so that neither id can move while
+the other stands still — and use the id derived from *that* wherever a
+chunk names its chunking contract.
+
+A unit offered as a chunk carries its byte span, its scalar span and its
+content digest unchanged. The **verification law** for such a chunk is
+the kernel's: given the document's exact bytes, re-derive the span's
+digest and both scalar coordinates and refuse any disagreement, an
+out-of-bounds span and a span cutting a scalar in half among them. An
+implementation that also states this refusal in its own vocabulary MUST
+state it by applying that law rather than by restating it, so that both
+sides refuse the same bytes for the same reason.
+
 ## 6. The vocabulary
 
 This specification mints no ontology. Every class, predicate and datatype
