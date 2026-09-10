@@ -56,6 +56,20 @@ SQL 的拆分提问。每个答案都是精确且确定的——同样的行、�
 接口的边界，以及架构上的前后对照，见
 [一个引擎取代三个数据库](#一个引擎取代三个数据库)。
 
+## 文档即其自身的图
+
+PurRDF 附带一个 Markdown → RDF 1.2 的结构化切片器
+[`purrdf-markdown`](./crates/markdown/)，它遵循一份
+[已发布的规范](./crates/markdown/SPEC.md)，并指定了一个词汇表命名空间
+`https://w3id.org/purrdf/markdown#`。一篇文档由此成为一张图，图中是它自身的各级
+标题、编号节（verse）与段落：每个节点都逐字指名源文档中的一段字节区间。节点标识按
+内容寻址；而生成这些标识所依据的 profile，又按切片法则自身的内容寻址——因此法则一旦
+变更，标识随之重新生成，而不是就此漂移。同样的字节、同样的 profile，在每个目标上给出
+逐字节相同的输出；一张对照表（concordance table）则提升为 RDF 1.2 的具体化引用
+（reified citation）。就 Markdown 转 RDF 而言，此前没有任何标准把三件事合于一处：
+确定性、字节区间可寻址，以及按法则内容寻址的标识。它切分的是这份规范写明的方言；
+它并非一个 CommonMark 实现。
+
 ## 它为何存在？
 
 RDF 工具沿两条轴线碎片化。
@@ -520,9 +534,10 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-shex`](./crates/shex/) | ShEx 2.1：ShExC/ShExJ 模式与验证。 |
 | [`purrdf-entail`](./crates/entail/) | 蕴涵机制：RDF/RDFS/OWL-RL/D chase、OWL-Direct tableau 与 RIF-Core 规则——每次求闭包都返回推理报告。 |
 | [`purrdf-geo`](./crates/geo/) | GeoSPARQL 1.1：精确、无浮点的 WKT 与 GeoJSON 几何，标量扩展点上的 `geof:` 函数族，以及属性函数扩展点上的要素级查询重写——全部在调用方提供的 IRI 之下。 |
-| [`purrdf-datalog`](./crates/datalog/) | chase 之下的不动点基底：一个列式关系存储与 DL 子句 IR 上的确定性半朴素求值器。不由门面 crate 重新导出。 |
+| [`purrdf-datalog`](./crates/datalog/) | chase 之下的不动点基底：一个列式关系存储与 DL 子句 IR 上的确定性半朴素求值器。由门面 crate 重新导出为 `purrdf::datalog`，因为蕴涵机制接口带有它的类型。 |
 | [`purrdf-text`](./crates/text/) | RDF 1.2 字面量上的确定性全文检索：一个内存倒排索引与精确定点 BM25 排名，从 SPARQL 经由调用方提供的属性函数 IRI 调用。 |
 | [`purrdf-validate`](./crates/validate/) | 共享的宿主边界：SARIF 2.1.0 诊断，以及 Python/wasm/C 绑定所调用的蕴涵机制字符串接口。 |
+| [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化切片器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址的 profile 之下。由门面 crate 重新导出为 `purrdf::markdown`。 |
 | [`purrdf-slice`](./crates/slice/) | 切片目录：清单、带类型的工件、所有权/依赖分析。 |
 | [`purrdf-iri`](./crates/iri/) | 零依赖的 IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
 | [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |
