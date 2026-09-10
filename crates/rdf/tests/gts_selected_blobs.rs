@@ -1501,3 +1501,72 @@ fn a_refused_payload_is_not_reported_as_held_elsewhere() {
     .expect("a budget that admits it returns the payload");
     assert_eq!(&*ok.blobs[0].bytes, &data[..]);
 }
+
+/// A refused occurrence's own declaration is what finally names it.
+///
+/// A refused payload never reaches the payload path, so its declaration would
+/// otherwise be missing from the container-global record and an earlier, staler
+/// one would answer in its place. That hands the byte ceiling the power to
+/// decide what a representation names — the precise defect this whole surface
+/// exists to prevent. Both directions are exercised: a ceiling must not invent
+/// a unique answer, and must not withhold a real one.
+#[test]
+fn a_ceiling_never_decides_what_a_representation_finally_names() {
+    let large = vec![b'q'; 50_000];
+    let large_digest = digest_str(&large);
+    let small = b"small and wanted";
+
+    // `first` is a stale earlier declaration for the oversized payload; the
+    // payload's own occurrence then declares `own`, which is what counts.
+    let build = |first: &str, own: &str| {
+        let mut writer = Writer::new("generic");
+        writer.add_frame("blob", None, None, None, Some(meta(&large_digest, first)));
+        writer.add_frame(
+            "blob",
+            None,
+            Some(large.clone()),
+            None,
+            Some(Value::Map(vec![("rep".into(), own.into())])),
+        );
+        writer.add_blob(small, None, Some("wanted"));
+        writer.into_bytes()
+    };
+
+    let mut tight = limits();
+    tight.max_encoded_bytes = 1_024;
+
+    // Two blobs finally carry "wanted": ambiguous under EVERY budget.
+    let ambiguous = build("other", "wanted");
+    assert!(import_gts_events(&ambiguous).is_ok());
+    for (label, budget) in [("tight", tight), ("generous", limits())] {
+        let error = import_gts_events_with_blobs(
+            &ambiguous,
+            &[GtsBlobSelector::Representation("wanted")],
+            budget,
+        )
+        .expect_err("a ceiling must not resolve a real ambiguity");
+        assert_eq!(
+            error.code, "rdf-ir-gts-blob-selection",
+            "{label}: {error:?}"
+        );
+        assert!(
+            error.message.contains("resolves to 2 blobs"),
+            "{label}: {error:?}"
+        );
+    }
+
+    // One blob finally carries "wanted": resolvable under EVERY budget.
+    let unique = build("wanted", "other");
+    assert!(import_gts_events(&unique).is_ok());
+    for (label, budget) in [("tight", tight), ("generous", limits())] {
+        let result = import_gts_events_with_blobs(
+            &unique,
+            &[GtsBlobSelector::Representation("wanted")],
+            budget,
+        )
+        .unwrap_or_else(|error| {
+            panic!("{label}: a ceiling must not withhold a unique answer: {error:?}")
+        });
+        assert_eq!(&*result.blobs[0].bytes, small, "{label}");
+    }
+}

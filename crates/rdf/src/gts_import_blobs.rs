@@ -528,6 +528,19 @@ impl<'a> BlobCollector<'a> {
     /// budget decide which blob a selector resolves to, so a tight ceiling could
     /// silently turn an ambiguous match into a confident wrong answer.
     pub(crate) fn refused(&mut self, refusal: BlobRefusal<'_>) {
+        // A refused occurrence never reaches `payload`, so its own declaration
+        // would otherwise be missing from the container-global record and a
+        // staler one would answer for it — letting the ceiling, rather than the
+        // container, decide what a representation finally names. Only a proved
+        // identity may write here: a transformed or encrypted refusal carries
+        // the file's unverified claim, which must not choose whose metadata is
+        // read.
+        if let (Some(digest), true, Some(declared)) =
+            (refusal.digest, refusal.digest_computed, refusal.metadata)
+        {
+            self.final_metadata
+                .insert(digest.to_string(), declared.clone());
+        }
         self.refused.push(GtsRefusedBlob {
             digest: refusal.digest.map(ToString::to_string),
             digest_computed: refusal.digest_computed,
