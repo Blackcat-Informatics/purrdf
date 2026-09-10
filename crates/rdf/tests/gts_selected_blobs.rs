@@ -556,12 +556,46 @@ fn oversized_unselected_payload_does_not_refuse_the_import() {
     assert_eq!(selected.blobs.len(), 1);
     assert_eq!(&*selected.blobs[0].bytes, b"small");
 
-    // The dataset is identical to the one the unbudgeted importer produces.
+    // The dataset is identical to the one the unbudgeted importer produces, and
+    // the envelope differs in exactly one documented way: the refused payload is
+    // an `over-budget` opaque node rather than a blob record, because the digest
+    // that would identify it is only computable by doing the decode the budget
+    // declined. Asserting quads alone would let any other divergence hide.
     let plain = import_gts_events(&bytes).expect("plain import");
     assert_eq!(
         selected.bundle.dataset.owned_quads().collect::<Vec<_>>(),
         plain.dataset.owned_quads().collect::<Vec<_>>()
     );
+    let (plain_side, selected_side) = (
+        &plain.envelope.lookaside,
+        &selected.bundle.envelope.lookaside,
+    );
+    assert_eq!(
+        plain_side.blobs.len(),
+        2,
+        "unbudgeted decodes and records both"
+    );
+    assert_eq!(plain_side.opaque_nodes, &[]);
+    assert_eq!(
+        selected_side.blobs.len(),
+        1,
+        "only the admitted payload is identified"
+    );
+    let [opaque] = selected_side.opaque_nodes.as_slice() else {
+        panic!(
+            "the refused payload is recorded: {:?}",
+            selected_side.opaque_nodes
+        );
+    };
+    assert_eq!(
+        opaque.reason, "over-budget",
+        "not conflated with corruption"
+    );
+    assert_eq!(selected_side.segments, plain_side.segments);
+    assert_eq!(selected_side.signatures, plain_side.signatures);
+    assert_eq!(selected_side.suppressions, plain_side.suppressions);
+    assert_eq!(selected_side.resources, plain_side.resources);
+    assert_eq!(selected_side.metadata, plain_side.metadata);
 
     // Invalid case: a payload the caller *named* that exceeds the same budget
     // still fails closed.
@@ -717,4 +751,124 @@ fn malformed_public_metadata_is_not_silently_treated_as_absent() {
     )
     .unwrap_err();
     assert_eq!(error.code, "rdf-ir-gts-blob-metadata");
+}
+
+/// A byte budget bounds retention; it must never decide selection.
+///
+/// An archive holds two payloads that both advertise `rep = "wanted"`. Naming
+/// that representation is ambiguous and must fail closed. If a refused payload
+/// simply vanished, a tight budget would delete one candidate and hand the
+/// caller the survivor as though it were the unique answer — a wrong result
+/// produced by a knob that is supposed to govern memory, not meaning.
+#[test]
+fn a_budget_refusal_cannot_resolve_an_ambiguous_selector() {
+    let mut writer = Writer::new("generic");
+    writer.add_blob(b"small", None, Some("wanted"));
+    // Digest-less, so it is decoded (and therefore budget-checked) rather than
+    // resolved eagerly from public metadata, yet it still advertises the rep.
+    writer.add_frame(
+        "blob",
+        None,
+        Some(vec![b'x'; 100_000]),
+        Some(&["zstd".into()]),
+        Some(Value::Map(vec![("rep".into(), "wanted".into())])),
+    );
+    let bytes = writer.into_bytes();
+
+    for (label, limits) in [
+        ("generous", GtsBlobLimits::new(1024 * 1024, 2 * 1024 * 1024)),
+        ("tight", GtsBlobLimits::new(100, 100)),
+    ] {
+        let error = import_gts_events_with_blobs(
+            &bytes,
+            &[GtsBlobSelector::Representation("wanted")],
+            limits,
+        )
+        .expect_err(&format!("{label} budget must not resolve the ambiguity"));
+        assert_eq!(
+            error.code, "rdf-ir-gts-blob-selection",
+            "{label}: {error:?}"
+        );
+        assert!(
+            error.message.contains("resolves to 2 blobs"),
+            "{label}: {error:?}"
+        );
+    }
+}
+
+/// Naming a payload the budget refused is reported as a budget refusal.
+///
+/// "Resolves to 0 blobs" would be a false statement about an archive that does
+/// contain the payload, and indistinguishable from naming a digest that is
+/// genuinely absent.
+#[test]
+fn naming_a_refused_payload_reports_the_budget_not_an_empty_match() {
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "blob",
+        None,
+        Some(vec![b'x'; 100_000]),
+        Some(&["zstd".into()]),
+        Some(Value::Map(vec![("rep".into(), "wanted".into())])),
+    );
+    let bytes = writer.into_bytes();
+
+    let refused = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        GtsBlobLimits::new(100, 100),
+    )
+    .expect_err("a named over-budget payload fails closed");
+    assert_eq!(refused.code, "rdf-ir-gts-blob-limit", "{refused:?}");
+    assert!(refused.message.contains("budget refused"), "{refused:?}");
+
+    // The neighbouring valid case: the same archive, a budget that admits it.
+    let ok = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("the same selection succeeds within budget");
+    assert_eq!(ok.blobs.len(), 1);
+    assert_eq!(ok.refused.len(), 0);
+
+    // A genuinely absent digest stays a selection failure, not a budget one.
+    let absent = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Digest(&digest_str(
+            b"never in this archive",
+        ))],
+        limits(),
+    )
+    .expect_err("an absent digest fails closed");
+    assert_eq!(absent.code, "rdf-ir-gts-blob-selection", "{absent:?}");
+}
+
+/// A successful import never hides what the budget cost the caller.
+#[test]
+fn an_unselected_refusal_is_reported_rather_than_dropped() {
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "blob",
+        None,
+        Some(vec![b'x'; 100_000]),
+        Some(&["zstd".into()]),
+        None,
+    );
+    writer.add_blob(b"small", None, Some("wanted"));
+    let bytes = writer.into_bytes();
+
+    let result = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        GtsBlobLimits::new(100, 100),
+    )
+    .expect("imports");
+    assert_eq!(result.blobs.len(), 1);
+    let [refused] = result.refused.as_slice() else {
+        panic!("the oversized payload is reported: {:?}", result.refused);
+    };
+    assert!(refused.digest.is_none(), "no digest was declared");
+    assert_eq!(refused.encoded_len, 100_000_usize.min(refused.encoded_len));
+    assert_ne!(refused.detail, "");
 }

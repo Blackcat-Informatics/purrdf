@@ -308,6 +308,31 @@ pub struct BlobPayload<'a> {
     pub codecs: &'a [Codec],
 }
 
+/// One inline blob occurrence a sink's byte ceiling refused before decoding.
+///
+/// Reported so a selecting consumer still learns a candidate was present. It
+/// carries everything decidable without spending the bytes: the container's
+/// declared public metadata (so a representation selector can still match), the
+/// physical source, and the encoded length that was rejected.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug)]
+pub struct BlobRefusal<'a> {
+    /// Zero-based segment containing this occurrence.
+    pub segment_index: usize,
+    /// Declared content digest, when the container published one.
+    ///
+    /// `None` for a payload with no public digest: refusing happens before the
+    /// decode that would compute it, so no identity is available. Such a blob is
+    /// matchable by representation and provenance, never by digest.
+    pub digest: Option<&'a str>,
+    /// Public metadata available at this occurrence, independent of RDF rows.
+    pub metadata: Option<&'a Value>,
+    /// Original blob byte-string length that was refused.
+    pub encoded_len: usize,
+    /// Which ceiling fired, in the reader's own words.
+    pub detail: &'a str,
+}
+
 /// Sink for [`read_to_sink`] events.
 ///
 /// Term ids in events are segment-local ids. A sink that needs a file-level
@@ -335,6 +360,15 @@ pub trait StreamingSink {
     /// Called after the legacy metadata-only [`Self::blob`] event. The metadata
     /// is repeated here so consumers need not pair callbacks by arrival order.
     fn blob_payload(&mut self, _payload: BlobPayload<'_>) {}
+    /// A blob this sink's own byte ceiling refused, before it was decoded.
+    ///
+    /// Fires instead of [`Self::blob_payload`], and only for a sink that set a
+    /// ceiling. A refused payload is reported rather than dropped so a selecting
+    /// consumer can still see that a candidate existed: silently omitting it
+    /// would let a ceiling change which blob a selector resolves to, turning a
+    /// retention bound into a selection rule. The digest is absent whenever the
+    /// container did not declare one, because refusing precedes hashing.
+    fn blob_refused(&mut self, _refusal: BlobRefusal<'_>) {}
     /// Optional encoded-byte bound before eager blob decoding, including decryption.
     ///
     /// Existing sinks leave the reader behavior unchanged. This does not bound
@@ -513,6 +547,27 @@ impl Folder<'_, '_, '_> {
                 frame_index: index,
             },
         );
+    }
+
+    /// Report a payload the sink's own ceiling refused, before any decode.
+    fn emit_blob_refusal(
+        &mut self,
+        digest: Option<&str>,
+        declared_metadata: Option<&Value>,
+        encoded_len: usize,
+        detail: &str,
+    ) {
+        let segment_index = self.segment_index;
+        let Some(sink) = self.sink.as_deref_mut() else {
+            return;
+        };
+        sink.blob_refused(BlobRefusal {
+            segment_index,
+            digest,
+            metadata: declared_metadata,
+            encoded_len,
+            detail,
+        });
     }
 
     fn emit_blob(
@@ -940,6 +995,13 @@ impl Folder<'_, '_, '_> {
                 }
                 Ok(_) => {}
                 Err(PayloadError::Budget(detail)) => {
+                    let refused_digest = pub_meta.as_ref().and_then(public_blob_digest);
+                    self.emit_blob_refusal(
+                        refused_digest.as_deref(),
+                        declared_metadata,
+                        encoded_len,
+                        &detail,
+                    );
                     self.opaque(frame, "blob", "over-budget");
                     self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
                 }
@@ -1010,6 +1072,13 @@ impl Folder<'_, '_, '_> {
             }
             Ok(_) => {}
             Err(PayloadError::Budget(detail)) => {
+                let refused_digest = pub_meta.as_ref().and_then(public_blob_digest);
+                self.emit_blob_refusal(
+                    refused_digest.as_deref(),
+                    declared_metadata,
+                    encoded_len,
+                    &detail,
+                );
                 self.opaque(frame, "blob", "over-budget");
                 self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
             }

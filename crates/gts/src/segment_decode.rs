@@ -60,7 +60,7 @@ use ciborium::value::Value;
 use crate::model::{
     Diagnostic, OpaqueNode, Quad, Signature, StreamableInfo, Suppression, Term, TermKind, Triple3,
 };
-use crate::reader::{BlobPayload, FrameContext, StreamingSink};
+use crate::reader::{BlobPayload, BlobRefusal, FrameContext, StreamingSink};
 
 /// A [`std::collections::HashMap`] keyed by the workspace's fixed-key `ahash`
 /// policy (`crates/rdf-core/src/hash.rs`'s `FastHasher`) — no runtime RNG
@@ -213,6 +213,11 @@ pub trait ResolvedSink {
 
     /// Borrowed blob payload passthrough (default no-op).
     fn blob_payload(&mut self, _payload: BlobPayload<'_>) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Refused blob passthrough (default no-op).
+    fn blob_refused(&mut self, _refusal: BlobRefusal<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -696,6 +701,15 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
             return;
         }
         if let Err(error) = self.sink.blob_payload(payload) {
+            self.fail(error);
+        }
+    }
+
+    fn blob_refused(&mut self, refusal: BlobRefusal<'_>) {
+        if self.error.is_some() {
+            return;
+        }
+        if let Err(error) = self.sink.blob_refused(refusal) {
             self.fail(error);
         }
     }

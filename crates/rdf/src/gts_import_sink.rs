@@ -38,7 +38,7 @@ use crate::gts_import_blobs::BlobCollector;
 use ciborium::value::Value;
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
-use purrdf_gts::reader::{BlobPayload, FrameContext};
+use purrdf_gts::reader::{BlobPayload, BlobRefusal, FrameContext};
 use purrdf_gts::segment_decode::{ResolvedSink, SegmentResolver};
 
 use crate::{
@@ -338,6 +338,13 @@ impl ResolvedSink for SinkImporter<'_> {
     fn blob_payload(&mut self, payload: BlobPayload<'_>) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
             blobs.payload(payload)?;
+        }
+        Ok(())
+    }
+
+    fn blob_refused(&mut self, refusal: BlobRefusal<'_>) -> Result<(), RdfDiagnostic> {
+        if let Some(blobs) = &mut self.blobs {
+            blobs.refused(refusal);
         }
         Ok(())
     }

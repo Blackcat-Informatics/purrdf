@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use ciborium::Value;
 use purrdf_gts::model::ByteRange;
-use purrdf_gts::reader::{BlobPayload, FrameContext};
+use purrdf_gts::reader::{BlobPayload, BlobRefusal, FrameContext};
 
 use crate::{GtsBundle, RdfDiagnostic};
 
@@ -95,14 +95,45 @@ pub struct GtsImportedBlob {
     pub segment_head: Vec<u8>,
 }
 
+/// One payload a byte budget refused, reported rather than silently dropped.
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub struct GtsRefusedBlob {
+    /// Declared content digest, absent when the container published none.
+    ///
+    /// Refusing precedes the decode that would compute an identity, so an
+    /// undeclared digest is unknowable here. Such a payload is matchable by
+    /// representation, never by digest.
+    pub digest: Option<String>,
+    /// Public metadata declared at the refused occurrence.
+    pub metadata: Option<Value>,
+    /// Zero-based segment containing the refused occurrence.
+    pub segment_index: usize,
+    /// Encoded byte length that was refused.
+    pub encoded_len: usize,
+    /// Which ceiling fired, in the reader's own words.
+    pub detail: String,
+}
+
 /// Native RDF 1.2 bundle and its explicitly requested inline blobs.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct GtsImportWithBlobs {
-    /// The same scoped native dataset and envelope as [`crate::import_gts_events`].
+    /// The same scoped native dataset as [`crate::import_gts_events`].
+    ///
+    /// The envelope matches too, with one documented exception: a payload this
+    /// import's budget refused is recorded as an opaque node with reason
+    /// `over-budget` instead of a blob record, because the digest that would
+    /// identify it is only computable by performing the decode the budget
+    /// declined. Such payloads are listed in [`Self::refused`].
     pub bundle: GtsBundle,
     /// Selected unique digests in deterministic digest order.
     pub blobs: Vec<GtsImportedBlob>,
+    /// Payloads the budget refused, in encounter order.
+    ///
+    /// Present so a successful import never hides a refusal: a caller that set a
+    /// ceiling can see exactly what it cost them.
+    pub refused: Vec<GtsRefusedBlob>,
 }
 
 /// Import the native dataset and retain required blobs during the same GTS read.
@@ -138,10 +169,14 @@ pub fn import_gts_events_with_blobs(
     let collector = BlobCollector::new(selectors, limits)?;
     let (bundle, collector) =
         crate::gts_import_sink::import_with_collector(bytes, Some(collector))?;
-    let blobs = collector
+    let (blobs, refused) = collector
         .expect("selected importer retains its collector")
         .finish()?;
-    Ok(GtsImportWithBlobs { bundle, blobs })
+    Ok(GtsImportWithBlobs {
+        bundle,
+        blobs,
+        refused,
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -156,6 +191,7 @@ pub(crate) struct BlobCollector<'a> {
     selectors: Vec<GtsBlobSelector<'a>>,
     limits: GtsBlobLimits,
     selected: BTreeMap<String, GtsImportedBlob>,
+    refused: Vec<GtsRefusedBlob>,
     frame: Option<BlobFrame>,
     total: usize,
 }
@@ -220,6 +256,7 @@ impl<'a> BlobCollector<'a> {
             selectors: selectors.to_vec(),
             limits,
             selected: BTreeMap::new(),
+            refused: Vec::new(),
             frame: None,
             total: 0,
         })
@@ -374,6 +411,22 @@ impl<'a> BlobCollector<'a> {
         Ok(())
     }
 
+    /// Record a payload the reader's ceiling refused before decoding it.
+    ///
+    /// Kept as a selection candidate, not discarded. A budget bounds what this
+    /// import *retains*; letting a refusal remove a candidate would let the
+    /// budget decide which blob a selector resolves to, so a tight ceiling could
+    /// silently turn an ambiguous match into a confident wrong answer.
+    pub(crate) fn refused(&mut self, refusal: BlobRefusal<'_>) {
+        self.refused.push(GtsRefusedBlob {
+            digest: refusal.digest.map(ToString::to_string),
+            metadata: refusal.metadata.cloned(),
+            segment_index: refusal.segment_index,
+            encoded_len: refusal.encoded_len,
+            detail: refusal.detail.to_string(),
+        });
+    }
+
     pub(crate) fn segment_head(&mut self, segment_index: usize, head: &[u8]) {
         for blob in self.selected.values_mut() {
             if blob.segment_index == segment_index {
@@ -387,23 +440,66 @@ impl<'a> BlobCollector<'a> {
         }
     }
 
-    fn finish(self) -> Result<Vec<GtsImportedBlob>, RdfDiagnostic> {
-        for selector in self.selectors {
-            let count = self
+    fn finish(self) -> Result<(Vec<GtsImportedBlob>, Vec<GtsRefusedBlob>), RdfDiagnostic> {
+        for selector in &self.selectors {
+            let retained = self
                 .selected
                 .values()
-                .filter(|blob| matches(selector, &blob.digest, blob.metadata.as_ref()))
+                .filter(|blob| matches(*selector, &blob.digest, blob.metadata.as_ref()))
                 .count();
+            // A refused candidate still counts. It was in the archive; only its
+            // bytes were declined. Ignoring it here would make the byte budget a
+            // selection rule, so a tighter ceiling could quietly resolve an
+            // ambiguous selector to one arbitrary survivor.
+            let refused: Vec<&GtsRefusedBlob> = self
+                .refused
+                .iter()
+                .filter(|blob| {
+                    matches(
+                        *selector,
+                        blob.digest.as_deref().unwrap_or_default(),
+                        blob.metadata.as_ref(),
+                    )
+                })
+                .collect();
+            let count = retained + refused.len();
             if count != 1 {
+                // A payload refused before it could be hashed has no identity to
+                // match a digest selector against, so say that rather than let
+                // "resolves to 0" imply the archive did not contain it.
+                let unidentified = self
+                    .refused
+                    .iter()
+                    .filter(|blob| blob.digest.is_none())
+                    .count();
+                let note = if unidentified == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        "; {unidentified} further payload(s) were refused by this import's budget before a digest could be computed, so they could not be matched"
+                    )
+                };
                 return Err(fail(
                     "rdf-ir-gts-blob-selection",
                     format!(
-                        "required selector {selector:?} resolves to {count} blobs; expected exactly one"
+                        "required selector {selector:?} resolves to {count} blobs; expected exactly one{note}"
+                    ),
+                ));
+            }
+            // Exactly one match, and it is the one we declined to decode. Say so
+            // precisely: reporting "resolves to 0 blobs" would be a false claim
+            // about an archive that does contain the payload.
+            if let [blob] = refused.as_slice() {
+                return Err(fail(
+                    "rdf-ir-gts-blob-limit",
+                    format!(
+                        "required selector {selector:?} matches a payload of {} encoded bytes that this import's budget refused: {}",
+                        blob.encoded_len, blob.detail
                     ),
                 ));
             }
         }
-        Ok(self.selected.into_values().collect())
+        Ok((self.selected.into_values().collect(), self.refused))
     }
 }
 
