@@ -201,9 +201,17 @@ pub fn import_gts_events_with_blobs(
     let collector = BlobCollector::new(selectors, limits)?;
     let (bundle, collector) =
         crate::gts_import_sink::import_with_collector(bytes, Some(collector))?;
-    let (blobs, refused) = collector
-        .expect("selected importer retains its collector")
-        .finish()?;
+    // The fold hands the collector straight back, so this cannot be None today.
+    // It is still a hard error rather than a panic: an internal invariant that
+    // fails should surface as a diagnostic on a Result-returning API, not abort
+    // the caller's process.
+    let Some(collector) = collector else {
+        return Err(fail(
+            "rdf-ir-gts-import-internal",
+            "the selected importer did not retain its blob collector",
+        ));
+    };
+    let (blobs, refused) = collector.finish()?;
     Ok(GtsImportWithBlobs {
         bundle,
         blobs,
@@ -355,7 +363,15 @@ impl<'a> BlobCollector<'a> {
             .any(|selector| matches(*selector, payload.digest, metadata))
         {
             if let Some(old) = self.selected.remove(payload.digest) {
-                self.total -= old.bytes.len();
+                // Release builds leave overflow checks off, so a future break of
+                // the "total is the sum of retained lengths" invariant would wrap
+                // to near usize::MAX and silently disable the total budget,
+                // surfacing as spurious decode refusals far from the cause.
+                debug_assert!(
+                    self.total >= old.bytes.len(),
+                    "retained-byte total underflow"
+                );
+                self.total = self.total.saturating_sub(old.bytes.len());
             }
             return Ok(());
         }
@@ -367,6 +383,10 @@ impl<'a> BlobCollector<'a> {
         }
         let metadata = bounded_metadata(metadata, self.limits.max_metadata_bytes)?;
         validate_metadata(metadata.as_ref(), payload.digest)?;
+        // The reader fires its frame event for every frame before any of that
+        // frame's rows, with the same segment index, so a payload always has a
+        // matching frame. The refusal stays as the shared provenance check in
+        // finish(), where it is reachable and tested.
         let frame = self
             .frame
             .as_ref()
@@ -435,7 +455,8 @@ impl<'a> BlobCollector<'a> {
             ));
         }
         let old_len = previous.map_or(0, |blob| blob.bytes.len());
-        let other_bytes = self.total - old_len;
+        debug_assert!(self.total >= old_len, "retained-byte total underflow");
+        let other_bytes = self.total.saturating_sub(old_len);
         let remaining = self
             .limits
             .max_total_decoded_bytes
@@ -555,6 +576,20 @@ impl<'a> BlobCollector<'a> {
                     format!(
                         "required selector {selector:?} matches a payload of {} encoded bytes that this import's budget refused: {}",
                         blob.encoded_len, blob.detail
+                    ),
+                ));
+            }
+        }
+        // The type permits an empty head or frame id, and the doc calls both
+        // "verified". Assert rather than trust: a silently empty provenance
+        // field is indistinguishable from a real one at the call site.
+        for blob in self.selected.values() {
+            if blob.segment_head.is_empty() || blob.frame_id.is_empty() {
+                return Err(fail(
+                    "rdf-ir-gts-blob-provenance",
+                    format!(
+                        "selected blob {} lacks the verified frame or segment provenance it reports",
+                        blob.digest
                     ),
                 ));
             }
