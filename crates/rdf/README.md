@@ -265,6 +265,46 @@ on `purrdf-rdf` directly only when you want the RDF layer alone.
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
 follows the workspace `rust-version` (currently 1.96, stable toolchain only).
 
+## Selected GTS payloads
+
+`import_gts_events_with_blobs` returns the native dataset and an explicitly
+named set of archive payloads from a single read, so a consumer that needs a few
+blob bodies no longer has to open the container a second time. Selectors name an
+exact digest in the canonical `blake3:<hex>` spelling, or a final public `rep`
+value — never an RDF predicate. Each selector must resolve to exactly one blob;
+missing and ambiguous selections are terminal.
+
+Retention is bounded by `GtsBlobLimits`, and the bounds are worth reading
+precisely, because what they do *not* cover matters as much as what they do:
+
+| bound | covers |
+|---|---|
+| `max_encoded_bytes` | one selected payload's on-wire bytes |
+| `max_decoded_bytes` | one payload's decoded output, and every compression-chain intermediate |
+| `max_total_decoded_bytes` | the sum retained across selected digests |
+| `max_metadata_bytes` | one blob's CBOR public metadata |
+| `max_frame_decoded_bytes` | one enclosing non-blob frame, which is how a `snapshot` reaches embedded blobs |
+
+They do not bound the native RDF dataset, the input file, reader frame buffers,
+or codec working memory.
+
+A payload that exceeds a bound is refused, not fatal: the import succeeds and
+the refusal is reported in `GtsImportWithBlobs::refused`. A refused payload
+still counts as a selection candidate, so a byte ceiling can never quietly
+resolve an ambiguous selector by deleting one of the candidates. Naming a
+refused payload fails with `rdf-ir-gts-blob-limit` describing the bound.
+
+Two refusals are worth knowing about in advance. A payload refused before it
+could be hashed has no identity, so it is matchable by representation but never
+by digest. And selecting a blob the container declares as *external* — a
+published digest with no payload field — returns `rdf-ir-gts-blob-external`:
+its bytes live outside the file, so no inline read can produce them.
+
+The envelope matches `import_gts_events` with one exception: a refused payload
+appears as an opaque node with reason `over-budget` rather than a blob record,
+because the digest that would identify it is only computable by performing the
+decode the budget declined.
+
 ## License
 
 Licensed under either of

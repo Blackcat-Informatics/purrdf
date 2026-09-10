@@ -656,6 +656,17 @@ Related crates:
 
 ## License and copyright
 
+## Reusing a parsed shapes graph
+
+`Shapes` retains the frozen `Arc<RdfDataset>` it was parsed from, and
+`Shapes::dataset()` borrows it. A consumer that needs the RDF behind a shapes
+graph — to union it with an ontology, to fold `owl:imports`, to hand it to
+SPARQL — reads it from there instead of reparsing the source text.
+
+The accessor returns a borrow rather than a clone so the caller decides whether
+to pay for retention; `Arc::clone(shapes.dataset())` keeps the dataset alive
+independently of the `Shapes` value.
+
 Copyright © 2026 Blackcat Informatics® Inc.
 
 This crate is licensed under **MIT OR Apache-2.0** — see

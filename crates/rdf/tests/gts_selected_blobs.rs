@@ -1027,3 +1027,110 @@ fn an_external_blob_is_distinguished_from_a_metadata_only_update() {
     .expect("a metadata-only update reuses the retained payload");
     assert_eq!(&*updated.blobs[0].bytes, data);
 }
+
+/// The transient-candidate cap refuses at 1025, not at 1024.
+///
+/// The negative side of an off-by-one is invisible: a cap that fired one entry
+/// early would still look like correct strictness. The boundary case must be
+/// shown to pass through to ordinary selection instead.
+#[test]
+fn the_transient_candidate_cap_admits_its_own_boundary() {
+    for (count, expected) in [
+        (1024_u32, "rdf-ir-gts-blob-selection"),
+        (1025, "rdf-ir-gts-blob-limit"),
+    ] {
+        let mut writer = Writer::new("generic");
+        for index in 0..count {
+            writer.add_blob(&index.to_be_bytes(), None, Some("wanted"));
+        }
+        let error = import_gts_events_with_blobs(
+            &writer.into_bytes(),
+            &[GtsBlobSelector::Representation("wanted")],
+            limits(),
+        )
+        .expect_err("every blob shares one representation, so selection is ambiguous");
+        assert_eq!(error.code, expected, "count={count}: {error:?}");
+    }
+}
+
+/// Metadata that names a digest it cannot be read as is refused.
+///
+/// Distinct from the decoded-digest mismatch: here the public metadata carries a
+/// `digest` entry that is not a readable digest at all, so the blob's identity
+/// comes from its bytes while its metadata claims something unreadable.
+#[test]
+fn metadata_naming_an_unreadable_digest_is_refused() {
+    let data = b"payload";
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "blob",
+        None,
+        Some(data.to_vec()),
+        None,
+        // A digest-shaped value of the wrong length: not resolvable, so the
+        // blob falls to identity-by-content while its metadata disagrees.
+        Some(Value::Map(vec![
+            ("digest".into(), Value::Bytes(vec![0_u8; 31])),
+            ("rep".into(), "wanted".into()),
+        ])),
+    );
+    let error = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect_err("metadata must not name a digest that is not this blob");
+    assert_eq!(error.code, "rdf-ir-gts-blob-digest", "{error:?}");
+
+    // Neighbouring valid case: the same payload, metadata naming it correctly.
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "blob",
+        None,
+        Some(data.to_vec()),
+        None,
+        Some(meta(&digest_str(data), "wanted")),
+    );
+    let ok = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("correct metadata still imports");
+    assert_eq!(&*ok.blobs[0].bytes, data);
+}
+
+/// An untransformed payload is bounded by the decoded ceiling too.
+///
+/// The encoded and decoded ceilings are separate knobs, and a payload with no
+/// codec chain reaches only the decoded one. Without a case here, a caller
+/// raising the encoded ceiling would silently lose the decoded bound.
+#[test]
+fn an_untransformed_payload_obeys_the_decoded_ceiling() {
+    let data = vec![b'x'; 4096];
+    let mut writer = Writer::new("generic");
+    // Digest-less, so the reader decodes it and the ceilings apply.
+    writer.add_frame("blob", None, Some(data.clone()), None, None);
+    let bytes = writer.into_bytes();
+
+    let mut tight = GtsBlobLimits::new(data.len() - 1, data.len());
+    tight.max_encoded_bytes = data.len() * 2;
+    let refused = import_gts_events_with_blobs(&bytes, &[], tight).expect("not fatal");
+    assert_eq!(refused.refused.len(), 1, "{:?}", refused.refused);
+    assert!(
+        refused.refused[0].detail.contains("decoded blob exceeds"),
+        "the decoded ceiling is what fired: {:?}",
+        refused.refused[0]
+    );
+
+    // Neighbouring valid case: a decoded ceiling that exactly admits it.
+    let mut exact = GtsBlobLimits::new(data.len(), data.len());
+    exact.max_encoded_bytes = data.len() * 2;
+    let ok = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Digest(&digest_str(&data))],
+        exact,
+    )
+    .expect("an exact decoded ceiling admits the payload");
+    assert_eq!(&*ok.blobs[0].bytes, &data[..]);
+}
