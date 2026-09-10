@@ -7,8 +7,8 @@
 //! carries the `kid` (label 4). Ed25519 is deterministic (RFC 8032), so the same
 //! key + id always yields the same signature — gated by `vectors/cose/*.json`.
 
-use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::aead::{Aead, AeadInPlace, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use ciborium::value::{Integer, Value};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
@@ -238,13 +238,17 @@ fn parse_encrypt0(blob: &[u8]) -> Option<Encrypt0Parts> {
         Value::Tag(_, inner) => *inner,
         other => other,
     };
-    let array = body.as_array()?;
-    if array.len() != 3 {
+    let Value::Array(array) = body else {
         return None;
-    }
-    let protected = array[0].as_bytes()?.clone();
-    let unprotected = array[1].as_map()?;
-    let ciphertext = array[2].as_bytes()?.clone();
+    };
+    let [
+        Value::Bytes(protected),
+        Value::Map(unprotected),
+        Value::Bytes(ciphertext),
+    ]: [Value; 3] = array.try_into().ok()?
+    else {
+        return None;
+    };
     let kid_target = Integer::from(KID);
     let iv_target = Integer::from(IV);
     let kid = unprotected.iter().find_map(|(k, v)| match (k, v) {
@@ -291,4 +295,50 @@ pub fn decrypt0(
             },
         )
         .map_err(|_| Encrypt0Error::AuthFailed)
+}
+
+/// Internal bounded decryption failures, without extending the public error enum.
+#[derive(Debug)]
+pub(crate) enum BoundedDecrypt0Error {
+    Crypto(Encrypt0Error),
+    Limit,
+}
+
+/// Decrypt in the parsed ciphertext buffer after checking the exact plaintext size.
+///
+/// COSE parsing consumes encoded input storage. The AES-GCM tag is excluded from
+/// the decoded limit, and no separate plaintext buffer is allocated.
+pub(crate) fn decrypt0_bounded(
+    blob: &[u8],
+    resolve: impl Fn(&str) -> Option<[u8; 32]>,
+    limit: usize,
+) -> Result<Vec<u8>, BoundedDecrypt0Error> {
+    use BoundedDecrypt0Error::{Crypto, Limit};
+
+    let mut parts = parse_encrypt0(blob).ok_or(Crypto(Encrypt0Error::Malformed))?;
+    let key = resolve(&parts.kid).ok_or(Crypto(Encrypt0Error::MissingKey))?;
+    if parts.iv.len() != 12 {
+        return Err(Crypto(Encrypt0Error::Malformed));
+    }
+    let plaintext_len = parts
+        .ciphertext
+        .len()
+        .checked_sub(16)
+        .ok_or(Crypto(Encrypt0Error::AuthFailed))?;
+    if plaintext_len > limit {
+        return Err(Limit);
+    }
+    let tag = Tag::clone_from_slice(&parts.ciphertext[plaintext_len..]);
+    parts.ciphertext.truncate(plaintext_len);
+    let aad = enc_structure(&parts.protected);
+    let cipher = Aes256Gcm::new((&key).into());
+    cipher
+        .decrypt_in_place_detached(
+            Nonce::from_slice(&parts.iv),
+            &aad,
+            &mut parts.ciphertext,
+            &tag,
+        )
+        .map_err(|_| Crypto(Encrypt0Error::AuthFailed))?;
+    Ok(parts.ciphertext)
 }

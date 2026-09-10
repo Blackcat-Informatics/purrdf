@@ -325,7 +325,7 @@ impl ValidationReport {
             if let Some(msg) = &r.message {
                 push_triple(
                     &mut builder,
-                    result_subj.clone(),
+                    result_subj,
                     sh::RESULT_MESSAGE,
                     RdfTerm::Literal(::purrdf::RdfLiteral::simple(msg.as_str())),
                 );

@@ -16,7 +16,9 @@ use std::io::Read;
 
 use ciborium::value::Value;
 
-use crate::codec::{Codec, CodecError, decode_chain, decode_chain_with_decrypt};
+use crate::codec::{
+    Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded,
+};
 use crate::model::{
     AnnotationRow, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow, Signature,
     StreamableInfo, Suppression, Term, TermKind, Triple3,
@@ -63,7 +65,14 @@ fn diag_code_for(reason: &str) -> &'static str {
     }
 }
 
-fn pub_digest(value: &Value) -> Option<String> {
+/// Resolve public blob metadata's digest using the reader's identity convention.
+///
+/// Accepts text with or without the `blake3:` prefix, or a 32-byte digest value.
+/// The original metadata is borrowed and unchanged. This only resolves the
+/// declaration; callers authenticating payloads must compare the result with the
+/// decoded content digest and reject ambiguous metadata keys separately.
+#[must_use]
+pub fn public_blob_digest(value: &Value) -> Option<String> {
     let Value::Map(entries) = value else {
         return None;
     };
@@ -174,6 +183,7 @@ fn decrypt_codec(
     codec: &Codec,
     data: &[u8],
     content_key: &ContentKeyResolver<'_>,
+    limit: usize,
 ) -> Result<Vec<u8>, CodecError> {
     if codec.name != "cose-encrypt0" {
         return Err(CodecError::Unavailable {
@@ -181,9 +191,14 @@ fn decrypt_codec(
             detail: format!("no decryptor for encrypt codec '{}'", codec.name),
         });
     }
-    crate::cose::decrypt0(data, |kid| content_key(kid)).map_err(|err| CodecError::Unavailable {
-        reason: "missing-key",
-        detail: format!("{} decrypt failed: {err}", codec.name),
+    crate::cose::decrypt0_bounded(data, content_key, limit).map_err(|err| match err {
+        crate::cose::BoundedDecrypt0Error::Crypto(err) => CodecError::Unavailable {
+            reason: "missing-key",
+            detail: format!("{} decrypt failed: {err}", codec.name),
+        },
+        crate::cose::BoundedDecrypt0Error::Limit => {
+            CodecError::Failed(format!("decoded transform output exceeds {limit} bytes"))
+        }
     })
 }
 
@@ -251,6 +266,38 @@ impl FrameContext<'_> {
     }
 }
 
+/// Borrowed payload and public metadata for one accepted inline blob occurrence.
+///
+/// This event carries no RDF term ids. Its segment index and the preceding
+/// [`StreamingSink::frame`] event identify its exact physical source. A later
+/// occurrence may replace a digest's public metadata; absent metadata preserves
+/// earlier metadata under the ordinary cross-segment union contract.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug)]
+pub struct BlobPayload<'a> {
+    /// Zero-based segment containing this occurrence.
+    pub segment_index: usize,
+    /// Declared content digest, or the computed digest when not declared.
+    pub digest: &'a str,
+    /// Public metadata available at this occurrence, independent of RDF rows.
+    pub metadata: Option<&'a Value>,
+    /// True only when this occurrence explicitly declares public metadata.
+    /// False distinguishes inherited segment metadata from a new declaration.
+    pub metadata_declared: bool,
+    /// Decoded bytes for an empty codec chain, otherwise transformed wire bytes.
+    /// `None` exposes a metadata-only occurrence without inventing a payload.
+    pub bytes: Option<&'a [u8]>,
+    /// Whether the occurrence contains a payload field at all. A present field
+    /// with `bytes == None` is malformed, distinct from a metadata-only update.
+    pub payload_present: bool,
+    /// Original blob byte-string length before any eager decoding. For a snapshot
+    /// entry this is the embedded blob length, excluding its enclosing RDF frame.
+    /// Metadata-only occurrences have length zero.
+    pub encoded_len: usize,
+    /// Resolved transform chain for `bytes`; apply in reverse to decode.
+    pub codecs: &'a [Codec],
+}
+
 /// Sink for [`read_to_sink`] events.
 ///
 /// Term ids in events are segment-local ids. A sink that needs a file-level
@@ -272,6 +319,28 @@ pub trait StreamingSink {
     fn suppression(&mut self, _segment_index: usize, _suppression: &Suppression) {}
     /// Accepted inline blob digest and declared metadata.
     fn blob(&mut self, _segment_index: usize, _digest: &str, _meta: Option<&Value>) {}
+    /// Borrowed blob bytes with their public metadata and codec chain.
+    ///
+    /// The default is inert: existing sinks neither copy nor decode payloads.
+    /// Called after the legacy metadata-only [`Self::blob`] event. The metadata
+    /// is repeated here so consumers need not pair callbacks by arrival order.
+    fn blob_payload(&mut self, _payload: BlobPayload<'_>) {}
+    /// Optional encoded-byte bound before eager blob decoding, including decryption.
+    ///
+    /// Existing sinks leave the reader behavior unchanged. This does not bound
+    /// ordinary RDF frame decoding or reader frame buffers.
+    fn blob_encoded_limit(&self) -> Option<usize> {
+        None
+    }
+    /// Optional bound for each intermediate and final eager blob decode output.
+    ///
+    /// Existing sinks leave the reader behavior unchanged. Bounded collectors
+    /// apply their per-blob limit before decoding without a public digest or
+    /// decrypting with a content key. This does not bound ordinary RDF frame
+    /// decoding, encoded COSE parsing buffers, or codec dictionary storage.
+    fn blob_decode_limit(&self) -> Option<usize> {
+        None
+    }
     /// Opaque frame produced by unknown, encrypted, or damaged payloads.
     fn opaque(&mut self, _segment_index: usize, _opaque: &OpaqueNode) {}
     /// Signature status observed on a frame.
@@ -436,7 +505,15 @@ impl Folder<'_, '_, '_> {
         );
     }
 
-    fn emit_blob(&mut self, digest: &str) {
+    fn emit_blob(
+        &mut self,
+        digest: &str,
+        bytes: Option<&[u8]>,
+        codecs: &[Codec],
+        declared_metadata: Option<&Value>,
+        payload_present: bool,
+        encoded_len: usize,
+    ) {
         // Only a sink can observe the meta, so look it up only when one is
         // present — and borrow it (`self.g` shared, `self.sink` mut are
         // disjoint fields) instead of deep-cloning the CBOR map per blob.
@@ -450,6 +527,16 @@ impl Folder<'_, '_, '_> {
             .find(|(stored, _)| stored == digest)
             .map(|(_, meta)| meta);
         sink.blob(self.segment_index, digest, meta);
+        sink.blob_payload(BlobPayload {
+            segment_index: self.segment_index,
+            digest,
+            metadata: declared_metadata.or(meta),
+            metadata_declared: declared_metadata.is_some(),
+            bytes,
+            payload_present,
+            encoded_len,
+            codecs,
+        });
     }
 
     fn push_opaque(&mut self, opaque: OpaqueNode) {
@@ -486,6 +573,18 @@ impl Folder<'_, '_, '_> {
     /// Resolve a frame's logical payload (§6.1); error on missing capability.
     fn payload(&self, frame: &[(Value, Value)], blob: bool) -> Result<Value, PayloadError> {
         let d = map_get(frame, "d");
+        if blob
+            && let Some(Value::Bytes(bytes)) = d
+            && let Some(limit) = self
+                .sink
+                .as_deref()
+                .and_then(StreamingSink::blob_encoded_limit)
+            && bytes.len() > limit
+        {
+            return Err(PayloadError::Damaged(format!(
+                "encoded blob exceeds {limit} bytes"
+            )));
+        }
         if let Some(Value::Array(ids)) = map_get(frame, "x")
             && !ids.is_empty()
         {
@@ -495,9 +594,20 @@ impl Folder<'_, '_, '_> {
                 ));
             };
             let chain = self.resolve_codecs(ids)?;
+            let limit = blob
+                .then(|| {
+                    self.sink
+                        .as_deref()
+                        .and_then(StreamingSink::blob_decode_limit)
+                })
+                .flatten();
             let decoded = if let Some(content_key) = self.content_key {
-                let decrypt = |codec: &Codec, data: &[u8]| decrypt_codec(codec, data, content_key);
-                decode_chain_with_decrypt(&chain, db, Some(&decrypt))?
+                let limit = limit.unwrap_or(usize::MAX);
+                let decrypt =
+                    |codec: &Codec, data: &[u8]| decrypt_codec(codec, data, content_key, limit);
+                decode_chain_with_decrypt_bounded(&chain, db, Some(&decrypt), limit)?
+            } else if let Some(limit) = limit {
+                decode_chain_bounded(&chain, db, limit)?
             } else {
                 decode_chain(&chain, db)?
             };
@@ -506,6 +616,18 @@ impl Folder<'_, '_, '_> {
             }
             return ciborium::de::from_reader(&decoded[..])
                 .map_err(|e| PayloadError::Damaged(e.to_string()));
+        }
+        if blob
+            && let Some(Value::Bytes(bytes)) = d
+            && let Some(limit) = self
+                .sink
+                .as_deref()
+                .and_then(StreamingSink::blob_decode_limit)
+            && bytes.len() > limit
+        {
+            return Err(PayloadError::Damaged(format!(
+                "decoded blob exceeds {limit} bytes"
+            )));
         }
         Ok(d.cloned().unwrap_or(Value::Null))
     }
@@ -749,10 +871,11 @@ impl Folder<'_, '_, '_> {
 
     fn h_blob_frame(&mut self, frame: &[(Value, Value)], index: usize) {
         let d = map_get(frame, "d");
-        let pub_meta = map_get(frame, "pub")
+        let declared_metadata = map_get(frame, "pub");
+        let pub_meta = declared_metadata
             .filter(|value| matches!(value, Value::Map(_)))
             .cloned();
-
+        let encoded_len = d.and_then(Value::as_bytes).map_or(0, Vec::len);
         let chain = match map_get(frame, "x") {
             Some(Value::Array(ids)) if !ids.is_empty() => match self.resolve_codecs(ids) {
                 Ok(chain) => chain,
@@ -786,10 +909,17 @@ impl Folder<'_, '_, '_> {
                         digest.clone(),
                         self.described.contains(&digest),
                     ));
+                    self.emit_blob(
+                        &digest,
+                        Some(&bytes),
+                        &[],
+                        declared_metadata,
+                        true,
+                        encoded_len,
+                    );
                     if self.materialize {
                         self.g.set_blob(digest.clone(), bytes);
                     }
-                    self.emit_blob(&digest);
                 }
                 Ok(_) => {}
                 Err(PayloadError::Unavailable { reason, detail }) => {
@@ -808,10 +938,18 @@ impl Folder<'_, '_, '_> {
             return;
         }
 
-        if let Some(digest) = pub_meta.as_ref().and_then(pub_digest) {
+        if let Some(digest) = pub_meta.as_ref().and_then(public_blob_digest) {
             if let Some(meta) = pub_meta {
                 self.g.set_blob_meta(digest.clone(), meta);
             }
+            self.emit_blob(
+                &digest,
+                d.and_then(Value::as_bytes).map(Vec::as_slice),
+                &chain,
+                declared_metadata,
+                d.is_some(),
+                encoded_len,
+            );
             if let Some(Value::Bytes(raw)) = d
                 && self.materialize
             {
@@ -823,7 +961,6 @@ impl Folder<'_, '_, '_> {
             }
             self.blob_events
                 .push((index, digest.clone(), self.described.contains(&digest)));
-            self.emit_blob(&digest);
             return;
         }
 
@@ -838,10 +975,17 @@ impl Folder<'_, '_, '_> {
                 }
                 self.blob_events
                     .push((index, digest.clone(), self.described.contains(&digest)));
+                self.emit_blob(
+                    &digest,
+                    Some(&bytes),
+                    &[],
+                    declared_metadata,
+                    true,
+                    encoded_len,
+                );
                 if self.materialize {
                     self.g.set_blob(digest.clone(), bytes);
                 }
-                self.emit_blob(&digest);
             }
             Ok(_) => {}
             Err(PayloadError::Unavailable { reason, detail }) => {
@@ -959,7 +1103,7 @@ impl Folder<'_, '_, '_> {
                     if self.materialize {
                         self.g.set_blob(digest.clone(), bytes.clone());
                     }
-                    self.emit_blob(&digest);
+                    self.emit_blob(&digest, Some(bytes), &[], None, true, bytes.len());
                 }
             }
         }

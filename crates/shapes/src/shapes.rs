@@ -426,6 +426,21 @@ pub struct Shapes {
     pub(crate) shapes_dataset: Arc<RdfDataset>,
 }
 
+impl Shapes {
+    /// Borrow the original frozen dataset retained when these shapes were parsed.
+    ///
+    /// This returns the existing shared owner without reparsing, copying the
+    /// dataset, or incrementing its reference count. Use `Arc::clone(shapes.dataset())`
+    /// to retain the same immutable dataset independently of the `Shapes` value.
+    ///
+    /// Document-prefix handling remains part of [`crate::engine::parse_shapes`]:
+    /// the dataset contains RDF statements, not the source document's prefix map.
+    #[must_use]
+    pub const fn dataset(&self) -> &Arc<RdfDataset> {
+        &self.shapes_dataset
+    }
+}
+
 impl Default for Shapes {
     fn default() -> Self {
         Self {
@@ -807,9 +822,9 @@ impl<'s> Parser<'s> {
         crate::term::sort_terms_canonical(&mut ids);
         for term in ids {
             let shape = if self.first_object_of(&term, sh::PATH).is_some() {
-                self.parse_standalone_property_shape(term.clone())?
+                self.parse_standalone_property_shape(term)?
             } else {
-                self.parse_node_shape(term.clone())?
+                self.parse_node_shape(term)?
             };
             node_shapes.push(shape);
         }

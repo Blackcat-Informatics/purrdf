@@ -332,7 +332,7 @@ impl Parser<'_> {
             // happened to reach it first, and sharing the caller's stack would make
             // a legitimate shared sub-expression look like a cycle.
             let saved = std::mem::take(&mut self.in_flight);
-            self.in_flight.insert(InFlight::NodeExpr(id.clone()));
+            self.in_flight.insert(InFlight::NodeExpr(id));
             let parsed = self.parse_node_expr(body_node);
             self.in_flight = saved;
             let body = parsed.map_err(|e| {

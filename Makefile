@@ -13,7 +13,7 @@ endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install
+	capi-build capi-header capi-check capi-install test-native-import-blobs lint-native-import-blobs doc-native-import-blobs
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -155,6 +155,20 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 
 test: ## Run the workspace test suite.
 	cargo test --workspace --locked
+
+lint-native-import-blobs: ## Lint the selected native-import production and test surfaces only.
+	cargo clippy -p purrdf-gts --lib --test bounded_keyed_blobs --locked -- -D warnings
+	cargo clippy -p purrdf-rdf --lib --test gts_selected_blobs --locked -- -D warnings
+	cargo clippy -p purrdf-shapes --lib --locked -- -D warnings
+
+doc-native-import-blobs: ## Check the native-import and shared shape-dataset public API documentation.
+	RUSTDOCFLAGS="-D warnings" cargo doc -p purrdf-gts -p purrdf-rdf -p purrdf-shapes --no-deps --locked
+
+test-native-import-blobs: ## Check bounded selected-blob import and native scope contracts only.
+	cargo test -p purrdf-gts --lib codec::tests:: --locked
+	cargo test -p purrdf-gts --test bounded_keyed_blobs --locked
+	cargo test -p purrdf-rdf --lib gts_import_sink::tests:: --locked
+	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 
 doc: ## Build docs for the 21 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli

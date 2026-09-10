@@ -1475,6 +1475,7 @@ dependencies = [
  "fastrand",
  "filetime",
  "flate2",
+ "getrandom 0.3.4",
  "purrdf-events",
  "rayon",
  "serde",

@@ -106,7 +106,11 @@ fn zstd_level(level: Option<i32>) -> CompressionLevel {
 
 /// Decode one transform. `identity` borrows its input (no copy of the whole
 /// payload); every real codec produces an owned buffer.
-fn decode_one<'a>(codec: &Codec, data: &'a [u8]) -> Result<Cow<'a, [u8]>, CodecError> {
+fn decode_one<'a>(
+    codec: &Codec,
+    data: &'a [u8],
+    limit: usize,
+) -> Result<Cow<'a, [u8]>, CodecError> {
     if codec.cls == "encrypt" {
         return Err(CodecError::Unavailable {
             reason: "missing-key",
@@ -114,12 +118,30 @@ fn decode_one<'a>(codec: &Codec, data: &'a [u8]) -> Result<Cow<'a, [u8]>, CodecE
         });
     }
     match codec.name.as_str() {
-        "identity" => Ok(Cow::Borrowed(data)),
+        "identity" if data.len() <= limit => Ok(Cow::Borrowed(data)),
+        "identity" => Err(decoded_limit(limit)),
         "gzip" => {
+            let mut decoder = flate2::read::GzDecoder::new(data);
             let mut out = Vec::new();
-            flate2::read::GzDecoder::new(data)
-                .read_to_end(&mut out)
-                .map_err(|e| CodecError::Failed(format!("gzip decode failed: {e}")))?;
+            if limit == usize::MAX {
+                decoder
+                    .read_to_end(&mut out)
+                    .map_err(|e| CodecError::Failed(format!("gzip decode failed: {e}")))?;
+                return Ok(Cow::Owned(out));
+            }
+            let mut chunk = [0_u8; 8192];
+            loop {
+                let read = decoder
+                    .read(&mut chunk)
+                    .map_err(|e| CodecError::Failed(format!("gzip decode failed: {e}")))?;
+                if read == 0 {
+                    break;
+                }
+                if read > limit.saturating_sub(out.len()) {
+                    return Err(decoded_limit(limit));
+                }
+                out.extend_from_slice(&chunk[..read]);
+            }
             Ok(Cow::Owned(out))
         }
         "zstd" | "zstd-rsyncable" => {
@@ -130,21 +152,19 @@ fn decode_one<'a>(codec: &Codec, data: &'a [u8]) -> Result<Cow<'a, [u8]>, CodecE
                     .map_err(|e| CodecError::Failed(format!("zstd dictionary load failed: {e}")))?;
             }
             // Start with a generous expansion factor and grow until the frame fits.
-            let mut capacity = data.len().saturating_mul(4).max(4096);
+            let mut capacity = data.len().saturating_mul(4).max(4096).min(limit);
             loop {
                 let mut out = Vec::new();
-                out.try_reserve(capacity).map_err(|e| {
+                out.try_reserve_exact(capacity).map_err(|e| {
                     CodecError::Failed(format!("zstd decode failed: output allocation failed: {e}"))
                 })?;
                 match decoder.decode_all_to_vec(data, &mut out) {
                     Ok(()) => return Ok(Cow::Owned(out)),
                     Err(FrameDecoderError::TargetTooSmall) => {
-                        capacity = capacity.checked_mul(2).ok_or_else(|| {
-                            CodecError::Failed(
-                                "zstd decode failed: decoded output is too large for this platform"
-                                    .into(),
-                            )
-                        })?;
+                        if capacity == limit {
+                            return Err(decoded_limit(limit));
+                        }
+                        capacity = capacity.saturating_mul(2).max(1).min(limit);
                     }
                     Err(e) => return Err(CodecError::Failed(format!("zstd decode failed: {e}"))),
                 }
@@ -358,6 +378,28 @@ pub fn decode_chain(chain: &[Codec], data: &[u8]) -> Result<Vec<u8>, CodecError>
     decode_chain_with_decrypt(chain, data, None)
 }
 
+fn decoded_limit(limit: usize) -> CodecError {
+    CodecError::Failed(format!("decoded transform output exceeds {limit} bytes"))
+}
+
+/// Reverse a codec chain, bounding every decoded intermediate and final buffer.
+///
+/// `limit` caps decoded bytes per transform before output-buffer growth, including
+/// identity and empty chains. Encoded input and codec dictionary bytes belong to
+/// the caller and are not counted against this bound. Encryption requires the
+/// separate keyed reader API and is refused here, as by [`decode_chain`].
+///
+/// # Errors
+/// Returns a codec error for unavailable transforms, corrupt bytes or an output
+/// exceeding `limit`. No oversized decoded buffer is returned or retained.
+pub fn decode_chain_bounded(
+    chain: &[Codec],
+    data: &[u8],
+    limit: usize,
+) -> Result<Vec<u8>, CodecError> {
+    decode_chain_with_decrypt_bounded(chain, data, None, limit)
+}
+
 /// A caller-supplied encrypt-class transform resolver.
 pub type Decryptor<'a> = dyn Fn(&Codec, &[u8]) -> Result<Vec<u8>, CodecError> + 'a;
 
@@ -366,6 +408,19 @@ pub fn decode_chain_with_decrypt(
     chain: &[Codec],
     data: &[u8],
     decrypt: Option<&Decryptor<'_>>,
+) -> Result<Vec<u8>, CodecError> {
+    decode_chain_with_decrypt_bounded(chain, data, decrypt, usize::MAX)
+}
+
+/// Reverse a chain with a decryptor that enforces `limit` before allocating output.
+///
+/// This internal callback contract is stronger than the public unbounded
+/// decryptor API. Each decrypted output is checked again before the next transform.
+pub(crate) fn decode_chain_with_decrypt_bounded(
+    chain: &[Codec],
+    data: &[u8],
+    decrypt: Option<&Decryptor<'_>>,
+    limit: usize,
 ) -> Result<Vec<u8>, CodecError> {
     let mut current = Cow::Borrowed(data);
     for codec in chain.iter().rev() {
@@ -379,11 +434,17 @@ pub fn decode_chain_with_decrypt(
                     });
                 }
             });
-        } else if let Cow::Owned(decoded) = decode_one(codec, current.as_ref())? {
+        } else if let Cow::Owned(decoded) = decode_one(codec, current.as_ref(), limit)? {
             // `identity` returns a borrow of `current`; leave `current` untouched
             // instead of copying the payload once per identity step.
             current = Cow::Owned(decoded);
         }
+        if current.len() > limit {
+            return Err(decoded_limit(limit));
+        }
+    }
+    if current.len() > limit {
+        return Err(decoded_limit(limit));
     }
     Ok(current.into_owned())
 }
@@ -392,6 +453,39 @@ pub fn decode_chain_with_decrypt(
 mod tests {
     use super::*;
     use crate::dict::DictSeed;
+
+    #[test]
+    fn bounded_decode_checks_empty_identity_and_every_chain_intermediate() {
+        assert_eq!(decode_chain_bounded(&[], b"", 0).unwrap(), b"");
+        assert!(decode_chain_bounded(&[], b"x", 0).is_err());
+        assert!(decode_chain_bounded(&[Codec::new("identity", "encode")], b"x", 0).is_err());
+        let raw = b"x";
+        let encoded = encode_chain(&["gzip".into(), "gzip".into()], raw).unwrap();
+        // Final output fits; the larger inner gzip stream exceeds this bound.
+        assert!(
+            decode_chain_bounded(
+                &[
+                    Codec::new("gzip", "compress"),
+                    Codec::new("gzip", "compress")
+                ],
+                &encoded,
+                raw.len()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            decode_chain_bounded(
+                &[
+                    Codec::new("gzip", "compress"),
+                    Codec::new("gzip", "compress")
+                ],
+                &encoded,
+                1024
+            )
+            .unwrap(),
+            raw
+        );
+    }
 
     #[test]
     fn encoded_core_codecs_round_trip() {
@@ -431,9 +525,13 @@ mod tests {
         let mut encoded = compress_to_vec(&block1[..], CompressionLevel::Uncompressed);
         encoded.extend(compress_to_vec(&block2[..], CompressionLevel::Uncompressed));
 
-        let decoded = decode_one(&Codec::new("zstd-rsyncable", "compress"), &encoded)
-            .expect("multi-frame zstd must decode")
-            .into_owned();
+        let decoded = decode_one(
+            &Codec::new("zstd-rsyncable", "compress"),
+            &encoded,
+            usize::MAX,
+        )
+        .expect("multi-frame zstd must decode")
+        .into_owned();
 
         let mut expected = block1.to_vec();
         expected.extend_from_slice(block2);
