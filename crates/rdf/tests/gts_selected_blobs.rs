@@ -1619,11 +1619,42 @@ fn an_unverified_refusal_is_never_called_held_elsewhere() {
     let mut tight = limits();
     tight.max_encoded_bytes = 1_024;
 
-    // The encrypted occurrence's own declaration says "other", so exactly one
-    // blob finally carries "wanted" and the selector must reach it.
-    let resolved =
+    // The encrypted occurrence claims to BE that digest and declares it "other",
+    // but nothing verified the claim. An unproved claim may not rename a digest
+    // the container declared, so the earlier declaration stands, the selector
+    // still reaches a payload this import could not produce, and it fails closed
+    // rather than quietly handing back the other blob.
+    let ambiguous =
         import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Representation("wanted")], tight)
-            .expect("a refused occurrence retagged itself away from this representation");
+            .expect_err("an unverified claim cannot retag a declared digest");
+    assert_eq!(ambiguous.code, "rdf-ir-gts-blob-limit", "{ambiguous:?}");
+
+    // Neighbouring valid case: the same shape with the retag PROVED. An
+    // untransformed digest-less payload is hashed by the reader, so its own
+    // declaration does bind, and the selector reaches the remaining blob.
+    let proved_payload = vec![b'p'; 80_000];
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "blob",
+        None,
+        None,
+        None,
+        Some(meta(&digest_str(&proved_payload), "wanted")),
+    );
+    writer.add_frame(
+        "blob",
+        None,
+        Some(proved_payload),
+        None,
+        Some(Value::Map(vec![("rep".into(), "other".into())])),
+    );
+    writer.add_blob(small, None, Some("wanted"));
+    let resolved = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        tight,
+    )
+    .expect("a proved identity may retag itself away from this representation");
     assert_eq!(&*resolved.blobs[0].bytes, small);
 
     // Naming the refused digest reports the budget, never "held elsewhere".
@@ -1675,7 +1706,7 @@ fn a_refused_declaration_obeys_the_metadata_ceiling() {
         over.refused[0]
     );
     assert!(
-        over.refused[0].detail.contains("metadata budget"),
+        over.refused[0].detail.contains("retention budgets"),
         "and the reason is stated: {:?}",
         over.refused[0]
     );
@@ -1829,4 +1860,178 @@ fn the_longest_nameable_representation_still_matches() {
     )
     .expect_err("no selector may carry more than the maximum");
     assert_eq!(error.code, "rdf-ir-gts-blob-selection", "{error:?}");
+}
+
+/// A declaration reaches a payload in a later segment, whole and attributed.
+///
+/// The reader's own inheritance resets at every segment boundary, so a bare
+/// occurrence arrives with nothing. The documented contract says absent metadata
+/// preserves the previous declaration across those boundaries — which means the
+/// caller must get the declaration's full content, not merely be able to select
+/// on it, and must be told which frame declared it.
+#[test]
+fn a_later_segments_payload_inherits_the_whole_declaration() {
+    let data = b"cross segment body";
+    let digest = digest_str(data);
+
+    let mut first = Writer::new("generic");
+    first.add_frame(
+        "blob",
+        None,
+        None,
+        None,
+        Some(Value::Map(vec![
+            ("digest".into(), digest.into()),
+            ("rep".into(), "wanted".into()),
+            ("mt".into(), "image/png".into()),
+        ])),
+    );
+    let first_head = first.head().to_vec();
+    let mut bytes = first.into_bytes();
+    let mut second = Writer::new("generic");
+    second.add_frame("blob", None, Some(data.to_vec()), None, None);
+    bytes.extend(second.into_bytes());
+
+    assert!(import_gts_events(&bytes).is_ok());
+    let result = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("a representation declared a segment earlier still names it");
+    let blob = &result.blobs[0];
+    assert_eq!(&*blob.bytes, data);
+
+    // Selected BY the representation, so it must not come back claiming to have
+    // none — and the media type declared alongside it must survive too.
+    let metadata = blob
+        .metadata
+        .as_ref()
+        .unwrap_or_else(|| panic!("the inherited declaration is returned: {blob:?}"));
+    let Value::Map(fields) = metadata else {
+        panic!("public metadata is a map: {metadata:?}");
+    };
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key.as_text() == Some(name))
+            .and_then(|(_, value)| value.as_text())
+            .map(ToString::to_string)
+    };
+    assert_eq!(field("rep").as_deref(), Some("wanted"));
+    assert_eq!(field("mt").as_deref(), Some("image/png"));
+
+    // Attribution points at the frame that declared it, not the one carrying
+    // the bytes, and carries that segment's verified head.
+    let source = blob
+        .metadata_source
+        .as_ref()
+        .unwrap_or_else(|| panic!("the declaration's source is returned: {blob:?}"));
+    assert_eq!(source.segment_index, 0);
+    assert_eq!(blob.segment_index, 1);
+    assert_eq!(source.segment_head, first_head);
+}
+
+/// A first declaration over the metadata ceiling is refused; under it, admitted.
+///
+/// This does NOT isolate where the bound fires. The importer copies public
+/// metadata into its lookaside before any payload event, and the pre-copy gate
+/// exists to bound it there rather than afterwards — but both orderings refuse
+/// the same container with the same code, so the difference is peak allocation
+/// and is not observable through this API. What is pinned here is the refusal
+/// itself and its neighbouring acceptance.
+#[test]
+fn a_first_declaration_over_the_metadata_ceiling_is_refused() {
+    let build = |filler: usize| {
+        let mut writer = Writer::new("generic");
+        writer.add_frame(
+            "blob",
+            None,
+            Some(b"body".to_vec()),
+            None,
+            Some(Value::Map(vec![
+                ("rep".into(), "wanted".into()),
+                ("note".into(), Value::Text("z".repeat(filler))),
+            ])),
+        );
+        writer.into_bytes()
+    };
+
+    let mut tight = limits();
+    tight.max_metadata_bytes = DEFAULT_MAX_METADATA_BYTES;
+    let error = import_gts_events_with_blobs(
+        &build(400_000),
+        &[GtsBlobSelector::Representation("wanted")],
+        tight,
+    )
+    .expect_err("an over-budget declaration is refused before it is copied");
+    assert_eq!(error.code, "rdf-ir-gts-blob-limit", "{error:?}");
+
+    // Neighbouring valid case: the same shape within the ceiling still imports.
+    let ok = import_gts_events_with_blobs(
+        &build(1_024),
+        &[GtsBlobSelector::Representation("wanted")],
+        tight,
+    )
+    .expect("an in-budget declaration is admitted");
+    assert_eq!(&*ok.blobs[0].bytes, b"body");
+}
+
+/// "External" is only claimed when nothing unidentified was refused.
+///
+/// Saying a payload is held elsewhere is a factual claim about the archive. A
+/// payload refused before it could be identified might be those very bytes, so
+/// the claim is not available; the truthful verdict is the budget's.
+#[test]
+fn externality_is_not_asserted_over_an_unidentified_refusal() {
+    let absent = digest_str(b"genuinely somewhere else");
+
+    // Nothing unidentified was refused, so externality is assertable.
+    let mut writer = Writer::new("generic");
+    writer.add_frame("blob", None, None, None, Some(meta(&absent, "wanted")));
+    let external = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect_err("a blob with no payload anywhere is external");
+    assert_eq!(external.code, "rdf-ir-gts-blob-external", "{external:?}");
+
+    // Same selection, but an encrypted frame was refused before identification.
+    // Those bytes could be the ones named, so the claim is withheld.
+    let key: [u8; 32] = purrdf_gts::wire::blake3_256(b"externality probe key")
+        .try_into()
+        .expect("a 256-bit digest is 32 bytes");
+    let iv: [u8; 12] = purrdf_gts::wire::blake3_256(b"externality probe nonce")[..12]
+        .try_into()
+        .expect("a 256-bit digest is at least 12 bytes");
+    let mut writer = Writer::new("generic");
+    writer.add_frame("blob", None, None, None, Some(meta(&absent, "wanted")));
+    writer
+        .add_frame_with_options(
+            "blob",
+            purrdf_gts::writer::FrameOptions {
+                raw: Some(vec![b'e'; 80_000]),
+                encrypt: Some(purrdf_gts::writer::Encrypt0Options {
+                    kid: "recipient".into(),
+                    key,
+                    iv,
+                }),
+                ..purrdf_gts::writer::FrameOptions::default()
+            },
+        )
+        .expect("encrypted oversized frame");
+    let mut tight = limits();
+    tight.max_encoded_bytes = 1_024;
+    let withheld = import_gts_events_with_blobs(
+        &writer.into_bytes(),
+        &[GtsBlobSelector::Representation("wanted")],
+        tight,
+    )
+    .expect_err("the selection still fails closed");
+    assert_eq!(withheld.code, "rdf-ir-gts-blob-limit", "{withheld:?}");
+    assert!(
+        !withheld.message.contains("held elsewhere"),
+        "externality is not assertable here: {withheld:?}"
+    );
 }
