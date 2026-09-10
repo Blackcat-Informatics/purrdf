@@ -46,7 +46,10 @@ set of N-Triples lines (valid Turtle):
   from every verse in the row's range (`2–5`, `2-5`, or `4`) to each
   backticked anchor, and a `canonSource` triple to each backticked path.
   With a canon IRI base declared, an anchor becomes the IRI `base ++
-  anchor`; without one it is a typed literal, never a guess.
+  anchor` — pure concatenation, and every anchor is checked against the
+  IRI it would mint before anything is rendered (see [The anchor lift is
+  checked](#the-anchor-lift-is-checked)). Without a base an anchor is a
+  typed literal, never a guess, and nothing about its bytes is refused.
 
 Horizontal rules and table rows are structure, not units. Spans are
 verbatim: the literal's bytes are `source[start..end]`, with no trimming,
@@ -103,8 +106,39 @@ slicer emits, and the base it mints node IRIs under, is configuration the
 caller supplies in a `Vocabulary`. `Vocabulary::under(base)` derives a whole
 vocabulary from one base with the crate's local names (`Document`, `Unit`,
 `byteStart`, `text`, ...); every field is public, so any IRI can be replaced.
-An empty or unwritable IRI is a typed error, not a default. The only IRIs the
-crate brings are the standard's: `rdf:type` and `xsd:integer`.
+An empty, unwritable, or merely *relative* IRI is a typed error naming the
+field, not a default: the crate asks the workspace IRI law — reached through
+`purrdf-core`, so it is the same law the kernel interns under — and refuses up
+front what would otherwise be refused a stage later. The source id answers to
+the same rule. The only IRIs the crate brings are the standard's: `rdf:type`
+and `xsd:integer`.
+
+## The anchor lift is checked
+
+Concatenation is deliberate: RFC-3986 reference resolution would dissolve a
+fragment base's `#` and fold dot segments away, so `base ++ anchor` and the
+base the caller declared would part company. But concatenation is exactly why
+the result cannot be trusted, so with a canon base declared every anchor in the
+concordance is walked before a claim is rendered, and `base ++ anchor` must
+
+- be an absolute IRI under the workspace law, and
+- lie under the declared base.
+
+Containment is `BaseIri::relativize`: the minted IRI is under the base exactly
+when a relative spelling of it against that base exists — decided by
+round-tripping that spelling back through resolution, not by comparing strings.
+That is the rule that answers for a *fragment* base (`https://example.org/canon#`
+++ `tide-line` relativizes to `#tide-line`), and it closes two escapes spelled
+entirely in lawful IRI characters, which no character blacklist can see: an
+anchor that climbs out of a path base (`../x` under `https://example.org/canon/`),
+and one that extends the base's host into another authority
+(`.elsewhere.example/x` after `https://example.org`). Both are refused, naming
+the anchor and the verse range of the row that wrote it.
+
+The law is IRI-lawfulness, never ASCII: `中文` mints `…/canon#中文` and lifts,
+because RFC-3987 `ucschar` is inside an IRI. And a refusal is scoped to minting
+alone — the same anchor with no canon base declared is a typed literal and
+slices without complaint.
 
 ## Deterministic, and identified by its law
 

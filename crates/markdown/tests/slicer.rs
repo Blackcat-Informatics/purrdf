@@ -1081,3 +1081,201 @@ fn a_vocabulary_that_is_not_under_one_base_is_its_own_profile() {
         Err(MarkdownError::InvalidVocabulary { field: "cites", .. })
     ));
 }
+
+/// A whole small document whose one concordance row names `anchor` for
+/// verse 1: the smallest thing that exercises the anchor lift.
+fn cited(anchor: &str) -> String {
+    format!(
+        "# T\n\nA headnote.\n\n1. One line.\n\n## Concordance\n\n\
+         | Verses | Canon source | Anchors |\n| --- | --- | --- |\n\
+         | 1 | `atlas/x.logic.ttl` | `{anchor}` |\n"
+    )
+}
+
+/// The declared profile with a canon base, so anchors lift into IRIs.
+fn under_canon(base: &str) -> Profile {
+    let mut profile = v1();
+    profile.canon_base = Some(base.to_owned());
+    profile
+}
+
+/// The `cites` objects of verse 1 of a sliced small document.
+fn verse_one_cites(claims: &[Claim]) -> Vec<String> {
+    let one = *units(claims)
+        .iter()
+        .find(|u| integer(u, &v().verse) == Some(1))
+        .expect("verse 1");
+    objects(one, &v().cites)
+}
+
+/// Every claim of a slice parses as Turtle: the lift is not merely
+/// accepted, it is readable.
+fn parses_whole(claims: &[Claim]) {
+    for claim in claims {
+        parse_dataset(claim.turtle.as_bytes(), "text/turtle", None)
+            .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
+    }
+}
+
+#[test]
+fn an_anchor_that_mints_no_iri_refuses_under_a_canon_base_and_names_the_row_that_wrote_it() {
+    for anchor in ["two words", "a>b"] {
+        assert_eq!(
+            slice_of(&cited(anchor), GUIDE_ID, &under_canon(CANON_BASE)),
+            Err(MarkdownError::InvalidAnchor {
+                anchor: anchor.to_owned(),
+                verses: (1, 1),
+            }),
+            "the concatenation is not an IRI, and the row is named so it can be found"
+        );
+    }
+    // The neighbouring anchor is ordinary, and it lifts.
+    let claims = slice_of(&cited("a-one"), GUIDE_ID, &under_canon(CANON_BASE)).expect("slices");
+    assert_eq!(
+        verse_one_cites(&claims),
+        vec![format!("<{CANON_BASE}a-one>")]
+    );
+    parses_whole(&claims);
+}
+
+#[test]
+fn the_same_refused_anchors_are_lawful_typed_literals_when_no_canon_base_is_declared() {
+    // Nothing is minted, so nothing is refused: the refusal is scoped to
+    // IRI minting and says nothing about an anchor's bytes.
+    for anchor in ["two words", "a>b", "../x", ".elsewhere.example/x"] {
+        let claims = slice_of(&cited(anchor), GUIDE_ID, &v1()).expect("slices");
+        assert_eq!(
+            verse_one_cites(&claims),
+            vec![format!("\"{anchor}\"^^<{}>", v().dt_anchor)]
+        );
+        parses_whole(&claims);
+    }
+}
+
+#[test]
+fn a_cjk_anchor_lifts_under_a_canon_base_because_the_law_is_iri_lawfulness_not_ascii() {
+    // RFC-3987 `ucschar` is inside an IRI, so `中文` needs no escaping
+    // and no permission: it mints, and it mints verbatim.
+    let anchor = "\u{4e2d}\u{6587}";
+    for base in [CANON_BASE, CANON_PATH_BASE] {
+        let claims = slice_of(&cited(anchor), GUIDE_ID, &under_canon(base)).expect("slices");
+        assert_eq!(
+            verse_one_cites(&claims),
+            vec![format!("<{base}{anchor}>")],
+            "an IRI is not an ASCII URI"
+        );
+        parses_whole(&claims);
+    }
+}
+
+/// A path-shaped canon base, beside the fragment-shaped one the goldens
+/// are minted under: the two shapes containment has to answer for.
+const CANON_PATH_BASE: &str = "https://example.org/canon/";
+
+#[test]
+fn an_anchor_that_climbs_out_of_a_path_canon_base_refuses_and_a_plain_one_lifts() {
+    assert_eq!(
+        slice_of(&cited("../x"), GUIDE_ID, &under_canon(CANON_PATH_BASE)),
+        Err(MarkdownError::InvalidAnchor {
+            anchor: "../x".to_owned(),
+            verses: (1, 1),
+        }),
+        "the minted IRI resolves outside the canon the caller declared"
+    );
+    // The same traversal under a FRAGMENT base climbs out of nothing: it
+    // is a fragment, and it stays under the base. Refusing it there
+    // would be an over-refusal.
+    let claims = slice_of(&cited("../x"), GUIDE_ID, &under_canon(CANON_BASE)).expect("slices");
+    assert_eq!(
+        verse_one_cites(&claims),
+        vec![format!("<{CANON_BASE}../x>")]
+    );
+    parses_whole(&claims);
+    // And a plain anchor under the path base lifts as it reads.
+    let claims =
+        slice_of(&cited("a-one"), GUIDE_ID, &under_canon(CANON_PATH_BASE)).expect("slices");
+    assert_eq!(
+        verse_one_cites(&claims),
+        vec![format!("<{CANON_PATH_BASE}a-one>")]
+    );
+    parses_whole(&claims);
+}
+
+#[test]
+fn an_anchor_that_extends_the_bases_host_into_another_authority_refuses() {
+    // Every character here is lawful in an IRI; only containment sees it.
+    let host_base = "https://example.org";
+    assert_eq!(
+        slice_of(
+            &cited(".elsewhere.example/x"),
+            GUIDE_ID,
+            &under_canon(host_base)
+        ),
+        Err(MarkdownError::InvalidAnchor {
+            anchor: ".elsewhere.example/x".to_owned(),
+            verses: (1, 1),
+        }),
+        "the concatenation lands on example.org.elsewhere.example"
+    );
+    // Under the same base an anchor that stays a path lifts.
+    let claims = slice_of(&cited("/x"), GUIDE_ID, &under_canon(host_base)).expect("slices");
+    assert_eq!(verse_one_cites(&claims), vec![format!("<{host_base}/x>")]);
+    parses_whole(&claims);
+}
+
+#[test]
+fn an_empty_or_relative_canon_base_refuses_and_an_absolute_one_lifts() {
+    for base in ["", "not an iri >", "canon#"] {
+        assert_eq!(
+            slice_of(&cited("a-one"), GUIDE_ID, &under_canon(base)),
+            Err(MarkdownError::InvalidCanonBase {
+                base: base.to_owned()
+            }),
+            "there is no IRI to mint under"
+        );
+    }
+    for base in [CANON_BASE, CANON_PATH_BASE] {
+        let claims = slice_of(&cited("a-one"), GUIDE_ID, &under_canon(base)).expect("slices");
+        assert_eq!(verse_one_cites(&claims), vec![format!("<{base}a-one>")]);
+    }
+}
+
+#[test]
+fn a_relative_vocabulary_refuses_and_the_absolute_one_slices() {
+    // `under("Document")` derives `DocumentDocument`, `DocumentcitesX`,
+    // and a node base of `Document`: writable, and every one of them
+    // relative, so the kernel would refuse the lot at intern time.
+    assert!(matches!(
+        Vocabulary::under("Document"),
+        Err(MarkdownError::InvalidVocabulary { .. })
+    ));
+    let mut broken = v1();
+    broken.vocabulary.cites = "cites".to_owned();
+    assert_eq!(
+        slice_of(THREE, GUIDE_ID, &broken),
+        Err(MarkdownError::InvalidVocabulary {
+            field: "cites",
+            iri: "cites".to_owned(),
+        })
+    );
+    // The declared vocabulary is absolute example.org, and it slices.
+    Vocabulary::under(SLICE_BASE).expect("an absolute base derives a vocabulary");
+    assert_eq!(
+        units(&slice_of(THREE, GUIDE_ID, &v1()).expect("slices")).len(),
+        3
+    );
+}
+
+#[test]
+fn a_relative_source_id_refuses_and_an_absolute_one_slices() {
+    for id in ["not-absolute", "doc/field-guide", "#fragment"] {
+        assert_eq!(
+            slice_of(THREE, id, &v1()),
+            Err(MarkdownError::RelativeSourceId { id: id.to_owned() }),
+            "a scheme-less id names a document only relative to whatever holds the claims"
+        );
+    }
+    let claims = slice_of(THREE, GUIDE_ID, &v1()).expect("slices");
+    assert_eq!(claims[0].subject, GUIDE_ID);
+    assert_eq!(units(&claims).len(), 3);
+}
