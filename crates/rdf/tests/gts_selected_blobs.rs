@@ -1268,3 +1268,102 @@ fn a_metadata_frame_may_precede_the_payload_it_describes() {
     .expect("a forward inline reference is not an external blob");
     assert_eq!(&*result.blobs[0].bytes, data);
 }
+
+/// A representation selector reads the FINAL metadata, including when deciding
+/// whether an unresolved digest was ever really named.
+///
+/// A digest can be tagged with a representation and then retagged away before
+/// the container ends. Judging it by the tag it briefly held refuses a file the
+/// authoritative importer accepts, over a blob the selection never reaches.
+#[test]
+fn a_retagged_digest_is_not_refused_over_a_representation_it_lost() {
+    let absent = digest_str(b"never inline anywhere");
+    let present = b"the one actually named";
+
+    let mut writer = Writer::new("generic");
+    // Transiently claims "wanted", with no payload...
+    writer.add_frame("blob", None, None, None, Some(meta(&absent, "wanted")));
+    // ...then gives it up.
+    writer.add_frame("blob", None, None, None, Some(meta(&absent, "other")));
+    // A different blob is what finally answers the selector.
+    writer.add_blob(present, None, Some("wanted"));
+    let bytes = writer.into_bytes();
+
+    assert!(
+        import_gts_events(&bytes).is_ok(),
+        "the authoritative importer accepts this container"
+    );
+    let result = import_gts_events_with_blobs(
+        &bytes,
+        &[GtsBlobSelector::Representation("wanted")],
+        limits(),
+    )
+    .expect("the selector resolves to the blob that finally carries the rep");
+    assert_eq!(result.blobs.len(), 1);
+    assert_eq!(&*result.blobs[0].bytes, present);
+}
+
+/// A container cannot suppress an ambiguity by claiming a digest it never proves.
+///
+/// A payload refused before any decode has no checked identity. Honouring the
+/// container's `pub.digest` there would let a hostile file name an already
+/// retained blob on an oversized frame and make a real ambiguity vanish — the
+/// same "input picks its own verdict" shape the diagnostic-code seam refuses.
+#[test]
+fn an_unverified_declared_digest_cannot_collapse_two_candidates() {
+    let retained = b"small and wanted";
+    let retained_digest = digest_str(retained);
+
+    let mut writer = Writer::new("generic");
+    writer.add_blob(retained, None, Some("wanted"));
+    // An ENCRYPTED oversized payload: the encrypt branch reaches the reader's
+    // ceilings even when public metadata declares a digest, so this is the one
+    // route by which a refusal can carry an identity nothing ever checked.
+    // It falsely claims the retained blob's digest.
+    writer
+        .add_frame_with_options(
+            "blob",
+            purrdf_gts::writer::FrameOptions {
+                raw: Some(vec![b'z'; 80_000]),
+                pub_meta: Some(meta(&retained_digest, "wanted")),
+                encrypt: Some(purrdf_gts::writer::Encrypt0Options {
+                    kid: "recipient".into(),
+                    // Derived, not written: a fixed key literal is a finding in
+                    // its own right, and a derived one replays exactly.
+                    key: purrdf_gts::wire::blake3_256(b"selected-blob decoy key")
+                        .try_into()
+                        .expect("a 256-bit digest is 32 bytes"),
+                    iv: purrdf_gts::wire::blake3_256(b"selected-blob decoy nonce")[..12]
+                        .try_into()
+                        .expect("a 256-bit digest is at least 12 bytes"),
+                }),
+                ..purrdf_gts::writer::FrameOptions::default()
+            },
+        )
+        .expect("encrypted decoy frame");
+    let bytes = writer.into_bytes();
+
+    let mut tight = limits();
+    tight.max_encoded_bytes = 1_024;
+    let error =
+        import_gts_events_with_blobs(&bytes, &[GtsBlobSelector::Representation("wanted")], tight)
+            .expect_err("an unproved identity must not collapse the candidates");
+    assert_eq!(error.code, "rdf-ir-gts-blob-selection", "{error:?}");
+
+    // The refusal records that it never proved what it was.
+    let observed = import_gts_events_with_blobs(&bytes, &[], tight).expect("no selectors");
+    assert_eq!(observed.refused.len(), 1);
+    // The record reports the container's claim faithfully — and marks it as a
+    // claim. That flag is the whole difference: the digest here is the retained
+    // blob's, and honouring it would have collapsed the two candidates.
+    assert_eq!(
+        observed.refused[0].digest.as_deref(),
+        Some(retained_digest.as_str()),
+        "the container did declare the retained blob's digest"
+    );
+    assert!(
+        !observed.refused[0].digest_computed,
+        "a payload refused before decoding cannot have a proved digest: {:?}",
+        observed.refused[0]
+    );
+}

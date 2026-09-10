@@ -176,6 +176,27 @@ pub const BLOB_BUDGET_DIAGNOSTIC: &str = "BlobBudget";
 /// must not silently treat the second the same way.
 pub const FRAME_BUDGET_DIAGNOSTIC: &str = "FrameBudget";
 
+/// Identity for a payload a ceiling refused, and whether this reader proved it.
+///
+/// With no transform chain the wire bytes are the decoded bytes, so hashing them
+/// is exact and costs no memory — that identity is *proved*. Otherwise the only
+/// candidate is the container's own `pub.digest`, which cannot be checked
+/// against a payload that was never decoded. The distinction matters downstream:
+/// acting on an unverified claim lets a container assert a refused payload's
+/// identity, and so decide how a selector resolves.
+fn refused_identity(
+    chain: &[Codec],
+    d: Option<&Value>,
+    pub_meta: Option<&Value>,
+) -> (Option<String>, bool) {
+    if chain.is_empty()
+        && let Some(raw) = d.and_then(Value::as_bytes)
+    {
+        return (Some(digest_str(raw)), true);
+    }
+    (pub_meta.and_then(public_blob_digest), false)
+}
+
 enum PayloadError {
     /// Missing capability — degrade to an opaque node with this reason.
     Unavailable {
@@ -336,6 +357,12 @@ pub struct BlobRefusal<'a> {
     pub digest: Option<&'a str>,
     /// Public metadata available at this occurrence, independent of RDF rows.
     pub metadata: Option<&'a Value>,
+    /// Whether this reader computed [`Self::digest`] from the payload itself.
+    ///
+    /// False means the value is the container's unverified claim, which no
+    /// consumer should treat as identity: the payload was refused before any
+    /// decode, so nothing checked it.
+    pub digest_computed: bool,
     /// Original blob byte-string length that was refused.
     pub encoded_len: usize,
     /// Which ceiling fired, in the reader's own words.
@@ -571,6 +598,7 @@ impl Folder<'_, '_, '_> {
     fn emit_blob_refusal(
         &mut self,
         digest: Option<&str>,
+        digest_computed: bool,
         declared_metadata: Option<&Value>,
         encoded_len: usize,
         detail: &str,
@@ -582,6 +610,7 @@ impl Folder<'_, '_, '_> {
         sink.blob_refused(BlobRefusal {
             segment_index,
             digest,
+            digest_computed,
             metadata: declared_metadata,
             encoded_len,
             detail,
@@ -1016,21 +1045,11 @@ impl Folder<'_, '_, '_> {
                 }
                 Ok(_) => {}
                 Err(PayloadError::Budget(detail)) => {
-                    let refused_digest = pub_meta
-                        .as_ref()
-                        .and_then(public_blob_digest)
-                        // With no transform chain the wire bytes are the decoded
-                        // bytes, so hashing them is exact and costs no memory.
-                        // Knowing the identity of a refused payload is what lets
-                        // a consumer tell one blob stored twice from two blobs.
-                        .or_else(|| {
-                            chain
-                                .is_empty()
-                                .then(|| d.and_then(Value::as_bytes).map(|raw| digest_str(raw)))
-                                .flatten()
-                        });
+                    let (refused_digest, digest_computed) =
+                        refused_identity(&chain, d, pub_meta.as_ref());
                     self.emit_blob_refusal(
                         refused_digest.as_deref(),
+                        digest_computed,
                         declared_metadata,
                         encoded_len,
                         &detail,
@@ -1105,21 +1124,11 @@ impl Folder<'_, '_, '_> {
             }
             Ok(_) => {}
             Err(PayloadError::Budget(detail)) => {
-                let refused_digest = pub_meta
-                    .as_ref()
-                    .and_then(public_blob_digest)
-                    // With no transform chain the wire bytes are the decoded
-                    // bytes, so hashing them is exact and costs no memory.
-                    // Knowing the identity of a refused payload is what lets a
-                    // consumer tell one blob stored twice from two blobs.
-                    .or_else(|| {
-                        chain
-                            .is_empty()
-                            .then(|| d.and_then(Value::as_bytes).map(|raw| digest_str(raw)))
-                            .flatten()
-                    });
+                let (refused_digest, digest_computed) =
+                    refused_identity(&chain, d, pub_meta.as_ref());
                 self.emit_blob_refusal(
                     refused_digest.as_deref(),
+                    digest_computed,
                     declared_metadata,
                     encoded_len,
                     &detail,
@@ -1250,7 +1259,7 @@ impl Folder<'_, '_, '_> {
                         && bytes.len() > limit
                     {
                         let detail = format!("snapshot blob exceeds {limit} bytes");
-                        self.emit_blob_refusal(Some(&digest), None, bytes.len(), &detail);
+                        self.emit_blob_refusal(Some(&digest), true, None, bytes.len(), &detail);
                         self.diag(BLOB_BUDGET_DIAGNOSTIC, detail, Some(index));
                         continue;
                     }

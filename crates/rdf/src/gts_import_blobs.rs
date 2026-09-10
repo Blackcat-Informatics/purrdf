@@ -132,6 +132,12 @@ pub struct GtsRefusedBlob {
     /// undeclared digest is unknowable here. Such a payload is matchable by
     /// representation, never by digest.
     pub digest: Option<String>,
+    /// Whether the digest was computed from the payload, not merely claimed.
+    ///
+    /// A payload refused before any decode cannot have a container-declared
+    /// digest checked against it, so a false value here is an assertion by the
+    /// file, not an identity.
+    pub digest_computed: bool,
     /// Public metadata declared at the refused occurrence.
     pub metadata: Option<Value>,
     /// Zero-based segment containing the refused occurrence.
@@ -242,6 +248,11 @@ pub(crate) struct BlobCollector<'a> {
     /// mid-stream: the bytes may still arrive in a later frame. Resolved in
     /// [`Self::finish`], once the whole container has been read.
     unresolved: Vec<String>,
+    /// Last explicitly declared public metadata per digest.
+    ///
+    /// Selection reads the *final* metadata, so an occurrence's verdict is only
+    /// provisional until the container ends.
+    final_metadata: BTreeMap<String, Value>,
     frame: Option<BlobFrame>,
     total: usize,
 }
@@ -309,6 +320,7 @@ impl<'a> BlobCollector<'a> {
             refused: Vec::new(),
             inlined: BTreeSet::new(),
             unresolved: Vec::new(),
+            final_metadata: BTreeMap::new(),
             frame: None,
             total: 0,
         })
@@ -373,6 +385,10 @@ impl<'a> BlobCollector<'a> {
     pub(crate) fn payload(&mut self, payload: BlobPayload<'_>) -> Result<(), RdfDiagnostic> {
         if payload.payload_present {
             self.inlined.insert(payload.digest.to_string());
+        }
+        if let Some(declared) = payload.metadata.filter(|_| payload.metadata_declared) {
+            self.final_metadata
+                .insert(payload.digest.to_string(), declared.clone());
         }
         let previous = self.selected.get(payload.digest);
         let metadata = payload
@@ -506,6 +522,7 @@ impl<'a> BlobCollector<'a> {
     pub(crate) fn refused(&mut self, refusal: BlobRefusal<'_>) {
         self.refused.push(GtsRefusedBlob {
             digest: refusal.digest.map(ToString::to_string),
+            digest_computed: refusal.digest_computed,
             metadata: refusal.metadata.cloned(),
             segment_index: refusal.segment_index,
             encoded_len: refusal.encoded_len,
@@ -533,6 +550,19 @@ impl<'a> BlobCollector<'a> {
         // payload — a file the authoritative importer accepts.
         for digest in &self.unresolved {
             if self.selected.contains_key(digest) {
+                continue;
+            }
+            // The verdict at the occurrence was provisional: a selector matches
+            // the FINAL metadata for a digest, and a later frame may have
+            // retagged this one so that nothing names it any more. Refusing over
+            // a blob the selection does not finally reach would reject a file
+            // the authoritative importer accepts.
+            let metadata = self.final_metadata.get(digest);
+            if !self
+                .selectors
+                .iter()
+                .any(|selector| matches(*selector, digest, metadata))
+            {
                 continue;
             }
             if self.inlined.contains(digest) {
@@ -581,15 +611,19 @@ impl<'a> BlobCollector<'a> {
                 // answers this selector, because it cannot be proven otherwise
                 // and refusing valid input is the worse error.
                 .filter(|blob| match blob.digest.as_deref() {
-                    // Known identity: if that payload is already retained, this
+                    // Proved identity: if that payload is already retained, this
                     // is the same blob stored twice, not a second candidate.
-                    Some(digest) => !self.selected.contains_key(digest),
-                    // Unknown identity — refused before it could be hashed, so
-                    // it may be a different payload. Count it and fail closed;
-                    // silently returning one of two possible answers is the
-                    // worse error, and the reader supplies a digest whenever
-                    // one is computable without spending the budget.
-                    None => true,
+                    // Only a digest this reader computed counts. A declared one
+                    // was never checked against a payload that was never
+                    // decoded, so honouring it would let a container name a
+                    // retained blob on an oversized frame and make a genuine
+                    // ambiguity disappear — the same "input picks its own
+                    // verdict" defect this importer already refuses to allow.
+                    Some(digest) if blob.digest_computed => !self.selected.contains_key(digest),
+                    // Unproved identity: it may be a different payload. Count it
+                    // and fail closed; silently returning one of two possible
+                    // answers is the worse error.
+                    _ => true,
                 })
                 .collect();
             let count = retained + refused.len();

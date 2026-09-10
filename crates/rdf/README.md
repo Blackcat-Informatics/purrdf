@@ -288,8 +288,12 @@ precisely, because what they do *not* cover matters as much as what they do:
 They do not bound the native RDF dataset, the input file, reader frame buffers,
 or codec working memory.
 
-A payload that exceeds a bound is refused, not fatal: the import succeeds and
-the refusal is reported in `GtsImportWithBlobs::refused`. A refused payload
+A *payload* that exceeds one of the four payload bounds is refused, not fatal:
+the import succeeds and the refusal is reported in
+`GtsImportWithBlobs::refused`. `max_frame_decoded_bytes` is different, and
+deliberately so — a refused frame loses RDF rows, so the dataset would no longer
+be the one `import_gts_events` builds. Exceeding it fails the import with
+`rdf-ir-gts-fold-diagnostic` rather than returning a silently truncated graph. A refused payload
 still counts as a selection candidate, so a byte ceiling can never quietly
 resolve an ambiguous selector by deleting one of the candidates. Naming a
 refused payload fails with `rdf-ir-gts-blob-limit` describing the bound.
