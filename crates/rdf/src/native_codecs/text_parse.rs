@@ -691,9 +691,11 @@ fn split_lang_direction(
 /// The N-Triples/N-Quads IRIREF grammar is `'<' ([^#x00-#x20<>"{}|^`\] | UCHAR)* '>'`:
 /// a character is forbidden as a RAW byte but PERMITTED by the production when spelled
 /// as a `UCHAR` escape. The lexer ([`tokenize`]) enforces the raw-byte half — its IRIREF
-/// scan STOPS at a raw whitespace / `< " { } | ^ \`` — and decodes every `\u`/`\U`
-/// escape, so by the time a value reaches here every otherwise-forbidden character it
-/// carries came from a UCHAR.
+/// scan STOPS at a raw `#x00-#x20` (every C0 control and the SPACE) or one of the nine
+/// reserved delimiters ``< > " { } | ^ ` \`` — and decodes every `\u`/`\U` escape, so by
+/// the time a value reaches here every otherwise-forbidden character it carries came from
+/// a UCHAR. That exclusion set is exactly the production's and no larger: a raw U+00A0 or
+/// U+3000 is `ucschar`, is lawful in an `IRIREF` body, and passes through to this check.
 ///
 /// A UCHAR lifts the LEXER's restriction, not the IRI's. RDF Concepts §3.2 requires the
 /// term to be an RFC-3987 IRI, and an escape is a SPELLING of a code point rather than a
