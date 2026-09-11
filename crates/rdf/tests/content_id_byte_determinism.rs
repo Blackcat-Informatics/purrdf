@@ -668,10 +668,65 @@ fn blank_count_is_invariant_between_flat_and_overlay_presentations() {
 
 // ── §5: sentinel-absence assertion (executable) ──────────────────────────────
 
+/// `rdf:reifies` — the real predicate a reifier binding denotes once lowered to the
+/// flat-assertion presentation. Named locally (not exported by `purrdf-rdf`, which
+/// mints no vocabulary): every crate that needs this literal spells it itself.
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+
+/// [`statement_layer_fixture_both_graphs`], plus a base quad spelling a THIRD
+/// reifier — over a triple that appears nowhere else in the fixture — through the
+/// overlay's own sentinel, exactly the shape `ex:r <urn:purrdf:rdfc:reifies> <<(
+/// ex:s ex:p ex:o )>>` spells.
+///
+/// Without this quad, [`flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact`]'s
+/// assertion that no reserved-namespace text appears in the output was true
+/// vacuously: [`statement_layer_fixture_both_graphs`] carries no sentinel-spelled
+/// base quad at all, so a leak in exactly that fold path had no way to reach the
+/// assertion. This fixture gives it one.
+fn statement_layer_fixture_both_graphs_with_a_spelled_row() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let conf = b.intern_iri(&ex("confidence"));
+    let high = b.intern_iri(&ex("high"));
+
+    let s1 = b.intern_iri(&ex("s1"));
+    let p1 = b.intern_iri(&ex("p1"));
+    let o1 = b.intern_iri(&ex("o1"));
+    b.push_quad(s1, p1, o1, None);
+    let t1 = b.intern_triple(s1, p1, o1);
+    let r1 = b.intern_blank("r1", BlankScope::DEFAULT);
+    b.push_reifier(r1, t1);
+    b.push_annotation(r1, conf, high);
+
+    let g = b.intern_iri(&ex("g"));
+    let s2 = b.intern_iri(&ex("s2"));
+    let p2 = b.intern_iri(&ex("p2"));
+    let o2 = b.intern_iri(&ex("o2"));
+    b.push_quad(s2, p2, o2, Some(g));
+    let t2 = b.intern_triple(s2, p2, o2);
+    let r2 = b.intern_blank("r2", BlankScope::DEFAULT);
+    b.push_reifier_in_graph(r2, t2, Some(g));
+    b.push_annotation_in_graph(r2, conf, high, Some(g));
+
+    // The third row: NO native reifier of its own — it exists ONLY as a base quad
+    // spelling the overlay's sentinel shape.
+    let s3 = b.intern_iri(&ex("s3"));
+    let p3 = b.intern_iri(&ex("p3"));
+    let o3 = b.intern_iri(&ex("o3"));
+    let t3 = b.intern_triple(s3, p3, o3);
+    let r3 = b.intern_iri(&ex("r3"));
+    let reifies_sentinel = b.intern_iri(&format!("{RESERVED_NAMESPACE}reifies"));
+    b.push_quad(r3, reifies_sentinel, t3, None);
+
+    b.freeze().expect("valid dataset")
+}
+
 /// On a dataset carrying reifiers AND annotations: (a) zero occurrences of the
 /// reserved namespace string in the flat output, and (b) the line count equals
 /// the exact expected flat row count (ordinary quads + one row per reifier +
-/// one row per annotation).
+/// one row per annotation) — run on BOTH the all-native fixture and a fixture that
+/// also carries a sentinel-SPELLED base quad, so the law is falsifiable rather than
+/// vacuously true (see
+/// [`statement_layer_fixture_both_graphs_with_a_spelled_row`]'s documentation).
 #[test]
 fn flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact() {
     let ds = statement_layer_fixture_both_graphs();
@@ -693,11 +748,45 @@ fn flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact() {
         "expected exactly 6 flat rows (2 base quads + 2 reifier rows + 2 \
          annotation rows): {bytes}"
     );
+
+    // The falsifiable variant: a sentinel-spelled base quad is present too.
+    let spelled_ds = statement_layer_fixture_both_graphs_with_a_spelled_row();
+    let spelled_bytes = try_canonicalize_flat_view(&*spelled_ds, CanonHash::Sha256)
+        .expect("admissible")
+        .nquads;
+
+    assert!(
+        !spelled_bytes.contains(RESERVED_NAMESPACE),
+        "the flat presentation must never mint the overlay's reserved sentinel, \
+         EVEN when the input itself carries a sentinel-spelled base quad — this is \
+         the exact G1 regression (a sentinel-spelled row leaking the sentinel under \
+         the flat presentation): {spelled_bytes}"
+    );
+    assert!(
+        spelled_bytes.contains(RDF_REIFIES),
+        "the sentinel-spelled row must have actually lowered to an ordinary \
+         rdf:reifies row rather than being silently dropped: {spelled_bytes}"
+    );
+    let spelled_line_count = spelled_bytes
+        .lines()
+        .filter(|line| !line.is_empty())
+        .count();
+    assert_eq!(
+        spelled_line_count, 7,
+        "expected exactly 7 flat rows (the previous 6 plus the one sentinel-spelled \
+         reifier row, lowered): {spelled_bytes}"
+    );
 }
 
 /// (c) A valid neighbour: an IRI adjacent to, but OUTSIDE, the reserved
 /// namespace is ADMITTED with that IRI present verbatim — and the reserved
 /// namespace itself is refused TYPED as `Refused(ReservedVocabulary…)`.
+///
+/// Paired the OTHER way too, per the over-refusal rule: the SAME reserved predicate
+/// over a plain IRI object stays refused, but over a TRIPLE-TERM object — the exact
+/// shape the overlay's own lowering emits — it is now ADMITTED and lowers to
+/// `rdf:reifies` rather than being refused. Both neighbours are checked so this test
+/// cannot pass by having simply widened the refusal into an admission of everything.
 #[test]
 fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused() {
     // Valid neighbour: `urn:purrdf:other:…`, NOT inside `urn:purrdf:rdfc:`.
@@ -734,4 +823,33 @@ fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused(
         other => panic!("expected a typed ReservedVocabulary refusal; got {other:?}"),
     }
     assert!(check_admissible_flat_view(&*inadmissible_ds).is_err());
+
+    // The neighbour in the OTHER direction: the identical reserved predicate, but
+    // over a TRIPLE-TERM object instead of a plain IRI — the exact shape the
+    // overlay's own lowering emits — is now ADMITTED (not refused) and lowers to an
+    // ordinary `rdf:reifies` row rather than leaking the sentinel.
+    let mut b = RdfDatasetBuilder::new();
+    let r = b.intern_iri(&ex("r"));
+    let s = b.intern_iri(&ex("s"));
+    let p = b.intern_iri(&ex("p"));
+    let o = b.intern_iri(&ex("o"));
+    let triple = b.intern_triple(s, p, o);
+    let reifies = b.intern_iri(&reserved);
+    b.push_quad(r, reifies, triple, None);
+    let admitted_triple_term_ds = b.freeze().expect("valid dataset");
+    let bytes = try_canonicalize_flat_view(&*admitted_triple_term_ds, CanonHash::Sha256)
+        .expect(
+            "the reserved predicate over a TRIPLE-TERM object is the fold's own \
+             emitted shape and must be admitted, not refused",
+        )
+        .nquads;
+    assert!(
+        !bytes.contains(RESERVED_NAMESPACE),
+        "the admitted, lowered row must not carry the sentinel: {bytes}"
+    );
+    assert!(
+        bytes.contains("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"),
+        "the admitted row must lower to the real rdf:reifies predicate: {bytes}"
+    );
+    assert!(check_admissible_flat_view(&*admitted_triple_term_ds).is_ok());
 }

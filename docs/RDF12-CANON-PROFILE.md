@@ -185,6 +185,8 @@ differs.
 | Reifier `(r, t)` in named graph `g` | `r rdf:reifies t g .` |
 | Annotation `(r, p, o)` in the default graph | `r p o .` |
 | Annotation `(r, p, o)` in named graph `g` | `r p o g .` |
+| Base quad spelling a reifier (§3.1's fold shape) `r ⟨urn:purrdf:rdfc:reifies⟩ t [g] .` | `r rdf:reifies t [g] .` — the SAME row a native reifier `(r, t)` [in `g`] lowers to |
+| Base quad spelling an annotation (§3.1's fold shape, sentinel as the quad's own GRAPH) `r p o ⟨urn:purrdf:rdfc:annotation⟩ .` | `r p o .` — the SAME row a native annotation `(r, p, o)` lowers to |
 
 `rdf:reifies` here is the RDF 1.2 vocabulary's OWN reification predicate
 (`http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies`), not a purrdf sentinel — the
@@ -197,6 +199,26 @@ the flat presentation deduplicates at the row level, so a dataset asserting a
 reifier binding both as a declared reifier and as the literal `rdf:reifies` quad
 it denotes canonicalizes identically to one asserting it only one of those two
 ways — doubly-spelled rows are never counted twice.
+
+**The last two table rows are the same §3.1 fold, applied under this
+presentation.** The input class they cover is an overlay §3-presentation canonical
+document — or any other input — carrying a base quad in exactly §3.1's fold shape,
+most notably an **overlay canonical document re-ingested through a loader that does
+not itself recognize the overlay's sentinel spelling at parse time** (a plain
+N-Quads/Turtle parser, for instance, which has no reason to know about
+`urn:purrdf:rdfc:`): such a loader hands the quad straight through as an ordinary
+base quad bearing the sentinel, and it is THIS canonicalizer's own admission sweep —
+not the loader — that recognizes and folds it, under either presentation. §3.1
+already established that this quad denotes exactly the reifier or annotation row it
+spells rather than a different structure that happens to resemble one; the flat
+presentation lowers that same row exactly as it lowers a NATIVELY-held one, so the
+two spellings of one row are never assigned two different flat identities, and the
+row-level dedup above extends across all three ways a row can appear (a native
+side-table entry, a sentinel-spelled base quad, and a real-predicate base quad, in
+any combination): it is still emitted exactly once. This is what makes "no reserved
+namespace IRI ever participates in a flat canonical document" (above) a true
+statement about EVERY admitted input, including one that itself carries the
+sentinel spelling, rather than only about inputs that never exercise the fold.
 
 **The flat presentation is a second canonicalization-oracle spelling of the RDF 1.2
 statement layer, never an RDF 1.1 fallback mode.** Choosing it does not drop down to

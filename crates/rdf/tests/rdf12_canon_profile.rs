@@ -38,9 +38,15 @@ use std::path::{Path, PathBuf};
 
 use purrdf_rdf::{
     CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError, CanonHash,
-    TermPosition, parse_dataset, try_canonicalize_with,
+    RESERVED_NAMESPACE, RdfDatasetBuilder, TermPosition, ViewCanonError, parse_dataset,
+    try_canonicalize_flat_view, try_canonicalize_with,
 };
 use sha2::{Digest, Sha256};
+
+/// `rdf:reifies` — the real predicate a reifier binding denotes once lowered to the
+/// flat-assertion presentation. Named locally (not exported by `purrdf-rdf`, which
+/// mints no vocabulary): every crate that needs this literal spells it itself.
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// What the manifest says must happen to a case.
 #[derive(Debug, PartialEq, Eq)]
@@ -345,6 +351,152 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
         }
         other => panic!("refused for the wrong reason: {other}"),
     }
+}
+
+/// The flat-presentation counterpart of
+/// [`a_spelled_reifier_co_canonicalizes_with_the_row_it_spells`]: under
+/// [`try_canonicalize_flat_view`], the sentinel-spelled quad `poison-forgery.ttl`
+/// carries must canonicalize to the SAME ordinary `rdf:reifies` row the genuine
+/// reifier in `reifier-simple.ttl` lowers to — never to a row still carrying the
+/// overlay's sentinel. This is the exact defect the CLI demonstrated: `ex:r
+/// <urn:purrdf:rdfc:reifies> <<( ex:s ex:p ex:o )>>` flat-canonicalized WITH the
+/// sentinel while the native reifier emitted `rdf:reifies`, splitting one row's
+/// identity in two.
+///
+/// This is an IDENTITY law, not a differential against
+/// [`purrdf_rdf::flat_rdf_quads_from_dataset`]'s pre-delegation route: that route
+/// shares this exact defect (it never folds a base quad's sentinel spelling back
+/// into a statement-layer row either), so comparing against it here would only
+/// prove the two agree on being wrong.
+#[test]
+fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
+    let root = corpus_root();
+    let genuine = std::fs::read(root.join("cases/reifier-simple.ttl")).expect("genuine case");
+    let dataset = parse_dataset(&genuine, "text/turtle", None).expect("parses");
+    let lowered = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
+        .expect("a genuine reifier canonicalizes under the flat presentation")
+        .nquads;
+    let row = lowered
+        .lines()
+        .find(|line| line.contains(RDF_REIFIES))
+        .unwrap_or_else(|| {
+            panic!(
+                "the genuine case must still lower to an ordinary rdf:reifies row, or \
+                 the fold fixture no longer spells a real row: {lowered}"
+            )
+        });
+
+    let spelled = std::fs::read(root.join("cases/poison-forgery.ttl")).expect("fold case");
+    let dataset = parse_dataset(&spelled, "text/turtle", None).expect("parses");
+    let folded = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
+        .expect(
+            "a quad in the exact emitted shape folds rather than refusing, under the \
+             flat presentation too",
+        )
+        .nquads;
+    assert_eq!(
+        folded,
+        format!("{row}\n"),
+        "under the flat presentation, the spelled reifier row must canonicalize to \
+         the SAME row the genuine structure lowers to — G1: the sentinel must not \
+         leak and the two spellings must not split identity. Genuine structure's \
+         flat form:\n{lowered}"
+    );
+    assert!(
+        !folded.contains(RESERVED_NAMESPACE),
+        "the flat presentation must never mint the reserved sentinel: {folded}"
+    );
+
+    // Idempotence, taken over the flat canonical document.
+    let reparsed =
+        parse_dataset(lowered.as_bytes(), "text/turtle", None).expect("canonical bytes re-parse");
+    assert_eq!(
+        try_canonicalize_flat_view(&*reparsed, CanonHash::Sha256)
+            .expect("the flat canonical document canonicalizes")
+            .nquads,
+        lowered,
+        "canonicalizing the flat canonical document moved its bytes"
+    );
+
+    // Near miss: the reserved namespace in a NON-foldable shape (the sentinel
+    // predicate over a plain IRI object, not a triple term) is still refused,
+    // typed, under the flat presentation exactly as under the overlay.
+    let mut b = RdfDatasetBuilder::new();
+    let r = b.intern_iri("http://example.org/r");
+    let reifies = b.intern_iri("urn:purrdf:rdfc:reifies");
+    let o = b.intern_iri("http://example.org/o");
+    b.push_quad(r, reifies, o, None);
+    let near_miss = b.freeze().expect("valid");
+    match try_canonicalize_flat_view(&*near_miss, CanonHash::Sha256) {
+        Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(err))) => {
+            assert_eq!(&*err.iri, "urn:purrdf:rdfc:reifies");
+            assert_eq!(err.position, TermPosition::Predicate);
+        }
+        other => panic!("refused for the wrong reason: {other:?}"),
+    }
+
+    // Its neighbouring VALID case: the same subject/object but a TRIPLE-TERM object
+    // instead of a plain IRI — the exact folded shape — is ADMITTED and lowers.
+    let mut b = RdfDatasetBuilder::new();
+    let r = b.intern_iri("http://example.org/r");
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    let triple = b.intern_triple(s, p, o);
+    let reifies = b.intern_iri("urn:purrdf:rdfc:reifies");
+    b.push_quad(r, reifies, triple, None);
+    let neighbour = b.freeze().expect("valid");
+    let admitted = try_canonicalize_flat_view(&*neighbour, CanonHash::Sha256)
+        .expect("the exact folded shape must be admitted, not refused");
+    assert!(admitted.nquads.contains(RDF_REIFIES));
+    assert!(!admitted.nquads.contains(RESERVED_NAMESPACE));
+}
+
+/// The annotation-side twin of
+/// [`a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells`]:
+/// `poison-sentinel-graph.trig` writes, as an ordinary quad using the ANNOTATION
+/// sentinel as its GRAPH name, exactly the row a native annotation over the same
+/// `(r, p, o)` lowers to. The native counterpart is built directly (rather than
+/// through Turtle's `{| … |}` syntax, which binds a FRESH reifier to an asserted
+/// triple rather than to an arbitrary explicit term) so its content matches
+/// `poison-sentinel-graph.trig`'s `(ex:s, ex:p, ex:o)` exactly.
+#[test]
+fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    b.push_annotation(s, p, o);
+    let native = b.freeze().expect("valid dataset");
+    let lowered = try_canonicalize_flat_view(&*native, CanonHash::Sha256)
+        .expect("a genuine annotation canonicalizes under the flat presentation")
+        .nquads;
+    assert_eq!(
+        lowered, "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
+        "the native annotation's flat form must be the ordinary quad, with no \
+         sentinel and no extra graph token"
+    );
+
+    let root = corpus_root();
+    let spelled = std::fs::read(root.join("cases/poison-sentinel-graph.trig")).expect("fold case");
+    let dataset = parse_dataset(&spelled, "application/trig", None).expect("parses");
+    let folded = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
+        .expect(
+            "a quad in the exact emitted shape folds rather than refusing, under the \
+             flat presentation too",
+        )
+        .nquads;
+    assert_eq!(
+        folded, lowered,
+        "under the flat presentation, the spelled annotation row (the sentinel used \
+         as the quad's GRAPH) must canonicalize to the SAME ordinary quad the native \
+         annotation lowers to — the annotation-graph sentinel must not leak as a \
+         graph name"
+    );
+    assert!(
+        !folded.contains(RESERVED_NAMESPACE),
+        "the flat presentation must never mint the reserved sentinel: {folded}"
+    );
 }
 
 /// The corpus's own content-addressed identity, so a consumer can pin
