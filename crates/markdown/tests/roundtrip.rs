@@ -269,9 +269,10 @@ fn a_continues_edge_naming_a_spanless_piece_is_refused_by_the_piece_it_names() {
         .map(|iri| iri.trim_end_matches('>').to_owned())
         .expect("the chain declares a piece");
     // Remove the piece whole — the shape a partial merge produces —
-    // and the edge names a node the graph does not carry. (A piece
-    // that kept its text and lost only its offsets refuses earlier,
-    // as its own `IncompleteSpan`.)
+    // and the edge names a node the graph does not carry. (In this
+    // fixture, a piece that kept its text and lost only its offsets
+    // would refuse as an `IncompleteSpan` instead — whichever of the
+    // two refusals wins is the walk's order, and both are refusals.)
     let sheared: String = turtle
         .lines()
         .filter(|line| !line.starts_with(&format!("<{continued}>")))
