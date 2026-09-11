@@ -1088,22 +1088,21 @@ designed for this intersection.
 * **Web Annotation Data Model** and **Web Annotation Vocabulary**
   (<https://www.w3.org/TR/annotation-model/>,
   <https://www.w3.org/TR/annotation-vocab/>). Missing: *total from
-  bytes*, *content-addressed law*. Its `oa:DataPositionSelector` is
-  byte-counted and is the closest standard match for the second
-  property; it is a vocabulary for recording annotations a consumer
+  bytes*, *content-addressed law*. Its `oa:DataPositionSelector` counts
+  bytes; it is a vocabulary for recording annotations a consumer
   produces rather than a mapping from a document, and it carries no
   digest of the source or of the procedure.
 * **NIF 2.0** (<https://persistence.uni-leipzig.org/nlp2rdf/specification/core.html>).
   Missing: all three. Offsets are into a context string rather than the
   byte stream, and its own core specification and ontology disagree on
   whether the unit is a code point or a code unit. Its
-  context-hash IRI content-addresses the addressed *text*, which is the
-  nearest prior art to §8.
+  context-hash IRI content-addresses the addressed *text*, as §8's
+  anchors do, and not the law that addressed it.
 * **EARMARK** (<https://essepuntato.it/earmark/shell/current/shell.html>).
-  Missing: all three. It is the closest conceptual match — the bytes,
-  the range and the thing the range means are three disjoint classes —
-  but a range's unit is not fixed to bytes, and it models markup a
-  producer supplies rather than deriving it.
+  Missing: all three. The bytes, the range and the thing the range
+  means are three disjoint classes; a range's unit is not fixed to
+  bytes, and it models markup a producer supplies rather than deriving
+  it.
 * **DoCO**, **PO**, **DEO**, **C4O**, **FaBiO** and the **Collections
   Ontology** (<https://sparontologies.github.io/doco/current/doco.html>
   and the sibling documents there,
@@ -1114,8 +1113,8 @@ designed for this intersection.
   (<https://www.rfc-editor.org/rfc/rfc5147.txt>). Missing: *total from
   bytes*, *byte span* (`char=` and `line=` count characters and lines),
   *content-addressed law*. Its `length=` and `md5=` integrity checks
-  content-address the text being addressed, which is the one instance
-  of that idea in this list.
+  content-address the text being addressed rather than the law that
+  addressed it.
 * **RFC 7111**, fragment identifiers for `text/csv`
   (<https://www.rfc-editor.org/rfc/rfc7111.txt>). Missing: all three.
   A fragment syntax over rows, columns and cells, not a mapping.
@@ -1156,21 +1155,18 @@ designed for this intersection.
   <https://www.w3.org/TR/tabular-metadata/>,
   <https://www.w3.org/TR/csv2rdf/>). Missing: *byte span* (a row is
   addressed by row number), *content-addressed law*. It is total, and
-  it is the closest the tabular family comes; its totality is relative
-  to metadata a processor may discover from the network rather than
-  from local configuration.
+  its totality is relative to metadata a processor may discover from
+  the network rather than from local configuration.
 * **R2RML** (<https://www.w3.org/TR/r2rml/>) and **RML**
   (<https://rml.io/specs/rml/>). Missing: *total from bytes* — a term
   map yields nothing for a null, and RML both aborts on a data error
   and generates nothing for a missing value — *byte span*, and
-  *content-addressed law*. RML's collection extension is the strongest
-  ordering mechanism here, and its order is the order the term maps
-  were declared in rather than the source's own.
+  *content-addressed law*. RML's collection extension orders by the
+  order the term maps were declared in rather than by the source's own.
 * **A Direct Mapping of Relational Data to RDF**
   (<https://www.w3.org/TR/rdb-direct-mapping/>). Missing: *byte span*,
-  *content-addressed law*. It is the one total, automatic mapping in
-  this list, and it reaches that by minting every IRI from schema
-  names — which §6 forbids.
+  *content-addressed law*. It is total and automatic, and it reaches
+  that by minting every IRI from schema names — which §6 forbids.
 * **SPARQL-Generate**
   (<https://ci.mines-stetienne.fr/sparql-generate/>). Missing: all
   three. A query-shaped mapping language; an unmatched path yields
@@ -1180,8 +1176,7 @@ designed for this intersection.
   standardized by the W3C Data Façades Community Group
   (<https://www.w3.org/community/facade-x/>). Missing: *byte span* — a
   node is addressed by a structural path or a row number — and
-  *content-addressed law*. It is the closest existing work to a general
-  structural slicer, and it mints predicates from source key strings,
+  *content-addressed law*. It mints predicates from source key strings,
   which §6 forbids.
 * **WoT JSON Schema in RDF**
   (<https://w3c.github.io/wot-thing-description/ontology/jsonschema.html>).
@@ -1204,12 +1199,12 @@ designed for this intersection.
 
 ### 12.4 The state of the three properties
 
-Of everything above, four hold exactly one of the three. The Direct
-Mapping, CSVW and Façade-X are total from bytes; `oa:DataPositionSelector`
-is byte-counted. None holds *content-addressed law*: RFC 5147's `md5=`
-comes nearest, and it content-addresses the text being addressed rather
-than the law that addressed it, which is a different thing. None of the
-twenty-one holds two of the three, and none is about Markdown.
+Twenty-one entries are listed above. Four of them hold exactly one of
+the three properties: CSVW, the Direct Mapping and Façade-X are *total
+from bytes*, and the Web Annotation Data Model's
+`oa:DataPositionSelector` is a *byte span*. The other seventeen hold
+none. No entry holds two of the three, no entry holds *content-addressed
+law*, and no entry is about Markdown.
 
 If a standard does hold all three, then this section is the part of this
 document that is wrong, and its authors would rather be told which one
