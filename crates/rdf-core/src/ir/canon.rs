@@ -1648,6 +1648,13 @@ fn graph_match_of<Id: ViewTermId>(g: Option<Id>) -> GraphMatch<Id> {
 /// rendered/serialized text — so a duplicate never reaches [`CanonState`]'s incident
 /// map in the first place; a component that never exists cannot perturb a first-degree
 /// hash the way a component built and only deduplicated at the text layer could.
+///
+/// Cost: one `quads_for_pattern` probe per statement-layer row, on each of the
+/// canonicalizer's component-collection passes. Every in-tree view answers the
+/// probe through an index; a third-party [`DatasetView`] that leaves
+/// `quads_for_pattern` on its default full-scan body pays
+/// O(statement rows × quads) per pass here, and should override it before
+/// putting large statement-bearing datasets through the flat presentation.
 fn already_asserted<D: DatasetView>(
     ds: &D,
     graph_probe: GraphMatch<D::Id>,

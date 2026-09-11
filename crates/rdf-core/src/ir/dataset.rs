@@ -1394,7 +1394,9 @@ impl RdfDataset {
     /// this crate refuses to ship. Unreachable through the public API: the only
     /// producer of a non-empty reifier table is
     /// [`super::builder::RdfDatasetBuilder::push_reifier_in_graph`], which interns
-    /// the predicate itself before the row is stored.
+    /// the predicate itself before the row is stored. Cost: one interner lookup
+    /// per `reifier_quads`/`reifier_quads_of` CALL (not per yielded row) —
+    /// negligible beside the iteration it guards.
     fn assert_reifier_table_invariant(&self) {
         assert!(
             self.reifiers.is_empty() || self.rdf_reifies_id().is_some(),
