@@ -167,6 +167,22 @@ pub enum MarkdownError {
         /// What the kernel's verification law found.
         cause: EmbeddingError,
     },
+    /// The assembled model's spans would not decode back to the very
+    /// bytes they cover: the codec's own emission would be unlawful
+    /// under the decode law, and the document is refused rather than
+    /// sliced into a graph nothing can rebuild.
+    ///
+    /// Every admitted document is held to this before a model exists
+    /// to render — in every build, not behind a debug assertion —
+    /// because a cover defect discovered by a *consumer's* decode is a
+    /// silent drop that already shipped. Seeing this refusal means a
+    /// defect in this crate's slicing law, not in the document; it is
+    /// stated as a refusal rather than a panic so it fails loudly, by
+    /// name, and carries the cover law's own finding.
+    CoverDefect {
+        /// What the kernel's cover law found.
+        cause: purrdf_core::cover::ReconstructError,
+    },
 }
 
 impl std::fmt::Display for MarkdownError {
@@ -231,6 +247,12 @@ impl std::fmt::Display for MarkdownError {
                     f,
                     "concordance anchor {anchor:?} for verses {}\u{2013}{} mints no lawful IRI under the canon base",
                     verses.0, verses.1
+                )
+            }
+            Self::CoverDefect { cause } => {
+                write!(
+                    f,
+                    "the emitted spans would not decode back to the source: {cause}"
                 )
             }
             Self::TamperedUnit { span, cause } => {

@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use purrdf_core::embedding::ChunkingContractId;
 use purrdf_core::{ContentDigest, RdfLiteral, RdfTerm, RdfTriple, emit_term};
 
-use crate::identity::{citation_iri, node_iri_of_digest};
+use crate::identity::{citation_iri, node_iri_of_digest, structure_iri};
 use crate::model::{Document, Section, Span, Unit};
 use crate::profile::{Profile, Vocabulary};
 use crate::{Claim, ClaimKind};
@@ -107,14 +107,17 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
         .structures()
         .iter()
         .map(|span| {
-            node_iri_of_digest(
+            // Minted through the same public formula a consumer holds
+            // (`structure_iri`), not a parallel spelling of it: the
+            // model keeps no digest for a structure span, so the
+            // public route costs exactly what the digest form would.
+            structure_iri(
                 &profile.vocabulary,
-                "structure",
                 document.id(),
                 &contract,
                 span.start,
                 span.end,
-                &ContentDigest::of(document.structure_text(*span).as_bytes()),
+                document.structure_text(*span).as_bytes(),
             )
         })
         .collect();
@@ -186,16 +189,11 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
             }
         }
     }
-    debug_assert_eq!(
-        crate::decode::reconstruct(
-            document.byte_length(),
-            &ContentDigest::of(document.source().as_bytes()),
-            &crate::decode::model_spans(document),
-        )
-        .as_deref(),
-        Ok(document.source()),
-        "the emitted spans decode back to the very source they cover"
-    );
+    // No verification here, and none needed: a `Document` cannot exist
+    // without having passed the write-side cover check in
+    // [`analyze`](crate::analyze) — in every build — so the spans this
+    // projection just rendered are ones the decode law already
+    // accepted against these very bytes.
     claims
 }
 

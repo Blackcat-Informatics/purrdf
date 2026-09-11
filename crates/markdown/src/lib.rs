@@ -415,6 +415,13 @@ pub struct Claim {
 /// [`MarkdownError::MalformedCanonBase`] when the base it declares —
 /// the empty one among them — is no IRI reference at all.
 ///
+/// Last, the codec holds itself to its own law:
+/// [`MarkdownError::CoverDefect`] when the spans the projection would
+/// emit do not decode back to these very bytes under the kernel's
+/// cover law. That refusal names a defect in this crate, never in the
+/// document, and it is checked in every build — a cover defect a
+/// consumer's decode discovers is a silent drop that already shipped.
+///
 /// Then the document. [`MarkdownError::EmptySourceId`] when the id is
 /// empty, which would be written `<>` and name no document;
 /// [`MarkdownError::InvalidSourceId`] when the id cannot be written
@@ -456,7 +463,15 @@ pub fn analyze<'a>(
     if let Some(base) = &canon {
         validate_anchors(&reading, base)?;
     }
-    Ok(Document::assemble(doc.id, text, &reading, profile))
+    let document = Document::assemble(doc.id, text, &reading, profile);
+    // The write side of the codec, held in every build: a document is
+    // admitted only if the spans its projection will emit decode back
+    // to these very bytes under the kernel's cover law. A defect here
+    // is this crate's, and it is refused loudly at the seam rather
+    // than shipped as a graph a consumer's decode discovers to be
+    // unlawful.
+    decode::verify_cover(&document)?;
+    Ok(document)
 }
 
 /// Slices a Markdown document into claims under a profile: [`analyze`]

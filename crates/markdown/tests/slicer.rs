@@ -17,7 +17,7 @@ use purrdf_markdown::{
     CONTEXT_BYTES, Claim, ClaimKind, DIGEST_ALGORITHM, Document, MIN_MAX_BYTES, MarkdownError,
     PURREMB_PARAMETER_ENCODING, Profile, RowDefect, STANDARD_NAMESPACE, SourceDocument, Span,
     SpanRelation, Unit, Vocabulary, analyze, render, section_iri, slice_markdown, span_relation,
-    unit_iri, verify_unit,
+    structure_iri, unit_iri, verify_unit,
 };
 use purrdf_rdf::parse_dataset;
 
@@ -5618,6 +5618,55 @@ fn the_section_iri_a_consumer_mints_is_the_section_iri_the_projection_emits() {
     );
     assert_ne!(emitted[0].subject, over_whole);
     assert!(claims.iter().all(|c| !c.turtle.contains(&over_whole)));
+}
+
+/// The same equivalence for the fourth kind: [`structure_iri`] is the
+/// public formula a consumer mints with, and since this change the
+/// projection mints its own structure IRIs through the very same call
+/// — but one call site is one spelling, and only this vector says the
+/// fields it fills (which span, which bytes) are the ones a consumer
+/// holding a model would choose.
+#[test]
+fn the_structure_iri_a_consumer_mints_is_the_structure_iri_the_projection_emits() {
+    let document = model(GUIDE, &v1());
+    let claims = slice(GUIDE, &v1());
+    let contract = v1().chunking_id();
+    let emitted: Vec<&Claim> = claims
+        .iter()
+        .filter(|c| c.kind == ClaimKind::Structure)
+        .collect();
+    assert_eq!(emitted.len(), document.structures().len());
+    assert!(
+        !emitted.is_empty(),
+        "the guide has structure between its units"
+    );
+    for (claim, span) in emitted.iter().zip(document.structures()) {
+        assert_eq!(
+            claim.subject,
+            structure_iri(
+                &v(),
+                GUIDE_ID,
+                &contract,
+                span.start,
+                span.end,
+                &GUIDE.as_bytes()[span.start as usize..span.end as usize]
+            ),
+            "one formula, one answer"
+        );
+    }
+    // And the kind is a field of the preimage: the same span of the
+    // same bytes under the unit kind is a node this graph never mints.
+    let first = document.structures()[0];
+    let as_unit = unit_iri(
+        &v(),
+        GUIDE_ID,
+        &contract,
+        first.start,
+        first.end,
+        &GUIDE.as_bytes()[first.start as usize..first.end as usize],
+    );
+    assert_ne!(emitted[0].subject, as_unit);
+    assert!(claims.iter().all(|c| !c.turtle.contains(&as_unit)));
 }
 
 // --- the heading stack, stated twice and held to one answer ---------------

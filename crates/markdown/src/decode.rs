@@ -281,6 +281,28 @@ fn require(offset: Option<u64>, subject: &str, missing: &'static str) -> Result<
     })
 }
 
+/// The write side of the codec's verification: every admitted
+/// document's spans, held against the decode law and the source's own
+/// digest before a model exists to render — in every build.
+///
+/// [`analyze`](crate::analyze) calls this last, so a [`Document`] that
+/// exists is one whose emission decodes; a cover defect is a refusal
+/// there ([`MarkdownError::CoverDefect`](crate::MarkdownError::CoverDefect)),
+/// never a graph a consumer's decode discovers to be unlawful. The
+/// price — one rebuild and two digests per document, at slicing time —
+/// is paid where the defect would be made, which is the only place a
+/// write-side check can catch it.
+pub(crate) fn verify_cover(document: &Document<'_>) -> Result<(), crate::MarkdownError> {
+    let spans = model_spans(document);
+    reconstruct(
+        document.byte_length(),
+        &purrdf_core::ContentDigest::of(document.source().as_bytes()),
+        &spans,
+    )
+    .map(|_| ())
+    .map_err(|cause| crate::MarkdownError::CoverDefect { cause })
+}
+
 /// The model's own spans, as [`reconstruct`] takes them: what the
 /// projection is about to emit, read off the model rather than back out
 /// of the graph — the write-side half of the codec's verification, and
