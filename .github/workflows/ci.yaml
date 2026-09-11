@@ -44,6 +44,9 @@ jobs:
       - name: Check the toolchain-pin gate can still fail
         run: python3 scripts/check-toolchain-pin.py --self-test
 
+      - name: Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+        run: python3 scripts/check-iri-resolver-singleton.py
+
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 
@@ -62,11 +65,17 @@ jobs:
       - name: Check no first-party extension is attributed to a SPARQL specification
         run: python3 scripts/check-spec-attribution.py --self-test
 
+      - name: Check hand-written numbers still agree with the artifacts they restate
+        run: python3 scripts/check-doc-claims.py
+
       - name: Check the zh-Hans translation against its glossary
         run: python3 scripts/check-i18n-glossary.py
 
       - name: Check cross-registry release coherence
         run: python3 scripts/check-versions.py
+
+      - name: Check the crates.io release order is publishable and verifiable (offline)
+        run: python3 scripts/check-publish-order.py
 
       - name: Check the crates.io record preflight refuses every wrong registry state (offline)
         run: bash scripts/check-crates-io-records.sh --self-test
@@ -85,6 +94,9 @@ jobs:
 
       - name: Check every scraped conformance row is RED without its scoreboard line
         run: python3 scripts/conformance-matrix.py --self-test
+
+      - name: Check the kernel ring-fence (no oxigraph/PyO3 in purrdf-core, zero-dep leaves)
+        run: make rdf-core-hygiene
 
   test:
     runs-on: ubuntu-latest

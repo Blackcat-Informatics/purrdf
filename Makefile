@@ -58,6 +58,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-brand-casing.py
 	python3 scripts/check-spec-attribution.py --self-test
+	python3 scripts/check-doc-claims.py
 	python3 scripts/check-i18n-glossary.py
 	python3 scripts/check-versions.py
 	python3 scripts/check-publish-order.py
