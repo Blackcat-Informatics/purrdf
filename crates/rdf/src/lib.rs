@@ -89,6 +89,12 @@ pub mod capture_support;
 // sources and authoring recipes, shared by the maintainer freezing binary
 // (src/bin/gen_dict_vectors.rs) and the drift-guard test (tests/dict_vectors.rs).
 pub mod gts_dict_vectors;
+// The ONE definition of the keystone GTS-ingestion fixture, shared by the
+// integration suite (tests/gts_view_ingestion.rs) and the bench
+// (benches/gts_ingest.rs) — separate crates that can only share through the
+// library. Not public API: hidden from the docs, and no shipping path calls it.
+#[doc(hidden)]
+pub mod gts_fixtures;
 // Canonical, review-friendly Turtle serializer over the IR: the
 // native replacement for rdflib `longturtle` in `purrdf normalize`. Oxigraph-free.
 pub mod turtle_normalize;
@@ -103,6 +109,7 @@ mod nesting;
 // `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two
 // IR import helpers are re-exported here.
 pub use dataset_io::dataset_from_bytes;
+pub use gts_compose::{GtsIngestError, IngestCheckpoint, IngestReport};
 pub use gts_import_blobs::{
     DEFAULT_MAX_FRAME_DECODED_BYTES, DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits,
     GtsBlobMetadataSource, GtsBlobSelector, GtsImportWithBlobs, GtsImportedBlob, GtsRefusedBlob,
@@ -204,45 +211,50 @@ pub use projections::{
 };
 pub use purrdf_core::{
     ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
-    AttributionRole, BlankScope, BudgetExceeded, BundleError, Bytes, CANON_CORPUS_DIGEST,
-    CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError, CanonHash, CanonicalRelabeling,
-    Canonicalized, CompositeDatasetView, CompositeSource, CompositeViewId, ContentDigest,
-    ContentStore, ContentStoreError, DatasetDiff, DatasetMut, DatasetProvenance, DatasetSink,
-    DatasetView, DeltaDatasetView, DeltaViewId, FallibleDatasetView, FastHasher, FastMap, FastSet,
-    FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
-    FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GraphMatch, GraphMatchValue, GraphPlacement,
-    GtsBundle, HandleEntry, HandleKey, IdSet, IdVec, IriError, LossEntry, LossLedger,
-    MutableDataset, OriginKind, OriginSetId, OriginSetInterner, PROJECTION_CODECS, PageFault,
-    PageFaultKind, PageGeneration, PageId, PageMaterialization, PagePart, PageProvider,
-    PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
-    PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle,
-    PipelineBundleError, ProvenanceError, QuadHandle, QuadIds, QuadPatternCursor, QuadRef,
-    QuadValues, RDFC_CALL_LIMIT, RESEARCH_OBJECT_CODECS, RESERVED_NAMESPACE, RdfAnnotation,
-    RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
-    RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral, RdfLocation, RdfLookaside,
-    RdfLookasideKind, RdfLookasideResource, RdfMetadataEntry, RdfMetadataValue,
-    RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier, RdfSegmentRecord,
-    RdfSerializeRequest, RdfSerializer, RdfSeverity, RdfSignatureRecord, RdfStoreCapabilities,
-    RdfSuppressionRecord, RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple, ReservedVocabulary,
-    SSSOM_DEFAULT_VALIDATION_TYPES, SegmentUnitMap, SerializeGraph, SkolemError, SmallVec,
-    SparqlEngine, SparqlRequest, SparqlResult, SssomColumnLayout, SssomColumnLayoutError,
+    AttributionRole, BlankScope, BudgetExceeded, BundleDigestWork, BundleError, Bytes,
+    CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError, CanonHash,
+    CanonScopeName, CanonicalRelabeling, Canonicalized, CompositeDatasetView, CompositeSource,
+    CompositeViewId, ContentDigest, ContentStore, ContentStoreError, DatasetDiff, DatasetMut,
+    DatasetProvenance, DatasetSink, DatasetView, DeltaDatasetView, DeltaViewId,
+    FallibleDatasetView, FastHasher, FastMap, FastSet, FnFunction, FnImpl, FnMapping, FnOutput,
+    FnParam, FnParamMapping, FnReturnMapping, FnoCatalog, FrozenDatasetSource,
+    GENID_WELL_KNOWN_PATH, GraphLayer, GraphMatch, GraphMatchValue, GraphPlacement, GtsBundle,
+    HandleEntry, HandleKey, IdSet, IdVec, IriError, LossEntry, LossLedger, MutableDataset,
+    OriginKind, OriginSetId, OriginSetInterner, OwnerKey, OwnerMutability, PIPELINE_ROOT_DOMAIN,
+    PROJECTION_CODECS, PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization,
+    PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap,
+    PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView,
+    PipelineBundle, PipelineBundleError, PipelineViewBundle, ProvenanceError, QuadHandle, QuadIds,
+    QuadPatternCursor, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESEARCH_OBJECT_CODECS,
+    RESERVED_NAMESPACE, RdfAnnotation, RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset,
+    RdfDatasetBuilder, RdfDatasetVisitor, RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral,
+    RdfLocation, RdfLookaside, RdfLookasideKind, RdfLookasideResource, RdfMetadataEntry,
+    RdfMetadataValue, RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier,
+    RdfSegmentRecord, RdfSerializeRequest, RdfSerializer, RdfSeverity, RdfSignatureRecord,
+    RdfStoreCapabilities, RdfSuppressionRecord, RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple,
+    ReservedVocabulary, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
+    SSSOM_DEFAULT_VALIDATION_TYPES, ScopeBinding, SegmentUnitMap, SerializeGraph, SkolemError,
+    SmallVec, SparqlEngine, SparqlRequest, SparqlResult, SssomColumnLayout, SssomColumnLayoutError,
     SssomCommentError, SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping,
     SssomMappingSet, SssomMeta, SssomSetComment, SubsetPageProvider, TermFactory, TermId,
-    TermPosition, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner, UnitMetadata, ViewLimits,
-    ViewOperationStatus, ViewStats, ViewWork, assert_ledger_complete, assert_ledger_sound,
-    canonical_relabel, canonical_relabel_with_mapping, canonicalize, canonicalize_with,
-    check_admissible, check_ledger_complete, check_ledger_sound, check_provenance, dataset_diff,
-    datasets_isomorphic, deskolemize, display_term, emit_annotation, emit_quad, emit_reifier,
-    emit_resource, emit_term, fno_to_ntriples, fno_to_quads, gts_to_rdf_loss_ledger,
-    loss_matrix_json, lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger, pair_loss_ledger,
-    profile_for, rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger,
+    TermPosition, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner, UnitMetadata,
+    ViewAccountingReport, ViewLimits, ViewOperationStatus, ViewStats, ViewWork,
+    assert_ledger_complete, assert_ledger_sound, blank_count_view, canonical_relabel,
+    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
+    canonicalize_with, check_admissible, check_admissible_view, check_ledger_complete,
+    check_ledger_sound, check_provenance, dataset_diff, datasets_isomorphic, deskolemize,
+    display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term,
+    fno_to_ntriples, fno_to_quads, graph_digest_view, gts_to_rdf_loss_ledger, loss_matrix_json,
+    lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger, pair_loss_ledger, profile_for,
+    rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger,
     rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger, rdf_to_research_object_loss_ledger,
     rdf_to_skos_loss_ledger, registered_pairs, research_object_to_rdf_loss_ledger, rule_iri,
-    skolemize, smallvec, try_canonicalize, try_canonicalize_with,
+    skolemize, smallvec, try_canonicalize, try_canonicalize_graph_view, try_canonicalize_view,
+    try_canonicalize_with, try_graph_digest_view,
 };
 pub use purrdf_core::{
-    PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
-    restore_pack, verify_pack,
+    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
+    pack_digest, restore_pack, verify_pack,
 };
 
 // Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the

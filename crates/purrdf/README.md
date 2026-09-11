@@ -60,9 +60,9 @@ caller-supplied configuration.
   on the RDF 1.1 subset. Over reifiers and annotations there are two named
   forms: `canonical_flat_nquads` rewrites them to plain `rdf:reifies` triples
   and canonicalizes those under RDFC-1.0, while `canonicalize` is the
-  first-party `purrdf-rdfc12` v1 profile (a reserved-namespace lowering, byte-
+  first-party `purrdf-rdfc12` v2 profile (a reserved-namespace lowering, byte-
   identical to RDFC-1.0 only on the RDF 1.1 subset; a digest over it must not
-  be labelled RDFC-1.0).
+  be labelled RDFC-1.0; idempotent over its own output).
 - **SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator (property
   paths, aggregates, EXISTS/NOT EXISTS answered by a memoized existence probe
   where a prepare-time proof licenses it and by the per-row definition

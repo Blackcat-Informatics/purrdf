@@ -167,6 +167,41 @@ pub enum GraphMatchValue<'a> {
 /// id is always smaller than the term naming it), or runs an explicit
 /// freeze-time acyclicity pass before this trait can see the result. An
 /// out-of-tree implementor owes the library the same guarantee directly.
+///
+/// # Snapshot-ingestion obligations
+///
+/// A second class of consumer reads a view *whole*: the canonicalizer, the native
+/// serializers, the pack writer and the archive ingestors all take one pass over
+/// every accessor and write down what they find. For them the accessors are not
+/// three overlapping conveniences but a partition of the dataset, and this trait —
+/// public, and unable to check any of it — can only state the partition and rely on
+/// the implementor, the same documented-`unsafe`-trait spirit as the termination
+/// contract above. The obligations are:
+///
+/// * **No double-counting across the statement layer.** [`quads`](Self::quads) and
+///   [`quad_refs`](Self::quad_refs) yield the ordinary RDF rows ONLY. The virtual
+///   rows [`reifier_quads`](Self::reifier_quads) and
+///   [`annotation_quads`](Self::annotation_quads) resolve — a reifier's
+///   `rdf:reifies` binding, and each annotation triple — must NOT also appear in
+///   `quads()`. An ingestor that trusts the partition writes a duplicate row; one
+///   that defends against it by deduplicating cannot distinguish the duplicate from
+///   a row the dataset genuinely holds twice in two graphs, so no consumer can
+///   repair this from the outside. A backend with no statement layer satisfies the
+///   obligation trivially: both side-table accessors yield nothing.
+///
+/// * **Declaration-only graphs are legitimate.** [`named_graphs`](Self::named_graphs)
+///   MAY name a graph that owns no row at all — a graph declared and left empty is
+///   RDF content, and a view that tracks declarations is expected to surface them.
+///   A consumer therefore must not assume every named graph is reachable from
+///   `quads()`, and must not treat an empty projection as a missing graph.
+///
+/// * **A claimed capability must be enumerable.** Whatever
+///   [`capabilities`](Self::capabilities) claims, the accessors that expose it must
+///   actually answer for it. Claiming an RDF 1.2 statement layer while
+///   `reifier_quads()` and `annotation_quads()` yield nothing is a contract
+///   violation, not an empty dataset: a consumer that branches on capabilities
+///   silently drops the layer it was told to expect, and reports success. Claim what
+///   the view enumerates, and enumerate what it claims.
 pub trait DatasetView {
     /// The dataset-local id type this view mints and reads in (C0.8). For the
     /// production [`RdfDataset`] this is [`TermId`]; a paged/global backend supplies
@@ -566,6 +601,25 @@ pub trait FallibleDatasetView: DatasetView {
 
     /// Take an atomic checkpoint of current operational status and evidence.
     fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence>;
+}
+
+/// The frozen dataset never faults: its rows, terms and side tables are already
+/// resident and validated, so every read is total and `operation_status` is
+/// [`Ready`](ViewOperationStatus::Ready) at every checkpoint, before and after
+/// evaluation alike. [`Infallible`](std::convert::Infallible) is the honest root
+/// cause type — the `Failed` variant is uninhabited here, not merely unused — and
+/// the evidence is the unit, because an in-memory read consumes no request budget
+/// a boundary could meter. This impl exists so a `FallibleDatasetView`-bounded
+/// execution path (the one an operational backend needs) also accepts the
+/// production view, instead of forcing callers to pick an entry point by backend.
+impl FallibleDatasetView for RdfDataset {
+    type Error = std::convert::Infallible;
+    type Evidence = ();
+
+    #[inline]
+    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence> {
+        ViewOperationStatus::Ready { evidence: () }
+    }
 }
 
 impl<T: FallibleDatasetView> FallibleDatasetView for Arc<T> {

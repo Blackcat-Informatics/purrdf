@@ -20,6 +20,29 @@
 //! exact oracle (no false positives *and* no false negatives), which is what
 //! [`super::compare::datasets_isomorphic`] is rebuilt on.
 //!
+//! ## The working seam is VIEW-generic
+//!
+//! Nothing in the algorithm needs a materialized [`RdfDataset`]: it reads quads,
+//! the RDF 1.2 side tables and the term table, all of which
+//! [`DatasetView`] already offers. So the whole seam —
+//! component collection, the blank sweep, the admissibility sweep, the first- and
+//! n-degree hashes and the canonical writer — is generic over `D: DatasetView` and
+//! keyed on `D::Id`, and the view entry points ([`canonicalize_view`],
+//! [`try_canonicalize_view`], [`check_admissible_view`], [`blank_count_view`],
+//! [`canonicalize_graph_view`]) run it directly on a composite or delta view with
+//! **no intermediate dataset built anywhere**.
+//!
+//! The `&RdfDataset` entry points ([`canonicalize`], [`canonicalize_with`],
+//! [`try_canonicalize`], [`try_canonicalize_with`], [`check_admissible`],
+//! [`blank_count`]) are thin wrappers over that same core — `RdfDataset` IS a
+//! `DatasetView`, so they are the `D = RdfDataset` instantiation and their output is
+//! byte-identical to what it was before the seam existed, not merely equivalent.
+//!
+//! Identity is therefore comparable ACROSS view kinds: a composite view and the flat
+//! dataset holding the same content canonicalize to the same bytes, so
+//! [`super::compare::datasets_isomorphic`] compares them without materializing
+//! either.
+//!
 //! ## SUBSUME + EXTEND: the RDF-1.2 overlay
 //!
 //! RDFC-1.0 is specified over triples/quads. purrdf's IR additionally carries a
@@ -51,9 +74,51 @@
 //!
 //! So the disjointness is enforced rather than assumed: a dataset carrying ANY IRI
 //! in [`RESERVED_NAMESPACE`], in any position, is REFUSED — see
-//! [`ReservedVocabulary`]. Refusal is chosen over injective escaping because the
-//! property a consumer has to audit ("these bytes cannot be forged") is then a
+//! [`ReservedVocabulary`] — except in the one shape this module itself emits, which
+//! is folded back (next section). Refusal is chosen over injective escaping because
+//! the property a consumer has to audit ("these bytes cannot be forged") is then a
 //! single total rule over the input rather than a proof about an escaping function.
+//!
+//! ### …except the canonicalizer's OWN output, which is FOLDED back
+//!
+//! The refusal is a rule about an input dataset, and the canonical document is an
+//! input: parse the N-Quads this module emits and the statement layer comes back as
+//! plain quads bearing the sentinels, because that is precisely what the lowering
+//! wrote. Read literally, the rule therefore refuses the canonicalizer's own output —
+//! `canon(canon(g))` would not merely differ, it would not complete — and an identity
+//! that cannot be re-derived from the bytes it was minted from is not an identity a
+//! consumer can check.
+//!
+//! So a quad in EXACTLY the shape the lowering emits is FOLDED back into the
+//! statement layer at ingestion instead of being refused:
+//!
+//! - `r <urn:purrdf:rdfc:reifies> t [g] .`, with `r` an IRI or blank node and `t` a
+//!   triple term, is read as the reifier binding `(r, t, g)`.
+//! - `r p o <urn:purrdf:rdfc:annotation> .`, with `r` an IRI or blank node and `p` an
+//!   IRI, is read as the default-graph annotation `(r, p, o)`.
+//!
+//! Nothing else moves. A sentinel predicate over a non-triple object, a sentinel in
+//! subject, object or datatype position, the annotation sentinel anywhere but a lone
+//! graph slot, and every other IRI in the namespace are refused exactly as before —
+//! and the fold smuggles nothing past the sweep, because the folded row's remaining
+//! slots are swept like any other (a reserved IRI nested inside the triple term still
+//! refuses).
+//!
+//! The fold is not a hole in the anti-forgery argument, it is that argument applied
+//! in the other direction. The refusal exists because two datasets with DIFFERENT
+//! content must not share canonical bytes; a quad in the exact emitted shape has the
+//! SAME content as the reifier or annotation row it spells — it is that row, written
+//! down — so giving the two one digest is the lossless overlay working as specified.
+//! The fold is total and shape-exact in both directions, so it is injective on
+//! content: every folded quad denotes exactly one statement-layer row, every row is
+//! spelled by exactly one quad shape, and a dataset that carries a row BOTH ways
+//! carries it once (the duplicate spelling is dropped, not counted twice).
+//!
+//! One shape is out of reach, and it is the emitter's doing rather than the fold's: a
+//! NAMED-graph annotation lowers to a five-token line (`r p o <…:annotation> <g> .`)
+//! which is not an N-Quads quad at all, so no quad can carry it and none is folded.
+//! The graph-scoped entry point ([`canonicalize_graph_view`]) erases the graph slot,
+//! so its output is always quad-shaped and folds in full.
 //!
 //! ## Termination (poison guard)
 //!
@@ -81,18 +146,23 @@ use std::fmt::Write as _;
 
 use sha2::{Digest, Sha256, Sha384};
 
-use super::dataset::{RdfDataset, TermRef};
+use super::dataset::{QuadIds, RdfDataset, TermRef};
 use super::skolem::{TermMapper, rebuild_dataset};
-use super::term::{BlankScope, TermId};
+use super::term::{BlankScope, TermId, TermValue};
+use crate::content_store::ContentDigest;
+use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
 
 /// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// The IRI namespace the RDF 1.2 overlay lowers into, reserved by this profile.
 ///
-/// **No term of an input dataset may be an IRI in this namespace, in any position.**
-/// A dataset that carries one is refused with [`ReservedVocabulary`]; see
-/// [`CANON_PROFILE_ID`] for why refusal rather than convention is the contract.
+/// **No term of an input dataset may be an IRI in this namespace, in any position,
+/// except where it spells one of the overlay's own lowered rows.** A dataset that
+/// carries one anywhere else is refused with [`ReservedVocabulary`]; see
+/// [`CANON_PROFILE_ID`] for why refusal rather than convention is the contract, and
+/// the module documentation for the two folded shapes and why folding them is the
+/// anti-forgery argument rather than an exception to it.
 ///
 /// The rule is stated over the NAMESPACE rather than over the two sentinel spellings
 /// below, and that is the load-bearing choice. An enumeration would have to be
@@ -147,7 +217,7 @@ pub const CANON_PROFILE_ID: &str = "purrdf-rdfc12";
 /// together: the first two say which algorithm was agreed, and this says which
 /// evidence was agreed to demonstrate it.
 pub const CANON_CORPUS_DIGEST: &str =
-    "038f7431e845e63c8bb2122cdfa2c9968f40c17ae7cb6b9e458bbb5cb11375b7";
+    "b9f367a47ebbf389f76efddb083040dae77b1987f96709bebb8af9fdb5818d3d";
 
 /// The version of [`CANON_PROFILE_ID`] this build implements.
 ///
@@ -156,7 +226,16 @@ pub const CANON_CORPUS_DIGEST: &str =
 /// change that could move a consumer's minted identity. A change that cannot move
 /// output (a refactor, a faster search, a clearer diagnostic) does NOT increment
 /// it, which is what makes the number worth pinning.
-pub const CANON_PROFILE_VERSION: u32 = 1;
+///
+/// **v1 → v2**: the refusal rule narrowed. The two quad shapes this module's own
+/// lowering emits — `r <urn:purrdf:rdfc:reifies> t [g] .` over a triple term, and
+/// `r p o <urn:purrdf:rdfc:annotation> .` over an IRI predicate — are FOLDED back
+/// into the statement layer instead of refused, which is what makes canonicalization
+/// idempotent over its own output. Every other use of [`RESERVED_NAMESPACE`] refuses
+/// exactly as in v1, and no input that v1 admitted changed bytes; the increment is
+/// owed because two inputs v1 refused now canonicalize, and a refusal is part of the
+/// contract a consumer pinned.
+pub const CANON_PROFILE_VERSION: u32 = 2;
 
 /// The RDFC-1.0 hash algorithm. SHA-256 is the default; SHA-384 is the spec's
 /// alternative (RDFC-1.0 §3, exercised by W3C suite `test075`). EXTEND beyond
@@ -248,16 +327,25 @@ fn hash_lines(hash: CanonHash, lines: &[String]) -> HashHex {
     }
 }
 
-/// The result of canonicalizing a dataset.
+/// The result of canonicalizing a dataset or a view of one.
+///
+/// Generic over the id type `Id` — the [`Id`](DatasetView::Id) of the view
+/// that produced it — and **defaulted to [`TermId`]**, so the bare spelling
+/// `Canonicalized` continues to name the `&RdfDataset` result everywhere.
 #[derive(Clone, Debug)]
-pub struct Canonicalized {
+pub struct Canonicalized<Id = TermId> {
     /// The canonical N-Quads document: every line `'\n'`-terminated, the set of
     /// lines sorted bytewise ascending and deduplicated. Blanks render as their
     /// canonical `_:c14nN` label. Includes the reified/annotated overlay (via the
     /// reserved `urn:purrdf:rdfc:` sentinels).
+    ///
+    /// This field carries NO view-local ids, which is what makes it comparable
+    /// across view kinds: the canonical bytes of a composite view and of the flat
+    /// dataset holding the same content are equal.
     pub nquads: String,
-    /// Each blank [`TermId`] mapped to its canonical label (`"c14n0"`, …) WITHOUT
-    /// the leading `_:`.
+    /// Each blank id mapped to its canonical label (`"c14n0"`, …) WITHOUT
+    /// the leading `_:`. The ids are those of the view that was canonicalized and
+    /// are meaningful only within it.
     ///
     /// This map is the PRINCIPLED blank-label assignment: the labels are issued
     /// purely from graph structure, so they are isomorphism-invariant (two
@@ -266,7 +354,7 @@ pub struct Canonicalized {
     /// egress alphabet (`BLANK_NODE_LABEL`, XML `NCName`; see
     /// [`crate::blank_label`]). [`canonical_relabel`] applies it as a dataset
     /// rewrite.
-    pub labels: BTreeMap<TermId, Box<str>>,
+    pub labels: BTreeMap<Id, Box<str>>,
 }
 
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`] (RDFC-1.0 with SHA-256,
@@ -295,7 +383,10 @@ pub fn canonicalize(ds: &RdfDataset) -> Canonicalized {
 /// for the fallible equivalent.
 #[must_use]
 pub fn canonicalize_with(ds: &RdfDataset, hash: CanonHash) -> Canonicalized {
-    CanonState::new(ds, hash).run()
+    // A thin wrapper, not a second implementation: `RdfDataset` IS a `DatasetView`,
+    // so this is the `D = RdfDataset` instantiation of the one core and its bytes
+    // are identical to the view form's by construction rather than by agreement.
+    canonicalize_view(ds, hash)
 }
 
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`], returning a typed
@@ -331,7 +422,153 @@ pub fn try_canonicalize_with(
     ds: &RdfDataset,
     hash: CanonHash,
 ) -> Result<Canonicalized, CanonError> {
-    CanonState::new(ds, hash).run_fallible()
+    try_canonicalize_view(ds, hash)
+}
+
+/// Canonicalize any [`DatasetView`] under profile [`CANON_PROFILE_ID`] with an
+/// explicit hash algorithm — the view-generic form of [`canonicalize_with`], and the
+/// function that one delegates to.
+///
+/// Nothing is materialized: the algorithm reads `view`'s quads, its RDF 1.2 reifier
+/// and annotation rows and its term table in place, so a composite or delta view
+/// canonicalizes without ever building an [`RdfDataset`]. The result's
+/// [`nquads`](Canonicalized::nquads) carry no view-local ids, so a composite view and
+/// the flat dataset holding the same content produce byte-equal canonical documents;
+/// [`labels`](Canonicalized::labels) is keyed on `view`'s OWN ids.
+///
+/// The hash algorithm is explicit here rather than split across a `_with` twin: the
+/// `_with` pair on the `&RdfDataset` side exists to keep its long-standing default
+/// spelling, and duplicating that split over the view surface would double it for no
+/// added expressiveness.
+///
+/// # Panics
+/// **Trusted callers only**, exactly like [`canonicalize_with`]: hard-`panic!`s on
+/// poison-budget exhaustion and on reserved-vocabulary input alike. See
+/// [`try_canonicalize_view`] for the fallible equivalent.
+#[must_use]
+pub fn canonicalize_view<D: DatasetView>(view: &D, hash: CanonHash) -> Canonicalized<D::Id> {
+    CanonState::new(view, CanonScope::Dataset, hash).run()
+}
+
+/// Canonicalize any [`DatasetView`], returning a typed [`CanonError`] instead of
+/// panicking — the view-generic form of [`try_canonicalize_with`], and the function
+/// that one delegates to.
+///
+/// **This is the entry point for UNTRUSTED input**, for the reasons
+/// [`try_canonicalize`] gives; byte-identical `Ok` output to [`canonicalize_view`].
+///
+/// # Errors
+/// [`CanonError::ReservedVocabulary`] if any term of `view` is an IRI in
+/// [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] if the n-degree search's
+/// call/permutation budget ([`RDFC_CALL_LIMIT`]) is exhausted first.
+pub fn try_canonicalize_view<D: DatasetView>(
+    view: &D,
+    hash: CanonHash,
+) -> Result<Canonicalized<D::Id>, CanonError> {
+    CanonState::new(view, CanonScope::Dataset, hash).run_fallible()
+}
+
+/// Canonicalize the subgraph of `view` asserted in the named graph `graph` (an IRI),
+/// with the graph slot erased — the per-graph identity a carrier digest pins.
+///
+/// Selection is graph-FAITHFUL and emission graph-ERASING, uniformly across both
+/// layers, exactly as
+/// [`RdfDataset::project_named_graph`](super::dataset::RdfDataset::project_named_graph)
+/// defines it: a base quad contributes when its graph slot is `graph`, and a reifier
+/// declaration or annotation row contributes when **its own** graph slot is `graph`;
+/// each is canonicalized with no graph name. The statement layer is keyed per graph in
+/// this IR, so one reifier id may be declared and annotated independently in two
+/// graphs and only the rows belonging to `graph` are admitted — the digest is a
+/// function of `graph`'s content ALONE.
+///
+/// The difference from the projection route is that no projection exists: the rows are
+/// selected through a [`GraphMatch::Named`] pattern probe and the side tables' own
+/// graph slots, so the output is byte-identical to canonicalizing the materialized
+/// projection without building it. A `graph` this view interns nowhere, or interns but
+/// never uses as a graph name, names no rows and canonicalizes to the empty document —
+/// absence is an empty subgraph, never an error.
+///
+/// # Panics
+/// Trusted callers only, exactly like [`canonicalize_view`]; see
+/// [`try_canonicalize_graph_view`] for the fallible equivalent.
+#[must_use]
+pub fn canonicalize_graph_view<D: DatasetView>(
+    view: &D,
+    graph: &str,
+    hash: CanonHash,
+) -> Canonicalized<D::Id> {
+    match graph_scope(view, graph) {
+        Some(scope) => CanonState::new(view, scope, hash).run(),
+        None => empty_canonicalized(),
+    }
+}
+
+/// Canonicalize one named graph of `view`, returning a typed [`CanonError`] instead of
+/// panicking. See [`canonicalize_graph_view`] for the selection rule.
+///
+/// # Errors
+/// [`CanonError::ReservedVocabulary`] if any term of the selected subgraph is an IRI
+/// in [`RESERVED_NAMESPACE`]; [`CanonError::BudgetExceeded`] on a pathologically
+/// symmetric blank graph. The sweep is scoped to the subgraph, so a reserved IRI in
+/// ANOTHER graph does not refuse this one — the projection route has exactly that
+/// property, and a per-graph digest that refused on a neighbour's content would not be
+/// a function of `graph` alone.
+pub fn try_canonicalize_graph_view<D: DatasetView>(
+    view: &D,
+    graph: &str,
+    hash: CanonHash,
+) -> Result<Canonicalized<D::Id>, CanonError> {
+    match graph_scope(view, graph) {
+        Some(scope) => CanonState::new(view, scope, hash).run_fallible(),
+        None => Ok(empty_canonicalized()),
+    }
+}
+
+/// The SHA-256 [`ContentDigest`] of one named graph's canonical form — the value a
+/// per-graph content handle pins, taken over [`canonicalize_graph_view`]'s bytes.
+///
+/// # Panics
+/// Trusted callers only, exactly like [`canonicalize_graph_view`]; see
+/// [`try_graph_digest_view`] for the fallible equivalent.
+#[must_use]
+pub fn graph_digest_view<D: DatasetView>(view: &D, graph: &str) -> ContentDigest {
+    ContentDigest::of(
+        canonicalize_graph_view(view, graph, CanonHash::Sha256)
+            .nquads
+            .as_bytes(),
+    )
+}
+
+/// The SHA-256 [`ContentDigest`] of one named graph's canonical form, returning a
+/// typed [`CanonError`] instead of panicking. Byte-identical `Ok` output to
+/// [`graph_digest_view`].
+///
+/// # Errors
+/// Exactly [`try_canonicalize_graph_view`]'s refusals, unchanged.
+pub fn try_graph_digest_view<D: DatasetView>(
+    view: &D,
+    graph: &str,
+) -> Result<ContentDigest, CanonError> {
+    Ok(ContentDigest::of(
+        try_canonicalize_graph_view(view, graph, CanonHash::Sha256)?
+            .nquads
+            .as_bytes(),
+    ))
+}
+
+/// The [`CanonScope`] naming `graph` in `view`, or `None` when `view` interns no such
+/// IRI (so no quad or statement row can carry it as a graph name).
+fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id>> {
+    view.term_id_by_value(&TermValue::iri(graph))
+        .map(CanonScope::Graph)
+}
+
+/// The canonical form of an empty selection: the empty document, no labels.
+fn empty_canonicalized<Id>() -> Canonicalized<Id> {
+    Canonicalized {
+        nquads: String::new(),
+        labels: BTreeMap::new(),
+    }
 }
 
 /// Relabel every blank node of `ds` to its canonical `c14n{n}` label at
@@ -470,7 +707,7 @@ fn relabel_recording(
     // The typed consumer needs the issued labels, not a serialized document.
     // Keep the exact admission/search algorithm shared with text canonicalization
     // and move its label table without rendering or cloning it.
-    let labels = CanonState::new(ds, CanonHash::Sha256)
+    let labels = CanonState::new(ds, CanonScope::Dataset, CanonHash::Sha256)
         .issue_labels()?
         .canonical
         .issued;
@@ -561,7 +798,9 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
 }
 
 /// Whether `ds` is admissible to canonicalization under profile
-/// [`CANON_PROFILE_ID`] — i.e. carries no IRI in [`RESERVED_NAMESPACE`].
+/// [`CANON_PROFILE_ID`] — i.e. carries no IRI in [`RESERVED_NAMESPACE`] outside the
+/// overlay's own lowered shapes, which are folded back rather than refused (module
+/// documentation).
 ///
 /// Exposed separately so a dataset can be screened at ADMISSION, before it is
 /// stored, rather than only at the moment identity is minted. A store that admits
@@ -572,70 +811,99 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
 /// # Errors
 /// [`ReservedVocabulary`] naming the least offending `(position, iri)`.
 pub fn check_admissible(ds: &RdfDataset) -> Result<(), ReservedVocabulary> {
-    reserved_vocabulary(ds).map_or(Ok(()), Err)
+    check_admissible_view(ds)
+}
+
+/// Whether any [`DatasetView`] is admissible to canonicalization under profile
+/// [`CANON_PROFILE_ID`] — the view-generic form of [`check_admissible`], and the
+/// function that one delegates to.
+///
+/// Screens a composite or delta view in place, so a view can be admitted or refused
+/// before anyone decides whether to materialize it.
+///
+/// # Errors
+/// [`ReservedVocabulary`] naming the least offending `(position, iri)`.
+pub fn check_admissible_view<D: DatasetView>(view: &D) -> Result<(), ReservedVocabulary> {
+    reserved_vocabulary(view, CanonScope::Dataset).map_or(Ok(()), Err)
 }
 
 /// The count of distinct blank nodes in `ds` (incl. blanks nested inside triple
 /// terms). A cheap structural pre-reject used by [`super::compare`].
 #[must_use]
 pub fn blank_count(ds: &RdfDataset) -> usize {
-    let mut set: BTreeSet<TermId> = BTreeSet::new();
-    collect_components(ds, &mut |comp| {
-        comp.for_each_blank(ds, &mut |b| {
+    blank_count_view(ds)
+}
+
+/// The count of distinct blank nodes any [`DatasetView`] carries (incl. blanks nested
+/// inside triple terms and inside composite literals) — the view-generic form of
+/// [`blank_count`], and the function that one delegates to.
+///
+/// Label-independent by construction: it counts view ids, so two views whose blanks
+/// differ only in `(label, scope)` count the same, and two sources of a composite that
+/// happen to share a local label count as the two distinct nodes they are.
+#[must_use]
+pub fn blank_count_view<D: DatasetView>(view: &D) -> usize {
+    let mut set: BTreeSet<D::Id> = BTreeSet::new();
+    collect_components(view, CanonScope::Dataset, &mut |comp| {
+        comp.for_each_blank(view, &mut |b| {
             set.insert(b);
         });
     });
     set.len()
 }
 
+/// Which statements of a view canonicalization admits.
+///
+/// A scope is a SELECTION, never a rewrite: the same components are hashed and written
+/// either way, so the whole-dataset and per-graph paths share one implementation and
+/// cannot drift apart in their handling of the RDF 1.2 overlay.
+#[derive(Clone, Copy)]
+enum CanonScope<Id> {
+    /// Every quad, reifier row and annotation row the view carries, each keeping its
+    /// own graph slot.
+    Dataset,
+    /// Only the rows whose OWN graph slot is this named graph, each emitted with the
+    /// graph slot erased — see [`canonicalize_graph_view`].
+    Graph(Id),
+}
+
 /// A statement normalized to a quad shape for uniform hashing and serialization.
 /// Predicate/graph slots may be a reserved sentinel IRI (the overlay rows).
+///
+/// Keyed on the id type of the view it was collected from, so the same component
+/// machinery serves a flat dataset, a composite view and a delta view alike.
 #[derive(Clone, Copy)]
-enum Component {
+enum Component<Id> {
     /// A genuine dataset quad.
-    Quad {
-        s: TermId,
-        p: TermId,
-        o: TermId,
-        g: Option<TermId>,
-    },
+    Quad { s: Id, p: Id, o: Id, g: Option<Id> },
     /// A reifier binding `r <urn:purrdf:rdfc:reifies> t` in graph `g` (`None` =
     /// default graph — the graph slot then stays empty, byte-identical to the
     /// pre-graph-dimension form).
-    Reifier {
-        r: TermId,
-        t: TermId,
-        g: Option<TermId>,
-    },
+    Reifier { r: Id, t: Id, g: Option<Id> },
     /// An annotation `r p o` in the reserved annotation graph, itself scoped to graph
     /// `g` (`None` = default graph).
-    Annotation {
-        r: TermId,
-        p: TermId,
-        o: TermId,
-        g: Option<TermId>,
-    },
+    Annotation { r: Id, p: Id, o: Id, g: Option<Id> },
 }
 
 /// One quad slot: a dataset term, a synthetic sentinel IRI (overlay predicate) that
 /// has no [`TermId`], or the annotation-overlay graph marker (the reserved annotation
 /// sentinel plus the annotation's own named graph, if any).
 #[derive(Clone, Copy)]
-enum Slot {
-    Term(TermId),
+enum Slot<Id> {
+    Term(Id),
     Sentinel(&'static str),
     /// The annotation overlay's graph position: the reserved annotation sentinel and,
     /// for a named-graph annotation, the graph term. `None` renders exactly as the
     /// bare sentinel (byte-identical to the default-graph form); `Some(g)` appends the
     /// real graph term so a named-graph annotation stays lossless and distinct from a
-    /// genuine quad. The graph term keeps its [`TermId`] so a blank-node graph still
+    /// genuine quad. The graph term keeps its id so a blank-node graph still
     /// participates in canonical labeling.
-    AnnotationGraph(Option<TermId>),
+    AnnotationGraph(Option<Id>),
 }
 
-impl Component {
+impl<Id: ViewTermId> Component<Id> {
     /// The four quad slots `(s, p, o, g)` of this component in canonical shape.
-    fn slots(self) -> (Slot, Slot, Slot, Option<Slot>) {
+    fn slots(self) -> (Slot<Id>, Slot<Id>, Slot<Id>, Option<Slot<Id>>) {
         match self {
             Self::Quad { s, p, o, g } => (
                 Slot::Term(s),
@@ -660,9 +928,9 @@ impl Component {
         }
     }
 
-    /// Invoke `f` for every blank [`TermId`] appearing anywhere in this component
+    /// Invoke `f` for every blank id appearing anywhere in this component
     /// (recursing into triple terms).
-    fn for_each_blank(self, ds: &RdfDataset, f: &mut impl FnMut(TermId)) {
+    fn for_each_blank<D: DatasetView<Id = Id>>(self, ds: &D, f: &mut impl FnMut(Id)) {
         let (s, p, o, g) = self.slots();
         for slot in [Some(s), Some(p), Some(o), g].into_iter().flatten() {
             match slot {
@@ -673,7 +941,7 @@ impl Component {
     }
 }
 
-/// Invoke `f` for every blank [`TermId`] reachable at `id` — recursing triple
+/// Invoke `f` for every blank id reachable at `id` — recursing triple
 /// terms, and descending into the lexical form of a composite (`cdt:List` /
 /// `cdt:Map`) literal.
 ///
@@ -682,7 +950,7 @@ impl Component {
 /// any other. Leaving it out would make two datasets that differ only by a
 /// consistent renaming of such a node canonicalize differently, and would let
 /// [`canonical_relabel`] emit a dangling label.
-fn blanks_in_term(ds: &RdfDataset, id: TermId, f: &mut impl FnMut(TermId)) {
+fn blanks_in_term<D: DatasetView>(ds: &D, id: D::Id, f: &mut impl FnMut(D::Id)) {
     match ds.resolve(id) {
         TermRef::Blank { .. } => f(id),
         TermRef::Triple { s, p, o } => {
@@ -701,7 +969,7 @@ fn blanks_in_term(ds: &RdfDataset, id: TermId, f: &mut impl FnMut(TermId)) {
     }
 }
 
-/// The [`TermId`]s of the blank nodes a composite literal's lexical form names,
+/// The view ids of the blank nodes a composite literal's lexical form names,
 /// in occurrence order and deduplicated.
 ///
 /// Empty unless `datatype` is one of the two composite IRIs, so an ordinary
@@ -710,9 +978,13 @@ fn blanks_in_term(ds: &RdfDataset, id: TermId, f: &mut impl FnMut(TermId)) {
 /// Every `(label, scope)` a composite literal names was interned when the
 /// literal was
 /// ([`intern_literal`](super::builder::RdfDatasetBuilder::intern_literal) does
-/// it), so the lookup normally succeeds; a pair the dataset does not hold names
+/// it), so the lookup normally succeeds; a pair the view does not hold names
 /// no node of this graph and is skipped rather than fabricated.
-fn composite_blanks(ds: &RdfDataset, lexical: &str, datatype: TermId) -> Vec<TermId> {
+///
+/// The lookup goes through [`DatasetView::term_id_by_value`], which resolves WITHOUT
+/// minting — the same non-minting resolve the flat path's `term_id_by_blank` performs,
+/// so an embedded pair naming no node stays absent rather than becoming one.
+fn composite_blanks<D: DatasetView>(ds: &D, lexical: &str, datatype: D::Id) -> Vec<D::Id> {
     let TermRef::Iri(iri) = ds.resolve(datatype) else {
         return Vec::new();
     };
@@ -722,43 +994,253 @@ fn composite_blanks(ds: &RdfDataset, lexical: &str, datatype: TermId) -> Vec<Ter
     let mut seen = BTreeSet::new();
     crate::cdt_blank::cdt_embedded_blanks(lexical, iri)
         .into_iter()
-        .filter_map(|(label, scope)| ds.term_id_by_blank(&label, scope))
+        .filter_map(|(label, scope)| ds.term_id_by_value(&TermValue::Blank { label, scope }))
         .filter(|id| seen.insert(*id))
         .collect()
 }
 
-/// Drive `f` over every [`Component`] of the dataset (quads, reifiers, annotations).
-fn collect_components(ds: &RdfDataset, f: &mut impl FnMut(Component)) {
-    for q in ds.quads() {
-        f(Component::Quad {
+/// The ids, in ONE view's own id space, of the overlay's two sentinel IRIs.
+///
+/// Looked up once per component sweep and compared by id afterwards, so a view that
+/// interns neither — every dataset that has never been through a canonical document —
+/// pays two value resolves for the whole sweep and nothing at all per quad. A view
+/// that does intern one pays one `Option` comparison per quad, and the quad's terms
+/// are resolved only once that comparison has already matched.
+#[derive(Clone, Copy)]
+struct Sentinels<Id> {
+    /// The id of `urn:purrdf:rdfc:reifies`, if this view interns it.
+    reifies: Option<Id>,
+    /// The id of `urn:purrdf:rdfc:annotation`, if this view interns it.
+    annotation: Option<Id>,
+}
+
+impl<Id: ViewTermId> Sentinels<Id> {
+    /// Resolve both sentinels against `ds` WITHOUT minting — the same non-minting
+    /// resolve [`graph_scope`] performs, and with the same consequence: an IRI the
+    /// view interns nowhere names no term of it, so no quad can carry it and no quad
+    /// can be in a folded shape.
+    ///
+    /// A view that somehow held one IRI under two ids would fold only the id this
+    /// resolve names; the other would reach the admissibility sweep, which compares
+    /// IRIs by VALUE, and be refused. That failure direction is the safe one — a
+    /// missed fold refuses, it never admits a second spelling.
+    fn of<D: DatasetView<Id = Id>>(ds: &D) -> Self {
+        Self {
+            reifies: ds.term_id_by_value(&TermValue::iri(SENTINEL_REIFIES)),
+            annotation: ds.term_id_by_value(&TermValue::iri(SENTINEL_ANNOTATION_GRAPH)),
+        }
+    }
+}
+
+/// Whether `id` resolves to a term legal in an ASSERTED subject position — an IRI or
+/// a blank node.
+///
+/// The quad subject and the statement layer's reifier slot carry the same rule at
+/// freeze time (`require_asserted_subject`), so on a frozen dataset it holds already;
+/// it is checked anyway because the fold's whole safety argument is that the shape it
+/// recognizes is EXACTLY the shape the lowering emits, and a shape test that assumes
+/// away one of its conjuncts is not exact.
+fn is_asserted_subject<D: DatasetView>(ds: &D, id: D::Id) -> bool {
+    matches!(ds.resolve(id), TermRef::Iri(_) | TermRef::Blank { .. })
+}
+
+/// The statement-layer row a base quad SPELLS when it is in exactly the shape this
+/// module's own lowering emits, or `None` when it is an ordinary quad.
+///
+/// This is the ingestion half of the overlay: [`Component::slots`] writes a reifier
+/// out as `r <…:reifies> t [g]` and a default-graph annotation as `r p o <…:annotation>`,
+/// and this reads those two shapes back. The two are inverses by construction, which
+/// is what makes canonicalization idempotent over its own output.
+///
+/// `q.g` is the graph slot the scope will EMIT, not necessarily the one the quad
+/// stores: under [`CanonScope::Graph`] the slot is erased before the fold sees it, so
+/// canonicalizing the graph literally named `<urn:purrdf:rdfc:annotation>` keeps
+/// behaving as it always has (the name is erased, so nothing is folded and nothing is
+/// refused) rather than acquiring a meaning from a name the caller chose.
+fn fold_sentinel_row<D: DatasetView>(
+    ds: &D,
+    sentinels: Sentinels<D::Id>,
+    q: QuadIds<D::Id>,
+) -> Option<Component<D::Id>> {
+    if sentinels.reifies == Some(q.p) {
+        return (is_asserted_subject(ds, q.s) && matches!(ds.resolve(q.o), TermRef::Triple { .. }))
+            .then_some(Component::Reifier {
+                r: q.s,
+                t: q.o,
+                g: q.g,
+            });
+    }
+    if let Some(annotation) = sentinels.annotation
+        && q.g == Some(annotation)
+    {
+        return (is_asserted_subject(ds, q.s) && matches!(ds.resolve(q.p), TermRef::Iri(_)))
+            .then_some(Component::Annotation {
+                r: q.s,
+                p: q.p,
+                o: q.o,
+                // The lowering spends the graph slot on the sentinel itself, so the
+                // shape it emits is the DEFAULT-graph annotation and nothing else; a
+                // named-graph annotation lowers to a five-token line no quad can hold.
+                g: None,
+            });
+    }
+    None
+}
+
+/// Whether `scope` already admits `folded` from the view's OWN side tables.
+///
+/// A dataset may carry one statement-layer row both natively and as the quad that
+/// spells it. The fold's claim is that those are the same row, so the canonical form
+/// must hold it once: the duplicate spelling is dropped here rather than counted
+/// twice. Dropping (rather than, say, refusing the pair) is what keeps the claim
+/// symmetric — a dataset and the same dataset with one row spelled twice are the same
+/// content, hence the same bytes.
+///
+/// Only reached when a fold actually fired, so a view carrying no sentinel-shaped quad
+/// never walks a side table here.
+fn already_native<D: DatasetView>(
+    ds: &D,
+    scope: CanonScope<D::Id>,
+    folded: Component<D::Id>,
+) -> bool {
+    match folded {
+        Component::Reifier { r, t, g } => ds
+            .reifier_quads()
+            .any(|row| row.s == r && row.o == t && scope_emits(scope, row.g, g)),
+        Component::Annotation { r, p, o, g } => ds
+            .annotation_quads()
+            .any(|row| row.s == r && row.p == p && row.o == o && scope_emits(scope, row.g, g)),
+        // The fold never produces an ordinary quad; a quad is what it declines to fold.
+        Component::Quad { .. } => false,
+    }
+}
+
+/// Whether a side-table row whose OWN graph slot is `row` is admitted by `scope` and
+/// emitted with the graph slot `emitted` — the comparison [`already_native`] needs,
+/// stated once so the two scopes cannot drift apart in it.
+fn scope_emits<Id: ViewTermId>(
+    scope: CanonScope<Id>,
+    row: Option<Id>,
+    emitted: Option<Id>,
+) -> bool {
+    match scope {
+        CanonScope::Dataset => row == emitted,
+        CanonScope::Graph(graph) => emitted.is_none() && row == Some(graph),
+    }
+}
+
+/// The component a base quad contributes under `scope` — itself, the statement-layer
+/// row it spells, or nothing at all when it spells a row the view already holds
+/// natively.
+fn base_quad_component<D: DatasetView>(
+    ds: &D,
+    scope: CanonScope<D::Id>,
+    sentinels: Sentinels<D::Id>,
+    q: QuadIds<D::Id>,
+) -> Option<Component<D::Id>> {
+    let Some(folded) = fold_sentinel_row(ds, sentinels, q) else {
+        return Some(Component::Quad {
             s: q.s,
             p: q.p,
             o: q.o,
             g: q.g,
         });
-    }
-    for (r, t, g) in ds.reifiers_with_graph() {
-        f(Component::Reifier { r, t, g });
-    }
-    for (r, p, o, g) in ds.annotations_with_graph() {
-        f(Component::Annotation { r, p, o, g });
+    };
+    (!already_native(ds, scope, folded)).then_some(folded)
+}
+
+/// Drive `f` over every [`Component`] the `scope` admits (quads, reifiers,
+/// annotations), read straight off the view's accessors.
+///
+/// The RDF 1.2 rows come from [`DatasetView::reifier_quads`] /
+/// [`DatasetView::annotation_quads`], the virtual-quad shape of the side tables:
+/// `(reifier, rdf:reifies, triple-term, graph)` and `(reifier, predicate, object,
+/// graph)`. For [`RdfDataset`] those yield exactly the rows, in exactly the order, that
+/// its `reifiers_with_graph` / `annotations_with_graph` tables hold — which is what
+/// makes the flat wrappers byte-identical to the pre-seam implementation.
+///
+/// Under [`CanonScope::Graph`] the selection is a [`GraphMatch::Named`] pattern probe
+/// for the base quads and the side tables' own graph slots for the overlay rows, and
+/// every admitted component is emitted with its graph slot ERASED — the projection's
+/// rule, applied without building a projection.
+///
+/// This is also where a base quad that SPELLS a statement-layer row is folded back
+/// into one ([`base_quad_component`]). Placing the fold here rather than at an entry
+/// point is what makes it reach everything: the flat wrappers, the view-generic entry
+/// points, the per-graph scope, the admissibility sweep and the blank sweep all read
+/// the dataset through this one function, so none of them can disagree about what the
+/// input contains.
+fn collect_components<D: DatasetView>(
+    ds: &D,
+    scope: CanonScope<D::Id>,
+    f: &mut impl FnMut(Component<D::Id>),
+) {
+    let sentinels = Sentinels::of(ds);
+    match scope {
+        CanonScope::Dataset => {
+            for q in ds.quads() {
+                if let Some(comp) = base_quad_component(ds, scope, sentinels, q) {
+                    f(comp);
+                }
+            }
+            for q in ds.reifier_quads() {
+                f(Component::Reifier {
+                    r: q.s,
+                    t: q.o,
+                    g: q.g,
+                });
+            }
+            for q in ds.annotation_quads() {
+                f(Component::Annotation {
+                    r: q.s,
+                    p: q.p,
+                    o: q.o,
+                    g: q.g,
+                });
+            }
+        }
+        CanonScope::Graph(graph) => {
+            for q in ds.quads_for_pattern(None, None, None, GraphMatch::Named(graph)) {
+                // The graph slot is erased FIRST, so the fold reads the quad as this
+                // scope will emit it (see [`fold_sentinel_row`]).
+                let q = QuadIds { g: None, ..q };
+                if let Some(comp) = base_quad_component(ds, scope, sentinels, q) {
+                    f(comp);
+                }
+            }
+            for q in ds.reifier_quads().filter(|q| q.g == Some(graph)) {
+                f(Component::Reifier {
+                    r: q.s,
+                    t: q.o,
+                    g: None,
+                });
+            }
+            for q in ds.annotation_quads().filter(|q| q.g == Some(graph)) {
+                f(Component::Annotation {
+                    r: q.s,
+                    p: q.p,
+                    o: q.o,
+                    g: None,
+                });
+            }
+        }
     }
 }
 
 /// How a blank renders during serialization.
 #[derive(Clone, Copy)]
-enum BlankRender<'a> {
+enum BlankRender<'a, Id> {
     /// Hash First Degree Quads (§4.6): the focus blank → `_:a`, every other → `_:z`.
-    FirstDegree { focus: TermId },
+    FirstDegree { focus: Id },
     /// Final output (§4.4 step 7): each blank → its issued `_:c14nN` label.
-    Canonical { issuer: &'a IdIssuer },
+    Canonical { issuer: &'a IdIssuer<Id> },
 }
 
-impl<'a> BlankRender<'a> {
+impl<'a, Id: ViewTermId> BlankRender<'a, Id> {
     /// The `_:`-less label a blank renders to under this strategy. Borrowed: the
     /// first-degree labels are static and the canonical ones live in the issuer,
     /// so no `String` is minted per blank occurrence written.
-    fn label(self, id: TermId) -> &'a str {
+    fn label(self, id: Id) -> &'a str {
         match self {
             BlankRender::FirstDegree { focus } => {
                 if id == focus {
@@ -777,13 +1259,13 @@ impl<'a> BlankRender<'a> {
 /// The RDFC-1.0 "identifier issuer": mints prefixed ids (`c14n0`, `b0`, …) in a
 /// stable order, remembering each blank's id and the issuance order.
 #[derive(Clone)]
-struct IdIssuer {
+struct IdIssuer<Id> {
     prefix: &'static str,
-    issued: BTreeMap<TermId, Box<str>>,
-    order: Vec<TermId>,
+    issued: BTreeMap<Id, Box<str>>,
+    order: Vec<Id>,
 }
 
-impl IdIssuer {
+impl<Id: ViewTermId> IdIssuer<Id> {
     fn new(prefix: &'static str) -> Self {
         Self {
             prefix,
@@ -793,7 +1275,7 @@ impl IdIssuer {
     }
 
     /// Issue (or return the already-issued) id for `b`.
-    fn issue(&mut self, b: TermId) -> &str {
+    fn issue(&mut self, b: Id) -> &str {
         // One tree descent for both outcomes (`entry`), instead of the
         // contains + insert + get triple this replaced. The id is still numbered
         // from `order.len()` BEFORE the push, so the issued sequence is unchanged.
@@ -807,31 +1289,37 @@ impl IdIssuer {
         }
     }
 
-    fn issued_for(&self, b: TermId) -> Option<&str> {
+    fn issued_for(&self, b: Id) -> Option<&str> {
         self.issued.get(&b).map(Box::as_ref)
     }
 
-    fn has(&self, b: TermId) -> bool {
+    fn has(&self, b: Id) -> bool {
         self.issued.contains_key(&b)
     }
 
     /// The blanks in issuance order.
-    fn order(&self) -> &[TermId] {
+    fn order(&self) -> &[Id] {
         &self.order
     }
 }
 
-/// Per-dataset canonicalization state.
-struct CanonState<'a> {
-    ds: &'a RdfDataset,
-    /// Every blank, in ascending [`TermId`] order (the deterministic reference set).
-    blanks: Vec<TermId>,
+/// Per-run canonicalization state over ONE view.
+///
+/// Generic over `D: DatasetView` and keyed on `D::Id`: the working tables below are
+/// scratch, and the view itself is read in place — no [`RdfDataset`] is built here for
+/// any view, including the composite and delta ones.
+struct CanonState<'a, D: DatasetView> {
+    ds: &'a D,
+    /// Which statements of `ds` this run admits.
+    scope: CanonScope<D::Id>,
+    /// Every blank, in ascending id order (the deterministic reference set).
+    blanks: Vec<D::Id>,
     /// The components each blank participates in (its "quads", RDFC-1.0 §4.4).
-    incident: BTreeMap<TermId, Vec<Component>>,
+    incident: BTreeMap<D::Id, Vec<Component<D::Id>>>,
     /// First-degree hash (§4.6) of each blank, computed once.
-    first_degree: BTreeMap<TermId, HashHex>,
+    first_degree: BTreeMap<D::Id, HashHex>,
     /// The durable canonical issuer.
-    canonical: IdIssuer,
+    canonical: IdIssuer<D::Id>,
     /// The hash algorithm for this run (RDFC-1.0 §3).
     hash: CanonHash,
     /// Remaining recursion/permutation budget (poison guard).
@@ -899,14 +1387,18 @@ impl std::fmt::Display for TermPosition {
     }
 }
 
-/// The input dataset carries an IRI in the profile's [`RESERVED_NAMESPACE`], which
-/// canonicalization refuses rather than lower alongside its own sentinels.
+/// The input dataset carries an IRI in the profile's [`RESERVED_NAMESPACE`] somewhere
+/// other than in one of the overlay's own lowered shapes, which canonicalization
+/// refuses rather than lower alongside its own sentinels.
 ///
-/// Accepting such a dataset would let a genuine reifier/annotation structure and a
-/// literal assertion of its lowered form canonicalize to identical bytes — an
-/// identity collision, and for a content-addressed store an identity-forgery
-/// primitive. See the module documentation for why the rule is refusal at the
-/// namespace rather than escaping at the two sentinel spellings.
+/// Accepting such a dataset would let a structure with DIFFERENT content canonicalize
+/// to a genuine reifier/annotation structure's bytes — an identity collision, and for
+/// a content-addressed store an identity-forgery primitive. The two exact shapes the
+/// lowering emits are the one case where the content is not different: those are
+/// folded back into the statement layer instead of refused, which is what makes
+/// canonicalization idempotent over its own output. See the module documentation for
+/// both halves of that argument, and for why the rule is refusal at the namespace
+/// rather than escaping at the two sentinel spellings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ReservedVocabulary {
@@ -989,7 +1481,7 @@ impl From<ReservedVocabulary> for CanonError {
 /// Recursion mirrors [`blanks_in_term`], which already walks the same nesting on the
 /// same input: term ids are issued bottom-up so the structure is a DAG, and the depth
 /// it can reach is the depth the parser admitted before this function ever ran.
-fn reserved_in_term(ds: &RdfDataset, id: TermId) -> Option<Box<str>> {
+fn reserved_in_term<D: DatasetView>(ds: &D, id: D::Id) -> Option<Box<str>> {
     match ds.resolve(id) {
         TermRef::Iri(iri) => iri.starts_with(RESERVED_NAMESPACE).then(|| Box::from(iri)),
         TermRef::Literal { datatype, .. } => reserved_in_term(ds, datatype),
@@ -1000,7 +1492,8 @@ fn reserved_in_term(ds: &RdfDataset, id: TermId) -> Option<Box<str>> {
     }
 }
 
-/// The dataset's reserved-namespace violation, or `None` if it is admissible.
+/// The view's reserved-namespace violation within `scope`, or `None` if it is
+/// admissible.
 ///
 /// Returns the LEAST `(position, iri)` rather than the first one encountered. The
 /// difference only shows on a dataset carrying several violations — which is already
@@ -1009,9 +1502,12 @@ fn reserved_in_term(ds: &RdfDataset, id: TermId) -> Option<Box<str>> {
 /// same dataset. The refusal was always total; this makes the DIAGNOSTIC total too,
 /// so a corpus can pin the reported position and a consumer comparing two
 /// implementations' rejections is comparing something well defined.
-fn reserved_vocabulary(ds: &RdfDataset) -> Option<ReservedVocabulary> {
+fn reserved_vocabulary<D: DatasetView>(
+    ds: &D,
+    scope: CanonScope<D::Id>,
+) -> Option<ReservedVocabulary> {
     let mut worst: Option<ReservedVocabulary> = None;
-    collect_components(ds, &mut |comp| {
+    collect_components(ds, scope, &mut |comp| {
         let (s, p, o, g) = comp.slots();
         for (slot, position) in [
             (Some(s), TermPosition::Subject),
@@ -1019,8 +1515,12 @@ fn reserved_vocabulary(ds: &RdfDataset) -> Option<ReservedVocabulary> {
             (Some(o), TermPosition::Object),
             (g, TermPosition::Graph),
         ] {
-            // `Slot::Sentinel` is the overlay's OWN lowering, not caller input, and
-            // `AnnotationGraph(None)` carries no term at all — neither is a violation.
+            // `Slot::Sentinel` is the overlay's OWN lowering — of a row this view
+            // holds natively, or of one a base quad spelled and `collect_components`
+            // folded back — and `AnnotationGraph(None)` carries no term at all;
+            // neither is a violation. Every OTHER slot of a folded row still arrives
+            // here as `Slot::Term`, so the fold cannot smuggle a reserved IRI past
+            // this sweep by hiding it in a triple term or an annotation predicate.
             let Some(Slot::Term(id) | Slot::AnnotationGraph(Some(id))) = slot else {
                 continue;
             };
@@ -1039,14 +1539,14 @@ fn reserved_vocabulary(ds: &RdfDataset) -> Option<ReservedVocabulary> {
     worst
 }
 
-impl<'a> CanonState<'a> {
-    fn new(ds: &'a RdfDataset, hash: CanonHash) -> Self {
-        let mut blank_set: BTreeSet<TermId> = BTreeSet::new();
-        let mut incident: BTreeMap<TermId, Vec<Component>> = BTreeMap::new();
-        collect_components(ds, &mut |comp| {
+impl<'a, D: DatasetView> CanonState<'a, D> {
+    fn new(ds: &'a D, scope: CanonScope<D::Id>, hash: CanonHash) -> Self {
+        let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
+        let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
+        collect_components(ds, scope, &mut |comp| {
             // Record incidence for each distinct blank in the component (a blank that
             // appears in two positions of one quad still lists that quad once).
-            let mut seen: BTreeSet<TermId> = BTreeSet::new();
+            let mut seen: BTreeSet<D::Id> = BTreeSet::new();
             comp.for_each_blank(ds, &mut |b| {
                 blank_set.insert(b);
                 if seen.insert(b) {
@@ -1054,9 +1554,10 @@ impl<'a> CanonState<'a> {
                 }
             });
         });
-        let blanks: Vec<TermId> = blank_set.into_iter().collect();
+        let blanks: Vec<D::Id> = blank_set.into_iter().collect();
         Self {
             ds,
+            scope,
             blanks,
             incident,
             first_degree: BTreeMap::new(),
@@ -1068,7 +1569,7 @@ impl<'a> CanonState<'a> {
 
     /// Run the full algorithm, panicking on poison-budget exhaustion (trusted
     /// callers — [`canonicalize`]/[`canonicalize_with`]).
-    fn run(self) -> Canonicalized {
+    fn run(self) -> Canonicalized<D::Id> {
         match self.run_fallible() {
             Ok(canonicalized) => canonicalized,
             Err(err) => panic!("{err}"),
@@ -1083,7 +1584,7 @@ impl<'a> CanonState<'a> {
     /// is deliberate: a dataset that is both inadmissible and pathologically
     /// symmetric must be refused for the reason that makes it dangerous, and it
     /// must be refused without spending the poison budget deciding so.
-    fn run_fallible(self) -> Result<Canonicalized, CanonError> {
+    fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError> {
         let canonical = self.issue_labels()?;
         let nquads = canonical.serialize_canonical();
         let labels = canonical.canonical.issued;
@@ -1092,7 +1593,7 @@ impl<'a> CanonState<'a> {
 
     /// Admit and issue labels once for both typed relabeling and canonical text.
     fn issue_labels(mut self) -> Result<Self, CanonError> {
-        if let Some(violation) = reserved_vocabulary(self.ds) {
+        if let Some(violation) = reserved_vocabulary(self.ds, self.scope) {
             return Err(CanonError::ReservedVocabulary(violation));
         }
         let blank_count = self.blanks.len();
@@ -1107,7 +1608,7 @@ impl<'a> CanonState<'a> {
 
     fn run_inner(&mut self) -> Result<(), Exhausted> {
         // §4.4 step 3: first-degree hash of every blank, grouped by hash.
-        let mut by_hash: BTreeMap<HashHex, Vec<TermId>> = BTreeMap::new();
+        let mut by_hash: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
         for &b in &self.blanks {
             let h = self.hash_first_degree(b);
             self.first_degree.insert(b, h);
@@ -1132,7 +1633,7 @@ impl<'a> CanonState<'a> {
             let group = by_hash.get(&h).expect("ambiguous hash present");
             // 5.2–5.3: for each not-yet-canonical blank, run hashNDegreeQuads against a
             // fresh temporary issuer seeded with that blank.
-            let mut hash_paths: Vec<(HashHex, IdIssuer)> = Vec::new();
+            let mut hash_paths: Vec<(HashHex, IdIssuer<D::Id>)> = Vec::new();
             for &b in group {
                 if self.canonical.has(b) {
                     continue;
@@ -1156,7 +1657,7 @@ impl<'a> CanonState<'a> {
     }
 
     /// Hash First Degree Quads (RDFC-1.0 §4.6) for blank `b`.
-    fn hash_first_degree(&self, b: TermId) -> HashHex {
+    fn hash_first_degree(&self, b: D::Id) -> HashHex {
         let render = BlankRender::FirstDegree { focus: b };
         let mut lines: Vec<String> = self
             .incident
@@ -1177,13 +1678,13 @@ impl<'a> CanonState<'a> {
     /// Hash N-Degree Quads (RDFC-1.0 §4.8): the gossip-path permutation search.
     fn hash_n_degree(
         &mut self,
-        identifier: TermId,
-        mut issuer: IdIssuer,
-    ) -> Result<(HashHex, IdIssuer), Exhausted> {
+        identifier: D::Id,
+        mut issuer: IdIssuer<D::Id>,
+    ) -> Result<(HashHex, IdIssuer<D::Id>), Exhausted> {
         self.budget = self.budget.checked_sub(1).ok_or(Exhausted)?;
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
-        let mut hn: BTreeMap<HashHex, Vec<TermId>> = BTreeMap::new();
+        let mut hn: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
         let components = self.incident.get(&identifier).cloned().unwrap_or_default();
         for comp in &components {
             self.related_blanks(*comp, identifier, &issuer, &mut |related, related_hash| {
@@ -1196,7 +1697,7 @@ impl<'a> CanonState<'a> {
         for (related_hash, related_list) in &hn {
             data_to_hash.push_str(related_hash.as_str());
             let mut chosen_path: Option<String> = None;
-            let mut chosen_issuer: Option<IdIssuer> = None;
+            let mut chosen_issuer: Option<IdIssuer<D::Id>> = None;
 
             // §4.8 step 5.4: every permutation of the related list, identity first.
             for perm in permutations(related_list) {
@@ -1207,7 +1708,7 @@ impl<'a> CanonState<'a> {
                 self.budget = self.budget.checked_sub(1).ok_or(Exhausted)?;
                 let mut issuer_copy = issuer.clone();
                 let mut path = String::new();
-                let mut recursion: Vec<TermId> = Vec::new();
+                let mut recursion: Vec<D::Id> = Vec::new();
                 let mut pruned = false;
 
                 // 5.4.4
@@ -1281,10 +1782,10 @@ impl<'a> CanonState<'a> {
     /// invoke `f(related, hash_related_blank_node(related, …))`.
     fn related_blanks(
         &self,
-        comp: Component,
-        focus: TermId,
-        issuer: &IdIssuer,
-        f: &mut impl FnMut(TermId, HashHex),
+        comp: Component<D::Id>,
+        focus: D::Id,
+        issuer: &IdIssuer<D::Id>,
+        f: &mut impl FnMut(D::Id, HashHex),
     ) {
         let (s, p, o, g) = comp.slots();
         // Standard quad positions whose blanks are "related": subject, object, graph.
@@ -1300,12 +1801,12 @@ impl<'a> CanonState<'a> {
     /// Walk a slot for related blanks, recursing triple terms with a position path.
     fn related_in_slot(
         &self,
-        slot: Slot,
+        slot: Slot<D::Id>,
         position: &str,
-        predicate: &Slot,
-        focus: TermId,
-        issuer: &IdIssuer,
-        f: &mut impl FnMut(TermId, HashHex),
+        predicate: &Slot<D::Id>,
+        focus: D::Id,
+        issuer: &IdIssuer<D::Id>,
+        f: &mut impl FnMut(D::Id, HashHex),
     ) {
         // The annotation-overlay graph marker carries a real graph term whose blanks
         // are "related" exactly like any graph-slot term.
@@ -1375,10 +1876,10 @@ impl<'a> CanonState<'a> {
     /// Hash Related Blank Node (RDFC-1.0 §4.7).
     fn hash_related_blank_node(
         &self,
-        related: TermId,
+        related: D::Id,
         position: &str,
-        predicate: &Slot,
-        issuer: &IdIssuer,
+        predicate: &Slot<D::Id>,
+        issuer: &IdIssuer<D::Id>,
     ) -> HashHex {
         let mut input = String::new();
         input.push_str(position);
@@ -1402,7 +1903,7 @@ impl<'a> CanonState<'a> {
     /// The IRI value of a predicate slot (a real IRI term or a sentinel). Borrowed
     /// from the sentinel table or the dataset arena: this sits inside Hash Related
     /// Blank Node, the innermost loop of the n-degree search, so it mints nothing.
-    fn predicate_iri(&self, predicate: &Slot) -> &str {
+    fn predicate_iri(&self, predicate: &Slot<D::Id>) -> &str {
         match predicate {
             Slot::Sentinel(iri) => iri,
             Slot::Term(id) => match self.ds.resolve(*id) {
@@ -1421,7 +1922,7 @@ impl<'a> CanonState<'a> {
             issuer: &self.canonical,
         };
         let mut lines: BTreeSet<String> = BTreeSet::new();
-        collect_components(self.ds, &mut |comp| {
+        collect_components(self.ds, self.scope, &mut |comp| {
             let mut s = String::new();
             self.write_component(comp, render, &mut s);
             lines.insert(s);
@@ -1434,7 +1935,12 @@ impl<'a> CanonState<'a> {
     }
 
     /// Write one component as a canonical N-Quads line (`s p o [g] .\n`).
-    fn write_component(&self, comp: Component, render: BlankRender<'_>, out: &mut String) {
+    fn write_component(
+        &self,
+        comp: Component<D::Id>,
+        render: BlankRender<'_, D::Id>,
+        out: &mut String,
+    ) {
         let (s, p, o, g) = comp.slots();
         self.write_slot(s, render, out);
         out.push(' ');
@@ -1448,7 +1954,7 @@ impl<'a> CanonState<'a> {
         out.push_str(" .\n");
     }
 
-    fn write_slot(&self, slot: Slot, render: BlankRender<'_>, out: &mut String) {
+    fn write_slot(&self, slot: Slot<D::Id>, render: BlankRender<'_, D::Id>, out: &mut String) {
         match slot {
             Slot::Sentinel(iri) => {
                 out.push('<');
@@ -1483,7 +1989,7 @@ impl<'a> CanonState<'a> {
     /// blank nodes that happen to live inside a literal, so two isomorphic
     /// datasets would serialize differently and the oracle would report a false
     /// negative. Every other byte of the lexical form is untouched.
-    fn write_term(&self, id: TermId, render: BlankRender<'_>, out: &mut String) {
+    fn write_term(&self, id: D::Id, render: BlankRender<'_, D::Id>, out: &mut String) {
         match self.ds.resolve(id) {
             TermRef::Iri(iri) => {
                 out.push('<');
@@ -1542,8 +2048,8 @@ impl<'a> CanonState<'a> {
     fn render_composite_lexical<'l>(
         &self,
         lexical: &'l str,
-        datatype: TermId,
-        render: BlankRender<'_>,
+        datatype: D::Id,
+        render: BlankRender<'_, D::Id>,
     ) -> std::borrow::Cow<'l, str> {
         let TermRef::Iri(iri) = self.ds.resolve(datatype) else {
             return std::borrow::Cow::Borrowed(lexical);
@@ -1553,7 +2059,10 @@ impl<'a> CanonState<'a> {
                 label,
                 crate::blank_label::LabelAlphabet::BlankNodeLabel,
             );
-            let id = self.ds.term_id_by_blank(&label, scope)?;
+            let id = self.ds.term_id_by_value(&TermValue::Blank {
+                label: label.into_owned(),
+                scope,
+            })?;
             Some(format!("_:{}", render.label(id)))
         })
     }
@@ -1705,24 +2214,28 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Reserved vocabulary: the overlay's sentinels cannot be forged from input
+    // Reserved vocabulary: the overlay's sentinels cannot be forged from input,
+    // and the overlay's OWN lowered shapes fold back instead of being refused
     // -----------------------------------------------------------------------
 
-    /// The attack the refusal rule exists to stop, built end to end.
+    /// The shape the refusal rule used to stop, and what it means now.
     ///
     /// Dataset A carries a genuine reifier, which the overlay lowers to a row spelled
-    /// `r <urn:purrdf:rdfc:reifies> <<(…)>>`. Dataset B carries no reifier at all —
-    /// it simply ASSERTS that row as an ordinary quad. Before the refusal rule the two
-    /// canonicalized to identical bytes, so a consumer minting identity from those
-    /// bytes would give a structurally different dataset the same identity.
+    /// `r <urn:purrdf:rdfc:reifies> <<(…)>>`. Dataset B carries no reifier at all — it
+    /// simply ASSERTS that row as an ordinary quad. That is not two structures sharing
+    /// one digest, it is one structure written two ways: B's quad denotes exactly the
+    /// binding A declares, so the two carry the same content and sharing a digest is
+    /// the lossless overlay working, not a collision. Canonicalization folds B's quad
+    /// back into the statement layer and the pair co-canonicalizes, byte for byte.
     ///
-    /// The assertion is deliberately two-sided. It is not enough that B is refused:
-    /// the test also builds A's canonical bytes and confirms they are exactly the ones
-    /// B would have had to produce, so it fails if the lowering is ever changed in a
-    /// way that makes the fixture stop reproducing the collision — a test that passed
-    /// because it stopped testing anything would be worse than no test.
+    /// The assertion is deliberately two-sided. It is not enough that B is admitted:
+    /// the test also confirms A's bytes still travel through the sentinel, so it fails
+    /// if the lowering is ever changed in a way that makes the fixture stop exercising
+    /// the fold at all — a test that passed because it stopped testing anything would
+    /// be worse than no test. What the refusal rule still stops — a quad that is NOT
+    /// in the emitted shape — is pinned by the twins below.
     #[test]
-    fn a_literally_asserted_sentinel_row_cannot_forge_a_reifier_structure() {
+    fn a_literally_asserted_sentinel_row_folds_into_the_reifier_it_denotes() {
         // A: a genuine reifier.
         let mut b = RdfDatasetBuilder::new();
         let (s, pred, o, r) = (
@@ -1747,22 +2260,40 @@ mod tests {
         let sentinel = b.intern_iri(SENTINEL_REIFIES);
         let triple = b.intern_triple(s, pred, o);
         b.push_quad(r, sentinel, triple, None);
-        let forged = b.freeze().expect("valid");
+        let spelled = b.freeze().expect("valid");
+        assert_eq!(
+            spelled.reifier_quads().count(),
+            0,
+            "B must carry no statement layer of its own — the quad IS the input"
+        );
 
-        // The forgery is refused, and refused for BEING a forgery attempt.
-        match try_canonicalize(&forged) {
-            Err(CanonError::ReservedVocabulary(err)) => {
-                assert_eq!(&*err.iri, SENTINEL_REIFIES);
-                assert_eq!(err.position, TermPosition::Predicate);
-            }
-            other => panic!("the forged dataset must be refused; got {other:?}"),
-        }
+        let folded = try_canonicalize(&spelled).expect("the emitted shape must fold, not refuse");
+        assert_eq!(
+            folded.nquads, lowered,
+            "the spelled row and the row it spells must canonicalize to the same bytes"
+        );
 
-        // And the collision was real: had it not been refused, these are the bytes it
-        // would have produced — byte-identical to the genuine structure's.
-        assert!(
-            lowered.contains("<urn:purrdf:rdfc:reifies>") && !lowered.is_empty(),
-            "genuine lowering: {lowered}"
+        // C: the same dataset with the row spelled BOTH ways. One row, held twice, is
+        // still one row — so the bytes may not move, and in particular the duplicate
+        // may not be counted twice.
+        let mut b = RdfDatasetBuilder::new();
+        let (s, pred, o, r) = (
+            iri(&mut b, "s"),
+            iri(&mut b, "p"),
+            iri(&mut b, "o"),
+            iri(&mut b, "r"),
+        );
+        let triple = b.intern_triple(s, pred, o);
+        let sentinel = b.intern_iri(SENTINEL_REIFIES);
+        b.push_reifier(r, triple);
+        b.push_quad(r, sentinel, triple, None);
+        let both = b.freeze().expect("valid");
+        assert_eq!(
+            try_canonicalize(&both)
+                .expect("a row spelled both ways must fold, not refuse")
+                .nquads,
+            lowered,
+            "spelling one row twice must not change the canonical form"
         );
     }
 
@@ -1798,6 +2329,16 @@ mod tests {
             TermPosition::Object,
             TermPosition::Graph,
         ] {
+            // A LONE annotation sentinel in the graph slot is the overlay's own
+            // default-graph annotation row and folds back (see the fold tests), so
+            // probing the position rule with it THERE would be probing the fold
+            // instead. Every position is still probed — this one with a reserved name
+            // the overlay does not lower into, which is the position rule itself.
+            let probe = if position == TermPosition::Graph {
+                "urn:purrdf:rdfc:not-a-sentinel"
+            } else {
+                sentinel
+            };
             let mut b = RdfDatasetBuilder::new();
             let (s, pred, o, g) = (
                 iri(&mut b, "s"),
@@ -1805,7 +2346,7 @@ mod tests {
                 iri(&mut b, "o"),
                 iri(&mut b, "g"),
             );
-            let bad = b.intern_iri(sentinel);
+            let bad = b.intern_iri(probe);
             match position {
                 TermPosition::Subject => b.push_quad(bad, pred, o, None),
                 TermPosition::Predicate => b.push_quad(s, bad, o, None),
@@ -1817,7 +2358,7 @@ mod tests {
             match try_canonicalize(&ds) {
                 Err(CanonError::ReservedVocabulary(err)) => {
                     assert_eq!(err.position, position, "position must be reported exactly");
-                    assert_eq!(&*err.iri, sentinel);
+                    assert_eq!(&*err.iri, probe);
                 }
                 other => panic!("{position:?} must be refused; got {other:?}"),
             }
@@ -1984,13 +2525,332 @@ mod tests {
         assert!(out.nquads.contains("<urn:purrdf:rdfc:annotation>"));
     }
 
+    // -----------------------------------------------------------------------
+    // Idempotence: canonicalization admits its own output and reproduces it
+    // -----------------------------------------------------------------------
+
+    /// Which way a fixture spells its RDF 1.2 statement layer.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Spelling {
+        /// The reifier and annotation rows pushed into the side tables — the dataset
+        /// a producer builds.
+        Native,
+        /// Each of those rows pushed as the plain quad its canonical line IS — the
+        /// dataset a reader of the canonical document builds.
+        Lowered,
+    }
+
+    /// A fixture carrying reifiers, an annotation and scoped blanks, in either
+    /// spelling.
+    ///
+    /// [`Spelling::Lowered`] STANDS IN FOR PARSING the canonical document back:
+    /// `purrdf-core` holds no N-Quads parser (the parsers live above this crate, so
+    /// reaching for one here would invert the dependency), and the tests below tie
+    /// the stand-in to the actual bytes rather than asserting it on trust — the
+    /// lowered form carries no statement layer at all, holds exactly one quad per
+    /// canonical line, and its terms are the ones those lines name. That is what a
+    /// faithful parse of those bytes produces, up to blank-node labels — and
+    /// canonicalization is invariant under those by construction, which
+    /// `isomorphic_blank_relabeling_is_byte_equal` pins.
+    ///
+    /// Both reifier subject shapes the lowering can emit are covered: a blank node
+    /// (default graph) and an IRI (named graph).
+    fn statement_layer_fixture(spelling: Spelling) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let (p, q, o) = (iri(&mut b, "p"), iri(&mut b, "q"), iri(&mut b, "o"));
+        let g = iri(&mut b, "g");
+        let shared = b.intern_blank("n", BlankScope::DEFAULT);
+        let scoped = b.intern_blank("n", BlankScope(4));
+        b.push_quad(shared, p, o, None);
+        b.push_quad(scoped, p, o, Some(g));
+        let triple = b.intern_triple(shared, p, o);
+        let blank_reifier = b.intern_blank("r", BlankScope(7));
+        let iri_reifier = iri(&mut b, "nr");
+        match spelling {
+            Spelling::Native => {
+                b.push_reifier_in_graph(blank_reifier, triple, None);
+                b.push_reifier_in_graph(iri_reifier, triple, Some(g));
+                b.push_annotation_in_graph(blank_reifier, q, o, None);
+            }
+            Spelling::Lowered => {
+                let reifies = b.intern_iri(SENTINEL_REIFIES);
+                let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
+                b.push_quad(blank_reifier, reifies, triple, None);
+                b.push_quad(iri_reifier, reifies, triple, Some(g));
+                b.push_quad(blank_reifier, q, o, Some(annotation));
+            }
+        }
+        b.freeze().expect("valid")
+    }
+
+    /// `canon(canon(g)) == canon(g)`, bytes and digest alike — the property whose
+    /// absence meant the canonicalizer could not read back the document it had just
+    /// written, and so could not re-derive an identity it had just minted.
+    ///
+    /// The second pass runs over the LOWERED spelling, which is the dataset those
+    /// bytes parse to; the assertions below it pin that correspondence to the bytes
+    /// themselves rather than to the fixture's good intentions.
+    #[test]
+    fn canonicalization_is_idempotent_over_its_own_output() {
+        let native = statement_layer_fixture(Spelling::Native);
+        let reread = statement_layer_fixture(Spelling::Lowered);
+
+        let first = canonicalize(&native);
+        assert!(
+            first.nquads.contains("<urn:purrdf:rdfc:reifies>")
+                && first.nquads.contains("<urn:purrdf:rdfc:annotation>")
+                && first.nquads.contains("_:c14n"),
+            "the fixture must reach both sentinels and the labeler: {}",
+            first.nquads
+        );
+
+        // The stand-in really is the document: no statement layer of its own, and one
+        // quad for every canonical line.
+        assert_eq!(reread.reifier_quads().count(), 0);
+        assert_eq!(reread.annotation_quads().count(), 0);
+        assert_eq!(
+            reread.quads().count(),
+            first.nquads.lines().count(),
+            "the re-read dataset must hold exactly the canonical document's rows"
+        );
+
+        let second = try_canonicalize(&reread).expect("the canonical document must be admissible");
+        assert_eq!(
+            second.nquads, first.nquads,
+            "canonicalizing the canonical document must reproduce it byte for byte"
+        );
+        assert_eq!(
+            ContentDigest::of(second.nquads.as_bytes()),
+            ContentDigest::of(first.nquads.as_bytes()),
+            "equal bytes must mint equal identity"
+        );
+
+        // And a THIRD pass changes nothing either — idempotence, not a one-off.
+        assert_eq!(canonicalize(&reread).nquads, second.nquads);
+    }
+
+    /// The same property through the graph-scoped entry point.
+    ///
+    /// A per-graph canonical document is graph-ERASING, so its rows come back in the
+    /// default graph — including the annotation row, whose named-graph form is the one
+    /// shape the lowering writes as a five-token line no quad can hold. Re-reading that
+    /// document and canonicalizing the whole of it must reproduce the per-graph bytes,
+    /// which is what a carrier that pins a per-graph digest re-derives.
+    #[test]
+    fn graph_scoped_canonicalization_is_idempotent_over_its_own_output() {
+        let mut b = RdfDatasetBuilder::new();
+        let (p, q, o) = (iri(&mut b, "p"), iri(&mut b, "q"), iri(&mut b, "o"));
+        let g = iri(&mut b, "g");
+        let member = b.intern_blank("m", BlankScope(2));
+        b.push_quad(member, p, o, Some(g));
+        let triple = b.intern_triple(member, p, o);
+        let reifier = iri(&mut b, "r");
+        b.push_reifier_in_graph(reifier, triple, Some(g));
+        b.push_annotation_in_graph(reifier, q, o, Some(g));
+        // A neighbouring default-graph row that the scope must not admit.
+        b.push_quad(o, p, o, None);
+        let native = b.freeze().expect("valid");
+
+        let scoped = canonicalize_graph_view(&*native, "http://example.org/g", CanonHash::Sha256);
+        assert!(
+            scoped.nquads.contains("<urn:purrdf:rdfc:reifies>")
+                && scoped.nquads.contains("<urn:purrdf:rdfc:annotation> ."),
+            "the per-graph document must carry both lowered rows, graph-erased: {}",
+            scoped.nquads
+        );
+
+        // The document, read back: every row in the default graph, the statement
+        // layer spelled as the plain quads those lines are.
+        let mut b = RdfDatasetBuilder::new();
+        let (p, q, o) = (iri(&mut b, "p"), iri(&mut b, "q"), iri(&mut b, "o"));
+        let member = b.intern_blank("m", BlankScope::DEFAULT);
+        let triple = b.intern_triple(member, p, o);
+        let reifier = iri(&mut b, "r");
+        let reifies = b.intern_iri(SENTINEL_REIFIES);
+        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
+        b.push_quad(member, p, o, None);
+        b.push_quad(reifier, reifies, triple, None);
+        b.push_quad(reifier, q, o, Some(annotation));
+        let reread = b.freeze().expect("valid");
+        assert_eq!(
+            reread.quads().count(),
+            scoped.nquads.lines().count(),
+            "the re-read dataset must hold exactly the per-graph document's rows"
+        );
+
+        assert_eq!(
+            try_canonicalize(&reread)
+                .expect("a per-graph canonical document must be admissible")
+                .nquads,
+            scoped.nquads,
+            "re-canonicalizing a per-graph document must reproduce it byte for byte"
+        );
+        assert_eq!(
+            graph_digest_view(&*native, "http://example.org/g"),
+            ContentDigest::of(
+                try_canonicalize(&reread)
+                    .expect("admissible")
+                    .nquads
+                    .as_bytes()
+            ),
+            "the per-graph digest must be re-derivable from the document it covers"
+        );
+    }
+
+    /// The soundness statement of the fold: a genuine statement-layer row and the
+    /// plain quad that spells it are the same content, so they canonicalize to the
+    /// same bytes — reifiers and annotations alike, and through every entry point.
+    #[test]
+    fn a_spelled_row_and_the_row_it_spells_canonicalize_identically() {
+        let native = statement_layer_fixture(Spelling::Native);
+        let spelled = statement_layer_fixture(Spelling::Lowered);
+
+        assert_eq!(canonicalize(&native).nquads, canonicalize(&spelled).nquads);
+        assert_eq!(
+            canonicalize_with(&native, CanonHash::Sha384).nquads,
+            canonicalize_with(&spelled, CanonHash::Sha384).nquads,
+            "the fold is in the ingestion seam, so it is hash-algorithm-independent"
+        );
+        assert_eq!(
+            canonicalize_view(&*native, CanonHash::Sha256).nquads,
+            canonicalize_view(&*spelled, CanonHash::Sha256).nquads,
+            "the view-generic entry point folds too — one seam, not two"
+        );
+        assert_eq!(
+            blank_count(&native),
+            blank_count(&spelled),
+            "the blank sweep reads the folded rows, so it agrees across spellings"
+        );
+        assert!(
+            check_admissible(&spelled).is_ok(),
+            "screening must admit exactly what canonicalization admits"
+        );
+        assert!(
+            datasets_are_byte_equal(&native, &spelled),
+            "the two spellings must be one identity"
+        );
+    }
+
+    /// Whether two datasets mint the same identity under this profile.
+    fn datasets_are_byte_equal(a: &RdfDataset, b: &RdfDataset) -> bool {
+        ContentDigest::of(canonicalize(a).nquads.as_bytes())
+            == ContentDigest::of(canonicalize(b).nquads.as_bytes())
+    }
+
+    /// The fold is SHAPE-EXACT, and these are its near misses: each differs from an
+    /// emitted shape in exactly one respect, and each must still be refused.
+    ///
+    /// This is the half of the rule that stops forgery, so it is asserted against the
+    /// neighbours rather than against a distant counterexample: a fold that were even
+    /// slightly wider would admit one of these, and admitting one of these WOULD be a
+    /// collision — none of them denotes the row it resembles.
+    #[test]
+    fn the_fold_is_shape_exact_and_its_near_misses_still_refuse() {
+        // The sentinel predicate over an object that is NOT a triple term: it denotes
+        // no reifier binding, because a reifier binds a triple term and nothing else.
+        let mut b = RdfDatasetBuilder::new();
+        let (r, o) = (iri(&mut b, "r"), iri(&mut b, "o"));
+        let reifies = b.intern_iri(SENTINEL_REIFIES);
+        b.push_quad(r, reifies, o, None);
+        let ds = b.freeze().expect("valid");
+        match try_canonicalize(&ds) {
+            Err(CanonError::ReservedVocabulary(err)) => {
+                assert_eq!(&*err.iri, SENTINEL_REIFIES);
+                assert_eq!(err.position, TermPosition::Predicate);
+            }
+            other => panic!("a non-triple object must still be refused; got {other:?}"),
+        }
+
+        // A different name in the reserved namespace as the predicate: the rule is
+        // over the namespace, and only the two lowered shapes are folded.
+        let mut b = RdfDatasetBuilder::new();
+        let (r, p, o) = (iri(&mut b, "r"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let unminted = b.intern_iri("urn:purrdf:rdfc:reifies-ish");
+        let triple = b.intern_triple(r, p, o);
+        b.push_quad(r, unminted, triple, None);
+        let ds = b.freeze().expect("valid");
+        assert!(
+            matches!(
+                try_canonicalize(&ds),
+                Err(CanonError::ReservedVocabulary(_))
+            ),
+            "only the sentinel spelling folds, not a neighbour in the namespace"
+        );
+
+        // The sentinel in OBJECT position: no lowered row ever puts it there.
+        let mut b = RdfDatasetBuilder::new();
+        let (r, p) = (iri(&mut b, "r"), iri(&mut b, "p"));
+        let reifies = b.intern_iri(SENTINEL_REIFIES);
+        b.push_quad(r, p, reifies, None);
+        let ds = b.freeze().expect("valid");
+        match try_canonicalize(&ds) {
+            Err(CanonError::ReservedVocabulary(err)) => {
+                assert_eq!(err.position, TermPosition::Object);
+            }
+            other => panic!("the sentinel in object position must refuse; got {other:?}"),
+        }
+
+        // The annotation sentinel as a PREDICATE rather than as a lone graph slot.
+        let mut b = RdfDatasetBuilder::new();
+        let (r, o) = (iri(&mut b, "r"), iri(&mut b, "o"));
+        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
+        b.push_quad(r, annotation, o, None);
+        let ds = b.freeze().expect("valid");
+        assert!(
+            matches!(
+                try_canonicalize(&ds),
+                Err(CanonError::ReservedVocabulary(_))
+            ),
+            "the annotation sentinel is a graph marker, never a predicate"
+        );
+
+        // A folded row may not smuggle a reserved IRI past the sweep in the slots the
+        // fold does NOT consume: the triple term is still swept.
+        let mut b = RdfDatasetBuilder::new();
+        let (r, p) = (iri(&mut b, "r"), iri(&mut b, "p"));
+        let reifies = b.intern_iri(SENTINEL_REIFIES);
+        let hidden = b.intern_iri("urn:purrdf:rdfc:hidden");
+        let triple = b.intern_triple(r, p, hidden);
+        b.push_quad(r, reifies, triple, None);
+        let ds = b.freeze().expect("valid");
+        match try_canonicalize(&ds) {
+            Err(CanonError::ReservedVocabulary(err)) => {
+                assert_eq!(&*err.iri, "urn:purrdf:rdfc:hidden");
+                assert_eq!(err.position, TermPosition::Object);
+            }
+            other => panic!("a reserved IRI inside a folded row must refuse; got {other:?}"),
+        }
+
+        // Same for the annotation fold's predicate and object slots.
+        let mut b = RdfDatasetBuilder::new();
+        let r = iri(&mut b, "r");
+        let annotation = b.intern_iri(SENTINEL_ANNOTATION_GRAPH);
+        let hidden = b.intern_iri("urn:purrdf:rdfc:hidden");
+        b.push_quad(r, hidden, r, Some(annotation));
+        let ds = b.freeze().expect("valid");
+        match try_canonicalize(&ds) {
+            Err(CanonError::ReservedVocabulary(err)) => {
+                assert_eq!(&*err.iri, "urn:purrdf:rdfc:hidden");
+                assert_eq!(err.position, TermPosition::Predicate);
+            }
+            other => panic!("a reserved annotation predicate must refuse; got {other:?}"),
+        }
+
+        // The neighbouring VALID case, so the refusals above are not passing by
+        // refusing everything: the emitted shapes themselves still fold.
+        assert!(
+            try_canonicalize(&statement_layer_fixture(Spelling::Lowered)).is_ok(),
+            "the exact emitted shapes must remain admissible"
+        );
+    }
+
     /// The profile identity a consumer pins is readable from the API, and the reserved
     /// namespace really is the prefix of the sentinels the overlay lowers into — the
     /// one relationship the whole refusal argument rests on.
     #[test]
     fn the_profile_identity_and_the_reserved_namespace_are_consistent() {
         assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
-        assert_eq!(CANON_PROFILE_VERSION, 1);
+        assert_eq!(CANON_PROFILE_VERSION, 2);
         assert!(SENTINEL_REIFIES.starts_with(RESERVED_NAMESPACE));
         assert!(SENTINEL_ANNOTATION_GRAPH.starts_with(RESERVED_NAMESPACE));
     }
@@ -2380,6 +3240,133 @@ mod tests {
             out.named_graphs().count() >= 1,
             "the declaration survives the rewrite"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The view seam: the flat entry points ARE the core, at `D = RdfDataset`
+    // -----------------------------------------------------------------------
+
+    /// A dataset exercising every surface the seam had to carry over: blanks in
+    /// two scopes, a quoted triple term, reifier and annotation rows in both the
+    /// default graph and a named one, and a declaration-only named graph.
+    fn seam_dataset() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let (p, q, o) = (iri(&mut b, "p"), iri(&mut b, "q"), iri(&mut b, "o"));
+        let g = iri(&mut b, "g");
+        let shared = b.intern_blank("n", BlankScope::DEFAULT);
+        let scoped = b.intern_blank("n", BlankScope(4));
+        b.push_quad(shared, p, o, None);
+        b.push_quad(shared, q, o, None);
+        b.push_quad(scoped, p, o, Some(g));
+        let triple = b.intern_triple(shared, p, o);
+        b.push_quad(scoped, q, triple, Some(g));
+        let reifier = b.intern_blank("r", BlankScope(7));
+        b.push_reifier_in_graph(reifier, triple, Some(g));
+        b.push_annotation_in_graph(reifier, q, o, Some(g));
+        let default_reifier = iri(&mut b, "dr");
+        b.push_reifier_in_graph(default_reifier, triple, None);
+        b.push_annotation_in_graph(default_reifier, q, o, None);
+        let declared_only = b.intern_blank("declared only", BlankScope(9));
+        b.declare_named_graph(declared_only);
+        b.freeze().expect("valid")
+    }
+
+    /// The `&RdfDataset` entry points are wrappers, not a second implementation:
+    /// the bytes and the issued labels must be the view core's, identically. If
+    /// they could differ, every consumer pinning the flat output would be pinning
+    /// something the view path does not reproduce.
+    #[test]
+    fn the_flat_entry_points_are_the_view_core_at_rdfdataset() {
+        let ds = seam_dataset();
+        let flat = canonicalize_with(&ds, CanonHash::Sha256);
+        let view = canonicalize_view(&*ds, CanonHash::Sha256);
+        assert_eq!(flat.nquads, view.nquads);
+        assert_eq!(flat.labels, view.labels);
+        assert!(
+            flat.nquads.contains("<urn:purrdf:rdfc:reifies>")
+                && flat.nquads.contains("<urn:purrdf:rdfc:annotation>")
+                && flat.nquads.contains("_:c14n"),
+            "the fixture must reach the overlay and the labeler: {}",
+            flat.nquads
+        );
+        // The defaulted type parameter: `Canonicalized` still names the `TermId`
+        // instantiation, so existing call sites keep their key type unchanged.
+        let flat: Canonicalized = flat;
+        let _: &BTreeMap<TermId, Box<str>> = &flat.labels;
+        // SHA-384 travels the same seam.
+        assert_eq!(
+            canonicalize_with(&ds, CanonHash::Sha384).nquads,
+            canonicalize_view(&*ds, CanonHash::Sha384).nquads
+        );
+        // And so do the screening surfaces.
+        assert_eq!(blank_count(&ds), blank_count_view(&*ds));
+        assert!(check_admissible(&ds).is_ok() && check_admissible_view(&*ds).is_ok());
+    }
+
+    /// The per-graph canonicalization is the named-graph PROJECTION's canonical
+    /// form, reached without building the projection. Both halves matter: the
+    /// bytes must match for a graph that exists, and a graph that does not exist
+    /// must canonicalize to the empty document rather than to anything else —
+    /// the flat projection route already answers that way.
+    #[test]
+    fn graph_scoped_canonicalization_matches_the_named_graph_projection() {
+        let ds = seam_dataset();
+        let graph = "http://example.org/g";
+        let projected = canonicalize(&ds.project_named_graph(graph)).nquads;
+        assert!(!projected.is_empty(), "the graph must hold content");
+        assert_eq!(
+            canonicalize_graph_view(&*ds, graph, CanonHash::Sha256).nquads,
+            projected
+        );
+        assert_eq!(
+            graph_digest_view(&*ds, graph),
+            ContentDigest::of(projected.as_bytes())
+        );
+        // The default graph's reifier over the same triple term belongs to the
+        // default graph alone, so it never reaches `<g>`'s projection.
+        assert!(
+            !projected.contains("<http://example.org/dr>"),
+            "{projected}"
+        );
+        // A graph the dataset never names selects nothing, exactly as projecting
+        // it flat does.
+        let absent = "http://example.org/no-such-graph";
+        assert_eq!(canonicalize(&ds.project_named_graph(absent)).nquads, "");
+        assert_eq!(
+            canonicalize_graph_view(&*ds, absent, CanonHash::Sha256).nquads,
+            ""
+        );
+    }
+
+    /// A reserved IRI in ONE graph refuses that graph and leaves its neighbour
+    /// admissible. The second half is the point: a per-graph digest that refused
+    /// on another graph's content would not be a function of its own graph, and a
+    /// refusal that spread would be the over-refusal mirror of a silent drop.
+    #[test]
+    fn a_graph_scoped_refusal_does_not_spread_to_a_neighbouring_graph() {
+        let mut b = RdfDatasetBuilder::new();
+        let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
+        let (dirty, clean) = (iri(&mut b, "dirty"), iri(&mut b, "clean"));
+        let bad = b.intern_iri(SENTINEL_REIFIES);
+        b.push_quad(o, bad, o, Some(dirty));
+        b.push_quad(o, p, o, Some(clean));
+        let ds = b.freeze().expect("valid");
+        assert!(matches!(
+            try_canonicalize_graph_view(&*ds, "http://example.org/dirty", CanonHash::Sha256),
+            Err(CanonError::ReservedVocabulary(_))
+        ));
+        let neighbour =
+            try_canonicalize_graph_view(&*ds, "http://example.org/clean", CanonHash::Sha256)
+                .expect("a clean graph must still canonicalize");
+        assert_eq!(
+            neighbour.nquads,
+            canonicalize(&ds.project_named_graph("http://example.org/clean")).nquads
+        );
+        // The whole dataset IS refused, because the offending row is in it.
+        assert!(matches!(
+            try_canonicalize_view(&*ds, CanonHash::Sha256),
+            Err(CanonError::ReservedVocabulary(_))
+        ));
     }
 
     #[test]

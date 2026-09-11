@@ -9,11 +9,17 @@
 //! rejecting a corrupted one (a flipped section byte, a flipped magic byte)
 //! fail-closed.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
-use purrdf_core::ir::pack::container::{PackBuilder, PackError, PackView};
+use purrdf_core::ir::pack::container::{PackBuilder, PackCheckpoint, PackError, PackView};
 use purrdf_core::ir::pack::dict::PackDictError;
-use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_core::{
+    BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView,
+    FallibleDatasetView, GraphMatch, MutableDataset, QuadIds, QuadRef, QuadValues, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef,
+    TermValue, ViewLimits, ViewOperationStatus, verify_pack,
+};
 use sha2::{Digest, Sha256};
 
 /// The committed golden fixture's path (see [`golden_bytes_match_committed_fixture`]
@@ -395,4 +401,342 @@ fn from_bytes_rejects_unsupported_version() {
 
     let err = PackView::from_bytes(&corrupted).expect_err("an unknown version must be rejected");
     assert_eq!(err, PackError::UnsupportedVersion(99));
+}
+
+// ---------------------------------------------------------------------------
+// One encoder: the flat path and the shared-view path write the same bytes
+// ---------------------------------------------------------------------------
+
+/// The view-parity fixture, optionally carrying ONE extra named-graph row so a
+/// delta that inserts exactly that row has a flat twin to be compared against.
+///
+/// It exercises everything the view path has to carry across unchanged:
+/// default-graph AND named-graph base rows, a declaration-only named graph, an
+/// explicitly scoped blank, a base-direction language-tagged literal, a quoted
+/// triple term, a reifier binding declared inside a named graph, and two
+/// annotations — one in that graph and one in the default graph.
+fn view_parity_dataset(with_addition: bool) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    b.push_quad(s, p, o, None);
+
+    let scoped = b.intern_blank("scoped", BlankScope(7));
+    let greeting = b.intern_literal(RdfLiteral {
+        direction: Some(RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("مرحبا", "ar")
+    });
+    let g = b.intern_iri("http://example.org/g");
+    b.push_quad(scoped, p, greeting, Some(g));
+
+    let triple = b.intern_triple(s, p, o);
+    let h = b.intern_iri("http://example.org/h");
+    b.push_quad(s, p, triple, Some(h));
+
+    let reifier = b.intern_blank("statement", BlankScope(9));
+    b.push_reifier_in_graph(reifier, triple, Some(g));
+    let confidence = b.intern_iri("http://example.org/confidence");
+    b.push_annotation_in_graph(reifier, confidence, greeting, Some(g));
+    b.push_annotation(reifier, confidence, o);
+
+    if with_addition {
+        let added = b.intern_iri("http://example.org/added");
+        b.push_quad(added, p, o, Some(g));
+    }
+
+    // Declared, and deliberately empty.
+    let empty = b.intern_iri("http://example.org/empty");
+    b.declare_named_graph(empty);
+
+    b.freeze()
+        .expect("the view-parity fixture is a valid dataset")
+}
+
+fn view_parity_fixture() -> Arc<RdfDataset> {
+    view_parity_dataset(false)
+}
+
+/// The graph-selection twin of [`view_parity_dataset`]: graph `g`'s COMPLETE
+/// content — its base row, the reifier declared there and the annotation
+/// asserted there — plus the declaration-only graph, and nothing else. This is
+/// the flat dataset a selection of `{g, empty}` must pack as, byte for byte.
+fn selected_graph_expectation() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    let scoped = b.intern_blank("scoped", BlankScope(7));
+    let greeting = b.intern_literal(RdfLiteral {
+        direction: Some(RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("مرحبا", "ar")
+    });
+    let g = b.intern_iri("http://example.org/g");
+    b.push_quad(scoped, p, greeting, Some(g));
+
+    let triple = b.intern_triple(s, p, o);
+    let reifier = b.intern_blank("statement", BlankScope(9));
+    b.push_reifier_in_graph(reifier, triple, Some(g));
+    let confidence = b.intern_iri("http://example.org/confidence");
+    b.push_annotation_in_graph(reifier, confidence, greeting, Some(g));
+
+    let empty = b.intern_iri("http://example.org/empty");
+    b.declare_named_graph(empty);
+
+    b.freeze()
+        .expect("the selection expectation is a valid dataset")
+}
+
+/// A composite over exactly the content a flat dataset holds writes the flat
+/// dataset's pack, byte for byte. The composition is shared-scope, so the two
+/// views are the same RDF value down to blank identity and the single encoder
+/// has no way — and no reason — to tell them apart.
+#[test]
+fn build_view_bytes_over_a_composite_equals_build_bytes_over_the_flat_dataset() {
+    let dataset = view_parity_fixture();
+    let composite =
+        CompositeDatasetView::with_shared_scopes(vec![Arc::clone(&dataset)], ViewLimits::default())
+            .expect("one shared-scope source composes");
+
+    let flat = PackBuilder::build_bytes(&dataset).expect("builds");
+    let shared = PackBuilder::build_view_bytes(&composite).expect("builds from the composite");
+    assert_eq!(
+        flat, shared,
+        "flat and composite pack bytes must be byte-identical"
+    );
+    verify_pack(&shared).expect("a composite-built pack certifies its own identity");
+}
+
+/// A delta snapshot packs as the flat dataset its effective content equals —
+/// base rows read through the shared base, the inserted row through the delta,
+/// and one encoder over both.
+#[test]
+fn build_view_bytes_over_a_delta_equals_the_flat_dataset_it_snapshots() {
+    let base = view_parity_fixture();
+    let mut mutable = MutableDataset::new(Arc::clone(&base));
+    mutable
+        .insert(QuadValues {
+            s: TermValue::iri("http://example.org/added"),
+            p: TermValue::iri("http://example.org/p"),
+            o: TermValue::iri("http://example.org/o"),
+            g: Some(TermValue::iri("http://example.org/g")),
+        })
+        .expect("a fresh IRI row inserts");
+    let delta = mutable.snapshot_view().expect("the snapshot publishes");
+
+    let expected = view_parity_dataset(true);
+    assert_eq!(
+        PackBuilder::build_view_bytes(&delta).expect("builds from the delta"),
+        PackBuilder::build_bytes(&expected).expect("builds"),
+        "delta and flat pack bytes must be byte-identical"
+    );
+}
+
+/// A SELECTION of a composite's named graphs packs as the flat dataset holding
+/// exactly those graphs: every layer — base rows, the reifier declaration, the
+/// annotation, and the declaration-only graph — is filtered by the one
+/// selection, and what survives is byte-identical to the flat twin.
+#[test]
+fn build_view_bytes_over_a_graph_selection_equals_the_equivalent_flat_dataset() {
+    let dataset = view_parity_fixture();
+    let composite = Arc::new(
+        CompositeDatasetView::with_shared_scopes(vec![Arc::clone(&dataset)], ViewLimits::default())
+            .expect("one shared-scope source composes"),
+    );
+    let selection = CompositeSource::from_selection(
+        Arc::clone(&composite),
+        [
+            TermValue::iri("http://example.org/g"),
+            TermValue::iri("http://example.org/empty"),
+        ],
+        ViewLimits::default(),
+    )
+    .expect("both named graphs are held by the composite");
+    let selected =
+        CompositeDatasetView::from_shared_sources(vec![selection], ViewLimits::default())
+            .expect("a selection composes like any other source");
+
+    assert_eq!(
+        PackBuilder::build_view_bytes(&selected).expect("builds from the selection"),
+        PackBuilder::build_bytes(&selected_graph_expectation()).expect("builds"),
+        "a packed selection must equal the packed flat projection"
+    );
+}
+
+/// The typed root cause a [`BudgetedView`] reports once its row budget is gone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProbeFault(&'static str);
+
+impl std::fmt::Display for ProbeFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for ProbeFault {}
+
+/// A view that yields `budget` rows and then faults the way an operational
+/// backend does: it STOPS YIELDING rather than erroring, so nothing about the
+/// row stream distinguishes the truncation from an honest end of stream and only
+/// the operational checkpoint can tell them apart.
+struct BudgetedView {
+    inner: Arc<RdfDataset>,
+    budget: Cell<usize>,
+    faulted: Cell<bool>,
+}
+
+impl BudgetedView {
+    fn new(inner: Arc<RdfDataset>, budget: usize) -> Self {
+        Self {
+            inner,
+            budget: Cell::new(budget),
+            faulted: Cell::new(false),
+        }
+    }
+
+    fn spend(&self) -> bool {
+        match self.budget.get().checked_sub(1) {
+            Some(left) => {
+                self.budget.set(left);
+                true
+            }
+            None => {
+                self.faulted.set(true);
+                false
+            }
+        }
+    }
+}
+
+impl DatasetView for BudgetedView {
+    type Id = TermId;
+    type ProbePlan = ();
+
+    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.inner.quads().take_while(|_| self.spend())
+    }
+
+    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
+        self.quads().map(|q| QuadRef {
+            s: self.resolve(q.s),
+            p: self.resolve(q.p),
+            o: self.resolve(q.o),
+            g: q.g.map(|g| self.resolve(g)),
+        })
+    }
+
+    fn resolve(&self, id: TermId) -> TermRef<'_> {
+        self.inner.resolve(id)
+    }
+
+    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+        self.inner.term_id_by_value(value)
+    }
+
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+    fn quads_for_pattern_with_plan(
+        &self,
+        _plan: &(),
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        self.quads_for_pattern(s, p, o, g)
+    }
+
+    fn term_count(&self) -> usize {
+        self.inner.term_count()
+    }
+
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.inner.reifier_quads()
+    }
+
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.inner.annotation_quads()
+    }
+
+    fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.inner.named_graphs()
+    }
+}
+
+impl FallibleDatasetView for BudgetedView {
+    type Error = ProbeFault;
+    type Evidence = usize;
+
+    fn operation_status(&self) -> ViewOperationStatus<ProbeFault, usize> {
+        let evidence = self.budget.get();
+        if self.faulted.get() {
+            ViewOperationStatus::Failed {
+                error: ProbeFault("the probe view exhausted its row budget"),
+                evidence,
+            }
+        } else {
+            ViewOperationStatus::Ready { evidence }
+        }
+    }
+}
+
+/// A pack is a claim about a dataset's WHOLE content, so a view that faulted
+/// while being read never yields bytes — and a view with budget to spare is not
+/// refused for keeping the same company.
+#[test]
+fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
+    let dataset = view_parity_fixture();
+    let rows = dataset.quads().count();
+    assert!(rows > 1, "the fixture has rows to truncate");
+
+    // (i) AFTER: Ready on entry, Failed once the budget ran out mid-read.
+    let truncating = BudgetedView::new(Arc::clone(&dataset), rows - 1);
+    assert!(matches!(
+        truncating.operation_status(),
+        ViewOperationStatus::Ready { .. }
+    ));
+    let err = PackBuilder::build_view_bytes(&truncating)
+        .expect_err("a truncated read must never be framed as a pack");
+    assert!(
+        matches!(
+            err,
+            PackError::ViewNotReady {
+                checkpoint: PackCheckpoint::AfterRows,
+                ..
+            }
+        ),
+        "expected an after-rows refusal, got {err:?}"
+    );
+
+    // (ii) BEFORE: a view that had already faulted is refused without reading.
+    let spent = BudgetedView::new(Arc::clone(&dataset), 0);
+    assert_eq!(spent.quads().count(), 0, "the budget is already gone");
+    let err = PackBuilder::build_view_bytes(&spent)
+        .expect_err("an already-faulted view must never be framed as a pack");
+    assert!(
+        matches!(
+            err,
+            PackError::ViewNotReady {
+                checkpoint: PackCheckpoint::BeforeRows,
+                ..
+            }
+        ),
+        "expected a before-rows refusal, got {err:?}"
+    );
+
+    // THE NEIGHBOUR: the same probe with budget to spare never faults, and its
+    // pack is the flat dataset's own bytes. Refusing this one would be exactly
+    // the over-refusal the two checkpoints must not commit.
+    let generous = BudgetedView::new(Arc::clone(&dataset), usize::MAX);
+    assert_eq!(
+        PackBuilder::build_view_bytes(&generous).expect("an intact read packs"),
+        PackBuilder::build_bytes(&dataset).expect("builds"),
+        "an intact fallible view must pack exactly as its flat source does"
+    );
 }

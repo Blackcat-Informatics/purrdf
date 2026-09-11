@@ -134,24 +134,27 @@ pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::embedding;
 pub use ir::embedding::*;
 pub use ir::{
-    BlankScope, BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION,
-    CanonError, CanonHash, CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff,
-    DatasetSink, DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH,
-    GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider,
-    MutableDataset, PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization,
-    PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap,
-    PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView,
-    PipelineBundle, PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
+    BlankScope, BudgetExceeded, BundleDigestWork, CANON_CORPUS_DIGEST, CANON_PROFILE_ID,
+    CANON_PROFILE_VERSION, CanonError, CanonHash, CanonScopeName, CanonicalRelabeling,
+    Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink, DeltaDatasetView, DeltaViewId,
+    FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary, GlobalTermId, GraphLayer,
+    GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset, PIPELINE_ROOT_DOMAIN,
+    PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagePart, PageProvider,
+    PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
+    PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle,
+    PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
     QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
     RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError, SubsetPageProvider, TermId,
-    TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonical_relabel,
-    canonical_relabel_with_mapping, canonicalize, canonicalize_with, check_admissible,
-    dataset_diff, datasets_isomorphic, deskolemize, skolemize, try_canonicalize,
-    try_canonicalize_with,
+    TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder, blank_count_view,
+    canonical_relabel, canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view,
+    canonicalize_view, canonicalize_with, check_admissible, check_admissible_view, dataset_diff,
+    datasets_isomorphic, deskolemize, graph_digest_view, skolemize, try_canonicalize,
+    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
+    try_graph_digest_view,
 };
 pub use ir::{
-    PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
-    restore_pack, verify_pack,
+    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
+    pack_digest, restore_pack, verify_pack,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,
@@ -231,6 +234,7 @@ pub mod prelude {
 }
 
 pub use ir::{
-    CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ViewLimits, ViewStats,
-    ViewWork,
+    CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, OwnerKey,
+    OwnerMutability, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
+    ScopeBinding, ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
 };

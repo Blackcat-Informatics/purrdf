@@ -58,6 +58,12 @@
 //! source dataset, on top of the per-section SHA-256 integrity `PackView::from_bytes`
 //! already enforces.
 //!
+//! [`PackBuilder::build_view_bytes`] writes the very same container from any
+//! [`crate::FallibleDatasetView`] — a composite, a delta, a graph selection over
+//! one — through the same encoder [`PackBuilder::build_bytes`] delegates to, so a
+//! stage that already holds a shared view never materializes an
+//! [`crate::RdfDataset`] just to pack it, and the bytes are identical either way.
+//!
 //! The stable consumer surface is the small set re-exported from this module:
 //! [`PackBuilder`], [`PackView`], [`restore_pack`], [`verify_pack`], and their
 //! supporting identity/error types. The encoding primitives remain doc-hidden.
@@ -80,6 +86,6 @@ pub mod view;
 #[doc(hidden)]
 pub use certify::{PackDigest, dataset_from_view, pack_digest, restore_pack, verify_pack};
 #[doc(hidden)]
-pub use container::{PackBuilder, PackError, PackView};
+pub use container::{PackBuilder, PackCheckpoint, PackError, PackView};
 #[doc(hidden)]
 pub use view::PackId;

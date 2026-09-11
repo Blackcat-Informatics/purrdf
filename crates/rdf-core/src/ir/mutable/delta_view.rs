@@ -724,6 +724,19 @@ impl DatasetView for DeltaDatasetView {
     }
 }
 
+/// A snapshot borrows two frozen dictionaries and its own copied delta — nothing
+/// it reads can fail to arrive — so every checkpoint is
+/// [`Ready`](crate::ViewOperationStatus::Ready), before and after iteration alike.
+impl crate::FallibleDatasetView for DeltaDatasetView {
+    type Error = std::convert::Infallible;
+    type Evidence = ();
+
+    #[inline]
+    fn operation_status(&self) -> crate::ViewOperationStatus<Self::Error, Self::Evidence> {
+        crate::ViewOperationStatus::Ready { evidence: () }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

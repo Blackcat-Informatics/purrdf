@@ -174,7 +174,7 @@ pub fn decode_document(
     let mut source_digest: Option<String> = None;
     let mut nodes: std::collections::BTreeMap<&str, NodeFacts> = std::collections::BTreeMap::new();
 
-    for quad in dataset.iter() {
+    for quad in dataset {
         let TermRef::Iri(subject) = quad.s else {
             continue;
         };
@@ -264,7 +264,7 @@ pub fn decode_document(
                 Some(piece) => {
                     let it = nodes
                         .get(piece.as_str())
-                        .filter(|p| mine(&p))
+                        .filter(|p| mine(p))
                         .filter(|p| p.byte_start.is_some() && p.byte_end.is_some())
                         .ok_or_else(|| DecodeError::UnknownContinuedPiece {
                             subject: (*subject).to_owned(),

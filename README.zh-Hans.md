@@ -219,9 +219,11 @@ ORDER BY ?rank
   SHA-384）。在 RDF 1.2 构造之上有两种规范形式，并以不同的名字区分：**扁平形式**
   （`canonical_flat_nquads`；CLI 的 `--canonical` 与 wasm 的 `Dataset.canonicalize()`
   所运行的形式）把具体化节点与注解改写为普通的 `rdf:reifies`/注解三元组，再在 RDFC-1.0
-  下将其规范化；而原生的 `purrdf::canonicalize` 是第一方的 **`purrdf-rdfc12` v1**
+  下将其规范化；而原生的 `purrdf::canonicalize` 是第一方的 **`purrdf-rdfc12` v2**
   profile，它改为把它们降为保留的 `urn:purrdf:rdfc:` 命名空间，并拒绝任何已经携带该
-  命名空间的输入。该 profile 只在 RDF 1.1 子集上与 RDFC-1.0 逐字节一致，对其输出计算的
+  命名空间的输入——除非其写法恰好是该 profile 自身输出所用的那两种形态，这两种形态会
+  被折回陈述层，因此对规范化文档再次规范化会逐字节返回原文。该 profile 只在 RDF 1.1
+  子集上与 RDFC-1.0 逐字节一致，对其输出计算的
   摘要不得标为 RDFC-1.0——见
   [`docs/RDF12-CANON-PROFILE.md`](./docs/RDF12-CANON-PROFILE.md)。在二者之外，还有一种
   **便于评审的规范 Turtle** 渲染（`purrdf-core` 中的 `render_canonical_turtle`、
@@ -618,7 +620,7 @@ IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `No
 | 蕴涵（OWL 2 DL 一致性） | 随库固化的 W3C OWL 2 套件 | **258 / 262** 一致，4 例入台账，0 未入台账 |
 | 蕴涵（OWL 2 RL，W3C 蕴涵测试） | 随库固化的 W3C OWL 2 蕴涵套件 | **50 / 50** 一致，0 例入账，0 未入台账——负例通道 **23 / 23**（未发现不可靠之处），正例通道 **27 / 27** |
 | RDFC-1.0 | W3C 规范化夹具 | 绿 |
-| RDF 1.2 规范化 profile（`purrdf-rdfc12` v1） | 第一方向量（`vectors/rdf12-canon/`） | **5 / 5** |
+| RDF 1.2 规范化 profile（`purrdf-rdfc12` v2） | 第一方向量（`vectors/rdf12-canon/`） | **5 / 5** |
 | GTS | 冻结的跨语言向量（`vectors/`） | **38 / 39** 逐字节折叠为其已提交的期望值，1 处入台账的分歧 |
 
 ## 能力如何增长
