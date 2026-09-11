@@ -185,3 +185,11 @@ harness = false
 # Reports both Criterion throughput and one-shot allocation count/bytes.
 name = "projections"
 harness = false
+
+[[bench]]
+# One GTS ingestion reached three ways — materialize-then-flat, straight through
+# a composite view, and through a delta-rooted one — carried to emitted bytes.
+# Prints an `observation` line per shape/variant with the accounted-byte and
+# view-work families named. Report-only; asserts no magnitude and no speedup.
+name = "gts_ingest"
+harness = false
