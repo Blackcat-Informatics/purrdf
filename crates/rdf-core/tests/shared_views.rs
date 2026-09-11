@@ -8,9 +8,10 @@ use std::sync::Arc;
 
 use purrdf_core::{
     BlankScope, CanonHash, CompositeDatasetView, CompositeSource, ContentDigest, DatasetMut,
-    DatasetView, DeltaDatasetView, GraphMatch, GraphPlacement, MutableDataset, QuadIds, QuadValues,
-    RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermRef,
-    TermValue, ViewLimits, blank_count_view, canonicalize, canonicalize_graph_view,
+    DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch, GraphMatchValue,
+    GraphPlacement, MutableDataset, QuadIds, QuadValues, RESERVED_NAMESPACE, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfTextDirection, ScopeBinding, TermRef, TermValue, ViewLimits,
+    ViewOperationStatus, blank_count_view, canonicalize, canonicalize_graph_view,
     canonicalize_view, check_admissible_view, datasets_isomorphic, graph_digest_view,
     try_canonicalize_view, try_graph_digest_view,
 };
@@ -1252,4 +1253,412 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
         CompositeDatasetView::new(vec![poisoned.freeze().unwrap()], ViewLimits::default()).unwrap();
     assert!(try_graph_digest_view(&poisoned, GRAPH).is_err());
     assert!(try_graph_digest_view(&poisoned, OTHER_GRAPH).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Appending a source says the same thing as composing the whole list at once
+// ---------------------------------------------------------------------------
+
+/// Every named graph a view addresses, as values rather than view-local handles,
+/// so two independently built views can be compared at all.
+fn graph_names<D: DatasetView>(view: &D) -> BTreeSet<TermValue> {
+    view.named_graphs().map(|id| owned(view, id)).collect()
+}
+
+/// One pattern probe expressed in term VALUES: bind each supplied value in the
+/// view under test, run the pattern, and resolve the answer back to values. A
+/// value interned nowhere matches nothing, which is an empty answer, not a skip.
+fn value_probe<D: DatasetView>(
+    view: &D,
+    s: Option<&TermValue>,
+    p: Option<&TermValue>,
+    o: Option<&TermValue>,
+    g: GraphMatchValue<'_>,
+) -> BTreeSet<Row> {
+    let bind = |value: Option<&TermValue>| match value {
+        None => Some(None),
+        Some(value) => view.term_id_by_value(value).map(Some),
+    };
+    let (Some(s), Some(p), Some(o)) = (bind(s), bind(p), bind(o)) else {
+        return BTreeSet::new();
+    };
+    let graph = match g {
+        GraphMatchValue::Any => GraphMatch::Any,
+        GraphMatchValue::Default => GraphMatch::Default,
+        GraphMatchValue::Named(value) => match view.term_id_by_value(value) {
+            Some(id) => GraphMatch::Named(id),
+            None => return BTreeSet::new(),
+        },
+    };
+    view.quads_for_pattern(s, p, o, graph)
+        .map(|q| row(view, q))
+        .collect()
+}
+
+/// Two views observed through everything a consumer can ask them: canonical
+/// identity, per-graph identity, the whole three-table surface, the named graph
+/// set, the term dictionary, every bound-axis pattern probe over every row, and
+/// the retention/work accounting.
+fn assert_same_view(left: &CompositeDatasetView, right: &CompositeDatasetView) {
+    let bytes = canonicalize_view(left, CanonHash::Sha256).nquads;
+    assert!(!bytes.is_empty(), "an empty canonical form proves nothing");
+    assert_eq!(
+        bytes,
+        canonicalize_view(right, CanonHash::Sha256).nquads,
+        "canonical bytes"
+    );
+    assert_eq!(
+        ContentDigest::of(bytes.as_bytes()),
+        ContentDigest::of(
+            canonicalize_view(right, CanonHash::Sha256)
+                .nquads
+                .as_bytes()
+        )
+    );
+
+    let graphs = graph_names(left);
+    assert_eq!(graphs, graph_names(right), "named graph set");
+    assert!(!graphs.is_empty(), "the fixture must name some graph");
+    for graph in &graphs {
+        let TermValue::Iri(iri) = graph else { continue };
+        assert_eq!(
+            graph_digest_view(left, iri),
+            graph_digest_view(right, iri),
+            "per-graph digest of {iri}"
+        );
+    }
+
+    assert_eq!(surface(left), surface(right), "three-table surface");
+    assert_eq!(left.term_count(), right.term_count(), "term count");
+    assert_eq!(
+        left.term_ids()
+            .map(|id| left.term_value(id))
+            .collect::<BTreeSet<_>>(),
+        right
+            .term_ids()
+            .map(|id| right.term_value(id))
+            .collect::<BTreeSet<_>>(),
+        "term dictionary"
+    );
+    assert_eq!(left.stats(), right.stats(), "retention and work accounting");
+
+    let rows: Vec<Row> = left.quads().map(|q| row(left, q)).collect();
+    assert!(!rows.is_empty(), "pattern probes need rows to probe with");
+    for (s, p, o, g) in &rows {
+        for mask in 0..16 {
+            let s = (mask & 1 != 0).then_some(s);
+            let p = (mask & 2 != 0).then_some(p);
+            let o = (mask & 4 != 0).then_some(o);
+            let g = if mask & 8 == 0 {
+                GraphMatchValue::Any
+            } else {
+                g.as_ref()
+                    .map_or(GraphMatchValue::Default, GraphMatchValue::Named)
+            };
+            assert_eq!(
+                value_probe(left, s, p, o, g),
+                value_probe(right, s, p, o, g),
+                "pattern probe, mask {mask}"
+            );
+        }
+    }
+}
+
+/// Three sources worth appending one at a time: a native document, a delta that
+/// never gets compacted, and a second document projected into one graph — so the
+/// appended view has to agree about placement, the derived graph dictionary and
+/// the statement layer, not only about ordinary rows.
+fn bundle_sources() -> Vec<CompositeSource> {
+    let first = identity_fixture();
+    let second = complete_source();
+    let mut mutable = MutableDataset::new(second.clone());
+    mutable
+        .insert(QuadValues::triple(iri("added"), iri("p"), iri("o")))
+        .unwrap();
+    let delta = Arc::new(mutable.snapshot_view().unwrap());
+    vec![
+        CompositeSource::new(first),
+        CompositeSource::from_delta(delta)
+            .with_graph_placement(GraphPlacement::Named(iri("delta"))),
+        CompositeSource::new(second).with_graph_placement(GraphPlacement::Default),
+    ]
+}
+
+#[test]
+fn appending_sources_one_at_a_time_composes_what_the_whole_list_composes() {
+    let sources = bundle_sources();
+    let scratch =
+        CompositeDatasetView::from_bound_sources(sources.clone(), ViewLimits::default()).unwrap();
+
+    let mut stepwise =
+        CompositeDatasetView::from_bound_sources(vec![sources[0].clone()], ViewLimits::default())
+            .unwrap();
+    for source in &sources[1..] {
+        let next = stepwise
+            .extend(source.clone(), ViewLimits::default())
+            .unwrap();
+        // Appending publishes a new view; the one appended to is untouched.
+        assert!(next.sources().len() > stepwise.sources().len());
+        stepwise = next;
+    }
+    assert_eq!(stepwise.sources().len(), sources.len());
+    assert_same_view(&scratch, &stepwise);
+    assert_probes(&stepwise);
+    assert_eq!(
+        surface(&stepwise),
+        surface(&stepwise.materialize().unwrap())
+    );
+
+    // The intermediate view stays valid and keeps saying what it said: appending
+    // to a prefix must not mutate the prefix.
+    let two =
+        CompositeDatasetView::from_bound_sources(sources[..2].to_vec(), ViewLimits::default())
+            .unwrap();
+    let appended = two
+        .extend(sources[2].clone(), ViewLimits::default())
+        .unwrap();
+    assert_same_view(&scratch, &appended);
+    assert_same_view(
+        &two,
+        &CompositeDatasetView::from_bound_sources(sources[..2].to_vec(), ViewLimits::default())
+            .unwrap(),
+    );
+
+    // Appending refuses exactly what composing from scratch refuses, and admits
+    // exactly what it admits.
+    let tight = ViewLimits {
+        max_sources: 2,
+        ..ViewLimits::default()
+    };
+    assert!(two.extend(sources[2].clone(), tight).is_err());
+    assert!(CompositeDatasetView::from_bound_sources(sources.clone(), tight).is_err());
+    assert!(
+        two.extend(sources[2].clone(), ViewLimits::default())
+            .is_ok()
+    );
+    assert!(
+        CompositeDatasetView::from_bound_sources(sources, ViewLimits::default()).is_ok(),
+        "the neighbouring admissible composition must still succeed"
+    );
+}
+
+#[test]
+fn appending_a_co_referent_source_over_a_standardized_scope_still_matches_from_scratch() {
+    // The first source's blanks are standardized onto low scope numbers; the
+    // appended one insists on keeping those very scopes. Reserving them after the
+    // fact would move every earlier renaming, so the answer must be the one the
+    // whole list produces, not the one a blind append would.
+    let source = complete_source();
+    let standardized = CompositeSource::new(source.clone());
+    let co_referent = CompositeSource::new(source).with_scope_binding(ScopeBinding::Shared);
+    let scratch = CompositeDatasetView::from_bound_sources(
+        vec![standardized.clone(), co_referent.clone()],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    let appended =
+        CompositeDatasetView::from_bound_sources(vec![standardized], ViewLimits::default())
+            .unwrap()
+            .extend(co_referent, ViewLimits::default())
+            .unwrap();
+    assert_same_view(&scratch, &appended);
+    // Co-reference was not silently granted: the two occurrences stay two.
+    assert_eq!(appended.quads().count(), 2);
+    assert_eq!(
+        blank_count_view(&appended),
+        2 * blank_count_view(&*complete_source())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Blank identity is stated per source, not chosen once for the whole composite
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_modal_constructors_are_the_endpoints_of_the_per_source_binding() {
+    let sources = bundle_sources();
+    let bind = |binding| {
+        sources
+            .iter()
+            .cloned()
+            .map(|source| source.with_scope_binding(binding))
+            .collect::<Vec<_>>()
+    };
+
+    for binding in [ScopeBinding::Independent, ScopeBinding::Shared] {
+        let legacy = if matches!(binding, ScopeBinding::Independent) {
+            CompositeDatasetView::from_sources(sources.clone(), ViewLimits::default())
+        } else {
+            CompositeDatasetView::from_shared_sources(sources.clone(), ViewLimits::default())
+        }
+        .unwrap();
+        let bound =
+            CompositeDatasetView::from_bound_sources(bind(binding), ViewLimits::default()).unwrap();
+        assert_same_view(&legacy, &bound);
+        assert_eq!(legacy.sources()[0].scope_binding(), binding);
+    }
+
+    // Both modal constructors OVERRIDE whatever binding their sources carried —
+    // that is what makes them modal — so the same list handed to each still
+    // separates or collapses by the constructor, never by the source.
+    let source = complete_source();
+    let marked = vec![
+        CompositeSource::new(source.clone()).with_scope_binding(ScopeBinding::Shared),
+        CompositeSource::new(source.clone()).with_scope_binding(ScopeBinding::Shared),
+    ];
+    assert_eq!(
+        CompositeDatasetView::from_sources(marked.clone(), ViewLimits::default())
+            .unwrap()
+            .quads()
+            .count(),
+        2
+    );
+    assert_eq!(
+        CompositeDatasetView::from_shared_sources(marked, ViewLimits::default())
+            .unwrap()
+            .quads()
+            .count(),
+        1
+    );
+    let unmarked = vec![
+        CompositeSource::new(source.clone()),
+        CompositeSource::new(source),
+    ];
+    assert_eq!(
+        CompositeDatasetView::from_shared_sources(unmarked, ViewLimits::default())
+            .unwrap()
+            .quads()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart() {
+    let base = identity_fixture();
+    let delta = Arc::new(delta_of(&base));
+    let alone = canonicalize_view(&*base, CanonHash::Sha256).nquads;
+
+    // The reference for "two independent occurrences": the flat dataset built by
+    // appending the source to itself.
+    let mut doubled = RdfDatasetBuilder::new();
+    doubled.push_dataset(&base);
+    doubled.push_dataset(&base);
+    let doubled = canonicalize(&doubled.freeze().unwrap()).nquads;
+    assert_ne!(alone, doubled, "the fixture must carry blanks to separate");
+
+    let native = |binding| CompositeSource::new(base.clone()).with_scope_binding(binding);
+    let snapshot = |binding| CompositeSource::from_delta(delta.clone()).with_scope_binding(binding);
+
+    // A delta that co-refers with its base contributes no second copy of anything.
+    let co_referent = CompositeDatasetView::from_bound_sources(
+        vec![native(ScopeBinding::Shared), snapshot(ScopeBinding::Shared)],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        canonicalize_view(&co_referent, CanonHash::Sha256).nquads,
+        alone
+    );
+
+    // The same two sources standardized apart are two occurrences instead.
+    let apart = CompositeDatasetView::from_bound_sources(
+        vec![
+            native(ScopeBinding::Independent),
+            snapshot(ScopeBinding::Independent),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(canonicalize_view(&apart, CanonHash::Sha256).nquads, doubled);
+
+    // THE MIXED CASE: the delta co-refers with its base, and a third contribution
+    // parsed on its own does not. The composite must hold exactly two occurrences
+    // — not one (which would mean the third source collapsed) and not three
+    // (which would mean the delta did not co-refer).
+    let mixed = CompositeDatasetView::from_bound_sources(
+        vec![
+            native(ScopeBinding::Shared),
+            snapshot(ScopeBinding::Shared),
+            native(ScopeBinding::Independent),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    let mixed_bytes = canonicalize_view(&mixed, CanonHash::Sha256).nquads;
+    assert_eq!(mixed_bytes, doubled, "co-referent pair plus one occurrence");
+    assert_ne!(
+        mixed_bytes, alone,
+        "the independent source must not collapse"
+    );
+    assert_eq!(blank_count_view(&mixed), 2 * blank_count_view(&*base));
+    assert_probes(&mixed);
+
+    // Declaring that third source co-referent too collapses the composite back to
+    // one occurrence — the separation was the binding's doing, nothing else's.
+    let all_shared = CompositeDatasetView::from_bound_sources(
+        vec![
+            native(ScopeBinding::Shared),
+            snapshot(ScopeBinding::Shared),
+            native(ScopeBinding::Shared),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        canonicalize_view(&all_shared, CanonHash::Sha256).nquads,
+        alone
+    );
+
+    // And the mixed composite is reached by appending, too.
+    let appended = CompositeDatasetView::from_bound_sources(
+        vec![native(ScopeBinding::Shared), snapshot(ScopeBinding::Shared)],
+        ViewLimits::default(),
+    )
+    .unwrap()
+    .extend(native(ScopeBinding::Independent), ViewLimits::default())
+    .unwrap();
+    assert_same_view(&mixed, &appended);
+    assert_eq!(surface(&mixed), surface(&mixed.materialize().unwrap()));
+}
+
+// ---------------------------------------------------------------------------
+// The infallible views answer the operational checkpoint an engine samples
+// ---------------------------------------------------------------------------
+
+/// A view that cannot fault reports `Ready` at BOTH checkpoints an execution
+/// boundary samples: before evaluation, and after every accessor has been drained.
+fn assert_always_ready<D: FallibleDatasetView<Evidence = ()>>(view: &D, name: &str) {
+    assert!(
+        matches!(view.operation_status(), ViewOperationStatus::Ready { .. }),
+        "{name} before iteration"
+    );
+    let drained = view.quads().count()
+        + view.quad_refs().count()
+        + view.reifier_quads().count()
+        + view.annotation_quads().count()
+        + view.named_graphs().count()
+        + view
+            .quads_for_pattern(None, None, None, GraphMatch::Any)
+            .count();
+    assert!(drained > 0, "{name} must actually have been read");
+    match view.operation_status() {
+        ViewOperationStatus::Ready { evidence } => assert_eq!(evidence, ()),
+        ViewOperationStatus::Failed { .. } => panic!("{name} after full iteration"),
+    }
+}
+
+#[test]
+fn infallible_views_certify_ready_before_and_after_a_full_read() {
+    let flat = identity_fixture();
+    let composite =
+        CompositeDatasetView::from_bound_sources(bundle_sources(), ViewLimits::default()).unwrap();
+    let delta = delta_of(&flat);
+
+    assert_always_ready(&*flat, "frozen dataset");
+    assert_always_ready(&composite, "composite view");
+    assert_always_ready(&delta, "delta snapshot");
+    // The shared-handle blanket impl forwards rather than defaulting.
+    assert_always_ready(&flat, "shared frozen dataset");
+    assert_always_ready(&Arc::new(delta_of(&flat)), "shared delta snapshot");
 }

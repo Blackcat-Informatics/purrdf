@@ -93,5 +93,7 @@ pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundle
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, TermId, TermValue};
 
-pub use composite::{CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement};
+pub use composite::{
+    CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,
+};
 pub use view_accounting::{ViewLimits, ViewStats, ViewWork};

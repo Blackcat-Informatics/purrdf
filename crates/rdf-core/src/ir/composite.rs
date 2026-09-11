@@ -68,17 +68,35 @@ pub enum GraphPlacement {
     Named(TermValue),
 }
 
+/// How one source's blank node scopes bind to the composite's blank identity space.
+///
+/// Blank node identity is scoped, never global: the same label in two documents
+/// names two different nodes unless a caller states otherwise. The binding is that
+/// statement, made per source, so one composite can hold a delta that co-refers
+/// with its own base beside an independently parsed contribution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ScopeBinding {
+    /// Standardize this source's blank scopes apart from every other source.
+    #[default]
+    Independent,
+    /// Retain the supplied blank scopes. Equal label and scope name one node,
+    /// whichever co-referent source contributed the occurrence.
+    Shared,
+}
+
 #[derive(Debug, Clone)]
 enum Carrier {
     Native(Arc<RdfDataset>),
     Delta(Arc<DeltaDatasetView>),
 }
 
-/// One retained immutable source and its explicit graph placement.
+/// One retained immutable source with its explicit graph placement and blank
+/// scope binding.
 #[derive(Debug, Clone)]
 pub struct CompositeSource {
     carrier: Carrier,
     placement: GraphPlacement,
+    binding: ScopeBinding,
     literals: Arc<ReboundLiterals>,
 }
 
@@ -89,6 +107,7 @@ impl CompositeSource {
         Self {
             carrier: Carrier::Native(dataset),
             placement: GraphPlacement::Preserve,
+            binding: ScopeBinding::Independent,
             literals: Arc::default(),
         }
     }
@@ -98,6 +117,7 @@ impl CompositeSource {
         Self {
             carrier: Carrier::Delta(view),
             placement: GraphPlacement::Preserve,
+            binding: ScopeBinding::Independent,
             literals: Arc::default(),
         }
     }
@@ -106,6 +126,18 @@ impl CompositeSource {
     pub fn with_graph_placement(mut self, placement: GraphPlacement) -> Self {
         self.placement = placement;
         self
+    }
+    /// Select whether this source's blank scopes are standardized apart or
+    /// co-referent with the composite's base blank identity space.
+    #[must_use]
+    pub fn with_scope_binding(mut self, binding: ScopeBinding) -> Self {
+        self.binding = binding;
+        self
+    }
+    /// The blank scope binding this source contributes under.
+    #[must_use]
+    pub const fn scope_binding(&self) -> ScopeBinding {
+        self.binding
     }
     /// Original native source, including source-owned sidecars, when applicable.
     #[must_use]
@@ -473,14 +505,30 @@ impl ViewTermId for CompositeViewId {
 #[derive(Debug, Clone)]
 pub struct CompositeDatasetView {
     sources: Arc<[CompositeSource]>,
-    mappings: Arc<[FastMap<LocalId, CompositeViewId>]>,
-    reverse: Arc<[FastMap<CompositeViewId, LocalId>]>,
+    mappings: Arc<[Arc<AliasMap>]>,
+    reverse: Arc<[Arc<ReverseMap>]>,
     scopes: Arc<[BTreeMap<BlankScope, BlankScope>]>,
     placement: Arc<[SourceGraph]>,
+    prefix: PrefixState,
     user_sources: usize,
     unique_terms: usize,
     stats: ViewStats,
     work: Arc<WorkCounter>,
+}
+
+/// Everything an appended source needs of the sources already composed: which
+/// blank scopes are spoken for, how far the standardizing counter has walked, and
+/// the accounting owed by the user sources alone. The derived graph dictionary is
+/// deliberately absent — it is rebuilt from the full placement list every time, so
+/// its retention is never charged twice.
+#[derive(Debug, Clone)]
+struct PrefixState {
+    reserved: Arc<BTreeSet<BlankScope>>,
+    assigned: Arc<BTreeSet<BlankScope>>,
+    next: u32,
+    stats: ViewStats,
+    work: ViewWork,
+    unique_terms: usize,
 }
 
 impl CompositeDatasetView {
@@ -512,7 +560,7 @@ impl CompositeDatasetView {
         sources: Vec<CompositeSource>,
         limits: ViewLimits,
     ) -> Result<Self, RdfDiagnostic> {
-        Self::build(sources, limits, true)
+        Self::from_bound_sources(rebind(sources, ScopeBinding::Independent), limits)
     }
     /// Compose source contributions in an explicitly shared blank identity space.
     /// # Errors
@@ -521,64 +569,91 @@ impl CompositeDatasetView {
         sources: Vec<CompositeSource>,
         limits: ViewLimits,
     ) -> Result<Self, RdfDiagnostic> {
-        Self::build(sources, limits, false)
+        Self::from_bound_sources(rebind(sources, ScopeBinding::Shared), limits)
+    }
+    /// Compose sources that each state their own blank scope binding.
+    ///
+    /// This is the general form the two modal constructors are endpoints of:
+    /// [`from_sources`](Self::from_sources) declares every source
+    /// [`Independent`](ScopeBinding::Independent) and
+    /// [`from_shared_sources`](Self::from_shared_sources) declares every source
+    /// [`Shared`](ScopeBinding::Shared), overriding whatever binding the supplied
+    /// sources carried. Mixed lists are the point: a delta may co-refer with the
+    /// base it branched from while a third contribution stays standardized apart.
+    ///
+    /// A shared source's supplied scopes are reserved before any standardization
+    /// runs, so an independent source is never renamed *onto* a co-referent scope.
+    ///
+    /// # Errors
+    /// Refuses invalid graph names, exhausted scope IDs or retention ceilings.
+    pub fn from_bound_sources(
+        sources: Vec<CompositeSource>,
+        limits: ViewLimits,
+    ) -> Result<Self, RdfDiagnostic> {
+        let blanks: Vec<BTreeSet<BlankScope>> =
+            sources.iter().map(CompositeSource::blank_scopes).collect();
+        let mut prefix = Prefix::default();
+        for (source, blank) in sources.iter().zip(&blanks) {
+            prefix.reserved.extend(reservations(source, blank));
+        }
+        for (source, blank) in sources.into_iter().zip(blanks) {
+            prefix.append(source, blank, limits)?;
+        }
+        prefix.assemble(limits)
     }
 
-    fn build(
-        mut sources: Vec<CompositeSource>,
+    /// Compose one more source onto this view, aliasing only the new contribution
+    /// against the identity space the retained sources already agreed on.
+    ///
+    /// The result is the view [`from_bound_sources`](Self::from_bound_sources)
+    /// would have built from this view's sources followed by `source`: the same
+    /// rows, the same canonical identity, the same named graphs and the same
+    /// retention accounting. What differs is the work: composing from scratch
+    /// aliases every source against every earlier one, while appending aliases
+    /// only `source`, so accumulating a bundle one contribution at a time costs
+    /// what the contributions cost rather than what the bundle costs squared.
+    ///
+    /// Appending does not mutate this view; both remain usable and independent.
+    ///
+    /// # Errors
+    /// Refuses invalid graph names, exhausted scope IDs or retention ceilings —
+    /// the same refusals, with the same diagnostics, as composing from scratch.
+    pub fn extend(
+        &self,
+        source: CompositeSource,
         limits: ViewLimits,
-        independent: bool,
     ) -> Result<Self, RdfDiagnostic> {
-        let user_sources = sources.len();
-        let (mut stats, graph_ids, graph_count) = prepare_sources(&mut sources, limits)?;
-        let mut construction_work = ViewWork::default();
-        let scopes = bind_scopes(
-            &mut sources,
-            user_sources,
-            independent,
-            &mut stats,
-            &mut construction_work,
-            limits,
-        )?;
-        let (mappings, reverse) = build_aliases(&sources, &scopes, &mut construction_work)?;
-        let mut view = Self {
-            sources: sources.into(),
-            mappings: mappings.into(),
-            reverse: reverse.into(),
-            scopes: scopes.into(),
-            placement: vec![SourceGraph::Preserve; user_sources + usize::from(graph_count > 0)]
-                .into(),
-            user_sources,
-            unique_terms: 0,
-            stats,
-            work: Arc::default(),
-        };
-        let mut placement = Vec::with_capacity(view.sources.len());
-        for (index, source) in view.sources.iter().enumerate() {
-            placement.push(match &source.placement {
-                GraphPlacement::Preserve => SourceGraph::Preserve,
-                GraphPlacement::Default => SourceGraph::Replace(None),
-                GraphPlacement::Named(_) => SourceGraph::Replace(Some(view.map_id(
-                    user_sources,
-                    LocalId::Base(graph_ids[index].expect("named placement has a graph ID")),
-                ))),
-            });
+        let blank = source.blank_scopes();
+        // Reserving a scope that standardization already handed out would shift
+        // every earlier renaming, so the incremental prefix no longer describes
+        // the composition being asked for. Recompose instead of answering wrongly.
+        if self
+            .prefix
+            .assigned
+            .is_disjoint(&reservations(&source, &blank))
+        {
+            let mut prefix = self.retained_prefix();
+            prefix.append(source, blank, limits)?;
+            return prefix.assemble(limits);
         }
-        view.placement = placement.into();
-        view.unique_terms = view.term_ids().count();
-        view.work.add(construction_work);
-        if graph_count > 0 {
-            view.work.add(ViewWork {
-                copied_terms: view.sources[user_sources].term_count(),
-                copied_text_bytes: view.sources[user_sources]
-                    .native()
-                    .expect("graph dictionary")
-                    .rdf_text_bytes(),
-                freezes: 1,
-                ..ViewWork::default()
-            });
+        let mut sources = self.sources().to_vec();
+        sources.push(source);
+        Self::from_bound_sources(sources, limits)
+    }
+
+    fn retained_prefix(&self) -> Prefix {
+        Prefix {
+            sources: self.sources[..self.user_sources].to_vec(),
+            scopes: self.scopes[..self.user_sources].to_vec(),
+            mappings: self.mappings[..self.user_sources].to_vec(),
+            reverse: self.reverse[..self.user_sources].to_vec(),
+            reserved: (*self.prefix.reserved).clone(),
+            assigned: (*self.prefix.assigned).clone(),
+            next: self.prefix.next,
+            stats: self.prefix.stats,
+            work: self.prefix.work,
+            unique_terms: self.prefix.unique_terms,
         }
-        Ok(view)
     }
 
     /// The retained user sources, including their sidecar owners and placement.
@@ -780,217 +855,337 @@ impl CompositeDatasetView {
     }
 }
 
-fn prepare_sources(
-    sources: &mut Vec<CompositeSource>,
-    limits: ViewLimits,
-) -> Result<(ViewStats, Vec<Option<TermId>>, usize), RdfDiagnostic> {
-    let mut stats = ViewStats::default();
-    for source in sources.iter() {
-        source.retain(&mut stats);
+type AliasMap = FastMap<LocalId, CompositeViewId>;
+type ReverseMap = FastMap<CompositeViewId, LocalId>;
+
+/// Per-source retained bookkeeping: the source handle, both alias maps, the scope
+/// map, the resolved placement and the derived graph handle.
+fn source_bookkeeping_bytes() -> usize {
+    size_of::<CompositeSource>()
+        + 2 * size_of::<AliasMap>()
+        + size_of::<BTreeMap<BlankScope, BlankScope>>()
+        + size_of::<SourceGraph>()
+        + size_of::<Option<TermId>>()
+}
+
+/// Two retained alias maps plus one temporary recursive lookup map, each charged
+/// at four times its payload for hash-table slack.
+fn alias_term_bytes() -> usize {
+    4 * (2 * size_of::<(LocalId, CompositeViewId)>() + size_of::<(LocalId, Option<LocalId>)>())
+}
+
+fn rebind(sources: Vec<CompositeSource>, binding: ScopeBinding) -> Vec<CompositeSource> {
+    sources
+        .into_iter()
+        .map(|source| source.with_scope_binding(binding))
+        .collect()
+}
+
+/// The scopes one source forbids standardization from handing out: a caller-supplied
+/// blank graph name keeps its own scope, and a co-referent source keeps all of them.
+fn reservations(source: &CompositeSource, blank: &BTreeSet<BlankScope>) -> BTreeSet<BlankScope> {
+    let mut reserved = BTreeSet::new();
+    if let GraphPlacement::Named(TermValue::Blank { scope, .. }) = &source.placement {
+        reserved.insert(*scope);
+    }
+    if matches!(source.binding, ScopeBinding::Shared) {
+        reserved.extend(blank.iter().copied());
+    }
+    reserved
+}
+
+/// The user-source half of a composition, in the order the sources were supplied.
+/// Composing from scratch appends every source to an empty prefix; extending an
+/// existing view appends one source to the prefix that view retained.
+#[derive(Debug, Default)]
+struct Prefix {
+    sources: Vec<CompositeSource>,
+    scopes: Vec<BTreeMap<BlankScope, BlankScope>>,
+    mappings: Vec<Arc<AliasMap>>,
+    reverse: Vec<Arc<ReverseMap>>,
+    reserved: BTreeSet<BlankScope>,
+    assigned: BTreeSet<BlankScope>,
+    next: u32,
+    stats: ViewStats,
+    work: ViewWork,
+    unique_terms: usize,
+}
+
+impl Prefix {
+    fn append(
+        &mut self,
+        mut source: CompositeSource,
+        blank: BTreeSet<BlankScope>,
+        limits: ViewLimits,
+    ) -> Result<(), RdfDiagnostic> {
+        let index = self.sources.len();
+        source.retain(&mut self.stats);
         let graph_bytes = match &source.placement {
             GraphPlacement::Named(TermValue::Iri(iri)) => iri.len(),
             GraphPlacement::Named(TermValue::Blank { label, .. }) => label.len(),
             _ => 0,
         };
-        stats.auxiliary_bytes = stats
+        self.stats.auxiliary_bytes = self
+            .stats
             .auxiliary_bytes
             .saturating_add(graph_bytes)
-            .saturating_add(
-                size_of::<CompositeSource>()
-                    + 2 * size_of::<FastMap<LocalId, CompositeViewId>>()
-                    + size_of::<BTreeMap<BlankScope, BlankScope>>()
-                    + size_of::<SourceGraph>()
-                    + size_of::<Option<TermId>>(),
-            );
-    }
-    // Conservative construction + retained bookkeeping admission, before maps.
-    let alias_terms = sources
-        .iter()
-        .skip(1)
-        .fold(0_usize, |n, s| n.saturating_add(s.term_count()));
-    // Two retained maps plus one temporary recursive lookup map. The first
-    // source uses identity translation and has no term-sized alias map.
-    stats.auxiliary_bytes = stats
-        .auxiliary_bytes
-        .saturating_add(alias_terms.saturating_mul(
-            4 * (2 * size_of::<(LocalId, CompositeViewId)>()
-                + size_of::<(LocalId, Option<LocalId>)>()),
-        ));
-    limits.check(&stats)?;
-    let mut graph_builder = RdfDatasetBuilder::new();
-    let mut graph_ids = Vec::with_capacity(sources.len());
-    let mut graph_count = 0;
-    for source in sources.iter() {
-        let id = match &source.placement {
-            GraphPlacement::Named(TermValue::Iri(iri)) => Some(graph_builder.intern_iri(iri)),
-            GraphPlacement::Named(TermValue::Blank { label, scope }) => {
-                Some(graph_builder.intern_blank(label, *scope))
-            }
-            GraphPlacement::Named(_) => {
-                return Err(RdfDiagnostic::error(
-                    "view-graph-name",
-                    "view graph placement requires an IRI or blank node",
-                ));
-            }
-            _ => None,
-        };
-        if let Some(id) = id {
-            graph_builder.declare_named_graph(id);
-            graph_count += 1;
+            .saturating_add(source_bookkeeping_bytes());
+        if index > 0 {
+            // The first source uses identity translation and owns no alias map.
+            self.stats.auxiliary_bytes = self
+                .stats
+                .auxiliary_bytes
+                .saturating_add(source.term_count().saturating_mul(alias_term_bytes()));
         }
-        graph_ids.push(id);
-    }
-    if graph_count > 0 {
-        let graphs = graph_builder.freeze()?;
-        stats.retain(&graphs);
-        stats.auxiliary_bytes = stats
-            .auxiliary_bytes
-            .saturating_add(graphs.term_count().saturating_mul(
-                4 * (2 * size_of::<(LocalId, CompositeViewId)>()
-                    + size_of::<(LocalId, Option<LocalId>)>()),
-            ))
-            .saturating_add(size_of::<CompositeSource>());
-        sources.push(CompositeSource::new(graphs));
-        limits.check(&stats)?;
-    }
-    Ok((stats, graph_ids, graph_count))
-}
+        limits.check(&self.stats)?;
 
-fn bind_scopes(
-    sources: &mut [CompositeSource],
-    user_sources: usize,
-    independent: bool,
-    stats: &mut ViewStats,
-    construction_work: &mut ViewWork,
-    limits: ViewLimits,
-) -> Result<Vec<BTreeMap<BlankScope, BlankScope>>, RdfDiagnostic> {
-    let mut scopes = Vec::with_capacity(sources.len());
-    let mut used = BTreeSet::new();
-    // Caller-supplied graph names retain their own scope. Reserve those scopes.
-    for source in &sources[..user_sources] {
-        if let GraphPlacement::Named(TermValue::Blank { scope, .. }) = &source.placement {
-            used.insert(*scope);
-        }
-    }
-    let mut next = 0_u32;
-    for (index, source) in sources.iter().enumerate() {
-        let original = source.blank_scopes();
+        self.reserved.extend(reservations(&source, &blank));
+        let shared = matches!(source.binding, ScopeBinding::Shared);
         let mut mapping = BTreeMap::new();
-        for scope in original {
-            let mapped = if !independent || index == user_sources {
+        for scope in blank {
+            let mapped = if shared {
                 scope
             } else {
-                while used.contains(&BlankScope(next)) {
-                    next = next.checked_add(1).ok_or_else(|| {
+                while self.reserved.contains(&BlankScope(self.next)) {
+                    self.next = self.next.checked_add(1).ok_or_else(|| {
                         RdfDiagnostic::error(
                             "view-blank-scope",
                             "composite blank scope space exhausted",
                         )
                     })?;
                 }
-                let mapped = BlankScope(next);
-                used.insert(mapped);
+                let mapped = BlankScope(self.next);
+                self.reserved.insert(mapped);
+                self.assigned.insert(mapped);
                 mapped
             };
             mapping.insert(scope, mapped);
         }
-        stats.auxiliary_bytes = stats.auxiliary_bytes.saturating_add(
+        self.stats.auxiliary_bytes = self.stats.auxiliary_bytes.saturating_add(
             mapping
                 .len()
                 .saturating_mul(8 * size_of::<(BlankScope, BlankScope)>()),
         );
-        limits.check(stats)?;
-        construction_work.copied_index_bytes +=
-            mapping.len() * size_of::<(BlankScope, BlankScope)>();
-        scopes.push(mapping);
-    }
-    for (index, source) in sources.iter_mut().enumerate() {
-        let work = source.rebind_literals(&scopes[index]);
-        stats.auxiliary_bytes = stats
+        limits.check(&self.stats)?;
+        self.work.copied_index_bytes += mapping.len() * size_of::<(BlankScope, BlankScope)>();
+
+        let work = source.rebind_literals(&mapping);
+        self.stats.auxiliary_bytes = self
+            .stats
             .auxiliary_bytes
             .saturating_add(work.copied_text_bytes)
             .saturating_add(work.copied_index_bytes.saturating_mul(4));
-        limits.check(stats)?;
-        construction_work.copied_terms += work.copied_terms;
-        construction_work.copied_text_bytes += work.copied_text_bytes;
-        construction_work.copied_index_bytes += work.copied_index_bytes;
+        limits.check(&self.stats)?;
+        self.work.copied_terms += work.copied_terms;
+        self.work.copied_text_bytes += work.copied_text_bytes;
+        self.work.copied_index_bytes += work.copied_index_bytes;
+
+        self.sources.push(source);
+        self.scopes.push(mapping);
+        self.unique_terms += alias_last(
+            &self.sources,
+            &self.scopes,
+            &mut self.mappings,
+            &mut self.reverse,
+            &mut self.work,
+        )?;
+        Ok(())
     }
-    Ok(scopes)
+
+    fn assemble(self, limits: ViewLimits) -> Result<CompositeDatasetView, RdfDiagnostic> {
+        let Self {
+            mut sources,
+            mut scopes,
+            mut mappings,
+            mut reverse,
+            reserved,
+            assigned,
+            next,
+            stats: base_stats,
+            work: base_work,
+            unique_terms: base_unique_terms,
+        } = self;
+        let user_sources = sources.len();
+        let mut graph_builder = RdfDatasetBuilder::new();
+        let mut graph_ids = Vec::with_capacity(user_sources);
+        let mut graph_count = 0_usize;
+        for source in &sources {
+            let id = match &source.placement {
+                GraphPlacement::Named(TermValue::Iri(iri)) => Some(graph_builder.intern_iri(iri)),
+                GraphPlacement::Named(TermValue::Blank { label, scope }) => {
+                    Some(graph_builder.intern_blank(label, *scope))
+                }
+                GraphPlacement::Named(_) => {
+                    return Err(RdfDiagnostic::error(
+                        "view-graph-name",
+                        "view graph placement requires an IRI or blank node",
+                    ));
+                }
+                _ => None,
+            };
+            if let Some(id) = id {
+                graph_builder.declare_named_graph(id);
+                graph_count += 1;
+            }
+            graph_ids.push(id);
+        }
+        let mut stats = base_stats;
+        let mut work = base_work;
+        let mut unique_terms = base_unique_terms;
+        if graph_count > 0 {
+            let graphs = graph_builder.freeze()?;
+            stats.retain(&graphs);
+            stats.auxiliary_bytes = stats
+                .auxiliary_bytes
+                .saturating_add(graphs.term_count().saturating_mul(alias_term_bytes()))
+                .saturating_add(size_of::<CompositeSource>());
+            limits.check(&stats)?;
+            // The derived dictionary owns the caller's own graph names, so its
+            // scopes are the supplied ones verbatim — already reserved above.
+            let dictionary = CompositeSource::new(graphs).with_scope_binding(ScopeBinding::Shared);
+            let mapping: BTreeMap<_, _> = dictionary
+                .blank_scopes()
+                .into_iter()
+                .map(|scope| (scope, scope))
+                .collect();
+            stats.auxiliary_bytes = stats.auxiliary_bytes.saturating_add(
+                mapping
+                    .len()
+                    .saturating_mul(8 * size_of::<(BlankScope, BlankScope)>()),
+            );
+            limits.check(&stats)?;
+            work.copied_index_bytes += mapping.len() * size_of::<(BlankScope, BlankScope)>();
+            sources.push(dictionary);
+            scopes.push(mapping);
+            unique_terms += alias_last(&sources, &scopes, &mut mappings, &mut reverse, &mut work)?;
+        }
+        let mut view = CompositeDatasetView {
+            sources: sources.into(),
+            mappings: mappings.into(),
+            reverse: reverse.into(),
+            scopes: scopes.into(),
+            placement: vec![SourceGraph::Preserve; user_sources + usize::from(graph_count > 0)]
+                .into(),
+            prefix: PrefixState {
+                reserved: Arc::new(reserved),
+                assigned: Arc::new(assigned),
+                next,
+                stats: base_stats,
+                work: base_work,
+                unique_terms: base_unique_terms,
+            },
+            user_sources,
+            unique_terms,
+            stats,
+            work: Arc::default(),
+        };
+        let mut placement = Vec::with_capacity(view.sources.len());
+        for (index, source) in view.sources.iter().enumerate() {
+            placement.push(match &source.placement {
+                GraphPlacement::Preserve => SourceGraph::Preserve,
+                GraphPlacement::Default => SourceGraph::Replace(None),
+                GraphPlacement::Named(_) => SourceGraph::Replace(Some(view.map_id(
+                    user_sources,
+                    LocalId::Base(graph_ids[index].expect("named placement has a graph ID")),
+                ))),
+            });
+        }
+        view.placement = placement.into();
+        view.work.add(work);
+        if graph_count > 0 {
+            view.work.add(ViewWork {
+                copied_terms: view.sources[user_sources].term_count(),
+                copied_text_bytes: view.sources[user_sources]
+                    .native()
+                    .expect("graph dictionary")
+                    .rdf_text_bytes(),
+                freezes: 1,
+                ..ViewWork::default()
+            });
+        }
+        Ok(view)
+    }
 }
 
-type AliasMaps = (
-    Vec<FastMap<LocalId, CompositeViewId>>,
-    Vec<FastMap<CompositeViewId, LocalId>>,
-);
-
-fn build_aliases(
+/// Alias the last pushed source against every source composed before it, and
+/// report how many of its terms stay canonical in their own right.
+fn alias_last(
     sources: &[CompositeSource],
     scopes: &[BTreeMap<BlankScope, BlankScope>],
-    construction_work: &mut ViewWork,
-) -> Result<AliasMaps, RdfDiagnostic> {
-    let mut mappings: Vec<FastMap<LocalId, CompositeViewId>> = Vec::new();
-    let mut reverse: Vec<FastMap<CompositeViewId, LocalId>> = Vec::new();
-    for (index, source) in sources.iter().enumerate() {
-        let source_index = u32::try_from(index)
-            .map_err(|_| RdfDiagnostic::error("view-source-count", "source count exceeds u32"))?;
-        let mut mapping: FastMap<_, _> = if index == 0 {
-            FastMap::default()
-        } else {
-            source
-                .term_ids()
-                .map(|local| {
-                    (
+    mappings: &mut Vec<Arc<AliasMap>>,
+    reverse: &mut Vec<Arc<ReverseMap>>,
+    work: &mut ViewWork,
+) -> Result<usize, RdfDiagnostic> {
+    let index = sources.len() - 1;
+    let source = &sources[index];
+    let source_index = u32::try_from(index)
+        .map_err(|_| RdfDiagnostic::error("view-source-count", "source count exceeds u32"))?;
+    let mut mapping: AliasMap = if index == 0 {
+        AliasMap::default()
+    } else {
+        source
+            .term_ids()
+            .map(|local| {
+                (
+                    local,
+                    CompositeViewId {
+                        source: source_index,
                         local,
-                        CompositeViewId {
-                            source: source_index,
-                            local,
-                        },
-                    )
-                })
-                .collect()
-        };
-        for previous in 0..index {
-            // One memo at a time bounds transient storage by this contribution,
-            // independent of the number or size of earlier dictionaries.
-            let mut memo = FastMap::default();
-            for id in source.term_ids() {
-                if mapping[&id].source != source_index {
-                    continue;
-                }
-                if let Some(found) = lookup_source_term(
-                    source,
-                    &sources[previous],
-                    id,
-                    |scope| {
-                        let mapped = scopes[index][&scope];
-                        scopes[previous]
-                            .iter()
-                            .find_map(|(old, new)| (*new == mapped).then_some(*old))
                     },
-                    &mut memo,
-                ) {
-                    let canonical = if previous == 0 {
-                        CompositeViewId {
-                            source: 0,
-                            local: found,
-                        }
-                    } else {
-                        mappings[previous][&found]
-                    };
-                    mapping.insert(id, canonical);
-                }
+                )
+            })
+            .collect()
+    };
+    for previous in 0..index {
+        // One memo at a time bounds transient storage by this contribution,
+        // independent of the number or size of earlier dictionaries.
+        let mut memo = FastMap::default();
+        for id in source.term_ids() {
+            if mapping[&id].source != source_index {
+                continue;
+            }
+            if let Some(found) = lookup_source_term(
+                source,
+                &sources[previous],
+                id,
+                |scope| {
+                    let mapped = scopes[index][&scope];
+                    scopes[previous]
+                        .iter()
+                        .find_map(|(old, new)| (*new == mapped).then_some(*old))
+                },
+                &mut memo,
+            ) {
+                let canonical = if previous == 0 {
+                    CompositeViewId {
+                        source: 0,
+                        local: found,
+                    }
+                } else {
+                    mappings[previous][&found]
+                };
+                mapping.insert(id, canonical);
             }
         }
-        let back = mapping
-            .iter()
-            .map(|(&local, &canonical)| (canonical, local))
-            .collect();
-        construction_work.copied_index_bytes +=
-            mapping.len() * 2 * size_of::<(LocalId, CompositeViewId)>();
-        mappings.push(mapping);
-        reverse.push(back);
     }
-    Ok((mappings, reverse))
+    let back: ReverseMap = mapping
+        .iter()
+        .map(|(&local, &canonical)| (canonical, local))
+        .collect();
+    work.copied_index_bytes += mapping.len() * 2 * size_of::<(LocalId, CompositeViewId)>();
+    // The first source translates by identity and owns no map, so every one of its
+    // terms is canonical; later sources keep the ones no earlier source answered for.
+    let canonical = if index == 0 {
+        source.term_ids().count()
+    } else {
+        mapping
+            .values()
+            .filter(|id| id.source == source_index)
+            .count()
+    };
+    mappings.push(Arc::new(mapping));
+    reverse.push(Arc::new(back));
+    Ok(canonical)
 }
 
 impl DatasetView for CompositeDatasetView {
@@ -1124,6 +1319,20 @@ impl DatasetView for CompositeDatasetView {
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
+    }
+}
+
+/// A composite faults nowhere a frozen source would not: it retains its sources,
+/// reads through their resident indexes and mints no request of its own, so every
+/// checkpoint is [`Ready`](crate::ViewOperationStatus::Ready) — the same standing
+/// [`RdfDataset`] reports, preserved through composition rather than lost at it.
+impl crate::FallibleDatasetView for CompositeDatasetView {
+    type Error = std::convert::Infallible;
+    type Evidence = ();
+
+    #[inline]
+    fn operation_status(&self) -> crate::ViewOperationStatus<Self::Error, Self::Evidence> {
+        crate::ViewOperationStatus::Ready { evidence: () }
     }
 }
 

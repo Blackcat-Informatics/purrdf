@@ -219,6 +219,6 @@ pub mod prelude {
 }
 
 pub use ir::{
-    CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ViewLimits, ViewStats,
-    ViewWork,
+    CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,
+    ViewLimits, ViewStats, ViewWork,
 };
