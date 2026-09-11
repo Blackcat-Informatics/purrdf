@@ -108,10 +108,13 @@ pub mod turtle;
 // The wasm-clean canonical-Turtle authority for the correspondence EDOAL lowering.
 pub mod turtle_render;
 // XSD/XPath regular-expression dialect translation shared by `sh:pattern`
-// (SHACL), SPARQL `REGEX`/`REPLACE`, and ShEx `PATTERN` (issue #295). No
-// public consumer yet — the Unicode block-escape table lands first so it has
-// its own generation/test story before the translator is built on top of it.
-mod xsd_regex;
+// (SHACL), SPARQL `REGEX`/`REPLACE`, and ShEx `PATTERN` (issue #295):
+// `xsd_regex::compile` translates the `regExp` grammar of XML Schema Part 2
+// Appendix G into `regex`-crate syntax. `pub` because its consumers
+// (`purrdf-shapes`, `purrdf-sparql-eval`, `purrdf-shex`) are other crates,
+// not `purrdf-core` internals — those call sites are wired in by later,
+// separate tasks under issue #295, not here.
+pub mod xsd_regex;
 
 pub use backend::{
     RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,

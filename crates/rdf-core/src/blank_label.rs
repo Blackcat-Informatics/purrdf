@@ -544,7 +544,7 @@ fn is_xml_text_char(c: char) -> bool {
 }
 
 /// Inclusive Unicode scalar-value range `[lo, hi]`.
-type CharRange = (u32, u32);
+pub(crate) type CharRange = (u32, u32);
 
 /// Whether a range table is non-empty per entry, within the Unicode scalar
 /// space, and strictly ascending with a gap between neighbours.
@@ -589,7 +589,7 @@ const _: () = {
 /// [`is_pn_chars_u`]). Ranges are sorted and non-overlapping — the precondition
 /// [`in_ranges`]'s binary search rests on, proved by the const assertion above
 /// rather than assumed.
-const PN_CHARS_BASE_RANGES: &[CharRange] = &[
+pub(crate) const PN_CHARS_BASE_RANGES: &[CharRange] = &[
     (0x0041, 0x005A),   // [A-Z]
     (0x0061, 0x007A),   // [a-z]
     (0x00C0, 0x00D6),   // [#xC0-#xD6]
@@ -610,7 +610,7 @@ const PN_CHARS_BASE_RANGES: &[CharRange] = &[
 /// (beyond `'-'` and `[0-9]`, which are cheap ASCII checks handled inline).
 /// Sorted and non-overlapping for [`in_ranges`], proved by the const assertion
 /// above.
-const PN_CHARS_EXTRA_RANGES: &[CharRange] = &[
+pub(crate) const PN_CHARS_EXTRA_RANGES: &[CharRange] = &[
     (0x00B7, 0x00B7), // #xB7
     (0x0300, 0x036F), // [#x300-#x36F]
     (0x203F, 0x2040), // [#x203F-#x2040]

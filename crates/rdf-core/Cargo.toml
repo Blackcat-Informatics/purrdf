@@ -69,6 +69,13 @@ sha2 = { workspace = true, default-features = true }
 # generic `IdVec` and re-exported `SmallVec`/`smallvec!`. Default features only
 # (no `union`/`serde`) — wasm-clean, `unsafe`-free.
 smallvec = { workspace = true }
+# The execution engine `xsd_regex::compile` translates XSD/XPath regex source
+# into: a DFA-based, backtracking-free, pure-Rust, wasm32-clean engine already
+# proven elsewhere in this workspace (`purrdf-rdf`, `purrdf-shapes`,
+# `purrdf-shex`, `purrdf-slice`, `purrdf-sparql-{algebra,eval}`). See
+# `crate::xsd_regex`'s module doc for the dialect-translation rationale
+# (issue #295).
+regex = { workspace = true }
 
 [dev-dependencies]
 # Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing

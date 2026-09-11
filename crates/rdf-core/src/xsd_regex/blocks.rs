@@ -444,9 +444,11 @@ pub(crate) const UNICODE_BLOCKS: &[(&str, u32, u32)] = &[
 ///
 /// [`UNICODE_BLOCKS`] is sorted by codepoint (`lo`), not by name -- that is the
 /// order that lets [`table_is_sorted_and_non_overlapping`] cheaply prove the
-/// table has no gaps or overlaps against `Blocks.txt`'s own invariant. A
-/// name-keyed binary search would need a second, name-sorted view of the same
-/// ~376 rows; a linear scan is simpler (one array, ETHOS §S) and this runs at
+/// table is sorted ascending and non-overlapping (gaps between blocks are
+/// legitimate and expected -- most of the Unicode codespace is unassigned --
+/// so the test proves non-overlap, not the absence of gaps). A name-keyed
+/// binary search would need a second, name-sorted view of the same
+/// 338 rows; a linear scan is simpler (one array, ETHOS §S) and this runs at
 /// most once per distinct `\p{IsX}`/`\P{IsX}` construct in a pattern being
 /// *compiled*, never per matched character -- not a hot path.
 ///

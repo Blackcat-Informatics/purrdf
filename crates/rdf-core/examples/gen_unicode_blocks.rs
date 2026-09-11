@@ -239,17 +239,28 @@ fn main() {
     .unwrap();
     writeln!(
         out,
-        "/// table has no gaps or overlaps against `Blocks.txt`'s own invariant. A"
+        "/// table is sorted ascending and non-overlapping (gaps between blocks are"
     )
     .unwrap();
     writeln!(
         out,
-        "/// name-keyed binary search would need a second, name-sorted view of the same"
+        "/// legitimate and expected -- most of the Unicode codespace is unassigned --"
     )
     .unwrap();
     writeln!(
         out,
-        "/// ~376 rows; a linear scan is simpler (one array, ETHOS §S) and this runs at"
+        "/// so the test proves non-overlap, not the absence of gaps). A name-keyed"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// binary search would need a second, name-sorted view of the same"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// {} rows; a linear scan is simpler (one array, ETHOS §S) and this runs at",
+        blocks.len()
     )
     .unwrap();
     writeln!(
