@@ -131,9 +131,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   states the dialect grammar, the split law, the concordance law, the three
   identities and their verification law, ordering, conformance and the emission
   law, and the crate's vectors are read against that document. The vocabulary is
-  a designated namespace, `https://w3id.org/purrdf/markdown#`, whose term set is
-  part of the contract identity; no IRI outside it is emitted, and no term of it
-  is written in two roles.
+  caller-supplied: `Vocabulary::under(base)` derives the whole term set from one
+  base, the term set and not merely the base is inside the contract identity,
+  and no term is written in two roles. `Vocabulary::standard()` offers one
+  designated namespace, `https://w3id.org/purrdf/markdown#`, by name rather than
+  on a caller's behalf, for deployments that want a shared one; it is a stable
+  identifier that does not dereference today, a redirect for it is being
+  registered, and nothing rests on that because RDF asks no IRI to resolve.
+  Beside the caller's terms an emitted graph carries four IRIs of the standard's
+  — `rdf:type`, `rdf:reifies`, `xsd:integer`, `xsd:hexBinary` — and the caller's
+  own source id and canon anchors.
 - **purrdf:** The umbrella exposes the slicer as `purrdf::markdown`, so a
   consumer slices a document without naming `purrdf-markdown` as a separate
   dependency.

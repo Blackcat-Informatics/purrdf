@@ -702,6 +702,16 @@ either way, and the profile's contract id tells the two apart. The
 designated namespace MUST NOT be reached for on a caller's behalf; an
 implementation MAY offer it, but only by name.
 
+One honest caveat, and it is owed here as much as it is owed of any
+namespace this document cites: the designated namespace is not publicly
+dereferenceable. `https://w3id.org/purrdf/markdown#` is a stable
+identifier, not a URL that resolves today; a redirect for it is being
+registered, and no date is promised here. Nothing in this law rests on
+that. RDF does not require an IRI to dereference, so the term set, the
+three identities, the split and every conformance requirement above hold
+exactly as written whether the namespace resolves or not, and a document
+exchanged under it is no less readable for it.
+
 The only IRIs this specification brings of its own are the standard's:
 `rdf:type`; `rdf:reifies`, which binds a citation node to each triple
 term it reifies (§11); `xsd:integer` for every ordinal, level, byte

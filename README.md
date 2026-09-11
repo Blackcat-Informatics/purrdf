@@ -61,16 +61,23 @@ architectural before/after are in
 PurRDF ships a structural Markdown-to-RDF 1.2 slicer,
 [`purrdf-markdown`](./crates/markdown/), under a
 [published specification](./crates/markdown/SPEC.md) with a designated
-vocabulary namespace, `https://w3id.org/purrdf/markdown#`. A document becomes a
-graph of its own headings, verses, and paragraphs: every node names a verbatim
-byte range of the source, node identities are content-addressed, and the
-profile they are minted under is content-addressed over the slicing law itself,
-so a change to the law re-mints rather than drifts. The same bytes under the
-same profile give byte-for-byte identical output on every target, and a
-concordance table lifts into RDF 1.2 reified citations. No prior standard
-combines determinism, byte-span addressability, and law-content-addressed
-identity for Markdown-to-RDF. It slices the dialect the specification writes
-out; it is not a CommonMark implementation.
+vocabulary namespace, `https://w3id.org/purrdf/markdown#`. One honest caveat
+about that namespace: it is not publicly dereferenceable. It is a stable
+identifier, not a URL that resolves today — a redirect for it is being
+registered, and no date is promised. Nothing depends on it: RDF asks no IRI to
+dereference, so the law and the identities below are the same either way.
+
+A document becomes a graph of its own headings, verses, and paragraphs: every
+node names a verbatim byte range of the source, node identities are
+content-addressed, and the profile they are minted under is content-addressed
+over the slicing law itself, so a change to the law re-mints rather than
+drifts. The same bytes under the same profile give byte-for-byte identical
+output on every target, and a concordance table lifts into RDF 1.2 reified
+citations. We surveyed the standards that map documents to RDF and found none
+that combines determinism, byte-span addressability, and law-content-addressed
+identity for Markdown; if one exists we would rather hear of it than claim it
+does not. It slices the dialect
+the specification writes out; it is not a CommonMark implementation.
 
 ## Why does this exist?
 

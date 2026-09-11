@@ -25,6 +25,13 @@ use crate::{DIGEST_ALGORITHM, MIN_MAX_BYTES, claims};
 /// writing it out — see that constructor for why the import/export
 /// surface is deliberately opinionated while [`Vocabulary::under`]
 /// stays open.
+///
+/// One honest caveat: this namespace is not publicly dereferenceable. It
+/// is a stable identifier, not a URL that resolves today; a redirect for
+/// it is being registered, and no date is promised. Nothing here depends
+/// on that — RDF does not require an IRI to dereference, so the terms
+/// derived from this base, the node identities minted under it, and the
+/// contract id computed over both are what they would be either way.
 pub const STANDARD_NAMESPACE: &str = "https://w3id.org/purrdf/markdown#";
 
 /// The parameter encoding [`Profile::purremb_chunking_stage`] declares:
