@@ -327,6 +327,67 @@ fn superset_directional_literals_are_admitted_in_both_directions() {
     ));
 }
 
+// ── BLANK_NODE_LABEL scans PN_CHARS, and PN_CHARS is a boundary ───────────────
+
+/// The label body is scanned with the shared transcription of
+///
+/// > `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x36F] |`
+/// > `[#x203F-#x2040]`
+///
+/// (SPARQL 1.2 §19.8 / Turtle 1.2 §6.5). What this pins is the *boundary*: the
+/// scan is maximal-munch, so where the class stops is where the term stops.
+/// U+00A0 NO-BREAK SPACE is the refusal vector — it is not `PN_CHARS`, so it
+/// ends the label, and since it is not `WS` either it can only be a syntax
+/// error. A class that admitted "anything above U+007F" would instead swallow
+/// it and the `]` after it, and report nothing.
+#[test]
+fn blank_node_label_stops_at_a_no_break_space_rather_than_absorbing_it() {
+    // The refusal vector: a label cannot contain, or be continued past, U+00A0.
+    assert!(
+        parse_list("[_:a\u{a0}b]").is_err(),
+        "U+00A0 is neither PN_CHARS nor WS, so it can only be an error"
+    );
+    // …and the same bytes with the SPACE the author meant are still two list
+    // elements, not one absorbed blob — the neighbouring valid case.
+    assert_eq!(
+        list_items("[_:a, _:b]"),
+        vec![CdtTerm::Blank("a".into()), CdtTerm::Blank("b".into())]
+    );
+}
+
+/// The mirror of the refusal above: the class is EXACT, not "ASCII only". Every
+/// non-ASCII scalar the production names still scans, so tightening the class
+/// did not narrow the language.
+#[test]
+fn blank_node_label_still_admits_every_non_ascii_scalar_pn_chars_names() {
+    // `PN_CHARS_BASE` proper (CJK), plus the three non-ASCII ranges `PN_CHARS`
+    // adds: U+00B7 MIDDLE DOT, a combining mark from [#x300-#x36F], and
+    // U+203F UNDERTIE.
+    assert_eq!(
+        list_items("[_:\u{65e5}\u{b7}\u{301}\u{203f}x]"),
+        vec![CdtTerm::Blank("\u{65e5}\u{b7}\u{301}\u{203f}x".into())]
+    );
+    // The ASCII members `PN_CHARS` adds beyond `PN_CHARS_U`, and the interior
+    // `.` this production allows on top of them.
+    assert_eq!(
+        list_items("[_:0a-b.c_d]"),
+        vec![CdtTerm::Blank("0a-b.c_d".into())]
+    );
+    // A hole in `PN_CHARS_BASE` is a real hole: U+00D7 MULTIPLICATION SIGN sits
+    // between [#xC0-#xD6] and [#xD8-#xF6] and is not a name character, so it
+    // ends the label exactly as U+00A0 does.
+    assert!(
+        parse_list("[_:a\u{d7}b]").is_err(),
+        "U+00D7 is not PN_CHARS"
+    );
+    // Its neighbour one code point down is admitted, so this is exactness
+    // rather than a truncated table.
+    assert_eq!(
+        list_items("[_:a\u{d6}b]"),
+        vec![CdtTerm::Blank("a\u{d6}b".into())]
+    );
+}
+
 // ── Ill-formed shapes ─────────────────────────────────────────────────────────
 
 #[test]

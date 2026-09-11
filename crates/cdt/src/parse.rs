@@ -580,13 +580,29 @@ impl<'a> Scanner<'a> {
     }
 
     /// `BLANK_NODE_LABEL ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?`
+    ///
+    /// The label body is scanned with
+    /// [`purrdf_iri::terminals::is_pn_chars`], the workspace's single
+    /// transcription of
+    ///
+    /// > `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x36F] |`
+    /// > `[#x203F-#x2040]`
+    ///
+    /// (SPARQL 1.2 §19.8 / Turtle 1.2 §6.5), rather than a copy kept here. The
+    /// class is what decides where the label STOPS, not merely what may appear
+    /// inside it: the loop below is maximal-munch, so a class one scalar too
+    /// wide does not widen the accepted language, it moves the token boundary
+    /// and re-reads a document both spellings accept. U+00A0 NO-BREAK SPACE is
+    /// the standing example — it is neither `WS` nor `PN_CHARS`, so it can only
+    /// end the label and then fail, and any local table that admitted it would
+    /// swallow the following term instead.
     fn parse_blank_node_label(&mut self) -> Result<String, CdtError> {
         let start = self.position;
         self.expect(b'_', "`_:` opening a blank node label")?;
         self.expect(b':', "`_:` opening a blank node label")?;
         let body_start = self.position;
         while let Some(ch) = self.input[self.position..].chars().next() {
-            if is_pn_chars(ch) || ch == '.' {
+            if purrdf_iri::terminals::is_pn_chars(ch) || ch == '.' {
                 self.position += ch.len_utf8();
             } else {
                 break;
@@ -967,34 +983,11 @@ fn finish_map(mut entries: Vec<(usize, CdtEntry)>) -> Result<CdtValue, CdtError>
     ))
 }
 
-/// `PN_CHARS` (SPARQL) — the character class a blank node label body admits.
-fn is_pn_chars(ch: char) -> bool {
-    is_pn_chars_u(ch)
-        || ch == '-'
-        || ch.is_ascii_digit()
-        || ch == '\u{b7}'
-        || matches!(ch, '\u{300}'..='\u{36f}' | '\u{203f}'..='\u{2040}')
-}
-
-/// `PN_CHARS_U ::= PN_CHARS_BASE | '_'`
-fn is_pn_chars_u(ch: char) -> bool {
-    ch == '_' || is_pn_chars_base(ch)
-}
-
-/// `PN_CHARS_BASE` (SPARQL).
-fn is_pn_chars_base(ch: char) -> bool {
-    ch.is_ascii_alphabetic()
-        || matches!(ch,
-            '\u{c0}'..='\u{d6}'
-            | '\u{d8}'..='\u{f6}'
-            | '\u{f8}'..='\u{2ff}'
-            | '\u{370}'..='\u{37d}'
-            | '\u{37f}'..='\u{1fff}'
-            | '\u{200c}'..='\u{200d}'
-            | '\u{2070}'..='\u{218f}'
-            | '\u{2c00}'..='\u{2fef}'
-            | '\u{3001}'..='\u{d7ff}'
-            | '\u{f900}'..='\u{fdcf}'
-            | '\u{fdf0}'..='\u{fffd}'
-            | '\u{10000}'..='\u{effff}')
-}
+// `PN_CHARS`, `PN_CHARS_U` and `PN_CHARS_BASE` were transcribed here once, as a
+// fourth independent copy of a table the workspace already owns. The copies
+// agreed, which is exactly why the arrangement was dangerous: four tables that
+// agree today are four tables that can stop agreeing one edit at a time, and a
+// scanner's class is a token BOUNDARY, so a divergence is silent. The single
+// transcription now lives in `purrdf_iri::terminals`, with the W3C production
+// quoted at each predicate and its ranges proved sorted and disjoint at compile
+// time; `parse_blank_node_label` reaches it directly.
