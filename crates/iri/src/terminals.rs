@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Exact character classes for the Turtle/SPARQL terminal grammar — the ONE
-//! transcription every scanner in the workspace scans with.
+//! Exact character classes for the Turtle/SPARQL/XML terminal grammars — the
+//! ONE transcription every scanner in the workspace scans with.
 //!
 //! # Why a scanner may not approximate
 //!
@@ -69,6 +69,15 @@
 //! (§19.8) and the W3C *RDF 1.2 Turtle* grammar (§6.5); the two specifications
 //! spell `PN_CHARS_BASE`, `PN_CHARS_U` and `PN_CHARS` character-for-character
 //! alike, and `VARNAME` is SPARQL-only.
+//!
+//! `NameStartChar` and `NameChar` come from a DIFFERENT specification — *XML
+//! 1.0 Fifth Edition* §2.3, productions `[4]` and `[4a]` — and are the classes
+//! `xsd:Name`, `xsd:NCName` and `xsd:ID` are defined over, so they reach RDF
+//! through datatype validation rather than through a scanner. They are kept
+//! here, beside the Turtle/SPARQL classes they *resemble*, precisely because
+//! the resemblance is the trap: `PN_CHARS_BASE` is `NameStartChar` minus `':'`
+//! and `'_'`, and `NameChar` is `PN_CHARS` plus `':'` and `'.'`. Neither pair
+//! may be aliased to the other — see [`is_xml_name_start_char`].
 
 /// An inclusive Unicode scalar-value range `[lo, hi]`, the unit every
 /// production below is transcribed into.
@@ -373,8 +382,9 @@ terminal! {
     /// `[#xFDF0-#xFFFD] | [#x10000-#xEFFFF]`
     ///
     /// The name-start class shared verbatim by SPARQL 1.2 §19.8 and Turtle 1.2
-    /// §6.5 (and, minus `':'` and `'_'`, by the XML 1.0 `NameStartChar`
-    /// production).
+    /// §6.5. It is XML 1.0's [`NameStartChar`](is_xml_name_start_char) minus
+    /// `':'` and `'_'` — every other range of the two is identical, which is
+    /// what makes the two scalars that differ so easy to lose.
     ///
     /// Note the deliberate holes: U+00D7 MULTIPLICATION SIGN and U+00F7
     /// DIVISION SIGN sit in the gaps at `#xC0-#xD6`/`#xD8-#xF6`, U+037E GREEK
@@ -675,12 +685,109 @@ terminal! {
     pub const fn is_iriref_forbidden(char);
 }
 
+terminal! {
+    /// `NameStartChar ::= ':' | [A-Z] | '_' | [a-z] | [#xC0-#xD6] |`
+    /// `[#xD8-#xF6] | [#xF8-#x2FF] | [#x370-#x37D] | [#x37F-#x1FFF] |`
+    /// `[#x200C-#x200D] | [#x2070-#x218F] | [#x2C00-#x2FEF] |`
+    /// `[#x3001-#xD7FF] | [#xF900-#xFDCF] | [#xFDF0-#xFFFD] | [#x10000-#xEFFFF]`
+    ///
+    /// XML 1.0 Fifth Edition §2.3 `[4]`: the class that opens an XML `Name`,
+    /// and through it `NCName` and every XSD datatype derived from it
+    /// (`xsd:Name`, `xsd:NCName`, `xsd:ID`, `xsd:IDREF`, `xsd:ENTITY`).
+    ///
+    /// # Why this is NOT [`is_pn_chars_base`]
+    ///
+    /// The two tables share every one of their twelve non-ASCII ranges,
+    /// character for character, and differ by exactly two ASCII scalars — which
+    /// is the whole hazard. `NameStartChar` admits:
+    ///
+    /// * **`':'`**, which SPARQL and Turtle remove because a colon is *their*
+    ///   prefix separator: `ex:a` is a prefixed name with local part `a`, while
+    ///   XML would happily read `ex:a` as one `Name` (that is why `NCName` has
+    ///   to exist as a separate production that subtracts the colon again);
+    /// * **`'_'`**, which `PN_CHARS_BASE` also lacks — Turtle adds it one level
+    ///   up, in [`PN_CHARS_U`](is_pn_chars_u), because `_:` must stay
+    ///   distinguishable as the blank-node prefix.
+    ///
+    /// So aliasing this to `is_pn_chars_base` would reject `:name` and `_name`,
+    /// both of which are lawful XML names, and aliasing it to
+    /// [`is_pn_chars_u`] would reject `:name` alone — a refusal that surfaces
+    /// only when a document actually carries such a name. The `ascii:` table
+    /// below is literally the difference, and the `extends` clause keeps the
+    /// twelve shared ranges written once, so the two classes cannot drift apart
+    /// while still being impossible to confuse at this site.
+    ///
+    /// # Why [`char::is_alphabetic`] is not this predicate
+    ///
+    /// This is the mistake the approximations in this workspace kept making,
+    /// and it is not a boundary case: U+00AA FEMININE ORDINAL INDICATOR is
+    /// `Alphabetic`, sits below the table's first non-ASCII range `[#xC0-#xD6]`,
+    /// and is **not** a `NameStartChar`. Nor are U+00B5 MICRO SIGN or U+00BA
+    /// MASCULINE ORDINAL INDICATOR. The deliberate holes of
+    /// [`is_pn_chars_base`] are holes here too: U+00D7, U+00F7 and U+037E are
+    /// excluded, and so is everything above `#xD7FF` except the two named
+    /// blocks and the supplementary planes up to `#xEFFFF`.
+    tables XML_NAME_START_CHAR_ASCII, XML_NAME_START_CHAR_NON_ASCII;
+    pub const fn is_xml_name_start_char(char) extends is_pn_chars_base;
+    ascii: [
+        (0x3A, 0x3A), // ':' — present here, ABSENT from PN_CHARS_BASE
+        (0x5F, 0x5F), // '_' — present here, ABSENT from PN_CHARS_BASE
+    ];
+    non_ascii: [];
+}
+
+terminal! {
+    /// `NameChar ::= NameStartChar | '-' | '.' | [0-9] | #xB7 |`
+    /// `[#x300-#x36F] | [#x203F-#x2040]`
+    ///
+    /// XML 1.0 Fifth Edition §2.3 `[4a]`: every scalar after the first in an
+    /// XML `Name`. Position-dependent like the Turtle name productions, so it
+    /// takes a second predicate rather than widening
+    /// [`is_xml_name_start_char`] — `-a` and `.a` and `0a` are not names, while
+    /// `a-a`, `a.a` and `a0` are.
+    ///
+    /// # The `'.'` is the difference that matters
+    ///
+    /// Beyond `NameStartChar` this adds exactly what
+    /// [`PN_CHARS`](is_pn_chars) adds beyond [`PN_CHARS_U`](is_pn_chars_u) —
+    /// `'-'`, `[0-9]`, U+00B7 MIDDLE DOT, the combining diacritical marks
+    /// `[#x300-#x36F]`, and the two ties `[#x203F-#x2040]` — **plus `'.'`**.
+    ///
+    /// That one scalar is why an `xsd:NCName` and a Turtle local name are not
+    /// the same language. `'.'` is not a `PN_CHARS` member at all: Turtle
+    /// admits it *between* name characters by the shape of the production
+    /// (`(PN_CHARS | '.')* PN_CHARS`) and never at either end, so `a.b` is one
+    /// local name while `a.` is the local name `a` followed by the statement
+    /// terminator. XML puts `'.'` in the character class itself, so `a.` is a
+    /// perfectly good XML `Name` with nothing following it. A validator that
+    /// answered `xsd:Name` with `is_pn_chars` would refuse the lawful value
+    /// `a.`; one that answered a Turtle local name with this class would let a
+    /// trailing dot swallow the `'.'` that ends the triple.
+    ///
+    /// The `':'` inherited from `NameStartChar` is the second difference, and
+    /// it is the one `NCName` exists to remove: `NCName` is this class minus
+    /// `':'` in both positions, so nothing here may be reused for `NCName`
+    /// without subtracting it.
+    tables XML_NAME_CHAR_ASCII, XML_NAME_CHAR_NON_ASCII;
+    pub const fn is_xml_name_char(char) extends is_xml_name_start_char;
+    ascii: [
+        (0x2D, 0x2D), // '-'
+        (0x2E, 0x2E), // '.' — the scalar PN_CHARS does NOT admit
+        (0x30, 0x39), // [0-9]
+    ];
+    non_ascii: [
+        (0x00B7, 0x00B7), // #xB7
+        (0x0300, 0x036F), // [#x300-#x36F]
+        (0x203F, 0x2040), // [#x203F-#x2040]
+    ];
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         is_blank_node_label_start, is_iriref_forbidden, is_iriref_forbidden_byte, is_pn_chars,
         is_pn_chars_base, is_pn_chars_u, is_pn_local_esc, is_pn_local_start, is_varname_continue,
-        is_varname_start, is_ws, is_ws_char,
+        is_varname_start, is_ws, is_ws_char, is_xml_name_char, is_xml_name_start_char,
     };
     use pretty_assertions::assert_eq;
 
@@ -719,6 +826,42 @@ mod tests {
         pn_chars_u_oracle(c)
             || c.is_ascii_digit()
             || matches!(c, '-' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
+    }
+
+    /// XML 1.0 5e §2.3 `[4]` `NameStartChar`, transcribed independently from
+    /// the specification's own alternation rather than derived from any table
+    /// in this module — the point being that it is written out in full,
+    /// including the twelve ranges it shares with `PN_CHARS_BASE`, so agreement
+    /// is evidence about the production and not about the `extends` clause.
+    fn xml_name_start_char_oracle(c: char) -> bool {
+        matches!(c,
+            ':'
+            | 'A'..='Z'
+            | '_'
+            | 'a'..='z'
+            | '\u{C0}'..='\u{D6}'
+            | '\u{D8}'..='\u{F6}'
+            | '\u{F8}'..='\u{2FF}'
+            | '\u{370}'..='\u{37D}'
+            | '\u{37F}'..='\u{1FFF}'
+            | '\u{200C}'..='\u{200D}'
+            | '\u{2070}'..='\u{218F}'
+            | '\u{2C00}'..='\u{2FEF}'
+            | '\u{3001}'..='\u{D7FF}'
+            | '\u{F900}'..='\u{FDCF}'
+            | '\u{FDF0}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{EFFFF}')
+    }
+
+    /// XML 1.0 5e §2.3 `[4a]` `NameChar`, transcribed independently.
+    fn xml_name_char_oracle(c: char) -> bool {
+        xml_name_start_char_oracle(c)
+            || matches!(c,
+                '-' | '.'
+                | '0'..='9'
+                | '\u{B7}'
+                | '\u{300}'..='\u{36F}'
+                | '\u{203F}'..='\u{2040}')
     }
 
     #[test]
@@ -784,6 +927,12 @@ mod tests {
             assert_eq!(is_pn_chars_base(c), pn_chars_base_oracle(c), "{c:?}");
             assert_eq!(is_pn_chars_u(c), pn_chars_u_oracle(c), "{c:?}");
             assert_eq!(is_pn_chars(c), pn_chars_oracle(c), "{c:?}");
+            assert_eq!(
+                is_xml_name_start_char(c),
+                xml_name_start_char_oracle(c),
+                "{c:?}"
+            );
+            assert_eq!(is_xml_name_char(c), xml_name_char_oracle(c), "{c:?}");
         }
     }
 
@@ -1028,6 +1177,152 @@ mod tests {
     }
 
     #[test]
+    fn an_xml_name_starts_with_a_narrower_class_than_it_continues_with() {
+        // Stated as a total function: `NameStartChar` ⊂ `NameChar` over every
+        // scalar value, so no future edit can widen the head past the tail.
+        for c in all_scalars() {
+            if is_xml_name_start_char(c) {
+                assert!(is_xml_name_char(c), "{c:?}");
+            }
+        }
+        // And the containment is PROPER in both positions, so the subset test
+        // above is not satisfied by the two classes being one class.
+        for c in ['-', '.', '0', '9', '\u{B7}', '\u{300}', '\u{203F}'] {
+            assert!(is_xml_name_char(c), "{c:?} must continue a Name");
+            assert!(!is_xml_name_start_char(c), "{c:?} must not open a Name");
+        }
+        // The neighbouring lawful case: these open a Name and continue one, so
+        // the refusals above are position-dependence and not a narrowed
+        // alphabet.
+        for c in [':', '_', 'a', 'Z', '\u{C0}', '\u{4E2D}'] {
+            assert!(is_xml_name_start_char(c), "{c:?}");
+            assert!(is_xml_name_char(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn xml_name_start_char_is_pn_chars_base_plus_exactly_the_colon_and_underscore() {
+        // The difference, asserted POSITIVELY and in both directions over every
+        // scalar, so that "simplifying" either predicate into an alias of the
+        // other fails here rather than in a user's document.
+        for c in all_scalars() {
+            assert_eq!(
+                is_xml_name_start_char(c),
+                is_pn_chars_base(c) || c == ':' || c == '_',
+                "{c:?}"
+            );
+            // Every `PN_CHARS_BASE` member is an XML name start; the converse
+            // fails on exactly two scalars.
+            if is_pn_chars_base(c) {
+                assert!(is_xml_name_start_char(c), "{c:?}");
+            }
+        }
+        // The two scalars, named: XML admits them, SPARQL/Turtle do not.
+        assert!(is_xml_name_start_char(':'));
+        assert!(!is_pn_chars_base(':'));
+        assert!(is_xml_name_start_char('_'));
+        assert!(!is_pn_chars_base('_'));
+        // `PN_CHARS_U` closes only half the gap, so it is not the alias either.
+        assert!(is_pn_chars_u('_'));
+        assert!(!is_pn_chars_u(':'));
+        // Exactly two scalars separate them — a count, so a third slipping in
+        // is a failure and not a silently wider class.
+        assert_eq!(
+            all_scalars()
+                .filter(|&c| is_xml_name_start_char(c) != is_pn_chars_base(c))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn xml_name_char_is_pn_chars_plus_exactly_the_colon_and_the_dot() {
+        // `NameChar` adds to `NameStartChar` precisely what `PN_CHARS` adds to
+        // `PN_CHARS_U`, plus `'.'`; with the `':'` inherited from the head
+        // class that makes exactly two scalars of difference from `PN_CHARS`.
+        for c in all_scalars() {
+            assert_eq!(
+                is_xml_name_char(c),
+                is_pn_chars(c) || c == ':' || c == '.',
+                "{c:?}"
+            );
+        }
+        // The `'.'`, positively: this is why an `xsd:NCName` and a Turtle local
+        // name disagree. Turtle admits a dot only BETWEEN name characters, by
+        // the shape of the production and never by the character class.
+        assert!(is_xml_name_char('.'));
+        assert!(!is_pn_chars('.'));
+        // The `':'`, positively, in the continue position too.
+        assert!(is_xml_name_char(':'));
+        assert!(!is_pn_chars(':'));
+        assert_eq!(
+            all_scalars()
+                .filter(|&c| is_xml_name_char(c) != is_pn_chars(c))
+                .count(),
+            2
+        );
+        // And the neighbour that must still agree: `'-'` is in both classes, so
+        // the two differences above are the only ones.
+        assert!(is_xml_name_char('-'));
+        assert!(is_pn_chars('-'));
+    }
+
+    #[test]
+    fn an_alphabetic_scalar_is_not_thereby_an_xml_name_start_char() {
+        // U+00AA is `Alphabetic`, and it sits in the hole below the table's
+        // first non-ASCII range `[#xC0-#xD6]`. Every approximation that reached
+        // for `char::is_alphabetic` admitted it, and no XML processor does.
+        assert!('\u{AA}'.is_alphabetic());
+        assert!(!is_xml_name_start_char('\u{AA}'));
+        assert!(!is_xml_name_char('\u{AA}'));
+        // Its neighbours in the same hole, for the same reason.
+        for c in ['\u{B5}', '\u{BA}', '\u{D7}', '\u{F7}', '\u{37E}'] {
+            assert!(!is_xml_name_start_char(c), "{c:?}");
+            assert!(!is_xml_name_char(c), "{c:?}");
+        }
+        // The neighbouring VALID case, so this is exactness and not an
+        // ASCII-only refusal: U+00C0 opens the first non-ASCII range and is a
+        // `NameStartChar`, as are the range's other end and a CJK ideograph.
+        assert!(is_xml_name_start_char('\u{C0}'));
+        assert!(is_xml_name_start_char('\u{D6}'));
+        assert!(is_xml_name_start_char('\u{4E2D}'));
+        // U+00B7 MIDDLE DOT is the mirror trap: not alphabetic, not a name
+        // START, and yet a lawful name CONTINUE.
+        assert!(!'\u{B7}'.is_alphabetic());
+        assert!(!is_xml_name_start_char('\u{B7}'));
+        assert!(is_xml_name_char('\u{B7}'));
+    }
+
+    #[test]
+    fn the_combining_block_continues_an_xml_name_and_never_opens_one() {
+        // `[#x300-#x36F]` is 112 scalars, and it is in `NameChar` alone. Swept
+        // exhaustively rather than sampled, in BOTH directions, because a head
+        // class that admitted a combining mark would let a name begin with an
+        // accent that has nothing to sit on.
+        const BLOCK: std::ops::RangeInclusive<char> = '\u{300}'..='\u{36F}';
+        assert_eq!(BLOCK.count(), 112);
+        for c in BLOCK {
+            assert!(is_xml_name_char(c), "{c:?} must continue a Name");
+            assert!(!is_xml_name_start_char(c), "{c:?} must not open a Name");
+        }
+        // The scalars on either side of the block OPEN a name — U+02FF ends
+        // `[#xF8-#x2FF]` and U+0370 opens `[#x370-#x37D]` — so the
+        // continue-only region is exactly the block and the refusal above is
+        // about combining marks rather than about everything near them.
+        assert!(is_xml_name_start_char('\u{2FF}'));
+        assert!(is_xml_name_start_char('\u{370}'));
+        // Which pins the edges from the other side as well: the combining
+        // block is the only run of 112 scalars this class treats differently
+        // from the class that opens a name.
+        assert_eq!(
+            ('\u{2FF}'..='\u{370}')
+                .filter(|&c| is_xml_name_char(c) && !is_xml_name_start_char(c))
+                .count(),
+            112
+        );
+    }
+
+    #[test]
     fn every_predicate_is_usable_in_const_context() {
         // The predicates are `const fn` so a scanner can fold them into lookup
         // tables at compile time; these assertions are evaluated by the
@@ -1044,5 +1339,11 @@ mod tests {
         const { assert!(!is_pn_local_esc('"')) }
         const { assert!(is_iriref_forbidden_byte(b' ')) }
         const { assert!(!is_iriref_forbidden('\u{A0}')) }
+        const { assert!(is_xml_name_start_char(':')) }
+        const { assert!(is_xml_name_start_char('_')) }
+        const { assert!(!is_xml_name_start_char('\u{AA}')) }
+        const { assert!(!is_xml_name_start_char('.')) }
+        const { assert!(is_xml_name_char('.')) }
+        const { assert!(!is_xml_name_char('\u{AA}')) }
     }
 }

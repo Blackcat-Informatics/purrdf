@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use csv::ReaderBuilder;
+use purrdf_iri::terminals::{is_ws, is_xml_name_char, is_xml_name_start_char};
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
 
@@ -742,25 +743,48 @@ fn validate_lexical(
 fn value_length(lexical: &str, base: &str, config: &CsvwConfig) -> Result<usize, String> {
     match base.strip_prefix(config.vocabulary().xsd_namespace()) {
         Some("hexBinary") => Ok(lexical.len() / 2),
-        Some("base64Binary") => {
-            let compact = lexical
-                .bytes()
-                .filter(|byte| !byte.is_ascii_whitespace())
-                .collect::<Vec<_>>();
-            let padding = compact
-                .iter()
-                .rev()
-                .take_while(|byte| **byte == b'=')
-                .count();
-            compact
-                .len()
-                .checked_div(4)
-                .and_then(|groups| groups.checked_mul(3))
-                .and_then(|bytes| bytes.checked_sub(padding))
-                .ok_or_else(|| "invalid CSVW base64Binary length".to_owned())
-        }
+        Some("base64Binary") => base64_octet_length(lexical),
         _ => Ok(lexical.chars().count()),
     }
+}
+
+/// The `length` of an `xsd:base64Binary` lexical form, "measured in octets (8
+/// bits) of binary data" (XSD 1.1 Part 2 §4.3.1).
+///
+/// XSD 1.1 Part 2 §3.3.16 fixes `whiteSpace` = `collapse` on `xsd:base64Binary`
+/// and its lexical grammar admits `#x20` between quads, so the octets are
+/// counted over the lexical form with exactly XML `S` removed:
+/// "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3 `[3]`), which is also
+/// the class `collapse` is defined over (XSD 1.1 Part 2 §4.3.6: "contiguous
+/// sequences of `#x20`s are collapsed to a single `#x20`, and any `#x20` at the
+/// start or end of the string are then removed", after `replace` has mapped
+/// `#x9`, `#xA` and `#xD` to `#x20`).
+///
+/// # Why not [`u8::is_ascii_whitespace`]
+///
+/// That predicate implements the WhatWG Infra definition, so it **admits `#x0C`
+/// FORM FEED**, which `S` does not name (and excludes `#x0B`, which `S` does not
+/// name either). A FORM FEED inside a base64 lexical form is not whitespace: it
+/// is a character the lexical space excludes outright. Silently dropping it
+/// counted the octets of a value the datatype refuses, so an ill-formed literal
+/// could satisfy a `length`, `minLength` or `maxLength` facet — the exact trap
+/// [`purrdf_iri::terminals`] documents.
+fn base64_octet_length(lexical: &str) -> Result<usize, String> {
+    let compact = lexical
+        .bytes()
+        .filter(|byte| !is_ws(*byte))
+        .collect::<Vec<_>>();
+    let padding = compact
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count();
+    compact
+        .len()
+        .checked_div(4)
+        .and_then(|groups| groups.checked_mul(3))
+        .and_then(|bytes| bytes.checked_sub(padding))
+        .ok_or_else(|| "invalid CSVW base64Binary length".to_owned())
 }
 
 fn xsd_datatype(base: &str, config: &CsvwConfig) -> Option<XsdDatatype> {
@@ -807,17 +831,68 @@ fn validate_derived_string(value: &str, local: &str) -> Result<(), String> {
         "normalizedString" if value.contains(['\r', '\n', '\t']) => {
             Err("normalizedString contains forbidden whitespace".to_owned())
         }
-        "token" if value.trim() != value || value.contains("  ") => {
+        "token" if !valid_xsd_token(value) => {
             Err("token contains uncollapsed whitespace".to_owned())
         }
         "language" if !valid_language(value) => Err("invalid language value".to_owned()),
         "Name" if !valid_xml_name(value, true) => Err("invalid XML Name value".to_owned()),
         "NCName" if !valid_xml_name(value, false) => Err("invalid XML NCName value".to_owned()),
-        "NMTOKEN" if value.is_empty() || value.chars().any(char::is_whitespace) => {
-            Err("invalid XML NMTOKEN value".to_owned())
-        }
+        "NMTOKEN" if !valid_xml_nmtoken(value) => Err("invalid XML NMTOKEN value".to_owned()),
         _ => Ok(()),
     }
+}
+
+/// Whether `value` lies in the ·value space· of `xsd:token`.
+///
+/// XSD 1.1 Part 2 §3.3.2: "The ·value space· of `token` is the set of strings
+/// that do not contain the carriage return (`#xD`), line feed (`#xA`) nor tab
+/// (`#x9`) characters, that have no leading or trailing spaces (`#x20`) and that
+/// have no internal sequences of two or more spaces."
+///
+/// Every character the rule names is one of the four in XML `S` —
+/// "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3 `[3]`) — which is the
+/// class `whiteSpace` = `collapse` is defined over (XSD 1.1 Part 2 §4.3.6). No
+/// other scalar participates.
+///
+/// # Both directions were wrong here
+///
+/// This used to read `value.trim() != value || value.contains("  ")`.
+///
+/// * **Over-refusal.** [`str::trim`] trims the Unicode `White_Space` property —
+///   twenty-six code points, not four — so a token padded with U+00A0 NO-BREAK
+///   SPACE was rejected. U+00A0 is ordinary content to this datatype: it is
+///   neither replaced nor collapsed, and `"\u{A0}a\u{A0}"` is a perfectly good
+///   `xsd:token`.
+/// * **Over-acceptance.** The old test caught `#x9`/`#xA`/`#xD` only where they
+///   sat at an end, because that is all `trim` looks at. An INTERNAL tab —
+///   `"a\tb"` — passed both halves, and the value space forbids those three
+///   characters everywhere, not merely at the edges.
+fn valid_xsd_token(value: &str) -> bool {
+    !value.contains(['\r', '\n', '\t'])
+        && !value.starts_with(' ')
+        && !value.ends_with(' ')
+        && !value.contains("  ")
+}
+
+/// Whether `value` lies in the ·value space· of `xsd:NMTOKEN`.
+///
+/// XSD 1.1 Part 2 §3.3.9: "`NMTOKEN` represents the `NMTOKEN` attribute type
+/// from [XML 1.0 (Second Edition)]. The ·value space· of `NMTOKEN` is the set of
+/// tokens that ·match· the `Nmtoken` production in [XML 1.0 (Second Edition)]."
+/// That production is "`Nmtoken ::= (NameChar)+`" (XML 1.0 5e §2.3 `[7]`).
+///
+/// So an `NMTOKEN` is a non-empty run of XML `NameChar` — the same class an
+/// `xsd:Name` continues with, and unlike `Name` it has no distinguished first
+/// character, which is why a leading digit or hyphen is lawful here and not
+/// there.
+///
+/// This used to ask only that the value be non-empty and free of
+/// [`char::is_whitespace`], which is not a transcription of `NameChar` in either
+/// direction: it admitted `"a@b"`, `"!!!"` and every other punctuation run, and
+/// it answered the Unicode `White_Space` property where the production names a
+/// character class that simply does not contain those scalars.
+fn valid_xml_nmtoken(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(is_xml_name_char)
 }
 
 fn valid_language(value: &str) -> bool {
@@ -829,17 +904,51 @@ fn valid_language(value: &str) -> bool {
     })
 }
 
+/// Whether `value` lies in the ·value space· of `xsd:Name` (`colon` true) or of
+/// `xsd:NCName` (`colon` false).
+///
+/// XSD 1.1 Part 2 §3.3.6: "The ·value space· of `Name` is the set of all strings
+/// which ·match· the `Name` production of [XML 1.0 (Second Edition)]" —
+/// "`Name ::= NameStartChar (NameChar)*`" (XML 1.0 5e §2.3 `[5]`).
+///
+/// XSD 1.1 Part 2 §3.3.7: "The ·value space· of `NCName` is the set of all
+/// strings which ·match· the `NCName` production of [Namespaces in XML]" —
+/// "`NCName ::= NCNameStartChar NCNameChar*`", where "`NCNameChar ::= NameChar -
+/// ':'`" and "`NCNameStartChar ::= NameStartChar - ':'`" (Namespaces in XML 1.0
+/// 3e §3).
+///
+/// # The colon is the whole difference, and it is not optional
+///
+/// [`is_xml_name_start_char`] and [`is_xml_name_char`] both ADMIT `':'`, because
+/// XML's `Name` does. `NCName` exists precisely to subtract it, in **both**
+/// positions. Routing `NCName` at those predicates unsubtracted would make
+/// `ns:local` a valid `NCName`, which it is not — that string is the whole
+/// reason the namespaces specification had to mint a second production. Hence
+/// the `colon` gate is applied to the first character and to every subsequent
+/// one, not just to the head.
+///
+/// # Why the Unicode classes it used to ask are wrong in both directions
+///
+/// This was hand-rolled as `is_alphabetic` for the head and `is_alphanumeric`
+/// for the tail. Neither is a transcription of the XML production:
+///
+/// * **Over-acceptance.** U+00AA FEMININE ORDINAL INDICATOR is `Alphabetic` and
+///   is **not** a `NameStartChar`: the production goes `[A-Za-z_:]` straight to
+///   `[#xC0-#xD6]`, so U+00AA, U+00B5 MICRO SIGN and U+00BA all sit below the
+///   first non-ASCII range. Each was accepted as an `xsd:Name`.
+/// * **Over-refusal, and it is the larger half.** `NameChar` adds `#xB7` MIDDLE
+///   DOT, the 112 code points of the combining block `[#x300-#x36F]`, and
+///   `[#x203F-#x2040]`. None of those carries `Alphanumeric`, so EVERY
+///   NFD-decomposed name was refused: `café` validated spelled with U+00E9 and
+///   failed spelled `cafe` + U+0301, though the two are canonically equivalent
+///   and NFD is what many exporters emit.
 fn valid_xml_name(value: &str, colon: bool) -> bool {
+    let colon_ok = |character: char| colon || character != ':';
     let mut chars = value.chars();
-    chars.next().is_some_and(|character| {
-        character == '_' || character.is_alphabetic() || (colon && character == ':')
-    }) && chars.all(|character| {
-        character == '_'
-            || character == '-'
-            || character == '.'
-            || character.is_alphanumeric()
-            || (colon && character == ':')
-    })
+    chars
+        .next()
+        .is_some_and(|character| is_xml_name_start_char(character) && colon_ok(character))
+        && chars.all(|character| is_xml_name_char(character) && colon_ok(character))
 }
 
 fn numeric_datatype(local: &str) -> bool {
@@ -1555,5 +1664,144 @@ mod tests {
             logical_records("row", &[String::new()], Some('"'), true).is_err(),
             "an empty terminator cannot make forward progress"
         );
+    }
+
+    /// `xsd:Name` is `NameStartChar (NameChar)*` and nothing else — checked in
+    /// BOTH directions, because the transcription this replaced was wrong in
+    /// both.
+    #[test]
+    fn xsd_name_is_the_xml_name_production() {
+        // The refusal being added: U+00AA FEMININE ORDINAL INDICATOR is
+        // `Alphabetic` and is NOT a `NameStartChar` — the production jumps
+        // `[A-Za-z_:]` straight to `[#xC0-#xD6]`.
+        assert!(!valid_xml_name("\u{AA}", true));
+        assert!(!valid_xml_name("a\u{AA}", true));
+        // Its lawful NEIGHBOURS, so the refusal is exactness and not a narrowed
+        // alphabet: U+00C0 opens the first non-ASCII range and U+00E9 sits in
+        // `[#xD8-#xF6]`.
+        assert!(valid_xml_name("\u{C0}", true));
+        assert!(valid_xml_name("caf\u{E9}", true));
+
+        // The over-refusal that was the larger half: `NameChar` carries the
+        // combining block `[#x300-#x36F]`, so the NFD spelling of the very same
+        // name must validate exactly as the NFC spelling does.
+        assert!(valid_xml_name("cafe\u{301}", true), "NFD `café`");
+        assert!(valid_xml_name("a\u{B7}b", true), "#xB7 MIDDLE DOT");
+        assert!(valid_xml_name("a\u{203F}b", true), "[#x203F-#x2040]");
+
+        // Ordinary members, head and tail.
+        assert!(valid_xml_name("_x", true));
+        assert!(valid_xml_name(":x", true));
+        assert!(valid_xml_name("a-b.c", true));
+        // A leading digit is a `NameChar` and not a `NameStartChar`.
+        assert!(!valid_xml_name("0a", true));
+        assert!(valid_xml_name("a0", true));
+        assert!(!valid_xml_name("", true));
+
+        // The Unicode properties the replaced transcription actually asked,
+        // pinned so neither direction above is merely asserted: U+00AA IS
+        // `Alphabetic`, which is why it opened a name, and U+0301 is NOT
+        // `Alphanumeric`, which is why every NFD-decomposed name was refused.
+        assert!('\u{AA}'.is_alphabetic());
+        assert!(!'\u{301}'.is_alphanumeric());
+        assert!(!'\u{B7}'.is_alphanumeric());
+    }
+
+    /// `NCName` is `Name` MINUS the colon, in both positions.
+    #[test]
+    fn xsd_ncname_subtracts_the_colon_name_admits() {
+        for value in ["ns:local", ":x", "a:b:c"] {
+            assert!(valid_xml_name(value, true), "{value:?} is an xsd:Name");
+            assert!(!valid_xml_name(value, false), "{value:?} is no xsd:NCName");
+        }
+        // The neighbours that must still pass as `NCName`, so the subtraction is
+        // the colon and only the colon.
+        for value in ["_x", "a-b.c", "cafe\u{301}", "caf\u{E9}", "a\u{B7}b"] {
+            assert!(valid_xml_name(value, false), "{value:?}");
+        }
+        assert!(!valid_xml_name("\u{AA}", false));
+    }
+
+    /// `Nmtoken ::= (NameChar)+` — no distinguished first character, and no
+    /// punctuation.
+    #[test]
+    fn xsd_nmtoken_is_a_run_of_name_chars() {
+        // Lawful: `NMTOKEN` may begin with what `Name` may only continue with.
+        for value in ["0a", "-a", ".a", "a\u{B7}b", "cafe\u{301}", "1234"] {
+            assert!(valid_xml_nmtoken(value), "{value:?}");
+        }
+        // Refused: the old test asked only for "non-empty and no whitespace".
+        for value in ["", "a@b", "!!!", "a b", "a\u{A0}b"] {
+            assert!(!valid_xml_nmtoken(value), "{value:?}");
+        }
+    }
+
+    /// `xsd:token`'s value space names exactly `#x9`, `#xA`, `#xD` and `#x20`.
+    #[test]
+    fn xsd_token_is_defined_over_xml_s_and_not_unicode_whitespace() {
+        // The over-refusal being removed: U+00A0 is ordinary content here.
+        assert!(valid_xsd_token("\u{A0}a\u{A0}"));
+        assert!(valid_xsd_token("a\u{A0}\u{A0}b"));
+        assert!(valid_xsd_token("a\u{2003}b"), "EM SPACE is content too");
+        // The over-acceptance being removed: `#x9`/`#xA`/`#xD` are forbidden
+        // EVERYWHERE, not merely at the ends.
+        assert!(!valid_xsd_token("a\tb"));
+        assert!(!valid_xsd_token("a\nb"));
+        assert!(!valid_xsd_token("a\rb"));
+        // Unchanged behaviour for the ordinary four.
+        assert!(!valid_xsd_token(" a"));
+        assert!(!valid_xsd_token("a "));
+        assert!(!valid_xsd_token("a  b"));
+        assert!(!valid_xsd_token("\ta"));
+        assert!(valid_xsd_token("a b"));
+        assert!(valid_xsd_token("a"));
+        assert!(valid_xsd_token(""));
+
+        // The property the replaced test actually asked: `str::trim` trims
+        // U+00A0 because Unicode gives it `White_Space`, which is why a lawful
+        // token bearing one was refused.
+        assert!('\u{A0}'.is_whitespace());
+        assert_eq!("\u{A0}a\u{A0}".trim(), "a");
+    }
+
+    /// `xsd:base64Binary` length is counted with XML `S` removed — and FORM FEED
+    /// is not XML `S`.
+    #[test]
+    fn base64_length_removes_xml_s_and_not_form_feed() {
+        // The valid neighbours, unchanged: every member of `S` — and only those
+        // four — is removed before counting, so each padded spelling of the same
+        // quad still measures three octets.
+        for padded in [
+            "YWJj", " YWJj ", "YW\tbj", "YW\r\nbj", "Y W b j", "\nYWJj\n",
+        ] {
+            assert_eq!(
+                base64_octet_length(padded),
+                Ok(3),
+                "{padded:?} must measure the same three octets"
+            );
+        }
+        // Padding still subtracts.
+        assert_eq!(base64_octet_length("YW =="), Ok(1));
+        assert_eq!(base64_octet_length(""), Ok(0));
+
+        // The change: `#x0C` FORM FEED is NOT `S`, so it is no longer silently
+        // dropped. `"YWJ\u{C}"` is four characters to this counter and was three
+        // to the old one, which is the whole difference between the two
+        // predicates — an ill-formed lexical form no longer measures as a
+        // well-sized one.
+        assert_eq!(base64_octet_length("YWJ\u{C}"), Ok(3));
+        assert_eq!(
+            base64_octet_length("YWJ")
+                .expect("three characters is less than one quad, so it measures zero"),
+            0,
+            "the count `is_ascii_whitespace` used to produce for `\"YWJ\\u{{C}}\"`"
+        );
+        // U+000B VERTICAL TAB is the mirror hole: `is_ascii_whitespace` excludes
+        // it and `char::is_whitespace` admits it; `S` names neither, so it is
+        // counted exactly like the FORM FEED.
+        assert_eq!(base64_octet_length("YWJ\u{B}"), Ok(3));
+        // And non-ASCII Unicode whitespace is likewise ordinary content: U+00A0
+        // encodes as two bytes, so `"YW\u{A0}"` is four bytes, one whole quad.
+        assert_eq!(base64_octet_length("YW\u{A0}"), Ok(3));
     }
 }
