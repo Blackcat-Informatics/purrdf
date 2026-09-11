@@ -456,7 +456,7 @@ impl PageProvider for SucceedsThenFaultsSecondPageProvider {
                     Err(PageFault::provider(page, "page 1 always fails after seal"))
                 }
             }
-            other => panic!("unexpected page id {other}"),
+            _ => unreachable!("the test provider defines exactly two pages"),
         }
     }
 }
