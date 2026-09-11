@@ -43,6 +43,17 @@ holds a character cursor (``fn peek`` plus a ``self.pos``-shaped position). Name
 term's *lexical form* and scans nothing, while ``crates/shex/src/shapemap.rs``
 scans characters without a single ``lex_``-prefixed function.
 
+**Known blind spot, stated rather than papered over.** Detection is per FILE, so
+a crate that puts its entry point in one file and its cursor in another is
+invisible here: ``crates/geo/src/geojson.rs`` carried this exact defect while
+its scanner lived in ``json.rs``, and it was found by reading, not by this gate.
+Widening the net to "any file in a crate that contains a scanner" was rejected —
+it would sweep in every config and rendering path those crates own, and a gate
+that cries wolf teaches authors to route around it, which is the failure mode
+this whole property exists to prevent. A narrow gate that admits its edge is
+worth more than a broad one nobody trusts; the edge is covered by the entry-point
+audit that ``--census`` supports, not by this scan.
+
 ``ALLOWLIST`` is an explicit, reasoned exemption table — never a silent skip, and
 the workspace's deviation ledger for this property. An entry that stops matching
 is reported as STALE so the table cannot rot, the same discipline the

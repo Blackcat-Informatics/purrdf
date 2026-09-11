@@ -35,6 +35,7 @@
 
 use std::collections::HashMap;
 
+use purrdf_iri::terminals::is_ws;
 use purrdf_iri::{BaseOrigin, BaseScope, Iri, IriError, Position};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize, tokenize_turtle};
 use rayon::prelude::*;
@@ -87,12 +88,76 @@ fn iri_err_at(error: &IriError, line: u32, column: u32) -> RdfDiagnostic {
     })
 }
 
+/// U+FEFF ZERO WIDTH NO-BREAK SPACE, the scalar a UTF-8 byte order mark spells
+/// (`EF BB BF`). Named here so the one place that refuses it and the one place that
+/// documents the refusal cannot spell it differently.
+const BYTE_ORDER_MARK: char = '\u{feff}';
+
+/// `raw` with its leading run of `WS` removed.
+///
+/// > `WS ::= #x20 | #x9 | #xD | #xA`
+///
+/// — Turtle 1.2 §6.5 / SPARQL 1.2 §19.8, transcribed once in
+/// [`purrdf_iri::terminals::is_ws`] and scanned through it here.
+///
+/// Deliberately NOT [`str::trim_start`], which is defined over
+/// [`char::is_whitespace`] — the Unicode `White_Space` property, twenty-six scalars —
+/// where the line grammar names four. The difference is not cosmetic: `str::trim_start`
+/// eats U+00A0 NO-BREAK SPACE, U+000B, U+000C, U+2028 and the rest, so a line the
+/// grammar has no reading for is silently re-shaped into one that parses.
+///
+/// The scan is byte-wise, which is EXACT over UTF-8 rather than an approximation of it:
+/// every `WS` member is ASCII and no byte of a multi-byte UTF-8 sequence is below
+/// `0x80`, so a raw-byte test can neither miss a member nor alias one — and the byte
+/// index it stops at is therefore always a scalar boundary.
+fn trim_ws_start(raw: &str) -> &str {
+    let bytes = raw.as_bytes();
+    let start = bytes
+        .iter()
+        .position(|&byte| !is_ws(byte))
+        .unwrap_or(bytes.len());
+    &raw[start..]
+}
+
+/// `raw` with its leading AND trailing runs of `WS` removed — the line-grammar-exact
+/// replacement for [`str::trim`].
+///
+/// > `WS ::= #x20 | #x9 | #xD | #xA`
+///
+/// — Turtle 1.2 §6.5 / SPARQL 1.2 §19.8. See [`trim_ws_start`] for why the four-member
+/// production and the twenty-six-member Unicode property are not interchangeable and
+/// why the byte-wise scan is exact.
+fn trim_ws(raw: &str) -> &str {
+    let trimmed = trim_ws_start(raw);
+    let bytes = trimmed.as_bytes();
+    let end = bytes
+        .iter()
+        .rposition(|&byte| !is_ws(byte))
+        .map_or(0, |last| last + 1);
+    &trimmed[..end]
+}
+
 /// 1-based column (counted in Unicode scalar values) of a byte offset that lies
 /// within the TRIMMED content of `raw`. `trimmed_off` is a byte offset into
-/// `raw.trim()` (i.e. token spans from tokenizing the trimmed line); it is
-/// rebased onto `raw` by adding the leading-whitespace width.
+/// [`trim_ws(raw)`](trim_ws) (i.e. token spans from tokenizing the trimmed line); it is
+/// rebased onto `raw` by adding the leading-`WS` width.
+///
+/// > `WS ::= #x20 | #x9 | #xD | #xA`
+///
+/// — Turtle 1.2 §6.5 / SPARQL 1.2 §19.8.
+///
+/// The leading run measured here MUST be the run [`parse_one_line`] actually removed,
+/// scalar for scalar, because this function's whole job is to undo that removal. The two
+/// therefore scan the SAME predicate through the SAME [`trim_ws_start`], and neither
+/// spells a whitespace test of its own. Letting them drift is a pure diagnostic
+/// regression and an invisible one: the parse still succeeds or fails exactly as it did,
+/// and only the column moves — so every error on a line with leading whitespace would
+/// quietly point at the wrong scalar with no test failing. Concretely, if this measured
+/// [`str::trim_start`]'s wider run while the parser removed `WS`, then on
+/// `"␣␣<NBSP><urn:ex:s> …"` the parser would fail AT the NO-BREAK SPACE while this
+/// reported the column of the `<` after it.
 fn column_in_raw(raw: &str, trimmed_off: usize) -> u32 {
-    let lead = raw.len() - raw.trim_start().len();
+    let lead = raw.len() - trim_ws_start(raw).len();
     let mut byte = (lead + trimmed_off).min(raw.len());
     while byte > 0 && !raw.is_char_boundary(byte) {
         byte -= 1;
@@ -428,15 +493,125 @@ fn parse_lines_sequential<S: SpanCollector>(
 ///
 /// `raw` is the UNTRIMMED line as `str::lines` yields it (no `\n` / `\r\n`
 /// terminator); columns in diagnostics are rebased onto it.
+///
+/// # What separates the tokens, and what does not
+///
+/// The run stripped off each end is `WS` and only `WS`:
+///
+/// > `WS ::= #x20 | #x9 | #xD | #xA`
+///
+/// — Turtle 1.2 §6.5 / SPARQL 1.2 §19.8, four code points, scanned through the single
+/// [`purrdf_iri::terminals::is_ws`] transcription. [`str::trim`] is NOT that: it is
+/// defined over [`char::is_whitespace`], the Unicode `White_Space` property, and admits
+/// twenty-six scalars including U+00A0 NO-BREAK SPACE, U+000B, U+000C, U+2028 and
+/// U+3000.
+///
+/// Using the wider test here did not merely widen the accepted language, it CHANGED WHAT
+/// TWO KINDS OF LINE MEAN — and both changes were silent, because the affected lines
+/// still parsed:
+///
+/// * **A line holding nothing but U+00A0** trimmed to the empty string and was dropped
+///   as BLANK. It is not blank: U+00A0 is not `WS`, so nothing about it is skippable, and
+///   it is not a comment either. It is now what the grammar says it is — a line whose
+///   first scalar opens no terminal — and it is refused, with the column pointing at the
+///   NO-BREAK SPACE itself.
+/// * **A NO-BREAK SPACE before `#`** trimmed away, leaving the line starting with `#`, so
+///   the line was read as a COMMENT and everything on it was discarded. `#` opens a
+///   comment only where a comment may begin, and a comment may begin only after `WS` or
+///   at the line's start; a U+00A0 before it is neither. Such a line is now refused
+///   rather than silently thrown away. (Turtle 1.2 / N-Triples 1.2, *Comments*:
+///   "Comments in N-Triples take the form of `#`, outside an `IRIREF` or
+///   `STRING_LITERAL_QUOTE`, and continue to the end of line (marked by characters #xD or
+///   #xA) or end of file.")
+///
+/// None of this reaches INSIDE a token. A U+00A0 in a quoted literal or in an `IRIREF`
+/// body is content, is lawful, and is untouched — `IRIREF` excludes only `#x00-#x20` and
+/// nine reserved delimiters, and U+00A0 is `ucschar` (see
+/// [`absolute_iri_by_grammar`]). This is a rule about the LINE grammar, not about string
+/// content.
+///
+/// # U+FEFF: a lawful NAME character, refused in the ONE position no name may occupy
+///
+/// U+FEFF ZERO WIDTH NO-BREAK SPACE — the scalar a UTF-8 byte order mark spells — is
+/// **not** whitespace of any kind, and it is **not** a character this grammar excludes.
+/// It sits inside `PN_CHARS_BASE`:
+///
+/// > `PN_CHARS_BASE ::= … | [#xF900-#xFDCF] | [#xFDF0-#xFFFD] | [#x10000-#xEFFFF]`
+///
+/// `#xFEFF` falls in `[#xFDF0-#xFFFD]`, so it is a lawful name-start and name-continue
+/// scalar, a lawful `ucschar` inside an `IRIREF` body, and lawful content inside a
+/// literal. Every one of `_:a<FEFF>b`, `ex:a<FEFF>b`, `<urn:ex:a<FEFF>b>` and
+/// `"x<FEFF>y"` parses, and MUST keep parsing: refusing a scalar the name production
+/// explicitly admits would be over-refusal, which this repository treats as exactly as
+/// severe as a silent drop. Nothing below touches any of them.
+///
+/// What IS refused is one position: the first non-`WS` scalar of a line. That refusal is
+/// exact rather than cautious, and it is exact by exhaustion over the grammar's own
+/// alternatives. A line of this family is a `triple`, a comment, or empty, with
+///
+/// > `WS ::= #x20 | #x9 | #xD | #xA`
+///
+/// > `EOL ::= [#xD#xA]+`
+///
+/// and a `triple` opens at
+///
+/// > `subject ::= IRIREF | BLANK_NODE_LABEL`
+///
+/// (RDF 1.2 adds the triple term `<<( … )>>`, which also opens at `<`). Spelled out,
+/// the first scalar of a statement is `<` or `_`, a comment's is `#`, and there is no
+/// fourth alternative — N-Triples and N-Quads have NO bare-word position at all: no
+/// keywords, no prefixed names, no `a`. So a name-start scalar at the head of a line
+/// belongs to no production, and no document is lost by saying so.
+///
+/// This is therefore not a new refusal, only a new *diagnostic*. Such a line was already
+/// refused, and refused unhelpfully: U+FEFF being `PN_CHARS_BASE`, the scanner had
+/// already dispatched it as a name before any arm could look at it, so the line came back
+/// as "unexpected token `Word("\u{feff}")`" — a message naming nothing the user could act
+/// on. The verdict is unchanged; only the explanation is.
+///
+/// The rejected alternative was to STRIP exactly one leading U+FEFF at document start. It
+/// loses on the grammar: no production of this family names a byte order mark, so
+/// stripping would be this parser inventing a production the specification does not have
+/// — the same class of act as widening `WS` to the Unicode property, and the very class
+/// of act the rest of this module exists to undo. It is also the weaker reading of what a
+/// mark IS: a byte order mark is a claim about the ENCODING of a byte stream, and by the
+/// time a line reaches here the bytes have been decoded as UTF-8 and the claim has been
+/// honoured, so what remains is only a scalar the line grammar does not place. And it is
+/// unspellable without inventing state: this function is the single copy of the line
+/// grammar shared by all three line paths and it is handed a LINE, never a document
+/// offset, while a per-line strip would accept a mark at the head of EVERY line, which no
+/// reading of any specification supports.
+///
+/// The two neighbours of the decision, both refused, neither by this arm:
+///
+/// * A **second consecutive** U+FEFF is a leading U+FEFF in its own right and meets the
+///   same refusal — which it also would under the strip-exactly-one alternative.
+/// * A **mid-line** U+FEFF standing alone between two tokens is refused one layer down,
+///   as the `Word` it lawfully lexes into, because no position of an N-Triples/N-Quads
+///   statement admits a bare word. That has nothing to do with byte order marks and the
+///   diagnostic does not pretend otherwise. A mid-line U+FEFF *adjacent to or inside* a
+///   token is a different thing entirely — it is part of that name, IRI or literal, and
+///   it parses.
 fn parse_one_line(
     raw: &str,
     allow_graph: bool,
     lineno: u32,
     base: &BaseScope,
 ) -> Result<Option<Statement>, RdfDiagnostic> {
-    let line = raw.trim();
+    let line = trim_ws(raw);
     if line.is_empty() || line.starts_with('#') {
         return Ok(None);
+    }
+    if line.starts_with(BYTE_ORDER_MARK) {
+        return Err(err_at(
+            "line begins with U+FEFF ZERO WIDTH NO-BREAK SPACE (the UTF-8 byte order \
+             mark, bytes EF BB BF). It is a lawful PN_CHARS_BASE scalar INSIDE a token, \
+             but no production of the N-Triples / N-Quads line grammar names a byte order \
+             mark: a statement begins at an IRIREF `<` or a blank node label `_:`, a \
+             comment at `#`, and WS is #x20 | #x9 | #xD | #xA. Remove the mark",
+            lineno,
+            column_in_raw(raw, 0),
+        ));
     }
     let tokens = tokenize(line).map_err(|e| {
         let col = e.byte_offset().map_or(1, |at| column_in_raw(raw, at));
@@ -3239,5 +3414,302 @@ mod tests {
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // The line grammar's `WS`, on ALL THREE line paths
+    //
+    // `WS ::= #x20 | #x9 | #xD | #xA` decides where a statement starts and whether a
+    // line is blank or a comment, so a document can change MEANING (not merely
+    // validity) when the test widens. Every vector below is therefore executed on the
+    // sequential path, the chunk-parallel path and the streaming `LineStreamParser`:
+    // they are separate call sites, and a fix to one is not a fix to the others.
+    // ───────────────────────────────────────────────────────────────────────────
+
+    /// One path's reading of a document: how many statements it found, or why it
+    /// refused.
+    type PathAnswer = Result<usize, RdfDiagnostic>;
+
+    /// The three line paths, in the order [`all_line_paths`] reports them.
+    const LINE_PATHS: [&str; 3] = ["sequential", "chunk-parallel", "line-stream"];
+
+    /// Feed `text` to the streaming [`LineStreamParser`] one `str::lines` line at a
+    /// time — exactly as `stream::stream_line_format` drives it — and report the quad
+    /// count of the graph it froze.
+    fn line_stream_answer(text: &str) -> PathAnswer {
+        let mut parser = LineStreamParser::new(NativeRdfFormat::NTriples, BaseScope::empty())?;
+        for raw in text.lines() {
+            parser.push_line(raw)?;
+        }
+        Ok(parser.finish().quads.len())
+    }
+
+    /// `text` as read by every N-Triples line path.
+    ///
+    /// The chunk-parallel path is driven with a 1-byte chunk target, so EVERY line is
+    /// its own chunk and every line boundary is also a chunk boundary — the geometry
+    /// most likely to expose a rule that was only ever applied in the buffered lane.
+    fn all_line_paths(text: &str) -> [PathAnswer; 3] {
+        let base = BaseScope::empty();
+        [
+            parse_lines_sequential(text, false, 1, &base, &mut NoSpans)
+                .map(|statements| statements.len()),
+            parse_lines_parallel_with_chunk_size(text, false, 1, &base)
+                .map(|statements| statements.len()),
+            line_stream_answer(text),
+        ]
+    }
+
+    /// Every line path reads `text` as exactly `statements` statements.
+    #[track_caller]
+    fn every_line_path_accepts(text: &str, statements: usize) {
+        for (path, answer) in LINE_PATHS.iter().zip(all_line_paths(text)) {
+            let found =
+                answer.unwrap_or_else(|e| panic!("{path} must accept {text:?}, refused it: {e:?}"));
+            assert_eq!(found, statements, "{path} statement count for {text:?}");
+        }
+    }
+
+    /// Every line path refuses `text` with the IDENTICAL diagnostic; that diagnostic is
+    /// handed back so the caller can pin its message and its column.
+    #[track_caller]
+    fn every_line_path_refuses(text: &str) -> RdfDiagnostic {
+        let mut answers = all_line_paths(text)
+            .into_iter()
+            .zip(LINE_PATHS)
+            .map(|(answer, path)| match answer {
+                Ok(count) => panic!("{path} must refuse {text:?}, read {count} statements"),
+                Err(diagnostic) => diagnostic,
+            });
+        let first = answers.next().expect("three paths");
+        for (diagnostic, path) in answers.zip(&LINE_PATHS[1..]) {
+            assert_eq!(
+                diagnostic, first,
+                "{path} must report the sequential diagnostic byte-identically"
+            );
+        }
+        first
+    }
+
+    /// The 1-based (line, column) a located diagnostic names.
+    #[track_caller]
+    fn located(diagnostic: &RdfDiagnostic) -> (u32, u32) {
+        let location = diagnostic.location.as_ref().expect("located diagnostic");
+        (
+            location.line.expect("line"),
+            location.column.expect("column"),
+        )
+    }
+
+    /// The over-refusal side, executed: everything the line grammar DOES admit around
+    /// whitespace still parses, on all three paths.
+    ///
+    /// This is the neighbour set for every refusal tightened below. `WS` has four
+    /// members and all four of them still separate, terminate and indent.
+    #[test]
+    fn the_valid_neighbours_of_the_exact_ws_class_still_parse() {
+        let plain = "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n";
+        every_line_path_accepts(plain, 1);
+        // Indented with SPACEs, and with TABs.
+        every_line_path_accepts("    <urn:ex:s> <urn:ex:p> <urn:ex:o> .\n", 1);
+        every_line_path_accepts("\t\t<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n", 1);
+        // Trailing `WS` after the terminator.
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> <urn:ex:o> . \t\n", 1);
+        // CRLF line endings (`str::lines` leaves nothing, but a lone trailing `#xD`
+        // on an un-terminated final line is `WS` and must still be trimmed).
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r\n", 1);
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r", 1);
+        // A file with NO trailing newline.
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> <urn:ex:o> .", 1);
+        // A comment line, an INDENTED comment line, a blank line, and a line of
+        // nothing but `WS` — four lines, no statements, no error.
+        every_line_path_accepts("# a comment\n\t  # an indented comment\n\n \t \n", 0);
+        // And all of it at once, still exactly the two statements.
+        every_line_path_accepts(
+            "# leading comment\r\n\
+             \t<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r\n\
+             \n\
+             \x20\x20# indented comment\n\
+             <urn:ex:s2> <urn:ex:p> \"v\" .",
+            2,
+        );
+    }
+
+    /// U+00A0 INSIDE a token is content, is lawful, and is untouched: this is a rule
+    /// about the LINE grammar, not about what a literal or an `IRIREF` may hold.
+    #[test]
+    fn a_no_break_space_inside_a_token_still_parses() {
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> \"a\u{a0}b\" .\n", 1);
+        every_line_path_accepts("<urn:ex:a\u{a0}b> <urn:ex:p> <urn:ex:o> .\n", 1);
+        // And the scalar SURVIVES into the term rather than being trimmed out of it.
+        let statements = parse_lines_sequential(
+            "<urn:ex:a\u{a0}b> <urn:ex:p> <urn:ex:o> .\n",
+            false,
+            1,
+            &BaseScope::empty(),
+            &mut NoSpans,
+        )
+        .expect("a NO-BREAK SPACE in an IRIREF body is `ucschar` and parses");
+        assert_eq!(
+            subject_key(&statements[0][0]).as_deref(),
+            Some("urn:ex:a\u{a0}b"),
+            "the NO-BREAK SPACE must survive verbatim in the resolved IRI"
+        );
+    }
+
+    /// A line holding nothing but U+00A0 used to trim to the empty string and be
+    /// dropped as BLANK. It is not blank — U+00A0 is not `WS` — and it is not a
+    /// comment, so it is now refused, pointing at the NO-BREAK SPACE itself.
+    #[test]
+    fn a_line_of_only_a_no_break_space_is_not_a_blank_line() {
+        let diagnostic = every_line_path_refuses(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n\u{a0}\n<urn:ex:s2> <urn:ex:p> <urn:ex:o> .\n",
+        );
+        assert_eq!(located(&diagnostic), (2, 1));
+        assert!(
+            diagnostic.message.contains("U+00A0 NO-BREAK SPACE"),
+            "the diagnostic must name the offending scalar: {}",
+            diagnostic.message
+        );
+        // The neighbours: the SPACE-only line and the TAB-only line the author almost
+        // certainly meant are still blank lines, and the document still parses.
+        every_line_path_accepts(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n \n<urn:ex:s2> <urn:ex:p> <urn:ex:o> .\n",
+            2,
+        );
+        every_line_path_accepts(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n\t\n<urn:ex:s2> <urn:ex:p> <urn:ex:o> .\n",
+            2,
+        );
+    }
+
+    /// A U+00A0 before `#` used to trim away, so the line was read as a COMMENT and
+    /// everything on it was silently discarded. A comment may open at the line start or
+    /// after `WS`, and a NO-BREAK SPACE is neither.
+    #[test]
+    fn a_no_break_space_before_a_hash_does_not_open_a_comment() {
+        let diagnostic = every_line_path_refuses("\u{a0}# this does not open a comment\n");
+        assert_eq!(located(&diagnostic), (1, 1));
+        assert!(
+            diagnostic.message.contains("U+00A0 NO-BREAK SPACE"),
+            "the diagnostic must name the offending scalar: {}",
+            diagnostic.message
+        );
+        // The neighbours: a comment at the line start and a comment after real `WS`
+        // are both still comments, carrying no statement and raising no error.
+        every_line_path_accepts("# this opens a comment\n", 0);
+        every_line_path_accepts(" \t# this opens a comment too\n", 0);
+        // And a `#` INSIDE a token is still not a comment either way.
+        every_line_path_accepts("<urn:ex:s#f> <urn:ex:p> \"a # b\" .\n", 1);
+    }
+
+    /// A LEADING U+FEFF is refused, by name, on every line path — the decision
+    /// documented at [`parse_one_line`].
+    #[test]
+    fn a_leading_byte_order_mark_is_refused_by_name() {
+        let diagnostic = every_line_path_refuses("\u{feff}<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n");
+        assert_eq!(located(&diagnostic), (1, 1));
+        assert!(
+            diagnostic
+                .message
+                .contains("U+FEFF ZERO WIDTH NO-BREAK SPACE"),
+            "the diagnostic must name the character: {}",
+            diagnostic.message
+        );
+        // The neighbour: the identical document without the mark parses.
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n", 1);
+    }
+
+    /// A SECOND consecutive U+FEFF is refused under this decision AND would be refused
+    /// under the strip-exactly-one alternative, so it pins the boundary of the decision
+    /// rather than restating it.
+    #[test]
+    fn a_second_consecutive_byte_order_mark_is_refused() {
+        let diagnostic =
+            every_line_path_refuses("\u{feff}\u{feff}<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n");
+        assert_eq!(located(&diagnostic), (1, 1));
+        assert!(
+            diagnostic
+                .message
+                .contains("U+FEFF ZERO WIDTH NO-BREAK SPACE"),
+            "the diagnostic must name the character: {}",
+            diagnostic.message
+        );
+    }
+
+    /// A MID-LINE U+FEFF outside a token is refused as the stray `Word` it lexes into —
+    /// again under either decision, since no strip rule reaches past a line's head.
+    #[test]
+    fn a_mid_line_byte_order_mark_outside_a_token_is_refused() {
+        let diagnostic = every_line_path_refuses("<urn:ex:s> \u{feff}<urn:ex:p> <urn:ex:o> .\n");
+        assert_eq!(
+            located(&diagnostic),
+            (1, 12),
+            "the column must name the mark, scalar 12 of the line"
+        );
+        assert!(
+            !diagnostic.message.contains("byte order mark"),
+            "a mid-line mark is not a byte order mark and must not be called one: {}",
+            diagnostic.message
+        );
+        // The neighbour: U+FEFF INSIDE a token is `ucschar`/literal content, lawful,
+        // and still parses — the refusal reaches the line grammar only.
+        every_line_path_accepts("<urn:ex:a\u{feff}b> <urn:ex:p> <urn:ex:o> .\n", 1);
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> \"a\u{feff}b\" .\n", 1);
+    }
+
+    /// The neighbour that decides the whole U+FEFF question: it is a LAWFUL name
+    /// character, and the refusal above must not reach it.
+    ///
+    /// `PN_CHARS_BASE` includes `[#xFDF0-#xFFFD]`, and `#xFEFF` is inside that range, so
+    /// U+FEFF is a legal `BLANK_NODE_LABEL` scalar. A blanket ban on the character —
+    /// the obvious wrong turn when writing the refusal above — would reject this line,
+    /// which is exactly the over-refusal mirror of the silent re-read. U+00A0, which is
+    /// in NO name class, is the contrast that shows the two are not interchangeable.
+    #[test]
+    fn a_byte_order_mark_inside_a_blank_node_label_is_a_name_character_and_parses() {
+        every_line_path_accepts("_:a\u{feff}b <urn:ex:p> <urn:ex:o> .\n", 1);
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> _:a\u{feff}b .\n", 1);
+        // A U+FEFF that STARTS the label, right after `_:` — `PN_CHARS_U` admits it in
+        // the label's first position too, so the line's first scalar being `_` is what
+        // matters, not what follows it.
+        every_line_path_accepts("_:\u{feff}b <urn:ex:p> <urn:ex:o> .\n", 1);
+        // The contrast: U+00A0 is in no name class, so the same shape is refused.
+        let diagnostic = every_line_path_refuses("_:a\u{a0}b <urn:ex:p> <urn:ex:o> .\n");
+        assert!(
+            diagnostic.message.contains("U+00A0 NO-BREAK SPACE"),
+            "the diagnostic must name the offending scalar: {}",
+            diagnostic.message
+        );
+    }
+
+    /// [`column_in_raw`] and [`parse_one_line`] measure the SAME leading run.
+    ///
+    /// Nothing else in the crate would notice if they drifted: the parse outcome is
+    /// unchanged and only the reported column moves, so this is the one place that
+    /// pins it. The two halves are asserted separately and then against each other.
+    #[test]
+    fn the_diagnostic_column_and_the_trim_move_in_lockstep() {
+        // Half one — the column's own view of the leading run. `WS` members are part
+        // of it; Unicode whitespace that is not `WS` is the first CONTENT scalar.
+        assert_eq!(column_in_raw("  <urn:ex:s>", 0), 3);
+        assert_eq!(column_in_raw("\t<urn:ex:s>", 0), 2);
+        assert_eq!(column_in_raw("\r\n<urn:ex:s>", 0), 3);
+        assert_eq!(column_in_raw("\u{a0}<urn:ex:s>", 0), 1);
+        assert_eq!(column_in_raw("  \u{a0}<urn:ex:s>", 0), 3);
+        assert_eq!(column_in_raw("\u{b}<urn:ex:s>", 0), 1);
+        assert_eq!(column_in_raw("\u{c}<urn:ex:s>", 0), 1);
+        assert_eq!(column_in_raw("\u{3000}<urn:ex:s>", 0), 1);
+
+        // Half two — the parser's. Two SPACEs then a NO-BREAK SPACE: the refusal must
+        // land on scalar 3, the NO-BREAK SPACE, not on the `<` after it.
+        let diagnostic = every_line_path_refuses("  \u{a0}<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n");
+        assert_eq!(located(&diagnostic), (1, 3));
+
+        // The neighbour: the same indentation without the NO-BREAK SPACE parses, and a
+        // refusal further along that line is reported at the right scalar too.
+        every_line_path_accepts("  <urn:ex:s> <urn:ex:p> <urn:ex:o> .\n", 1);
+        let short = every_line_path_refuses("  <urn:ex:s> <urn:ex:p> .\n");
+        assert_eq!(located(&short), (1, 3));
     }
 }
