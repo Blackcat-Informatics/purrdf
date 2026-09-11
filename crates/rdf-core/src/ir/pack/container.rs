@@ -493,6 +493,16 @@ impl PackBuilder {
     /// section order, the unified id space and the canonical-identity digest are
     /// all functions of content alone.
     ///
+    /// # Declaration-only graphs
+    ///
+    /// The pack format derives its graphs from rows: a named graph that owns no
+    /// quad, reifier or annotation row leaves no bytes here, exactly as it leaves
+    /// none through [`build_bytes`](Self::build_bytes) over the frozen dataset
+    /// that declared it. A view path that encoded the declaration would change
+    /// the format, so it deliberately does not; a caller that must carry an
+    /// empty declaration across this boundary states it explicitly on the far
+    /// side, the same discipline every row-derived output surface asks for.
+    ///
     /// # Operational refusal
     ///
     /// A fallible view's status is sampled TWICE: before a single row is drained,

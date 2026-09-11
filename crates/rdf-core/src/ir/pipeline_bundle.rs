@@ -632,24 +632,47 @@ fn iri_named_graphs<D: DatasetView>(view: &D) -> Vec<HandleKey> {
 /// else — the containment invariant the module docs state.
 /// Register every owner one composite source keeps resident: a native base, a
 /// delta's base and overlay, or — for a graph selection — every owner of the
-/// composite it retains, recursively, since a selection can be taken over a
-/// composite that itself holds one. The ledger deduplicates by owner identity,
-/// so an owner reached along two paths is charged once.
+/// composite it retains, transitively, since a selection can be taken over a
+/// composite that itself holds one.
+///
+/// The traversal is an iterative worklist, not a recursion, and it deduplicates
+/// as it walks: caller-composed views may share one composite along many
+/// branches of a nested selection graph, and revisiting it on every branch
+/// would do exponential work, stack a guard per path where one per owner keeps
+/// it resident, and — deep enough — overflow the call stack. Composites are
+/// visited once by allocation identity, and each distinct owner yields exactly
+/// one guard, which is all residency requires; the ledger's own dedup makes
+/// extra guards harmless, so the sets here are a cost bound, never a
+/// correctness one.
 fn retain_source_owners(
-    source: &CompositeSource,
+    view: &CompositeDatasetView,
     ledger: &Arc<RetentionLedger>,
     retained: &mut Vec<RetentionGuard>,
 ) {
-    if let Some(base) = source.dataset() {
-        retained.push(ledger.retain_dataset(base));
-    }
-    if let Some(delta) = source.delta() {
-        retained.push(ledger.retain_dataset(delta.base()));
-        retained.push(ledger.retain_dataset(delta.delta()));
-    }
-    if let Some((selected, _)) = source.selection() {
-        for inner in selected.sources() {
-            retain_source_owners(inner, ledger, retained);
+    let mut seen_views = std::collections::BTreeSet::new();
+    let mut seen_owners = std::collections::BTreeSet::new();
+    let mut worklist = vec![view];
+    seen_views.insert(std::ptr::from_ref(view) as usize);
+    while let Some(current) = worklist.pop() {
+        for source in current.sources() {
+            if let Some(base) = source.dataset()
+                && seen_owners.insert(Arc::as_ptr(base) as usize)
+            {
+                retained.push(ledger.retain_dataset(base));
+            }
+            if let Some(delta) = source.delta() {
+                for owner in [delta.base(), delta.delta()] {
+                    if seen_owners.insert(Arc::as_ptr(owner) as usize) {
+                        retained.push(ledger.retain_dataset(owner));
+                    }
+                }
+            }
+            if let Some((selected, _)) = source.selection() {
+                let selected: &CompositeDatasetView = selected;
+                if seen_views.insert(std::ptr::from_ref(selected) as usize) {
+                    worklist.push(selected);
+                }
+            }
         }
     }
 }
@@ -1248,9 +1271,7 @@ impl<H> PipelineViewBundle<H> {
     ) -> Self {
         let view = view.into();
         let mut retained = Vec::new();
-        for source in view.sources() {
-            retain_source_owners(source, ledger, &mut retained);
-        }
+        retain_source_owners(&view, ledger, &mut retained);
         Self {
             view,
             ledger: Arc::clone(ledger),
