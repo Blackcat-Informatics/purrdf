@@ -19,6 +19,8 @@
 
 use std::borrow::Cow;
 
+use purrdf_iri::terminals;
+
 use crate::error::{ParseError, Result};
 
 /// A lexical token. Payload-bearing variants keep the *lexical* form (the AST
@@ -244,13 +246,32 @@ impl<'a> Lexer<'a> {
         Ok(out)
     }
 
-    /// Skip whitespace and `#` line comments. The comment tail is skipped with a
+    /// Skip `WS` and `#` line comments. The comment tail is skipped with a
     /// single `memchr` to the newline rather than a per-char walk.
+    ///
+    /// The whitespace test is [`terminals::is_ws`] — the grammar's
+    /// `WS ::= #x20 | #x9 | #xD | #xA` — applied to the raw byte, NOT
+    /// [`char::is_whitespace`]. Two separate reasons, and the first is a
+    /// correctness one:
+    ///
+    /// * `char::is_whitespace` answers the Unicode `White_Space` property, which
+    ///   names some twenty-odd scalars the grammar does not: U+00A0 NO-BREAK
+    ///   SPACE, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and
+    ///   U+000B/U+000C. Skipping them between tokens accepts documents no
+    ///   conforming processor accepts, and — because none of them is a `PN_CHARS`
+    ///   member either — it lets a misplaced NO-BREAK SPACE *silently separate*
+    ///   two tokens the grammar would have refused to separate.
+    /// * The byte test is exact over UTF-8 for the same reason
+    ///   [`is_iriref_forbidden_byte`] is: every `WS` member is ASCII, and no byte
+    ///   of a multi-byte UTF-8 sequence is below `0x80`, so a raw-byte comparison
+    ///   can neither miss a member nor alias one. That removes a UTF-8 decode and
+    ///   a Unicode-property lookup from the loop that runs between *every* pair of
+    ///   tokens in SPARQL, Turtle, TriG, N-Triples and N-Quads.
     fn skip_trivia(&mut self) {
         loop {
-            match self.cur() {
-                Some(c) if c.is_whitespace() => self.pos += c.len_utf8(),
-                Some('#') => match memchr::memchr(b'\n', &self.bytes[self.pos..]) {
+            match self.byte_at(0) {
+                Some(b) if terminals::is_ws(b) => self.pos += 1,
+                Some(b'#') => match memchr::memchr(b'\n', &self.bytes[self.pos..]) {
                     // Consume through the newline (byte-identical to the prior
                     // per-char loop, which broke AFTER pushing past '\n').
                     Some(rel) => self.pos += rel + 1,
@@ -608,17 +629,33 @@ impl<'a> Lexer<'a> {
         Ok(Token::BlankNodeLabel(label))
     }
 
+    /// `ANON ::= '[' WS* ']'` — one token — or else the bare `'['` that opens a
+    /// blank-node property list.
+    ///
+    /// The inter-bracket run is scanned with [`terminals::is_ws`] over raw bytes,
+    /// the same exact-over-UTF-8 byte test [`Self::skip_trivia`] uses and for the
+    /// same two reasons. Here the exactness is load-bearing in a second way: a
+    /// scalar that `char::is_whitespace` admits but `WS` does not — U+00A0 the
+    /// leading example — must not *close* the `ANON`, because it is not a member
+    /// of any production that may appear between the brackets, so `[<NBSP>]` is
+    /// simply not a SPARQL token and must be refused rather than silently read as
+    /// a fresh blank node.
+    ///
+    /// This scan is deliberately **comment-blind**, and must stay so. `ANON` is a
+    /// *terminal*, so the grammar admits no comment inside it; and the lexer could
+    /// not skip one soundly even if it wanted to, because `[ # c\n ?p ?o ]` is a
+    /// lawful *populated* `BlankNodePropertyListPath` that must emit `LBracket`.
+    /// Nothing at this level can tell the empty case from the populated one, so
+    /// teaching this scan about `#` would only *widen* acceptance. The empty pair
+    /// `'[' ']'` reachable only via a comment is refused by the parser, which does
+    /// know which case it is in — see `parse_blank_node_property_list` in
+    /// [`crate::parser`].
     fn lex_bracket_or_anon(&mut self) -> Result<Token<'a>> {
-        // `[` optionally `]` (with only whitespace between) → anonymous blank.
         let mut j = self.pos + 1; // byte offset past '['
-        while let Some(c) = self.src[j..].chars().next() {
-            if c.is_whitespace() {
-                j += c.len_utf8();
-            } else {
-                break;
-            }
+        while self.bytes.get(j).copied().is_some_and(terminals::is_ws) {
+            j += 1; // every `WS` member is one ASCII byte
         }
-        if self.src[j..].starts_with(']') {
+        if self.bytes.get(j) == Some(&b']') {
             self.pos = j + 1; // ']' is ASCII
             Ok(Token::Anon)
         } else {
@@ -1022,6 +1059,167 @@ mod tests {
                 "{c:?} is a reserved IRIREF delimiter on the UCHAR path too"
             );
         }
+    }
+
+    // ── `WS ::= #x20 | #x9 | #xD | #xA`, and nothing else, at BOTH trivia sites ──
+    //
+    // The defect these pin: `skip_trivia` and the `ANON` scan both tested
+    // `char::is_whitespace`, i.e. the Unicode `White_Space` property, which names
+    // roughly two dozen scalars the grammar does not. That is not a harmless
+    // liberality, because a scanner's character class is a BOUNDARY test: none of
+    // those extra scalars is a `PN_CHARS` member either, so skipping one lets it
+    // silently separate two tokens the grammar would have refused to separate,
+    // and the document parses — differently — instead of failing.
+    //
+    // The two sites must move together. Tightening the `ANON` scan alone flips
+    // `{ [<NBSP>] }` from refused to ACCEPTED: the NO-BREAK SPACE stops closing
+    // the `ANON`, an `LBracket` is emitted instead, a still-liberal `skip_trivia`
+    // then eats the NO-BREAK SPACE, the `]` arrives, and the parser reads an empty
+    // blank-node property list. So the vector below exercises the pair.
+    //
+    // The refusal set is GENERATED from the Unicode property rather than written
+    // out by hand, because a hand-written list of "the Unicode spaces" silently
+    // loses members: U+205F MEDIUM MATHEMATICAL SPACE and U+2029 PARAGRAPH
+    // SEPARATOR are the two that go first.
+
+    /// Every scalar carrying the Unicode `White_Space` property that `WS` does
+    /// NOT name — the exact set both trivia sites must refuse to skip.
+    ///
+    /// `char::is_whitespace` *is* the `White_Space` property, so deriving the set
+    /// from it makes the vector self-maintaining: a future Unicode revision that
+    /// adds a space character adds it here too, rather than leaving a stale
+    /// literal list that silently stops covering it.
+    fn non_ws_unicode_whitespace() -> Vec<char> {
+        (0..=0x0010_FFFF_u32)
+            .filter_map(char::from_u32)
+            .filter(|&c| c.is_whitespace() && !matches!(c, ' ' | '\t' | '\r' | '\n'))
+            .collect()
+    }
+
+    /// The generated set really does hold the members a hand-list drops, and
+    /// really does exclude the four `WS` members — otherwise every vector built on
+    /// it would pass vacuously.
+    #[test]
+    fn the_generated_refusal_set_covers_what_a_hand_list_loses() {
+        let set = non_ws_unicode_whitespace();
+        for c in [
+            '\u{b}', '\u{c}', '\u{85}', '\u{a0}', '\u{1680}', '\u{2000}', '\u{200a}', '\u{2028}',
+            '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+        ] {
+            assert!(
+                set.contains(&c),
+                "U+{:04X} carries White_Space and is not `WS`",
+                c as u32
+            );
+        }
+        for c in [' ', '\t', '\r', '\n'] {
+            assert!(
+                !set.contains(&c),
+                "U+{:04X} is one of the four `WS` members",
+                c as u32
+            );
+        }
+        // A floor, not an equality: the point is that the set is the property's,
+        // so a Unicode revision may grow it without invalidating the vector.
+        assert!(
+            set.len() >= 21,
+            "White_Space minus `WS` has {} members",
+            set.len()
+        );
+    }
+
+    /// Between two tokens, exactly the four `WS` members are trivia. Each refusal
+    /// is executed next to its ASCII neighbour in the same vector, so this pins
+    /// exactness in both directions rather than blanket non-ASCII refusal.
+    ///
+    /// The asserted property is "the scalar was not DROPPED", not a particular
+    /// error arm: the lexer's name classes are still liberal, so a non-ASCII
+    /// space currently surfaces as a spurious extra token rather than a lex
+    /// error. Either outcome is a refusal to treat it as trivia; which one occurs
+    /// is not this vector's claim to make.
+    #[test]
+    fn only_ws_is_skipped_between_two_tokens() {
+        for c in [' ', '\t', '\r', '\n'] {
+            let src = format!("{{{c}}}");
+            assert_eq!(
+                toks(&src),
+                vec![Token::LBrace, Token::RBrace],
+                "U+{:04X} is `WS` and must still be skipped",
+                c as u32
+            );
+        }
+        for c in non_ws_unicode_whitespace() {
+            let src = format!("{{{c}}}");
+            let skipped = tokenize(&src).is_ok_and(|spanned| {
+                spanned
+                    .iter()
+                    .map(|s| &s.token)
+                    .eq([Token::LBrace, Token::RBrace].iter())
+            });
+            assert!(
+                !skipped,
+                "U+{:04X} is not `WS` and must not be skipped as trivia",
+                c as u32
+            );
+        }
+    }
+
+    /// `u8::is_ascii_whitespace` is a two-sided trap, so both of its sides are
+    /// executed: it ADMITS U+000C, which `WS` does not name, and EXCLUDES U+000B,
+    /// which Unicode does. Both are ASCII, so both reach the lexer's error arm
+    /// and the refusal can be pinned exactly.
+    #[test]
+    fn form_feed_and_vertical_tab_are_not_trivia() {
+        assert!(0x0c_u8.is_ascii_whitespace());
+        assert!(tokenize("{\u{c}}").is_err(), "U+000C FORM FEED is not `WS`");
+        assert!(!0x0b_u8.is_ascii_whitespace());
+        assert!('\u{b}'.is_whitespace());
+        assert!(
+            tokenize("{\u{b}}").is_err(),
+            "U+000B VERTICAL TAB is not `WS`"
+        );
+        // The neighbours: the two ASCII controls `WS` DOES name still separate.
+        assert_eq!(toks("{\t}"), vec![Token::LBrace, Token::RBrace]);
+        assert_eq!(toks("{\r\n}"), vec![Token::LBrace, Token::RBrace]);
+    }
+
+    /// `ANON ::= '[' WS* ']'` is closed by the four `WS` members and by nothing
+    /// else, and the sibling `NIL ::= '(' WS* ')'` bracket pair is untouched.
+    #[test]
+    fn anon_admits_exactly_ws_between_its_brackets() {
+        assert_eq!(toks("[]"), vec![Token::Anon]);
+        assert_eq!(toks("[ \t\r\n]"), vec![Token::Anon]);
+        assert_eq!(toks_turtle("[ \t\r\n]"), vec![Token::Anon]);
+        for c in non_ws_unicode_whitespace() {
+            let src = format!("[{c}]");
+            let closes_anon = tokenize(&src).is_ok_and(
+                |spanned| matches!(spanned.as_slice(), [one] if one.token == Token::Anon),
+            );
+            assert!(
+                !closes_anon,
+                "U+{:04X} is not `WS` and must not close an ANON",
+                c as u32
+            );
+        }
+        // `( WS* )` still lexes to the pair the parser folds into `rdf:nil`.
+        assert_eq!(toks("( )"), vec![Token::LParen, Token::RParen]);
+        assert_eq!(toks("(\t\r\n)"), vec![Token::LParen, Token::RParen]);
+    }
+
+    /// The same scalar is refused as trivia and admitted inside an `IRIREF` — the
+    /// two productions disagree about U+00A0 and both are now transcribed
+    /// exactly, so tightening `WS` must not have re-broken the `IRIREF` body.
+    #[test]
+    fn no_break_space_is_refused_as_trivia_yet_lawful_inside_an_iriref() {
+        assert!(
+            !tokenize("{\u{a0}}").is_ok_and(|spanned| spanned.len() == 2),
+            "U+00A0 is not `WS`"
+        );
+        assert_eq!(
+            toks("<urn:ex:a\u{a0}b>"),
+            vec![Token::Iri("urn:ex:a\u{a0}b".into())],
+            "U+00A0 is above #x20 and is not a reserved IRIREF delimiter"
+        );
     }
 
     #[test]

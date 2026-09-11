@@ -1328,6 +1328,20 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         Ok(reifier)
     }
 
+    /// `blankNodePropertyList ::= '[' predicateObjectList ']'` (Turtle 1.2 §6.5),
+    /// or the anonymous blank node `ANON ::= '[' WS* ']'`.
+    ///
+    /// The two are distinguished lexically: `[]`, `[ ]` and `[` tab/CR/LF `]` all
+    /// lex to a single [`Token::Anon`], so an `LBracket` here always opens a
+    /// property list, whose `predicateObjectList` is **not** optional.
+    ///
+    /// An `LBracket` immediately followed by an `RBracket` is therefore not a
+    /// production at all. It has exactly one source: a comment between the
+    /// brackets, `[ #` … newline … `]`. The tokenizer's `ANON` scan cannot refuse
+    /// that, because it is comment-blind by construction — `[ #` … newline …
+    /// `:p :o ]` is a lawful *populated* list and nothing lexical separates the
+    /// two cases — so the refusal belongs here, where the following tokens are
+    /// known.
     fn blank_node_property_list(
         &mut self,
         graph: Option<&Node>,
@@ -1338,11 +1352,20 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             return Ok(self.next_bnode());
         }
         self.expect(&Token::LBracket)?;
-        let subject = self.next_bnode();
-        if !self.eat(&Token::RBracket) {
-            self.predicate_object_list(&subject, graph, depth)?;
-            self.expect(&Token::RBracket)?;
+        if self.at(&Token::RBracket) {
+            let (line, column) = self.loc();
+            return Err(err_at(
+                "`[` `]` with nothing between them is not a blank-node property \
+                 list (which requires at least one predicate-object pair) and not \
+                 an anonymous blank node (`ANON` admits only whitespace between \
+                 its brackets, and a comment is not whitespace)",
+                line,
+                column,
+            ));
         }
+        let subject = self.next_bnode();
+        self.predicate_object_list(&subject, graph, depth)?;
+        self.expect(&Token::RBracket)?;
         Ok(subject)
     }
 
@@ -2861,6 +2884,77 @@ mod tests {
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(29));
         assert!(e.message.contains("unknown prefix"));
+    }
+
+    // ── `'[' ']'` with nothing between the brackets is not a production ───────────
+    //
+    // Turtle's `blankNodePropertyList ::= '[' predicateObjectList ']'` has no empty
+    // alternative, and `ANON ::= '[' WS* ']'` is a terminal, so `[ #` comment
+    // newline `]` is not a Turtle document. This reader accepted it, and — unlike
+    // the SPARQL side — it accepted it BOTH before and after the `ANON` scan was
+    // tightened, because the comment is eaten as trivia either way. The lexer
+    // change alone would have left this half silently wrong, which is why the
+    // parser refusal is what closes it.
+
+    /// Parse a Turtle document with no base and no span collection.
+    fn turtle(text: &str) -> Result<Vec<Statement>, RdfDiagnostic> {
+        DocParser::new(text, BaseScope::empty(), false, &mut NoSpans).parse()
+    }
+
+    /// The refusal: a bracket pair emptied only by a comment, in subject and in
+    /// object position.
+    #[test]
+    fn a_comment_emptied_bracket_pair_is_not_a_blank_node_property_list() {
+        for text in [
+            "<http://ex/s> <http://ex/p> [ # c\n ] .\n",
+            "[ # c\n ] <http://ex/p> <http://ex/o> .\n",
+            "<http://ex/s> <http://ex/p> ( [ # c\n ] ) .\n",
+        ] {
+            let e = turtle(text).expect_err("`[` `]` with only a comment is not a production");
+            assert!(
+                e.message.contains("with nothing between them"),
+                "{text:?} must be refused by the empty-bracket-pair arm, got: {}",
+                e.message
+            );
+        }
+    }
+
+    /// Every neighbour still parses: the same comment in the same place once the
+    /// list is populated, the anonymous blank node in each `WS` spelling, and the
+    /// empty collection.
+    #[test]
+    fn the_neighbours_of_the_comment_emptied_bracket_pair_still_parse() {
+        for text in [
+            "<http://ex/s> <http://ex/p> [ <http://ex/q> <http://ex/o> ] .\n",
+            "<http://ex/s> <http://ex/p> [ # c\n <http://ex/q> <http://ex/o> ] .\n",
+            "[ <http://ex/q> <http://ex/o> ] <http://ex/p> <http://ex/o> .\n",
+            "<http://ex/s> <http://ex/p> [] .\n",
+            "<http://ex/s> <http://ex/p> [ ] .\n",
+            "<http://ex/s> <http://ex/p> [\t\r\n] .\n",
+            "<http://ex/s> <http://ex/p> () .\n",
+            "<http://ex/s> <http://ex/p> ( ) .\n",
+            "<http://ex/s> <http://ex/p> ( # c\n ) .\n",
+        ] {
+            turtle(text).unwrap_or_else(|e| panic!("must still parse {text:?}: {}", e.message));
+        }
+    }
+
+    /// The tightened `WS` class reaches this reader too — it shares the SPARQL
+    /// tokenizer — so a NO-BREAK SPACE neither closes an `ANON` nor separates two
+    /// terms, while its ASCII neighbour does both.
+    #[test]
+    fn a_non_ws_space_is_refused_in_turtle_delimiter_position() {
+        assert!(
+            turtle("<http://ex/s> <http://ex/p> [\u{a0}] .\n").is_err(),
+            "U+00A0 is not `WS`, so `[<NBSP>]` is not an ANON"
+        );
+        turtle("<http://ex/s> <http://ex/p> [ ] .\n").expect("`[ ]` is an ANON");
+        // And the mirror: the very same scalar is LAWFUL raw inside `<...>`,
+        // because `IRIREF` excludes only `#x00-#x20` and the nine reserved
+        // delimiters. The two productions disagree about U+00A0 and both are
+        // transcribed exactly, so tightening one must not move the other.
+        turtle("<http://ex/s> <http://ex/p> <urn:ex:a\u{a0}b> .\n")
+            .expect("U+00A0 is a lawful IRIREF body character");
     }
 
     /// A bare `/` in a prefixed-name local part (e.g. `ex:report/shacl/sarif`)
