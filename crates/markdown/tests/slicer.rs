@@ -260,7 +260,14 @@ fn typed_value(claim: &Claim, predicate: &str) -> Option<String> {
 fn plain_value(claim: &Claim, predicate: &str) -> Option<String> {
     object(claim, predicate).map(|o| {
         assert!(!o.contains("\"^^"), "a plain literal carries no datatype");
-        o.trim_start_matches('"').trim_end_matches('"').to_owned()
+        // One quote from each end and exactly one, so words that
+        // themselves begin or end with a quote come back whole — and a
+        // language-tagged literal, which ends past its closing quote,
+        // fails the strip and the test with it.
+        o.strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix('"'))
+            .expect("a plain literal sits between one pair of quotes")
+            .to_owned()
     })
 }
 
@@ -5931,7 +5938,7 @@ fn the_specification_still_states_every_clause_this_suite_pins_and_carries_no_pr
     assert!(SPEC.starts_with("<!--"), "a license header opens it");
     for clause in [
         "Version 2.0.0-draft",
-        "2026-09-10",
+        "2026-09-11",
         STANDARD_NAMESPACE,
         "crates/markdown/tests/slicer.rs",
         // The split law, with the nuances the vectors pin.
@@ -5966,6 +5973,24 @@ fn the_specification_still_states_every_clause_this_suite_pins_and_carries_no_pr
         "the RDF 1.2 **triple term**",
         "only in **object** position",
         "MUST NOT emit `canonSource` on a unit",
+        // The codec: the cover, the decode law, and the two literal
+        // classes the split rests on.
+        "### 11.3 The decode law",
+        "**The round trip is normative.**",
+        "**Plain means content, typed means bytes.**",
+        "MUST NOT emit a plain literal\non any other node",
+        "structure nodes may be adjacent",
+        "A **structure node's IRI** is the same formula with",
+        "MUST start **strictly before** the continuation",
+        "overlap into legality",
+        "An empty span covers nothing",
+        "MUST be refused **even when the",
+        "so a graph cannot buy an allocation with a number",
+        "`verbatimStart`",
+        "`verbatimText`",
+        "ORDER BY ?start",
+        "**snapshot codec, never an editing model**",
+        "**merge-idempotent**",
         // One writer, and the predicate position inside it.
         "**The predicate position is an IRI position.**",
         "MUST NOT keep a second rendering",

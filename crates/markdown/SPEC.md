@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 **A stand-off specification for turning a written document into RDF 1.2
 along its own structure**
 
-Version 2.0.0-draft — 2026-09-10 — Blackcat Informatics® Inc.
+Version 2.0.0-draft — 2026-09-11 — Blackcat Informatics® Inc.
 
 ## Abstract
 

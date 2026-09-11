@@ -211,9 +211,9 @@ fn a_graph_that_cannot_anchor_a_decode_names_what_it_lacks() {
     );
 }
 
-/// The A-series invariants of the emission, held over the graph. No
-/// two structure runs touch — a maximal run absorbed its neighbour —
-/// and none is empty, the last included.
+/// "Maximal run" in its checkable form, held over the graph: no two
+/// structure runs touch — a maximal run absorbed its neighbour — and
+/// none is empty, the last included.
 #[test]
 fn no_two_structure_nodes_are_adjacent_and_none_is_empty() {
     for p in [profile(), tight(6, 3)] {
