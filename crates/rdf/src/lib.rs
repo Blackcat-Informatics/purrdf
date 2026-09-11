@@ -89,6 +89,12 @@ pub mod capture_support;
 // sources and authoring recipes, shared by the maintainer freezing binary
 // (src/bin/gen_dict_vectors.rs) and the drift-guard test (tests/dict_vectors.rs).
 pub mod gts_dict_vectors;
+// The ONE definition of the keystone GTS-ingestion fixture, shared by the
+// integration suite (tests/gts_view_ingestion.rs) and the bench
+// (benches/gts_ingest.rs) — separate crates that can only share through the
+// library. Not public API: hidden from the docs, and no shipping path calls it.
+#[doc(hidden)]
+pub mod gts_fixtures;
 // Canonical, review-friendly Turtle serializer over the IR: the
 // native replacement for rdflib `longturtle` in `purrdf normalize`. Oxigraph-free.
 pub mod turtle_normalize;

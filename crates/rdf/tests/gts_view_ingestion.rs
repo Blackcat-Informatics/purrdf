@@ -16,10 +16,15 @@
 //!   another, and default-graph relocation — ingested three ways (flat carrier,
 //!   a composite view over the same content, a delta view over the same content)
 //!   must mint one `snapshot_content_id` and one term table.
-//! * **Refusals, each with its neighbouring valid twin.** The capability gate,
-//!   the two operational checkpoints, the plain-slot guard, the blank wire-value
-//!   injectivity guard and the terminal poison flag are all refusals, and a
-//!   refusal that also rejects valid input is the mirror of a silent drop.
+//! * **Refusals, each with its neighbouring valid twin.** The two operational
+//!   checkpoints, the plain-slot guard, the blank wire-value injectivity guard
+//!   and the terminal poison flag are all refusals, and a refusal that also
+//!   rejects valid input is the mirror of a silent drop. What is NOT a refusal is
+//!   also pinned: a capability claim is not runtime-checkable, so an
+//!   enumerable-but-empty statement layer is admitted rather than rejected.
+//! * **Atomicity.** A refusal rolls its own ingestion back, so the infallible
+//!   `snapshot_payload`/`snapshot_content_id` accessors never describe a
+//!   truncated interior — while publication still refuses.
 //! * **Accounting.** The report names the declaration-only graphs that were
 //!   deliberately NOT interned, and its scratch figure is non-zero and monotone.
 //! * **The keystone.** All of it assembled at once: a `PipelineViewBundle` over a
@@ -36,16 +41,19 @@ use purrdf_rdf::gts_compose::{
     DEFAULT_RSYNCABLE_THRESHOLD, GtsIngestError, IngestCheckpoint, MediumPlan, RDF_REIFIES,
     SnapshotBuilder, emit_gts,
 };
+// The keystone shape itself lives in the library, so this suite and
+// `benches/gts_ingest.rs` measure ONE fixture rather than two drifting copies.
+use purrdf_rdf::gts_fixtures::{
+    KEY_DECLARED, KEY_G1, KEY_G2, KEY_G3, KEYSTONE_GROUPS, SELECTED, emitted, keystone_base,
+    keystone_contribution, keystone_delta, keystone_loadout,
+};
 use purrdf_rdf::{
-    BlankScope, CompositeDatasetView, CompositeSource, ContentStore, DatasetMut, DatasetProvenance,
-    DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch, MutableDataset,
-    PipelineViewBundle, QuadIds, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfLookaside, RdfStoreCapabilities, RdfTextDirection, RetentionLedger, TermId, TermRef,
-    TermValue, ViewLimits, parse_dataset,
+    BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView, DeltaDatasetView,
+    FallibleDatasetView, GraphMatch, MutableDataset, PipelineViewBundle, QuadIds, QuadRef,
+    QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection,
+    RetentionLedger, TermId, TermRef, TermValue, ViewLimits, parse_dataset,
 };
 
-/// The named graph every relocated default-graph row lands in.
-const SELECTED: &str = "https://example.org/selected";
 /// Declared in source A and left empty; declared AND filled in source B.
 const SHARED: &str = "https://example.org/shared";
 /// Declared in source A and left empty everywhere.
@@ -636,6 +644,153 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
     .expect("an unpoisoned builder publishes");
 }
 
+/// A FAILED INGESTION IS TAKEN BACK OUT, so nothing can ever observe a
+/// half-ingested interior.
+///
+/// `snapshot_content_id` and `snapshot_payload` are infallible by frozen
+/// signature — they cannot report the poison flag, and a library may not answer a
+/// question by panicking. The guarantee is therefore structural rather than
+/// documentary: the refusal rolls its own ingestion back before returning, so
+/// every state those accessors can be called in is a fully accepted one.
+///
+/// The failing source here is deliberately LARGE and mixed — its refusal fires
+/// after many rows and terms of every kind have already been interned — so a
+/// rollback that forgot a table would show up as a moved content id.
+#[test]
+fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
+    let mut builder = SnapshotBuilder::new();
+    let _ = builder
+        .add_view_scoped(&composite_over(&source_a()), Some(SELECTED), Some("a"))
+        .expect("a healthy ingestion precedes the failure");
+    let accepted_id = builder.snapshot_content_id();
+    let accepted_payload = builder.snapshot_payload();
+    let accepted_totals = builder.ingest_totals();
+
+    // A source that ingests a great many rows and THEN hits the plain-slot guard.
+    let mut poisoning = RdfDatasetBuilder::new();
+    let s = poisoning.intern_iri("https://example.org/poison/s");
+    let p = poisoning.intern_iri("https://example.org/poison/p");
+    for index in 0..64 {
+        let o = poisoning.intern_iri(&format!("https://example.org/poison/o{index}"));
+        let blank = poisoning.intern_blank(&format!("p{index}"), BlankScope(9));
+        poisoning.push_quad(s, p, o, None);
+        poisoning.push_quad(blank, p, o, None);
+    }
+    let quoted = poisoning.intern_triple(s, p, s);
+    poisoning.push_quad(s, p, quoted, None);
+    let poisoning = poisoning.freeze().expect("the poisoning source freezes");
+
+    let err = builder
+        .add_view(&poisoning)
+        .expect_err("a quoted triple in a plain slot must fail closed");
+    assert!(matches!(err, GtsIngestError::UnrepresentableTerm { .. }));
+    assert!(builder.poison().is_some(), "the failure is terminal");
+
+    // THE ROLLBACK: not one row, term or index entry of the refused ingestion
+    // survives, on any table.
+    assert_eq!(
+        builder.snapshot_content_id(),
+        accepted_id,
+        "a refused ingestion must not move the content id"
+    );
+    assert_eq!(builder.snapshot_payload(), accepted_payload);
+    assert_eq!(
+        builder.ingest_totals().rows_consumed,
+        accepted_totals.rows_consumed,
+        "…nor the receipt's row count"
+    );
+    assert_eq!(
+        builder.ingest_totals().terms_interned,
+        accepted_totals.terms_interned
+    );
+
+    // NON-VACUITY: the refused source really would have moved the content id had
+    // any of it been kept. The same rows, minus the one unrepresentable term,
+    // ingest into a fresh builder and mint something different.
+    let mut without_the_trap = RdfDatasetBuilder::new();
+    let s = without_the_trap.intern_iri("https://example.org/poison/s");
+    let p = without_the_trap.intern_iri("https://example.org/poison/p");
+    for index in 0..64 {
+        let o = without_the_trap.intern_iri(&format!("https://example.org/poison/o{index}"));
+        without_the_trap.push_quad(s, p, o, None);
+    }
+    let without_the_trap = without_the_trap.freeze().expect("the control freezes");
+    let mut control = SnapshotBuilder::new();
+    let _ = control
+        .add_view_scoped(&composite_over(&source_a()), Some(SELECTED), Some("a"))
+        .expect("the same healthy ingestion");
+    let _ = control
+        .add_view(&without_the_trap)
+        .expect("the representable rows ingest");
+    assert_ne!(
+        control.snapshot_content_id(),
+        accepted_id,
+        "the refused rows were not a no-op; the rollback is doing real work"
+    );
+
+    // …and publication still refuses, complete tables notwithstanding: a full
+    // description of content the caller did not ask for is not the snapshot.
+    let refused = emit_gts(
+        &builder,
+        "dist",
+        Some(vec!["identity".to_owned()]),
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+        DEFAULT_RSYNCABLE_THRESHOLD,
+        &MediumPlan::undicted(None),
+    )
+    .expect_err("a poisoned builder must not publish, rolled back or not");
+    assert!(refused.contains("poisoned"), "{refused}");
+}
+
+/// An unrepresentable-term refusal names the term in RDF TEXT, never in the
+/// view's own ids.
+///
+/// A quoted triple used to fall through to `Debug`, so the message read
+/// `Triple { s: Id(..), p: Id(..), o: Id(..) }` — the offending term named in a
+/// vocabulary only the view speaks, leaving the reader unable to find the row it
+/// came from. Every constituent is now resolved.
+#[test]
+fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("https://example.org/quoted-subject");
+    let p = b.intern_iri("https://example.org/quoted-predicate");
+    let o = b.intern_literal(RdfLiteral {
+        direction: Some(RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("مرحبا", "ar")
+    });
+    let quoted = b.intern_triple(s, p, o);
+    let plain_s = b.intern_iri("https://example.org/s");
+    let plain_p = b.intern_iri("https://example.org/p");
+    b.push_quad(plain_s, plain_p, quoted, None);
+    let source = b.freeze().expect("the plain-slot trap freezes");
+
+    let mut builder = SnapshotBuilder::new();
+    let message = builder
+        .add_view(&source)
+        .expect_err("a quoted triple in a plain slot must fail closed")
+        .to_string();
+
+    for text in [
+        "https://example.org/quoted-subject",
+        "https://example.org/quoted-predicate",
+        "مرحبا",
+        "ar--rtl",
+    ] {
+        assert!(
+            message.contains(text),
+            "the refusal must name {text:?}: {message}"
+        );
+    }
+    assert!(
+        !message.contains("Id("),
+        "and must name no internal id: {message}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A purpose-built probe view: budgeted faulting + capability claims
 // ---------------------------------------------------------------------------
@@ -695,8 +850,11 @@ impl ProbeView {
         view
     }
 
-    /// Claims the RDF 1.2 statement layer while enumerating none of it.
-    fn dishonest_claim(inner: Arc<RdfDataset>) -> Self {
+    /// Claims the RDF 1.2 statement layer while its accessors answer NOTHING for
+    /// it — the trait obligation broken by construction. Not runtime-detectable
+    /// (see `a_capability_claim_never_moves_a_byte_of_the_snapshot`); what it
+    /// publishes is what it enumerated.
+    fn unenumerated_claim(inner: Arc<RdfDataset>) -> Self {
         Self {
             claim_reifiers: true,
             claim_annotations: true,
@@ -713,6 +871,13 @@ impl ProbeView {
             enumerate_statements: true,
             ..Self::honest(inner)
         }
+    }
+
+    /// Claims the statement layer over an inner dataset that HAS none: the
+    /// accessors answer, honestly, with nothing. Indistinguishable at runtime
+    /// from [`Self::unenumerated_claim`], and perfectly valid.
+    fn empty_claim(inner: Arc<RdfDataset>) -> Self {
+        Self::honest_claim(inner)
     }
 
     /// Spend one row of budget; the view faults when it runs out.
@@ -865,44 +1030,168 @@ fn a_view_that_faults_mid_ingestion_never_mints_a_snapshot() {
     assert_eq!(flat.snapshot_content_id(), healthy.snapshot_content_id());
 }
 
+/// The snapshot is a function of the rows a view ENUMERATES, never of the flags
+/// it sets — and the ingestion no longer pretends the two can be cross-checked.
+///
+/// A runtime gate used to stand at the head of the ingestion refusing any view
+/// whose claimed statement layer enumerated no row, on the theory that an empty
+/// answer to a claimed capability was a detectable lie. It is not: "this view
+/// cannot enumerate its reifiers" and "this view has no reifiers" are the same
+/// observation at runtime, and the second is an ordinary valid state that the
+/// gate therefore refused (see
+/// `a_delta_that_removes_the_bases_only_reifier_still_ingests`, which is exactly
+/// the input it rejected).
+///
+/// So the `DatasetView` obligation — a claimed capability must be answerable
+/// through its accessor — stays a PROSE contract on the trait, and this test
+/// pins what the ingestion can honestly say instead: an enumerable-but-empty
+/// layer is admitted, a claim moves no byte, and a view that does not answer for
+/// its own layer publishes what it enumerated.
 #[test]
-fn a_claimed_statement_layer_must_be_enumerable() {
+fn a_capability_claim_never_moves_a_byte_of_the_snapshot() {
     let a = source_a();
     assert!(
         a.capabilities().reifiers && a.capabilities().annotations,
         "the fixture's own claims are honest"
     );
 
-    // The dishonest view claims the layer and answers nothing for it. Ingesting
-    // it would emit a 1.2-stripped snapshot and report success.
-    let mut builder = SnapshotBuilder::new();
-    let err = builder
-        .add_view(&ProbeView::dishonest_claim(Arc::clone(&a)))
-        .expect_err("an unenumerable claim must be refused");
-    assert!(
-        matches!(err, GtsIngestError::UnenumerableCapability { .. }),
-        "{err:?}"
+    // (i) ENUMERABLE BUT EMPTY IS ADMITTED. A view over a dataset with no
+    // statement layer at all, claiming one, ingests — and mints exactly the flat
+    // carrier's snapshot, because the claim contributed nothing to it.
+    let plain = blank_subject("b0");
+    assert!(!plain.capabilities().reifiers && !plain.capabilities().annotations);
+    let mut claimed = SnapshotBuilder::new();
+    let _ = claimed
+        .add_view(&ProbeView::empty_claim(Arc::clone(&plain)))
+        .expect("a claimed but empty statement layer is valid input");
+    let mut flat_plain = SnapshotBuilder::new();
+    flat_plain.add_dataset(&plain).expect("flat ingests");
+    assert_eq!(
+        flat_plain.snapshot_content_id(),
+        claimed.snapshot_content_id(),
+        "an empty claimed layer must mint the flat path's snapshot"
     );
-    assert!(builder.poison().is_some());
 
-    // THE HONEST TWIN: the same claims, answered. It ingests, and mints the flat
-    // carrier's snapshot.
-    let mut honest = SnapshotBuilder::new();
-    let _ = honest
+    // (ii) THE CLAIM IS INERT. The same view with the claims dropped mints the
+    // same bytes: nothing reads the flags on the way to the payload.
+    let mut unclaimed = SnapshotBuilder::new();
+    let _ = unclaimed
+        .add_view(&ProbeView::honest(Arc::clone(&plain)))
+        .expect("the unclaiming view ingests");
+    assert_eq!(claimed.snapshot_payload(), unclaimed.snapshot_payload());
+
+    // (iii) A CLAIM THAT IS ANSWERED still rides through untouched.
+    let mut answered = SnapshotBuilder::new();
+    let _ = answered
         .add_view(&ProbeView::honest_claim(Arc::clone(&a)))
         .expect("an enumerable claim ingests");
     let mut flat = SnapshotBuilder::new();
     flat.add_dataset(&a).expect("flat ingests");
-    assert_eq!(flat.snapshot_content_id(), honest.snapshot_content_id());
+    assert_eq!(flat.snapshot_content_id(), answered.snapshot_content_id());
 
-    // …and a view with NO statement layer at all, claiming none, is equally fine:
-    // the gate is about the CLAIM, never about emptiness.
-    let plain = blank_subject("b0");
-    assert!(!plain.capabilities().reifiers && !plain.capabilities().annotations);
-    let mut empty = SnapshotBuilder::new();
-    let _ = empty
-        .add_view(&ProbeView::honest(plain))
-        .expect("a view with no statement layer ingests");
+    // (iv) AND A VIEW THAT DOES NOT ANSWER FOR ITS OWN LAYER publishes what it
+    // enumerated — which is the prose obligation stated as a consequence rather
+    // than as a check. `source_a` really does hold a statement layer, the
+    // suppressing view really does hide it, and the snapshot really does differ:
+    // nothing here is detectable from inside the ingestion, so nothing here is
+    // refused by it.
+    let mut suppressing = SnapshotBuilder::new();
+    let _ = suppressing
+        .add_view(&ProbeView::unenumerated_claim(Arc::clone(&a)))
+        .expect("an unanswered claim is not runtime-detectable, so it is not refused");
+    assert!(suppressing.poison().is_none());
+    assert_ne!(
+        flat.snapshot_content_id(),
+        suppressing.snapshot_content_id(),
+        "the suppressed statement layer is genuinely absent from what it published"
+    );
+}
+
+/// THE INPUT THE OLD GATE REFUSED, driven through a real delta carrier.
+///
+/// `DeltaDatasetView::capabilities()` is the union of its base's and its
+/// delta's, so a delta that removes the base's ONLY reifier binding still claims
+/// the statement layer while its accessor — correctly — enumerates nothing. That
+/// is valid RDF and a valid view; refusing it was an over-refusal, the mirror of
+/// the silent drop the gate was reaching for.
+#[test]
+fn a_delta_that_removes_the_bases_only_reifier_still_ingests() {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("https://example.org/s");
+    let p = b.intern_iri("https://example.org/p");
+    let o = b.intern_iri("https://example.org/o");
+    let claim = b.intern_iri("https://example.org/claim");
+    let quoted = b.intern_triple(s, p, o);
+    b.push_quad(s, p, o, None);
+    b.push_reifier_in_graph(claim, quoted, None);
+    let base = b.freeze().expect("the base freezes");
+    assert!(
+        base.capabilities().reifiers,
+        "the base claims the layer it actually holds"
+    );
+
+    // The delta takes that one binding back out again.
+    let mut mutable = MutableDataset::new(Arc::clone(&base));
+    assert!(
+        mutable.remove(&QuadValues {
+            s: TermValue::iri("https://example.org/claim"),
+            p: TermValue::iri(RDF_REIFIES),
+            o: TermValue::Triple {
+                s: Box::new(TermValue::iri("https://example.org/s")),
+                p: Box::new(TermValue::iri("https://example.org/p")),
+                o: Box::new(TermValue::iri("https://example.org/o")),
+            },
+            g: None,
+        }),
+        "the base's only reifier binding is suppressed by the delta"
+    );
+    let view = mutable.snapshot_view().expect("the delta publishes");
+
+    // NON-VACUITY: this really is the exact pair the gate keyed on.
+    assert!(
+        view.capabilities().reifiers,
+        "capabilities() is base ∪ delta, so the claim survives the removal"
+    );
+    assert!(
+        view.reifier_quads().next().is_none(),
+        "…while the accessor correctly enumerates nothing"
+    );
+
+    let mut through_view = SnapshotBuilder::new();
+    let _ = through_view
+        .add_view(&view)
+        .expect("a reifier-suppressing delta is valid input, not a refusal");
+
+    // …and it mints the snapshot of its own flat-materialized equivalent.
+    let materialized = mutable.freeze().expect("the same delta materializes");
+    assert_eq!(materialized.reifier_quads().count(), 0);
+    let mut flat = SnapshotBuilder::new();
+    flat.add_dataset(&materialized).expect("flat ingests");
+    assert_eq!(
+        through_view.snapshot_content_id(),
+        flat.snapshot_content_id(),
+        "the view path must mint the flat path's snapshot"
+    );
+    assert_eq!(through_view.snapshot_payload(), flat.snapshot_payload());
+
+    // THE NEIGHBOURING CASE: a delta that leaves the binding alone still carries
+    // it through, so the admission above is not "the statement layer is ignored".
+    let untouched = MutableDataset::new(Arc::clone(&base))
+        .snapshot_view()
+        .expect("an empty delta publishes");
+    assert_eq!(untouched.reifier_quads().count(), 1);
+    let mut kept = SnapshotBuilder::new();
+    let _ = kept
+        .add_view(&untouched)
+        .expect("the untouched delta ingests");
+    let mut flat_base = SnapshotBuilder::new();
+    flat_base.add_dataset(&base).expect("flat ingests the base");
+    assert_eq!(kept.snapshot_content_id(), flat_base.snapshot_content_id());
+    assert_ne!(
+        kept.snapshot_content_id(),
+        through_view.snapshot_content_id(),
+        "removing the binding really did change what is published"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -935,117 +1224,15 @@ fn a_claimed_statement_layer_must_be_enumerable() {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Note(&'static str);
 
-/// The base's first quad-bearing named graph — scoped blanks, a triple term and the
-/// statement layer live here.
-const KEY_G1: &str = "https://example.org/keystone/g1";
-/// The base's second quad-bearing named graph.
-const KEY_G2: &str = "https://example.org/keystone/g2";
-/// The graph folded in by `accumulate_named_graph`; absent from the base.
-const KEY_G3: &str = "https://example.org/keystone/g3";
-/// Declared by the base and left empty everywhere — the graph the ingest report
-/// must NAME rather than drop.
-const KEY_DECLARED: &str = "https://example.org/keystone/declared";
-/// How many row groups the base carries. Six ordinary quads per group, plus a
-/// statement-layer triple every eighth group.
-const KEYSTONE_GROUPS: usize = 60;
-
-/// A largish shared base: several hundred quads across two named graphs and the
-/// default graph, one blank LABEL living in two scopes per group, triple terms,
-/// reifier declarations, statement annotations, all three literal shapes — and one
-/// named graph declared and never filled.
-///
-/// Every element is a way the view path and the flat path could disagree: a scope
-/// renaming that conflated two same-label blanks, a statement layer selected by
-/// membership rather than by its own graph slot, a direction that did not survive
-/// composition, a declaration one surface forgot.
-fn keystone_base() -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let q = b.intern_iri("https://example.org/q");
-    let g1 = b.intern_iri(KEY_G1);
-    let g2 = b.intern_iri(KEY_G2);
-    let declared = b.intern_iri(KEY_DECLARED);
-    let plain = b.intern_literal(RdfLiteral::simple("bare"));
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("cat", "en"));
-    let directional = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    for i in 0..KEYSTONE_GROUPS {
-        let s = b.intern_iri(&format!("https://example.org/s{i}"));
-        let o = b.intern_iri(&format!("https://example.org/o{i}"));
-        // Default-graph rows, relocated to <selected> at ingest time.
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, q, plain, None);
-        // Named-graph rows, one literal shape each.
-        b.push_quad(s, p, directional, Some(g1));
-        b.push_quad(s, q, tagged, Some(g2));
-        // One local label in two scopes: two nodes a label-keyed identity would
-        // conflate, kept structurally distinguishable so canonicalization stays
-        // linear rather than exploring automorphisms.
-        let shared = b.intern_blank(&format!("n{i}"), BlankScope::DEFAULT);
-        let scoped = b.intern_blank(&format!("n{i}"), BlankScope(4));
-        b.push_quad(shared, p, o, Some(g1));
-        b.push_quad(scoped, q, o, Some(g1));
-        if i % 8 == 0 {
-            let triple = b.intern_triple(shared, p, directional);
-            let reifier = b.intern_blank(&format!("st{i}"), BlankScope(7));
-            b.push_reifier_in_graph(reifier, triple, Some(g1));
-            b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
-        }
-    }
-    // A named graph owning no row at all.
-    b.declare_named_graph(declared);
-    b.freeze().expect("the keystone base freezes")
+/// The keystone base at this suite's size. The shape itself — and everything it
+/// is a trap for — is documented once, in `purrdf_rdf::gts_fixtures`.
+fn base_dataset() -> Arc<RdfDataset> {
+    keystone_base(KEYSTONE_GROUPS)
 }
 
-/// A small contribution wholly contained in `KEY_G3`, whose blanks deliberately
-/// reuse the base's LABEL and scopes: a carrier that renamed scopes carelessly
-/// would either conflate these nodes with the base's or break their co-reference,
-/// and either moves the emitted bytes.
-fn keystone_contribution() -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let q = b.intern_iri("https://example.org/q");
-    let g = b.intern_iri(KEY_G3);
-    let node = b.intern_blank("n0", BlankScope::DEFAULT);
-    let elsewhere = b.intern_blank("n0", BlankScope(4));
-    for i in 0..6 {
-        let o = b.intern_iri(&format!("https://example.org/c{i}"));
-        b.push_quad(node, p, o, Some(g));
-        b.push_quad(elsewhere, q, o, Some(g));
-    }
-    b.push_quad(node, q, elsewhere, Some(g));
-    b.freeze().expect("the keystone contribution freezes")
-}
-
-/// A delta view whose EFFECTIVE content is exactly `base`'s, reached through a real
-/// mutation round trip rather than an untouched passthrough — so the delta
-/// machinery (suppression rows, delta-only ids) is genuinely in the read path.
-fn keystone_delta(base: &Arc<RdfDataset>) -> Arc<DeltaDatasetView> {
-    let mut mutable = MutableDataset::new(Arc::clone(base));
-    let scratch = QuadValues::triple(
-        TermValue::iri("https://example.org/scratch"),
-        TermValue::iri("https://example.org/p"),
-        TermValue::iri("https://example.org/o"),
-    );
-    assert!(
-        mutable
-            .insert(scratch.clone())
-            .expect("the scratch row inserts")
-    );
-    assert!(mutable.remove(&scratch), "and is taken back out again");
-    Arc::new(mutable.snapshot_view().expect("the delta publishes"))
-}
-
-/// The sidecars every keystone carrier travels with. Identical on both the measured
-/// and the reference carrier, so nothing here can explain a byte difference.
-fn keystone_loadout() -> (RdfLookaside, Arc<ContentStore>, DatasetProvenance) {
-    (
-        RdfLookaside::default(),
-        Arc::new(ContentStore::new()),
-        DatasetProvenance::new(),
-    )
+/// The contribution folded into `KEY_G3` by `accumulate_named_graph`.
+fn contribution_dataset() -> Arc<RdfDataset> {
+    keystone_contribution(KEY_G3, 0, 6)
 }
 
 /// A carrier over `base` with one named graph accumulated into it — the exact
@@ -1089,27 +1276,10 @@ fn keystone_delta_carrier(
     .expect("the delta is within the default ceilings")
 }
 
-/// The emitted container bytes — what actually ships.
-fn emitted(builder: &SnapshotBuilder) -> Vec<u8> {
-    emit_gts(
-        builder,
-        "dist",
-        Some(vec!["identity".to_owned()]),
-        Vec::new(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        DEFAULT_RSYNCABLE_THRESHOLD,
-        &MediumPlan::undicted(None),
-    )
-    .expect("the keystone emits")
-}
-
 #[test]
 fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
-    let base = keystone_base();
-    let contribution = keystone_contribution();
+    let base = base_dataset();
+    let contribution = contribution_dataset();
     let delta = keystone_delta(&base);
     let ledger = RetentionLedger::new();
 

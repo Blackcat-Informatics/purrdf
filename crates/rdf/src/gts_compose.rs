@@ -28,7 +28,7 @@ use purrdf_gts::wire::{blake3_256, canonical, hex};
 use purrdf_gts::writer::Writer;
 
 use crate::dataset_view::ViewOperationStatus;
-use crate::{DatasetView, FallibleDatasetView, FastHasher, RdfTextDirection, TermRef};
+use crate::{BlankScope, DatasetView, FallibleDatasetView, FastHasher, RdfTextDirection, TermRef};
 
 /// The `rdf:reifies` predicate IRI (RDF 1.2 statement layer).
 pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -112,35 +112,50 @@ fn lookup_term_row(terms: &[TermRow], index: &HashTable<u32>, key: RowKey<'_>) -
         .map(|&id| id as usize)
 }
 
-/// One blank-node intern key `(scope, label)` (C0.2) and the term row it minted.
-/// Kept beside the term table because the stored term value is the WIRE
-/// rendering (`"{scope}-{label}"`), from which the key cannot be recovered.
+/// One blank-node intern key and the term row it minted.
+///
+/// The key is the view's own `(label, blank-scope)` pair (C0.2) under the
+/// caller's ingest `scope` — the PRE-IMAGE of the qualified label, never the
+/// qualified label itself. That is deliberate and it is exactly equivalent:
+/// [`BlankScope::qualify_label`] is injective over `(label, scope)`, so keying on
+/// the pair and keying on its rendering identify precisely the same blanks. What
+/// it buys is that a LOOKUP — the common case, once per ingested blank position —
+/// hashes and compares three borrowed components and allocates nothing, where
+/// keying on the rendering had to materialize a qualified `String` for every row
+/// at any non-default scope just to discover the blank was already interned.
+///
+/// Kept beside the term table because the stored term value is the WIRE rendering
+/// (`"{ingest-scope}-{qualified-label}"`), from which the key cannot be recovered.
 #[derive(Debug)]
 struct BnodeKey {
-    /// The caller-supplied ingest scope (`None` = the raw label).
+    /// The caller-supplied ingest scope (`None` = no ingest prefix).
     scope: Option<String>,
-    /// The (already dataset-scope-qualified) blank label.
+    /// The blank node's own dataset-level scope, as the view reported it.
+    blank_scope: BlankScope,
+    /// The blank node's RAW label, as the view reported it — not qualified.
     label: String,
     /// The `terms` index this key minted.
     term: u32,
 }
 
 /// The fixed-key hash of a borrowed blank intern key.
-fn bnode_key_hash(scope: Option<&str>, label: &str) -> u64 {
-    FastHasher::default().hash_one((scope, label))
+fn bnode_key_hash(scope: Option<&str>, blank_scope: BlankScope, label: &str) -> u64 {
+    FastHasher::default().hash_one((scope, blank_scope.ordinal(), label))
 }
 
-/// Hash-consed lookup of a blank-node intern key. Allocates nothing.
+/// Hash-consed lookup of a blank-node intern key. Allocates nothing — in
+/// particular it never renders the qualified label the wire value is built from.
 fn lookup_bnode_key(
     keys: &[BnodeKey],
     index: &HashTable<u32>,
     scope: Option<&str>,
+    blank_scope: BlankScope,
     label: &str,
 ) -> Option<usize> {
     index
-        .find(bnode_key_hash(scope, label), |&slot| {
+        .find(bnode_key_hash(scope, blank_scope, label), |&slot| {
             let key = &keys[slot as usize];
-            key.scope.as_deref() == scope && key.label == label
+            key.scope.as_deref() == scope && key.blank_scope == blank_scope && key.label == label
         })
         .map(|&slot| keys[slot as usize].term as usize)
 }
@@ -161,6 +176,21 @@ fn lookup_bnode_wire(terms: &[TermRow], wire: &HashTable<u32>, value: &str) -> O
 /// but without materializing five owned strings per element on every comparison.
 fn term_order(a: &TermRow, b: &TermRow) -> std::cmp::Ordering {
     row_key_of(a).cmp(&row_key_of(b))
+}
+
+/// The length of every accumulating table at one instant.
+///
+/// This is the whole of an ingestion's undo record. Each table is append-only
+/// for the duration of one ingestion — nothing is ever rewritten in place, and
+/// canonical re-identification happens later, over a copy — so the lengths alone
+/// name the state to return to, and taking the mark costs five loads.
+#[derive(Clone, Copy, Debug)]
+struct TableMark {
+    terms: usize,
+    bnode_keys: usize,
+    quads: usize,
+    reifies: usize,
+    annot: usize,
 }
 
 /// An accumulating snapshot builder mirroring `gts_producer._Builder`.
@@ -191,6 +221,11 @@ pub struct SnapshotBuilder {
     /// The first ingestion failure, if any. Terminal: once set, every later
     /// `add_*` and [`emit_gts`] refuses rather than publishing over a partially
     /// ingested builder.
+    ///
+    /// The failing ingestion is also ROLLED BACK (see [`TableMark`]), so the
+    /// tables a poisoned builder still exposes through
+    /// [`snapshot_payload`](Self::snapshot_payload) are the last FULLY ACCEPTED
+    /// state and never a truncated interior.
     poison: Option<GtsIngestError>,
     /// The cumulative ingestion receipt across every `add_*` call.
     totals: IngestReport,
@@ -229,23 +264,40 @@ impl SnapshotBuilder {
         })
     }
 
-    /// Intern a blank node at `(scope, label)`.
+    /// Intern a blank node reported as `(label, blank_scope)` under the caller's
+    /// ingest `scope`.
+    ///
+    /// The qualified label — and with it the wire value — is materialized ONLY on
+    /// the path that actually mints a row (or refuses to). A lookup that finds the
+    /// blank already interned renders nothing at all.
     ///
     /// # Errors
     /// [`GtsIngestError::BlankWireCollision`] when this NEW intern key encodes
     /// onto a wire value an EXISTING, different key already minted.
-    fn intern_bnode(&mut self, label: &str, scope: Option<&str>) -> Result<usize, GtsIngestError> {
-        if let Some(id) = lookup_bnode_key(&self.bnode_keys, &self.bnode_index, scope, label) {
+    fn intern_bnode(
+        &mut self,
+        label: &str,
+        blank_scope: BlankScope,
+        scope: Option<&str>,
+    ) -> Result<usize, GtsIngestError> {
+        if let Some(id) = lookup_bnode_key(
+            &self.bnode_keys,
+            &self.bnode_index,
+            scope,
+            blank_scope,
+            label,
+        ) {
             return Ok(id);
         }
         // Scope-prefix the stored value exactly as Python's `_Interner.bnode`:
-        // `None` keeps the raw label; a scope yields `"{scope}-{label}"`. The
-        // encoding is FROZEN — every existing scoped caller's bytes ride on it —
-        // and it is not injective over `(scope, label)`, so the collision it can
-        // produce is refused here rather than encoded.
+        // `None` keeps the qualified label; a scope yields `"{scope}-{label}"`.
+        // The encoding is FROZEN — every existing scoped caller's bytes ride on
+        // it — and it is not injective over `(scope, label)`, so the collision it
+        // can produce is refused here rather than encoded.
+        let qualified = blank_scope.qualify_label(label);
         let value = match scope {
-            None => label.to_owned(),
-            Some(scope) => format!("{scope}-{label}"),
+            None => qualified.as_ref().to_owned(),
+            Some(scope) => format!("{scope}-{qualified}"),
         };
         if let Some(existing) = lookup_bnode_wire(&self.terms, &self.bnode_wire, &value) {
             let held = self
@@ -256,9 +308,11 @@ impl SnapshotBuilder {
             return Err(GtsIngestError::BlankWireCollision {
                 wire_value: value,
                 held_scope: held.scope.clone(),
-                held_label: held.label.clone(),
+                // The refusal is about the WIRE encoding, so both labels are named
+                // in the spelling that encoding consumes: the qualified one.
+                held_label: held.blank_scope.qualify_label(&held.label).into_owned(),
                 incoming_scope: scope.map(str::to_owned),
-                incoming_label: label.to_owned(),
+                incoming_label: qualified.into_owned(),
             });
         }
         let id = u32::try_from(self.terms.len()).expect("snapshot term ids fit u32");
@@ -277,14 +331,15 @@ impl SnapshotBuilder {
         let slot = u32::try_from(self.bnode_keys.len()).expect("blank intern keys fit u32");
         self.bnode_keys.push(BnodeKey {
             scope: scope.map(str::to_owned),
+            blank_scope,
             label: label.to_owned(),
             term: id,
         });
         let keys = &self.bnode_keys;
         self.bnode_index
-            .insert_unique(bnode_key_hash(scope, label), slot, |&other| {
+            .insert_unique(bnode_key_hash(scope, blank_scope, label), slot, |&other| {
                 let key = &keys[other as usize];
-                bnode_key_hash(key.scope.as_deref(), &key.label)
+                bnode_key_hash(key.scope.as_deref(), key.blank_scope, &key.label)
             });
         Ok(id as usize)
     }
@@ -411,6 +466,11 @@ impl SnapshotBuilder {
 
     /// The terminal failure that poisoned this builder, if any. Once set, every
     /// later `add_*` and [`emit_gts`] refuses.
+    ///
+    /// The failing ingestion was also rolled back, so the tables underneath are
+    /// the last fully accepted state — a poisoned builder still answers
+    /// [`Self::snapshot_content_id`] with a content id over complete content, it
+    /// just will not publish it.
     pub fn poison(&self) -> Option<&GtsIngestError> {
         self.poison.as_ref()
     }
@@ -426,20 +486,59 @@ impl SnapshotBuilder {
         scope: Option<&str>,
     ) -> Result<IngestReport, GtsIngestError> {
         if let Some(poison) = &self.poison {
-            // Naming the EARLIER failure, not this call: a poisoned builder has a
-            // half-ingested interior, and the only honest thing it can say is which
-            // ingestion left it that way.
+            // Naming the EARLIER failure, not this call: the only honest thing a
+            // poisoned builder can say is which ingestion left it that way.
             return Err(GtsIngestError::Poisoned {
                 cause: poison.to_string(),
             });
         }
+        // ATOMIC PER INGESTION. A refusal can fire after an arbitrary number of
+        // rows have already been interned, and the accessors that answer over the
+        // tables — `snapshot_payload` and `snapshot_content_id` — are infallible
+        // by frozen signature, so they cannot themselves report the poison. They
+        // must therefore never have a truncated interior to describe: the failing
+        // ingestion is taken back out, leaving the builder at exactly the state
+        // the last fully-accepted ingestion left it in.
+        let mark = self.mark();
         match self.ingest_view_rows(view, default_graph_name, scope) {
             Ok(report) => Ok(report),
             Err(err) => {
+                self.rollback_to(mark);
                 self.poison = Some(err.clone());
                 Err(err)
             }
         }
+    }
+
+    /// A cheap length-only mark of every accumulating table, taken before a
+    /// single row of an ingestion is consumed.
+    fn mark(&self) -> TableMark {
+        TableMark {
+            terms: self.terms.len(),
+            bnode_keys: self.bnode_keys.len(),
+            quads: self.quads.len(),
+            reifies: self.reifies.len(),
+            annot: self.annot.len(),
+        }
+    }
+
+    /// Take a failed ingestion back out, restoring the builder to `mark`.
+    ///
+    /// Every table this ingestion could have grown is append-only within the
+    /// ingestion, so truncation restores the rows exactly. The three hash-consed
+    /// indexes hold positions into those tables, so each drops precisely the
+    /// entries that now point past the end — no rehash, and nothing that survived
+    /// the mark is disturbed.
+    fn rollback_to(&mut self, mark: TableMark) {
+        self.terms.truncate(mark.terms);
+        self.bnode_keys.truncate(mark.bnode_keys);
+        self.quads.truncate(mark.quads);
+        self.reifies.truncate(mark.reifies);
+        self.annot.truncate(mark.annot);
+        self.index.retain(|&mut id| (id as usize) < mark.terms);
+        self.bnode_wire.retain(|&mut id| (id as usize) < mark.terms);
+        self.bnode_index
+            .retain(|&mut slot| (slot as usize) < mark.bnode_keys);
     }
 
     /// The row-consuming body of [`Self::ingest_view`], separated only so that
@@ -450,23 +549,27 @@ impl SnapshotBuilder {
         default_graph_name: Option<&str>,
         scope: Option<&str>,
     ) -> Result<IngestReport, GtsIngestError> {
-        // (1) CAPABILITY GATE. The `DatasetView` snapshot-ingestion obligation is
-        // explicit: a claimed capability must be enumerable through its accessors.
-        // A view claiming a statement layer whose accessor answers nothing would
-        // mint a silently 1.2-stripped snapshot that reports success.
-        let caps = view.capabilities();
-        if caps.reifiers && view.reifier_quads().next().is_none() {
-            return Err(GtsIngestError::UnenumerableCapability {
-                capability: "reifiers",
-            });
-        }
-        if caps.annotations && view.annotation_quads().next().is_none() {
-            return Err(GtsIngestError::UnenumerableCapability {
-                capability: "annotations",
-            });
-        }
+        // NO CAPABILITY GATE. The `DatasetView` snapshot-ingestion obligation —
+        // a claimed capability must be answerable through its accessor — is a
+        // PROSE contract on the trait, and it stays one, because it is not
+        // decidable here. A gate used to stand at this point refusing any view
+        // whose claimed statement layer enumerated no row, on the theory that an
+        // empty answer to a claimed capability was a lie. It is not a lie
+        // detector: "this view cannot enumerate its reifiers" and "this view has
+        // no reifiers" are the SAME observation at runtime, and the second is an
+        // ordinary valid state. `DeltaDatasetView::capabilities()` is the union of
+        // its base's and its delta's, so a delta that removes the base's only
+        // reifier still claims the layer while correctly enumerating nothing — and
+        // the gate refused it. That is an over-refusal of valid data, the mirror
+        // of the silent drop the gate was reaching for, and a check that cannot
+        // tell the two apart is worse than no check at all.
+        //
+        // What remains is what IS detectable, and it is checked below: a view that
+        // faults while yielding rows (both checkpoints), a term that no snapshot
+        // slot can represent, and a blank encoding collision. The snapshot is a
+        // function of the rows a view enumerates and of nothing it merely claims.
 
-        // (2) CHECKPOINT BEFORE any row is consumed.
+        // (1) CHECKPOINT BEFORE any row is consumed.
         Self::checkpoint(view, IngestCheckpoint::BeforeRows)?;
 
         let terms_before = self.terms.len();
@@ -541,7 +644,7 @@ impl SnapshotBuilder {
             rows_consumed += 1;
         }
 
-        // (3) CHECKPOINT AFTER every row has been consumed. A view that faulted
+        // (2) CHECKPOINT AFTER every row has been consumed. A view that faulted
         // mid-iteration stops yielding rather than erroring, so without this the
         // builder would mint a `snapshot_content_id` over a truncation.
         Self::checkpoint(view, IngestCheckpoint::AfterRows)?;
@@ -612,7 +715,7 @@ impl SnapshotBuilder {
             TermRef::Blank {
                 label,
                 scope: blank_scope,
-            } => self.intern_bnode(&blank_scope.qualify_label(label), scope),
+            } => self.intern_bnode(label, blank_scope, scope),
             TermRef::Literal {
                 lexical,
                 datatype,
@@ -771,6 +874,13 @@ impl SnapshotBuilder {
     }
 
     /// The canonical `snapshot` frame payload (`_Builder._snapshot_payload`).
+    ///
+    /// Infallible, and honestly so: a failed ingestion is rolled back before its
+    /// error is returned (see [`GtsIngestError`]), so these tables are always the
+    /// last FULLY ACCEPTED state and never a truncated interior. What this does
+    /// NOT mean is that a poisoned builder may be published — it may not; that
+    /// refusal lives in [`emit_gts`], because a complete description of the wrong
+    /// content is still the wrong content.
     pub fn snapshot_payload(&self) -> Value {
         let (terms, quads, reifies, annot) = self.canonical_tables();
         let mut entries: Vec<(Value, Value)> = vec![
@@ -837,6 +947,10 @@ impl SnapshotBuilder {
 
     /// The `blake3:<hex>` content address of the snapshot payload
     /// (`_Builder.snapshot_content_id`).
+    ///
+    /// A stable content id over complete content in every reachable state,
+    /// poisoned included — see [`Self::snapshot_payload`] for why, and for why
+    /// that is not permission to publish a poisoned builder.
     pub fn snapshot_content_id(&self) -> String {
         let bytes = canonical(&self.snapshot_payload());
         format!("blake3:{}", hex(&blake3_256(&bytes)))
@@ -888,13 +1002,69 @@ fn wire_id(n: usize) -> Value {
     Value::Integer(ciborium::value::Integer::from(n as i64))
 }
 
-/// Render a view term for a diagnostic: an IRI verbatim, a blank node as its
-/// scope-qualified `_:` spelling, anything else through `Debug`.
+/// How deep [`render_term`] follows a term's constituents.
+///
+/// A diagnostic is not a serializer: it must terminate over ANY view, including
+/// one whose `resolve` is cyclic, and it does not need to be exhaustive to be
+/// useful. Quoted triples nest far more shallowly than this in practice; past it
+/// the rendering says so rather than recursing.
+const RENDER_TERM_DEPTH: usize = 8;
+
+/// Render a view term for a diagnostic, in its own TEXT rather than in the view's
+/// internal ids.
+///
+/// Every constituent is followed: a quoted triple renders its subject, predicate
+/// and object, and a typed literal renders its datatype IRI. This is the whole
+/// point of the function — a message reading `Triple { s: Id(41), p: Id(7), ... }`
+/// names the offending term in a vocabulary only the view itself speaks, and
+/// leaves the reader unable to find the row it came from.
 fn render_term<D: DatasetView>(view: &D, id: D::Id) -> String {
+    render_term_within(view, id, RENDER_TERM_DEPTH)
+}
+
+/// [`render_term`] with the remaining recursion budget carried explicitly.
+fn render_term_within<D: DatasetView>(view: &D, id: D::Id, depth: usize) -> String {
+    let Some(next) = depth.checked_sub(1) else {
+        return "…".to_owned();
+    };
     match view.resolve(id) {
         TermRef::Iri(iri) => iri.to_owned(),
         TermRef::Blank { label, scope } => format!("_:{}", scope.qualify_label(label)),
-        other => format!("{other:?}"),
+        TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            // N-Triples-shaped, and deliberately: a language tag suppresses the
+            // datatype exactly as the ingestion path does, so the rendering
+            // describes the term the snapshot would have stored.
+            let mut rendered = format!("{lexical:?}");
+            match (language, direction) {
+                (Some(language), Some(direction)) => {
+                    rendered.push('@');
+                    rendered.push_str(language);
+                    rendered.push_str("--");
+                    rendered.push_str(direction.as_str());
+                }
+                (Some(language), None) => {
+                    rendered.push('@');
+                    rendered.push_str(language);
+                }
+                (None, _) => {
+                    rendered.push_str("^^<");
+                    rendered.push_str(&render_term_within(view, datatype, next));
+                    rendered.push('>');
+                }
+            }
+            rendered
+        }
+        TermRef::Triple { s, p, o } => format!(
+            "<<( {} {} {} )>>",
+            render_term_within(view, s, next),
+            render_term_within(view, p, next),
+            render_term_within(view, o, next),
+        ),
     }
 }
 
@@ -920,19 +1090,23 @@ impl std::fmt::Display for IngestCheckpoint {
 
 /// A terminal, typed ingestion refusal.
 ///
-/// Every variant is a REFUSAL, never a degraded success: the builder that
-/// produced one is poisoned, and neither a later `add_*` nor [`emit_gts`] will
-/// publish over its half-ingested interior.
+/// Every variant is a REFUSAL, never a degraded success. Two things follow from
+/// one, and both are load-bearing:
+///
+/// * The failing ingestion is ROLLED BACK. Every row it had already interned is
+///   taken back out, so the builder is left at exactly the state the last fully
+///   accepted ingestion left it in. This is what makes the infallible
+///   [`SnapshotBuilder::snapshot_content_id`] and
+///   [`SnapshotBuilder::snapshot_payload`] safe to keep infallible: there is no
+///   half-ingested interior for them to describe.
+/// * The builder is POISONED. It is nonetheless refused for all further use:
+///   every later `add_*` returns [`Self::Poisoned`] and [`emit_gts`] refuses to
+///   publish. A caller asked for content that could not be ingested, and shipping
+///   the subset that could — however internally consistent — would answer a
+///   question nobody asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GtsIngestError {
-    /// The view claims an RDF 1.2 statement-layer capability whose own accessor
-    /// enumerates nothing. Ingesting it would mint a silently 1.2-stripped
-    /// snapshot and report success.
-    UnenumerableCapability {
-        /// The claimed capability (`"reifiers"` or `"annotations"`).
-        capability: &'static str,
-    },
     /// The view's operational status was not `Ready` at an ingestion checkpoint,
     /// so the rows read are a truncation, not the view.
     ViewNotReady {
@@ -972,6 +1146,9 @@ pub enum GtsIngestError {
         incoming_label: String,
     },
     /// An earlier ingestion failed; this builder can no longer ingest or publish.
+    /// Its tables still describe the last fully accepted state — the failed
+    /// ingestion was rolled back — but that state is not what the caller asked
+    /// for, so it is not publishable.
     Poisoned {
         /// The earlier failure, rendered.
         cause: String,
@@ -981,12 +1158,6 @@ pub enum GtsIngestError {
 impl std::fmt::Display for GtsIngestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnenumerableCapability { capability } => write!(
-                f,
-                "the view claims the RDF 1.2 {capability} capability but enumerates no \
-                 {capability} rows; a claimed capability must be enumerable through its \
-                 accessor, and ingesting this view would strip the statement layer silently"
-            ),
             Self::ViewNotReady { checkpoint, cause } => write!(
                 f,
                 "the view reported an operational failure {checkpoint}, so the rows read are \
