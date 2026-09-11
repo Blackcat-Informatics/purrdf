@@ -9,8 +9,9 @@ use std::sync::Arc;
 use purrdf_core::{
     BlankScope, CanonHash, CompositeDatasetView, CompositeSource, ContentDigest, DatasetMut,
     DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch, GraphMatchValue,
-    GraphPlacement, MutableDataset, QuadIds, QuadValues, RESERVED_NAMESPACE, RdfDataset,
-    RdfDatasetBuilder, RdfLiteral, RdfTextDirection, ScopeBinding, TermRef, TermValue, ViewLimits,
+    GraphPlacement, MutableDataset, OwnerMutability, QuadIds, QuadValues, RESERVED_NAMESPACE,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger,
+    RetentionSnapshot, ScopeBinding, TermRef, TermValue, ViewAccountingReport, ViewLimits,
     ViewOperationStatus, blank_count_view, canonicalize, canonicalize_graph_view,
     canonicalize_view, check_admissible_view, datasets_isomorphic, graph_digest_view,
     try_canonicalize_view, try_graph_digest_view,
@@ -1661,4 +1662,340 @@ fn infallible_views_certify_ready_before_and_after_a_full_read() {
     // The shared-handle blanket impl forwards rather than defaulting.
     assert_always_ready(&flat, "shared frozen dataset");
     assert_always_ready(&Arc::new(delta_of(&flat)), "shared delta snapshot");
+}
+
+// ---------------------------------------------------------------------------
+// The shared ledger answers residency; per-view admission is untouched
+// ---------------------------------------------------------------------------
+
+/// A base shared by two carriers is RESIDENT once, so the ledger reports its
+/// bytes once — while each carrier's own `ViewStats` keeps charging it per
+/// source, because admission is a statement about one view's ceilings.
+#[test]
+fn one_base_shared_by_two_carriers_is_retained_exactly_once() {
+    let base = identity_fixture();
+    let ledger = RetentionLedger::new();
+    let carrier_a = ledger.retain_dataset(&base);
+    let carrier_b = ledger.retain_dataset(&base);
+    assert_eq!(
+        carrier_a.owner_key(),
+        carrier_b.owner_key(),
+        "the same allocation must key the same owner"
+    );
+
+    let shared = ledger.snapshot();
+    assert_eq!(shared.distinct_owners, 1);
+    assert_eq!(shared.live_guards, 2);
+    assert_eq!(shared.retained_sources, 1);
+    assert_eq!(shared.retained_terms, base.term_count());
+    assert_eq!(shared.retained_rows, base.rdf_row_count());
+    assert_eq!(shared.retained_payload_bytes, base.rdf_payload_bytes());
+
+    // The per-view scope is deliberately unchanged: two sources, charged twice.
+    let per_view =
+        CompositeDatasetView::new(vec![base.clone(), base.clone()], ViewLimits::default())
+            .unwrap()
+            .stats();
+    assert_eq!(per_view.retained_sources, 2);
+    assert_eq!(per_view.retained_terms, 2 * base.term_count());
+    assert_eq!(
+        per_view.retained_payload_bytes,
+        2 * base.rdf_payload_bytes()
+    );
+
+    // The report keeps RETAINED (deduplicated) and INCREMENTAL (this view's own
+    // bookkeeping) in separate fields, so no byte is counted in both.
+    let report = ledger.report(&per_view);
+    assert_eq!(
+        report.retained.retained_payload_bytes,
+        base.rdf_payload_bytes()
+    );
+    assert_eq!(report.incremental_auxiliary_bytes, per_view.auxiliary_bytes);
+    assert_eq!(report.incremental_work, per_view.work);
+    assert_eq!(
+        report.total_accounted_bytes(),
+        base.rdf_payload_bytes() + report.retained.memo_bytes + per_view.auxiliary_bytes
+    );
+    assert!(
+        report.total_accounted_bytes() < per_view.retained_payload_bytes + per_view.auxiliary_bytes,
+        "the deduplicated total must be strictly smaller than the per-view restatement"
+    );
+    assert_eq!(
+        ViewAccountingReport::new(ledger.snapshot(), &per_view),
+        report
+    );
+
+    drop(carrier_a);
+    drop(carrier_b);
+    assert_eq!(ledger.snapshot(), RetentionSnapshot::default());
+}
+
+/// The last reader releases the charge, whichever reader that turns out to be:
+/// no order leaves a residue, and none takes a total below zero.
+#[test]
+fn retention_is_released_by_the_last_reader_under_either_drop_order() {
+    let base = identity_fixture();
+    for reverse in [false, true] {
+        let ledger = RetentionLedger::new();
+        let first = ledger.retain_dataset(&base);
+        // A clone is another reader of the SAME owner, not another owner.
+        let cloned = first.clone();
+        let third = ledger.retain_dataset(&base);
+        // Put something in the memo too, so its release is proved as well.
+        let digest = first.memoized_graph_digest(GRAPH, || graph_digest_view(&*base, GRAPH));
+        assert_eq!(digest, graph_digest_view(&*base, GRAPH));
+
+        let full = ledger.snapshot();
+        assert_eq!(full.distinct_owners, 1);
+        assert_eq!(full.live_guards, 3);
+        assert_eq!(full.retained_payload_bytes, base.rdf_payload_bytes());
+        assert_eq!(full.memo_entries, 1);
+        assert!(full.memo_bytes >= GRAPH.len());
+
+        let mut readers = vec![first, cloned, third];
+        if reverse {
+            readers.reverse();
+        }
+        while let Some(reader) = readers.pop() {
+            drop(reader);
+            let now = ledger.snapshot();
+            if readers.is_empty() {
+                assert_eq!(
+                    now,
+                    RetentionSnapshot {
+                        memo_misses: 1,
+                        ..RetentionSnapshot::default()
+                    },
+                    "the last reader must release everything but the hit/miss history \
+                     (reverse={reverse})"
+                );
+            } else {
+                assert_eq!(
+                    now.distinct_owners, 1,
+                    "a surviving reader keeps the owner (reverse={reverse})"
+                );
+                assert_eq!(now.live_guards, readers.len());
+                assert_eq!(now.retained_payload_bytes, base.rdf_payload_bytes());
+                assert_eq!(now.memo_entries, 1);
+            }
+        }
+    }
+}
+
+/// Deduplication is by ALLOCATION, never by content: two structurally identical
+/// bases are two residents and both are reported. Pointer identity answers "how
+/// many bytes are here"; it never answers "are these the same graph".
+#[test]
+fn two_distinct_bases_each_report_their_own_retention() {
+    let one = identity_fixture();
+    let two = identity_fixture();
+    let ledger = RetentionLedger::new();
+    let guard_one = ledger.retain_dataset(&one);
+    let guard_two = ledger.retain_dataset(&two);
+    assert_ne!(guard_one.owner_key(), guard_two.owner_key());
+    assert_eq!(
+        graph_digest_view(&*one, GRAPH),
+        graph_digest_view(&*two, GRAPH),
+        "the two bases are RDF-identical, and are still two residents"
+    );
+
+    let shared = ledger.snapshot();
+    assert_eq!(shared.distinct_owners, 2);
+    assert_eq!(shared.live_guards, 2);
+    assert_eq!(shared.retained_sources, 2);
+    assert_eq!(shared.retained_terms, one.term_count() + two.term_count());
+    assert_eq!(
+        shared.retained_rows,
+        one.rdf_row_count() + two.rdf_row_count()
+    );
+    assert_eq!(
+        shared.retained_payload_bytes,
+        one.rdf_payload_bytes() + two.rdf_payload_bytes()
+    );
+
+    // Each keeps its own memo slot: the same graph name under two owners is two
+    // entries, and dropping one owner leaves the other's analysis alone.
+    let digest = guard_one.memoized_graph_digest(GRAPH, || graph_digest_view(&*one, GRAPH));
+    assert_eq!(
+        guard_two.memoized_graph_digest(GRAPH, || graph_digest_view(&*two, GRAPH)),
+        digest
+    );
+    assert_eq!(ledger.snapshot().memo_entries, 2);
+    assert_eq!(ledger.snapshot().memo_misses, 2);
+    drop(guard_one);
+    let after = ledger.snapshot();
+    assert_eq!(after.distinct_owners, 1);
+    assert_eq!(after.retained_payload_bytes, two.rdf_payload_bytes());
+    assert_eq!(after.memo_entries, 1);
+    drop(guard_two);
+    assert_eq!(ledger.snapshot().memo_entries, 0);
+}
+
+/// A frozen owner's per-graph identity analysis is computed once and shared by
+/// every reader on the ledger; a mutable owner is never memoized at all.
+#[test]
+fn a_frozen_owner_shares_one_graph_digest_analysis_between_its_readers() {
+    let base = identity_fixture();
+    let ledger = RetentionLedger::new();
+    let reader_a = ledger.retain_dataset(&base);
+    let reader_b = ledger.retain_dataset(&base);
+    assert_eq!(reader_a.mutability(), OwnerMutability::Frozen);
+    assert_eq!(reader_a.charge(), RetainedCharge::of_dataset(&base));
+
+    let direct = graph_digest_view(&*base, GRAPH);
+    let cold = ledger.snapshot();
+    assert_eq!(
+        (cold.memo_entries, cold.memo_hits, cold.memo_misses),
+        (0, 0, 0)
+    );
+
+    // Miss: the closure runs, the digest is stored, and its bytes are accounted.
+    let computed = reader_a.memoized_graph_digest(GRAPH, || graph_digest_view(&*base, GRAPH));
+    assert_eq!(computed, direct);
+    let warm = ledger.snapshot();
+    assert_eq!(
+        (warm.memo_entries, warm.memo_hits, warm.memo_misses),
+        (1, 0, 1)
+    );
+    assert!(warm.memo_bytes >= GRAPH.len() + 32, "{}", warm.memo_bytes);
+
+    // Hit: the OTHER carrier's reader never recomputes.
+    let reused = reader_b
+        .memoized_graph_digest(GRAPH, || panic!("a stored analysis must not be recomputed"));
+    assert_eq!(reused, direct);
+    let hot = ledger.snapshot();
+    assert_eq!(
+        (hot.memo_entries, hot.memo_hits, hot.memo_misses),
+        (1, 1, 1)
+    );
+    assert_eq!(hot.memo_bytes, warm.memo_bytes);
+
+    // A second graph is a second entry, and the fallible spelling agrees.
+    let other_direct = try_graph_digest_view(&*base, OTHER_GRAPH).unwrap();
+    let other = reader_b
+        .try_memoized_graph_digest(OTHER_GRAPH, || try_graph_digest_view(&*base, OTHER_GRAPH))
+        .unwrap();
+    assert_eq!(other, other_direct);
+    assert_ne!(other, direct);
+    let two_graphs = ledger.snapshot();
+    assert_eq!(two_graphs.memo_entries, 2);
+    assert_eq!(two_graphs.memo_misses, 2);
+    assert!(two_graphs.memo_bytes > warm.memo_bytes);
+
+    // A failed computation stores nothing and is neither a hit nor a miss: no
+    // analysis completed, so there is nothing to have shared.
+    let failed: Result<ContentDigest, &str> =
+        reader_a.try_memoized_graph_digest("http://example.org/absent", || Err("refused"));
+    assert_eq!(failed, Err("refused"));
+    assert_eq!(ledger.snapshot(), two_graphs);
+
+    // A MUTABLE owner is accounted but never memoized: every call recomputes, and
+    // the miss counter says so rather than the ledger claiming stale content.
+    let live = identity_fixture();
+    let live_reader = ledger.retain(
+        &live,
+        RetainedCharge::of_dataset(&live),
+        OwnerMutability::Mutable,
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            live_reader.memoized_graph_digest(GRAPH, || graph_digest_view(&*live, GRAPH)),
+            direct
+        );
+    }
+    let mutable = ledger.snapshot();
+    assert_eq!(
+        mutable.memo_entries, 2,
+        "nothing was stored for the mutable owner"
+    );
+    assert_eq!(mutable.memo_misses, 4);
+    assert_eq!(mutable.memo_hits, 1);
+    assert_eq!(mutable.distinct_owners, 2, "it is still retained");
+    assert_eq!(
+        mutable.retained_payload_bytes,
+        base.rdf_payload_bytes() + live.rdf_payload_bytes()
+    );
+}
+
+/// Residency on a ledger does not admit, refuse, or resize anything: the per-view
+/// ceilings answer exactly as they did before, for both the refused case and its
+/// adequately sized neighbour.
+#[test]
+fn a_shared_ledger_does_not_move_per_view_admission() {
+    let base = identity_fixture();
+    let undersized = ViewLimits {
+        max_sources: 1,
+        ..ViewLimits::default()
+    };
+    let sources = || vec![base.clone(), base.clone()];
+
+    // The baseline, with no ledger in play.
+    let before = CompositeDatasetView::new(sources(), undersized).unwrap_err();
+    assert_eq!(before.code, "view-retention-limit");
+    assert_eq!(before.message, "view retains 2 sources, limit is 1");
+
+    let ledger = RetentionLedger::new();
+    let resident = ledger.retain_dataset(&base);
+    assert_eq!(
+        ledger.snapshot().retained_payload_bytes,
+        base.rdf_payload_bytes()
+    );
+
+    // Same refusal, same diagnostic, with the base already resident and reported.
+    let after = CompositeDatasetView::new(sources(), undersized).unwrap_err();
+    assert_eq!(after.code, before.code);
+    assert_eq!(after.message, before.message);
+    assert_eq!(after.severity, before.severity);
+
+    // The adequately sized twin still succeeds — a refusal is a claim too.
+    let admitted = CompositeDatasetView::new(
+        sources(),
+        ViewLimits {
+            max_sources: 2,
+            ..ViewLimits::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(admitted.stats().retained_sources, 2);
+    assert!(
+        admitted.quads().count() > base.quads().count(),
+        "the admitted view must actually carry both occurrences"
+    );
+    assert!(
+        datasets_isomorphic(
+            &*base,
+            &CompositeDatasetView::new(vec![base.clone()], ViewLimits::default()).unwrap()
+        ),
+        "and a single-source composite still reads exactly its base"
+    );
+
+    // The same holds on the byte ceiling: exactly enough is admitted, one byte
+    // short is refused, and the ledger's deduplicated total changes neither.
+    let exact = ViewLimits {
+        max_payload_bytes: base.rdf_payload_bytes(),
+        ..ViewLimits::default()
+    };
+    let short = ViewLimits {
+        max_payload_bytes: base.rdf_payload_bytes() - 1,
+        ..ViewLimits::default()
+    };
+    assert!(CompositeDatasetView::new(vec![base.clone()], exact).is_ok());
+    assert_eq!(
+        CompositeDatasetView::new(vec![base.clone()], short)
+            .unwrap_err()
+            .code,
+        "view-retention-limit"
+    );
+
+    // And the per-view stats a ledger-registered base produces are bit-identical
+    // to the ones it produces with no ledger anywhere.
+    let with_ledger = CompositeDatasetView::new(sources(), ViewLimits::default())
+        .unwrap()
+        .stats();
+    drop(resident);
+    assert_eq!(ledger.snapshot(), RetentionSnapshot::default());
+    let without_ledger = CompositeDatasetView::new(sources(), ViewLimits::default())
+        .unwrap()
+        .stats();
+    assert_eq!(with_ledger, without_ledger);
 }

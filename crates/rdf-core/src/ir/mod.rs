@@ -96,4 +96,7 @@ pub use term::{BlankScope, TermId, TermValue};
 pub use composite::{
     CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,
 };
-pub use view_accounting::{ViewLimits, ViewStats, ViewWork};
+pub use view_accounting::{
+    OwnerKey, OwnerMutability, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
+    ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
+};
