@@ -394,12 +394,22 @@ fn claim(
 
 /// One N-Triples line, its object already rendered.
 ///
-/// The subject goes through the canonical writer; the predicate is
-/// written bare between `<` and `>`, exactly as `purrdf-core`'s own quad
-/// writer does, because a predicate is an IRI the profile already
-/// answered for.
+/// **The predicate position is an IRI position**, so it is written by
+/// [`iri`] exactly as the subject is. Every predicate this module writes
+/// is a validated absolute IRI — a vocabulary field
+/// [`Vocabulary::validate`](crate::Vocabulary::validate) answered for, or
+/// one of the standard's own constants — so the canonical writer escapes
+/// nothing here and the two spellings agree on every byte.
+///
+/// They are still one spelling and not two, which is the point of the
+/// specification's §11.2: a second rendering of the IRI rule standing
+/// beside the canonical writer is invisible until the day a document
+/// carries the one character the two disagree about, and by then it has
+/// been emitting a graph nobody can read. The cost of keeping one writer
+/// is a rendering that is provably the identity; the cost of keeping two
+/// is a defect that cannot be seen.
 fn triple(subject: &str, predicate: &str, object: &str) -> String {
-    format!("{} <{predicate}> {object} .", iri(subject))
+    format!("{} {} {object} .", iri(subject), iri(predicate))
 }
 
 fn iri(value: &str) -> String {
@@ -435,7 +445,43 @@ fn integer(value: u64) -> String {
     typed(&value.to_string(), crate::XSD_INTEGER)
 }
 
-/// Characters that cannot appear inside an N-Triples IRI reference.
+/// Characters that cannot appear inside an N-Triples IRI reference: the
+/// reserved delimiters, the space, and the C0 controls.
+///
+/// # Why this set is narrower than the writer's, and what closes the gap
+///
+/// It is **not** the set `purrdf-core`'s canonical writer escapes. The
+/// writer escapes every `char::is_control`, which is this set's C0 block
+/// *and* the DEL (U+007F) *and* the whole C1 block (U+0080–U+009F). A
+/// reader who "simplified" the two into one set, in either direction,
+/// would be making a change this crate cannot check for itself — so the
+/// reason they differ is stated here rather than left to be rediscovered.
+///
+/// The two sets do not have to agree, because this is the **eager** half
+/// of a two-part refusal and never the last word. A caller's IRI is asked
+/// this question first, so that a space or a `>` is refused by name and
+/// carries the character that caused it
+/// ([`MarkdownError::InvalidVocabulary`](crate::MarkdownError::InvalidVocabulary),
+/// [`MarkdownError::InvalidSourceId`](crate::MarkdownError::InvalidSourceId));
+/// then the same string is asked the **IRI law's** question, which is the
+/// one that decides (`profile::absolute_iri`, through `purrdf-core`).
+///
+/// The IRI law is what refuses the DEL and the C1 block, and it does so
+/// on the grammar rather than on a blacklist: RFC 3987 `ucschar` — the
+/// range an IRI adds over a URI — opens at **U+00A0**, one code point
+/// past the end of C1, and no ASCII class admits U+007F. So every
+/// character the writer would have had to escape inside an IRI is refused
+/// before a byte of output exists, and the writer's IRI escape can never
+/// fire on a term this crate emits. U+00A0 itself is the neighbour that
+/// proves the bound is the grammar's and not a taste: it is admitted, and
+/// it mints.
+///
+/// Widening this set to match the writer's would therefore refuse nothing
+/// new and would put a second, hand-written copy of a boundary the IRI
+/// grammar already owns into this crate — the second law that drifts.
+/// Narrowing the writer's to match this one would leave a control
+/// character unescaped in a term. Neither is an improvement; the
+/// difference is the design.
 pub(crate) fn iri_forbids(c: char) -> bool {
     matches!(c, '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\') || (c as u32) <= 0x20
 }
@@ -443,6 +489,30 @@ pub(crate) fn iri_forbids(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One line, one writer. The subject and the predicate are both
+    /// rendered by `purrdf-core`'s canonical writer, so this module keeps
+    /// a single spelling of the IRI rule and never a second escaper
+    /// beside it — the shape §11.2 of the specification names.
+    ///
+    /// The predicate carried here is an ordinary validated IRI, which is
+    /// the only kind that ever reaches this function: what the vector
+    /// pins is the *route*, not an escape, because a route that is the
+    /// identity today is what a second escaper drifts away from
+    /// tomorrow.
+    #[test]
+    fn a_predicate_is_written_by_the_canonical_writer_the_subject_is_written_by() {
+        let line = triple("urn:test:s", "urn:test:p", "\"o\"");
+        assert_eq!(
+            line,
+            format!(
+                "{} {} \"o\" .",
+                emit_term(&RdfTerm::Iri("urn:test:s".to_owned())),
+                emit_term(&RdfTerm::Iri("urn:test:p".to_owned()))
+            )
+        );
+        assert_eq!(line, "<urn:test:s> <urn:test:p> \"o\" .");
+    }
 
     #[test]
     fn escaping_covers_the_named_escapes_the_controls_and_the_delete() {

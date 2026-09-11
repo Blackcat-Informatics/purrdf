@@ -180,6 +180,23 @@ impl Walker {
         }
     }
 
+    /// Opens a section and re-states the stack of sections **in force**:
+    /// every section at this one's level or above is closed by it, and
+    /// what is left on top is the nearest preceding shallower section.
+    ///
+    /// That pop rule is the same sentence
+    /// [`assemble_sections`](crate::model) reads when it closes a
+    /// section's span and names its parent, and the repetition is the
+    /// seam working rather than a duplication to be tidied away. This
+    /// stack answers *what is in force at this line* — the section a unit
+    /// opens under, the lineage it carries, whether a concordance is open
+    /// above a table row — while the lines are still going past, and at
+    /// that moment no section still open has an end. The law's pass
+    /// answers *where each section ends and whose child it is*, which is
+    /// a fact about the whole reading. Neither answer is the other's, and
+    /// the reader states no span it was not asked for: see
+    /// [`crate::dialect`] for the contract and the vector that holds the
+    /// two to one answer.
     fn open_section(
         &mut self,
         start: usize,

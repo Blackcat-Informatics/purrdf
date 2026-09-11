@@ -1022,6 +1022,25 @@ impl<'a> Document<'a> {
 /// have closed it already. So each section is pushed once and popped
 /// once and nothing is re-scanned — where searching forward for the
 /// close re-walked, for every section, every descendant it holds.
+///
+/// # Why the dialect reader keeps a stack too
+///
+/// The reader pops by this same rule, and that is the seam working
+/// rather than a duplication. It is asked a different question at a
+/// different time: *what is in force at this line* — the section a unit
+/// opens under, the lineage it carries, whether a concordance section is
+/// open above a table row — and it is asked it while the lines are
+/// still going past, when no section still open has an end to state.
+/// This pass is asked *where each section ends and whose child it is*,
+/// which is a fact about the whole reading and cannot be known until the
+/// reading is over. So the reader could not hand this answer over, and
+/// this pass could not borrow the reader's transient stack: rebuilding
+/// it **is** the closure.
+///
+/// What the two share is a consequence of the level alone — the sections
+/// in force are exactly those with no later section at their level or
+/// above — and the vector suite holds them to one answer over generated
+/// level sequences rather than trusting them to stay in step.
 fn assemble_sections(reading: &Reading, len: usize) -> Vec<Section> {
     let raw = &reading.sections;
     let mut sections: Vec<Section> = Vec::with_capacity(raw.len());

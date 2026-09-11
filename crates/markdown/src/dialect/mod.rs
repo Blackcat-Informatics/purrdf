@@ -43,6 +43,37 @@
 //! and they live in [`crate::model`], [`crate::split`],
 //! [`crate::identity`], and [`crate::claims`].
 //!
+//! # The one law stated in two places
+//!
+//! The reader nonetheless keeps a stack of the sections **in force**,
+//! popped by the same nearest-preceding-shallower rule the law closes a
+//! section with, and that is deliberate rather than a duplication left
+//! lying about. The two uses are different questions asked at different
+//! times, and neither can be answered with the other's answer:
+//!
+//! * The reader is asked *what is in force at this line* — which section
+//!   a unit belongs to ([`RawUnit::section`]), what heading stack it
+//!   carries ([`RawUnit::lineage`]), and whether a concordance section
+//!   is open above a table row (the reader's `in_concordance`). All
+//!   three are facts about a line, they are needed **while** the lines
+//!   are still going past, and none of them is a span.
+//! * The law is asked *where each section ends and whose child it is* —
+//!   the containment closure ([`crate::model`]), which is a fact about
+//!   the whole reading and cannot be stated until the reading is over.
+//!
+//! So the reader could not hand the closure over even if it were
+//! allowed to: at the line where a unit needs its section, the sections
+//! still open have no end yet. And the law could not borrow the
+//! reader's stack, because the stack is transient — it is the shape at
+//! one line, not a record — and rebuilding it is the closure itself.
+//!
+//! What is shared is the *rule*, and the rule is a consequence of the
+//! level alone: the sections in force are those with no later section
+//! at their level or above, so the reader's pop and the law's close are
+//! the same sentence read forwards. The vector suite holds them to one
+//! answer over generated level sequences rather than trusting that they
+//! stay in step.
+//!
 //! # Plugging in the next format
 //!
 //! A second structured format is a second module beside

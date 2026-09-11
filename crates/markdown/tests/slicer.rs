@@ -12,12 +12,12 @@ use purrdf_core::embedding::{
     AppliedStage, ChunkingContractId, CorpusTarget, DocumentTarget, EmbeddingError, TargetId,
     derive_chunking_contract_id,
 };
-use purrdf_core::{CanonHash, ContentDigest, try_canonicalize_with};
+use purrdf_core::{BaseIri, CanonHash, ContentDigest, parse_iri, try_canonicalize_with};
 use purrdf_markdown::{
-    CONTEXT_BYTES, Claim, ClaimKind, Document, MIN_MAX_BYTES, MarkdownError,
+    CONTEXT_BYTES, Claim, ClaimKind, DIGEST_ALGORITHM, Document, MIN_MAX_BYTES, MarkdownError,
     PURREMB_PARAMETER_ENCODING, Profile, RowDefect, STANDARD_NAMESPACE, SourceDocument, Span,
-    SpanRelation, Unit, Vocabulary, analyze, render, slice_markdown, span_relation, unit_iri,
-    verify_unit,
+    SpanRelation, Unit, Vocabulary, analyze, render, section_iri, slice_markdown, span_relation,
+    unit_iri, verify_unit,
 };
 use purrdf_rdf::parse_dataset;
 
@@ -5011,13 +5011,687 @@ fn scalar_and_byte_offsets_convert_into_each_other_across_the_whole_guide() {
     }
 }
 
+// --- §2: the dialect grammar, executed rather than quoted -----------------
+
+/// Every section a text states: its level, its heading text, and whether
+/// a movement marker opened it.
+fn section_shape(text: &str) -> Vec<(u32, String, bool)> {
+    model(text, &v1())
+        .sections()
+        .iter()
+        .map(|s| (s.level(), s.heading().to_owned(), s.is_movement()))
+        .collect()
+}
+
+/// Every unit a text states, as its verse number and its verbatim quote.
+fn unit_shape(text: &str) -> Vec<(Option<u64>, String)> {
+    model(text, &v1())
+        .units()
+        .iter()
+        .map(|u| (u.verse(), u.quote().to_owned()))
+        .collect()
+}
+
+/// The verbatim quote of every unit a text states.
+fn unit_quotes(text: &str) -> Vec<String> {
+    unit_shape(text).into_iter().map(|(_, q)| q).collect()
+}
+
+/// §2 of the specification, asked of the slicer instead of read: every
+/// recognition rule the dialect grammar states, executed against real
+/// slicing, each beside the **neighbouring** line it must not read.
+///
+/// A false grammar clause is the costliest kind of false clause, because
+/// a wrong reading here still produces output: a heading read as prose
+/// is a paragraph, a verse read as prose is a paragraph, and nothing
+/// refuses, nothing is empty, and no consumer learns. So each rule is
+/// asked in both directions — the line the clause admits, and the
+/// nearest line it does not.
+#[test]
+fn the_dialect_grammar_of_section_two_recognizes_exactly_what_it_states() {
+    // §2.1 — one to six hashes and then a space open a heading whose
+    // level is the number of hashes, and the heading line is the content
+    // of no unit.
+    for hashes in 1..=6_usize {
+        let text = format!("{} T\n", "#".repeat(hashes));
+        assert_eq!(
+            section_shape(&text),
+            vec![(hashes as u32, "T".to_owned(), false)],
+            "{hashes} hashes open a heading at level {hashes}"
+        );
+        assert!(unit_quotes(&text).is_empty(), "a heading is no unit");
+    }
+    // Seven or more open none at all, and the line is ordinary prose.
+    for hashes in 7..=9_usize {
+        let text = format!("{} T\n", "#".repeat(hashes));
+        assert!(section_shape(&text).is_empty(), "{hashes} hashes");
+        assert_eq!(
+            unit_quotes(&text),
+            vec![format!("{} T", "#".repeat(hashes))],
+            "and the line falls into a paragraph, marker and all"
+        );
+    }
+    // Hashes running straight into text open none either: the space (or
+    // the tab) is the mark.
+    assert!(
+        section_shape("#T\n").is_empty(),
+        "hashes running into text open no heading"
+    );
+    assert_eq!(unit_quotes("#T\n"), vec!["#T".to_owned()]);
+    // The title is the rest of the marker text, trimmed, with trailing
+    // hashes removed and trimmed again — and an empty title is a title.
+    assert_eq!(
+        section_shape("##   Marrow   ##  \n"),
+        vec![(2, "Marrow".to_owned(), false)]
+    );
+    assert_eq!(section_shape("## \n"), vec![(2, String::new(), false)]);
+
+    // §2 — the terminating newline is part of no line, so a section's
+    // heading span is its opening line alone, which is the span §5 mints
+    // its identity over.
+    let text = "## Marrow\n\n1. One.\n";
+    let document = model(text, &v1());
+    assert_eq!(document.sections()[0].heading_span(), Span::new(0, 9));
+    assert_eq!(&text[0..9], "## Marrow");
+
+    // §2.1 — a movement marker is U+2042 and then a space; its name is
+    // the rest, trimmed, with one surrounding `*` or `_` pair removed;
+    // and it sits one level under the nearest *heading*, so consecutive
+    // movements are siblings rather than a descending chain.
+    let movements = "# H\n\n\u{2042} *a*\n\n\u{2042} _b_\n";
+    assert_eq!(
+        section_shape(movements),
+        vec![
+            (1, "H".to_owned(), false),
+            (2, "a".to_owned(), true),
+            (2, "b".to_owned(), true),
+        ]
+    );
+    let walked = model(movements, &v1());
+    assert_eq!(walked.sections()[1].parent(), Some(0));
+    assert_eq!(
+        walked.sections()[2].parent(),
+        Some(0),
+        "a movement is no parent of the movement after it"
+    );
+    // Without the space it opens nothing, and the marker stays in the
+    // text where the author wrote it.
+    assert!(
+        section_shape("\u{2042}*a*\n").is_empty(),
+        "the space after the marker is the mark"
+    );
+    assert_eq!(unit_quotes("\u{2042}*a*\n"), vec!["\u{2042}*a*".to_owned()]);
+
+    // §2.2 — digits, a `.` and a space open a verse; the same digits
+    // without the space open none, and the line is prose.
+    assert_eq!(
+        unit_shape("12. Hear this.\n"),
+        vec![(Some(12), "12. Hear this.".to_owned())]
+    );
+    assert_eq!(
+        unit_shape("12.Hear this.\n"),
+        vec![(None, "12.Hear this.".to_owned())]
+    );
+
+    // §2.2 — a blank line, a horizontal rule and a table row each close
+    // the open unit and are part of no unit.
+    for separator in ["", "---", "***", "-----", "  ---  ", "| a |"] {
+        assert_eq!(
+            unit_quotes(&format!("one\n{separator}\ntwo\n")),
+            vec!["one".to_owned(), "two".to_owned()],
+            "{separator:?} closes the unit and joins none"
+        );
+    }
+    // And the neighbours none of the three rules name run straight on: a
+    // rule is three or more characters, all `-` or all `*`.
+    for content in ["--", "**", "-*-", "- - -", "----x"] {
+        assert_eq!(
+            unit_quotes(&format!("one\n{content}\ntwo\n")),
+            vec![format!("one\n{content}\ntwo")],
+            "{content:?} is ordinary content"
+        );
+    }
+
+    // §2.1 — the document's title is the first heading that is not a
+    // movement, so a movement before it is no title.
+    assert_eq!(
+        model("\u{2042} *m*\n\n# H\n\n## Deeper\n", &v1()).title(),
+        Some("H")
+    );
+}
+
+// --- §4.3: the anchor lift, executed --------------------------------------
+
+/// A document whose only concordance row names a verse this document
+/// does **not** carry: the row §4.2 admits, and whose anchors §4.3 walks
+/// all the same.
+fn cited_elsewhere(anchor: &str) -> String {
+    format!(
+        "# T\n\n1. One line.\n\n## Concordance\n\n\
+         | Verses | Canon source | Anchors |\n| --- | --- | --- |\n\
+         | 9 | `atlas/x.logic.ttl` | `{anchor}` |\n"
+    )
+}
+
+/// §4.3 executed: the lift is **concatenation** and never RFC-3986
+/// resolution, its containment test is relativization, and it is asked
+/// of every anchor of the table rather than of the anchors that happen
+/// to lift here.
+///
+/// The first of those is a clause a reading of the code cannot settle,
+/// because under most bases the two answers coincide. Under the
+/// fragment base the goldens are minted under they do not: resolution
+/// throws the fragment away and lands somewhere else entirely, so the
+/// two answers are written out side by side here and the graph is held
+/// to the one the law names.
+#[test]
+fn the_anchor_lift_concatenates_never_resolves_and_walks_every_row_of_the_table() {
+    // Concatenation, stated as the IRI the graph carries.
+    let claims = slice_of(&cited("tide-line"), GUIDE_ID, &under_canon(CANON_BASE)).expect("slices");
+    let minted = format!("{CANON_BASE}tide-line");
+    assert_eq!(verse_one_cites(&claims), vec![format!("<{minted}>")]);
+    assert_eq!(minted, "https://example.org/canon#tide-line");
+
+    // Resolution is the other answer, and it is not this one: RFC-3986
+    // dissolves the base's `#` and the anchor lands outside the canon
+    // altogether.
+    let base = BaseIri::parse(CANON_BASE).expect("an absolute base");
+    let resolved = base.resolve("tide-line").expect("it resolves");
+    assert_eq!(resolved.as_str(), "https://example.org/tide-line");
+    assert_ne!(resolved.as_str(), minted, "concatenation, never resolution");
+
+    // And the containment test is relativization, which is the only rule
+    // that answers for a fragment base at all: the minted IRI has a
+    // relative spelling against it, and that is what admits it.
+    let parsed = parse_iri(&minted).expect("an IRI");
+    assert_eq!(base.relativize(&parsed), Some("#tide-line".to_owned()));
+
+    // Every anchor of the table is walked, and not only those whose
+    // verses this document carries: verse 9 is nowhere in this document,
+    // and its row's anchor is refused where it is written.
+    for anchor in ["two words", "../x"] {
+        assert_eq!(
+            slice_of(
+                &cited_elsewhere(anchor),
+                GUIDE_ID,
+                &under_canon(CANON_PATH_BASE)
+            ),
+            Err(MarkdownError::InvalidAnchor {
+                anchor: anchor.to_owned(),
+                verses: (9, 9),
+            }),
+            "a row that lifts nothing here still names the anchor it wrote"
+        );
+    }
+    // The neighbouring row — the same verse this document does not
+    // carry, with a lawful anchor — is no refusal at all. It lifts
+    // nothing, it is reported as data, and nothing cites it.
+    let lawful = cited_elsewhere("far-shore");
+    let document = model(&lawful, &under_canon(CANON_PATH_BASE));
+    let unmatched: Vec<(u64, u64)> = document
+        .unmatched_citations()
+        .map(purrdf_markdown::Citation::verses)
+        .collect();
+    assert_eq!(unmatched, vec![(9, 9)], "reported, never refused");
+    let claims = render(&document);
+    assert!(
+        claims
+            .iter()
+            .all(|claim| !claim.turtle.contains(&v().cites)),
+        "a row that lifted nothing states no edge"
+    );
+    parses_whole(&claims);
+}
+
+// --- §5: the preimage, rebuilt from the specification's own words ---------
+
+/// A length-prefixed preimage exactly as §5 states one: each field
+/// preceded by its length as eight bytes little-endian, in the order the
+/// section lists them.
+///
+/// It is spelled out here rather than reached for in the crate. A second
+/// implementation has only these words, and an identity the crate agrees
+/// with *itself* about is no evidence that the words say what the crate
+/// does.
+fn spec_preimage(fields: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for field in fields {
+        out.extend_from_slice(&(field.len() as u64).to_le_bytes());
+        out.extend_from_slice(field);
+    }
+    out
+}
+
+/// §5's node IRI over a content digest already taken:
+/// `<node base><kind>:<alg>:<hex>`, the hex being the digest of the
+/// seven-field preimage — the kind, the source id, the profile's
+/// **chunking** id, the span's two endpoints as eight bytes
+/// little-endian each, the digest algorithm tag, and the content digest.
+fn spec_node_iri(
+    kind: &str,
+    contract: &ChunkingContractId,
+    span: Span,
+    content: &ContentDigest,
+) -> String {
+    let preimage = spec_preimage(&[
+        kind.as_bytes(),
+        GUIDE_ID.as_bytes(),
+        contract.as_bytes(),
+        &span.start.to_le_bytes(),
+        &span.end.to_le_bytes(),
+        DIGEST_ALGORITHM.as_bytes(),
+        content.as_bytes(),
+    ]);
+    format!(
+        "{SLICE_BASE}{kind}:{DIGEST_ALGORITHM}:{}",
+        ContentDigest::of(&preimage).to_hex()
+    )
+}
+
+/// §5 executed: the preimage the specification writes out, rebuilt field
+/// by field from its words, mints the very IRIs the slicer emits for a
+/// real document — every section, every unit, and a citation.
+///
+/// This is the vector a second implementation is really held to. The
+/// crate's own [`unit_iri`] and `citation_iri` are pinned against the
+/// projection elsewhere; both of those would still agree if the *fields*
+/// were in another order, or a length prefix were dropped, or the wrong
+/// profile id were in position three. Nothing but a preimage built from
+/// the specification can tell.
+#[test]
+fn the_preimage_section_five_states_mints_the_very_ids_the_slicer_emits() {
+    let document = model(GUIDE, &v1());
+    let claims = slice(GUIDE, &v1());
+    let contract = v1().chunking_id();
+    let bytes = |span: Span| &GUIDE.as_bytes()[span.start as usize..span.end as usize];
+
+    // A section: the kind `section`, over its *heading span* and that
+    // span's bytes.
+    let emitted = sections(&claims);
+    assert_eq!(emitted.len(), document.sections().len());
+    assert!(emitted.len() > 4, "the guide has sections to speak of");
+    for (claim, section) in emitted.iter().zip(document.sections()) {
+        let span = section.heading_span();
+        assert_eq!(
+            claim.subject,
+            spec_node_iri("section", &contract, span, &ContentDigest::of(bytes(span)))
+        );
+    }
+
+    // A unit: the kind `unit`, over its own span and its own bytes — and
+    // the digest the model carries is the digest of those bytes.
+    let emitted = units(&claims);
+    assert_eq!(emitted.len(), document.units().len());
+    assert!(emitted.len() > 4, "and units to speak of");
+    for (claim, unit) in emitted.iter().zip(document.units()) {
+        assert_eq!(unit.digest(), ContentDigest::of(bytes(unit.span())));
+        assert_eq!(
+            claim.subject,
+            spec_node_iri("unit", &contract, unit.span(), &unit.digest())
+        );
+    }
+
+    // A citation: the kind `citation`, over the row's own line span,
+    // with the content digest taken over the row's line, the unit's IRI,
+    // and the triple terms the node reifies, in the row's own order.
+    let row = &document.citations()[0];
+    let (verse, unit) = row.lifted()[0];
+    let claim = emitted[unit];
+    assert_eq!(document.units()[unit].verse(), Some(verse));
+    let terms = reified_terms(row, &v1(), &claim.subject);
+    let mut fields: Vec<&[u8]> = vec![bytes(row.span()), claim.subject.as_bytes()];
+    fields.extend(terms.iter().map(String::as_bytes));
+    let content = ContentDigest::of(&spec_preimage(&fields));
+    assert!(
+        citation_nodes(claim).contains(&spec_node_iri("citation", &contract, row.span(), &content)),
+        "the row's node is the one the specification's formula mints"
+    );
+
+    // Field 3 is the chunking id, and the specification forbids the
+    // contract id there by name. Nothing else would do: the same formula
+    // under the wider id mints an IRI this document states nowhere.
+    let wider = v1().contract_id();
+    assert_ne!(wider.to_hex(), contract.to_hex());
+    let first = &document.units()[0];
+    let under_wider = spec_node_iri("unit", &wider, first.span(), &first.digest());
+    assert!(
+        claims.iter().all(|c| !c.turtle.contains(&under_wider)),
+        "a node addressed by the emission id is a node this graph does not have"
+    );
+}
+
+/// §5's length prefix, executed: *no two field sequences share a
+/// preimage*, which is a claim about the sequences whose bytes
+/// concatenate alike — the only ones that could have collided.
+#[test]
+fn the_length_prefix_keeps_two_field_sequences_that_concatenate_alike_apart() {
+    let contract = v1().chunking_id();
+    let mint = |line: &[u8], unit: &str, terms: &[&str]| {
+        let terms: Vec<String> = terms.iter().map(|t| (*t).to_owned()).collect();
+        purrdf_markdown::citation_iri(&v(), GUIDE_ID, &contract, 0, 4, line, unit, &terms)
+    };
+    // Unframed, `ab` ++ `c` and `a` ++ `bc` are one string.
+    assert_eq!(
+        [b"ab".as_slice(), b"c"].concat(),
+        [b"a".as_slice(), b"bc"].concat()
+    );
+    assert_ne!(mint(b"ab", "c", &[]), mint(b"a", "bc", &[]));
+    // So are one reified term of two names and two of one.
+    assert_ne!(mint(b"row", "u", &["ab"]), mint(b"row", "u", &["a", "b"]));
+    // And the formula is still a function of what it is handed.
+    assert_eq!(mint(b"ab", "c", &[]), mint(b"ab", "c", &[]));
+}
+
+/// The second path to a section's identity, held to the first.
+///
+/// [`section_iri`] is public surface a consumer mints with, and the
+/// projection mints its own section IRIs from a digest it has already
+/// taken. They are one formula in the source; nothing but this says they
+/// are one answer over a real document, where the *fields* — which span,
+/// which bytes — are what the projection chooses and the consumer has to
+/// guess.
+///
+/// The unit half of this equivalence is pinned in `identity`'s own unit
+/// tests, and the preimage behind both is pinned from the specification
+/// in [`the_preimage_section_five_states_mints_the_very_ids_the_slicer_emits`].
+#[test]
+fn the_section_iri_a_consumer_mints_is_the_section_iri_the_projection_emits() {
+    let document = model(GUIDE, &v1());
+    let claims = slice(GUIDE, &v1());
+    let contract = v1().chunking_id();
+    let emitted = sections(&claims);
+    assert_eq!(emitted.len(), document.sections().len());
+    assert!(!emitted.is_empty(), "the guide states sections");
+    for (claim, section) in emitted.iter().zip(document.sections()) {
+        let span = section.heading_span();
+        assert_eq!(
+            claim.subject,
+            section_iri(
+                &v(),
+                GUIDE_ID,
+                &contract,
+                span.start,
+                span.end,
+                &GUIDE.as_bytes()[span.start as usize..span.end as usize]
+            ),
+            "one formula, one answer"
+        );
+    }
+    // The span is the heading line's and not the section's, which is the
+    // part a consumer holding a model has to get right: minting over the
+    // whole section names a node this graph does not have.
+    let whole = document.sections()[0].span();
+    let over_whole = section_iri(
+        &v(),
+        GUIDE_ID,
+        &contract,
+        whole.start,
+        whole.end,
+        &GUIDE.as_bytes()[whole.start as usize..whole.end as usize],
+    );
+    assert_ne!(emitted[0].subject, over_whole);
+    assert!(claims.iter().all(|c| !c.turtle.contains(&over_whole)));
+}
+
+// --- the heading stack, stated twice and held to one answer ---------------
+
+/// A document built from a sequence of levels: each entry opens a
+/// section — a heading at that level, or a movement marker where the
+/// level is `0` — and is followed by one paragraph, so every section has
+/// a unit under it to report the stack the reader held there.
+///
+/// Every heading and every movement name is distinct, so a lineage names
+/// its sections unambiguously.
+fn levelled(levels: &[u32]) -> String {
+    levels
+        .iter()
+        .enumerate()
+        .map(|(i, &level)| {
+            let opener = if level == 0 {
+                format!("\u{2042} *m{i}*")
+            } else {
+                format!("{} h{i}", "#".repeat(level as usize))
+            };
+            format!("{opener}\n\nbody of {i}.\n\n")
+        })
+        .collect::<Vec<String>>()
+        .concat()
+}
+
+/// The reader's stack and the law's closure, asked the same question
+/// about one document and required to answer the same way.
+///
+/// The reader answers *what was in force at this unit* — the innermost
+/// section and the lineage — off the stack it pops as it walks the
+/// lines. The law answers *whose child is this section, and where does
+/// it end* off a stack of its own, built after the reading is over. Here
+/// the two are put side by side: the lineage the reader handed the unit
+/// must be the parent chain the law built, heading for heading, and the
+/// spans the law closed must contain that unit exactly where the chain
+/// says they do and nowhere else.
+fn the_reader_and_the_law_agree_on(levels: &[u32]) {
+    let text = levelled(levels);
+    let document = model(&text, &v1());
+    assert_eq!(document.sections().len(), levels.len(), "{levels:?}");
+    assert_eq!(document.units().len(), levels.len(), "{levels:?}");
+    for unit in document.units() {
+        // The reader's answer.
+        let innermost = unit.section().expect("a unit under a section");
+        let opened_before = document
+            .sections()
+            .iter()
+            .rposition(|s| s.span().start < unit.span().start)
+            .expect("a section opened before it");
+        assert_eq!(
+            innermost, opened_before,
+            "{levels:?}: the section in force is the last one opened"
+        );
+        // The law's answer: the parent chain of that section, outermost
+        // first.
+        let mut chain: Vec<String> = Vec::new();
+        let mut at = Some(innermost);
+        while let Some(index) = at {
+            let section = &document.sections()[index];
+            chain.push(section.heading().to_owned());
+            at = section.parent();
+        }
+        chain.reverse();
+        assert_eq!(unit.lineage(), chain.as_slice(), "{levels:?}");
+        // And the closure the law states holds exactly the chain: every
+        // section of it contains the unit, and no other section does.
+        for section in document.sections() {
+            assert_eq!(
+                section.span().contains_span(unit.span()),
+                chain.iter().any(|h| h.as_str() == section.heading()),
+                "{levels:?}: {:?} against the unit at {:?}",
+                section.heading(),
+                unit.span()
+            );
+        }
+    }
+}
+
+/// The heading-stack law is stated in two places — the dialect reader
+/// pops it to answer what is in force at a line, and the model pops it
+/// to close every section's span and name its parent — because the two
+/// are asked different questions at different times and neither can hand
+/// the other its answer. This is what keeps them from drifting apart:
+/// the same documents, both answers, and an equality.
+///
+/// Exhaustive over every sequence of one to three sections at any level
+/// (six heading levels and the movement marker, so 7 + 49 + 343
+/// documents), then over deterministic eight-section sequences — the
+/// depths a short exhaustion cannot reach, generated by a fixed
+/// recurrence so the suite reads no clock and no entropy and slices the
+/// same documents on every run and every target.
+#[test]
+fn the_reader_and_the_law_agree_on_the_heading_stack_over_generated_level_sequences() {
+    for a in 0..=6 {
+        the_reader_and_the_law_agree_on(&[a]);
+        for b in 0..=6 {
+            the_reader_and_the_law_agree_on(&[a, b]);
+            for c in 0..=6 {
+                the_reader_and_the_law_agree_on(&[a, b, c]);
+            }
+        }
+    }
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    for _ in 0..64 {
+        let mut levels: Vec<u32> = Vec::with_capacity(8);
+        for _ in 0..8 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            levels.push(u32::try_from((state >> 33) % 7).expect("a level under seven"));
+        }
+        the_reader_and_the_law_agree_on(&levels);
+    }
+}
+
+// --- the two forbidden sets, and the boundary that closes the gap ---------
+
+/// The C1 control block, which the crate's own character rule does not
+/// name and the canonical writer would escape: the gap between the two
+/// forbidden sets, closed by the IRI law before a byte of output exists.
+const C1_CONTROLS: [char; 3] = ['\u{80}', '\u{85}', '\u{9f}'];
+
+/// U+00A0, the first code point of RFC-3987 `ucschar`: one past the end
+/// of C1, and the neighbour that proves the boundary above is the IRI
+/// grammar's and not a blacklist's.
+const FIRST_UCSCHAR: char = '\u{a0}';
+
+/// The two "forbidden" sets in this crate are not the same set, and the
+/// difference is closed by a boundary neither of them states.
+///
+/// The crate's own character rule refuses the reserved delimiters, the
+/// space and the C0 controls. `purrdf-core`'s canonical writer escapes
+/// every control — C0, the DEL, **and** the C1 block (U+0080–U+009F),
+/// which the character rule never mentions. Nothing would stop a C1
+/// character reaching the writer except that `ucschar` opens at U+00A0,
+/// so the IRI law refuses C1 at every seam that takes a caller's IRI.
+/// That is a fact about a third law, and this is what states it: the C1
+/// refusals are **malformed** — the IRI law's finding, carried — and
+/// never the crate's own character refusal, and U+00A0 one code point
+/// later is admitted everywhere.
+#[test]
+fn a_c1_control_in_a_caller_iri_is_refused_by_the_iri_law_and_the_first_ucschar_still_mints() {
+    for c1 in C1_CONTROLS {
+        // The source id.
+        let id = format!("https://example.org/doc{c1}");
+        match slice_of(THREE, &id, &v1()).expect_err("no IRI, no document") {
+            MarkdownError::MalformedSourceId { id: named, cause } => {
+                assert_eq!(named, id);
+                assert_eq!(cause.diagnostic_code(), "iri-disallowed-char");
+            }
+            other => panic!("{c1:?} is no IRI character, and the law must say so: {other:?}"),
+        }
+        // A vocabulary field.
+        let mut broken = v1();
+        broken.vocabulary.cites = format!("urn:test:cites{c1}");
+        match slice_of(THREE, GUIDE_ID, &broken).expect_err("no IRI, no term") {
+            MarkdownError::MalformedVocabulary { field, cause, .. } => {
+                assert_eq!(field, "cites");
+                assert_eq!(cause.diagnostic_code(), "iri-disallowed-char");
+            }
+            other => panic!("{c1:?} states no term: {other:?}"),
+        }
+        // A declared canon base.
+        let base = format!("https://example.org/canon{c1}#");
+        match slice_of(&cited("a-one"), GUIDE_ID, &under_canon(&base)).expect_err("no IRI, no base")
+        {
+            MarkdownError::MalformedCanonBase { base: named, cause } => {
+                assert_eq!(named, base);
+                assert_eq!(cause.diagnostic_code(), "iri-disallowed-char");
+            }
+            other => panic!("{c1:?} is no base to mint under: {other:?}"),
+        }
+        // And an anchor, which mints its IRI by concatenation and is
+        // walked against the same law. The character sits *inside* the
+        // anchor: a cell's value is trimmed (§4), and two of these three
+        // are Unicode whitespace, so at an edge they would be gone
+        // before the lift ever saw them.
+        let anchor = format!("a{c1}b");
+        assert_eq!(
+            slice_of(&cited(&anchor), GUIDE_ID, &under_canon(CANON_BASE)),
+            Err(MarkdownError::InvalidAnchor {
+                anchor,
+                verses: (1, 1),
+            })
+        );
+    }
+
+    // The neighbour, one code point later, at every one of those seams:
+    // U+00A0 is `ucschar`, so it is an IRI character, and it mints.
+    let id = format!("https://example.org/doc{FIRST_UCSCHAR}");
+    let claims = slice_of(THREE, &id, &v1()).expect("the first ucschar is an IRI character");
+    assert_eq!(claims[0].subject, id);
+    let mut widened = v1();
+    widened.vocabulary.cites = format!("urn:test:cites{FIRST_UCSCHAR}");
+    assert_eq!(widened.vocabulary.validate(), Ok(()));
+    let base = format!("https://example.org/canon{FIRST_UCSCHAR}#");
+    let anchor = format!("a{FIRST_UCSCHAR}one");
+    let claims = slice_of(&cited(&anchor), GUIDE_ID, &under_canon(&base)).expect("slices");
+    assert_eq!(verse_one_cites(&claims), vec![format!("<{base}{anchor}>")]);
+
+    // And what a `ucschar` anchor mints is readable Turtle. This leg
+    // carries U+00A1 rather than U+00A0, because it asks a different
+    // question of a different law: the lexer this suite re-reads claims
+    // with ends an IRI reference at Unicode whitespace, and U+00A0 is
+    // Unicode whitespace. What the IRI law admits into a graph and what
+    // a lexer reads back out of one are two questions, and only the
+    // first is this crate's.
+    let anchor = "a\u{a1}one";
+    let claims = slice_of(&cited(anchor), GUIDE_ID, &under_canon(CANON_BASE)).expect("slices");
+    assert_eq!(
+        verse_one_cites(&claims),
+        vec![format!("<{CANON_BASE}{anchor}>")]
+    );
+    parses_whole(&claims);
+
+    // The eager rule really is the narrower of the two: it names none of
+    // the characters above, which is why the IRI law is the one that
+    // answers for them.
+    for c in C1_CONTROLS.into_iter().chain([FIRST_UCSCHAR, '\u{7f}']) {
+        let id = format!("https://example.org/doc{c}");
+        assert!(
+            !matches!(
+                slice_of(THREE, &id, &v1()),
+                Err(MarkdownError::InvalidSourceId { .. })
+            ),
+            "{c:?} is refused by the IRI law or not at all"
+        );
+    }
+}
+
 // --- the specification ----------------------------------------------------
 
 /// The specification the conformance clause names, read from the crate.
 const SPEC: &str = include_str!("../SPEC.md");
 
+/// An **anti-rot pin**, and deliberately nothing more: every clause of
+/// the specification this suite executes elsewhere is still *present* in
+/// the specification, spelled the way the vectors were written against.
+///
+/// It catches a clause deleted, reworded past recognition, or quietly
+/// weakened in an edit, and that is worth having — a law nobody can read
+/// is not a law. What it cannot catch is the opposite failure, and no
+/// reader should mistake it for conformance: **a specification can state
+/// a clause the code does not implement, and every one of these
+/// assertions will still pass.** Twice in this crate's history it did —
+/// a clause about trimmed text, and a clause putting the canon base
+/// outside a contract id — and this vector was green throughout both.
+///
+/// The clause-to-behaviour vectors are the ones that answer for the law
+/// being *true*: §2 in
+/// [`the_dialect_grammar_of_section_two_recognizes_exactly_what_it_states`],
+/// §4.3 in
+/// [`the_anchor_lift_concatenates_never_resolves_and_walks_every_row_of_the_table`],
+/// and §5 in
+/// [`the_preimage_section_five_states_mints_the_very_ids_the_slicer_emits`]
+/// and its neighbours. Adding a clause here is cheap and proves nothing;
+/// adding one there is the work.
 #[test]
-fn the_specification_states_the_law_this_suite_executes_and_carries_no_process() {
+fn the_specification_still_states_every_clause_this_suite_pins_and_carries_no_process() {
     assert!(SPEC.starts_with("<!--"), "a license header opens it");
     for clause in [
         "Version 2.0.0-draft",
@@ -5056,6 +5730,11 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         "the RDF 1.2 **triple term**",
         "only in **object** position",
         "MUST NOT emit `canonSource` on a unit",
+        // One writer, and the predicate position inside it.
+        "**The predicate position is an IRI position.**",
+        "MUST NOT keep a second rendering",
+        // The anchor lift, which is concatenation and never resolution.
+        "**pure concatenation**",
         // The law that keeps a citation node attached to its unit, and
         // the row shape that has nothing else holding it there.
         "**A citation node is never an orphan.**",

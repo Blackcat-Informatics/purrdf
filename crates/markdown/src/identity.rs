@@ -49,6 +49,14 @@ pub fn unit_iri(
 
 /// The identity of a section, over its heading line's bytes, under the
 /// same chunking id [`unit_iri`] takes.
+///
+/// It is the formula [`render`](crate::render) mints every section IRI
+/// under, offered to a consumer that holds the source and a recorded
+/// heading span and wants to re-derive one for itself — exactly as
+/// [`unit_iri`] is. The projection reaches the formula by the digest
+/// form, because it has already taken the digest it needs, and the two
+/// routes are held to one answer by the vectors rather than by
+/// resemblance.
 #[must_use]
 pub fn section_iri(
     vocabulary: &Vocabulary,
@@ -221,6 +229,40 @@ mod tests {
                 18,
                 &ContentDigest::of(span)
             )
+        );
+    }
+
+    /// The same equivalence for a section, which is the path the
+    /// projection actually takes: it holds a section's *heading span* and
+    /// digests those bytes itself, so [`section_iri`] and the digest form
+    /// have to be one formula rather than two that happen to agree.
+    ///
+    /// The two are pinned again end to end — [`section_iri`] against the
+    /// subject of every section claim a real document emits — in the
+    /// vector suite, because agreeing on a preimage and agreeing on the
+    /// *fields* a document fills it with are two facts.
+    #[test]
+    fn a_sections_identity_is_the_same_formula_over_its_heading_line() {
+        let v = Vocabulary::under("urn:test:").expect("a vocabulary");
+        let contract = crate::Profile::new("t", 1, v.clone()).chunking_id();
+        let heading = b"## The Marrow Shelf";
+        assert_eq!(
+            section_iri(&v, "urn:test:doc", &contract, 64, 83, heading),
+            node_iri_of_digest(
+                &v,
+                "section",
+                "urn:test:doc",
+                &contract,
+                64,
+                83,
+                &ContentDigest::of(heading)
+            )
+        );
+        // And the kind is a field, so the same span of the same bytes is
+        // a different node under a different kind.
+        assert_ne!(
+            section_iri(&v, "urn:test:doc", &contract, 64, 83, heading),
+            unit_iri(&v, "urn:test:doc", &contract, 64, 83, heading)
         );
     }
 

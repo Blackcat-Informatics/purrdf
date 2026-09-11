@@ -1009,7 +1009,17 @@ re-implemented loosely.
 * A **triple term** is written `<<( ` subject ` ` predicate ` ` object
   ` )>>`, each component written by these same rules.
 
-An implementation SHOULD reach these forms through one canonical writer
-rather than maintain its own escaper beside it; the divergence a second
-escaper drifts into is invisible until a document carries the one
-character the two disagree about.
+**The predicate position is an IRI position.** A predicate is written
+between `<` and `>` by the IRI rule above, exactly as a subject and an
+IRI object are, and an implementation MUST NOT keep a second rendering of
+that rule beside the first. Every predicate this law emits is a
+vocabulary field or one of the standard's own IRIs (§6), all of them
+already answered for (§9), so the rule escapes nothing there and the two
+renderings would agree on every byte of every conforming document. That
+is precisely why the requirement is on the *writer* and not on the bytes:
+a second rendering that is provably the identity today is a second
+rendering that can drift tomorrow, and the drift is invisible until a
+document carries the one character the two disagree about.
+
+An implementation SHOULD therefore reach every one of these forms through
+one canonical writer rather than maintain its own escaper beside it.
