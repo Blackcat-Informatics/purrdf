@@ -6857,7 +6857,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             let outer = TermValue::Triple {
                 s: Box::new(TermValue::iri("http://example.org/subject")),
                 p: Box::new(TermValue::iri("http://example.org/wraps")),
-                o: Box::new(nested.clone()),
+                o: Box::new(nested),
             };
             let rendered = emit(&outer);
             // The malformed nested triple renders structurally, carrying its real

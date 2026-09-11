@@ -269,16 +269,14 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 ) => {
                     compared += 1;
                     if !evidence.is_complete() {
-                        mismatches.push((
-                            case.iri.clone(),
-                            format!("UNBOUNDED reported a trip: {evidence:?}"),
-                        ));
+                        mismatches
+                            .push((case.iri, format!("UNBOUNDED reported a trip: {evidence:?}")));
                         continue;
                     }
                     let (left, right) = (render(&expected), render(&result));
                     if left != right {
                         mismatches.push((
-                            case.iri.clone(),
+                            case.iri,
                             format!(
                                 "governed result is not byte-identical\n\
                                  ungoverned:\n{left}\ngoverned:\n{right}"
@@ -288,7 +286,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 }
                 (Ok(_), Ok(GovernedOutcome::BudgetExhausted(exhausted))) => {
                     mismatches.push((
-                        case.iri.clone(),
+                        case.iri,
                         format!(
                             "UNBOUNDED engages no ceiling, so nothing can trip — yet: {:?}",
                             exhausted.tripped
@@ -297,13 +295,13 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 }
                 (Ok(_), Err(error)) => {
                     mismatches.push((
-                        case.iri.clone(),
+                        case.iri,
                         format!("governed path failed where the ungoverned one succeeded: {error}"),
                     ));
                 }
                 (Err(expected), Ok(_)) => {
                     mismatches.push((
-                        case.iri.clone(),
+                        case.iri,
                         format!(
                             "governed path succeeded where the ungoverned one failed: {expected}"
                         ),
@@ -319,7 +317,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                         agreed_errors += 1;
                     } else {
                         mismatches.push((
-                            case.iri.clone(),
+                            case.iri,
                             format!(
                                 "both paths failed, with different diagnostics\n\
                                  ungoverned: {expected}\ngoverned:   {actual}"

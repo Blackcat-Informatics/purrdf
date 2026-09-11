@@ -1,0 +1,395 @@
+<!--
+SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+
+<p align="center">
+  <a href="https://github.com/Blackcat-Informatics/purrdf">
+    <img src="https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg" alt="PurRDF logo" width="120" height="120">
+  </a>
+</p>
+
+# `purrdf-markdown` — A Markdown Document as an RDF Graph of Itself
+
+[![crates.io](https://img.shields.io/crates/v/purrdf-markdown.svg)](https://crates.io/crates/purrdf-markdown)
+[![docs.rs](https://docs.rs/purrdf-markdown/badge.svg)](https://docs.rs/purrdf-markdown)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+[![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
+
+`purrdf-markdown` turns a Markdown document into RDF 1.2 along the
+document's own structure. It is not a chunker that cuts every N bytes: the
+unit is the thing the author wrote — a heading, a numbered verse, a
+paragraph — and the byte bound only acts on a unit that is too large to
+stand alone. The output is a graph you can query, index, embed, and read
+back to the exact bytes it came from.
+
+The whole law is written out, clause by clause, in the specification that
+ships beside the crate:
+[`crates/markdown/SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/markdown/SPEC.md).
+
+## Stand-off first, claims second
+
+The crate is a stand-off markup engine: the document's bytes are never
+touched, and everything it knows is a typed annotation over a *range* of
+them. `analyze` returns that layer as a `Document` — sections, units,
+citations, and the concordance rows that lifted nothing — and `render`
+projects it into claims. `slice_markdown` is the two in a row, and stays
+the whole surface a caller who only wants triples needs.
+
+A `Document` carries the `Profile` it was admitted under (`profile()`),
+and `render` takes the document alone. That is what makes the projection
+infallible rather than merely hopeful: every law it applies was answered
+for on these exact bytes, and there is no second argument through which
+another law could arrive. A document admitted with no canon base — whose
+anchors mint nothing, and are therefore checked against nothing — cannot
+be projected under a base that would mint them.
+
+The model answers in types what the graph answers in triples, and it
+answers questions the graph does not carry at all: which unit covers byte
+4,821 (`unit_at`), which units a byte range touches (`covering`), which
+units sit under a section by containment (`units_under`), how two spans
+lie against each other (`span_relation` — the thirteen Allen interval
+relations, so *meets* and *overlaps* are told apart at the endpoints), a
+unit's exact quote with bounded prefix/suffix context for re-anchoring
+across revisions (`anchor`), and which concordance rows named verses this
+document does not carry (`unmatched_citations`) or could not be read at
+all (`malformed_rows`). A unit's scalar span (`scalar_span`) and its
+content digest (`digest`) are on both sides now: typed on the model,
+typed literals in the graph.
+The claim projection is still a projection: what it cannot state is what
+names no node at all — a row that lifted nothing here, a row too
+malformed to read, a unit's surrounding context — and the model is where
+that is not lost.
+
+## What comes out
+
+For one document the slicer emits one claim per node, each claim a small
+set of N-Triples lines (valid Turtle):
+
+- **One document node**: the source's SHA-256, its media type, its byte
+  length, the profile it was sliced under, and its title.
+- **One section node per heading**: every ATX heading (`#` through
+  `######`) and every movement marker line (`⁂ *name*`), with its level,
+  ordinal, parent section, heading text, and byte span. A movement sits one
+  level under the nearest heading, so consecutive movements are siblings.
+- **One unit node per verse or paragraph**: a numbered line (`12. text`)
+  runs to the next blank line and is a verse carrying its number; any other
+  run of non-blank lines is a paragraph. Every unit carries **exactly one
+  plain `xsd:string` literal**, the verbatim byte span of the source, plus
+  its byte span, its span counted in Unicode scalars, its `xsd:hexBinary`
+  content digest, its ordinal, section, and heading lineage as *typed*
+  literals. A full-text or embedding index that selects plain strings
+  therefore sees one text per unit and nothing else, while a consumer that
+  counts characters, or that wants to prove a hit is bound to its bytes,
+  is answered from the graph rather than sent back to the source.
+- **Citations from a concordance table**: a `## Concordance` section whose
+  rows are `| Verses | Canon source | Anchors |` lifts into a `cites` triple
+  from every verse in the row's range (`2–5`, `2-5`, or `4`) to each
+  backticked anchor. *Inside* the concordance is containment, not
+  innermost: a concordance organised into subsections — one per volume, one
+  per hand — holds its rows at a depth, and a row at **any** depth under the
+  heading is a citation row, while a table no concordance section holds is
+  structure and lifts nothing. A row's cells are delimited by its
+  **unescaped** pipes only: `\|` is a literal `|` in a cell (GFM's own
+  spelling) and `\\` a literal `\`, and a backslash before anything else is
+  content, so a canon source path or a note beside an anchor may carry a
+  pipe. Each row's lift onto one verse is also its own
+  content-addressed **citation node**, which `rdf:reifies` the RDF 1.2
+  triple term `<<( <unit> <cites> <anchor> )>>` and carries that row's
+  backticked paths as `canonSource` — so a verse two rows cover keeps each
+  row's paths beside that row's anchors, which a flat `canonSource` on the
+  unit could not say. Every such node also states its class and a `unit`
+  back-edge to the verse it is an edge of, whatever its row lifted, so a
+  row that names sources and no anchors — which reifies nothing — is
+  reachable from that verse rather than emitted into a corner of the
+  graph nothing points at.
+  With a canon IRI base declared, an anchor becomes the IRI `base ++
+  anchor` — pure concatenation, and every anchor is checked against the
+  IRI it would mint before anything is rendered (see [The anchor lift is
+  checked](#the-anchor-lift-is-checked)). Without a base an anchor is a
+  typed literal, never a guess, and nothing about its bytes is refused.
+  A concordance may cover a canon wider than the document that carries it:
+  a row whose verses are all elsewhere lifts nothing here and is **not** an
+  error, and neither is a row too malformed to read. Both are reported as
+  data on the model (`unmatched_citations`, `malformed_rows`) rather than
+  refused or dropped — a table's own header and `|---|---|---|` are frame,
+  not defects.
+
+Horizontal rules and table rows are structure, not units. Spans are
+verbatim: the literal's bytes are `source[start..end]`, with no trimming,
+no normalization, and nothing prepended.
+
+## A small example
+
+```markdown
+# The Book
+
+⁂ *the crossing*
+
+1. The first verse crosses the socket whole.
+
+2. Two sovereign stars share one trajectory.
+```
+
+Sliced under `Vocabulary::under("urn:example:doc:")` with the profile
+`Profile::new("example-v1", 1, vocabulary)` and the source id
+`urn:example:book`, the second verse's claim is (every 64-hex digest
+shortened to its first eight characters):
+
+```text
+<urn:example:doc:unit:sha256:3f052451…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:document> <urn:example:book> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineagePath> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:section> <urn:example:doc:section:sha256:a1b06eb0…> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+```
+
+The byte span and the scalar span differ by two because the document's
+`⁂` is three bytes and one scalar. The `contentDigest` is the very digest
+inside the unit's IRI, stated as data so a reader holding the source
+proves the binding by comparison rather than by re-encoding.
+
+Append a concordance to that same document —
+
+```markdown
+## Concordance
+
+| Verses | Canon source | Anchors |
+|---|---|---|
+| 2 | `atlas/crossing.logic.ttl` | `the-crossing` |
+```
+
+— and the same node (the verse's bytes and span did not move, so its IRI
+does not either) gains five lines, in the claim's bytewise order: the
+row's own **citation node** — which reifies the edge, says what it is,
+carries the row's source, and names the unit it is an edge of — and then
+the asserted edge itself.
+
+```text
+<urn:example:doc:citation:sha256:35c6474e…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
+<urn:example:doc:citation:sha256:35c6474e…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Citation> .
+<urn:example:doc:citation:sha256:35c6474e…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
+<urn:example:doc:citation:sha256:35c6474e…> <urn:example:doc:unit> <urn:example:doc:unit:sha256:3f052451…> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
+```
+
+`<<( … )>>` is the RDF 1.2 **triple term** — the non-asserting form, the
+one an `rdf:reifies` object takes and the only one N-Triples admits. So a
+verse two rows cover keeps each row's sources beside that row's anchors,
+which a flat `canonSource` on the unit could not say.
+
+The class and the `unit` back-edge are on **every** citation node,
+whatever its row lifted, and that costs two triples per node on every
+document. It buys an invariant worth more than the lines: a row may name
+canon sources and **no** anchors — a sheet the canon has nothing to point
+at inside yet — and the node its lift mints then reifies nothing. Without
+those two lines nothing in the graph would name that node at all, so its
+source would be emitted and unreachable from the verse it is about. With
+them, every citation node of a document is one step from the unit it is
+an edge of, and everything a row says is reachable from that unit.
+
+```rust
+use purrdf_markdown::{Profile, SourceDocument, Vocabulary, slice_markdown};
+
+let vocabulary = Vocabulary::under("urn:example:doc:")?;
+let profile = Profile::new("example-v1", 1, vocabulary);
+let claims = slice_markdown(
+    &SourceDocument { id: "urn:example:book", bytes: markdown.as_bytes() },
+    &profile,
+)?;
+for claim in &claims {
+    // claim.turtle: sorted N-Triples lines; claim.span: the byte span.
+}
+# Ok::<(), purrdf_markdown::MarkdownError>(())
+```
+
+## The vocabulary is yours
+
+PurRDF mints no vocabulary. Every class, predicate, and datatype IRI the
+slicer emits, and the base it mints node IRIs under, is configuration the
+caller supplies in a `Vocabulary`. `Vocabulary::under(base)` derives a whole
+vocabulary from one base with the crate's local names (`Document`, `Unit`,
+`byteStart`, `text`, ...); every field is public, so any IRI can be replaced.
+`Vocabulary::standard()` derives that same term set under the one namespace
+the specification designates for documents meant to be *exchanged*
+(`https://w3id.org/purrdf/markdown#`) — an opinion about interchange, asked
+for by name and never reached for on a caller's behalf, because two
+deployments that each mint their own namespace publish two graphs nobody can
+join without a mapping, and the mapping is the part that never gets written.
+A deployment sovereign over its own terms keeps `under(base)` and loses
+nothing: the law, the identities, and the split are the same either way, and
+the profile's contract id tells the two apart.
+One honest caveat about that namespace: it is not publicly dereferenceable.
+It is a stable identifier, not a URL that resolves today — a redirect for it
+is being registered, and no date is promised. That costs nothing here: RDF
+asks no IRI to dereference, so the terms, the identities, and the contract id
+over them are the same whether it resolves or not.
+No derived IRI wears two roles: the classes, the predicates, and the
+datatypes are three disjoint sets, so a section's heading text is carried by
+`heading` and typed with `headingText`, and a lineage by `lineage` typed with
+`lineagePath`. That is what lets the designated namespace be *described* — no
+OWL or SHACL document can call one IRI both a datatype property and a
+datatype — and a namespace offered for interchange has to be describable.
+The term set is inside the contract id along with the base, so a renamed term
+is a different law and says so, while every unit and section keeps its
+identity because a term moves no boundary.
+An empty, unwritable, or merely *relative* IRI is a typed error naming the
+field, not a default: the crate asks the workspace IRI law — reached through
+`purrdf-core`, so it is the same law the kernel interns under — and refuses up
+front what would otherwise be refused a stage later. A field the law cannot
+read *at all* is a second, separate error carrying the law's own finding:
+`https://example.org/%` is a truncated percent-encoding, and calling it
+relative would be a false statement about a string that plainly has a scheme.
+The source id and the canon base answer to the same two rules. The only IRIs the crate brings are the standard's, and none of
+them is configuration: `rdf:type` and `rdf:reifies`, which are shapes of the
+RDF data model rather than terms of a vocabulary, and `xsd:integer` and
+`xsd:hexBinary`, which are the standard's names for the values they carry.
+
+## The anchor lift is checked
+
+Concatenation is deliberate: RFC-3986 reference resolution would dissolve a
+fragment base's `#` and fold dot segments away, so `base ++ anchor` and the
+base the caller declared would part company. But concatenation is exactly why
+the result cannot be trusted, so with a canon base declared every anchor in the
+concordance is walked before a claim is rendered, and `base ++ anchor` must
+
+- be an absolute IRI under the workspace law, and
+- lie under the declared base.
+
+Containment is `BaseIri::relativize`: the minted IRI is under the base exactly
+when a relative spelling of it against that base exists — decided by
+round-tripping that spelling back through resolution, not by comparing strings.
+That is the rule that answers for a *fragment* base (`https://example.org/canon#`
+++ `tide-line` relativizes to `#tide-line`), and it closes two escapes spelled
+entirely in lawful IRI characters, which no character blacklist can see: an
+anchor that climbs out of a path base (`../x` under `https://example.org/canon/`),
+and one that extends the base's host into another authority
+(`.elsewhere.example/x` after `https://example.org`). Both are refused, naming
+the anchor and the verse range of the row that wrote it.
+
+The law is IRI-lawfulness, never ASCII: `中文` mints `…/canon#中文` and lifts,
+because RFC-3987 `ucschar` is inside an IRI. And a refusal is scoped to minting
+alone — the same anchor with no canon base declared is a typed literal and
+slices without complaint.
+
+## Deterministic, and identified by its law
+
+The same bytes under the same profile slice to byte-identical claims on
+every target: the slicer opens no file, reads no clock, and uses no float.
+Every emitted node's triples are sorted bytewise, one triple per line.
+
+A `Profile` names the law it applies: a name, a version, the vocabulary, the
+byte bound, the overlap, and an optional canon base for concordance anchors.
+It states that law as **two** canonical, human-readable preimages, one fact
+per line, and each has an id of its own — the SHA-256-derived
+chunking-contract id of `purrdf-core` over those bytes.
+
+`chunking_bytes()` states only what decides where a unit starts and ends: the
+name, the version, the dialect grammar, and the split law with its two
+constants. `emission_bytes()` is those bytes verbatim, then everything else
+that decides a byte of the graph — the vocabulary, the canon base (written
+`canon base none` when there is none, so its absence is stated rather than
+implied), the concordance lift, the identity formulas, and the emission law
+with its term list and its reification shape.
+
+`contract_id()`, over the emission preimage, is the handle a consumer keeps:
+**two runs that agree on it agree on every byte they emit**, which is why the
+canon base is inside it — a declared base turns every citation object from a
+typed literal into a minted IRI. `chunking_id()`, over the chunking preimage,
+is what a node is addressed by and what a `.purremb` chunking stage carries,
+so a renamed predicate or a newly declared canon base costs a consumer no
+re-embedding: its vectors go stale exactly when a unit's bytes move. The
+chunking preimage is a prefix of the emission one, so neither id can stand
+still while a boundary moves. The document node records the profile as
+`<name>:<hex>` over the contract id.
+
+A unit's IRI is `<node base>unit:sha256:<hex>`: the hex is the SHA-256 of a
+length-prefixed preimage of the kind, the source id, the profile's **chunking**
+id, the byte span, the digest algorithm tag, and the SHA-256 of the span's
+bytes. That has three consequences worth knowing:
+
+- Two byte-identical paragraphs in one document are two distinct nodes,
+  because the span is inside the identity.
+- An insertion moves every later span and re-mints every later unit while
+  their text is unchanged; a same-length substitution re-mints only the unit
+  it touches and moves no boundary. Those are opposite signatures, and the
+  vectors assert each.
+- The digest algorithm is inside both the preimage and the IRI, so another
+  producer can mint the same shape under another algorithm without
+  redefining the preimage.
+
+A citation node is minted the same way over the pair it names — the
+concordance row's own line span, and a digest of that line together with the
+unit's IRI and the anchor terms the row mints — so one row lifting onto two
+verses is two nodes, two rows lifting onto one verse are two more, and a unit
+that re-mints re-mints every citation of it. The minted terms are in there
+because a citation node is a reifier: the term it reifies is the IRI
+`base ++ anchor` under a declared canon base and a typed literal under none,
+so one row read under two bases states two different triples and must be two
+nodes rather than one node reifying both.
+
+A consumer that holds the source bytes can re-derive any unit's IRI from its
+recorded span with `unit_iri` (and any citation's with `citation_iri`) and
+refuse a hit that does not re-derive: the binding between a search result and
+its text is proven on read-back, not assumed. The unit's `contentDigest` is
+the same digest stated as data, so the check needs no re-encoding.
+
+## Oversize units: the split law
+
+A unit over `max_bytes` (default 2048) splits into pieces: each cut falls at
+the last newline at or before the bound, else at the last UTF-8 scalar
+boundary, and never inside a scalar. No piece is ever over the bound, which is
+why a bound under four bytes — the width of the widest scalar — is refused.
+The next piece starts `overlap` bytes (default 128) before the cut, snapped
+backward to the start of a line, never before the unit's own start, and
+carries a `continues` triple to the previous piece. The overlap sits strictly
+under the bound. A split never crosses a heading, and every piece keeps its
+verse number and section.
+
+## Indented markers, and where a marker stops being one
+
+A heading, a movement marker, and a verse number are read behind a leading
+run of **up to three spaces**, so `   # Title` is a heading and `  1. one`
+is verse 1. Four or more leading spaces open no marker: the line is
+ordinary content and falls into the paragraph around it. That is not a
+refusal and it is not a code block — the dialect states none; it declines
+to read a marker that far in, which is where CommonMark puts its
+indented-code threshold. A **tab** in the leading run opens no marker
+either, wherever in the run it falls: CommonMark expands a tab to the next
+four-column tab stop, so nought to three spaces followed by a tab reaches
+column four exactly, and the law says so directly rather than expanding
+anything.
+
+The run is read for recognition only. The leading spaces stay inside the
+unit's span and inside its verbatim literal, and a heading's title, a
+movement's name, and a verse number are what they would be had the run
+never been written — the run is never part of a title.
+
+## A leading byte order mark
+
+A byte order mark opening the document states its encoding, so the first
+line's structure is read after it and a document that carries one slices into
+the same structure as the one that does not. Every span still counts the
+document's own bytes, so the mark falls before the first span and a unit's
+literal is always the verbatim bytes of its span. At any other offset the mark
+is ordinary content.
+
+## Errors
+
+`slice_markdown` refuses, typed, and never guesses. The profile answers first:
+a vocabulary field that is empty, cannot be an IRI reference, carries no
+scheme, or is no IRI at all (each naming the field, the last carrying the IRI
+law's finding), a name carrying a control character (the stage description
+states one fact per line, so a newline in a name would state facts of the law),
+a `max_bytes` under four, an `overlap` at or over `max_bytes`, and a declared
+canon base that carries no scheme or is no IRI at all. Then the document: an
+empty source id, which would be written `<>` and name no document; a source id
+that cannot be written inside `<` and `>`; one that carries no scheme; one that
+is no IRI at all; and bytes that are not UTF-8 (naming the offset).

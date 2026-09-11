@@ -492,6 +492,53 @@ fn uchar_escapes_are_validated_against_the_decoded_iri() {
         .expect("<urn:ex:s> still parses");
 }
 
+/// A `ucschar` that RENDERS as whitespace survives the full serialize→parse leg.
+///
+/// The test above stops at the serializer: it proves the `\u00a0` ESCAPE decodes and that the
+/// writer emits the decoded U+00A0 raw (the `IRIREF` production only forces `#x00-#x20`,
+/// the nine reserved delimiters and the control blocks into `UCHAR` form, and U+00A0 is
+/// none of those). It never reads that output back. It had to, because the reader did
+/// not agree with the writer: the shared lexer ended an `IRIREF` body at any
+/// `char::is_whitespace`, a strictly larger set than the production excludes, so the
+/// writer's own output re-parsed as a comparison `<` and the term was lost. Serialize
+/// then parse was not a round trip for any IRI carrying U+00A0 — or U+2000-U+200A,
+/// U+2028/U+2029, U+3000, or the rest of the non-ASCII Unicode whitespace, all of which
+/// are RFC-3987 `ucschar`.
+///
+/// This is an over-refusal fix, so its neighbour is executed too: an ASCII SPACE is
+/// inside `#x00-#x20` and an unescaped one inside `<...>` must STILL be refused.
+#[test]
+fn a_ucschar_that_renders_as_whitespace_survives_serialize_then_parse() {
+    for decoded in ['\u{a0}', '\u{2000}', '\u{2028}', '\u{3000}'] {
+        let source = format!("<urn:ex:a{decoded}b> {P} {O} .\n");
+        let dataset = parse_dataset(source.as_bytes(), "application/n-triples", None)
+            .unwrap_or_else(|e| panic!("U+{:04X} is a lawful IRI character: {e}", decoded as u32));
+        let written = String::from_utf8(
+            serialize_dataset(&dataset, "application/n-triples", SerializeGraph::Dataset)
+                .expect("serialize"),
+        )
+        .expect("utf-8");
+        let reparsed = parse_dataset(written.as_bytes(), "application/n-triples", None)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "the writer's own output must re-parse (U+{:04X}): {e}",
+                    decoded as u32
+                )
+            });
+        assert!(
+            datasets_isomorphic(&dataset, &reparsed),
+            "U+{:04X}: serialize then parse must be a round trip",
+            decoded as u32
+        );
+    }
+
+    // The neighbour that must stay refused: a RAW ASCII space inside `<...>` is not an
+    // IRIREF, and loosening the body scan must not have admitted it.
+    let spaced = format!("<urn:ex:a b> {P} {O} .\n");
+    parse_dataset(spaced.as_bytes(), "application/n-triples", None)
+        .expect_err("a raw ASCII space inside <...> is still not an IRIREF");
+}
+
 // ── Egress: the `emits_base` column, over every registered format ───────────────
 //
 // The parse leg resolved a relative reference against a base and the serialize leg threw

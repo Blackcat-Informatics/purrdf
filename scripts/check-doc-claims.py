@@ -463,7 +463,7 @@ _SPELLED = {
     1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
     8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
     14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
-    19: "nineteen", 20: "twenty", 21: "twenty-one",
+    19: "nineteen", 20: "twenty", 21: "twenty-one", 22: "twenty-two",
 }
 
 # The same table read backwards, for `_int`. Derived rather than written out, so a
@@ -475,7 +475,7 @@ _CARDINAL = {word: value for value, word in _SPELLED.items()}
 # from the one cardinal table rather than written out a second time.
 _IRREGULAR_ORDINAL = {1: "first", 2: "second", 3: "third", 5: "fifth", 8: "eighth",
                       9: "ninth", 12: "twelfth", 20: "twentieth",
-                      21: "twenty-first"}
+                      21: "twenty-first", 22: "twenty-second"}
 
 
 def _ordinal(value: int) -> str | None:
@@ -4255,13 +4255,16 @@ def outstanding_bootstrap_claim(crates: list[str], ledger: list[str]) -> list[st
     # spellings past twenty are hyphenated (`twenty-one`, `twenty-first`). A
     # class that stopped at the hyphen would simply not match, and this claim
     # would report "no count stated" for a document that states one correctly.
+    # `crates? (?:are|is)`: a one-crate ledger reads "one crate is", and the
+    # count is gated in the singular exactly as in the plural.
     stated = re.search(
-        _flow(r"(?P<count>[A-Za-z-]+) crates are in the release set above"), prose
+        _flow(r"(?P<count>[A-Za-z-]+) crates? (?:are|is) in the release set above"),
+        prose,
     )
     if not stated:
         problems.append(
             f"{rel}: the outstanding-bootstrap body states no crate count "
-            f"('<N> crates are in the release set above'); it was reworded, so "
+            f"('<N> crate(s) is/are in the release set above'); it was reworded, so "
             f"update the pattern rather than leaving the count ungated"
         )
     elif spelled and stated.group("count").lower() != spelled:
