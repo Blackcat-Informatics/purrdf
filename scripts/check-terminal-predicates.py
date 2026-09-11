@@ -104,7 +104,22 @@ CFG_TEST = re.compile(r"#\[cfg\(test\)\]")
 # character, and a bare `self.pos` catches binary readers (`crates/gts`,
 # `crates/columnar`) whose "position" indexes frames, not scalars.
 CURSOR_PEEK = re.compile(r"\bfn\s+peek\w*\s*[(<]")
-CURSOR_POS = re.compile(r"\bself\.pos\b")
+# `position` and `cursor` are spelled as often as `pos`: `crates/cdt/src/parse.rs`
+# holds `fn peek(&self) -> Option<u8>` and 69 occurrences of `self.position`, and
+# was invisible to every scanner rule until this alternation was added.
+CURSOR_POS = re.compile(r"\bself\.(?:pos|position|cursor)\b")
+
+# Scanners the structural test CANNOT see, because detection is per file and
+# these keep their cursor in another module. Naming them is the point: a file
+# the heuristic misses must be an entry in a ledger that rots loudly, never a
+# silent pass. `crates/geo/src/geojson.rs` carried the `str::trim` defect while
+# its cursor lived in `crates/geo/src/json.rs`, and nothing here caught it.
+SCANNERS: dict[str, str] = {
+    "crates/geo/src/geojson.rs": (
+        "decides GeoJSON lexical emptiness and hands the rest to the cursor in "
+        "crates/geo/src/json.rs, so it scans without holding a cursor itself"
+    ),
+}
 
 # Inside a scanner, these substitute a Unicode property for an enumerated
 # terminal. `trim`/`trim_start`/`trim_end` are included because a line-oriented
@@ -248,6 +263,15 @@ def strip_test_modules(source: str) -> str:
         opening = source.find("{", match.end())
         if opening < 0:
             continue
+        # A BODYLESS item -- `#[cfg(test)] use foo;`, `#[cfg(test)] const N: u8
+        # = 1;` -- ends at its semicolon and owns no brace. Without this bound
+        # the search runs on to the NEXT item's `{` and blanks real scanner
+        # code, and the gate reports OK while seeing nothing. That is a silent
+        # false negative in the gate built to prevent silent false negatives,
+        # and it is reachable by adding one ordinary `use` line to a scanner.
+        semicolon = source.find(";", match.end())
+        if 0 <= semicolon < opening:
+            continue
         depth = 0
         for offset in range(opening, len(source)):
             if source[offset] == "{":
@@ -283,17 +307,21 @@ def function_body(source: str, start: int) -> str:
     return source[opening:]
 
 
-def is_scanner(source: str) -> bool:
-    """Whether *source* holds a character cursor, and so decides boundaries."""
+def is_scanner(source: str, rel: str = "") -> bool:
+    """Whether *source* decides token boundaries: it holds a character cursor,
+    or it is named in the ``SCANNERS`` ledger because its cursor lives
+    elsewhere."""
+    if rel in SCANNERS:
+        return True
     return bool(CURSOR_PEEK.search(source)) and bool(CURSOR_POS.search(source))
 
 
-def findings_for(source: str) -> list[tuple[str, int, str]]:
+def findings_for(source: str, rel: str = "") -> list[tuple[str, int, str]]:
     """Every (rule, 1-based line, meaning) this file trips."""
     lines = source.splitlines()
     found: list[tuple[str, int, str]] = []
 
-    if is_scanner(source):
+    if is_scanner(source, rel):
         for rule, (pattern, meaning) in SCANNER_RULES.items():
             for index, line in enumerate(lines):
                 if pattern.search(line):
@@ -322,7 +350,7 @@ def scan() -> tuple[list[str], set[tuple[str, str]]]:
         rel = path.relative_to(REPO_ROOT).as_posix()
 
         for rule, line_no, meaning in sorted(
-            findings_for(source), key=lambda hit: (hit[1], hit[0])
+            findings_for(source, rel), key=lambda hit: (hit[1], hit[0])
         ):
             key = (rel, rule)
             if key in ALLOWLIST:
@@ -508,12 +536,49 @@ def self_test() -> None:
     in_test = SCANNER_SHELL % "" + "#[cfg(test)]\nmod t { fn u(c: char) { c.is_whitespace(); } }\n"
     assert not findings_for(strip_test_modules(in_test)), "test code must be exempt"
 
+    # The stripper must be BOUNDED. A bodyless `#[cfg(test)]` item owns no
+    # brace, and an unbounded search runs on to the next item's `{` and blanks
+    # the scanner -- the gate then reports OK having seen nothing. Exercised
+    # with the real offender AFTER the bodyless item, so a regression is a
+    # missing finding rather than a crash.
+    bodyless = "#[cfg(test)]\nuse std::collections::HashMap;\n\n" + SCANNER_SHELL % "c.is_whitespace();"
+    assert "unicode-whitespace" in {
+        rule for rule, _, _ in findings_for(strip_test_modules(bodyless))
+    }, "a bodyless #[cfg(test)] item must not blank the scanner that follows it"
+    for item in ("const N: u8 = 1;", "static S: u8 = 1;", "type T = u8;", "use a::b;"):
+        probe = f"#[cfg(test)]\n{item}\n\n" + SCANNER_SHELL % "c.is_alphanumeric();"
+        assert "unicode-name-class" in {
+            rule for rule, _, _ in findings_for(strip_test_modules(probe))
+        }, f"bodyless `{item}` must not blank what follows"
+    # ...and the braced form must still be exempt, or the bound has over-fired.
+    braced = "#[cfg(test)]\nmod t { fn u(c: char) { c.is_whitespace(); } }\n"
+    assert not findings_for(strip_test_modules(braced)), "braced test module stays exempt"
+
     # Offsets must survive both blankers, or every finding points at the wrong
     # line and the report is worse than useless.
     for blanker in (strip_comment_lines, strip_test_modules):
         assert len(blanker(in_test)) == len(in_test), f"{blanker.__name__} moved offsets"
 
     print("check-terminal-predicates.py: self-test OK")
+
+
+def stale_scanners() -> list[str]:
+    """``SCANNERS`` entries that no longer earn their place.
+
+    An entry is stale when the file is gone, or when the structural test now
+    finds it anyway — a ledger that keeps naming what the detector already sees
+    teaches the next reader that the detector is weaker than it is.
+    """
+    stale: list[str] = []
+    for rel in sorted(SCANNERS):
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            stale.append(f"{rel}: file no longer exists")
+            continue
+        source = strip_test_modules(strip_comment_lines(path.read_text(encoding="utf-8")))
+        if CURSOR_PEEK.search(source) and CURSOR_POS.search(source):
+            stale.append(f"{rel}: the structural test now detects this file on its own")
+    return stale
 
 
 def main(argv: list[str]) -> int:
@@ -523,7 +588,7 @@ def main(argv: list[str]) -> int:
     if "--census" in argv:
         return census()
     offenders, matched = scan()
-    stale = sorted(set(ALLOWLIST) - matched)
+    stale = sorted(set(ALLOWLIST) - matched) + [(entry, "") for entry in stale_scanners()]
 
     if offenders:
         print(
