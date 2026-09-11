@@ -14,7 +14,22 @@
 //! [`verify_unit`](crate::verify_unit) states about bytes handed to it
 //! *later*. It is not an exception to the rule above — nothing it
 //! refuses could have been known at slicing time.
+//!
+//! # A refusal borrowed from another law states that law's finding
+//!
+//! Four variants carry a `cause` rather than a sentence of their own:
+//! [`TamperedUnit`](MarkdownError::TamperedUnit), whose cause is the
+//! kernel's verification law, and the three malformed-IRI refusals
+//! ([`MalformedSourceId`](MarkdownError::MalformedSourceId),
+//! [`MalformedVocabulary`](MarkdownError::MalformedVocabulary),
+//! [`MalformedCanonBase`](MarkdownError::MalformedCanonBase)), whose
+//! cause is the workspace IRI law's. This crate does not own those
+//! laws, so it does not get to word their findings: it names the seam
+//! that asked and hands the finding through. A truncated
+//! percent-encoding is reported as a truncated percent-encoding, and at
+//! the byte it is at, because the law that found it says so.
 
+use purrdf_core::IriError;
 use purrdf_core::embedding::EmbeddingError;
 
 /// Why a document could not be sliced.
@@ -36,20 +51,49 @@ pub enum MarkdownError {
         /// The offending character.
         found: char,
     },
-    /// The source id is writable but not absolute: it carries no
-    /// scheme, so it names a document only relative to whatever holds
-    /// the claims, and every node minted over it inherits that.
+    /// The source id is writable and is an IRI reference, but is not
+    /// absolute: it carries no scheme, so it names a document only
+    /// relative to whatever holds the claims, and every node minted
+    /// over it inherits that.
     RelativeSourceId {
         /// The id as declared.
         id: String,
     },
+    /// The source id is no IRI reference at all — the workspace IRI law
+    /// cannot read it — so the question of a scheme never arises.
+    ///
+    /// It is a different finding from [`Self::RelativeSourceId`], and
+    /// deliberately so: `https://example.org/%` ends in a truncated
+    /// percent-encoding and plainly carries a scheme, and an id told it
+    /// "has no scheme" would send its author looking for a defect that
+    /// is not there.
+    MalformedSourceId {
+        /// The id as declared.
+        id: String,
+        /// What the workspace IRI law found, carried rather than
+        /// restated.
+        cause: IriError,
+    },
     /// A vocabulary IRI is empty, cannot be written as an IRI
-    /// reference, or is not absolute.
+    /// reference, or is an IRI reference carrying no scheme.
     InvalidVocabulary {
         /// The vocabulary field.
         field: &'static str,
         /// The offending value.
         iri: String,
+    },
+    /// A vocabulary IRI is writable but is no IRI reference at all, so
+    /// it states no term — the same distinction
+    /// [`Self::MalformedSourceId`] draws, drawn at the field that
+    /// carried it.
+    MalformedVocabulary {
+        /// The vocabulary field.
+        field: &'static str,
+        /// The offending value.
+        iri: String,
+        /// What the workspace IRI law found, carried rather than
+        /// restated.
+        cause: IriError,
     },
     /// The profile's byte bound is under [`MIN_MAX_BYTES`](crate::MIN_MAX_BYTES),
     /// so no piece could be both within the bound and outside a scalar.
@@ -74,12 +118,22 @@ pub enum MarkdownError {
         /// The offending character.
         found: char,
     },
-    /// The profile declares a canon base that is empty or is not an
-    /// absolute IRI, so nothing concatenated onto it could be one
-    /// either.
+    /// The profile declares a canon base that is an IRI reference
+    /// carrying no scheme, so nothing concatenated onto it could carry
+    /// one either.
     InvalidCanonBase {
         /// The base as declared.
         base: String,
+    },
+    /// The profile declares a canon base that is no IRI reference at
+    /// all — the empty base among them, which is no string to mint
+    /// under — so there is nothing to concatenate an anchor onto.
+    MalformedCanonBase {
+        /// The base as declared.
+        base: String,
+        /// What the workspace IRI law found, carried rather than
+        /// restated.
+        cause: IriError,
     },
     /// A concordance anchor does not mint a lawful IRI under the
     /// declared canon base: `base ++ anchor` is not an absolute IRI, or
@@ -127,10 +181,19 @@ impl std::fmt::Display for MarkdownError {
             Self::RelativeSourceId { id } => {
                 write!(f, "source id is not an absolute IRI: {id:?} has no scheme")
             }
+            Self::MalformedSourceId { id, cause } => {
+                write!(f, "source id {id:?} is not an IRI at all: {cause}")
+            }
             Self::InvalidVocabulary { field, iri } => {
                 write!(
                     f,
                     "vocabulary field {field} is not an absolute IRI: {iri:?}"
+                )
+            }
+            Self::MalformedVocabulary { field, iri, cause } => {
+                write!(
+                    f,
+                    "vocabulary field {field} {iri:?} is not an IRI at all: {cause}"
                 )
             }
             Self::InvalidMaxBytes { max_bytes, least } => {
@@ -153,6 +216,9 @@ impl std::fmt::Display for MarkdownError {
             }
             Self::InvalidCanonBase { base } => {
                 write!(f, "canon base is not an absolute IRI: {base:?}")
+            }
+            Self::MalformedCanonBase { base, cause } => {
+                write!(f, "canon base {base:?} is not an IRI at all: {cause}")
             }
             Self::InvalidAnchor { anchor, verses } => {
                 write!(

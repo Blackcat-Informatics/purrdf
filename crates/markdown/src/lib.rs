@@ -153,6 +153,14 @@
 //! the kernel will ask when it interns the result. A relative IRI would
 //! otherwise slice whole and be refused a stage later, far from the
 //! field that wrote it.
+//!
+//! That question has two halves and they are refused apart. A string
+//! the law reads whole and finds scheme-less is *relative*, and the
+//! remedy is to write it absolute. A string the law cannot read at all
+//! is *malformed*, and the refusal carries the law's own finding —
+//! which byte, and what about it — because this crate does not own that
+//! law and has no business rewording it. `https://example.org/%` is a
+//! truncated percent-encoding, not an id "with no scheme".
 
 #![forbid(unsafe_code)]
 #![doc(
@@ -288,24 +296,35 @@ pub struct Claim {
 ///
 /// # Errors
 ///
+/// Every IRI a caller states is asked the same two-part question, and
+/// the two halves are answered apart: a string the workspace IRI law
+/// reads whole and finds scheme-less is **relative**, and a string it
+/// cannot read at all is **malformed**, which is a finding only that
+/// law can word and which every malformed refusal here carries as its
+/// `cause`. One message never wears both hats.
+///
 /// The profile is answered for first.
 /// [`MarkdownError::InvalidVocabulary`] when one of its IRIs is empty,
-/// cannot be written as an IRI reference, or is not absolute;
-/// [`MarkdownError::InvalidProfileName`] when its name carries a
-/// control character, which the line-oriented stage description of
-/// [`Profile::stage_bytes`] cannot frame;
+/// cannot be written as an IRI reference, or carries no scheme;
+/// [`MarkdownError::MalformedVocabulary`] when one of them is no IRI
+/// reference at all; [`MarkdownError::InvalidProfileName`] when its
+/// name carries a control character, which the line-oriented stage
+/// description of [`Profile::stage_bytes`] cannot frame;
 /// [`MarkdownError::InvalidMaxBytes`] when its byte bound is under
 /// [`MIN_MAX_BYTES`], a bound no split could honour without cutting
 /// inside a scalar; [`MarkdownError::InvalidOverlap`] when its overlap
 /// is not strictly under that bound;
 /// [`MarkdownError::InvalidCanonBase`] when it declares a canon base
-/// that is empty or not an absolute IRI.
+/// that carries no scheme, and
+/// [`MarkdownError::MalformedCanonBase`] when the base it declares —
+/// the empty one among them — is no IRI reference at all.
 ///
 /// Then the document. [`MarkdownError::EmptySourceId`] when the id is
 /// empty, which would be written `<>` and name no document;
 /// [`MarkdownError::InvalidSourceId`] when the id cannot be written
 /// inside `<` and `>`; [`MarkdownError::RelativeSourceId`] when it can
-/// but carries no scheme; [`MarkdownError::InvalidUtf8`] when the
+/// but carries no scheme; [`MarkdownError::MalformedSourceId`] when it
+/// is no IRI reference at all; [`MarkdownError::InvalidUtf8`] when the
 /// bytes are not UTF-8.
 ///
 /// Then, only under a declared canon base, the concordance:
@@ -323,9 +342,15 @@ pub fn analyze<'a>(
     if let Some(found) = doc.id.chars().find(|c| claims::iri_forbids(*c)) {
         return Err(MarkdownError::InvalidSourceId { found });
     }
-    if !profile::is_absolute_iri(doc.id) {
-        return Err(MarkdownError::RelativeSourceId {
-            id: doc.id.to_owned(),
+    if let Err(defect) = profile::absolute_iri(doc.id) {
+        return Err(match defect {
+            profile::NotAbsolute::SchemeLess => MarkdownError::RelativeSourceId {
+                id: doc.id.to_owned(),
+            },
+            profile::NotAbsolute::Malformed(cause) => MarkdownError::MalformedSourceId {
+                id: doc.id.to_owned(),
+                cause,
+            },
         });
     }
     let text = std::str::from_utf8(doc.bytes).map_err(|e| MarkdownError::InvalidUtf8 {

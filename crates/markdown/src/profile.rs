@@ -12,7 +12,7 @@
 use purrdf_core::embedding::{
     AppliedStage, ChunkingContractId, StageImplementation, derive_chunking_contract_id,
 };
-use purrdf_core::{BaseIri, ContentDigest};
+use purrdf_core::{BaseIri, ContentDigest, IriError};
 
 use crate::error::MarkdownError;
 use crate::{DIGEST_ALGORITHM, MIN_MAX_BYTES, claims};
@@ -171,7 +171,10 @@ impl Vocabulary {
     /// [`MarkdownError::InvalidVocabulary`] when the base is empty,
     /// cannot sit inside an IRI reference, or does not make every
     /// derived name an absolute IRI — a base without a scheme derives a
-    /// whole vocabulary of relative IRIs.
+    /// whole vocabulary of relative IRIs; and
+    /// [`MarkdownError::MalformedVocabulary`] when a derived name is no
+    /// IRI reference at all, carrying the law's finding about the first
+    /// such field.
     pub fn under(base: &str) -> Result<Self, MarkdownError> {
         let iri = |local: &str| format!("{base}{local}");
         let vocabulary = Self {
@@ -234,7 +237,8 @@ impl Vocabulary {
     ///
     /// # Errors
     ///
-    /// [`MarkdownError::InvalidVocabulary`] cannot arise from the
+    /// Neither [`MarkdownError::InvalidVocabulary`] nor
+    /// [`MarkdownError::MalformedVocabulary`] can arise from the
     /// designated namespace — it is absolute and every derived name is
     /// absolute with it — but the result is a `Result` all the same, so
     /// that this constructor answers exactly as
@@ -296,16 +300,39 @@ impl Vocabulary {
     /// `purrdf-core`'s re-export of the law: parse as an RFC-3987 IRI,
     /// and carry a scheme.
     ///
+    /// The two halves of that question are answered separately, because
+    /// they are separate facts about the field: a value the law reads
+    /// whole and finds scheme-less is relative, and a value it cannot
+    /// read is malformed, which is a finding only the law can word.
+    ///
     /// # Errors
     ///
-    /// [`MarkdownError::InvalidVocabulary`], naming the field.
+    /// [`MarkdownError::InvalidVocabulary`], naming the field, when the
+    /// value is empty, cannot sit inside an IRI reference, or is an IRI
+    /// reference carrying no scheme;
+    /// [`MarkdownError::MalformedVocabulary`], naming the field and
+    /// carrying the law's own finding, when it is no IRI reference at
+    /// all.
     pub fn validate(&self) -> Result<(), MarkdownError> {
         for (name, iri) in self.fields() {
             let field = if name.is_empty() { "node base" } else { name };
-            if iri.is_empty() || iri.chars().any(claims::iri_forbids) || !is_absolute_iri(iri) {
+            if iri.is_empty() || iri.chars().any(claims::iri_forbids) {
                 return Err(MarkdownError::InvalidVocabulary {
                     field,
                     iri: iri.to_owned(),
+                });
+            }
+            if let Err(defect) = absolute_iri(iri) {
+                return Err(match defect {
+                    NotAbsolute::SchemeLess => MarkdownError::InvalidVocabulary {
+                        field,
+                        iri: iri.to_owned(),
+                    },
+                    NotAbsolute::Malformed(cause) => MarkdownError::MalformedVocabulary {
+                        field,
+                        iri: iri.to_owned(),
+                        cause,
+                    },
                 });
             }
         }
@@ -589,19 +616,63 @@ pub(crate) fn validate_profile(profile: &Profile) -> Result<Option<BaseIri>, Mar
         .canon_base
         .as_ref()
         .map(|base| {
-            // An empty base and an unparseable one are the same defect:
-            // there is no IRI to mint under.
-            BaseIri::parse(base).map_err(|_| MarkdownError::InvalidCanonBase { base: base.clone() })
+            absolute_iri(base).map_err(|defect| match defect {
+                // An empty base, an unreadable one and a scheme-less one
+                // all leave nothing to mint under, and they are still
+                // three different things to have written: the first two
+                // are findings of the law, which states which of them it
+                // is and where.
+                NotAbsolute::SchemeLess => MarkdownError::InvalidCanonBase { base: base.clone() },
+                NotAbsolute::Malformed(cause) => MarkdownError::MalformedCanonBase {
+                    base: base.clone(),
+                    cause,
+                },
+            })
         })
         .transpose()
 }
 
-/// Whether a string is an absolute IRI under the workspace law: it
-/// parses as an RFC-3987 IRI and carries a scheme. The one question,
-/// asked of the one law, through the kernel that will intern the
-/// answer.
-pub(crate) fn is_absolute_iri(candidate: &str) -> bool {
-    BaseIri::parse(candidate).is_ok()
+/// Why a caller's string is not an absolute IRI: the one distinction
+/// every seam of this crate draws, drawn in one place.
+///
+/// The two cases are different facts about a caller's input and have
+/// different remedies. A string the IRI grammar reads whole and finds
+/// scheme-less is an ordinary, bounded mistake: it *is* an IRI
+/// reference, it just names something relative to whatever holds the
+/// claims, and the remedy is to write it absolute. A string the grammar
+/// cannot read at all is not that, and nothing this crate knows says
+/// which byte of it is wrong — only the law that read it does.
+///
+/// Collapsing the two is what a boolean forces, and it is how
+/// `https://example.org/%` — a truncated percent-encoding, and a string
+/// that plainly carries a scheme — came to be refused for *having no
+/// scheme*, sending its author to look for a defect that is not there.
+#[derive(Debug)]
+pub(crate) enum NotAbsolute {
+    /// The string is a lawful IRI reference and simply carries no
+    /// scheme.
+    SchemeLess,
+    /// The string is no IRI reference at all, and this is what the
+    /// workspace IRI law found. It is carried verbatim to the seam that
+    /// asked, never reworded there.
+    Malformed(IriError),
+}
+
+/// The candidate as an absolute IRI under the workspace law: it parses
+/// as an RFC-3987 IRI and carries a scheme. The one question, asked of
+/// the one law, through the kernel that will intern the answer — and
+/// the answer handed back, both when it is a base to mint under and
+/// when it is a refusal to state.
+pub(crate) fn absolute_iri(candidate: &str) -> Result<BaseIri, NotAbsolute> {
+    BaseIri::parse(candidate).map_err(|cause| match cause {
+        // A base is the parsed IRI plus the scheme check, in that order,
+        // so these two — and only these two — are findings about a
+        // string the grammar read whole. Every other finding is about a
+        // string it could not read at all, whether or not the bytes in
+        // front of the defect look like a scheme.
+        IriError::NonAbsoluteBase(_) | IriError::MissingScheme => NotAbsolute::SchemeLess,
+        cause => NotAbsolute::Malformed(cause),
+    })
 }
 
 /// A character no line-oriented preimage can carry: the C0 controls,
@@ -624,6 +695,36 @@ mod tests {
         assert_eq!(custom.common_base(), None);
         assert!(custom.stage_lines().starts_with("vocabulary explicit\n"));
         assert!(custom.stage_lines().contains("  text urn:other:body\n"));
+    }
+
+    /// The distinction every seam of the crate rests on, asked of the
+    /// classifier that owns it: a string the law reads whole and finds
+    /// scheme-less is scheme-less, and a string it cannot read is
+    /// malformed — with the law's own finding, which is the part a
+    /// boolean threw away.
+    #[test]
+    fn not_absolute_tells_a_scheme_less_iri_from_one_that_is_no_iri() {
+        for relative in ["not-absolute", "doc/field-guide", "#fragment", "canon#"] {
+            assert!(matches!(
+                absolute_iri(relative),
+                Err(NotAbsolute::SchemeLess)
+            ));
+        }
+        for (malformed, code) in [
+            ("", "iri-empty"),
+            ("https://example.org/%", "iri-bad-percent-encoding"),
+            ("http://[not-an-ipv6", "iri-bad-authority"),
+            ("ht~tp://example.org/", "iri-bad-scheme"),
+            ("1http://example.org/", "iri-disallowed-char"),
+        ] {
+            let Err(NotAbsolute::Malformed(cause)) = absolute_iri(malformed) else {
+                panic!("{malformed:?} is no IRI reference at all");
+            };
+            assert_eq!(cause.diagnostic_code(), code);
+        }
+        // The base comes back for the caller that mints under it.
+        let base = absolute_iri("https://example.org/canon#").expect("an absolute base");
+        assert_eq!(base.as_str(), "https://example.org/canon#");
     }
 
     #[test]

@@ -1852,20 +1852,49 @@ fn an_anchor_that_extends_the_bases_host_into_another_authority_refuses() {
 }
 
 #[test]
-fn an_empty_or_relative_canon_base_refuses_and_an_absolute_one_lifts() {
-    for base in ["", "not an iri >", "canon#"] {
+fn a_relative_canon_base_refuses_as_relative_and_an_absolute_one_lifts() {
+    for base in ["canon#", "canon/", "#anchors"] {
         assert_eq!(
             slice_of(&cited("a-one"), GUIDE_ID, &under_canon(base)),
             Err(MarkdownError::InvalidCanonBase {
                 base: base.to_owned()
             }),
-            "there is no IRI to mint under"
+            "the base is an IRI reference and carries no scheme, so nothing minted under it could"
         );
     }
     for base in [CANON_BASE, CANON_PATH_BASE] {
         let claims = slice_of(&cited("a-one"), GUIDE_ID, &under_canon(base)).expect("slices");
         assert_eq!(verse_one_cites(&claims), vec![format!("<{base}a-one>")]);
     }
+}
+
+#[test]
+fn a_canon_base_that_is_no_iri_at_all_refuses_with_the_laws_own_finding() {
+    // The empty base is here rather than beside the relative ones: it
+    // is not a scheme-less IRI reference, it is no IRI reference.
+    for (base, code) in [("", "iri-empty"), ("not an iri >", "iri-disallowed-char")]
+        .into_iter()
+        .chain(MALFORMED_IRIS)
+    {
+        let refusal =
+            slice_of(&cited("a-one"), GUIDE_ID, &under_canon(base)).expect_err("no IRI, no base");
+        match &refusal {
+            MarkdownError::MalformedCanonBase { base: named, cause } => {
+                assert_eq!(named, base);
+                assert_eq!(cause.diagnostic_code(), code, "each defect keeps its own");
+                let rendered = refusal.to_string();
+                assert!(rendered.starts_with(&format!("canon base {base:?}")));
+                assert!(rendered.ends_with(&cause.to_string()));
+            }
+            other => panic!("{base:?} is no IRI at all, and the refusal must say so: {other:?}"),
+        }
+    }
+    // A base one character away from the truncated percent-encoding —
+    // the triplet completed — is lawful and lifts.
+    let base = "https://example.org/canon%2F";
+    let claims = slice_of(&cited("a-one"), GUIDE_ID, &under_canon(base)).expect("slices");
+    assert_eq!(verse_one_cites(&claims), vec![format!("<{base}a-one>")]);
+    parses_whole(&claims);
 }
 
 #[test]
@@ -1888,6 +1917,121 @@ fn a_relative_vocabulary_refuses_and_the_absolute_one_slices() {
     );
     // The declared vocabulary is absolute example.org, and it slices.
     Vocabulary::under(SLICE_BASE).expect("an absolute base derives a vocabulary");
+    assert_eq!(
+        units(&slice_of(THREE, GUIDE_ID, &v1()).expect("slices")).len(),
+        3
+    );
+}
+
+/// Strings that are no IRI reference at all, each with the diagnostic
+/// code the workspace IRI law states about it.
+///
+/// Every one of them is writable between `<` and `>`, so it reaches the
+/// law rather than being stopped by the character rule in front of it,
+/// and every one of them names a different defect. That is what the
+/// seams have to keep apart: the code is the law's own, and a seam that
+/// answered "has no scheme" would be stating something false about four
+/// of these five, each of which plainly carries one.
+const MALFORMED_IRIS: [(&str, &str); 5] = [
+    // A percent-encoding the end of the string cuts off.
+    ("https://example.org/%", "iri-bad-percent-encoding"),
+    // An IP-literal that never closes its bracket.
+    ("http://[not-an-ipv6", "iri-bad-authority"),
+    // `~` is no scheme character, so the scheme is read, and refused.
+    ("ht~tp://example.org/", "iri-bad-scheme"),
+    // A scheme may not begin with a digit, so the law reads no scheme
+    // here at all and refuses the `:` where it stands — a relative
+    // reference's first segment may not carry one.
+    ("1http://example.org/", "iri-disallowed-char"),
+    // U+007F, which the IRI grammar admits in no component.
+    ("https://example.org/a\u{7f}b", "iri-disallowed-char"),
+];
+
+#[test]
+fn a_malformed_source_id_refuses_as_malformed_and_never_as_relative() {
+    let mut codes = BTreeSet::new();
+    for (id, code) in MALFORMED_IRIS {
+        let refusal = slice_of(THREE, id, &v1()).expect_err("no IRI, no document");
+        match &refusal {
+            MarkdownError::MalformedSourceId { id: named, cause } => {
+                assert_eq!(named, id);
+                assert_eq!(cause.diagnostic_code(), code);
+                codes.insert(cause.diagnostic_code());
+                // The message names the seam and carries the law's
+                // finding whole, rather than wording it again.
+                let rendered = refusal.to_string();
+                assert!(rendered.starts_with(&format!("source id {id:?}")));
+                assert!(rendered.ends_with(&cause.to_string()));
+                assert!(
+                    !rendered.contains("no scheme"),
+                    "{rendered:?} states a defect the id does not have"
+                );
+            }
+            other => panic!("{id:?} is no IRI at all, and the refusal must say so: {other:?}"),
+        }
+    }
+    assert_eq!(
+        codes.len(),
+        4,
+        "four defects, four findings, and not one of them a missing scheme"
+    );
+    // The neighbouring refusal, unmoved: an id the law reads whole and
+    // finds scheme-less is relative, and says so.
+    assert_eq!(
+        slice_of(THREE, "not-absolute", &v1()),
+        Err(MarkdownError::RelativeSourceId {
+            id: "not-absolute".to_owned()
+        })
+    );
+    // The valid neighbour: one character from the truncated one, and it
+    // slices.
+    let id = "https://example.org/doc";
+    let claims = slice_of(THREE, id, &v1()).expect("slices");
+    assert_eq!(claims[0].subject, id);
+    assert_eq!(units(&claims).len(), 3);
+}
+
+#[test]
+fn a_malformed_vocabulary_iri_refuses_as_malformed_and_names_the_field() {
+    for (iri, code) in MALFORMED_IRIS {
+        let mut broken = v1();
+        broken.vocabulary.cites = iri.to_owned();
+        let refusal = slice_of(THREE, GUIDE_ID, &broken).expect_err("no IRI, no term");
+        match &refusal {
+            MarkdownError::MalformedVocabulary {
+                field,
+                iri: named,
+                cause,
+            } => {
+                assert_eq!(*field, "cites");
+                assert_eq!(named, iri);
+                assert_eq!(cause.diagnostic_code(), code);
+                let rendered = refusal.to_string();
+                assert!(rendered.starts_with("vocabulary field cites"));
+                assert!(rendered.ends_with(&cause.to_string()));
+            }
+            other => panic!("{iri:?} states no term, and the refusal must say so: {other:?}"),
+        }
+        // The same law asked directly answers the same way.
+        assert!(matches!(
+            broken.vocabulary.validate(),
+            Err(MarkdownError::MalformedVocabulary { field: "cites", .. })
+        ));
+    }
+    // The neighbouring refusals are unmoved: an empty field and a
+    // scheme-less one are still the relative refusal.
+    for iri in ["", "cites"] {
+        let mut relative = v1();
+        relative.vocabulary.cites = iri.to_owned();
+        assert_eq!(
+            slice_of(THREE, GUIDE_ID, &relative),
+            Err(MarkdownError::InvalidVocabulary {
+                field: "cites",
+                iri: iri.to_owned(),
+            })
+        );
+    }
+    // And the declared vocabulary still slices.
     assert_eq!(
         units(&slice_of(THREE, GUIDE_ID, &v1()).expect("slices")).len(),
         3

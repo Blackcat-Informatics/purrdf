@@ -196,8 +196,11 @@ the profile's contract id tells the two apart.
 An empty, unwritable, or merely *relative* IRI is a typed error naming the
 field, not a default: the crate asks the workspace IRI law — reached through
 `purrdf-core`, so it is the same law the kernel interns under — and refuses up
-front what would otherwise be refused a stage later. The source id answers to
-the same rule. The only IRIs the crate brings are the standard's, and none of
+front what would otherwise be refused a stage later. A field the law cannot
+read *at all* is a second, separate error carrying the law's own finding:
+`https://example.org/%` is a truncated percent-encoding, and calling it
+relative would be a false statement about a string that plainly has a scheme.
+The source id and the canon base answer to the same two rules. The only IRIs the crate brings are the standard's, and none of
 them is configuration: `rdf:type` and `rdf:reifies`, which are shapes of the
 RDF data model rather than terms of a vocabulary, and `xsd:integer` and
 `xsd:hexBinary`, which are the standard's names for the values they carry.
@@ -299,10 +302,12 @@ is ordinary content.
 ## Errors
 
 `slice_markdown` refuses, typed, and never guesses. The profile answers first:
-a vocabulary field that is empty or cannot be an IRI reference (naming the
-field), a name carrying a control character (the stage description states one
-fact per line, so a newline in a name would state facts of the law), a
-`max_bytes` under four, and an `overlap` at or over `max_bytes`. Then the
-document: an empty source id, which would be written `<>` and name no
-document; a source id that cannot be written inside `<` and `>`; and bytes
-that are not UTF-8 (naming the offset).
+a vocabulary field that is empty, cannot be an IRI reference, carries no
+scheme, or is no IRI at all (each naming the field, the last carrying the IRI
+law's finding), a name carrying a control character (the stage description
+states one fact per line, so a newline in a name would state facts of the law),
+a `max_bytes` under four, an `overlap` at or over `max_bytes`, and a declared
+canon base that carries no scheme or is no IRI at all. Then the document: an
+empty source id, which would be written `<>` and name no document; a source id
+that cannot be written inside `<` and `>`; one that carries no scheme; one that
+is no IRI at all; and bytes that are not UTF-8 (naming the offset).

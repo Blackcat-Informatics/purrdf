@@ -425,8 +425,13 @@ This specification mints no ontology. Every class, predicate and datatype
 IRI, and the base node IRIs are minted under, is **configuration** an
 implementation takes from its caller. There is no default namespace and
 no fabricated fallback: an implementation MUST refuse an IRI that is
-empty, that cannot be written as an IRI reference, or that is merely
-relative, naming the field that carried it.
+empty, that cannot be written as an IRI reference, that is no IRI
+reference at all, or that is an IRI reference carrying no scheme, naming
+the field that carried it.
+
+The last two are different refusals and an implementation MUST state
+them apart (§9.1). A field holding `https://example.org/%` is not a
+relative IRI: it is not an IRI.
 
 The term set is fixed. Deriving a whole vocabulary from one base appends
 these local names to it, and takes the base itself as the node base:
@@ -567,14 +572,41 @@ it then emits, or otherwise admit a source of variation into its output.
 
 An implementation MUST refuse, by name and before producing any output:
 a source that is not UTF-8; an empty source id; a source id that cannot
-be written as an IRI reference; a source id that is not absolute; a
-vocabulary field that is empty, unwritable or not absolute; a profile
-name carrying a control character; `max_bytes` under 4; `overlap` at or
-over `max_bytes`; a declared canon base that is empty or not absolute;
-and an anchor that mints no lawful IRI under a declared canon base or
-mints one outside it. An implementation MUST NOT refuse anything else,
-and in particular MUST NOT refuse a concordance row that lifts nothing
-here (§4.1) or one that is malformed (§4).
+be written as an IRI reference; a source id that is no IRI reference at
+all; a source id that is an IRI reference carrying no scheme; a
+vocabulary field that is empty, unwritable, no IRI reference at all, or
+an IRI reference carrying no scheme; a profile name carrying a control
+character; `max_bytes` under 4; `overlap` at or over `max_bytes`; a
+declared canon base that is no IRI reference at all — the empty base
+among them — or is one carrying no scheme; and an anchor that mints no
+lawful IRI under a declared canon base or mints one outside it. An
+implementation MUST NOT refuse anything else, and in particular MUST NOT
+refuse a concordance row that lifts nothing here (§4.1) or one that is
+malformed (§4).
+
+### 9.1 Not absolute, and not an IRI
+
+Three of those refusals — the source id, a vocabulary field, and the
+declared canon base — ask one string one question, and the question has
+two halves an implementation MUST NOT merge into one answer.
+
+A string the IRI grammar reads whole and finds to carry no scheme is
+**relative**. It denotes something only in relation to whatever holds
+the claims, and the remedy is to write it absolute.
+
+A string the IRI grammar cannot read at all is **malformed**. It has no
+scheme in the sense that it has nothing: `https://example.org/%` ends in
+a truncated percent-encoding and `http://[not-an-ipv6` never closes its
+IP-literal, and both plainly carry the characters of a scheme. An
+implementation MUST state such a refusal as malformed and MUST NOT state
+it as relative, because "carries no scheme" is then a false statement
+about the input, and a false statement sends its reader to look for a
+defect that is not there.
+
+A malformed refusal SHOULD carry the finding of the IRI grammar that
+read the string — which byte, and what about it — rather than a sentence
+of the slicer's own composition. The slicer does not own that grammar,
+and a second wording of one law is a second law that will drift.
 
 A conforming implementation SHOULD expose the stand-off model — the
 sections, units, citations, unmatched and malformed rows, scalar spans,
