@@ -41,9 +41,11 @@
 
 use proptest::prelude::*;
 use purrdf_rdf::{
-    BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside, RdfQuad,
-    RdfTerm, RdfTriple, SerializeGraph, canonical_flat_nquads, flat_rdf_quads_from_dataset,
-    parse_dataset, serialize_dataset,
+    BlankScope, CanonHash, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfLookaside, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, canonical_flat_nquads,
+    canonicalize_with, dataset_from_quad_sources, flat_dataset_from_quad_sources,
+    flat_dataset_from_quads, flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
+    try_canonicalize_flat_view,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -282,6 +284,79 @@ fn arb_dataset_rdfxml() -> impl Strategy<Value = std::sync::Arc<RdfDataset>> {
     prop::collection::vec(quad, 0..16).prop_map(dataset_from_quads)
 }
 
+// ── AC1 differential generators: scoped blanks, nested triples, blank graph
+// names, and both reifier spellings ─────────────────────────────────────────
+
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+
+/// A graph-position term: an IRI or a BLANK NODE — a named graph named by a
+/// blank node, which `arb_dataset`/`arb_dataset_star` above never generate
+/// (their graph slot is `prop::option::of(arb_iri())`, IRI-only).
+fn arb_graph_term() -> impl Strategy<Value = RdfTerm> {
+    prop_oneof![
+        arb_iri().prop_map(RdfTerm::iri),
+        arb_bnode_label().prop_map(RdfTerm::blank_node),
+    ]
+}
+
+/// A quoted triple nested up to TWO levels deep: [`arb_quoted_triple`]'s
+/// one-level triple, sometimes wrapped as the object of an outer triple.
+fn arb_nested_triple() -> impl Strategy<Value = RdfTriple> {
+    arb_quoted_triple().prop_flat_map(|inner| {
+        let wrap = inner.clone();
+        prop_oneof![
+            Just(inner),
+            (arb_iri(), arb_iri()).prop_map(move |(s, p)| {
+                RdfTriple::new(RdfTerm::iri(s), p, RdfTerm::triple(wrap.clone()))
+            }),
+        ]
+    })
+}
+
+/// Object terms for the differential generator: the basic surface, plus a
+/// (possibly two-level-nested) quoted triple.
+fn arb_diff_object() -> impl Strategy<Value = RdfTerm> {
+    prop_oneof![
+        3 => arb_object_basic(),
+        1 => arb_nested_triple().prop_map(RdfTerm::triple),
+    ]
+}
+
+/// A quad for the differential generator: any subject, a predicate that is
+/// USUALLY an ordinary IRI but OCCASIONALLY the literal `rdf:reifies` (so the
+/// folding route has something to fold), a (possibly nested) object, and an
+/// optional graph that may itself be a blank node.
+fn arb_diff_quad() -> impl Strategy<Value = RdfQuad> {
+    let predicate = prop_oneof![
+        4 => arb_iri(),
+        1 => Just(RDF_REIFIES.to_owned()),
+    ];
+    (
+        arb_subject(),
+        predicate,
+        arb_diff_object(),
+        prop::option::of(arb_graph_term()),
+    )
+        .prop_map(|(s, p, o, g)| {
+            let quad = RdfQuad::new(s, p, o);
+            match g {
+                Some(g) => quad.in_graph(g),
+                None => quad,
+            }
+        })
+}
+
+/// Two independently-generated quad sources. [`dataset_from_quad_sources`] and
+/// [`flat_dataset_from_quad_sources`] standardize each source apart under its
+/// own fresh [`BlankScope`], so a blank label repeated across the two sources
+/// still names two DISTINCT nodes — the "scoped blanks" surface AC1 requires.
+fn arb_diff_sources() -> impl Strategy<Value = (Vec<RdfQuad>, Vec<RdfQuad>)> {
+    (
+        prop::collection::vec(arb_diff_quad(), 0..6),
+        prop::collection::vec(arb_diff_quad(), 0..4),
+    )
+}
+
 // ── Config ──────────────────────────────────────────────────────────────────────
 
 fn config() -> ProptestConfig {
@@ -414,6 +489,49 @@ proptest! {
         let (decoded, scope) = BlankScope::unqualify_label(&label);
         let qualified = scope.qualify_label(&decoded);
         prop_assert!(text.contains(&format!("rdf:nodeID=\"{qualified}\"")), "{}", text);
+    }
+
+    /// AC1 differential: `try_canonicalize_flat_view` agrees with the
+    /// PRE-DELEGATION flatten-and-canonicalize route —
+    /// `flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&d))` then
+    /// `canonicalize_with` — over generated datasets carrying scoped blanks (two
+    /// independently-scoped sources), nested triple terms, blank graph names,
+    /// and BOTH reifier "spellings": [`dataset_from_quad_sources`] (folds an
+    /// `rdf:reifies` triple-term quad into a reifier binding, the same route
+    /// production ingestion uses) and [`flat_dataset_from_quad_sources`] (leaves
+    /// it a plain quad), chosen per generated case by `fold`.
+    #[test]
+    fn flat_view_canon_matches_the_pre_delegation_flatten_route(
+        (source0, source1) in arb_diff_sources(),
+        fold in any::<bool>(),
+        sha384 in any::<bool>(),
+    ) {
+        let sources: [&[RdfQuad]; 2] = [&source0, &source1];
+        let built = if fold {
+            dataset_from_quad_sources(&sources)
+        } else {
+            flat_dataset_from_quad_sources(&sources)
+        };
+        let Ok(dataset) = built else {
+            // A generated stream that fails to freeze (e.g. an `rdf:reifies` quad
+            // whose object is not itself a triple term, under the folding route)
+            // is not this property's concern — it is about agreement on datasets
+            // that DO exist.
+            return Ok(());
+        };
+        let hash = if sha384 { CanonHash::Sha384 } else { CanonHash::Sha256 };
+        let reference = {
+            let flat = flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&dataset))
+                .expect("an already-valid dataset's own flat quad stream must re-freeze");
+            canonicalize_with(&flat, hash).nquads
+        };
+        match try_canonicalize_flat_view(&*dataset, hash) {
+            Ok(canonicalized) => prop_assert_eq!(canonicalized.nquads, reference),
+            Err(err) => prop_assert!(
+                false,
+                "generated non-reserved-vocabulary input was refused: {err}"
+            ),
+        }
     }
 }
 

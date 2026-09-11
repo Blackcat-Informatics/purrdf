@@ -7,9 +7,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use purrdf_core::{
-    DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider, PageFault, PageGeneration,
-    PageId, PageMaterialization, PageProvider, PagedDataset, PagedQueryError, PagedQueryEvidence,
-    PagedQueryLimits, RdfDataset, RdfDatasetBuilder, StopCause, TermValue, ViewOperationStatus,
+    CanonHash, DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch,
+    InMemoryPageProvider, PageFault, PageGeneration, PageId, PageMaterialization, PageProvider,
+    PagedDataset, PagedQueryError, PagedQueryEvidence, PagedQueryLimits, RdfDataset,
+    RdfDatasetBuilder, StopCause, TermValue, ViewCanonError, ViewOperationStatus,
+    try_canonicalize_flat_view,
 };
 
 fn page(subject: &str, object: &str) -> Arc<RdfDataset> {
@@ -403,5 +405,159 @@ fn every_read_path_shares_one_operation_cache_and_evidence() {
         repeat.operation_status(),
         view.operation_status(),
         "identical operation state produces identical evidence and status"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Flat-assertion view-canon over a REAL fallible view: `try_canonicalize_flat_view`
+// (and its two-checkpoint completeness law) exercised through `PagedQueryView`
+// rather than through the in-`purrdf-core` unit-level probe double. This is the
+// same `checkpointed_drain` law `crates/rdf-core/src/ir/canon.rs`'s
+// `FlatProbeView` tests pin, run here against production paging machinery.
+// ---------------------------------------------------------------------------
+
+/// A two-page provider whose FIRST page always materializes successfully and whose
+/// SECOND page succeeds only once — during `PagedDataset::from_provider`'s seal pass,
+/// which must succeed for the dataset to exist at all — and fails on every later
+/// (query-time) call. A fresh `PagedQueryView` therefore starts `Ready` (nothing has
+/// been read yet), and only faults partway through the first read that reaches page 1.
+struct SucceedsThenFaultsSecondPageProvider {
+    first: Arc<RdfDataset>,
+    second: Arc<RdfDataset>,
+    second_page_calls: AtomicUsize,
+}
+
+impl PageProvider for SucceedsThenFaultsSecondPageProvider {
+    fn page_count(&self) -> usize {
+        2
+    }
+
+    fn generation(&self) -> PageGeneration {
+        PageGeneration(41)
+    }
+
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
+        match page.0 {
+            0 => Ok(PageMaterialization::new(
+                self.first.clone(),
+                self.generation(),
+                10,
+            )),
+            1 => {
+                let call = self.second_page_calls.fetch_add(1, Ordering::Relaxed);
+                if call == 0 {
+                    // The seal's own materialize pass — must succeed, or the
+                    // dataset never seals and this scenario cannot be built.
+                    Ok(PageMaterialization::new(
+                        self.second.clone(),
+                        self.generation(),
+                        20,
+                    ))
+                } else {
+                    Err(PageFault::provider(page, "page 1 always fails after seal"))
+                }
+            }
+            other => panic!("unexpected page id {other}"),
+        }
+    }
+}
+
+/// `try_canonicalize_flat_view` over a view that is `Ready` at the FIRST checkpoint
+/// (nothing read yet) but whose backing provider faults reading its second page:
+/// the SECOND checkpoint observes the fault, so the refusal carries
+/// `DrainCheckpoint::After` with the view's own typed error and evidence — never a
+/// `Canonicalized` escaping a partial read.
+#[test]
+fn flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_not_ready_after() {
+    let provider = Arc::new(SucceedsThenFaultsSecondPageProvider {
+        first: page("s0", "o0"),
+        second: page("s1", "o1"),
+        second_page_calls: AtomicUsize::new(0),
+    });
+    let paged = PagedDataset::from_provider(provider).expect("seal both pages once");
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+    // The checkpoint an execution boundary would sample before starting: nothing
+    // has been read through this fresh operation-scoped view yet.
+    assert!(
+        matches!(view.operation_status(), ViewOperationStatus::Ready { .. }),
+        "the view must certify Ready before any row is drained"
+    );
+
+    match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+        Err(ViewCanonError::NotReady {
+            checkpoint,
+            error,
+            evidence,
+        }) => {
+            assert_eq!(
+                checkpoint,
+                DrainCheckpoint::After,
+                "the view was Ready at the first checkpoint; only the second can have \
+                 caught this fault"
+            );
+            assert_eq!(
+                error,
+                PagedQueryError::Provider {
+                    page: PageId(1),
+                    message: "page 1 always fails after seal".to_owned(),
+                }
+            );
+            assert_eq!(
+                evidence.requested_pages,
+                vec![PageId(0), PageId(1)],
+                "both pages were requested before the fault was observed"
+            );
+            assert_eq!(evidence.consumed_pages, 1, "only page 0 was ever admitted");
+        }
+        other => panic!(
+            "expected a NotReady refusal at the After checkpoint with typed evidence; got \
+             {other:?}"
+        ),
+    }
+}
+
+/// `try_canonicalize_flat_view` over a view whose backing provider has ALREADY
+/// drifted generation before a single row is drained: the FIRST checkpoint catches
+/// it, the refusal carries `DrainCheckpoint::Before`, and — because the fault is
+/// caught before the drain ever starts — no page materialization is attempted at
+/// all beyond the one-time seal.
+#[test]
+fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_work() {
+    let provider = Arc::new(MutableGenerationProvider {
+        page: page("s", "o"),
+        generation: AtomicU64::new(23),
+        calls: AtomicUsize::new(0),
+    });
+    let paged = PagedDataset::from_provider(provider.clone()).expect("seal generation 23");
+    provider.generation.store(24, Ordering::Relaxed);
+    let calls_before_canon = provider.calls.load(Ordering::Relaxed);
+
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+        Err(ViewCanonError::NotReady {
+            checkpoint,
+            error,
+            evidence,
+        }) => {
+            assert_eq!(checkpoint, DrainCheckpoint::Before);
+            assert_eq!(
+                error,
+                PagedQueryError::StaleGeneration {
+                    page: None,
+                    expected: PageGeneration(23),
+                    actual: PageGeneration(24),
+                }
+            );
+            assert_eq!(evidence.requested_pages, [] as [_; 0]);
+            assert_eq!(evidence.consumed_pages, 0);
+        }
+        other => panic!("expected a NotReady refusal at the Before checkpoint; got {other:?}"),
+    }
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        calls_before_canon,
+        "a view already failed before the drain must trigger no additional \
+         materialization work"
     );
 }

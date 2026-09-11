@@ -9,12 +9,13 @@ use std::sync::Arc;
 use purrdf_core::{
     BlankScope, CanonHash, CompositeDatasetView, CompositeSource, ContentDigest, DatasetMut,
     DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch, GraphMatchValue,
-    GraphPlacement, MutableDataset, OwnerMutability, QuadIds, QuadValues, RESERVED_NAMESPACE,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger,
-    RetentionSnapshot, ScopeBinding, TermRef, TermValue, ViewAccountingReport, ViewLimits,
-    ViewOperationStatus, ViewStats, ViewWork, blank_count_view, canonicalize,
-    canonicalize_graph_view, canonicalize_view, check_admissible_view, datasets_isomorphic,
-    graph_digest_view, try_canonicalize_view, try_graph_digest_view,
+    GraphPlacement, InMemoryPageProvider, MutableDataset, OwnerMutability, PagedDataset,
+    PagedQueryLimits, QuadIds, QuadValues, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
+    RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger, RetentionSnapshot, ScopeBinding,
+    TermRef, TermValue, ViewAccountingReport, ViewLimits, ViewOperationStatus, ViewStats,
+    ViewWork, blank_count_view, canonicalize, canonicalize_graph_view, canonicalize_view,
+    check_admissible_view, datasets_isomorphic, graph_digest_view, try_canonicalize_flat_view,
+    try_canonicalize_view, try_graph_digest_view,
 };
 
 const P: &str = "http://example.org/p";
@@ -3511,4 +3512,106 @@ fn a_selection_backed_carrier_keeps_its_owners_resident_in_the_ledger() {
     assert_eq!(nested_ledger.snapshot().distinct_owners, 0);
     drop(control);
     assert_eq!(control_ledger.snapshot().distinct_owners, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Flat-assertion presentation: every FallibleDatasetView wrapper agrees with its
+// materialized `RdfDataset` equivalent
+// ---------------------------------------------------------------------------
+
+/// `try_canonicalize_flat_view` over every production `FallibleDatasetView`
+/// wrapper — the composite, the delta snapshot, a single-page `PagedQueryView`,
+/// and a shared `Arc<RdfDataset>` — canonicalizes to the SAME flat bytes as
+/// `identity_fixture` itself, exactly as the overlay presentation already agrees
+/// across these wrapper types
+/// (`canonical_identity_is_byte_equal_over_flat_composite_and_delta_views`).
+///
+/// `identity_fixture` carries reifiers and annotations in BOTH the default graph
+/// and a named graph, so this genuinely exercises the statement layer under the
+/// FLAT presentation, not just base quads — the fragment assertions below prove
+/// the fixture actually contains real `rdf:reifies` rows and no overlay sentinel.
+#[test]
+fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
+    let flat = identity_fixture();
+    let composite = CompositeDatasetView::new(vec![flat.clone()], ViewLimits::default()).unwrap();
+    let delta = delta_of(&flat);
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![
+        flat.clone(),
+    ])))
+    .expect("a single retained source seals into one page");
+    let paged_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+    let expected = try_canonicalize_flat_view(&*flat, CanonHash::Sha256)
+        .expect("the fixture is admissible")
+        .nquads;
+    assert!(
+        expected.contains(&format!("<{REIFIES}>")),
+        "the fixture must actually carry a real rdf:reifies row under the flat \
+         presentation, or wrapper parity proves nothing: {expected}"
+    );
+    assert!(
+        !expected.contains("urn:purrdf:rdfc:"),
+        "the flat presentation must never mint the overlay's reserved sentinel: {expected}"
+    );
+
+    for (name, view_bytes) in [
+        (
+            "independent composite",
+            try_canonicalize_flat_view(&composite, CanonHash::Sha256)
+                .expect("composite is admissible")
+                .nquads,
+        ),
+        (
+            "delta",
+            try_canonicalize_flat_view(&delta, CanonHash::Sha256)
+                .expect("delta is admissible")
+                .nquads,
+        ),
+        (
+            "paged (single page)",
+            try_canonicalize_flat_view(&paged_view, CanonHash::Sha256)
+                .expect("paged view is admissible and ready")
+                .nquads,
+        ),
+        (
+            "shared Arc<RdfDataset>",
+            try_canonicalize_flat_view(&flat, CanonHash::Sha256)
+                .expect("shared handle is admissible")
+                .nquads,
+        ),
+    ] {
+        assert_eq!(
+            view_bytes, expected,
+            "{name} flat canon must equal the materialized dataset's flat canon"
+        );
+    }
+
+    // The composite and delta cases restated against their OWN materialized
+    // `RdfDataset` snapshot (not the shared `flat` fixture they both happen to be
+    // built from), so the law is proven per-view rather than only via a common
+    // ancestor both sides could have coincidentally matched.
+    let composite_materialized = composite.materialize().expect("composite materializes");
+    assert_eq!(
+        try_canonicalize_flat_view(&*composite_materialized, CanonHash::Sha256)
+            .unwrap()
+            .nquads,
+        try_canonicalize_flat_view(&composite, CanonHash::Sha256)
+            .unwrap()
+            .nquads,
+        "composite view flat canon must equal its own materialized dataset's flat canon"
+    );
+    let delta_materialized = delta.materialize().expect("delta materializes");
+    assert_eq!(
+        try_canonicalize_flat_view(&*delta_materialized, CanonHash::Sha256)
+            .unwrap()
+            .nquads,
+        try_canonicalize_flat_view(&delta, CanonHash::Sha256)
+            .unwrap()
+            .nquads,
+        "delta view flat canon must equal its own materialized dataset's flat canon"
+    );
+    // `PagedQueryView` offers no `materialize()` of its own: it is a fallible READ
+    // over pages that are already-frozen `RdfDataset`s, so its "materialized
+    // equivalent" is definitionally the single source page it was sealed from
+    // (`flat`) — already proven equal to `expected` above.
 }
