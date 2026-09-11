@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 
+use purrdf_core::iri_escape::is_iriref_escape_required;
 use purrdf_iri::BaseIri;
 
 use crate::{FastHasher, FastMap, RdfDiagnostic};
@@ -370,20 +371,24 @@ fn push_uchar_00(out: &mut String, v: u32) {
     out.push(HEX_UPPER[(v & 0xF) as usize] as char);
 }
 
-/// Escape an IRI body for an N-Triples / Turtle / TriG `<…>` `IRIREF`. The W3C grammar
-/// forbids `<`, `>`, `"`, `{`, `}`, `|`, `^`, `` ` ``, `\`, the space character, and every
-/// control code point (C0 `0x00-0x1F`, DEL `0x7F`, and the C1 block `0x80-0x9F`) appearing
-/// raw; each rides as a `\uXXXX` `UCHAR` (the text parser decodes them back). A clean ASCII
-/// IRI (every production IRI) passes through byte-for-byte unchanged.
+/// Escape an IRI body for an N-Triples / Turtle / TriG `<…>` `IRIREF`.
+///
+/// Which scalars ride as a `\uXXXX` `UCHAR` (the text parser decodes them back) is decided
+/// by [`purrdf_core::iri_escape::is_iriref_escape_required`] and by nothing written here —
+/// see that module for the production
+/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5 `[18t]`) and
+/// for why egress escapes DEL and the C1 block, which the grammar permits raw. A clean
+/// ASCII IRI (every production IRI) passes through byte-for-byte unchanged.
+///
+/// [`IRI_CLEAN`] is the byte-shaped fast path for the same law and is proved to agree with
+/// it scalar by scalar; every byte it does not call clean is routed here.
 pub(crate) fn escape_iri(iri: &str) -> Cow<'_, str> {
-    escape_scan(iri, &IRI_CLEAN, |out, ch| match ch {
-        '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
+    escape_scan(iri, &IRI_CLEAN, |out, ch| {
+        if is_iriref_escape_required(ch) {
             push_uchar_00(out, ch as u32);
+        } else {
+            out.push(ch);
         }
-        c if c.is_control() || c == ' ' => {
-            push_uchar_00(out, c as u32);
-        }
-        c => out.push(c),
     })
 }
 

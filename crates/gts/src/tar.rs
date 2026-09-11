@@ -852,17 +852,46 @@ fn verify_checksum(header: &[u8], offset: usize) -> Result<(), TarError> {
     Ok(())
 }
 
+/// Read one ustar header numeric field.
+///
+/// POSIX (IEEE Std 1003.1, *pax*, "ustar Interchange Format") states the whole
+/// law in two sentences:
+///
+/// > All numeric fields are leading zero-filled octal numbers using digits from
+/// > the ISO/IEC 646:1991 standard IRV. Each numeric field is terminated by one
+/// > or more `<space>` or NUL characters.
+///
+/// So the padding around the digits is an **enumerated two-character set** —
+/// U+0020 SPACE and NUL — and it is skipped at both ends here, because a field
+/// that is space-padded on the left (`"  644\0"`, which POSIX's "terminated by
+/// one or more `<space>`" invites and several writers emit) carries its digits
+/// after the pad. [`write_octal`] emits the zero-filled form, so the workspace's
+/// own archives only ever exercise the right-hand pad.
+///
+/// # Why this is not [`str::trim`]
+///
+/// [`str::trim`] answers the Unicode `White_Space` property, which admits
+/// U+0009, U+000A, U+000B, U+000C, U+000D, U+00A0 and twenty more. None of them
+/// is an ISO/IEC 646 IRV digit and none of them is a POSIX field terminator, so
+/// trimming them could only ever launder a **malformed** header into a number:
+/// `b"\t644\0"` read as `0o644`, and a field of nothing but U+00A0 read as `0`.
+/// A header field is fixed-width and machine-written; there is no lawful input
+/// that needs the property, and reading a corrupt size as a plausible number is
+/// how a truncated archive becomes a silently short extraction.
 fn parse_octal(field: &[u8]) -> Option<u64> {
-    let end = field
+    let is_pad = |byte: &u8| *byte == 0 || *byte == b' ';
+    let start = field.iter().position(|byte| !is_pad(byte));
+    let Some(start) = start else {
+        // Nothing but padding: the field states no value, which every caller
+        // reads as zero (an absent `mtime`, a zero `size`).
+        return Some(0);
+    };
+    let digits = field[start..]
         .iter()
-        .position(|byte| *byte == 0 || *byte == b' ')
-        .unwrap_or(field.len());
-    let text = std::str::from_utf8(&field[..end]).ok()?.trim();
-    if text.is_empty() {
-        Some(0)
-    } else {
-        u64::from_str_radix(text, 8).ok()
-    }
+        .position(is_pad)
+        .map_or(&field[start..], |len| &field[start..start + len]);
+    let text = std::str::from_utf8(digits).ok()?;
+    u64::from_str_radix(text, 8).ok()
 }
 
 fn parse_pax_body(body: &[u8]) -> Result<BTreeMap<String, String>, TarError> {
@@ -1049,5 +1078,46 @@ mod tests {
         let digest = entry.digest.as_deref().unwrap();
         let blob = graph.blob_bytes(digest).unwrap().unwrap();
         assert_eq!(blob, b"hello");
+    }
+
+    /// POSIX, *ustar Interchange Format*: "Each numeric field is terminated by
+    /// one or more `<space>` or NUL characters." Both halves are executed: the
+    /// padding the clause names is stripped, and the white space it does not
+    /// name is refused rather than laundered into a plausible number.
+    #[test]
+    fn a_numeric_field_is_padded_by_space_and_nul_and_by_nothing_else() {
+        // THE VALID NEIGHBOURS: every lawful spelling of 0o644 still reads.
+        assert_eq!(parse_octal(b"0000644\0"), Some(0o644));
+        assert_eq!(parse_octal(b"0000644 "), Some(0o644));
+        assert_eq!(parse_octal(b"644\0\0\0\0\0"), Some(0o644));
+        assert_eq!(parse_octal(b"     644"), Some(0o644));
+        assert_eq!(parse_octal(b"\x00\x00644\x00 "), Some(0o644));
+        assert_eq!(parse_octal(b"00000000"), Some(0));
+        // A field of nothing but the clause's own padding states no value.
+        assert_eq!(parse_octal(b"        "), Some(0));
+        assert_eq!(parse_octal(b"\0\0\0\0\0\0\0\0"), Some(0));
+
+        // THE REFUSALS: none of these is an ISO/IEC 646 IRV digit and none is a
+        // POSIX terminator, so a header carrying one is corrupt. `str::trim`
+        // read the first two as 0o644 and the last as 0.
+        assert_eq!(parse_octal(b"\t644\0\0\0\0"), None);
+        assert_eq!(parse_octal(b"644\n\0\0\0\0"), None);
+        assert_eq!(parse_octal("\u{A0}\0\0\0\0\0".as_bytes()), None);
+        assert_eq!(
+            parse_octal(b"64x\0\0\0\0\0"),
+            None,
+            "8 and 9 aside, not octal"
+        );
+    }
+
+    /// The round trip the archive's own writer exercises: whatever
+    /// [`write_octal`] emits, [`parse_octal`] reads back unchanged.
+    #[test]
+    fn every_value_the_writer_emits_reads_back() {
+        for value in [0, 1, 7, 8, 0o644, 0o755, 1_000_000, u64::from(u32::MAX)] {
+            let mut field = [0u8; 12];
+            write_octal(&mut field, value).expect("fits");
+            assert_eq!(parse_octal(&field), Some(value), "{value}");
+        }
     }
 }

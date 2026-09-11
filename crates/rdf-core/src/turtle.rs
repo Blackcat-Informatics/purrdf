@@ -47,6 +47,7 @@ use crate::{
     QuadIds, RdfAnnotation, RdfDataset, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTriple,
     TermId, TermRef,
     blank_label::{LabelAlphabet, encode_blank_label, retarget_owned_label},
+    iri_escape::is_iriref_escape_required,
 };
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -160,12 +161,12 @@ fn emit_literal(literal: &RdfLiteral) -> String {
 
 /// Escape a string for embedding in an IRIREF (`<…>`).
 ///
-/// The IRIREF grammar forbids the reserved delimiter set (`< > " { } | ^ \``
-/// plus `\`) and the *entire* control range raw, so each of those — plus the
-/// space character — is escaped as `\uXXXX`. Unlike literals, the C1 block
-/// (`0x80`-`0x9F`) is escaped here too, since IRIREF has no carve-out for it.
-/// Mirrors [`crate`]'s sibling `escape_iri` in
-/// `purrdf::native_codecs::ser_model` exactly.
+/// Which scalars ride as `\uXXXX` is decided by
+/// [`is_iriref_escape_required`](crate::iri_escape::is_iriref_escape_required)
+/// and by nothing written here — see that module for the production
+/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5
+/// `[18t]`) and for why egress escapes DEL and the C1 block, which the grammar
+/// permits raw.
 fn escape_iri(iri: &str) -> String {
     let mut out = String::with_capacity(iri.len());
     write_iri_escaped(iri, &mut out);
@@ -174,14 +175,10 @@ fn escape_iri(iri: &str) -> String {
 
 fn write_iri_escaped(iri: &str, out: &mut String) {
     for ch in iri.chars() {
-        match ch {
-            '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                let _ = write!(out, "\\u{:04X}", ch as u32);
-            }
-            c if c.is_control() || c == ' ' => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
+        if is_iriref_escape_required(ch) {
+            let _ = write!(out, "\\u{:04X}", ch as u32);
+        } else {
+            out.push(ch);
         }
     }
 }

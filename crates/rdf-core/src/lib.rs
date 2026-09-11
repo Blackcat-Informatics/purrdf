@@ -33,6 +33,9 @@
 // Blank-node label syntax shared by parser and serializer egress contracts.
 pub mod blank_label;
 pub mod cdt_blank;
+// The ONE transcription of which scalars an `IRIREF` writer must escape — the
+// egress mirror of the ingress production in `purrdf_iri::terminals`.
+pub mod iri_escape;
 // The arity-generic binding-pattern adornment lattice shared by the Datalog
 // evaluator's demand keying and the SPARQL property-function access-pattern
 // feasibility check.

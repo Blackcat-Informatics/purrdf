@@ -25,6 +25,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
+use crate::iri_escape::is_iriref_escape_required;
 use crate::model::RdfTextDirection;
 use crate::{RdfDataset, TermId, TermRef};
 
@@ -748,17 +749,21 @@ fn is_valid_pn_local(local: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
+/// Escape an IRI body for a `<…>` `IRIREF`.
+///
+/// Which scalars ride as `\uXXXX` is decided by
+/// [`is_iriref_escape_required`](crate::iri_escape::is_iriref_escape_required)
+/// and by nothing written here — see that module for the production
+/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5
+/// `[18t]`) and for why egress escapes DEL and the C1 block, which the grammar
+/// permits raw.
 fn escape_iri(iri: &str) -> String {
     let mut out = String::with_capacity(iri.len());
     for c in iri.chars() {
-        match c {
-            '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c if c.is_control() || c == ' ' => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
+        if is_iriref_escape_required(c) {
+            let _ = write!(out, "\\u{:04X}", c as u32);
+        } else {
+            out.push(c);
         }
     }
     out

@@ -151,6 +151,7 @@ use super::skolem::{TermMapper, rebuild_dataset};
 use super::term::{BlankScope, TermId, TermValue};
 use crate::content_store::ContentDigest;
 use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
+use crate::iri_escape::is_iriref_escape_required;
 
 /// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -2130,17 +2131,20 @@ fn next_permutation(a: &mut [usize]) -> bool {
     true
 }
 
-/// Escape an IRI for `<…>` N-Quads form: control chars (C0, the space character, DEL,
-/// and the C1 block `0x80-0x9F`) and the reserved delimiter set become `\uXXXX`
-/// (canonical N-Triples IRIREF rules). Clean ASCII IRIs pass through unchanged.
+/// Escape an IRI for `<…>` N-Quads form.
+///
+/// Which scalars ride as `\uXXXX` is decided by
+/// [`is_iriref_escape_required`](crate::iri_escape::is_iriref_escape_required)
+/// and by nothing written here — see that module for the production
+/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5
+/// `[18t]`) and for why egress escapes DEL and the C1 block, which the grammar
+/// permits raw. Clean ASCII IRIs pass through unchanged.
 fn write_iri_escaped(iri: &str, out: &mut String) {
     for ch in iri.chars() {
-        match ch {
-            c if c.is_control() || c == ' ' => write_u_escape(c, out),
-            '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                write_u_escape(ch, out);
-            }
-            _ => out.push(ch),
+        if is_iriref_escape_required(ch) {
+            write_u_escape(ch, out);
+        } else {
+            out.push(ch);
         }
     }
 }

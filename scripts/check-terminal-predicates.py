@@ -26,10 +26,22 @@ keeps a seventh from appearing.
 
 **This gate is not "Unicode properties are bad".** It is narrower, and the
 distinction is the whole reason it can be trusted: a production that *names* a
-Unicode property must be implemented with that property. CommonMark defines its
-whitespace as Unicode whitespace, so ``crates/markdown``'s use of
-``char::is_whitespace`` is correct and this gate must never flag it. What is
-refused is a scanner for a grammar whose production enumerates an exact set —
+Unicode property must be implemented with that property. CommonMark, for
+instance, defines a "Unicode whitespace character" and uses it to decide the
+left- and right-flanking delimiter runs of §6.2 emphasis; a scanner
+implementing *that* clause with anything narrower would be wrong.
+
+The example is stated precisely because the imprecise version of it was wrong
+and sat here as fact: this docstring used to say CommonMark defines *its*
+whitespace as Unicode whitespace, and that a scanner in ``crates/markdown`` was
+therefore correct to use ``char::is_whitespace``. It is not. §2.1 defines a
+blank line as "a line containing only spaces (U+0020) or tabs (U+0009)", and
+ATX headings, thematic breaks and GFM table cells all name space-or-tab as
+well. One specification can answer this question differently in different
+clauses, so the unit of judgement is the CLAUSE a site implements, never the
+specification it belongs to.
+
+What is refused is a scanner for a grammar whose production enumerates an exact set —
 ``WS ::= #x20 | #x9 | #xD | #xA`` (Turtle/SPARQL/ShExC), XML's
 ``S ::= (#x20 | #x9 | #xD | #xA)+``, JSON's ``ws`` — answering it with a
 property that admits 26 code points instead of 4. Getting that boundary wrong in
@@ -37,22 +49,28 @@ the *other* direction is the same class of bug: a gate that rejects the correct
 fix teaches authors to hand-roll around it.
 
 Scanners are therefore identified **structurally, not by name**: a file that
-holds a character cursor (``fn peek`` plus a ``self.pos``-shaped position). Name
--based detection was tried and is wrong in both directions —
+holds a character cursor (``fn peek`` plus a ``self.pos``/``position``/``cursor``
+field). Name-based detection was tried and is wrong in both directions —
 ``crates/sparql-eval/src/expr.rs`` has ``fn lex_and_dt``, which returns an RDF
 term's *lexical form* and scans nothing, while ``crates/shex/src/shapemap.rs``
 scans characters without a single ``lex_``-prefixed function.
 
-**Known blind spot, stated rather than papered over.** Detection is per FILE, so
-a crate that puts its entry point in one file and its cursor in another is
-invisible here: ``crates/geo/src/geojson.rs`` carried this exact defect while
-its scanner lived in ``json.rs``, and it was found by reading, not by this gate.
-Widening the net to "any file in a crate that contains a scanner" was rejected —
-it would sweep in every config and rendering path those crates own, and a gate
-that cries wolf teaches authors to route around it, which is the failure mode
-this whole property exists to prevent. A narrow gate that admits its edge is
-worth more than a broad one nobody trusts; the edge is covered by the entry-point
-audit that ``--census`` supports, not by this scan.
+**A file the structure test cannot reach is a ledger entry, never a silent
+pass.** Detection is per FILE, so a crate that puts its entry point in one file
+and its cursor in another is invisible to it: ``crates/geo/src/geojson.rs``
+carried this exact defect while its scanner lived in ``json.rs``, and reading
+found it when this gate did not. Such files are named in ``SCANNERS``, which
+rots loudly — an entry whose file is gone, or which the structure test now finds
+by itself, fails the gate.
+
+The narrower heuristic once justified itself here with the claim that widening
+would "sweep in every config and rendering path those crates own". That was
+asserted, never measured, and it was false: widening the cursor field from
+``pos`` alone to ``pos|position|cursor`` governs exactly one further file and
+produces zero new offenders. The file was ``crates/cdt/src/parse.rs`` — a real
+scanner with a ``peek`` and sixty-nine ``self.position`` — invisible the whole
+time the claim stood. A cost asserted for a check is a claim like any other, and
+this one is now measured rather than argued.
 
 ``ALLOWLIST`` is an explicit, reasoned exemption table — never a silent skip, and
 the workspace's deviation ledger for this property. An entry that stops matching
@@ -172,6 +190,7 @@ TERMINAL_FN = re.compile(
     r"|pn_local(?:_start|_esc)?"
     r"|blank_node_label_start"
     r"|varname(?:_start|_continue|_char)?"
+    r"|xml_name(?:_start)?(?:_char)?"
     r"|ws(?:_char)?"
     r"|iriref_forbidden(?:_byte)?"
     # `hex` is deliberately absent. It looked like a terminal name and is not:
@@ -512,6 +531,7 @@ def self_test() -> None:
         "is_pn_chars_base", "is_pn_chars_u", "is_pn_chars", "is_pn_local_start",
         "is_blank_node_label_start", "is_varname_start", "is_varname_continue",
         "is_ws", "is_ws_char", "is_iriref_forbidden_byte",
+        "is_xml_name_start_char", "is_xml_name_char",
     ):
         forked = f"fn {owned}(c: char) -> bool {{ c.is_alphanumeric() }}"
         assert TERMINAL_FN_RULE in rules(forked), f"{owned} must be covered"
@@ -523,8 +543,8 @@ def self_test() -> None:
 
     # Over-refusal, both axes. A file that is not a scanner decides no token
     # boundary, so `char::is_whitespace` there is ordinary string handling --
-    # this is what keeps `crates/markdown` (whose CommonMark production NAMES
-    # Unicode whitespace) out of the report.
+    # a config path, a rendering path or a report formatter is ordinary string
+    # handling, not a token boundary.
     not_a_scanner = "fn f(s: &str) { s.trim(); let _ = s.is_whitespace(); }"
     assert not findings_for(not_a_scanner), "a non-scanner must not be flagged"
     assert not findings_for("impl P { fn peek(&self) {} fn f(&self) { s.trim(); } }"), (
@@ -603,7 +623,8 @@ def main(argv: list[str]) -> int:
             f"\nRoute the test through `{HOME_IMPORT}` ({HOME}), where each "
             "production is spelled once with its W3C citation and its ranges "
             "are asserted at compile time. If the grammar here genuinely names "
-            "a Unicode property — CommonMark's whitespace does — then this is "
+            "a Unicode property — read the CLAUSE, not the specification: one "
+            "spec answers this differently in different places — then this is "
             "not the defect: add it to ALLOWLIST in "
             "scripts/check-terminal-predicates.py, quoting the production.",
             file=sys.stderr,

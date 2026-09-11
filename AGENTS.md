@@ -80,10 +80,15 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   compile time; scanners call it rather than retyping a table.
   `scripts/check-terminal-predicates.py` (in `make check`, or
   `make terminal-hygiene`) refuses a Unicode-property test inside a file that
-  holds a character cursor. This is **not** "Unicode properties are bad": a
-  production that *names* one — CommonMark's whitespace does — must be
-  implemented with it, and the gate's `ALLOWLIST` is the reasoned ledger for
-  exactly those cases.
+  holds a character cursor, and names in `SCANNERS` the files whose cursor lives
+  in another module. This is **not** "Unicode properties are bad": a production
+  that *names* one must be implemented with it, and the gate's `ALLOWLIST` is
+  the reasoned ledger for exactly those cases. **Judge the clause, not the
+  specification** — one spec answers this differently in different places.
+  CommonMark defines a "Unicode whitespace character" and uses it for §6.2
+  emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
+  and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
+  nothing, and doing so once put a false exemption into this file.
 * **Everything is wasm-able.** Every release crate (all 22 published crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
