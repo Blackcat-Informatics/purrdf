@@ -865,7 +865,7 @@ fn verify_checksum(header: &[u8], offset: usize) -> Result<(), TarError> {
 /// U+0020 SPACE and NUL — and it is skipped at both ends here, because a field
 /// that is space-padded on the left (`"  644\0"`, which POSIX's "terminated by
 /// one or more `<space>`" invites and several writers emit) carries its digits
-/// after the pad. [`write_octal`] emits the zero-filled form, so the workspace's
+/// after the pad. `write_octal` emits the zero-filled form, so the workspace's
 /// own archives only ever exercise the right-hand pad.
 ///
 /// # Why this is not [`str::trim`]
@@ -893,7 +893,7 @@ fn verify_checksum(header: &[u8], offset: usize) -> Result<(), TarError> {
 ///
 /// The refusal is narrow by construction — it can only reject a field that
 /// carries a non-pad byte AFTER a pad byte, which no conforming writer emits and
-/// [`write_octal`] cannot produce. Every lawful padding shape still reads: right
+/// `write_octal` cannot produce. Every lawful padding shape still reads: right
 /// pad (`b"0000644\0"`, `b"0000644 "`), left pad (`b"     644"`), a run of either
 /// (`b"644\0\0\0"`, `b"644   "`), both ends at once, and an all-pad field.
 #[must_use]
@@ -1169,7 +1169,7 @@ mod tests {
     }
 
     /// The round trip the archive's own writer exercises: whatever
-    /// [`write_octal`] emits, [`parse_octal`] reads back unchanged.
+    /// `write_octal` emits, [`parse_octal`] reads back unchanged.
     #[test]
     fn every_value_the_writer_emits_reads_back() {
         for value in [0, 1, 7, 8, 0o644, 0o755, 1_000_000, u64::from(u32::MAX)] {
