@@ -458,6 +458,13 @@ impl RetentionLedger {
     /// keeps the FIRST charge and mutability: re-registering the same allocation
     /// under a different charge is a caller bug and is caught by a debug
     /// assertion rather than silently changing the reported total.
+    ///
+    /// # Panics
+    ///
+    /// In a DEBUG build only, if one allocation is registered twice under
+    /// disagreeing [`RetainedCharge`]s or disagreeing [`OwnerMutability`]. In a
+    /// release build the first registration's charge and mutability stand, so the
+    /// reported total never silently changes underneath a reader either way.
     #[must_use = "retention is released as soon as the guard drops"]
     pub fn retain<T: Any + Send + Sync>(
         self: &Arc<Self>,

@@ -328,6 +328,9 @@ impl std::error::Error for PipelineBundleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Canonicalization { source, .. } => Some(source),
+            Self::AdmissionBreach(diagnostic) | Self::Materialization(diagnostic) => {
+                Some(diagnostic)
+            }
             _ => None,
         }
     }
@@ -1178,13 +1181,20 @@ impl<H> PipelineViewBundle<H> {
     /// base it branched from and its delta, which is exactly what that source charges
     /// into its own [`ViewStats`].
     ///
-    /// No graph of a caller-composed view is treated as
-    /// [sole-owned](SoleGraph): placement and source order are the composing caller's
+    /// No graph of a caller-composed view is treated as SOLE-OWNED by one base:
+    /// placement and source order are the composing caller's
     /// business and are not readable back off the view, so this carrier cannot prove
     /// that one base answers for one graph and declines to assume it. Per-graph
     /// digests are therefore canonicalized on the composite, and this carrier's own
     /// memo — not a shared one — serves the repeats. [`from_dataset`](Self::from_dataset)
     /// composes the view itself and does know, so it does memoize.
+    ///
+    /// `limits` is RECORDED, not re-checked. The view arrives already composed and
+    /// already admitted by whoever composed it; re-running admission here would
+    /// re-refuse a view that legitimately exists, which is why this is the one
+    /// infallible constructor. The ceilings it records are enforced from the next
+    /// [`accumulate_named_graph`](Self::accumulate_named_graph) onwards, cumulatively
+    /// over everything the carrier then holds.
     #[must_use]
     pub fn from_view(
         view: impl Into<Arc<CompositeDatasetView>>,
@@ -1377,7 +1387,7 @@ impl<H> PipelineViewBundle<H> {
     /// [`PipelineBundle::graph_digest`] computes for equal content.
     ///
     /// Answered from, in order: this carrier's own memo; the SHARED ledger memo, when
-    /// one frozen base answers for the whole graph (see [`SoleGraph`]); otherwise
+    /// one frozen base is the SOLE source answering for the whole graph; otherwise
     /// [`try_graph_digest_view`] on the composite itself, which reads the composed
     /// rows in place and materializes nothing.
     ///

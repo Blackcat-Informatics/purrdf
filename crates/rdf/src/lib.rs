@@ -103,6 +103,7 @@ mod nesting;
 // `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two
 // IR import helpers are re-exported here.
 pub use dataset_io::dataset_from_bytes;
+pub use gts_compose::{GtsIngestError, IngestCheckpoint, IngestReport};
 pub use gts_import_blobs::{
     DEFAULT_MAX_FRAME_DECODED_BYTES, DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits,
     GtsBlobMetadataSource, GtsBlobSelector, GtsImportWithBlobs, GtsImportedBlob, GtsRefusedBlob,
