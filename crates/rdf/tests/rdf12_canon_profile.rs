@@ -40,8 +40,8 @@ use purrdf_rdf::{
     CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
     CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
     CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
-    CanonHash, RESERVED_NAMESPACE, RdfDatasetBuilder, TermPosition, ViewCanonError, parse_dataset,
-    try_canonicalize_flat_view, try_canonicalize_with,
+    CanonHash, CanonPresentation, RESERVED_NAMESPACE, RdfDatasetBuilder, TermPosition,
+    ViewCanonError, parse_dataset, try_canonicalize_flat_view, try_canonicalize_with,
 };
 use sha2::{Digest, Sha256};
 
@@ -527,6 +527,12 @@ fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
 /// profile id/version because a consumer's complete pin is the four coordinates
 /// `(profile, version, presentation, hash)` — a presentation id or version that
 /// drifted from the document silently would leave that pin unverifiable.
+///
+/// The fourth coordinate is also checked the OTHER way here: not just that the two
+/// presentation ids/versions above are what the document says, but that a produced
+/// [`purrdf_rdf::Canonicalized`] REPORTS the presentation that made it, via
+/// `Canonicalized::presentation` — the field a consumer actually reads to verify its
+/// pin against a value in hand, rather than only against the two constants above.
 #[test]
 fn the_profile_identity_is_readable_from_the_api() {
     assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
@@ -535,6 +541,22 @@ fn the_profile_identity_is_readable_from_the_api() {
     assert_eq!(CANON_PRESENTATION_OVERLAY_VERSION, 1);
     assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_ID, "flat-assertion");
     assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_VERSION, 1);
+
+    let empty = RdfDatasetBuilder::new()
+        .freeze()
+        .expect("empty dataset is valid");
+    assert_eq!(
+        try_canonicalize_with(&empty, CanonHash::Sha256)
+            .expect("empty dataset canonicalizes")
+            .presentation,
+        CanonPresentation::Overlay
+    );
+    assert_eq!(
+        try_canonicalize_flat_view(&*empty, CanonHash::Sha256)
+            .expect("empty dataset canonicalizes")
+            .presentation,
+        CanonPresentation::FlatAssertion
+    );
 }
 
 /// §3.3's first table row: a genuine quad is unchanged by the flat presentation. A

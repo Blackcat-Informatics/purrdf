@@ -405,8 +405,17 @@ fn hash_lines(hash: CanonHash, lines: &[String]) -> HashHex {
 pub struct Canonicalized<Id = TermId> {
     /// The canonical N-Quads document: every line `'\n'`-terminated, the set of
     /// lines sorted bytewise ascending and deduplicated. Blanks render as their
-    /// canonical `_:c14nN` label. Includes the reified/annotated overlay (via the
-    /// reserved `urn:purrdf:rdfc:` sentinels).
+    /// canonical `_:c14nN` label.
+    ///
+    /// What a reifier or annotation row renders AS depends on
+    /// [`Self::presentation`], reported alongside this field rather than left
+    /// implicit: under [`CanonPresentation::Overlay`] such a row renders through
+    /// the profile's reserved `urn:purrdf:rdfc:` sentinels; under
+    /// [`CanonPresentation::FlatAssertion`] no sentinel is ever minted — the same
+    /// row renders as an ordinary quad carrying its own real predicate. A document
+    /// produced by one of this module's four flat entry points therefore NEVER
+    /// contains a sentinel, and this field's bytes alone cannot tell a reader which
+    /// presentation produced them — read [`Self::presentation`] for that.
     ///
     /// This field carries NO view-local ids, which is what makes it comparable
     /// across view kinds: the canonical bytes of a composite view and of the flat
@@ -424,6 +433,16 @@ pub struct Canonicalized<Id = TermId> {
     /// [`crate::blank_label`]). [`canonical_relabel`] applies it as a dataset
     /// rewrite.
     pub labels: BTreeMap<Id, Box<str>>,
+    /// Which [`CanonPresentation`] produced [`Self::nquads`] — the fourth of the
+    /// consumer pin's four coordinates `(profile, version, presentation, hash)`
+    /// (`docs/RDF12-CANON-PROFILE.md` §9), now readable off the result itself
+    /// rather than only inferable from which entry point the caller happened to
+    /// call. [`canonicalize`], [`try_canonicalize_view`],
+    /// [`canonicalize_graph_view`] and their kin always report
+    /// [`CanonPresentation::Overlay`]; [`try_canonicalize_flat_view`],
+    /// [`try_canonicalize_flat_graph_view`] and the empty-selection cases of both
+    /// families always report the presentation of the family that produced them.
+    pub presentation: CanonPresentation,
 }
 
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`] (RDFC-1.0 with SHA-256,
@@ -568,7 +587,7 @@ pub fn canonicalize_graph_view<D: DatasetView>(
 ) -> Canonicalized<D::Id> {
     match graph_scope(view, graph) {
         Some(scope) => CanonState::new(view, scope, CanonPresentation::Overlay, hash).run(),
-        None => empty_canonicalized(),
+        None => empty_canonicalized(CanonPresentation::Overlay),
     }
 }
 
@@ -591,7 +610,7 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
         Some(scope) => {
             CanonState::new(view, scope, CanonPresentation::Overlay, hash).run_fallible()
         }
-        None => Ok(empty_canonicalized()),
+        None => Ok(empty_canonicalized(CanonPresentation::Overlay)),
     }
 }
 
@@ -738,7 +757,7 @@ pub fn try_canonicalize_flat_graph_view<D: FallibleDatasetView>(
         Some(scope) => {
             CanonState::new(v, scope, CanonPresentation::FlatAssertion, hash).run_fallible()
         }
-        None => Ok(empty_canonicalized()),
+        None => Ok(empty_canonicalized(CanonPresentation::FlatAssertion)),
     }) {
         Ok(Ok(canonicalized)) => Ok(canonicalized),
         Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
@@ -804,11 +823,14 @@ fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id
         .map(CanonScope::Graph)
 }
 
-/// The canonical form of an empty selection: the empty document, no labels.
-fn empty_canonicalized<Id>() -> Canonicalized<Id> {
+/// The canonical form of an empty selection: the empty document, no labels, under
+/// the caller-stated `presentation` (an empty document is the same bytes under
+/// either presentation, but the caller's own family is still the one reported).
+fn empty_canonicalized<Id>(presentation: CanonPresentation) -> Canonicalized<Id> {
     Canonicalized {
         nquads: String::new(),
         labels: BTreeMap::new(),
+        presentation,
     }
 }
 
@@ -1127,7 +1149,11 @@ enum CanonScope<Id> {
 /// means, so a presentation can never be reached by omission. Public as an
 /// identity/documentation vocabulary ONLY: it names the two presentations and
 /// anchors their normative docs, but NO function — public or private — accepts it as
-/// a parameter, so a caller never threads this enum across an API boundary. A
+/// a parameter, so a caller never threads this enum across an API boundary INTO
+/// canonicalization. That parameter-position ban stands unchanged; it does not
+/// extend to the result — every [`Canonicalized`] REPORTS which presentation
+/// produced it, via [`Canonicalized::presentation`], so a caller can read back
+/// which one it got without having to remember which entry point it called. A
 /// caller SELECTS a presentation by which entry point it calls instead: each
 /// presentation gets its own explicitly-named entry points. [`canonicalize`],
 /// [`try_canonicalize_view`], [`canonicalize_graph_view`] and their kin pin
@@ -2206,8 +2232,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError> {
         let canonical = self.issue_labels()?;
         let nquads = canonical.serialize_canonical();
+        let presentation = canonical.presentation;
         let labels = canonical.canonical.issued;
-        Ok(Canonicalized { nquads, labels })
+        Ok(Canonicalized {
+            nquads,
+            labels,
+            presentation,
+        })
     }
 
     /// Admit and issue labels once for both typed relabeling and canonical text.
@@ -4047,11 +4078,17 @@ mod tests {
     #[test]
     fn the_overlay_presentation_is_byte_identical_to_its_pre_axis_output() {
         let ds = presentation_fixture();
+        let canonicalized = canonicalize(&ds);
         assert_eq!(
-            canonicalize(&ds).nquads,
+            canonicalized.nquads,
             "<http://example.org/os> <http://example.org/op> <http://example.org/oo> .\n\
              _:c14n0 <http://example.org/confidence> \"0.9\"^^<http://www.w3.org/2001/XMLSchema#decimal> <urn:purrdf:rdfc:annotation> .\n\
              _:c14n0 <urn:purrdf:rdfc:reifies> <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n"
+        );
+        assert_eq!(
+            canonicalized.presentation,
+            CanonPresentation::Overlay,
+            "an overlay-producing entry point must report the Overlay presentation on its result"
         );
     }
 
@@ -4080,6 +4117,11 @@ mod tests {
             !flat.nquads.contains(RESERVED_NAMESPACE),
             "no reserved-namespace IRI may appear in the flat presentation's output: {}",
             flat.nquads
+        );
+        assert_eq!(
+            flat.presentation,
+            CanonPresentation::FlatAssertion,
+            "a flat-producing entry point must report the FlatAssertion presentation on its result"
         );
     }
 

@@ -474,3 +474,10 @@ artifact it actually linked:
 Running the corpus of §8 against a linked build turns that pin into a receipt: it
 demonstrates that this build produces the bytes the profile specifies and refuses
 the inputs the profile forbids.
+
+The presentation coordinate is also readable back off a produced result, not only
+off the entry point a caller happened to call: every `purrdf_core::Canonicalized`
+carries a `presentation` field naming exactly which of the two presentations
+produced its `nquads`. A consumer holding a `Canonicalized` value can therefore
+verify its pin's presentation coordinate against that field directly, rather than
+having to remember or re-derive it from the call site.
