@@ -17,8 +17,14 @@
 //! because it silently no-op'd), it also asserts the content-addressing dataset
 //! actually recognized its `blake3:<64hex>` terms.
 
+use std::sync::Arc;
+
 use purrdf_core::ContentIdScheme;
-use purrdf_rdf::{RdfDatasetBuilder, RdfLiteral, TermId, canonical_flat_nquads};
+use purrdf_rdf::gts_compose::SnapshotBuilder;
+use purrdf_rdf::{
+    CompositeDatasetView, CompositeSource, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId,
+    ViewLimits, canonical_flat_nquads, parse_dataset,
+};
 
 /// The caller-supplied derivation-predicate IRI (no fabricated vocabulary: this is
 /// configuration, spelled under `example.org` per the test-fixture rule).
@@ -116,5 +122,82 @@ fn content_addressing_does_not_perturb_serialized_bytes() {
         bytes_a.as_bytes(),
         bytes_b.as_bytes(),
         "content-addressing changed the serialized bytes:\n--- plain ---\n{bytes_a}\n--- addressed ---\n{bytes_b}"
+    );
+}
+
+/// A single-source composite view over `dataset`, in an explicitly SHARED blank
+/// identity space so the view reports the source's own `(label, scope)` pairs.
+fn composite_over(dataset: &Arc<RdfDataset>) -> CompositeDatasetView {
+    CompositeDatasetView::from_shared_sources(
+        vec![CompositeSource::new(Arc::clone(dataset))],
+        ViewLimits::default(),
+    )
+    .expect("a single retained source composes")
+}
+
+/// LITERAL NORMALIZATION IS A BYTE TRAP, and the two GTS ingestion surfaces must
+/// fall into it identically.
+///
+/// A view's `TermRef::Literal` ALWAYS carries a datatype term id, while the flat
+/// snapshot tables store a language-tagged literal with NO datatype and fold
+/// `xsd:string` away entirely. So the view path has to DROP three datatype IRIs —
+/// `xsd:string`, `rdf:langString`, `rdf:dirLangString` — and, because it drops
+/// them, must never intern them either. Interning even one adds a dictionary row,
+/// which re-ids every term after it and moves `snapshot_content_id`.
+#[test]
+fn the_view_ingestion_path_drops_the_same_datatype_iris_as_the_flat_path() {
+    let source = parse_dataset(
+        concat!(
+            "<http://example.org/s> <http://example.org/a> \"bare\" .\n",
+            "<http://example.org/s> <http://example.org/b> ",
+            "\"x\"^^<http://www.w3.org/2001/XMLSchema#string> .\n",
+            "<http://example.org/s> <http://example.org/c> \"cat\"@en .\n",
+            "<http://example.org/s> <http://example.org/d> \"مرحبا\"@ar--rtl .\n",
+            // A datatype that is NOT implicit must still be interned, or the test
+            // would pass by dropping everything.
+            "<http://example.org/s> <http://example.org/e> ",
+            "\"7\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+        )
+        .as_bytes(),
+        "application/n-triples",
+        None,
+    )
+    .expect("the literal spread parses");
+
+    let mut flat = SnapshotBuilder::new();
+    flat.add_dataset(&source).expect("flat ingests");
+    let mut view = SnapshotBuilder::new();
+    let _ = view
+        .add_view(&composite_over(&source))
+        .expect("the view path ingests");
+
+    assert_eq!(
+        flat.snapshot_content_id(),
+        view.snapshot_content_id(),
+        "the two ingestion surfaces disagreed on the literal traps"
+    );
+    assert_eq!(flat.snapshot_payload(), view.snapshot_payload());
+
+    let rendered = format!("{:?}", view.snapshot_payload());
+    for dropped in [
+        "XMLSchema#string",
+        "22-rdf-syntax-ns#langString",
+        "22-rdf-syntax-ns#dirLangString",
+    ] {
+        assert!(
+            !rendered.contains(dropped),
+            "the implicit datatype {dropped:?} must not reach the term table: {rendered}"
+        );
+    }
+    // NON-VACUITY: an explicit, non-implicit datatype IS interned, so the
+    // assertions above are about normalization rather than about a term table
+    // that simply holds no datatypes.
+    assert!(
+        rendered.contains("XMLSchema#integer"),
+        "an explicit datatype must still be interned: {rendered}"
+    );
+    assert!(
+        rendered.contains("rtl"),
+        "the directional literal keeps its base direction: {rendered}"
     );
 }
