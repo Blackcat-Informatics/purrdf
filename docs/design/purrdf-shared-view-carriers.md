@@ -385,19 +385,22 @@ in-memory read consumes no request budget a boundary could meter. The impl exist
 so that one ingestion path, bounded for the operational case, also accepts the
 production view, instead of forcing callers to pick an entry point by backend.
 
-### A claimed capability must be enumerable
+### A claimed capability is not a row count
 
-Before any row is read, ingestion checks the view's declared capabilities against
-its own accessors. A view whose `capabilities()` claims `reifiers` but whose
-`reifier_quads()` enumerates nothing is refused at entry with
-`GtsIngestError::UnenumerableCapability { capability }`, and likewise for
-`annotations`.
+Ingestion reads the statement layer through the view's own accessors
+(`reifier_quads()`, `annotation_quads()`) and ingests exactly what they
+enumerate. A capability claim is **not** checked against enumeration at entry,
+because emptiness is not evidence of anything: a view whose `capabilities()`
+claims `reifiers` while `reifier_quads()` enumerates nothing is a legitimate
+state — a delta can suppress the base's only reifier, and the honest result is
+a claimed-but-empty layer. Refusing that shape rejects valid input.
 
 RDF 1.2 reification and annotation are complete parts of the specification and
-the snapshot frame carries both tables. A view that claims the statement layer
-and then enumerates none of it would mint a snapshot with the statement layer
-silently stripped — and report success. The refusal is at entry, before a term is
-interned, so **there is no path to a silently RDF-1.2-stripped snapshot.**
+the snapshot frame carries both tables; what guards them is the trait's
+snapshot-ingestion obligations (an accessor must enumerate every row the view
+holds — a backend that under-enumerates violates its documented contract), not
+a runtime heuristic that cannot distinguish "cannot enumerate" from "has
+none".
 
 ## 8. Blank-node wire collision refusal
 
@@ -578,7 +581,7 @@ called only when a caller asks for it.
 | Composition, placement, blank scope binding, `extend` | `purrdf-core`, `ir::composite` |
 | Retention scope, admission ceilings, accounting | `purrdf-core`, `ir::view_accounting` |
 | Canonicalization entry points over views | `purrdf-core`, `ir::canon` |
-| Checkpoints, capability gate, ingestion, poison | `purrdf-rdf`, `gts_compose` |
+| Checkpoints, ingestion, rollback, poison | `purrdf-rdf`, `gts_compose` |
 | The frozen wire frame itself | `purrdf-gts`, and `docs/GTS-SPEC.md` |
 
 The carrier types, the ledger family and the canonicalization entry points are
