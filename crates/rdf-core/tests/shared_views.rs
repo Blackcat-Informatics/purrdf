@@ -12,7 +12,7 @@ use purrdf_core::{
     RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermRef,
     TermValue, ViewLimits, blank_count_view, canonicalize, canonicalize_graph_view,
     canonicalize_view, check_admissible_view, datasets_isomorphic, graph_digest_view,
-    try_canonicalize_view,
+    try_canonicalize_view, try_graph_digest_view,
 };
 
 const P: &str = "http://example.org/p";
@@ -1212,4 +1212,44 @@ fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
     ] {
         assert_eq!(empty, "");
     }
+
+    // The fallible per-graph digest agrees with its panicking sibling on the
+    // Ok path …
+    for graph in [GRAPH, OTHER_GRAPH] {
+        for (name, fallible, trusted) in [
+            (
+                "flat",
+                try_graph_digest_view(&*flat, graph),
+                graph_digest_view(&*flat, graph),
+            ),
+            (
+                "composite",
+                try_graph_digest_view(&independent, graph),
+                graph_digest_view(&independent, graph),
+            ),
+            (
+                "delta",
+                try_graph_digest_view(&delta, graph),
+                graph_digest_view(&delta, graph),
+            ),
+        ] {
+            assert_eq!(fallible.unwrap(), trusted, "{name} fallible digest");
+        }
+    }
+
+    // … and refuses exactly the graph carrying reserved vocabulary, without
+    // the refusal spreading to a neighbouring clean graph.
+    let mut poisoned = RdfDatasetBuilder::new();
+    let s = poisoned.intern_iri("http://example.org/s");
+    let p = poisoned.intern_iri(P);
+    let o = poisoned.intern_iri("http://example.org/o");
+    let reserved = poisoned.intern_iri(&format!("{RESERVED_NAMESPACE}reifies"));
+    let bad_graph = poisoned.intern_iri(GRAPH);
+    let clean_graph = poisoned.intern_iri(OTHER_GRAPH);
+    poisoned.push_quad(s, reserved, o, Some(bad_graph));
+    poisoned.push_quad(s, p, o, Some(clean_graph));
+    let poisoned =
+        CompositeDatasetView::new(vec![poisoned.freeze().unwrap()], ViewLimits::default()).unwrap();
+    assert!(try_graph_digest_view(&poisoned, GRAPH).is_err());
+    assert!(try_graph_digest_view(&poisoned, OTHER_GRAPH).is_ok());
 }
