@@ -61,9 +61,9 @@ use purrdf_core::InMemoryPageProvider;
 use purrdf_rdf::{
     BlankScope, CanonHash, Canonicalized, CompositeDatasetView, DatasetMut, DatasetView,
     DeltaDatasetView, FallibleDatasetView, MutableDataset, PagedDataset, PagedQueryLimits,
-    QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermValue,
-    ViewLimits, canonicalize_with, dataset_from_view, flat_dataset_from_quads,
-    flat_rdf_quads_from_dataset, try_canonicalize_flat_view,
+    QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermValue, ViewLimits,
+    canonicalize_with, dataset_from_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
+    try_canonicalize_flat_view,
 };
 
 /// Row-groups per dataset — medium, matching this crate's other fixture-scale
@@ -210,9 +210,8 @@ fn benches(c: &mut Criterion) {
     let delta = delta_view(&statements);
 
     let pages = statement_pages();
-    let paged_dataset =
-        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(pages)))
-            .expect("the pages seal into one paged dataset");
+    let paged_dataset = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(pages)))
+        .expect("the pages seal into one paged dataset");
 
     // PARITY, not speed: `owned` and `borrowed` must land on the SAME flat bytes
     // for the SAME content, asserted once per shape, before anything is timed. If

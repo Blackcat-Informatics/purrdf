@@ -93,9 +93,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::dataset_view::{
-    DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain,
-};
+use crate::dataset_view::{DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain};
 use crate::ir::canon::try_canonicalize_view;
 use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities};
 

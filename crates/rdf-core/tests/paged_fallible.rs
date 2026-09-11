@@ -7,11 +7,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use purrdf_core::{
-    CanonHash, DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch,
-    InMemoryPageProvider, PageFault, PageGeneration, PageId, PageMaterialization, PageProvider,
-    PagedDataset, PagedQueryError, PagedQueryEvidence, PagedQueryLimits, RdfDataset,
-    RdfDatasetBuilder, StopCause, TermValue, ViewCanonError, ViewOperationStatus,
-    try_canonicalize_flat_view,
+    CanonHash, DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
+    PageFault, PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset,
+    PagedQueryError, PagedQueryEvidence, PagedQueryLimits, RdfDataset, RdfDatasetBuilder,
+    StopCause, TermValue, ViewCanonError, ViewOperationStatus, try_canonicalize_flat_view,
 };
 
 fn page(subject: &str, object: &str) -> Arc<RdfDataset> {

@@ -114,15 +114,17 @@ impl PyRdfDataset {
     fn to_nquads(&self, py: Python<'_>) -> PyResult<String> {
         let dataset = Arc::clone(&self.inner);
         // Canonicalization + serialization run detached (GIL released).
-        py.detach(|| match try_canonicalize_flat_view(dataset.as_ref(), CanonHash::Sha256) {
-            Ok(canonicalized) => Ok(canonicalized.nquads),
-            Err(ViewCanonError::Refused(err)) => Err(err.to_string()),
-            Err(ViewCanonError::NotReady { error, .. }) => match error {
+        py.detach(
+            || match try_canonicalize_flat_view(dataset.as_ref(), CanonHash::Sha256) {
+                Ok(canonicalized) => Ok(canonicalized.nquads),
+                Err(ViewCanonError::Refused(err)) => Err(err.to_string()),
+                Err(ViewCanonError::NotReady { error, .. }) => match error {
                 // LAW: a frozen `&RdfDataset`'s `FallibleDatasetView::Error` is
                 // `Infallible` — the frozen dataset never faults, so this arm is
                 // unreachable by construction.
             },
-        })
+            },
+        )
         .map_err(PyValueError::new_err)
     }
 

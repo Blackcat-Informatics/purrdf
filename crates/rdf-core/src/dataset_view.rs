@@ -1135,7 +1135,9 @@ mod tests {
         /// `operation_status` needs to reconstruct it.
         fn new(faulted: bool) -> Self {
             Self {
-                inner: RdfDatasetBuilder::new().freeze().expect("empty dataset freezes"),
+                inner: RdfDatasetBuilder::new()
+                    .freeze()
+                    .expect("empty dataset freezes"),
                 status: std::cell::Cell::new(u8::from(faulted)),
             }
         }
@@ -1226,7 +1228,10 @@ mod tests {
         assert!(!drained, "the drain closure must not run at all");
         let failure = out.expect_err("an already-failed view must be refused");
         assert_eq!(failure.checkpoint, DrainCheckpoint::Before);
-        assert_eq!(failure.error, ProbeFault("the probe view was told to fault"));
+        assert_eq!(
+            failure.error,
+            ProbeFault("the probe view was told to fault")
+        );
     }
 
     /// A view `Ready` at the first sample but `Failed` by the second — the drain
@@ -1234,7 +1239,7 @@ mod tests {
     /// the closure's output (even though it ran to completion) is NOT published.
     #[test]
     fn a_view_that_faults_during_the_drain_returns_the_after_checkpoint_error_and_drops_the_output()
-     {
+    {
         let view = ProbeView::new(false);
         let out = checkpointed_drain(&view, |v| {
             // The fault happens INSIDE the drain, after the `Before` checkpoint
@@ -1244,6 +1249,9 @@ mod tests {
         });
         let failure = out.expect_err("a view that faulted mid-drain must be refused");
         assert_eq!(failure.checkpoint, DrainCheckpoint::After);
-        assert_eq!(failure.error, ProbeFault("the probe view was told to fault"));
+        assert_eq!(
+            failure.error,
+            ProbeFault("the probe view was told to fault")
+        );
     }
 }

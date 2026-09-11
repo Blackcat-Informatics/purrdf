@@ -571,7 +571,9 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
     hash: CanonHash,
 ) -> Result<Canonicalized<D::Id>, CanonError> {
     match graph_scope(view, graph) {
-        Some(scope) => CanonState::new(view, scope, CanonPresentation::Overlay, hash).run_fallible(),
+        Some(scope) => {
+            CanonState::new(view, scope, CanonPresentation::Overlay, hash).run_fallible()
+        }
         None => Ok(empty_canonicalized()),
     }
 }
@@ -682,8 +684,13 @@ pub fn try_canonicalize_flat_view<D: FallibleDatasetView>(
     hash: CanonHash,
 ) -> FlatViewResult<D> {
     match checkpointed_drain(view, |v| {
-        CanonState::new(v, CanonScope::Dataset, CanonPresentation::FlatAssertion, hash)
-            .run_fallible()
+        CanonState::new(
+            v,
+            CanonScope::Dataset,
+            CanonPresentation::FlatAssertion,
+            hash,
+        )
+        .run_fallible()
     }) {
         Ok(Ok(canonicalized)) => Ok(canonicalized),
         Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
@@ -921,10 +928,15 @@ fn relabel_recording(
     // The typed consumer needs the issued labels, not a serialized document.
     // Keep the exact admission/search algorithm shared with text canonicalization
     // and move its label table without rendering or cloning it.
-    let labels = CanonState::new(ds, CanonScope::Dataset, CanonPresentation::Overlay, CanonHash::Sha256)
-        .issue_labels()?
-        .canonical
-        .issued;
+    let labels = CanonState::new(
+        ds,
+        CanonScope::Dataset,
+        CanonPresentation::Overlay,
+        CanonHash::Sha256,
+    )
+    .issue_labels()?
+    .canonical
+    .issued;
     // Declaration-only blank graphs are invisible to canonicalization (they own
     // no statement), so continue the canonical numbering over them in a
     // value-deterministic order.
@@ -1058,11 +1070,16 @@ pub fn blank_count(ds: &RdfDataset) -> usize {
 #[must_use]
 pub fn blank_count_view<D: DatasetView>(view: &D) -> usize {
     let mut set: BTreeSet<D::Id> = BTreeSet::new();
-    collect_components(view, CanonScope::Dataset, CanonPresentation::Overlay, &mut |comp| {
-        comp.for_each_blank(view, &mut |b| {
-            set.insert(b);
-        });
-    });
+    collect_components(
+        view,
+        CanonScope::Dataset,
+        CanonPresentation::Overlay,
+        &mut |comp| {
+            comp.for_each_blank(view, &mut |b| {
+                set.insert(b);
+            });
+        },
+    );
     set.len()
 }
 
@@ -2609,9 +2626,9 @@ fn write_u_escape(ch: char, out: &mut String) {
 mod tests {
     use super::*;
     use crate::RdfStoreCapabilities;
-    use crate::ir::dataset::QuadRef;
     use crate::dataset_view::ViewOperationStatus;
     use crate::ir::RdfDatasetBuilder;
+    use crate::ir::dataset::QuadRef;
     use crate::{RdfLiteral, RdfTextDirection};
     use std::sync::Arc;
 
@@ -3915,14 +3932,22 @@ mod tests {
         // same row spelled twice (the declaration AND the literal quad it denotes)
         // must yield the SAME component count and the SAME canonical bytes.
         let mut once = RdfDatasetBuilder::new();
-        let (s, pred, o) = (iri(&mut once, "s"), iri(&mut once, "p"), iri(&mut once, "o"));
+        let (s, pred, o) = (
+            iri(&mut once, "s"),
+            iri(&mut once, "p"),
+            iri(&mut once, "o"),
+        );
         let r = once.intern_blank("r", BlankScope::DEFAULT);
         let triple = once.intern_triple(s, pred, o);
         once.push_reifier(r, triple);
         let once = once.freeze().expect("valid");
 
         let mut twice = RdfDatasetBuilder::new();
-        let (s, pred, o) = (iri(&mut twice, "s"), iri(&mut twice, "p"), iri(&mut twice, "o"));
+        let (s, pred, o) = (
+            iri(&mut twice, "s"),
+            iri(&mut twice, "p"),
+            iri(&mut twice, "o"),
+        );
         let r = twice.intern_blank("r", BlankScope::DEFAULT);
         let triple = twice.intern_triple(s, pred, o);
         twice.push_reifier(r, triple);
@@ -4125,7 +4150,11 @@ mod tests {
         let admitted = try_canonicalize_flat_view(&*large, CanonHash::Sha256)
             .expect("a large non-symmetric graph must not be refused for budget reasons");
         assert_ne!(admitted.nquads, "");
-        assert_eq!(admitted.labels.len(), 400, "every pair's two blanks get a label");
+        assert_eq!(
+            admitted.labels.len(),
+            400,
+            "every pair's two blanks get a label"
+        );
     }
 
     /// `try_canonicalize_flat_view` accepts `RdfDataset` directly AND `Arc<RdfDataset>`
@@ -4181,8 +4210,8 @@ mod tests {
         let projected = ds.project_named_graph(graph);
         let via_projection =
             try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
-        let via_graph_scope = try_canonicalize_flat_graph_view(&*ds, graph, CanonHash::Sha256)
-            .expect("admissible");
+        let via_graph_scope =
+            try_canonicalize_flat_graph_view(&*ds, graph, CanonHash::Sha256).expect("admissible");
         assert_eq!(via_graph_scope.nquads, via_projection.nquads);
         assert!(
             !via_graph_scope.nquads.contains("<http://example.org/bs>"),
@@ -4198,17 +4227,14 @@ mod tests {
     #[test]
     fn try_flat_digest_view_hashes_the_flat_canonical_document() {
         let ds = presentation_fixture();
-        let flat =
-            try_canonicalize_flat_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
-        let digest =
-            try_flat_digest_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
+        let flat = try_canonicalize_flat_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
+        let digest = try_flat_digest_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
         assert_eq!(digest, ContentDigest::of(flat.nquads.as_bytes()));
 
         // SHA-384 travels the same seam.
         let flat384 =
             try_canonicalize_flat_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
-        let digest384 =
-            try_flat_digest_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
+        let digest384 = try_flat_digest_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
         assert_eq!(digest384, ContentDigest::of(flat384.nquads.as_bytes()));
     }
 

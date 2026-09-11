@@ -23,10 +23,11 @@ use purrdf_core::ContentIdScheme;
 use purrdf_rdf::gts_compose::SnapshotBuilder;
 use purrdf_rdf::{
     BlankScope, CanonError, CanonHash, CompositeDatasetView, CompositeSource, RESERVED_NAMESPACE,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermId, TermPosition, ViewCanonError,
-    ViewLimits, blank_count_view, canonical_flat_nquads, canonicalize_with,
-    check_admissible_flat_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset, parse_dataset,
-    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_view,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermId, TermPosition,
+    ViewCanonError, ViewLimits, blank_count_view, canonical_flat_nquads, canonicalize_with,
+    check_admissible_flat_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
+    parse_dataset, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
+    try_canonicalize_view,
 };
 
 /// The caller-supplied derivation-predicate IRI (no fabricated vocabulary: this is

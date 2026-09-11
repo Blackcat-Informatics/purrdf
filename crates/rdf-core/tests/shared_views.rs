@@ -12,8 +12,8 @@ use purrdf_core::{
     GraphPlacement, InMemoryPageProvider, MutableDataset, OwnerMutability, PagedDataset,
     PagedQueryLimits, QuadIds, QuadValues, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger, RetentionSnapshot, ScopeBinding,
-    TermRef, TermValue, ViewAccountingReport, ViewLimits, ViewOperationStatus, ViewStats,
-    ViewWork, blank_count_view, canonicalize, canonicalize_graph_view, canonicalize_view,
+    TermRef, TermValue, ViewAccountingReport, ViewLimits, ViewOperationStatus, ViewStats, ViewWork,
+    blank_count_view, canonicalize, canonicalize_graph_view, canonicalize_view,
     check_admissible_view, datasets_isomorphic, graph_digest_view, try_canonicalize_flat_view,
     try_canonicalize_view, try_graph_digest_view,
 };
@@ -3535,10 +3535,9 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
     let flat = identity_fixture();
     let composite = CompositeDatasetView::new(vec![flat.clone()], ViewLimits::default()).unwrap();
     let delta = delta_of(&flat);
-    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![
-        flat.clone(),
-    ])))
-    .expect("a single retained source seals into one page");
+    let paged =
+        PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![flat.clone()])))
+            .expect("a single retained source seals into one page");
     let paged_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
 
     let expected = try_canonicalize_flat_view(&*flat, CanonHash::Sha256)
