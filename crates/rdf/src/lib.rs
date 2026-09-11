@@ -253,8 +253,8 @@ pub use purrdf_core::{
     try_canonicalize_with, try_graph_digest_view,
 };
 pub use purrdf_core::{
-    PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
-    restore_pack, verify_pack,
+    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
+    pack_digest, restore_pack, verify_pack,
 };
 
 // Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the

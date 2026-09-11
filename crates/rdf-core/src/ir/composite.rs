@@ -88,6 +88,7 @@ pub enum ScopeBinding {
 enum Carrier {
     Native(Arc<RdfDataset>),
     Delta(Arc<DeltaDatasetView>),
+    Selected(Arc<SelectedGraphs>),
 }
 
 /// One retained immutable source with its explicit graph placement and blank
@@ -121,6 +122,60 @@ impl CompositeSource {
             literals: Arc::default(),
         }
     }
+    /// Retain a SELECTION of one composite's named graphs as a composable source,
+    /// without flattening it and without copying a row, a string or a source handle.
+    ///
+    /// ## One selection, all four layers
+    ///
+    /// Selection is BY GRAPH and it is a single statement over everything a graph
+    /// holds: an ordinary quad, a reifier declaration, an annotation row and the
+    /// graph DECLARATION itself are each visible through this source exactly when
+    /// the graph they belong to was named, and invisible through every accessor
+    /// when it was not. A selected graph that holds no rows survives as what it was
+    /// — a declaration — so [`DatasetView::named_graphs`] over the composite this
+    /// source joins reports exactly the selected names.
+    ///
+    /// Rows in the retained composite's DEFAULT graph belong to no named graph and
+    /// are therefore never selected: `graphs` names graphs, and the default graph
+    /// has no name to give.
+    ///
+    /// ## Selection is not placement
+    ///
+    /// Select first, place after. A selected source accepts
+    /// [`with_graph_placement`](Self::with_graph_placement) and
+    /// [`with_scope_binding`](Self::with_scope_binding) exactly like a native or
+    /// delta source; with the default [`GraphPlacement::Preserve`] the selected
+    /// graphs keep their own names.
+    ///
+    /// ## Nothing is re-scoped, and nothing is re-owned
+    ///
+    /// Blank identity is answered by the retained composite in its own canonical
+    /// space and handed through verbatim, so occurrences that co-refer inside the
+    /// composite still co-refer inside the selection. The composite this source is
+    /// later composed INTO is what decides whether that space is shared with its
+    /// siblings, through the ordinary [`ScopeBinding`] this source carries. The
+    /// underlying owners are RETAINED, not copied, so a
+    /// [`RetentionLedger`](crate::RetentionLedger) that already sees one of them
+    /// reports it once between the two carriers.
+    ///
+    /// # Errors
+    /// `view-graph-name` if a selection entry is neither an IRI nor a blank node;
+    /// `view-graph-selection` if an entry names a graph this composite does not
+    /// hold (a declaration-only graph DOES count as held); `view-retention-limit`
+    /// if the retained owners plus this projection's own bookkeeping exceed
+    /// `limits`.
+    pub fn from_selection(
+        view: Arc<CompositeDatasetView>,
+        graphs: impl IntoIterator<Item = TermValue>,
+        limits: ViewLimits,
+    ) -> Result<Self, RdfDiagnostic> {
+        Ok(Self {
+            carrier: Carrier::Selected(Arc::new(SelectedGraphs::project(view, graphs, limits)?)),
+            placement: GraphPlacement::Preserve,
+            binding: ScopeBinding::Independent,
+            literals: Arc::default(),
+        })
+    }
     /// Select graph placement for this source's complete RDF surface.
     #[must_use]
     pub fn with_graph_placement(mut self, placement: GraphPlacement) -> Self {
@@ -144,16 +199,25 @@ impl CompositeSource {
     pub fn dataset(&self) -> Option<&Arc<RdfDataset>> {
         match &self.carrier {
             Carrier::Native(ds) => Some(ds),
-            Carrier::Delta(_) => None,
+            Carrier::Delta(_) | Carrier::Selected(_) => None,
         }
     }
     /// Original delta snapshot and its base-sidecar owner, when applicable.
     #[must_use]
     pub fn delta(&self) -> Option<&Arc<DeltaDatasetView>> {
         match &self.carrier {
-            Carrier::Native(_) => None,
+            Carrier::Native(_) | Carrier::Selected(_) => None,
             Carrier::Delta(ds) => Some(ds),
         }
+    }
+    /// Original composite and the graph names selected from it, when applicable.
+    /// The names are deduplicated and in canonical value order, so two selections
+    /// that named the same graphs report the same list whatever order they were
+    /// written in.
+    #[must_use]
+    pub fn selection(&self) -> Option<(&Arc<CompositeDatasetView>, &[TermValue])> {
+        self.selected()
+            .map(|selection| (&selection.view, &*selection.names))
     }
     fn native(&self) -> Option<&RdfDataset> {
         self.dataset().map(AsRef::as_ref)
@@ -161,15 +225,27 @@ impl CompositeSource {
     fn delta_ref(&self) -> Option<&DeltaDatasetView> {
         self.delta().map(AsRef::as_ref)
     }
+    fn selected(&self) -> Option<&Arc<SelectedGraphs>> {
+        match &self.carrier {
+            Carrier::Selected(selection) => Some(selection),
+            Carrier::Native(_) | Carrier::Delta(_) => None,
+        }
+    }
     fn term_ids(&self) -> impl Iterator<Item = LocalId> + '_ {
-        self.native()
-            .into_iter()
-            .flat_map(|ds| {
-                (0..ds.term_count()).map(|i| {
-                    LocalId::Base(TermId::from_index(
-                        u32::try_from(i).expect("native index fits u32"),
-                    ))
-                })
+        // A selection speaks the same dense `Base(index)` vocabulary a native
+        // source does: its table is the projected handles, in the retained
+        // composite's own ascending id order, so the local numbering is a function
+        // of that view and of nothing transient.
+        let dense = match &self.carrier {
+            Carrier::Native(ds) => ds.term_count(),
+            Carrier::Selected(selection) => selection.ids.len(),
+            Carrier::Delta(_) => 0,
+        };
+        (0..dense)
+            .map(|i| {
+                LocalId::Base(TermId::from_index(
+                    u32::try_from(i).expect("source index fits u32"),
+                ))
             })
             .chain(
                 self.delta_ref()
@@ -181,6 +257,7 @@ impl CompositeSource {
         match &self.carrier {
             Carrier::Native(ds) => ds.term_count(),
             Carrier::Delta(ds) => ds.term_count(),
+            Carrier::Selected(selection) => selection.ids.len(),
         }
     }
     fn resolve_raw(&self, id: LocalId) -> TermRef<'_, LocalId> {
@@ -192,6 +269,19 @@ impl CompositeSource {
                 map_term(ds.resolve(id), LocalId::Base, |s| s)
             }
             Carrier::Delta(ds) => ds.resolve(id),
+            Carrier::Selected(selection) => {
+                let inner = selection
+                    .inner(id)
+                    .expect("selected source requires one of its own handles");
+                // The scope arm is the identity ON PURPOSE: the retained composite
+                // has already resolved this term into its canonical blank space and
+                // selection is not a renaming of it.
+                map_term(
+                    selection.view.resolve(inner),
+                    |id| selection.local(id),
+                    |scope| scope,
+                )
+            }
         }
     }
     fn resolve(&self, id: LocalId) -> TermRef<'_, LocalId> {
@@ -286,12 +376,17 @@ impl CompositeSource {
         match &self.carrier {
             Carrier::Native(ds) => ds.term_id_by_iri(iri).map(LocalId::Base),
             Carrier::Delta(ds) => ds.lookup_iri(iri),
+            Carrier::Selected(selection) => selection.lookup(&TermValue::iri(iri)),
         }
     }
     fn lookup_blank(&self, label: &str, scope: BlankScope) -> Option<LocalId> {
         match &self.carrier {
             Carrier::Native(ds) => ds.term_id_by_blank(label, scope).map(LocalId::Base),
             Carrier::Delta(ds) => ds.lookup_blank(label, scope),
+            Carrier::Selected(selection) => selection.lookup(&TermValue::Blank {
+                label: label.to_owned(),
+                scope,
+            }),
         }
     }
     fn lookup_literal(
@@ -306,6 +401,12 @@ impl CompositeSource {
                 .term_id_by_literal(lexical, datatype, language, direction)
                 .map(LocalId::Base),
             Carrier::Delta(ds) => ds.lookup_literal(lexical, datatype, language, direction),
+            Carrier::Selected(selection) => selection.lookup(&TermValue::Literal {
+                lexical_form: lexical.to_owned(),
+                datatype: datatype.to_owned(),
+                language: language.map(str::to_owned),
+                direction,
+            }),
         };
         if let Some(id) = original.filter(|id| !self.literals.values.contains_key(id)) {
             return Some(id);
@@ -339,6 +440,21 @@ impl CompositeSource {
                 _ => None,
             },
             Carrier::Delta(ds) => ds.lookup_triple(s, p, o),
+            Carrier::Selected(selection) => {
+                // A triple term is addressed by VALUE here, as everywhere else on
+                // this seam: the retained composite owns the component identities
+                // and only it can say which of its handles the whole term is.
+                let component = |id: LocalId| {
+                    selection
+                        .inner(id)
+                        .map(|inner| Box::new(owned_value(&*selection.view, inner)))
+                };
+                selection.lookup(&TermValue::Triple {
+                    s: component(s)?,
+                    p: component(p)?,
+                    o: component(o)?,
+                })
+            }
         }
     }
     fn metadata_rows(
@@ -407,7 +523,44 @@ impl CompositeSource {
                         .flat_map(DeltaDatasetView::annotation_quads),
                 )
         });
-        native.chain(delta)
+        // ONE selection over both statement layers: a row is visible exactly when
+        // its OWN graph slot was selected, which is the same test the ordinary
+        // quads run — the statement layer is keyed per graph in this IR, so a
+        // reifier declared in two graphs contributes only the selected one's row.
+        // Every pull out of the retained composite is type-erased for the same
+        // reason `probe_graph` is: a selection's rows come FROM a composite, so
+        // a transparent pull here would put the composite's opaque iterator
+        // inside itself.
+        type ErasedRows<'a> = Box<dyn Iterator<Item = QuadIds<CompositeViewId>> + 'a>;
+        let selected = self.selected().into_iter().flat_map(move |selection| {
+            let view: &CompositeDatasetView = &selection.view;
+            let narrowed = subject.and_then(|id| selection.inner(id));
+            narrowed
+                .into_iter()
+                .filter(move |_| reifiers)
+                .flat_map(move |s| -> ErasedRows<'_> { Box::new(view.reifier_quads_of(s)) })
+                .chain(
+                    std::iter::once(view)
+                        .filter(move |_| reifiers && subject.is_none())
+                        .flat_map(|view| -> ErasedRows<'_> { Box::new(view.reifier_quads()) }),
+                )
+                .chain(narrowed.into_iter().filter(move |_| annotations).flat_map(
+                    move |s| -> ErasedRows<'_> {
+                        Box::new(
+                            view.annotations_of_with_graph(s)
+                                .map(move |(p, o, g)| QuadIds { s, p, o, g }),
+                        )
+                    },
+                ))
+                .chain(
+                    std::iter::once(view)
+                        .filter(move |_| annotations && subject.is_none())
+                        .flat_map(|view| -> ErasedRows<'_> { Box::new(view.annotation_quads()) }),
+                )
+                .filter(move |q| q.g.is_some_and(|graph| selection.graphs.contains(&graph)))
+                .map(move |q| map_quad(q, |id| selection.local(id)))
+        });
+        native.chain(delta).chain(selected)
     }
     fn probe(
         &self,
@@ -432,7 +585,28 @@ impl CompositeSource {
             .filter(move |_| ordinary)
             .into_iter()
             .flat_map(move |ds| ds.quads_for_pattern_with_plan(&plan, s, p, o, g));
-        native.chain(delta).chain(
+        // The projection reads the retained composite ONE selected graph at a time,
+        // so the physical pattern is graph-bound however the logical one was
+        // spelled. The caller's plan describes a different graph-boundness and a
+        // graph-bound prefix chosen for it would name the wrong rows, so this axis
+        // is re-planned here — the same reason placement re-plans its sources.
+        let selected_plan = physical_plan([s.is_some(), p.is_some(), o.is_some(), true]);
+        let selected = self
+            .selected()
+            .filter(move |_| ordinary)
+            .into_iter()
+            .flat_map(move |selection| {
+                selection
+                    .probe_pattern((s, p, o, g))
+                    .into_iter()
+                    .flat_map(move |(s, p, o, only)| {
+                        selection.targets(only).flat_map(move |graph| {
+                            selection.probe_graph(selected_plan, s, p, o, graph)
+                        })
+                    })
+                    .map(move |q| map_quad(q, |id| selection.local(id)))
+            });
+        native.chain(delta).chain(selected).chain(
             self.metadata_rows(table, s)
                 .filter(move |q| matches_pattern(*q, s, p, o, g)),
         )
@@ -448,6 +622,20 @@ impl CompositeSource {
             Carrier::Native(ds) => local_native_pattern(s, p, o, g)
                 .map_or(0, |(s, p, o, g)| ds.cardinality_estimate(s, p, o, g)),
             Carrier::Delta(ds) => ds.cardinality_estimate(s, p, o, g),
+            Carrier::Selected(selection) => {
+                selection
+                    .probe_pattern((s, p, o, g))
+                    .map_or(0, |(s, p, o, only)| {
+                        selection.targets(only).fold(0_usize, |total, graph| {
+                            total.saturating_add(selection.view.cardinality_estimate(
+                                s,
+                                p,
+                                o,
+                                GraphMatch::Named(graph),
+                            ))
+                        })
+                    })
+            }
         }
     }
     fn graphs(&self) -> impl Iterator<Item = LocalId> + '_ {
@@ -459,6 +647,13 @@ impl CompositeSource {
                     .into_iter()
                     .flat_map(DeltaDatasetView::named_graphs),
             )
+            .chain(self.selected().into_iter().flat_map(|selection| {
+                // Exactly the selected names, declaration-only ones included.
+                selection
+                    .graphs
+                    .iter()
+                    .map(move |&graph| selection.local(graph))
+            }))
     }
     fn retain(&self, stats: &mut ViewStats) {
         match &self.carrier {
@@ -470,6 +665,22 @@ impl CompositeSource {
                     .auxiliary_bytes
                     .saturating_add(ds.stats().auxiliary_bytes);
             }
+            Carrier::Selected(selection) => {
+                // The SAME owners the retained composite holds, charged the way it
+                // charges them — a selection keeps every one of them alive and is
+                // honest about that. Deduplication across carriers is the
+                // RetentionLedger's question, not admission's: `ViewStats` is
+                // deliberately per-view and unconditional, so discounting a base
+                // because the inner view also names it would understate this
+                // source's own ceilings.
+                for source in &*selection.view.sources {
+                    source.retain(stats);
+                }
+                stats.auxiliary_bytes = stats
+                    .auxiliary_bytes
+                    .saturating_add(selection.view.stats.auxiliary_bytes)
+                    .saturating_add(selection.ids.len().saturating_mul(selection_term_bytes()));
+            }
         }
     }
 }
@@ -478,6 +689,299 @@ impl CompositeSource {
 struct ReboundLiterals {
     values: FastMap<LocalId, String>,
     index: hashbrown::HashTable<LocalId>,
+}
+
+/// One composite view projected onto a chosen set of its named graphs.
+///
+/// The projection is a RENAMING, never a rebuild. [`ids`](Self::ids) is the dense
+/// table of the retained view's canonical handles the selected rows reach, so a
+/// selected source speaks the ordinary `LocalId::Base(index)` vocabulary every
+/// other source speaks, while every VALUE — IRI text, blank label and blank scope
+/// alike — is still answered by the retained view itself. No dictionary is built,
+/// no string is copied and no row is moved.
+///
+/// # Why co-reference survives
+///
+/// Two selected occurrences that name one node inside the composite resolve
+/// through ONE canonical handle there, so they land on one entry of this table and
+/// remain one term here. Nothing in this projection reads, mints or renumbers a
+/// [`BlankScope`]: the scopes it hands out are the retained view's canonical ones
+/// verbatim. The composite this source is composed INTO is therefore the only
+/// thing that can rename them, through the ordinary [`ScopeBinding`] every source
+/// carries — [`Shared`](ScopeBinding::Shared) keeps them, so the selection
+/// co-refers with anything else composed over the same identity space, and
+/// [`Independent`](ScopeBinding::Independent) standardizes the WHOLE selection
+/// apart under one injective map, which preserves internal co-reference by
+/// construction.
+#[derive(Debug)]
+struct SelectedGraphs {
+    /// The retained composite. Its sources — and therefore its owners — are kept
+    /// alive by this handle; none of them is copied.
+    view: Arc<CompositeDatasetView>,
+    /// The selected graph names, deduplicated, in canonical value order.
+    names: Arc<[TermValue]>,
+    /// The selected graphs' canonical handles in [`view`](Self::view), ascending.
+    graphs: BTreeSet<CompositeViewId>,
+    /// Local index -> canonical handle, ascending.
+    ids: Vec<CompositeViewId>,
+    /// The inverse of [`ids`](Self::ids).
+    index: FastMap<CompositeViewId, TermId>,
+    /// What the SELECTED subset exposes — not what the whole composite does.
+    capabilities: RdfStoreCapabilities,
+}
+
+impl SelectedGraphs {
+    fn project(
+        view: Arc<CompositeDatasetView>,
+        graphs: impl IntoIterator<Item = TermValue>,
+        limits: ViewLimits,
+    ) -> Result<Self, RdfDiagnostic> {
+        let inner: &CompositeDatasetView = &view;
+        // A declaration-only graph is HELD, so it is selectable: the whole point of
+        // carrying a selection forward is that it says the same thing the composite
+        // said about those graphs, and "this graph exists and is empty" is one of
+        // the things it said.
+        let held: BTreeSet<CompositeViewId> = inner.named_graphs().collect();
+        let mut selected: BTreeSet<CompositeViewId> = BTreeSet::new();
+        let mut names: Vec<TermValue> = Vec::new();
+        for name in graphs {
+            if !matches!(name, TermValue::Iri(_) | TermValue::Blank { .. }) {
+                return Err(RdfDiagnostic::error(
+                    "view-graph-name",
+                    "view graph selection requires an IRI or blank node",
+                ));
+            }
+            let Some(graph) = inner.term_id_by_value(&name).filter(|id| held.contains(id)) else {
+                return Err(RdfDiagnostic::error(
+                    "view-graph-selection",
+                    "view graph selection names a graph this composite does not hold",
+                ));
+            };
+            if selected.insert(graph) {
+                names.push(name);
+            }
+        }
+        names.sort();
+
+        // Every handle a selected row reaches, the selected graph NAMES included so
+        // an empty selected graph still has a name to declare.
+        let mut ids: BTreeSet<CompositeViewId> = selected.clone();
+        let mut reifiers = false;
+        let mut annotations = false;
+        for &graph in &selected {
+            for q in inner.quads_for_pattern(None, None, None, GraphMatch::Named(graph)) {
+                ids.extend([q.s, q.p, q.o]);
+                ids.extend(q.g);
+            }
+        }
+        for q in inner.reifier_quads() {
+            if q.g.is_some_and(|graph| selected.contains(&graph)) {
+                reifiers = true;
+                ids.extend([q.s, q.p, q.o]);
+                ids.extend(q.g);
+            }
+        }
+        for q in inner.annotation_quads() {
+            if q.g.is_some_and(|graph| selected.contains(&graph)) {
+                annotations = true;
+                ids.extend([q.s, q.p, q.o]);
+                ids.extend(q.g);
+            }
+        }
+
+        // A literal's datatype and a triple term's components are referenced BY
+        // HANDLE, so the projection must close over them or `resolve` would name a
+        // term this table does not hold. Bounded: the set only grows and can never
+        // exceed the retained view's own term count.
+        let mut queue: Vec<CompositeViewId> = ids.iter().copied().collect();
+        let mut quoted = false;
+        while let Some(id) = queue.pop() {
+            match inner.resolve(id) {
+                TermRef::Literal { datatype, .. } => {
+                    if ids.insert(datatype) {
+                        queue.push(datatype);
+                    }
+                }
+                TermRef::Triple { s, p, o } => {
+                    quoted = true;
+                    for component in [s, p, o] {
+                        if ids.insert(component) {
+                            queue.push(component);
+                        }
+                    }
+                }
+                TermRef::Iri(_) | TermRef::Blank { .. } => {}
+            }
+        }
+
+        let ids: Vec<CompositeViewId> = ids.into_iter().collect();
+        if u32::try_from(ids.len()).is_err() {
+            return Err(RdfDiagnostic::error(
+                "view-term-count",
+                "selected term count exceeds the source handle space",
+            ));
+        }
+        let index: FastMap<CompositeViewId, TermId> = ids
+            .iter()
+            .enumerate()
+            .map(|(local, &id)| {
+                (
+                    id,
+                    TermId::from_index(u32::try_from(local).expect("checked against u32 above")),
+                )
+            })
+            .collect();
+
+        let mut stats = ViewStats::default();
+        for source in &*inner.sources {
+            source.retain(&mut stats);
+        }
+        stats.auxiliary_bytes = stats
+            .auxiliary_bytes
+            .saturating_add(inner.stats.auxiliary_bytes)
+            .saturating_add(ids.len().saturating_mul(selection_term_bytes()))
+            .saturating_add(
+                selected
+                    .len()
+                    .saturating_mul(4 * size_of::<CompositeViewId>()),
+            )
+            .saturating_add(names.iter().map(graph_name_bytes).sum::<usize>());
+        limits.check(&stats)?;
+
+        // Honest for the SUBSET: the statement layers are claimed only when a
+        // selected graph actually declares one, and the named-graph layer only when
+        // something was selected. The three sidecar flags are the retained view's
+        // unchanged — they describe owners this source keeps alive, and a selection
+        // neither adds nor removes one.
+        let capabilities = RdfStoreCapabilities {
+            named_graphs: !selected.is_empty(),
+            quoted_triples: quoted,
+            reifiers,
+            annotations,
+            ..inner.capabilities()
+        };
+
+        Ok(Self {
+            view,
+            names: names.into(),
+            graphs: selected,
+            ids,
+            index,
+            capabilities,
+        })
+    }
+
+    /// The retained view's handle one of this source's local handles names, or
+    /// `None` when the handle names nothing this projection holds.
+    fn inner(&self, id: LocalId) -> Option<CompositeViewId> {
+        match id {
+            LocalId::Base(id) => self.ids.get(id.index()).copied(),
+            LocalId::Delta(_) => None,
+        }
+    }
+
+    /// This source's local handle for one retained-view handle.
+    fn local(&self, id: CompositeViewId) -> LocalId {
+        LocalId::Base(
+            self.index
+                .get(&id)
+                .copied()
+                .expect("the projection closes over every handle a selected row reaches"),
+        )
+    }
+
+    /// Resolve a term value against the retained view, admitting it only when the
+    /// selection actually holds the resulting handle.
+    fn lookup(&self, value: &TermValue) -> Option<LocalId> {
+        self.view
+            .term_id_by_value(value)
+            .and_then(|id| self.index.get(&id).copied())
+            .map(LocalId::Base)
+    }
+
+    /// One pattern translated into the retained view's handles, paired with the
+    /// selected graph it may read: `Some(graph)` for a single graph, `None` for
+    /// every selected graph.
+    ///
+    /// `None` for the whole result means the pattern names nothing here — a bound
+    /// axis this projection does not hold, a graph outside the selection, or the
+    /// default graph, which selection by graph name never admits.
+    fn probe_pattern(
+        &self,
+        (s, p, o, g): Pattern<LocalId>,
+    ) -> Option<(
+        Option<CompositeViewId>,
+        Option<CompositeViewId>,
+        Option<CompositeViewId>,
+        Option<CompositeViewId>,
+    )> {
+        let axis = |value: Option<LocalId>| match value {
+            None => Some(None),
+            Some(id) => self.inner(id).map(Some),
+        };
+        let graph = match g {
+            GraphMatch::Any => None,
+            GraphMatch::Default => return None,
+            GraphMatch::Named(id) => {
+                let graph = self.inner(id)?;
+                if !self.graphs.contains(&graph) {
+                    return None;
+                }
+                Some(graph)
+            }
+        };
+        Some((axis(s)?, axis(p)?, axis(o)?, graph))
+    }
+
+    /// The selected graphs one probe visits, ascending — deterministic, and a
+    /// single graph when the pattern bound one.
+    fn targets(&self, only: Option<CompositeViewId>) -> impl Iterator<Item = CompositeViewId> + '_ {
+        self.graphs
+            .iter()
+            .copied()
+            .filter(move |graph| only.is_none_or(|want| want == *graph))
+    }
+
+    /// Probe ONE selected graph of the retained composite. The plan is taken by
+    /// value so the returned cursor borrows the view alone. The cursor is
+    /// type-erased: a selection reads THROUGH the composite's own probe, so a
+    /// transparent return type here would make the composite's opaque iterator
+    /// contain itself (a selection is a composite source whose rows come from a
+    /// composite). One boxed hop per selected-graph probe severs that cycle and
+    /// costs nothing on the native and delta arms, which never take it.
+    fn probe_graph(
+        &self,
+        plan: QuadProbePlan,
+        s: Option<CompositeViewId>,
+        p: Option<CompositeViewId>,
+        o: Option<CompositeViewId>,
+        graph: CompositeViewId,
+    ) -> Box<dyn Iterator<Item = QuadIds<CompositeViewId>> + '_> {
+        Box::new(CompositeDatasetView::quads_for_pattern_with_plan(
+            &self.view,
+            &plan,
+            s,
+            p,
+            o,
+            GraphMatch::Named(graph),
+        ))
+    }
+}
+
+/// Per selected term: the dense handle table plus its reverse index, the latter
+/// charged at four times its payload for hash-table slack — the same conservative
+/// convention the alias maps are charged under.
+fn selection_term_bytes() -> usize {
+    size_of::<CompositeViewId>() + 4 * size_of::<(CompositeViewId, TermId)>()
+}
+
+/// The caller-owned bytes one selected graph name retains.
+fn graph_name_bytes(name: &TermValue) -> usize {
+    match name {
+        TermValue::Iri(iri) => iri.len(),
+        TermValue::Blank { label, .. } => label.len(),
+        TermValue::Literal { .. } | TermValue::Triple { .. } => 0,
+    }
 }
 
 /// An opaque handle local to one composite view. Source-local integer equality
@@ -1251,6 +1755,8 @@ impl DatasetView for CompositeDatasetView {
                 caps.union(match &source.carrier {
                     Carrier::Native(ds) => ds.capabilities(),
                     Carrier::Delta(ds) => ds.capabilities(),
+                    // The SELECTED subset's own claim, not the retained view's.
+                    Carrier::Selected(selection) => selection.capabilities,
                 })
             })
     }

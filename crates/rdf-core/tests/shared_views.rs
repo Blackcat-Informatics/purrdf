@@ -3150,3 +3150,279 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
          other way"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A selection of a composite's graphs is a composable source of its own
+// ---------------------------------------------------------------------------
+
+/// A selection fixture: one graph the selection keeps, one it drops, a
+/// default-graph row it can never keep, and a declaration-only graph — with one
+/// blank node and one reifier shared across all of them, so a selection that
+/// re-scoped or re-identified anything would show up immediately.
+fn selection_fixture() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let shared = b.intern_blank("shared", BlankScope::DEFAULT);
+    let p = b.intern_iri(P);
+    let o = b.intern_iri("http://example.org/o");
+    let g = b.intern_iri("http://example.org/g");
+    let h = b.intern_iri("http://example.org/h");
+    let empty = b.intern_iri("http://example.org/empty");
+    let text = b.intern_literal(RdfLiteral {
+        direction: Some(RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("مرحبا", "ar")
+    });
+    let triple = b.intern_triple(shared, p, o);
+    let reifier = b.intern_blank("statement", BlankScope(3));
+    // Kept by the selection, across all three row layers.
+    b.push_quad(shared, p, o, Some(g));
+    b.push_quad(shared, p, triple, Some(g));
+    b.push_reifier_in_graph(reifier, triple, Some(g));
+    b.push_annotation_in_graph(reifier, p, text, Some(g));
+    // Dropped by it — and co-referent with what it keeps, so dropping the rows
+    // must not drop the identities.
+    b.push_quad(shared, p, text, Some(h));
+    b.push_reifier_in_graph(reifier, triple, Some(h));
+    b.push_annotation_in_graph(reifier, p, o, Some(h));
+    // Never selectable: the default graph has no name to give.
+    b.push_quad(shared, p, o, None);
+    b.declare_named_graph(empty);
+    b.freeze().unwrap()
+}
+
+/// Exactly what a selection of `{g, empty}` over [`selection_fixture`] holds.
+fn selection_expectation() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let shared = b.intern_blank("shared", BlankScope::DEFAULT);
+    let p = b.intern_iri(P);
+    let o = b.intern_iri("http://example.org/o");
+    let g = b.intern_iri("http://example.org/g");
+    let empty = b.intern_iri("http://example.org/empty");
+    let text = b.intern_literal(RdfLiteral {
+        direction: Some(RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("مرحبا", "ar")
+    });
+    let triple = b.intern_triple(shared, p, o);
+    let reifier = b.intern_blank("statement", BlankScope(3));
+    b.push_quad(shared, p, o, Some(g));
+    b.push_quad(shared, p, triple, Some(g));
+    b.push_reifier_in_graph(reifier, triple, Some(g));
+    b.push_annotation_in_graph(reifier, p, text, Some(g));
+    b.declare_named_graph(empty);
+    b.freeze().unwrap()
+}
+
+/// A shared-scope composite over [`selection_fixture`], ready to be selected
+/// from: its blank identities are the fixture's own, verbatim.
+fn selection_composite(source: &Arc<RdfDataset>) -> Arc<CompositeDatasetView> {
+    Arc::new(
+        CompositeDatasetView::with_shared_scopes(vec![Arc::clone(source)], ViewLimits::default())
+            .unwrap(),
+    )
+}
+
+#[test]
+fn a_graph_selection_filters_every_layer_and_keeps_the_names_it_chose() {
+    let source = selection_fixture();
+    let composite = selection_composite(&source);
+    let selected = CompositeDatasetView::from_shared_sources(
+        vec![
+            CompositeSource::from_selection(
+                Arc::clone(&composite),
+                [iri("g"), iri("empty")],
+                ViewLimits::default(),
+            )
+            .unwrap(),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+
+    // Names survive, the declaration-only graph included, and nothing else appears.
+    assert_eq!(
+        selected
+            .named_graphs()
+            .map(|id| owned(&selected, id))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([iri("g"), iri("empty")])
+    );
+    // ONE selection over ordinary quads, reifier rows and annotation rows alike.
+    let expectation = selection_expectation();
+    assert_eq!(surface(&selected), surface(&expectation));
+    assert_eq!(
+        canonicalize_view(&selected, CanonHash::Sha256).nquads,
+        canonicalize_view(&expectation, CanonHash::Sha256).nquads
+    );
+    // The retained source reports the selection back, in canonical name order.
+    let (retained, names) = selected.sources()[0]
+        .selection()
+        .expect("a selected source says what it selected");
+    assert!(Arc::ptr_eq(retained, &composite));
+    assert_eq!(names, [iri("empty"), iri("g")].as_slice());
+    // Every peer contract a source's view owes holds over it unchanged.
+    assert_always_ready(&selected, "graph selection");
+    assert_probes(&selected);
+    assert_eq!(
+        surface(&selected),
+        surface(&selected.materialize().unwrap())
+    );
+}
+
+#[test]
+fn selecting_a_graph_the_composite_does_not_hold_is_refused_and_its_neighbour_is_not() {
+    let source = selection_fixture();
+    let composite = selection_composite(&source);
+
+    // A name this composite interns nowhere.
+    assert_eq!(
+        CompositeSource::from_selection(
+            Arc::clone(&composite),
+            [iri("absent")],
+            ViewLimits::default(),
+        )
+        .expect_err("a graph the composite does not hold has no rows to carry")
+        .code,
+        "view-graph-selection"
+    );
+    // A term it DOES intern, but never as a graph name.
+    assert_eq!(
+        CompositeSource::from_selection(Arc::clone(&composite), [iri("o")], ViewLimits::default())
+            .expect_err("a term that names no graph is not a graph")
+            .code,
+        "view-graph-selection"
+    );
+    // A value that could never name a graph at all.
+    assert_eq!(
+        CompositeSource::from_selection(
+            Arc::clone(&composite),
+            [TermValue::Literal {
+                lexical_form: "g".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                language: None,
+                direction: None,
+            }],
+            ViewLimits::default(),
+        )
+        .expect_err("a literal never names a graph")
+        .code,
+        "view-graph-name"
+    );
+
+    // THE NEIGHBOUR. A graph that holds no row at all is still a graph this
+    // composite HOLDS, so selecting it must succeed and carry its declaration —
+    // refusing it would drop a fact the composite was asserting.
+    let declared = CompositeDatasetView::from_shared_sources(
+        vec![
+            CompositeSource::from_selection(
+                Arc::clone(&composite),
+                [iri("empty")],
+                ViewLimits::default(),
+            )
+            .expect("a declaration-only graph is held, so it is selectable"),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(declared.quads().count(), 0);
+    assert_eq!(declared.reifier_quads().count(), 0);
+    assert_eq!(declared.annotation_quads().count(), 0);
+    assert_eq!(
+        declared
+            .named_graphs()
+            .map(|id| owned(&declared, id))
+            .collect::<Vec<_>>(),
+        vec![iri("empty")]
+    );
+}
+
+#[test]
+fn a_selection_places_binds_and_retains_like_any_other_source() {
+    let source = selection_fixture();
+    let composite = selection_composite(&source);
+    let select = || {
+        CompositeSource::from_selection(
+            Arc::clone(&composite),
+            [iri("g"), iri("empty")],
+            ViewLimits::default(),
+        )
+        .unwrap()
+    };
+
+    // PLACEMENT is a separate decision, taken after selection: every selected
+    // row, from every layer, lands in the one placed graph.
+    let placed = CompositeDatasetView::from_shared_sources(
+        vec![select().with_graph_placement(GraphPlacement::Named(iri("placed")))],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    for table in surface(&placed) {
+        for quad in &table {
+            assert_eq!(quad.3, Some(iri("placed")));
+        }
+    }
+    assert_eq!(
+        placed
+            .named_graphs()
+            .map(|id| owned(&placed, id))
+            .collect::<Vec<_>>(),
+        vec![iri("placed")]
+    );
+
+    // SHARED binding: the selection's blanks ARE the composite's blanks, so
+    // composing it beside the very source it was selected from re-states rows
+    // that source already holds instead of minting new occurrences.
+    let rejoined = CompositeDatasetView::from_bound_sources(
+        vec![
+            CompositeSource::new(Arc::clone(&source)).with_scope_binding(ScopeBinding::Shared),
+            select().with_scope_binding(ScopeBinding::Shared),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        canonicalize_view(&rejoined, CanonHash::Sha256).nquads,
+        canonicalize_view(&source, CanonHash::Sha256).nquads,
+        "a shared selection adds no occurrence its source did not already have"
+    );
+    assert_eq!(blank_count_view(&rejoined), blank_count_view(&*source));
+
+    // INDEPENDENT binding standardizes the WHOLE selection apart instead, so
+    // the same rows become a second, distinct set of occurrences.
+    let apart = CompositeDatasetView::from_bound_sources(
+        vec![
+            CompositeSource::new(Arc::clone(&source)).with_scope_binding(ScopeBinding::Shared),
+            select().with_scope_binding(ScopeBinding::Independent),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    assert!(
+        apart.quads().count() > rejoined.quads().count(),
+        "standardizing the selection apart cannot collapse it onto the source"
+    );
+    assert!(blank_count_view(&apart) > blank_count_view(&*source));
+
+    // OWNERSHIP: the selection RETAINS the composite's own sources rather than
+    // copying them, so admission charges exactly the bases the composite
+    // charges — not a second set, and not a discounted one.
+    let selected =
+        CompositeDatasetView::from_shared_sources(vec![select()], ViewLimits::default()).unwrap();
+    let inner = composite.stats();
+    let outer = selected.stats();
+    assert_eq!(outer.retained_sources, inner.retained_sources);
+    assert_eq!(outer.retained_terms, inner.retained_terms);
+    assert_eq!(outer.retained_rows, inner.retained_rows);
+    assert_eq!(outer.retained_payload_bytes, inner.retained_payload_bytes);
+
+    // And admission is still a ceiling: a selection that would exceed it is
+    // refused with the same typed diagnostic every other source is.
+    let refused = CompositeSource::from_selection(
+        Arc::clone(&composite),
+        [iri("g")],
+        ViewLimits {
+            max_terms: 1,
+            ..ViewLimits::default()
+        },
+    )
+    .expect_err("a selection over a ceiling is refused");
+    assert_eq!(refused.code, "view-retention-limit");
+}

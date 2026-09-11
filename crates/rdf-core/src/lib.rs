@@ -148,8 +148,8 @@ pub use ir::{
     try_graph_digest_view,
 };
 pub use ir::{
-    PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
-    restore_pack, verify_pack,
+    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
+    pack_digest, restore_pack, verify_pack,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,

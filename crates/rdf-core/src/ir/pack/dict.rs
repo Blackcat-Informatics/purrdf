@@ -3,7 +3,7 @@
 
 //! A single, unified PFC value dictionary: ONE [`PackTermId`](self)
 //! (a plain `u64`, 1-based) per distinct
-//! [`TermValue`] scanned from an [`RdfDataset`] — REGARDLESS of which role
+//! [`TermValue`] scanned from a [`crate::DatasetView`] — REGARDLESS of which role
 //! (subject, predicate, object, graph name, literal datatype, triple-term
 //! component, reifier/annotation side-table term) it plays — PFC-compressed on
 //! disk and decoded into OWNED structures at [`PackDict::open`].
@@ -68,9 +68,11 @@ use std::fmt;
 
 use purrdf_iri::IriError;
 
-use crate::hash::{FastMap, FastSet, IdSet};
+use crate::dataset_view::DatasetView;
+use crate::hash::{FastMap, FastSet};
+use crate::ir::composite::owned_value;
 use crate::ir::term::{StrRange, arena_str};
-use crate::{BlankScope, RdfDataset, RdfTextDirection, TermRef, TermValue};
+use crate::{BlankScope, RdfTextDirection, TermRef, TermValue};
 
 use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint, write_varint};
 
@@ -714,9 +716,16 @@ pub struct PackDict {
 const MAX_TRIPLE_TERM_DEPTH: usize = 128;
 
 impl PackDict {
-    /// Scan `dataset`'s base quads and build the unified dictionary (see the
+    /// Scan `view`'s base quads and build the unified dictionary (see the
     /// [module docs](self) for the exact id-assignment rule), returning the
     /// PFC-encoded, not-yet-parsed [`EncodedDict`].
+    ///
+    /// The scan reads the [`DatasetView`] seam and nothing narrower, so a frozen
+    /// dataset, a delta snapshot, a composite and a pack-backed projection all
+    /// encode through this one body. A view's ids are its own and never reach the
+    /// output: every term is resolved to its [`TermValue`] and the id space is
+    /// re-derived from the canonical value order, so two views holding the same
+    /// content produce the same dictionary bytes whatever they call their terms.
     ///
     /// # The auxiliary-value closure
     ///
@@ -730,13 +739,13 @@ impl PackDict {
     /// not already collected. A value already present keeps its existing id and is
     /// never duplicated.
     #[must_use]
-    pub fn encode(dataset: &RdfDataset) -> EncodedDict {
+    pub fn encode<D: DatasetView>(view: &D) -> EncodedDict {
         // Step 1: every distinct term id used in ANY base-quad role — subject,
         // predicate, object, or graph name — collapsed into ONE set (this is
         // the crux of the single-id-space fix: unlike an HDT-style split, a
         // predicate and a subject/object share the very same membership test).
-        let mut base_ids: IdSet = IdSet::default();
-        for q in dataset.quads() {
+        let mut base_ids: FastSet<D::Id> = FastSet::default();
+        for q in view.quads() {
             base_ids.insert(q.s);
             base_ids.insert(q.p);
             base_ids.insert(q.o);
@@ -744,8 +753,7 @@ impl PackDict {
                 base_ids.insert(g);
             }
         }
-        let mut values: Vec<TermValue> =
-            base_ids.iter().map(|&id| dataset.term_value(id)).collect();
+        let mut values: Vec<TermValue> = base_ids.iter().map(|&id| owned_value(view, id)).collect();
 
         // Step 1.5: RDF 1.2 side-table term closure roots. A
         // reifier row (`reifier, triple-term, graph`) and an annotation row
@@ -758,25 +766,32 @@ impl PackDict {
         // the shared `while qi < queue.len()` worklist loop below — a
         // `TermValue::Triple` entry always expands its components there,
         // whatever put it in the queue.
-        for (reifier, triple, graph) in dataset.reifiers_with_graph() {
-            values.push(dataset.term_value(reifier));
-            values.push(dataset.term_value(triple));
-            if let Some(g) = graph {
-                values.push(dataset.term_value(g));
+        //
+        // The reifier layer arrives through the view seam as the virtual quad
+        // `(reifier, rdf:reifies, triple-term, graph)`, so the binding's own three
+        // roots are its `s`, `o` and `g` slots; the `p` slot is the indirection
+        // predicate, folded in below on the condition it is interned under.
+        let mut has_reifiers = false;
+        for binding in view.reifier_quads() {
+            has_reifiers = true;
+            values.push(owned_value(view, binding.s));
+            values.push(owned_value(view, binding.o));
+            if let Some(g) = binding.g {
+                values.push(owned_value(view, g));
             }
         }
-        for (reifier, pred, obj, graph) in dataset.annotations_with_graph() {
-            values.push(dataset.term_value(reifier));
-            values.push(dataset.term_value(pred));
-            values.push(dataset.term_value(obj));
-            if let Some(g) = graph {
-                values.push(dataset.term_value(g));
+        for annotation in view.annotation_quads() {
+            values.push(owned_value(view, annotation.s));
+            values.push(owned_value(view, annotation.p));
+            values.push(owned_value(view, annotation.o));
+            if let Some(g) = annotation.g {
+                values.push(owned_value(view, g));
             }
         }
         // The `rdf:reifies` indirection predicate itself: see the [`RDF_REIFIES`]
         // doc comment for why it must be folded in on the SAME condition
         // (reifiers non-empty) the ingest path uses to intern it.
-        if dataset.reifiers_with_graph().next().is_some() {
+        if has_reifiers {
             values.push(TermValue::Iri(RDF_REIFIES.to_owned()));
         }
 
@@ -1234,7 +1249,7 @@ impl PackDict {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RdfDatasetBuilder, RdfLiteral, TermId};
+    use crate::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
     use proptest::prelude::*;
     use proptest::strategy::BoxedStrategy;
     use std::collections::HashSet;
