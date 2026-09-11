@@ -79,8 +79,8 @@ rows carried as typed verbatim literals beside the units — so the specified
 decode law rebuilds the document from the triples alone, byte for byte, and
 proves the rebuild against the source digest the graph itself states. Plain
 literals are exactly the content (a unit's text, a heading's words), typed
-literals are the bytes, so a text index sees every word once and not a byte
-of structure. We surveyed the standards that map documents to RDF and found none
+literals are the bytes, so a text index that selects the simple literals
+sees every word once and not a byte of structure. We surveyed the standards that map documents to RDF and found none
 that combines determinism, byte-span addressability, and law-content-addressed
 identity for Markdown. The specification's
 [related work](./crates/markdown/SPEC.md#12-related-work) section names every
