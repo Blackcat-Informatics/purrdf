@@ -330,10 +330,143 @@ fn parse_lines<S: SpanCollector>(
     parse_lines_sequential(text, allow_graph, 1, base, collector)
 }
 
+/// One physical line, plus the width in BYTES of the `EOL` terminator that ended it
+/// (`0` for a final line that ends at end-of-input instead).
+///
+/// The width is CARRIED rather than recomputed by the consumer because the sequential
+/// path maintains a document-global byte offset for span recording. An offset that
+/// stepped `#xD#xA` as one byte — or a lone `#xD` as two, which is what the code here
+/// used to do — moves every recorded [`Position`] onto the wrong scalar, and nothing
+/// fails: the parse succeeds exactly as before and only the reported location lies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PhysicalLine<'a> {
+    /// The line's text, WITHOUT its terminator.
+    text: &'a str,
+    /// The terminator's width in bytes: 2 for `#xD#xA`, 1 for a lone `#xD` or `#xA`,
+    /// 0 at end of input.
+    terminator: usize,
+}
+
+/// The byte width of the `EOL` terminator starting at `at`, where `bytes[at]` is already
+/// known to be `#xD` or `#xA`: 2 for the `#xD#xA` PAIR, 1 for anything else.
+///
+/// The pair rule is spelled ONCE, here, and every line path reaches it: the splitter, the
+/// chunker and the per-chunk line counter. Spelling it twice is how a CRLF document comes
+/// to parse as a different document depending on which path read it — the splitter
+/// yielding one line where the counter counted two shifts every subsequent diagnostic's
+/// line number by one, silently.
+fn eol_width(bytes: &[u8], at: usize) -> usize {
+    if bytes[at] == b'\r' && bytes.get(at + 1) == Some(&b'\n') {
+        2
+    } else {
+        1
+    }
+}
+
+/// Split `text` into physical lines at the line grammar's OWN terminator.
+///
+/// > `EOL ::= [#xD#xA]+`
+///
+/// — RDF 1.2 N-Triples §2.2 / N-Quads §2.3 (`ntriplesDoc ::= triple? (EOL triple?)* EOL?`),
+/// the production this family's whole line structure rests on.
+///
+/// This is deliberately NOT [`str::lines`], and the difference is a SILENT DROP rather
+/// than a misparse. `str::lines` splits at `#xA` and strips a `#xD` that immediately
+/// precedes one; a LONE `#xD` is ordinary text to it. So `<s> <p> <o> .#xD<s2> <p2> <o2>
+/// .#xD` arrived as ONE line, was tokenized as one, and — because [`parse_one_line`] took
+/// the tokens up to the first `.` and threw the rest away (see its own note on leftover
+/// tokens) — the second statement vanished with exit zero and no diagnostic.
+///
+/// Each cut is ONE terminator: `#xD#xA` is a single terminator and not two, so a CRLF
+/// document yields no spurious empty line between consecutive statements. A LONGER run of
+/// `[#xD#xA]` yields empty lines between the cuts, and `EOL`'s `+` is honoured one layer
+/// up rather than here: an empty line opens no production, [`parse_one_line`] returns
+/// `None` for it, and a run of terminators therefore separates two statements exactly as a
+/// single terminator does. Collapsing the run inside the splitter would be observably
+/// WORSE, because the 1-based line number every diagnostic carries counts PHYSICAL lines:
+/// `"a .\n\n\nb ."` would report `b .`'s errors at line 2 of a file in which every editor
+/// shows it at line 4.
+///
+/// Every terminator byte is ASCII and no byte of a multi-byte UTF-8 sequence is below
+/// `0x80`, so the byte-wise scan can neither miss a terminator nor cut inside a scalar.
+/// Nothing here reaches INSIDE a token: N-Triples/N-Quads exclude a RAW `#xD` from both
+/// token bodies that could otherwise hold one —
+/// `STRING_LITERAL_QUOTE ::= '"' ([^#x22#x5C#xA#xD] | ECHAR | UCHAR)* '"'` names `#xD` in
+/// its exclusion set, and ``IRIREF ::= '<' ([^#x00-#x20<>"{}|^`\] | UCHAR)* '>'`` excludes
+/// all of `#x00-#x20` — so a carriage return between `<`…`>` or between two `"` is not
+/// content this splitter is stealing; it is a document the grammar already has no reading
+/// for (and which the shared lexer already refused, as
+/// `a_carriage_return_inside_a_token_is_not_content_of_that_token` executes). The escaped
+/// spellings — `ECHAR`'s `\r`, and the `UCHAR` form of the same scalar, which ARE how a
+/// carriage return is written into a literal — carry no `#xD` BYTE in the source at all
+/// and are untouched.
+fn physical_lines(text: &str) -> PhysicalLines<'_> {
+    PhysicalLines { rest: text }
+}
+
+/// The iterator [`physical_lines`] returns.
+struct PhysicalLines<'a> {
+    /// The not-yet-yielded remainder of the document.
+    rest: &'a str,
+}
+
+impl<'a> Iterator for PhysicalLines<'a> {
+    type Item = PhysicalLine<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.rest.is_empty() {
+            return None;
+        }
+        let bytes = self.rest.as_bytes();
+        let Some(offset) = memchr::memchr2(b'\r', b'\n', bytes) else {
+            // A final line that ends at end-of-input: `EOL?` is optional, so this is a
+            // line, and (like `str::lines`) a document that DOES end in a terminator
+            // yields no extra empty line after it — `rest` is empty and the iterator ends.
+            let text = self.rest;
+            self.rest = "";
+            return Some(PhysicalLine {
+                text,
+                terminator: 0,
+            });
+        };
+        let terminator = eol_width(bytes, offset);
+        let text = &self.rest[..offset];
+        self.rest = &self.rest[offset + terminator..];
+        Some(PhysicalLine { text, terminator })
+    }
+}
+
+/// How many `EOL` terminators `text` holds — i.e. how many physical lines it ENDS.
+///
+/// This is the chunk-parallel path's line-number arithmetic, and it must agree with
+/// [`physical_lines`] exactly: it counts through the same [`eol_width`], so a `#xD#xA`
+/// pair counts ONCE on both sides and neither can drift into counting it twice.
+fn count_line_terminators(text: &str) -> u32 {
+    let bytes = text.as_bytes();
+    let mut count = 0u32;
+    let mut at = 0usize;
+    while let Some(offset) = memchr::memchr2(b'\r', b'\n', &bytes[at..]) {
+        let start = at + offset;
+        at = start + eol_width(bytes, start);
+        count = count.saturating_add(1);
+    }
+    count
+}
+
 /// Split `text` into line-aligned chunks of roughly `target_bytes` each: every chunk
-/// (except possibly the last) ends immediately after a `'\n'`, so concatenating the
-/// chunks' [`str::lines`] streams reproduces `text.lines()` exactly. `'\n'` is ASCII,
-/// so every boundary is a valid UTF-8 char boundary.
+/// (except possibly the last) ends immediately after a COMPLETE `EOL` terminator, so
+/// concatenating the chunks' [`physical_lines`] streams reproduces `physical_lines(text)`
+/// exactly.
+///
+/// "Complete" is the load-bearing word and it is the third trap of the `EOL` production.
+/// A boundary that fell BETWEEN `#xD` and `#xA` would hand one chunk a line ending in a
+/// lone `#xD` and the next a leading lone `#xA`, i.e. two terminators where the document
+/// has one — so a CRLF file would parse into a different number of lines depending on the
+/// chunk size, which is the machine's memory geometry deciding what a document means. The
+/// cut is therefore taken at `offset + eol_width(..)`, past the whole terminator, through
+/// the same [`eol_width`] the splitter and the counter use.
+///
+/// Every terminator byte is ASCII, so every boundary is a valid UTF-8 char boundary.
 fn split_line_chunks(text: &str, target_bytes: usize) -> Vec<&str> {
     let bytes = text.as_bytes();
     let target = target_bytes.max(1);
@@ -342,8 +475,11 @@ fn split_line_chunks(text: &str, target_bytes: usize) -> Vec<&str> {
     while start < text.len() {
         let mut end = start.saturating_add(target).min(text.len());
         if end < text.len() {
-            end = match memchr::memchr(b'\n', &bytes[end..]) {
-                Some(offset) => end + offset + 1,
+            end = match memchr::memchr2(b'\r', b'\n', &bytes[end..]) {
+                Some(offset) => {
+                    let at = end + offset;
+                    at + eol_width(bytes, at)
+                }
                 None => text.len(),
             };
         }
@@ -386,18 +522,18 @@ fn parse_lines_parallel_with_chunk_size(
 ) -> Result<Vec<Statement>, RdfDiagnostic> {
     let chunks = split_line_chunks(text, target_bytes);
     // Each chunk is a contiguous line-aligned slice; chunk 0 begins at document
-    // line 1 and chunk k begins at `1 + (total '\n' in chunks[0..k])`. Precompute
-    // those 1-based base lines (a sequential prefix sum) so every per-chunk
+    // line 1 and chunk k begins at `1 + (total EOL terminators in chunks[0..k])`.
+    // Precompute those 1-based base lines (a sequential prefix sum) so every per-chunk
     // diagnostic reports the SAME document-global line the sequential path would,
-    // keeping the parallel path byte-identical (line numbers included).
+    // keeping the parallel path byte-identical (line numbers included). The count runs
+    // through `count_line_terminators`, i.e. through the same `eol_width` the splitter
+    // uses, so a `#xD#xA` pair advances the line number by ONE here exactly as it ends
+    // one line there.
     let mut base_lines = Vec::with_capacity(chunks.len());
     let mut next_line = 1u32;
     for chunk in &chunks {
         base_lines.push(next_line);
-        // SIMD newline scan (memchr) rather than a per-byte filter over the chunk.
-        let newlines =
-            u32::try_from(memchr::memchr_iter(b'\n', chunk.as_bytes()).count()).unwrap_or(u32::MAX);
-        next_line = next_line.saturating_add(newlines);
+        next_line = next_line.saturating_add(count_line_terminators(chunk));
     }
     // Phase 1: parallel per-chunk tokenize+parse (on wasm32 rayon runs this inline).
     let per_chunk: Vec<Result<Vec<Statement>, RdfDiagnostic>> = chunks
@@ -440,21 +576,16 @@ fn parse_lines_sequential<S: SpanCollector>(
     // sequential path (see `parse_dataset_with`), so `text` here is the whole
     // document and this offset is document-global. For `NoSpans` the compiler proves
     // `S::ENABLED == false` and deletes every touch of `line_offset`, leaving the hot
-    // path byte-identical. `advance_line_offset` steps it past a line plus its `\n`
-    // or `\r\n` terminator (`str::lines` strips both).
+    // path byte-identical. The step is the line's own bytes plus the width of the `EOL`
+    // terminator that ended it, which `physical_lines` measured while it was cutting —
+    // so a lone `#xD` advances by one and a `#xD#xA` pair by two, and neither is guessed
+    // at from the byte that happens to follow.
     let mut line_offset = 0usize;
-    let advance_line_offset = |offset: &mut usize, raw: &str| {
-        *offset += raw.len();
-        match text.as_bytes().get(*offset) {
-            Some(b'\r') => *offset += 2,
-            Some(b'\n') => *offset += 1,
-            _ => {}
-        }
-    };
-    for raw in text.lines() {
+    for line in physical_lines(text) {
+        let raw = line.text;
         let Some(nodes) = parse_one_line(raw, allow_graph, lineno, base)? else {
             if S::ENABLED {
-                advance_line_offset(&mut line_offset, raw);
+                line_offset += raw.len() + line.terminator;
             }
             lineno = lineno.saturating_add(1);
             continue;
@@ -472,7 +603,7 @@ fn parse_lines_sequential<S: SpanCollector>(
                     },
                 );
             }
-            advance_line_offset(&mut line_offset, raw);
+            line_offset += raw.len() + line.terminator;
         }
         statements.push(nodes);
         lineno = lineno.saturating_add(1);
@@ -491,8 +622,27 @@ fn parse_lines_sequential<S: SpanCollector>(
 /// what diagnostic a malformed one produces, because there is nothing to drift: they
 /// differ only in where the line came from and where the statement goes.
 ///
-/// `raw` is the UNTRIMMED line as `str::lines` yields it (no `\n` / `\r\n`
-/// terminator); columns in diagnostics are rebased onto it.
+/// `raw` is the UNTRIMMED line as [`physical_lines`] yields it (no `#xD`, `#xA` or
+/// `#xD#xA` terminator); columns in diagnostics are rebased onto it.
+///
+/// # One line is at most one statement, and nothing may follow it
+///
+/// > `ntriplesDoc ::= triple? (EOL triple?)* EOL?`
+///
+/// > `triple ::= subject predicate object '.'`
+///
+/// — RDF 1.2 N-Triples §2.2 (N-Quads §2.3 differs only in admitting the graph label). A
+/// line holds AT MOST ONE `triple`, and the only thing the production allows after that
+/// `'.'` is the `EOL` that ends the line — or a comment, which is not a token and never
+/// reaches here. So anything still in the token stream once the terminator has been
+/// consumed belongs to no production, and is refused by [`expect_exhausted`](
+/// TokenCursor::expect_exhausted) naming what was found and the column it sits at.
+///
+/// Before that check this function took the tokens up to the first `.`, consumed the `.`,
+/// and returned — DISCARDING everything after it, with exit zero and no diagnostic. That
+/// is the silent-drop half of this file's `EOL` defect and it needed no exotic input at
+/// all: `<s> <p> <o> . <s2> <p2> <o2> .` is a line a user can type, and one of its two
+/// statements never reached the graph.
 ///
 /// # What separates the tokens, and what does not
 ///
@@ -624,6 +774,7 @@ fn parse_one_line(
         nodes.push(cursor.term(0)?);
     }
     cursor.expect_dot()?;
+    cursor.expect_exhausted()?;
     let valid_len = if allow_graph {
         nodes.len() == 3 || nodes.len() == 4
     } else {
@@ -705,6 +856,35 @@ impl<'a> TokenCursor<'a> {
     /// True at the statement terminator `.` or the end of the token stream.
     fn at_statement_end(&self) -> bool {
         matches!(self.peek(), None | Some(Token::Dot))
+    }
+
+    /// Refuse anything left in the token stream after the statement terminator.
+    ///
+    /// > `ntriplesDoc ::= triple? (EOL triple?)* EOL?`
+    ///
+    /// — RDF 1.2 N-Triples §2.2: a `triple` is followed by `EOL`, never by another
+    /// `triple` on the same line. The tokenizer has already eaten any trailing comment
+    /// (a `#` outside a token runs to end of line and produces no token) and all `WS`, so
+    /// a leftover token here is real content the grammar cannot place.
+    ///
+    /// The diagnostic names the token and its column because the two ways to arrive here
+    /// are both typos a user must SEE to fix: a second statement crammed onto the line,
+    /// and a stray `.` that ended the statement early (`<s> <p> <o>. <g> .`). Returning
+    /// `Ok` instead — which is what this function replaced — threw the remainder away.
+    fn expect_exhausted(&self) -> Result<(), RdfDiagnostic> {
+        match self.peek() {
+            None => Ok(()),
+            Some(token) => Err(err_at(
+                format!(
+                    "unexpected token {token:?} after the statement terminator '.'; a \
+                     line of this grammar holds at most one statement (`ntriplesDoc ::= \
+                     triple? (EOL triple?)* EOL?`), so a second statement must begin on \
+                     its own line"
+                ),
+                self.lineno,
+                self.col(),
+            )),
+        }
     }
 
     fn expect_dot(&mut self) -> Result<(), RdfDiagnostic> {
@@ -2380,9 +2560,12 @@ impl LineStreamParser {
 
     /// Feed the next physical line, in document order.
     ///
-    /// `raw` is the line WITHOUT its `\n` / `\r\n` terminator — exactly what
-    /// `str::lines` yields for the buffered path, so the diagnostics (line, column,
-    /// message) are the buffered path's diagnostics.
+    /// `raw` is the line WITHOUT its `EOL` terminator — exactly what [`physical_lines`]
+    /// yields for the buffered path, so the diagnostics (line, column, message) are the
+    /// buffered path's diagnostics. The reader that feeds this (the `LineReader` in
+    /// [`super::stream`]) cuts at the same `EOL ::= [#xD#xA]+`, including
+    /// a lone `#xD`, which is the whole point: a line path that split differently would
+    /// make a document's meaning depend on how it arrived.
     pub(super) fn push_line(&mut self, raw: &str) -> Result<(), RdfDiagnostic> {
         if let Some(nodes) = parse_one_line(raw, self.allow_graph, self.lineno, &self.base)? {
             self.accumulator.push(&nodes)?;
@@ -3475,13 +3658,18 @@ mod tests {
     /// The three line paths, in the order [`all_line_paths`] reports them.
     const LINE_PATHS: [&str; 3] = ["sequential", "chunk-parallel", "line-stream"];
 
-    /// Feed `text` to the streaming [`LineStreamParser`] one `str::lines` line at a
-    /// time — exactly as `stream::stream_line_format` drives it — and report the quad
-    /// count of the graph it froze.
+    /// Feed `text` to the streaming [`LineStreamParser`] one physical line at a time —
+    /// exactly as `stream::stream_line_format` drives it — and report the quad count of
+    /// the graph it froze.
+    ///
+    /// The lines come from [`physical_lines`], which is the splitter the streaming
+    /// `LineReader` reproduces over a `Read`; `stream`'s own tests drive the real reader
+    /// at read granularities down to one byte, so the two halves of that claim are each
+    /// executed rather than assumed.
     fn line_stream_answer(text: &str) -> PathAnswer {
         let mut parser = LineStreamParser::new(NativeRdfFormat::NTriples, BaseScope::empty())?;
-        for raw in text.lines() {
-            parser.push_line(raw)?;
+        for line in physical_lines(text) {
+            parser.push_line(line.text)?;
         }
         Ok(parser.finish().quads.len())
     }
@@ -3858,5 +4046,285 @@ mod tests {
         every_line_path_accepts("  <urn:ex:s> <urn:ex:p> <urn:ex:o> .\n", 1);
         let short = every_line_path_refuses("  <urn:ex:s> <urn:ex:p> .\n");
         assert_eq!(located(&short), (1, 3));
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // The line grammar's `EOL`, on ALL THREE line paths
+    //
+    // `EOL ::= [#xD#xA]+` decides where one statement ends and the next begins, so a
+    // splitter that answers it with `str::lines` — `#xA` only, with a `#xD` before it
+    // absorbed — does not misparse a document, it DROPS statements out of one. Every
+    // vector below runs on the sequential path, the chunk-parallel path (at a 1-byte
+    // chunk target, so every line boundary is also a chunk boundary) and the streaming
+    // parser, and asserts they answer identically.
+    // ───────────────────────────────────────────────────────────────────────────
+
+    /// The defect itself: two statements separated by a LONE `#xD` are two statements.
+    ///
+    /// `str::lines` treats a lone `#xD` as ordinary text, so the pair arrived as ONE
+    /// line; the parser then took the tokens up to the first `.` and threw the rest
+    /// away, so the second statement was lost with exit zero and no diagnostic.
+    #[test]
+    fn a_lone_carriage_return_terminates_a_line_on_every_path() {
+        every_line_path_accepts(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r<urn:ex:s2> <urn:ex:p> <urn:ex:o> .\r",
+            2,
+        );
+        // The same pair with no terminator after the last statement.
+        every_line_path_accepts(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r<urn:ex:s2> <urn:ex:p> <urn:ex:o> .",
+            2,
+        );
+        // Three statements, one terminator of each shape.
+        every_line_path_accepts(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r\
+             <urn:ex:s2> <urn:ex:p> <urn:ex:o> .\n\
+             <urn:ex:s3> <urn:ex:p> <urn:ex:o> .\r\n",
+            3,
+        );
+        // A lone `#xD` also ends a COMMENT, which otherwise swallows the statement
+        // after it — the silent-drop shape one layer up from the statement case.
+        every_line_path_accepts("# a comment\r<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r", 1);
+    }
+
+    /// `#xD#xA` is ONE terminator, not two: a CRLF document holds no empty line between
+    /// consecutive statements, and its line NUMBERS are the numbers an editor shows.
+    ///
+    /// Splitting the pair into two terminators is silent in the statement count (an
+    /// empty line carries no statement) and loud only here, in the diagnostic: every
+    /// line after the first would be reported at twice its true number.
+    #[test]
+    fn a_crlf_pair_is_one_terminator_not_two() {
+        every_line_path_accepts(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r\n\
+             <urn:ex:s2> <urn:ex:p> <urn:ex:o> .\r\n\
+             <urn:ex:s3> <urn:ex:p> <urn:ex:o> .\r\n",
+            3,
+        );
+        // An error on the THIRD line of a CRLF document is reported at line 3.
+        let diagnostic = every_line_path_refuses(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r\n\
+             <urn:ex:s2> <urn:ex:p> <urn:ex:o> .\r\n\
+             <urn:ex:s3> <urn:ex:p> .\r\n",
+        );
+        assert_eq!(located(&diagnostic), (3, 1));
+        // And the same document with LF endings answers identically, which is the
+        // property that makes a file portable between editors.
+        let lf = every_line_path_refuses(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n\
+             <urn:ex:s2> <urn:ex:p> <urn:ex:o> .\n\
+             <urn:ex:s3> <urn:ex:p> .\n",
+        );
+        assert_eq!(lf, diagnostic, "CRLF and LF must read the SAME document");
+    }
+
+    /// A longer run of `[#xD#xA]` separates two statements exactly as a single
+    /// terminator does — the `+` in the production — while the 1-based line numbers keep
+    /// counting PHYSICAL lines, which is what every editor and every diagnostic means.
+    #[test]
+    fn a_run_of_terminators_separates_statements_and_still_counts_physical_lines() {
+        for separator in ["\r\r", "\n\n", "\r\n\r\n", "\n\r", "\r\n\n\r"] {
+            let text = format!(
+                "<urn:ex:s> <urn:ex:p> <urn:ex:o> .{separator}<urn:ex:s2> <urn:ex:p> \
+                 <urn:ex:o> .\n"
+            );
+            every_line_path_accepts(&text, 2);
+        }
+        // Two blank lines between the statements: the bad line is document line 4.
+        let diagnostic = every_line_path_refuses(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> .\r\n\r\n\r\n<urn:ex:s2> <urn:ex:p> .\r\n",
+        );
+        assert_eq!(located(&diagnostic), (4, 1));
+    }
+
+    /// A trailing terminator at end of file yields no phantom final line, whatever shape
+    /// it took, and a document with NO trailing terminator still yields its last line.
+    #[test]
+    fn a_trailing_terminator_adds_no_phantom_line() {
+        for tail in ["", "\n", "\r", "\r\n"] {
+            let text = format!("<urn:ex:s> <urn:ex:p> <urn:ex:o> .{tail}");
+            every_line_path_accepts(&text, 1);
+        }
+        // The empty document, and a document of nothing but terminators.
+        for text in ["", "\n", "\r", "\r\n", "\r\n\r\n", "\n\r\n\r"] {
+            every_line_path_accepts(text, 0);
+        }
+    }
+
+    /// [`physical_lines`] IS `str::lines` on every document that holds no lone `#xD` —
+    /// which is the whole of the change, stated as a property rather than as a list of
+    /// examples, so a future edit to the splitter cannot quietly move the LF case too.
+    #[test]
+    fn the_splitter_reproduces_str_lines_wherever_no_lone_carriage_return_appears() {
+        for text in [
+            "",
+            "a",
+            "a\n",
+            "a\nb",
+            "a\nb\n",
+            "a\r\nb\r\n",
+            "a\r\n\r\nb",
+            "\n\n\n",
+            "a\n\nb\n",
+            "no trailing newline",
+        ] {
+            let split: Vec<&str> = physical_lines(text).map(|line| line.text).collect();
+            let expected: Vec<&str> = text.lines().collect();
+            assert_eq!(split, expected, "{text:?}");
+            // And the partition is exact: every byte is either line content or one of
+            // the terminators the splitter measured.
+            let total: usize = physical_lines(text)
+                .map(|line| line.text.len() + line.terminator)
+                .sum();
+            assert_eq!(total, text.len(), "{text:?} must partition exactly");
+        }
+        // The one document where the two DIFFER, which is the defect this splitter
+        // exists to fix.
+        assert_eq!(
+            physical_lines("a\rb").map(|l| l.text).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        assert_eq!("a\rb".lines().collect::<Vec<_>>(), vec!["a\rb"]);
+    }
+
+    /// A chunk boundary must never fall BETWEEN `#xD` and `#xA`, or a CRLF document
+    /// would parse into a different number of lines depending on the chunk size — the
+    /// machine's memory geometry deciding what a document means.
+    #[test]
+    fn split_line_chunks_never_splits_a_crlf_pair() {
+        let text = "aaa\r\nbb\r\n\r\nccccc\r\nno-trailing-terminator";
+        for target in 1..=text.len() + 1 {
+            let chunks = split_line_chunks(text, target);
+            assert_eq!(chunks.concat(), text, "target {target} must partition");
+            for (index, chunk) in chunks.iter().enumerate() {
+                if index + 1 == chunks.len() {
+                    continue;
+                }
+                assert!(
+                    chunk.ends_with('\n') || chunk.ends_with('\r'),
+                    "non-final chunk {chunk:?} (target {target}) must end at a terminator"
+                );
+                assert!(
+                    !(chunk.ends_with('\r') && chunks[index + 1].starts_with('\n')),
+                    "target {target} split a `#xD#xA` pair across chunks {chunk:?}"
+                );
+            }
+            // The invariant that makes the parallel path equal the sequential one:
+            // concatenating the chunks' line streams reproduces the document's.
+            let per_chunk: Vec<&str> = chunks
+                .iter()
+                .flat_map(|chunk| physical_lines(chunk).map(|line| line.text))
+                .collect();
+            let whole: Vec<&str> = physical_lines(text).map(|line| line.text).collect();
+            assert_eq!(per_chunk, whole, "target {target} must re-join exactly");
+        }
+        // A CR-only document has no `#xA` at all: the chunker must still find a
+        // boundary, or the parallel path would degenerate to a single chunk.
+        let cr_only = "aaa\rbb\r\rccccc\r";
+        assert!(
+            split_line_chunks(cr_only, 4).len() > 1,
+            "a `#xD`-terminated document must still chunk"
+        );
+    }
+
+    /// Chunk geometry never changes a CRLF document's parse — asserted at EVERY chunk
+    /// size, including one byte, so every boundary in the fixture is exercised.
+    #[test]
+    fn crlf_chunk_geometry_never_changes_output() {
+        let text = "# comment\r\n\r\n<https://e/s> <https://e/p> \"a\" .\r\n\
+                    <https://e/s> <https://e/p> \"b\"@en <https://e/g> .\r\
+                    _:b0 <https://e/p> <<( <https://e/x> <https://e/y> <https://e/z> )>> .\r\n";
+        let expected = parse_lines_sequential(text, true, 1, &BaseScope::empty(), &mut NoSpans)
+            .expect("sequential");
+        assert_eq!(expected.len(), 3, "the fixture holds three statements");
+        for target in 1..=text.len() + 1 {
+            let actual =
+                parse_lines_parallel_with_chunk_size(text, true, target, &BaseScope::empty())
+                    .expect("parallel parse");
+            assert!(
+                actual == expected,
+                "chunk size {target} must not change the parse"
+            );
+        }
+    }
+
+    /// Tokens after the statement terminator are REFUSED, naming what was found and
+    /// where. They used to be discarded silently — a statement a user typed, dropped
+    /// with exit zero.
+    #[test]
+    fn tokens_after_the_terminator_are_refused_not_discarded() {
+        let diagnostic = every_line_path_refuses(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> . <urn:ex:s2> <urn:ex:p> <urn:ex:o> .\n",
+        );
+        assert_eq!(
+            located(&diagnostic),
+            (1, 36),
+            "the column must name the first leftover token"
+        );
+        assert!(
+            diagnostic.message.contains("urn:ex:s2"),
+            "the diagnostic must name what was found: {}",
+            diagnostic.message
+        );
+        // A stray `.` mid-statement ends it early; the remainder is leftover, not lost.
+        let early = every_line_path_refuses("<urn:ex:s> <urn:ex:p>. <urn:ex:o> .\n");
+        assert!(
+            early.message.contains("after the statement terminator"),
+            "the diagnostic must say what it is refusing: {}",
+            early.message
+        );
+        // The over-refusal side, executed: everything the grammar DOES allow after the
+        // `.` still parses. A comment, `WS`, a `#xD`-terminated line, and (N-Quads) the
+        // graph label, which comes BEFORE the terminator and is not leftover at all.
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> <urn:ex:o> . # a comment\n", 1);
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> <urn:ex:o> .\t \n", 1);
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> <urn:ex:o> . # a comment\r", 1);
+        let quads = parse_lines_sequential(
+            "<urn:ex:s> <urn:ex:p> <urn:ex:o> <urn:ex:g> . # a comment\n",
+            true,
+            1,
+            &BaseScope::empty(),
+            &mut NoSpans,
+        )
+        .expect("a graph label precedes the terminator and is not leftover");
+        assert_eq!(quads.len(), 1);
+        assert_eq!(quads[0].len(), 4);
+    }
+
+    /// The over-refusal direction of the `EOL` split: a `#xD` INSIDE a token.
+    ///
+    /// The productions make this unrepresentable rather than merely unusual —
+    /// `STRING_LITERAL_QUOTE ::= '"' ([^#x22#x5C#xA#xD] | ECHAR | UCHAR)* '"'` names
+    /// `#xD` in its exclusion set, and ``IRIREF ::= '<' ([^#x00-#x20<>"{}|^`\] | UCHAR)*
+    /// '>'`` excludes all of `#x00-#x20` — so a RAW `#xD` between quotes or between
+    /// angle brackets was ALREADY refused, by the shared lexer, before this splitter
+    /// existed. Splitting there therefore takes no lawful document away; this test pins
+    /// that by refusing both shapes, and then executes the spellings that ARE lawful.
+    #[test]
+    fn a_carriage_return_inside_a_token_is_not_content_of_that_token() {
+        // Refused, on every path, in both token bodies.
+        every_line_path_refuses("<urn:ex:s> <urn:ex:p> \"a\rb\" .\n");
+        every_line_path_refuses("<urn:ex:a\rb> <urn:ex:p> <urn:ex:o> .\n");
+        // The lawful neighbours: the ESCAPED carriage return, which is how the scalar is
+        // written into a literal, parses AND survives into the term verbatim.
+        every_line_path_accepts("<urn:ex:s> <urn:ex:p> \"a\\rb\" .\n", 1);
+        let statements = parse_lines_sequential(
+            "<urn:ex:s> <urn:ex:p> \"a\\rb\" .\n",
+            false,
+            1,
+            &BaseScope::empty(),
+            &mut NoSpans,
+        )
+        .expect("`\\r` is ECHAR and parses");
+        assert_eq!(
+            statements[0][2],
+            Node::Literal {
+                value: "a\rb".to_owned(),
+                lang: None,
+                direction: None,
+                datatype: None,
+            },
+            "the escape must decode to the scalar, which the splitter never sees"
+        );
     }
 }

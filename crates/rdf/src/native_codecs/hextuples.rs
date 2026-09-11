@@ -31,6 +31,7 @@ use super::text_parse::LineParseMode;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
+use purrdf_iri::terminals::is_ws;
 
 /// The HexTuples codec: a standalone (non-line-family) [`RdfCodec`] over the
 /// line-oriented NDJSON quads syntax. A classic quad syntax with no RDF-1.2 triple-term
@@ -114,6 +115,28 @@ pub(super) fn parse_hextuples_to_dataset(
     parser.finish()
 }
 
+/// Whether `line` carries no JSON value at all — i.e. holds nothing but the
+/// insignificant whitespace JSON itself defines:
+///
+/// > `ws = *( %x20 / %x09 / %x0A / %x0D )`
+///
+/// — RFC 8259 §2 *JSON Grammar*. Four code points, and (not by coincidence) the same four
+/// that Turtle's `WS` and XML's `S` name, so the single
+/// [`purrdf_iri::terminals::is_ws`] transcription answers this production too.
+///
+/// Deliberately NOT [`str::trim`], which is defined over [`char::is_whitespace`] — the
+/// Unicode `White_Space` property, twenty-six scalars — and therefore answers a question
+/// JSON did not ask. The difference is a SILENT DROP, not a widening: a line holding
+/// nothing but U+00A0 NO-BREAK SPACE trimmed to the empty string and was skipped as
+/// BLANK, when it is in fact a line `serde_json` has no reading for. HexTuples is NDJSON
+/// — every non-blank line must be a six-element JSON array — so the only honest answers
+/// are "blank" and "invalid JSON", and U+00A0 is not blank by any rule JSON states.
+/// This is the same defect, in the same directory, that the line/Turtle front-end's
+/// `WS` work removed from `text_parse`; the sibling codec kept its copy.
+fn is_blank_json_line(line: &str) -> bool {
+    line.as_bytes().iter().all(|&byte| is_ws(byte))
+}
+
 /// Decode ONE physical HexTuples line, or `None` when the line is blank.
 ///
 /// The one copy of the per-line grammar: both [`parse_hextuples_to_dataset`] (which
@@ -125,7 +148,7 @@ fn parse_hextuples_line(
     lineno: usize,
     base: &purrdf_iri::BaseScope,
 ) -> Result<Option<HexRow>, RdfDiagnostic> {
-    if line.trim().is_empty() {
+    if is_blank_json_line(line) {
         return Ok(None);
     }
     let fields: Vec<String> = serde_json::from_str(line)
@@ -519,6 +542,57 @@ mod tests {
         assert_eq!(
             first, second,
             "HexTuples emission must be byte-deterministic"
+        );
+    }
+
+    /// One well-formed row, for the blankness vectors below.
+    fn row() -> String {
+        "[\"https://example.org/s\",\"https://example.org/p\",\
+         \"https://example.org/o\",\"globalId\",\"\",\"\"]"
+            .to_owned()
+    }
+
+    /// A line of nothing but U+00A0 is NOT a blank HexTuples line.
+    ///
+    /// JSON's insignificant whitespace is `ws = *( %x20 / %x09 / %x0A / %x0D )` (RFC 8259
+    /// §2) — four code points — and U+00A0 NO-BREAK SPACE is none of them. `str::trim`
+    /// said otherwise, so such a line was silently SKIPPED as blank instead of being
+    /// refused as the invalid JSON it is: a row a user wrote, dropped with exit zero.
+    #[test]
+    fn a_no_break_space_only_line_is_not_a_blank_hextuples_line() {
+        let offending = format!("{}\n\u{a0}\n", row());
+        let error = parse_dataset(offending.as_bytes(), "application/x-hextuples", None)
+            .expect_err("a U+00A0-only line carries no JSON value and is not blank");
+        assert_eq!(error.code, "native-codec-parse");
+        assert!(
+            error.message.contains("line 2") && error.message.contains("invalid JSON"),
+            "the refusal must name the line and what is wrong with it: {}",
+            error.message
+        );
+
+        // The over-refusal side, executed: every line JSON's `ws` DOES make blank is
+        // still blank, so the document still parses and still holds exactly one quad.
+        for blank in ["", " ", "\t", " \t ", "\r"] {
+            let text = format!("{}\n{blank}\n", row());
+            let dataset = parse_dataset(text.as_bytes(), "application/x-hextuples", None)
+                .unwrap_or_else(|e| panic!("a {blank:?} line is blank by JSON's `ws`: {e}"));
+            assert_eq!(dataset.quads().count(), 1);
+        }
+    }
+
+    /// U+00A0 INSIDE a JSON string is CONTENT — this is a rule about the line, not about
+    /// what a value may hold — and it must reach the frozen dataset verbatim.
+    #[test]
+    fn a_no_break_space_inside_a_json_string_is_content() {
+        let text = "[\"https://example.org/s\",\"https://example.org/p\",\
+                    \"a\u{a0}b\",\"http://www.w3.org/2001/XMLSchema#string\",\"\",\"\"]\n";
+        let dataset =
+            parse_dataset(text.as_bytes(), "application/x-hextuples", None).expect("parse");
+        let bytes = serialize_dataset(&dataset, "application/n-quads", SerializeGraph::Dataset)
+            .expect("serialize");
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("a\u{a0}b"),
+            "the NO-BREAK SPACE must survive into the literal"
         );
     }
 }

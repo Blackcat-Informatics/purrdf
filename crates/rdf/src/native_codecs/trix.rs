@@ -33,6 +33,7 @@ use crate::nesting::guard_xml_nesting;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
+use purrdf_iri::terminals::is_ws;
 
 /// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
 /// quads syntax. A classic quad syntax with no RDF-1.2 triple-term surface, so it is
@@ -292,8 +293,44 @@ fn element_text(element: Node<'_, '_>) -> String {
         .collect()
 }
 
+/// `text` with its leading and trailing runs of XML whitespace removed.
+///
+/// > `S ::= (#x20 | #x9 | #xD | #xA)+`
+///
+/// — XML 1.0 (Fifth Edition) §2.3 *Common Syntactic Constructs*. Four code points, and the
+/// same four Turtle's `WS` and JSON's `ws` name, so the single
+/// [`purrdf_iri::terminals::is_ws`] transcription answers this production too.
+///
+/// Deliberately NOT [`str::trim`]. `str::trim` is defined over [`char::is_whitespace`],
+/// the Unicode `White_Space` property — twenty-six scalars — and here that is not a
+/// liberality, it is a SILENT REWRITE of the caller's data: a `<uri>` whose text carries
+/// a leading or trailing U+00A0 NO-BREAK SPACE is a LAWFUL IRI (U+00A0 is `ucschar`, and
+/// `IRIREF` excludes only `#x00-#x20` and nine delimiters), so trimming it produced a
+/// DIFFERENT IRI than the document spelled, with no diagnostic and no loss entry. The
+/// same applies to an `<id>` blank node label. The frozen W3C RDFC-1.0 corpus contains
+/// exactly this term — `<urn:ex:\u{a0}>` — so it is not a hypothetical shape.
+///
+/// The bytes the XML layer has already normalized are still handled: XML line-end
+/// normalization has turned every `#xD#xA` and lone `#xD` in the text into `#xA` before
+/// `roxmltree` hands it over, and `#xA` is `S`, so pretty-printed indentation around a
+/// `<uri>` is removed exactly as it always was.
+fn trim_xml_s(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let start = bytes
+        .iter()
+        .position(|&byte| !is_ws(byte))
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|&byte| !is_ws(byte))
+        .map_or(start, |last| last + 1);
+    &text[start..end]
+}
+
+/// The direct text of `element` with its surrounding XML `S` removed — see
+/// [`trim_xml_s`] for why that is not [`str::trim`].
 fn trimmed_text(element: Node<'_, '_>) -> String {
-    element_text(element).trim().to_owned()
+    trim_xml_s(&element_text(element)).to_owned()
 }
 
 fn attr_local<'a>(element: Node<'a, '_>, local: &str) -> Option<&'a str> {
@@ -650,5 +687,76 @@ mod tests {
             "<https://example.org/s> <https://example.org/p> ",
             "\"a & b < c > d\" .\n",
         ));
+    }
+
+    /// A TriX document with `terms` as the three children of its single `<triple>`.
+    fn document(terms: &str) -> String {
+        format!(
+            "<TriX xmlns=\"{}\"><graph><triple>{terms}</triple></graph></TriX>",
+            super::TRIX_NS
+        )
+    }
+
+    /// The subject IRI of a one-triple document.
+    fn subject_of(trix: &str) -> String {
+        let dataset = parse_dataset(trix.as_bytes(), "application/trix", None)
+            .unwrap_or_else(|e| panic!("parse TriX: {e}"));
+        let quad = dataset.quads().next().expect("one quad");
+        match dataset.term_value(quad.s) {
+            crate::TermValue::Iri(iri) => iri,
+            other => panic!("subject is not an IRI: {other:?}"),
+        }
+    }
+
+    /// A U+00A0 at the edge of a `<uri>` is CONTENT: it is a lawful `ucschar`, so
+    /// trimming it silently minted a DIFFERENT IRI than the document spelled.
+    ///
+    /// XML's whitespace is `S ::= (#x20 | #x9 | #xD | #xA)+` (XML 1.0 §2.3) — four code
+    /// points — while `str::trim` answers `char::is_whitespace`, twenty-six. The frozen
+    /// W3C RDFC-1.0 corpus contains exactly this term, so the rewrite was reachable from
+    /// data this repository already ships.
+    #[test]
+    fn a_no_break_space_at_the_edge_of_a_uri_is_content_not_whitespace() {
+        let marked = document("<uri>urn:ex:s\u{a0}</uri><uri>urn:ex:p</uri><uri>urn:ex:o</uri>");
+        assert_eq!(
+            subject_of(&marked),
+            "urn:ex:s\u{a0}",
+            "the NO-BREAK SPACE must survive verbatim into the IRI"
+        );
+        // A leading one too, on a term whose IRI is still absolute.
+        let inner = document("<uri>urn:ex:a\u{a0}b</uri><uri>urn:ex:p</uri><uri>urn:ex:o</uri>");
+        assert_eq!(subject_of(&inner), "urn:ex:a\u{a0}b");
+
+        // The over-refusal side, executed: real XML `S` around the text — the
+        // indentation every pretty-printer emits — is still removed, in all four
+        // members, so an ordinary formatted document reads exactly as before.
+        for padding in [" ", "\t", "\n", "\r\n", " \t\n  "] {
+            let padded = document(&format!(
+                "<uri>{padding}urn:ex:s{padding}</uri><uri>urn:ex:p</uri><uri>urn:ex:o</uri>"
+            ));
+            assert_eq!(
+                subject_of(&padded),
+                "urn:ex:s",
+                "XML `S` padding {padding:?} must still be trimmed"
+            );
+        }
+    }
+
+    /// The same rule for `<id>`: a blank node label is what the document says it is.
+    ///
+    /// A label carrying a U+00A0 is not a lawful `BLANK_NODE_LABEL`, so this is the
+    /// refusal side — but the refusal must come from the LABEL validator saying so, not
+    /// from a trim silently rewriting the label into a different, lawful one.
+    #[test]
+    fn a_no_break_space_in_an_id_is_part_of_the_label() {
+        let marked = document("<id>b0\u{a0}</id><uri>urn:ex:p</uri><uri>urn:ex:o</uri>");
+        parse_dataset(marked.as_bytes(), "application/trix", None)
+            .expect_err("U+00A0 is in no PN_CHARS class, so the label is refused as written");
+        // The neighbour: the same label surrounded by real XML `S` is trimmed and
+        // parses, exactly as it always did.
+        let padded = document("<id>\n  b0\n  </id><uri>urn:ex:p</uri><uri>urn:ex:o</uri>");
+        let dataset = parse_dataset(padded.as_bytes(), "application/trix", None)
+            .expect("XML `S` around a label is still whitespace");
+        assert_eq!(dataset.quads().count(), 1);
     }
 }

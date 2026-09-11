@@ -738,7 +738,11 @@ pub(super) fn extract_markdown_links(
                 "unterminated Markdown link destination",
             ));
         };
-        let raw_target = body[paren + 1..end].trim();
+        // The separators between `(`, the destination and `)` are the ones CommonMark
+        // names — spaces, tabs and line endings — not `str::trim`'s Unicode
+        // `White_Space` property; see `is_commonmark_link_space`. A U+00A0 here belongs
+        // to the destination, and eating it silently shortened the target.
+        let raw_target = body[paren + 1..end].trim_matches(is_commonmark_link_space);
         let target = markdown_destination(raw_target)
             .ok_or_else(|| document_error(path, "empty Markdown link destination"))?;
         if links.len() >= MAX_OKF_LINKS_PER_DOCUMENT {
@@ -795,6 +799,62 @@ fn escaped(bytes: &[u8], offset: usize) -> bool {
     slashes % 2 == 1
 }
 
+/// Whether `ch` may separate the components of a CommonMark inline link.
+///
+/// > An inline link consists of a link text followed immediately by a left parenthesis
+/// > `(`, an optional link destination, an optional link title, and a right parenthesis
+/// > `)`. These four components may be separated by spaces, tabs, and up to one line
+/// > ending.
+///
+/// — CommonMark 0.31.2 §6.3 *Links*. The class is spaces, tabs and line endings — where
+/// > A line ending is a newline (`U+000A`), a carriage return (`U+000D`) not followed by
+/// > a newline, or a carriage return and a following newline.
+///
+/// (§2.1 *Characters and lines*), i.e. four code points, enumerated. It is NOT the Unicode
+/// `White_Space` property, so a U+00A0 NO-BREAK SPACE after the `(` is not a separator —
+/// it is the first character of the destination, which is exactly what
+/// [`ends_link_destination`] then admits.
+///
+/// The "up to one" bound on the line ending is a COUNT, not a character class, and is not
+/// enforced here: this reader accepts a longer run, as it did before. That liberality is
+/// stated rather than hidden; what is fixed is the class, because only the class decides
+/// where a token starts.
+const fn is_commonmark_link_space(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\n' | '\r')
+}
+
+/// Whether `ch` ends an unbracketed CommonMark link destination.
+///
+/// > A link destination consists of either […] a nonempty sequence of characters that
+/// > does not start with `<`, does not include ASCII control characters or space
+/// > character, and includes parentheses only if (a) they are backslash-escaped or (b)
+/// > they are part of a balanced pair of unescaped parentheses.
+///
+/// — CommonMark 0.31.2 §6.3 *Links*, "link destination". The terminating class is
+/// enumerated by that sentence: the SPACE character `U+0020`, and the ASCII control
+/// characters `U+0000-U+001F` and `U+007F`. Both halves are spelled out because
+/// [`char::is_whitespace`] — which this test used to be — is wrong in BOTH directions
+/// against it:
+///
+/// * it ADMITS what the destination may hold, so U+00A0 NO-BREAK SPACE, U+2007 FIGURE
+///   SPACE, U+3000 and the rest TRUNCATED a lawful destination at the first one, turning
+///   one link target into a shorter, different link target with no diagnostic;
+/// * it MISSES what the destination may not hold, since the ASCII control characters
+///   other than `\t\n\x0B\x0C\r` — `U+0000-U+0008`, `U+000E-U+001F`, `U+007F` — carry no
+///   Unicode `White_Space` property and so were swallowed INTO the destination.
+///
+/// CommonMark does name Unicode properties elsewhere (its *Unicode whitespace character*
+/// and *Unicode punctuation character* classes, used for emphasis delimiter runs), and
+/// where it does, a Unicode property is the correct implementation. It does not name one
+/// here.
+const fn ends_link_destination(ch: char) -> bool {
+    ch == ' ' || ch.is_ascii_control()
+}
+
+/// The link destination inside an inline link's parentheses, unescaped.
+///
+/// The bracketed `<…>` form is taken verbatim to its `>`; the bare form runs to the first
+/// unescaped character of the class [`ends_link_destination`] enumerates.
 fn markdown_destination(raw: &str) -> Option<String> {
     if let Some(rest) = raw.strip_prefix('<') {
         let end = rest.find('>')?;
@@ -802,7 +862,7 @@ fn markdown_destination(raw: &str) -> Option<String> {
     }
     let mut end = raw.len();
     for (index, ch) in raw.char_indices() {
-        if ch.is_whitespace() && !escaped(raw.as_bytes(), index) {
+        if ends_link_destination(ch) && !escaped(raw.as_bytes(), index) {
             end = index;
             break;
         }
@@ -976,6 +1036,44 @@ mod tests {
             lift_okf_bundle(&bundle, &config(), &mut sink).expect_err("dangling link must fail");
         assert!(error.to_string().contains("dangling Markdown link"));
         assert!(sink.dataset().is_none());
+    }
+
+    /// A link destination ends at a SPACE or an ASCII control character — the class
+    /// CommonMark enumerates — and at nothing else.
+    ///
+    /// `char::is_whitespace` answers the Unicode `White_Space` property instead, so a
+    /// U+00A0 NO-BREAK SPACE (or U+2007, U+3000, …) TRUNCATED the destination there:
+    /// one link target silently became a shorter, different link target. It was also
+    /// wrong the other way, letting the ASCII control characters that carry no
+    /// `White_Space` property (`U+0000-U+0008`, `U+000E-U+001F`, `U+007F`) INTO a
+    /// destination the production excludes from it.
+    #[test]
+    fn a_link_destination_ends_at_the_class_commonmark_names() {
+        // Unicode whitespace that is NOT space or a control character is CONTENT.
+        for held in ['\u{a0}', '\u{2007}', '\u{2028}', '\u{3000}', '\u{feff}'] {
+            let raw = format!("a{held}b.md");
+            assert_eq!(
+                markdown_destination(&raw).as_deref(),
+                Some(raw.as_str()),
+                "{held:?} does not end a CommonMark link destination"
+            );
+        }
+        // The enumerated terminators, each executed: SPACE and the ASCII controls.
+        for ended in [' ', '\t', '\n', '\r', '\u{0}', '\u{1}', '\u{b}', '\u{7f}'] {
+            assert_eq!(
+                markdown_destination(&format!("a.md{ended}title")).as_deref(),
+                Some("a.md"),
+                "{ended:?} ends a CommonMark link destination"
+            );
+        }
+        // And through the link scanner, where the same class separates the components:
+        // real spaces and tabs around the destination are still stripped, a U+00A0 is
+        // still part of the target.
+        let links = extract_markdown_links("See [x](  a.md \t) and [y](\u{a0}b.md).\n", "d.md")
+            .expect("two links");
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].target, "a.md");
+        assert_eq!(links[1].target, "\u{a0}b.md");
     }
 
     #[test]
