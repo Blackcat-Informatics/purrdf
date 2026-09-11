@@ -513,25 +513,41 @@ unit the row lifted onto, and then the **triple terms the node reifies**,
 each rendered exactly as §11.2 writes it, in the order the row wrote its
 anchors. A citation names a **pair**, so both halves of it MUST be inside
 the identity: one row lifting onto two verses is two citations, and two
-rows lifting onto one verse are two more. Because the unit's IRI is a
-field of the preimage, a unit that re-mints re-mints every citation of
-it, and a row copied verbatim into a second document mints different
-citations there.
+rows lifting onto one verse are two more. The pair is the whole of the
+count, and the anchors are no part of it: a row naming five anchors on
+one verse is **one** citation carrying five reified terms, and a row
+naming none on that verse is **one** citation carrying none. Because the
+unit's IRI is a field of the preimage, a unit that re-mints re-mints
+every citation of it, and a row copied verbatim into a second document
+mints different citations there.
 
 The reified terms MUST be inside it, and the row's line bytes are not a
-substitute for them. A citation node is a **reifier**: it identifies one
-occurrence of one triple and states that triple as an `rdf:reifies`
-object (§11.1). What the graph states is not what the row wrote — under a
-declared canon base the object is the IRI `base ++ anchor` and under none
-it is the anchor as a literal typed with the anchor datatype, and the
-predicate is whatever the vocabulary's `cites` term names — so one row
-read under two profiles can state two different triples while every byte
-of the row stands still. Were the reified terms outside the preimage,
-both readings would mint the **same** node IRI, and a consumer merging
-two stores would hold one reifier reifying two mutually exclusive
-triples. The whole term is the field, subject, predicate and object
-together, because the whole term is what is reified. A row that lifted no
-anchor contributes no such field and reifies nothing.
+substitute for them. A citation node is a **reifier of one lifting**: it
+identifies one row's lifting onto one unit, and it states, as
+`rdf:reifies` objects, **every** cited edge that lifting produced — none,
+one, or many (§11.1). What the graph states is not what the row wrote —
+under a declared canon base the object is the IRI `base ++ anchor` and
+under none it is the anchor as a literal typed with the anchor datatype,
+and the predicate is whatever the vocabulary's `cites` term names — so
+one row read under two profiles can state two different sets of triples
+while every byte of the row stands still.
+
+The identity MUST therefore tell apart two liftings that reify
+**different sets of terms**, and that is why the terms are in the
+preimage. Were they outside it, both readings would mint the **same**
+node IRI, and two graphs whose citation nodes carried that one IRI would
+assert different reified edges under it. Merging them would then
+fabricate in silence: the merged node reifies the union of the two sets
+and so asserts edges no single document ever stated of it, while
+answering to an IRI that promised one lifting. With the terms inside,
+the two liftings are two nodes and a merge states exactly what each
+document stated. The whole term is the field, subject, predicate and
+object together, because the whole term is what is reified, and the terms
+are fields in the order the row wrote its anchors, so the preimage
+distinguishes not only *which* edges were reified but the order the row
+named them in. A row that lifted no anchor contributes no such field and
+reifies nothing — and is still exactly one node, with exactly one
+identity (§11.1).
 
 Five consequences are load-bearing, and an implementation MUST
 reproduce all five:
@@ -687,10 +703,11 @@ designated namespace MUST NOT be reached for on a caller's behalf; an
 implementation MAY offer it, but only by name.
 
 The only IRIs this specification brings of its own are the standard's:
-`rdf:type`; `rdf:reifies`, which binds a citation node to the triple term
-it reifies (§11); `xsd:integer` for every ordinal, level, byte offset and
-scalar offset; and `xsd:hexBinary` for a unit's content digest. None of
-the four is configuration. `rdf:type` and `rdf:reifies` are shapes of the
+`rdf:type`; `rdf:reifies`, which binds a citation node to each triple
+term it reifies (§11); `xsd:integer` for every ordinal, level, byte
+offset and scalar offset; and `xsd:hexBinary` for a unit's content
+digest. None of the four is configuration. `rdf:type` and `rdf:reifies`
+are shapes of the
 RDF data model rather than terms of this vocabulary, and the two XSD
 datatypes are the standard's names for the values they carry; a
 deployment that renamed any of them would publish a graph no consumer
@@ -926,16 +943,17 @@ A concordance row that lifted onto a unit states, in that unit's claim:
    each distinct anchor once, because the claim's lines are
    de-duplicated.
 
-2. **The citation node.** One node per (row, unit), its IRI minted by
-   §5's citation formula. It states, for **every** such node and
-   whatever its row lifted,
+2. **The citation node.** One node per (row, unit) — **exactly one**,
+   however many anchors the row named, five or one or none — its IRI
+   minted by §5's citation formula. It states, for **every** such node
+   and whatever its row lifted,
 
    ```
    <citation> rdf:type <citation class> .
    <citation> <unit> <the unit> .
    ```
 
-   and then, for each anchor of the row,
+   and then, for each anchor of the row, one line on that same node,
 
    ```
    <citation> rdf:reifies <<( <unit> <cites> <anchor> )>> .
@@ -948,6 +966,13 @@ A concordance row that lifted onto a unit states, in that unit's claim:
    triple term denotes the triple without asserting it, which is exactly
    what an `rdf:reifies` object requires; N-Triples admits the
    parenthesized form only, and only in **object** position.
+
+   A node therefore reifies as many edges as its row lifted onto this
+   unit: a row of two anchors gives **one** node carrying **two**
+   `rdf:reifies` objects, and an implementation MUST NOT split it into
+   two nodes, one per reified triple. The set of terms a node reifies is
+   inside its identity (§5), so two liftings that reify different sets
+   are two nodes and never one.
 
 3. **The row's sources.** For each canon source path of the row, a
    `canonSource` triple **from the citation node**, whose object is the

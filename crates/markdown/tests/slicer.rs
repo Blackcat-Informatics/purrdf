@@ -1266,6 +1266,130 @@ fn a_row_with_both_sources_and_anchors_lifts_exactly_what_it_always_lifted() {
     parses_whole(&claims);
 }
 
+/// One document shape, one verse, one row, and only the anchor cell
+/// differing: the three cardinalities §11.1 clause 2 has to answer for.
+fn one_row_naming(anchors: &str) -> String {
+    format!(
+        "# T\n\n1. One.\n\n## Concordance\n\n\
+         | Verses | Canon source | Anchors |\n| --- | --- | --- |\n\
+         | 1 | `atlas/a.ttl` |{anchors}|\n"
+    )
+}
+
+/// The **cardinality** law, executed. A citation node is a reifier of one
+/// *lifting* and not of one triple, so a row lifting onto a unit mints
+/// **exactly one** node whatever that lifting reified — two edges, one,
+/// or none — and §5's preimage claim is what keeps liftings that reified
+/// different sets apart.
+///
+/// This is the vector for a sentence the specification could otherwise
+/// state two ways. Read as one node per reified triple, the first case
+/// below would be two nodes and the last would be **none at all** — and
+/// the last case is a row whose canon sources would then hang off no
+/// node any unit reaches, which is exactly the orphan §11.1 closes by
+/// name. The count and the reachability are one law, so they are asked
+/// here together.
+#[test]
+fn a_rows_lifting_is_one_citation_node_carrying_every_edge_that_lifting_reified() {
+    for (anchors, expected) in [
+        (" `a-one`, `a-two` ", &["a-one", "a-two"][..]),
+        (" `a-one` ", &["a-one"][..]),
+        (" ", &[][..]),
+    ] {
+        let text = one_row_naming(anchors);
+        let claims = slice_of(&text, GUIDE_ID, &v1()).expect("slices");
+        let unit = units(&claims)[0];
+        let nodes = citation_nodes(unit);
+        assert_eq!(
+            nodes.len(),
+            1,
+            "one row lifting onto one unit is one node, whatever it reified: {anchors:?}"
+        );
+        let lines = citation_lines(unit, &nodes[0]);
+        let reified: Vec<String> = lines
+            .iter()
+            .filter(|(predicate, _)| predicate == purrdf_markdown::RDF_REIFIES)
+            .map(|(_, object)| object.clone())
+            .collect();
+        let want: Vec<String> = expected
+            .iter()
+            .map(|anchor| {
+                format!(
+                    "<<( <{}> <{}> \"{anchor}\"^^<{}> )>>",
+                    unit.subject,
+                    v().cites,
+                    v().dt_anchor
+                )
+            })
+            .collect();
+        assert_eq!(
+            reified, want,
+            "one `rdf:reifies` object per anchor, and all of them on the one node"
+        );
+        // Typed and back-edged unconditionally, the empty case included:
+        // that is what makes a lifting of nothing a node and not an
+        // orphaned source path.
+        assert!(
+            lines.contains(&(
+                purrdf_markdown::RDF_TYPE.to_owned(),
+                format!("<{}>", v().citation_class)
+            )),
+            "the class holds whatever the row lifted: {anchors:?}"
+        );
+        assert!(
+            lines.contains(&(v().in_unit, format!("<{}>", unit.subject))),
+            "and so does the back-edge to its unit: {anchors:?}"
+        );
+        parses_whole(&claims);
+    }
+
+    // And the reified **set** is inside the node's identity. The row's
+    // bytes, its span and the unit are held fixed here, so the only
+    // thing that can move the IRI is the list of terms: the whole list
+    // mints the node the graph states, and that list one term short
+    // mints one the graph never states. Were the terms outside the
+    // preimage those two would carry the same IRI, and merging a store
+    // whose node reified both with a store whose node reified one would
+    // leave a single node asserting the union — an edge no document ever
+    // stated of it.
+    let text = one_row_naming(" `a-one`, `a-two` ");
+    let claims = slice_of(&text, GUIDE_ID, &v1()).expect("slices");
+    let unit = units(&claims)[0];
+    let document = model(&text, &v1());
+    let row = &document.citations()[0];
+    let span = row.span();
+    let terms = reified_terms(row, &v1(), &unit.subject);
+    assert_eq!(terms.len(), 2, "the row named two anchors");
+    let mint = |reified: &[String]| {
+        purrdf_markdown::citation_iri(
+            &v(),
+            GUIDE_ID,
+            &v1().chunking_id(),
+            span.start,
+            span.end,
+            &text.as_bytes()[span.start as usize..span.end as usize],
+            &unit.subject,
+            reified,
+        )
+    };
+    assert_eq!(
+        citation_nodes(unit),
+        vec![mint(&terms)],
+        "the node the graph states is minted over the whole reified set"
+    );
+    for short in [&terms[..1], &terms[1..], &[][..]] {
+        assert_ne!(
+            mint(short),
+            mint(&terms),
+            "a lifting that reified a different set is a different node"
+        );
+        assert!(
+            !citation_nodes(unit).contains(&mint(short)),
+            "and it is a node this graph never states"
+        );
+    }
+}
+
 /// Every `(subject, predicate, object)` of every claim of a slice, read
 /// off the emitted lines the way a consumer reads them.
 fn emitted_triples(claims: &[Claim]) -> Vec<(String, String, String)> {
@@ -5765,7 +5889,19 @@ fn the_specification_still_states_every_clause_this_suite_pins_and_carries_no_pr
         // Which id is field 3, and what a citation's identity carries.
         "Field 3 is the chunking id and MUST NOT be the contract id.",
         "triple terms the node reifies",
-        "A citation node is a **reifier**",
+        // The cardinality: one node per lifting, and the reified set —
+        // not one node per reified triple. Both halves are pinned,
+        // because a sentence stating only the first is the one that
+        // read two ways.
+        "A citation node is a **reifier of one lifting**",
+        "**every** cited edge that lifting produced — none,\none, or many",
+        "tell apart two liftings that reify\n**different sets of terms**",
+        "asserts edges no single document ever stated of it",
+        "is still exactly one node, with exactly one\nidentity",
+        "a row naming five anchors on\none verse is **one** citation carrying five reified terms",
+        "One node per (row, unit) — **exactly one**,",
+        "a row of two anchors gives **one** node carrying **two**",
+        "MUST NOT split it into\n   two nodes, one per reified triple",
         // The three identities, and the law that verifies a chunk.
         "### 5.1 The three identities, and the verification law",
         "NOT write the contract id or the chunking id where a chunking-stage id is",

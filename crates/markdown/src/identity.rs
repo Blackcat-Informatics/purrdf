@@ -54,9 +54,18 @@ pub fn unit_iri(
 /// under, offered to a consumer that holds the source and a recorded
 /// heading span and wants to re-derive one for itself — exactly as
 /// [`unit_iri`] is. The projection reaches the formula by the digest
-/// form, because it has already taken the digest it needs, and the two
-/// routes are held to one answer by the vectors rather than by
-/// resemblance.
+/// form, because it has already taken the digest it needs; that is one
+/// route and not two, since this function's whole body is the digest
+/// form over `ContentDigest::of(heading_line)`, so the two agreeing
+/// proves nothing about either.
+///
+/// What the formula *is* is proven elsewhere, and only elsewhere: this
+/// module's own vectors mint from a preimage built by hand out of §5's
+/// seven fields, and
+/// `the_preimage_section_five_states_mints_the_very_ids_the_slicer_emits`
+/// in `tests/slicer.rs` rebuilds that preimage from the specification's
+/// words and holds it against the subject of every section and unit
+/// claim a real document emits.
 #[must_use]
 pub fn section_iri(
     vocabulary: &Vocabulary,
@@ -98,25 +107,30 @@ pub fn section_iri(
 ///
 /// # Why what it reifies is in the preimage
 ///
-/// A citation node is a **reifier**: it identifies one occurrence of one
-/// triple, and it states that triple as an `rdf:reifies` object. So two
-/// citation nodes that reify different triples must be two nodes, or a
-/// consumer merging two stores gets one node reifying two things it was
-/// promised were one.
+/// A citation node is a **reifier of one lifting**: it identifies one
+/// row's lifting onto one unit, and it states, as `rdf:reifies` objects,
+/// every cited edge that lifting produced — none, one, or many. So two
+/// liftings that reify different *sets* of terms must be two nodes.
+/// Were they one, two graphs whose citation nodes carried that one IRI
+/// would assert different reified edges under it, and merging them would
+/// silently produce a node reifying the union — asserting edges no
+/// single document ever stated of it.
 ///
 /// The row's line does not settle that, because what the row writes is
 /// not what the graph states. Under a declared canon base the object is
 /// the minted IRI `base ++ anchor`; under none it is the anchor as a
 /// literal typed with the anchor datatype; and the predicate is whatever
 /// the vocabulary's `cites` field names. One row read under two profiles
-/// can therefore state two different triples while every byte of the row
-/// stands still.
+/// can therefore state two different *sets* of triples while every byte
+/// of the row stands still.
 ///
-/// `reified` closes that: it is the triple terms the node reifies, each
-/// rendered exactly as the emission law writes it — the whole of
-/// `<<( <unit> <cites> <anchor> )>>`, subject, predicate and object — in
-/// the row's own order. A row that lifted no anchor passes an empty
-/// slice, and reifies nothing.
+/// `reified` closes that: it is the whole list of triple terms the node
+/// reifies, each rendered exactly as the emission law writes it — the
+/// whole of `<<( <unit> <cites> <anchor> )>>`, subject, predicate and
+/// object — in the row's own order, so the digest distinguishes both
+/// which edges were reified and the order the row named them in. A row
+/// that lifted no anchor passes an empty slice, reifies nothing, and is
+/// still exactly one node.
 // Eight fields, because the preimage has eight fields. A parameter
 // struct would hide behind one name the very list a producer in another
 // language has to reproduce term for term, and the list is the law
@@ -213,56 +227,116 @@ fn push_field(out: &mut Vec<u8>, field: &[u8]) {
 mod tests {
     use super::*;
 
+    /// The node base these vectors mint under, written out rather than
+    /// read off a [`Vocabulary`], for the same reason the preimage is.
+    const BASE: &str = "urn:test:";
+    const SOURCE: &str = "urn:test:doc";
+
+    /// §5's node identity, rebuilt here **by hand**: seven fields, each
+    /// prefixed with its length as eight bytes little-endian, in the
+    /// order §5 lists them — the kind, the source id, the chunking id,
+    /// the span's start and end as eight bytes little-endian each, the
+    /// digest algorithm tag, and the digest of the content — digested,
+    /// and written `<node base><kind>:<alg>:<hex>`.
+    ///
+    /// Nothing under test is called. [`push_field`] could lose its
+    /// prefix, [`node_iri_of_digest`] could reorder its fields or drop
+    /// the algorithm tag, and these vectors would fail — which is the
+    /// whole reason to write the preimage out twice. Holding
+    /// [`unit_iri`] against [`node_iri_of_digest`] instead would prove
+    /// nothing at all: `unit_iri`'s entire body is that call.
+    ///
+    /// The wider claim — that a real document *fills* these fields the
+    /// way §5 says it does — is a different fact, and it is held in
+    /// `the_preimage_section_five_states_mints_the_very_ids_the_slicer_emits`
+    /// in `tests/slicer.rs`, over the subject of every claim the guide
+    /// emits.
+    fn by_hand(
+        kind: &str,
+        contract: &ChunkingContractId,
+        byte_start: u64,
+        byte_end: u64,
+        content: &[u8],
+    ) -> String {
+        let (start, end) = (byte_start.to_le_bytes(), byte_end.to_le_bytes());
+        let content_digest = ContentDigest::of(content);
+        let mut preimage = Vec::new();
+        for field in [
+            kind.as_bytes(),
+            SOURCE.as_bytes(),
+            contract.as_bytes(),
+            &start[..],
+            &end[..],
+            crate::DIGEST_ALGORITHM.as_bytes(),
+            content_digest.as_bytes(),
+        ] {
+            preimage.extend_from_slice(&(field.len() as u64).to_le_bytes());
+            preimage.extend_from_slice(field);
+        }
+        format!(
+            "{BASE}{kind}:{}:{}",
+            crate::DIGEST_ALGORITHM,
+            ContentDigest::of(&preimage).to_hex()
+        )
+    }
+
     #[test]
-    fn minting_from_a_taken_digest_is_minting_from_the_bytes() {
-        let v = Vocabulary::under("urn:test:").expect("a vocabulary");
+    fn a_units_identity_is_section_fives_preimage_over_its_own_bytes() {
+        let v = Vocabulary::under(BASE).expect("a vocabulary");
         let contract = crate::Profile::new("t", 1, v.clone()).chunking_id();
         let span = b"a span of bytes";
         assert_eq!(
-            unit_iri(&v, "urn:test:doc", &contract, 3, 18, span),
-            node_iri_of_digest(
-                &v,
-                "unit",
-                "urn:test:doc",
-                &contract,
-                3,
-                18,
-                &ContentDigest::of(span)
-            )
+            unit_iri(&v, SOURCE, &contract, 3, 18, span),
+            by_hand("unit", &contract, 3, 18, span)
+        );
+        // The span is a field, so the same bytes read at another offset
+        // are another node.
+        assert_ne!(
+            unit_iri(&v, SOURCE, &contract, 3, 18, span),
+            unit_iri(&v, SOURCE, &contract, 4, 19, span)
         );
     }
 
-    /// The same equivalence for a section, which is the path the
-    /// projection actually takes: it holds a section's *heading span* and
-    /// digests those bytes itself, so [`section_iri`] and the digest form
-    /// have to be one formula rather than two that happen to agree.
-    ///
-    /// The two are pinned again end to end — [`section_iri`] against the
-    /// subject of every section claim a real document emits — in the
-    /// vector suite, because agreeing on a preimage and agreeing on the
-    /// *fields* a document fills it with are two facts.
+    /// The same preimage for a section, over its *heading* span — the
+    /// path the projection actually takes, since it holds the heading
+    /// line and digests those bytes itself.
     #[test]
-    fn a_sections_identity_is_the_same_formula_over_its_heading_line() {
-        let v = Vocabulary::under("urn:test:").expect("a vocabulary");
+    fn a_sections_identity_is_the_same_preimage_over_its_heading_line() {
+        let v = Vocabulary::under(BASE).expect("a vocabulary");
         let contract = crate::Profile::new("t", 1, v.clone()).chunking_id();
         let heading = b"## The Marrow Shelf";
         assert_eq!(
-            section_iri(&v, "urn:test:doc", &contract, 64, 83, heading),
-            node_iri_of_digest(
-                &v,
-                "section",
-                "urn:test:doc",
-                &contract,
-                64,
-                83,
-                &ContentDigest::of(heading)
-            )
+            section_iri(&v, SOURCE, &contract, 64, 83, heading),
+            by_hand("section", &contract, 64, 83, heading)
         );
         // And the kind is a field, so the same span of the same bytes is
         // a different node under a different kind.
         assert_ne!(
-            section_iri(&v, "urn:test:doc", &contract, 64, 83, heading),
-            unit_iri(&v, "urn:test:doc", &contract, 64, 83, heading)
+            section_iri(&v, SOURCE, &contract, 64, 83, heading),
+            unit_iri(&v, SOURCE, &contract, 64, 83, heading)
+        );
+    }
+
+    /// The digest form the projection reaches for is the *same* formula,
+    /// asked of a digest already taken — and asked here against the
+    /// hand-built preimage rather than against [`unit_iri`], because
+    /// `unit_iri` is a call to it and the two cannot disagree.
+    #[test]
+    fn the_digest_form_mints_section_fives_preimage_too() {
+        let v = Vocabulary::under(BASE).expect("a vocabulary");
+        let contract = crate::Profile::new("t", 1, v.clone()).chunking_id();
+        let span = b"a span of bytes";
+        assert_eq!(
+            node_iri_of_digest(
+                &v,
+                "unit",
+                SOURCE,
+                &contract,
+                3,
+                18,
+                &ContentDigest::of(span)
+            ),
+            by_hand("unit", &contract, 3, 18, span)
         );
     }
 
