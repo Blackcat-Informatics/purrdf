@@ -1715,6 +1715,12 @@ fn canonical_refuses_reserved_vocabulary_without_aborting() {
         !stderr(&o).is_empty(),
         "the refusal must carry a diagnostic on stderr"
     );
+    assert!(
+        stderr(&o).contains("urn:purrdf:rdfc:sentinel"),
+        "the diagnostic must NAME the offending reserved IRI, not just fail — a \
+         regression to a bare error would still exit 1: {}",
+        stderr(&o)
+    );
 }
 
 // ── Relative IRI references and the document base ───────────────────────────────
