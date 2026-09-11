@@ -774,11 +774,14 @@ pub fn check_admissible_flat_view<D: FallibleDatasetView>(
     }
 }
 
-/// The chosen-algorithm [`ContentDigest`] of `view`'s WHOLE-DATASET flat canonical
+/// The SHA-256 [`ContentDigest`] of `view`'s WHOLE-DATASET flat canonical
 /// form — the [`FlatAssertion`](CanonPresentation::FlatAssertion) sibling of
 /// [`graph_digest_view`]/[`try_graph_digest_view`], taken over the whole dataset
 /// rather than one named graph (this module offers no flat PER-GRAPH digest entry
-/// point). Byte-identical to hashing [`try_canonicalize_flat_view`]'s
+/// point). `hash` selects only the RDFC label-issuance algorithm inside the
+/// canonicalization; the digest over the resulting document is unconditionally
+/// SHA-256, exactly as every other [`ContentDigest`] in this module. Equal to
+/// [`ContentDigest::of`] applied to [`try_canonicalize_flat_view`]'s
 /// [`Canonicalized::nquads`] under the same `hash`, because that is exactly what
 /// this function does.
 ///
@@ -4822,7 +4825,11 @@ mod tests {
         let digest = try_flat_digest_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
         assert_eq!(digest, ContentDigest::of(flat.nquads.as_bytes()));
 
-        // SHA-384 travels the same seam.
+        // SHA-384 travels the same seam — and selects ONLY the label-issuance
+        // algorithm: the digest over the resulting document is still the
+        // unconditional SHA-256 `ContentDigest`, so a Sha384-labelled run's
+        // digest length and value are those of `ContentDigest::of`, never a
+        // SHA-384 of anything.
         let flat384 =
             try_canonicalize_flat_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
         let digest384 = try_flat_digest_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
