@@ -389,29 +389,25 @@ fn is_langtag(tag: &str) -> bool {
     subtags.all(|sub| !sub.is_empty() && sub.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
-/// `[18t] IRIREF ::= "<" ([^#x00-#x20<>"{}|^`\] | UCHAR)* ">"` — the content class.
+/// `[18t] IRIREF ::= "<" ([^#x00-#x20<>"{}|^`\] | UCHAR)* ">"` — the content class,
+/// as the complement of [`terminals::is_iriref_forbidden`].
 ///
 /// A content class is a terminal like any other, and `char::is_control` stood in for
 /// this one while being wrong in **both** directions at once, which is why the error
-/// was invisible from either side alone:
-///
-/// * it **admits** `#x20` SPACE, and the production excludes the whole `#x00-#x20`
-///   range, so `<urn:ex:a b>` used to name an IRI with a space in it;
-/// * it **refuses** `U+007F-U+009F`, which the production admits, so a lawful IRI
-///   carrying a C1 control was reported as unterminated;
-/// * and it says nothing at all about `` ` ``, `|`, `^` and `\`, four of the nine
-///   delimiters the production excludes by name — so those were absorbed too.
-///
-/// Enumerating the production is therefore not pedantry: each of those four scalars
-/// is a *delimiter* somewhere in the Turtle family, and admitting one here lets a
-/// shape map name a node no conforming processor would resolve the same way.
+/// was invisible from either side alone: it admitted `#x20` SPACE (so `<urn:ex:a b>`
+/// named an IRI with a space in it), refused the lawful U+007F-U+009F, and said
+/// nothing at all about `` ` ``, `|`, `^` and `\`, four of the nine delimiters the
+/// production excludes by name. The enumerated replacement that followed was a THIRD
+/// transcription of a production the workspace already owned, so the exclusion set
+/// now comes from the shared module and this function is just the polarity flip the
+/// scan loop reads more naturally in.
 ///
 /// `UCHAR` (`\uXXXX` / `\UXXXXXXXX`) is not decoded here, so the `'\'` that opens one
 /// is refused rather than absorbed verbatim: a backslash in the raw IRI is a
 /// different IRI than the one the escape denotes, and refusing names the defect
 /// instead of resolving the wrong node.
 const fn is_iriref_content(c: char) -> bool {
-    c as u32 > 0x20 && !matches!(c, '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\')
+    !terminals::is_iriref_forbidden(c)
 }
 
 /// `[14t] STRING_LITERAL2 ::= '"' ([^#x22#x5C#xA#xD] | ECHAR | UCHAR)* '"'` — the
@@ -884,12 +880,14 @@ impl MapParser {
     /// it parsed. `u8::is_ascii_whitespace` is not the correction either — it admits
     /// U+000C FORM FEED, which `PASSED TOKENS` does not name.
     ///
-    /// The narrowing to a byte is exact rather than a guess: `u8::try_from` fails
-    /// above U+00FF, and every Latin-1 scalar it does yield (U+00A0 the one that
-    /// matters) is outside `WS`, so nothing non-ASCII can alias a member.
+    /// This scanner holds decoded scalars, so it reaches for the scalar-shaped
+    /// [`terminals::is_ws_char`] rather than narrowing to a byte here. The two are
+    /// one table: every `WS` member is ASCII, so the widened search answers `false`
+    /// for U+00A0 and everything above it, which is exactly what the narrowing used
+    /// to prove locally.
     fn skip_ws(&mut self) {
         while let Some(c) = self.peek() {
-            if u8::try_from(c).is_ok_and(terminals::is_ws) {
+            if terminals::is_ws_char(c) {
                 self.pos += 1;
             } else {
                 break;

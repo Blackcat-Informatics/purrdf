@@ -153,7 +153,18 @@ NON_ASCII_MEANING = (
 # module is a fork of a table the workspace already owns.
 TERMINAL_FN = re.compile(
     r"\bfn\s+is_"
-    r"(?:pn_chars(?:_base|_u)?|varname(?:_start|_continue|_char)?|ws)"
+    r"(?:pn_chars(?:_base|_u)?"
+    r"|pn_local(?:_start|_esc)?"
+    r"|blank_node_label_start"
+    r"|varname(?:_start|_continue|_char)?"
+    r"|ws(?:_char)?"
+    r"|iriref_forbidden(?:_byte)?"
+    # `hex` is deliberately absent. It looked like a terminal name and is not:
+    # `is_hex` validates a Frictionless data-package field in crates/rdf and
+    # answers `is_ascii_hexdigit`, which is exact and owns no production. A
+    # family list that sweeps in every plausible-sounding name is the same
+    # over-refusal this gate refuses in scanners.
+    r"|percent|plx|echar)"
     r"\s*[(<]"
 )
 TERMINAL_FN_RULE = "forked-terminal"
@@ -466,6 +477,17 @@ def self_test() -> None:
     assert TERMINAL_FN_RULE in rules(was_shipped), "and the fork it sits in"
 
     # The corrected form: named for the terminal, but delegating.
+    # The name IS the claim, so every production the shared module owns must be
+    # covered. Two of these were added after the first draft of this gate, and a
+    # local fork of either would have gone unflagged.
+    for owned in (
+        "is_pn_chars_base", "is_pn_chars_u", "is_pn_chars", "is_pn_local_start",
+        "is_blank_node_label_start", "is_varname_start", "is_varname_continue",
+        "is_ws", "is_ws_char", "is_iriref_forbidden_byte",
+    ):
+        forked = f"fn {owned}(c: char) -> bool {{ c.is_alphanumeric() }}"
+        assert TERMINAL_FN_RULE in rules(forked), f"{owned} must be covered"
+
     fixed = "fn is_pn_chars_base(c: char) -> bool { terminals::is_pn_chars_base(c) }"
     assert TERMINAL_FN_RULE not in rules(fixed), "delegation must clear the fork"
     assert NON_ASCII_RULE not in rules(fixed), "and leave nothing behind"

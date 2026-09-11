@@ -44,6 +44,15 @@
 //! production enumerates a small set — a compile-time assertion that the table
 //! has exactly the cardinality the production names.
 //!
+//! A production whose callers hold different cursor shapes gets two predicates
+//! over **one** table rather than two tables: [`is_ws`] and [`is_ws_char`],
+//! [`is_iriref_forbidden_byte`] and [`is_iriref_forbidden`]. The suffix names
+//! the shape that had to be added, not a second transcription — the lift is
+//! sound only because the shared table is proved wholly ASCII, so the widened
+//! search answers `false` for every scalar a `u8::try_from` narrowing would have
+//! rejected. Both spellings in each pair are names the workspace's terminal gate
+//! recognises as this module's, so a local fork under either name is caught.
+//!
 //! Every predicate is ordered **ASCII-first**: the overwhelmingly common scalar
 //! in real documents is below `0x80` and costs one comparison against a
 //! two-or-three entry table, and only a scalar at or above `0x80` pays for the
@@ -189,6 +198,17 @@ const fn range_cardinality(ranges: &[ScalarRange]) -> u32 {
 ///   predicate ASCII-first; the two tables are proved to sit on their own side
 ///   of [`ASCII_LIMIT`].
 ///
+/// A byte-shaped invocation may additionally carry a `char_form:` clause, which
+/// emits a `const fn name(char)` **over the same table**. That is the whole
+/// reason the clause exists rather than a second invocation: a scanner that
+/// holds decoded scalars and a scanner that holds raw bytes are asking one
+/// production, and spelling it twice is the fork this module was built to
+/// abolish. The lift is exact because the byte arm has already proved the table
+/// wholly ASCII, so no scalar at or above [`ASCII_LIMIT`] can be a member and
+/// the widened search answers `false` for every one of them — the same answer
+/// the caller's own `u8::try_from` narrowing would have produced, without the
+/// narrowing having to be re-argued at each call site.
+///
 /// Every invocation additionally proves its tables sorted and disjoint, and a
 /// `cardinality:` clause proves a small enumerated production admits exactly as
 /// many scalars as it names.
@@ -199,6 +219,11 @@ macro_rules! terminal {
         $vis:vis const fn $name:ident(u8);
         ranges: [ $( ($lo:literal, $hi:literal) ),* $(,)? ];
         $( cardinality: $cardinality:literal; )?
+        $(
+            char_form:
+            $(#[$char_meta:meta])*
+            $char_vis:vis const fn $char_name:ident(char);
+        )?
     ) => {
         /// Inclusive ranges of the production, in grammar order.
         const $table: &[ScalarRange] = &[ $( ($lo, $hi) ),* ];
@@ -226,6 +251,15 @@ macro_rules! terminal {
         $vis const fn $name(b: u8) -> bool {
             in_ranges(widen(b), $table)
         }
+
+        $(
+            $(#[$char_meta])*
+            #[inline]
+            #[must_use]
+            $char_vis const fn $char_name(c: char) -> bool {
+                in_ranges(c as u32, $table)
+            }
+        )?
     };
 
     (
@@ -314,6 +348,22 @@ terminal! {
         (0x20, 0x20), // #x20 SPACE
     ];
     cardinality: 4;
+    char_form:
+    /// `WS` for a scanner that holds a decoded [`char`] rather than a raw byte.
+    ///
+    /// The same four-member table as [`is_ws`], searched over the full scalar
+    /// value. Every member is ASCII, so every scalar at or above U+0080 answers
+    /// `false` — which is the correct answer and not an approximation: U+00A0
+    /// NO-BREAK SPACE, U+2000-U+200A, U+2028, U+2029 and U+3000 carry the
+    /// Unicode `White_Space` property and none of them is `WS`.
+    ///
+    /// This exists so that the narrowing argument is made once. A scalar-holding
+    /// scanner would otherwise spell the test `u8::try_from(c).is_ok_and(is_ws)`
+    /// and owe a comment explaining why the fallible narrowing cannot lose a
+    /// member; ShExC's `@pass` scanner and its shape-map scanner each carried
+    /// that argument separately. Two prose copies of one proof drift the same
+    /// way two range tables do.
+    pub const fn is_ws_char(char);
 }
 
 terminal! {
@@ -505,11 +555,132 @@ terminal! {
     ];
 }
 
+terminal! {
+    /// The scalar a `PN_LOCAL_ESC` escapes — the part of the terminal that IS a
+    /// character class.
+    ///
+    /// ```text
+    /// PN_LOCAL_ESC ::= '\' ( '_' | '~' | '.' | '-' | '!' | '$' | '&' | "'"
+    ///                      | '(' | ')' | '*' | '+' | ',' | ';' | '=' | '/'
+    ///                      | '?' | '#' | '@' | '%' )
+    /// ```
+    ///
+    /// SPARQL 1.2 §19.8 / Turtle 1.2 §6.5. The `'\'` itself is a literal the
+    /// scanner has already consumed when it asks this, so what is answered here
+    /// is the twenty-member set that may FOLLOW the backslash — and only that
+    /// set. A `'\'` followed by anything else is not a `PN_LOCAL_ESC` at all, so
+    /// it does not belong to the local name and must end the scan rather than be
+    /// absorbed: `ex:a\qb` is the prefixed name `ex:a` and then a syntax error,
+    /// never the local name `a\qb` or `aqb`.
+    ///
+    /// The escaped scalar stands for ITSELF in the local name's value, which is
+    /// why the set is exactly the punctuation that would otherwise terminate the
+    /// scan or be read as some other token — `dbr:Semantic_analysis_\(linguistics\)`
+    /// is one prefixed name whose local part contains literal parentheses.
+    ///
+    /// Scalar-shaped, because every member is ASCII and both of the workspace's
+    /// prefixed-name scanners look at the escaped scalar as a decoded [`char`];
+    /// a non-ASCII scalar after the backslash is not escapable, which is why the
+    /// non-ASCII table is empty rather than absent.
+    ///
+    /// Note the deliberate holes. The table's `[#x23-#x2F]` run is contiguous
+    /// only by accident of the code chart, and the gaps around it are the point:
+    /// `'"'` (`#x22`) is NOT escapable, nor are `'<'` (`#x3C`), `'>'` (`#x3E`),
+    /// `'\'` (`#x5C`), `'['`, `']'`, `'^'`, `` '`' ``, `'{'`, `'|'`, `'}'`, the
+    /// digits or the letters. A scanner that answered "any ASCII punctuation"
+    /// would accept `ex:a\"b` and mint a local name containing a quote.
+    tables PN_LOCAL_ESC_ASCII, PN_LOCAL_ESC_NON_ASCII;
+    pub const fn is_pn_local_esc(char);
+    ascii: [
+        (0x21, 0x21), // '!'
+        (0x23, 0x2F), // '#' '$' '%' '&' '\'' '(' ')' '*' '+' ',' '-' '.' '/'
+        (0x3B, 0x3B), // ';'
+        (0x3D, 0x3D), // '='
+        (0x3F, 0x40), // '?' '@'
+        (0x5F, 0x5F), // '_'
+        (0x7E, 0x7E), // '~'
+    ];
+    non_ascii: [];
+    cardinality: 20;
+}
+
+terminal! {
+    /// Whether a byte may NOT appear raw in an `IRIREF` body.
+    ///
+    /// ```text
+    /// IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'
+    /// ```
+    ///
+    /// SPARQL 1.2 §19.8 / Turtle 1.2 §6.5 (`[18t]`), and ShExC spells it the
+    /// same way. Exactly two things are excluded: the range `#x00-#x20` — every
+    /// C0 control **plus the SPACE** — and the nine reserved delimiters
+    /// ``< > " { } | ^ ` \``. **Nothing else.** Every excluded code point is
+    /// ASCII, so a byte test is exact over UTF-8: a multi-byte sequence's lead
+    /// and continuation bytes are all `>= 0x80` and can never alias one of them.
+    ///
+    /// This is stated as the FORBIDDEN set rather than the admitted one because
+    /// that is what the production itself enumerates; the admitted class is its
+    /// complement over all of Unicode, which no table can hold.
+    ///
+    /// # Why [`char::is_control`] is not this predicate
+    ///
+    /// A content class is a terminal like any other, and `is_control` stands in
+    /// for this one while being wrong in **both** directions at once, which is
+    /// why substituting it is invisible from either side alone:
+    ///
+    /// * it **admits** `#x20` SPACE, which the production excludes, so
+    ///   `<urn:ex:a b>` names an IRI with a space in it;
+    /// * it **refuses** U+007F-U+009F, which the production admits, so a lawful
+    ///   IRI carrying a C1 control is reported as unterminated;
+    /// * and it says nothing at all about `` ` ``, `|`, `^` and `\` — four of
+    ///   the nine delimiters — so those are absorbed into the body too. Each of
+    ///   those four is a delimiter somewhere in the Turtle family, so admitting
+    ///   one lets a document name a node no conforming processor resolves the
+    ///   same way.
+    ///
+    /// # Why non-ASCII whitespace is lawful here
+    ///
+    /// This is likewise NOT [`char::is_whitespace`]. U+00A0 NO-BREAK SPACE,
+    /// U+2000-U+200A, U+2028, U+2029, U+3000 and the rest of the non-ASCII
+    /// Unicode whitespace are **lawful** raw inside an `IRIREF`, and they are
+    /// `ucschar` under RFC 3987 §2.2 so they survive IRI validation as well. The
+    /// workspace's own N-Triples/N-Quads/Turtle/TriG writers emit those scalars
+    /// VERBATIM — only `#x00-#x20`, the delimiters and the control blocks ride
+    /// as `\uXXXX` — so terminating a body at them would make serialize-then-parse
+    /// stop being a round trip. An `IRIREF` body is content, not a token
+    /// boundary, and the class that decides it is narrower than any whitespace
+    /// property, not wider.
+    table IRIREF_FORBIDDEN_RANGES;
+    pub const fn is_iriref_forbidden_byte(u8);
+    ranges: [
+        (0x00, 0x20), // [#x00-#x20]: the C0 controls and SPACE
+        (0x22, 0x22), // '"'
+        (0x3C, 0x3C), // '<'
+        (0x3E, 0x3E), // '>'
+        (0x5C, 0x5C), // '\'
+        (0x5E, 0x5E), // '^'
+        (0x60, 0x60), // '`'
+        (0x7B, 0x7D), // '{' '|' '}'
+    ];
+    cardinality: 42;
+    char_form:
+    /// The [`char`] form of [`is_iriref_forbidden_byte`], for a scan that
+    /// already holds a decoded scalar — an escape decoder, or a scanner over a
+    /// `Vec<char>`.
+    ///
+    /// The same table, searched over the full scalar value. Every forbidden code
+    /// point is ASCII, so every scalar at or above U+0080 is permitted: that
+    /// includes U+00A0 and the whole Latin-1 supplement, and it is the
+    /// production's answer, not a shortcut.
+    pub const fn is_iriref_forbidden(char);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        is_blank_node_label_start, is_pn_chars, is_pn_chars_base, is_pn_chars_u, is_pn_local_start,
-        is_varname_continue, is_varname_start, is_ws,
+        is_blank_node_label_start, is_iriref_forbidden, is_iriref_forbidden_byte, is_pn_chars,
+        is_pn_chars_base, is_pn_chars_u, is_pn_local_esc, is_pn_local_start, is_varname_continue,
+        is_varname_start, is_ws, is_ws_char,
     };
     use pretty_assertions::assert_eq;
 
@@ -739,6 +910,124 @@ mod tests {
     }
 
     #[test]
+    fn the_char_lift_of_a_byte_production_agrees_on_every_scalar() {
+        // The `char_form:` clause is only sound because its table is wholly
+        // ASCII. Checked as a total function rather than spot-checked: for every
+        // scalar the lift must answer exactly what narrowing-then-testing
+        // answers, which is the argument each call site used to have to make.
+        for c in all_scalars() {
+            assert_eq!(
+                is_ws_char(c),
+                u8::try_from(c).is_ok_and(is_ws),
+                "WS at {c:?}"
+            );
+            assert_eq!(
+                is_iriref_forbidden(c),
+                u8::try_from(c).is_ok_and(is_iriref_forbidden_byte),
+                "IRIREF content at {c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pn_local_esc_is_exactly_the_twenty_scalars_the_production_lists() {
+        // An independent transcription: the production's own alternation, in the
+        // order the grammar writes it, against a table that had to coalesce the
+        // set into ranges to be searchable.
+        let oracle = |c: char| {
+            matches!(
+                c,
+                '_' | '~'
+                    | '.'
+                    | '-'
+                    | '!'
+                    | '$'
+                    | '&'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '*'
+                    | '+'
+                    | ','
+                    | ';'
+                    | '='
+                    | '/'
+                    | '?'
+                    | '#'
+                    | '@'
+                    | '%'
+            )
+        };
+        for c in all_scalars() {
+            assert_eq!(is_pn_local_esc(c), oracle(c), "{c:?}");
+        }
+        assert_eq!(all_scalars().filter(|&c| is_pn_local_esc(c)).count(), 20);
+    }
+
+    #[test]
+    fn pn_local_esc_refuses_the_punctuation_beside_the_members_it_names() {
+        // The coalesced `[#x23-#x2F]` run makes the gaps the thing to pin: each
+        // of these sits one or two scalars from a member and is NOT escapable,
+        // so `ex:a\"b` cannot mint a local name carrying a quote.
+        for c in ['"', '<', '>', '\\', '[', ']', '^', '`', '{', '|', '}', ':'] {
+            assert!(!is_pn_local_esc(c), "{c:?}");
+        }
+        // Their lawful neighbours, so this is the production and not a narrowed
+        // punctuation alphabet.
+        for c in ['!', '#', '/', ';', '=', '?', '@', '_', '~', '%'] {
+            assert!(is_pn_local_esc(c), "{c:?}");
+        }
+        // Names and digits are escaped by nothing: `\a` is not a `PN_LOCAL_ESC`.
+        for c in ['a', 'Z', '0', '\u{4E2D}'] {
+            assert!(!is_pn_local_esc(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn the_iriref_content_class_is_wrong_in_both_directions_under_is_control() {
+        // The admitted-but-excluded side: SPACE is `#x00-#x20`, so `<urn:ex:a b>`
+        // has no reading, yet `char::is_control` calls SPACE ordinary content.
+        assert!(is_iriref_forbidden(' '));
+        assert!(!' '.is_control());
+        // The excluded-but-admitted side: the C1 controls are LAWFUL raw in an
+        // `IRIREF` body, and `is_control` refuses all of them.
+        for c in ['\u{7F}', '\u{80}', '\u{9F}'] {
+            assert!(c.is_control(), "{c:?}");
+            assert!(!is_iriref_forbidden(c), "{c:?}");
+        }
+        // The four delimiters `is_control` says nothing about at all.
+        for c in ['`', '|', '^', '\\'] {
+            assert!(!c.is_control(), "{c:?}");
+            assert!(is_iriref_forbidden(c), "{c:?}");
+        }
+        // All nine delimiters, and the whole excluded range's endpoints.
+        for c in ['<', '>', '"', '{', '}', '|', '^', '`', '\\'] {
+            assert!(is_iriref_forbidden(c), "{c:?}");
+        }
+        assert!(is_iriref_forbidden('\u{0}'));
+        assert!(is_iriref_forbidden('\u{20}'));
+        assert!(!is_iriref_forbidden('\u{21}'));
+        // Non-ASCII whitespace is content, not a boundary: the round trip the
+        // workspace's writers depend on.
+        for c in ['\u{A0}', '\u{2000}', '\u{2028}', '\u{3000}'] {
+            assert!(c.is_whitespace(), "{c:?}");
+            assert!(!is_iriref_forbidden(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn ws_char_is_the_four_members_and_nothing_that_merely_looks_like_them() {
+        for c in [' ', '\t', '\r', '\n'] {
+            assert!(is_ws_char(c), "{c:?}");
+        }
+        for c in ['\u{B}', '\u{C}', '\u{85}', '\u{A0}', '\u{1680}', '\u{3000}'] {
+            assert!(c.is_whitespace(), "{c:?}");
+            assert!(!is_ws_char(c), "{c:?}");
+        }
+        assert_eq!(all_scalars().filter(|&c| is_ws_char(c)).count(), 4);
+    }
+
+    #[test]
     fn every_predicate_is_usable_in_const_context() {
         // The predicates are `const fn` so a scanner can fold them into lookup
         // tables at compile time; these assertions are evaluated by the
@@ -749,5 +1038,11 @@ mod tests {
         const { assert!(is_pn_chars_u('_')) }
         const { assert!(!is_varname_continue('-')) }
         const { assert!(is_pn_chars('-')) }
+        const { assert!(is_ws_char(' ')) }
+        const { assert!(!is_ws_char('\u{A0}')) }
+        const { assert!(is_pn_local_esc('~')) }
+        const { assert!(!is_pn_local_esc('"')) }
+        const { assert!(is_iriref_forbidden_byte(b' ')) }
+        const { assert!(!is_iriref_forbidden('\u{A0}')) }
     }
 }

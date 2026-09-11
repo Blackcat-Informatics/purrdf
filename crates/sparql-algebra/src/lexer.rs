@@ -262,11 +262,12 @@ impl<'a> Lexer<'a> {
     ///   member either — it lets a misplaced NO-BREAK SPACE *silently separate*
     ///   two tokens the grammar would have refused to separate.
     /// * The byte test is exact over UTF-8 for the same reason
-    ///   [`is_iriref_forbidden_byte`] is: every `WS` member is ASCII, and no byte
-    ///   of a multi-byte UTF-8 sequence is below `0x80`, so a raw-byte comparison
-    ///   can neither miss a member nor alias one. That removes a UTF-8 decode and
-    ///   a Unicode-property lookup from the loop that runs between *every* pair of
-    ///   tokens in SPARQL, Turtle, TriG, N-Triples and N-Quads.
+    ///   [`terminals::is_iriref_forbidden_byte`] is: every `WS` member is ASCII,
+    ///   and no byte of a multi-byte UTF-8 sequence is below `0x80`, so a
+    ///   raw-byte comparison can neither miss a member nor alias one. That
+    ///   removes a UTF-8 decode and a Unicode-property lookup from the loop that
+    ///   runs between *every* pair of tokens in SPARQL, Turtle, TriG, N-Triples
+    ///   and N-Quads.
     fn skip_trivia(&mut self) {
         loop {
             match self.byte_at(0) {
@@ -403,7 +404,7 @@ impl<'a> Lexer<'a> {
                     .as_bytes()
                     .iter()
                     .copied()
-                    .any(is_iriref_forbidden_byte)
+                    .any(terminals::is_iriref_forbidden_byte)
                 {
                     self.pos = end + 1; // consume through '>'
                     return Ok(Token::Iri(Cow::Borrowed(body)));
@@ -437,7 +438,7 @@ impl<'a> Lexer<'a> {
                 }
                 break; // a non-UCHAR backslash is not valid in an IRIREF
             }
-            if is_iriref_forbidden(c) {
+            if terminals::is_iriref_forbidden(c) {
                 break; // forbidden raw in IRIREF → not an IRIREF
             }
             content.push(c);
@@ -827,10 +828,6 @@ impl<'a> Lexer<'a> {
     /// decisions about the scalars that FOLLOW — so those two are decided here,
     /// with the cursor, exactly as the body of the scan decides them.
     ///
-    /// `'%'` is admitted on its lead scalar alone, which is how the tail already
-    /// treats it: this scanner does not check `HEX HEX`, and tightening that is a
-    /// separate decision about the same production, not part of the head class.
-    ///
     /// The `'/'` arm is the [`LexerOptions::pn_local_allows_slash`] dialect and
     /// not the W3C production. That option's contract is that a bare `/` is *a
     /// `PN_LOCAL` character*, so it is one in both positions, and
@@ -839,12 +836,39 @@ impl<'a> Lexer<'a> {
     fn at_pn_local_start(&self) -> bool {
         match self.cur() {
             // `PN_LOCAL_ESC` — a `\` that escapes nothing belongs to no name.
-            Some('\\') => self.peek(1).is_some_and(is_pn_local_esc),
-            Some('%') => true, // `PERCENT`
+            Some('\\') => self.peek(1).is_some_and(terminals::is_pn_local_esc),
+            Some('%') => self.at_percent(),
             Some('/') => self.options.pn_local_allows_slash,
             Some(c) => terminals::is_pn_local_start(c),
             None => false,
         }
+    }
+
+    /// Whether the cursor sits on a whole `PERCENT ::= '%' HEX HEX`.
+    ///
+    /// `HEX ::= [0-9] | [A-F] | [a-f]`, which is exactly
+    /// [`char::is_ascii_hexdigit`] — an enumerated production answered by an
+    /// exact predicate rather than a convenient property, so nothing here
+    /// approximates. Case is not significant: `%2F`, `%2f` and `%aB` are all
+    /// lawful `PERCENT`s.
+    ///
+    /// **Both digits are required, and that is a refusal this scanner did not
+    /// use to make.** A bare `'%'` was admitted on its lead scalar alone, at the
+    /// head of a local name and in its tail, so `ex:%zz` lexed here as one
+    /// prefixed name while the workspace's ShExC scanner — reading the same
+    /// production — read it as `ex:` followed by junk. Two surfaces of one
+    /// product gave opposite answers to one grammar, and the grammar is not
+    /// ambiguous.
+    ///
+    /// Like every other `PLX` decision this refusal moves a token BOUNDARY
+    /// rather than rejecting a document outright: the local name simply stops
+    /// before the `'%'`, and what the `'%'` then means is the caller's question.
+    /// `ex:%` truncated at end of input is the reason both lookaheads are
+    /// `Option`-shaped — [`Lexer::peek`] returns `None` past the end, so a
+    /// truncated escape ends the name instead of reading past the buffer.
+    fn at_percent(&self) -> bool {
+        self.peek(1).is_some_and(|h| h.is_ascii_hexdigit())
+            && self.peek(2).is_some_and(|h| h.is_ascii_hexdigit())
     }
 
     /// `PN_LOCAL`: like a prefix but may also start with a digit or `_`/`:`; must
@@ -876,8 +900,9 @@ impl<'a> Lexer<'a> {
     /// `ex:-b` is not; scanning the head with the tail class read both the same
     /// way. [`terminals::is_pn_local_start`] answers the three single-scalar
     /// alternatives; `PLX` is a shape rather than a class and is decided here —
-    /// a `'%'` opens `PERCENT` and a `'\'` opens `PN_LOCAL_ESC` when what follows
-    /// it is escapable — so `ex:%20a` and `ex:\~a` keep their leading `PLX`.
+    /// a `'%'` opens `PERCENT` when two `HEX` digits follow it and a `'\'` opens
+    /// `PN_LOCAL_ESC` when what follows it is escapable — so `ex:%20a` and
+    /// `ex:\~a` keep their leading `PLX`, and `ex:%zz` does not have one.
     ///
     /// Second, a head check may not become a *requirement* that a head exist.
     /// `PNAME_NS` is a whole terminal — `ex:` and `:` are complete prefixed names
@@ -899,7 +924,7 @@ impl<'a> Lexer<'a> {
         let mut trailing_dots = 0usize;
         while let Some(c) = self.cur() {
             if c == '\\' {
-                if self.peek(1).is_some_and(is_pn_local_esc) {
+                if self.peek(1).is_some_and(terminals::is_pn_local_esc) {
                     // An escape rewrites bytes — restart with the owned builder.
                     self.pos = begin;
                     return Cow::Owned(self.take_local_owned());
@@ -916,7 +941,18 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 continue;
             }
-            if terminals::is_pn_chars(c) || c == ':' || c == '%' {
+            if c == '%' {
+                // `PLX` → `PERCENT ::= '%' HEX HEX`: all three scalars or none.
+                if !self.at_percent() {
+                    break;
+                }
+                trailing_dots = 0;
+                // `'%'` and both `HEX` digits are ASCII, so the escape is
+                // exactly three bytes wide.
+                self.pos += 3;
+                continue;
+            }
+            if terminals::is_pn_chars(c) || c == ':' {
                 trailing_dots = 0;
                 self.pos += c.len_utf8();
             } else {
@@ -939,7 +975,7 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.cur() {
             if c == '\\' {
                 // PN_LOCAL_ESC: consume the backslash and emit the next char verbatim.
-                if let Some(escaped) = self.peek(1).filter(|e| is_pn_local_esc(*e)) {
+                if let Some(escaped) = self.peek(1).filter(|e| terminals::is_pn_local_esc(*e)) {
                     out.push(escaped);
                     self.pos += 2;
                     trailing_dots = 0;
@@ -965,7 +1001,20 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 continue;
             }
-            if terminals::is_pn_chars(c) || c == ':' || c == '%' {
+            if c == '%' {
+                // `PLX` → `PERCENT ::= '%' HEX HEX`, kept VERBATIM (unlike a
+                // `PN_LOCAL_ESC`, the escape is part of the IRI's value).
+                if !self.at_percent() {
+                    break;
+                }
+                out.push(c);
+                out.extend(self.peek(1));
+                out.extend(self.peek(2));
+                trailing_dots = 0;
+                self.pos += 3;
+                continue;
+            }
+            if terminals::is_pn_chars(c) || c == ':' {
                 out.push(c);
                 trailing_dots = 0;
                 self.pos += c.len_utf8();
@@ -989,32 +1038,6 @@ fn min_opt(a: Option<usize>, b: Option<usize>) -> Option<usize> {
         (Some(x), Some(y)) => Some(x.min(y)),
         (a, b) => a.or(b),
     }
-}
-
-/// The set of characters a Turtle/SPARQL `PN_LOCAL_ESC` (`\X`) may escape (§19.8).
-fn is_pn_local_esc(c: char) -> bool {
-    matches!(
-        c,
-        '_' | '~'
-            | '.'
-            | '-'
-            | '!'
-            | '$'
-            | '&'
-            | '\''
-            | '('
-            | ')'
-            | '*'
-            | '+'
-            | ','
-            | ';'
-            | '='
-            | '/'
-            | '?'
-            | '#'
-            | '@'
-            | '%'
-    )
 }
 
 // ── Naming the scalar a reader cannot see ────────────────────────────────────
@@ -1159,40 +1182,6 @@ fn invisible_scalar_diagnostic(c: char) -> Option<String> {
 /// shows the reader exactly what they typed.
 fn unexpected_character(c: char) -> String {
     invisible_scalar_diagnostic(c).unwrap_or_else(|| format!("unexpected character {c:?}"))
-}
-
-/// Whether `b` may NOT appear raw in an `IRIREF` body.
-///
-/// The Turtle/TriG/SPARQL `IRIREF` production is
-/// ``'<' ([^#x00-#x20<>"{}|^`\] | UCHAR)* '>'``. Exactly two things are excluded: the
-/// range `#x00-#x20` (every C0 control plus the SPACE) and the nine reserved delimiters
-/// ``< > " { } | ^ ` \``. **Nothing else.** Every excluded code point is ASCII, so a byte
-/// test is exact over UTF-8: a multi-byte sequence's lead and continuation bytes are all
-/// `>= 0x80` and can never alias one of them.
-///
-/// In particular this is NOT `char::is_whitespace`. U+00A0 NO-BREAK SPACE, U+2000-U+200A,
-/// U+2028/U+2029, U+3000 and the rest of the non-ASCII Unicode whitespace are **lawful**
-/// inside an `IRIREF`, and they are `ucschar` under RFC-3987 §2.2 so they also survive IRI
-/// validation. [`crate::lexer::tokenize`] is the front end for the workspace's
-/// N-Triples/N-Quads/Turtle/TriG readers, whose writers emit those code points VERBATIM
-/// (only `#x00-#x20`, the delimiters and the control blocks ride as `\uXXXX`); terminating
-/// the body at them would make serialize-then-parse stop being a round trip.
-#[inline]
-const fn is_iriref_forbidden_byte(b: u8) -> bool {
-    b <= 0x20
-        || matches!(
-            b,
-            b'<' | b'>' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`' | b'\\'
-        )
-}
-
-/// The `char` form of [`is_iriref_forbidden_byte`], for the escape-decoding scan that
-/// already holds a decoded `char`. Non-ASCII is never forbidden raw, so a `char` that
-/// does not fit in a `u8` is trivially permitted; the Latin-1 supplement that *does* fit
-/// (U+0080-U+00FF, which includes U+00A0) is above `0x20` and is permitted as well.
-#[inline]
-fn is_iriref_forbidden(c: char) -> bool {
-    u8::try_from(c).is_ok_and(is_iriref_forbidden_byte)
 }
 
 /// Whether `name` is a complete `VARNAME`, sigil already stripped.
@@ -1768,10 +1757,16 @@ mod tests {
     /// no character class can answer.
     ///
     /// `PLX ::= PERCENT | PN_LOCAL_ESC` is a SHAPE — `'%' HEX HEX` and `'\' [_~.…]`
-    /// — so `'%'` and an escaping `'\'` open a local name although
-    /// [`terminals::is_pn_local_start`] refuses both. Reading them out of the
-    /// head class is the over-refusal this sweep exists to catch: `ex:%20a` is a
-    /// lawful prefixed name.
+    /// — so an escaping `'\'` and a `'%'` with two `HEX` digits behind it open a
+    /// local name although [`terminals::is_pn_local_start`] refuses both leads.
+    /// Reading them out of the head class is the over-refusal this sweep exists
+    /// to catch: `ex:%20a` is a lawful prefixed name.
+    ///
+    /// Being a shape cuts the other way too, which is why the single-scalar
+    /// sweep below can say nothing about either lead: the probe `ex:{c}z` puts a
+    /// `'z'` behind the candidate, and `z` is neither a `HEX` digit nor
+    /// escapable, so `ex:%z` and `ex:\z` open NO local name. Both shapes are
+    /// therefore pinned by their own vectors after the loop, in both directions.
     ///
     /// A head the production does not name does not fail — it ENDS the prefixed
     /// name at the colon, because `PNAME_NS ::= PN_PREFIX? ':'` is itself a
@@ -1780,9 +1775,11 @@ mod tests {
     #[test]
     fn a_local_name_opens_at_its_head_class_plus_the_shapes_of_plx() {
         for c in (0..=0x7F_u8).map(char::from) {
-            // `ex:\z` is not a `PN_LOCAL_ESC` (`z` is not escapable), so the
-            // backslash opens nothing; the escaping case is pinned below.
-            let opens = terminals::is_pn_local_start(c) || c == '%';
+            // Neither `PLX` shape is complete in this probe: `ex:\z` is not a
+            // `PN_LOCAL_ESC` (`z` is not escapable) and `ex:%z` is not a
+            // `PERCENT` (`z` is not a `HEX` digit), so both leads open nothing
+            // here. The completed shapes are pinned below.
+            let opens = terminals::is_pn_local_start(c);
             let probe = format!("ex:{c}z");
             for (reading, name) in [
                 (tokenize(&probe), "SPARQL"),
@@ -1836,6 +1833,73 @@ mod tests {
             toks("ex:\\.a"),
             vec![Token::PrefixedName("ex", ".a".into())]
         );
+    }
+
+    /// `PERCENT ::= '%' HEX HEX` — all three scalars, at the head and in the
+    /// tail, with `HEX ::= [0-9] | [A-F] | [a-f]` case-insensitive.
+    ///
+    /// The scanner used to admit the `'%'` on its own and never look at the two
+    /// digits, so `ex:%zz` was one prefixed name here and two tokens in the
+    /// workspace's ShExC scanner, which reads the same production. Requiring the
+    /// digits is a REFUSAL, so the lawful neighbours are executed beside it:
+    /// every case below that the production admits is asserted to still lex as
+    /// one name.
+    #[test]
+    fn percent_needs_both_hex_digits_and_takes_them_in_either_case() {
+        // Admitted: the head position, every `HEX` case, and the tail.
+        for local in [
+            "%20a", // the canonical escaped space
+            "%2F",  // upper-case `HEX`
+            "%2f",  // lower-case, the same escape
+            "%ab",
+            "%AB",
+            "%aB", // `[a-f]`, `[A-F]`, and mixed within one escape
+            "%00",
+            "%ff",       // the ends of the byte range
+            "a%20b",     // a `PERCENT` in the TAIL, between name characters
+            "a%20",      // and at the very end of a name
+            "%20%2F%ab", // three in a row
+            "%20:a",     // a `PERCENT` beside the `':'` a local name may carry
+        ] {
+            let probe = format!("ex:{local}");
+            assert_eq!(
+                toks(&probe),
+                vec![Token::PrefixedName("ex", local.into())],
+                "{probe:?} is one prefixed name: PERCENT admits it"
+            );
+        }
+        // Refused, at the head: the local name is EMPTY and the `'%'` is left
+        // for the next token, which in SPARQL is no token at all.
+        for probe in ["ex:%zz", "ex:%2", "ex:%2z", "ex:%z2", "ex:%%20", "ex:%"] {
+            assert!(
+                tokenize(probe).is_err(),
+                "{probe:?} has no reading: `%` opens no PERCENT and starts no token"
+            );
+            assert!(tokenize_turtle(probe).is_err(), "{probe:?}, as Turtle");
+        }
+        // Refused in the TAIL, where the name before it is real: the boundary
+        // moves, the document does not become unreadable at the name.
+        for (probe, local) in [("ex:a%zz", "a"), ("ex:a%2", "a"), ("ex:a%", "a")] {
+            let reading = tokenize(probe).ok();
+            assert!(
+                reading.is_none(),
+                "{probe:?}: the `%` is left over and begins no token"
+            );
+            // The name itself stopped where the production says it stops, which
+            // a prefix of the probe shows directly.
+            let truncated = format!("{probe} ");
+            assert!(tokenize(&truncated).is_err(), "{truncated:?}");
+            assert_eq!(
+                toks(&format!("ex:{local}")),
+                vec![Token::PrefixedName("ex", local.into())]
+            );
+        }
+        // End of input, the case that must not read past the buffer: a `'%'`
+        // with nothing behind it, and one with a single digit behind it.
+        for probe in ["ex:%", "ex:%2", "ex:a%", "ex:a%2", "%", "_:a%"] {
+            let _ = tokenize(probe);
+            let _ = tokenize_turtle(probe);
+        }
     }
 
     /// The empty local name and the empty prefix are LAWFUL, and a head-class
@@ -2231,7 +2295,7 @@ mod tests {
     fn the_diagnostic_never_fires_inside_an_iriref() {
         for &(c, _) in NON_WS_UNICODE_SPACES.iter().chain(INVISIBLE_NON_SPACES) {
             let src = format!("<urn:ex:a{c}b>");
-            if is_iriref_forbidden(c) {
+            if terminals::is_iriref_forbidden(c) {
                 assert!(
                     no_leading_iriref(&src),
                     "U+{:04X} is inside #x00-#x20 and still ends the body",
@@ -2251,7 +2315,7 @@ mod tests {
         let forbidden: Vec<char> = NON_WS_UNICODE_SPACES
             .iter()
             .chain(INVISIBLE_NON_SPACES)
-            .filter(|&&(c, _)| is_iriref_forbidden(c))
+            .filter(|&&(c, _)| terminals::is_iriref_forbidden(c))
             .map(|&(c, _)| c)
             .collect();
         assert_eq!(forbidden, vec!['\u{b}', '\u{c}']);

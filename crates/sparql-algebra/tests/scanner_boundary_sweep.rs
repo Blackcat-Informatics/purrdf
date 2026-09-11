@@ -265,10 +265,20 @@ struct Sweep {
 }
 
 /// `[169s] PN_LOCAL`'s continuation class as SPARQL scans it: `PN_CHARS`, the
-/// `':'` the production names, `'.'` where a further name character follows, and
-/// the `'%'` that opens `[171s] PERCENT`.
+/// `':'` the production names, and `'.'` where a further name character follows.
+///
+/// `[170s] PLX ::= PERCENT | PN_LOCAL_ESC` is deliberately absent, and its
+/// absence is not an omission. Neither alternative is a character class —
+/// `[171s] PERCENT ::= '%' HEX HEX` and `[173s] PN_LOCAL_ESC ::= '\' [_~.-!$&…]`
+/// are decisions about the scalars that FOLLOW the lead — so a one-scalar probe
+/// cannot state either one. This sweep's probes put a `'z'` behind the
+/// candidate, and `z` is neither a `HEX` digit nor escapable, so `ex:a%z` and
+/// `ex:a\z` are genuinely NOT one token: the `%` and the `\` end the local name.
+/// Listing `'%'` here claimed the opposite, which held only while the scanner
+/// admitted a `'%'` on its lead scalar alone. Both shapes are pinned, in both
+/// directions, by the named vectors in `lexer.rs` and `name_class_boundaries.rs`.
 fn pn_local_continue(c: char) -> bool {
-    terminals::is_pn_chars(c) || c == ':' || c == '.' || c == '%'
+    terminals::is_pn_chars(c) || c == ':' || c == '.'
 }
 
 /// The same class as Turtle scans it: a bare `/` is admitted there, because

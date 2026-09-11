@@ -255,13 +255,14 @@ impl<'a> Lexer<'a> {
     ///
     /// The production is byte-shaped upstream because a byte test for an
     /// all-ASCII class is exact over UTF-8; this scanner holds decoded scalars,
-    /// so it narrows first. `u8::try_from` fails above U+00FF, and every
-    /// Latin-1 scalar it does yield — U+00A0 among them — is outside `WS`, so
-    /// no non-ASCII scalar can alias a member.
+    /// so it reaches for [`terminals::is_ws_char`] — the same four-member table
+    /// searched over the whole scalar value. The narrowing argument lives there
+    /// rather than here, because it is a property of the production (every
+    /// member is ASCII) and not of this scanner.
     fn skip_trivia(&mut self) {
         loop {
             match self.cur() {
-                Some(c) if u8::try_from(c).is_ok_and(terminals::is_ws) => self.pos += 1,
+                Some(c) if terminals::is_ws_char(c) => self.pos += 1,
                 Some('#') => {
                     while let Some(c) = self.cur() {
                         self.pos += 1;
@@ -365,7 +366,11 @@ impl<'a> Lexer<'a> {
                     let decoded = self.read_uchar(start)?;
                     content.push(decoded);
                 }
-                '\u{0}'..='\u{20}' | '<' | '"' | '{' | '}' | '|' | '^' | '`' => {
+                // Everything `[^#x00-#x20<>"{}|^`\]` excludes. The `'>'` and
+                // `'\'` arms above have already claimed the two members that
+                // have a reading here — the terminator and a `UCHAR` lead — so
+                // reaching this arm means the body cannot continue.
+                _ if terminals::is_iriref_forbidden(c) => {
                     return Err(ShexError::lex(
                         format!("character {c:?} is not allowed in an IRI reference"),
                         self.byte_at(self.pos),
@@ -856,7 +861,7 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.cur() {
             match c {
                 '\\' => {
-                    let Some(esc) = self.peek(1).filter(|&e| is_pn_local_esc(e)) else {
+                    let Some(esc) = self.peek(1).filter(|&e| terminals::is_pn_local_esc(e)) else {
                         break;
                     };
                     out.push(esc);
@@ -902,32 +907,6 @@ impl<'a> Lexer<'a> {
         }
         out
     }
-}
-
-/// The set of characters a `PN_LOCAL_ESC` (`\X`) may escape.
-const fn is_pn_local_esc(c: char) -> bool {
-    matches!(
-        c,
-        '_' | '~'
-            | '.'
-            | '-'
-            | '!'
-            | '$'
-            | '&'
-            | '\''
-            | '('
-            | ')'
-            | '*'
-            | '+'
-            | ','
-            | ';'
-            | '='
-            | '/'
-            | '?'
-            | '#'
-            | '@'
-            | '%'
-    )
 }
 
 #[cfg(test)]
