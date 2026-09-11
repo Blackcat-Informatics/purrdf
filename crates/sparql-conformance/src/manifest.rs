@@ -823,7 +823,7 @@ fn load_update_details(
             }
         }
 
-        let acc = expected.entry(test_iri.clone()).or_default();
+        let acc = expected.entry(test_iri).or_default();
         push_unique_path(&mut acc.0, resolve_opt(resolver, iri_of(row, "resData"))?);
         if let Some(g) = iri_of(row, "resGraph") {
             let name = lexical_of(row, "resLabel").unwrap_or_else(|| g.clone());
