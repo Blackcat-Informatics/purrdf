@@ -36,7 +36,7 @@
 //! scoping.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -1362,10 +1362,13 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
             .push(PropertyItem::Pair(p, v));
     }
 
-    let namespaces = serializer_namespaces(graph, &subjects)?;
     // One reifier index for the whole document: every quoted-triple object below
-    // resolves through it in O(1) rather than scanning the reifier table.
+    // resolves through it in O(1) rather than scanning the reifier table. Built before
+    // the namespace pre-pass because that pass descends through quoted triples too — a
+    // predicate nested inside a `parseType="Triple"` element needs its prefix declared on
+    // the root just as much as a top-level one does.
     let reifier_index = graph.reifier_index();
+    let namespaces = serializer_namespaces(graph, &subjects, &reifier_index)?;
     let mut out = String::from(
         "<?xml version=\"1.0\"?>\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema#\"",
     );
@@ -1431,7 +1434,7 @@ fn write_reifies(
     (s, p, o): (usize, usize, usize),
     namespaces: &BTreeMap<String, String>,
 ) -> Result<(), RdfDiagnostic> {
-    let name = serializer_qname(RDF_REIFIES_IRI, namespaces);
+    let name = serializer_qname(RDF_REIFIES_IRI, namespaces)?;
     let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
     write_triple_node(
         out,
@@ -1487,34 +1490,118 @@ fn write_node_attribute(
     Ok(())
 }
 
+/// Bind a prefix to every namespace this document's element names will use.
+///
+/// A namespace declaration is written on the `rdf:RDF` root, BEFORE any body, so every
+/// predicate the body can reach has to be known here. That includes the predicates nested
+/// inside a `parseType="Triple"` element, which the walk below descends into: they used to
+/// be left to "qualify lazily in `write_property`", where the missing entry silently
+/// became the bare prefix `ns`. No generated prefix is ever spelled `ns` — they are `ns0`,
+/// `ns1`, … — so those elements went out bound to an UNDECLARED prefix and the emitted
+/// document was not namespace-well-formed.
+///
+/// Top-level predicates are registered first and in their existing order, so their prefix
+/// numbers are exactly what they were; a nested predicate's namespace only ever adds a
+/// binding the document was missing.
+///
+/// # Termination
+///
+/// The descent into quoted triples carries a `visited` set over object term ids, so it
+/// terminates on any `SerGraph` — including one whose term table is self-reaching, which
+/// `write_property` itself relies on its producer to rule out.
 fn serializer_namespaces(
     graph: &SerGraph,
     subjects: &BTreeMap<String, (usize, Vec<PropertyItem>)>,
+    reifier_index: &ReifierIndex,
 ) -> Result<BTreeMap<String, String>, RdfDiagnostic> {
     let mut namespaces = BTreeMap::from([
         (RDF_NS.to_string(), "rdf".to_string()),
         (XSD_NS.to_string(), "xsd".to_string()),
     ]);
     let mut next = 0usize;
-    // Mirror the prior `to_rdf_quads`-fed serializer: a namespace is registered ONLY for
-    // each top-level quad's predicate (for an `rdf:reifies` binding that predicate is
-    // `rdf:reifies`, already in the RDF namespace). Inner triple-term predicates are not
-    // pre-registered — they qualify lazily in `write_property`.
+    // Quoted triples still to walk, in discovery order, and the object term ids already
+    // enqueued — a FIFO over a `Vec` so the traversal (and therefore the prefix
+    // numbering) is deterministic.
+    let mut pending: Vec<(usize, usize, usize)> = Vec::new();
+    let mut visited: BTreeSet<usize> = BTreeSet::new();
     for (_, properties) in subjects.values() {
         for property in properties {
-            let predicate_iri = match property {
-                PropertyItem::Pair(predicate, _) => ser_value(ser_term(graph, *predicate)?)?,
-                PropertyItem::Reifies(_, _, _) => RDF_REIFIES_IRI,
-            };
-            let namespace = split_property_iri(predicate_iri).0;
-            if namespaces.contains_key(namespace) {
-                continue;
+            match *property {
+                PropertyItem::Pair(predicate, object) => {
+                    let iri = ser_value(ser_term(graph, predicate)?)?;
+                    register_namespace(iri, &mut namespaces, &mut next)?;
+                    enqueue_quoted_triple(
+                        graph,
+                        reifier_index,
+                        object,
+                        &mut pending,
+                        &mut visited,
+                    )?;
+                }
+                PropertyItem::Reifies(s, p, o) => {
+                    register_namespace(RDF_REIFIES_IRI, &mut namespaces, &mut next)?;
+                    // Not deduplicated: a `Reifies` row is a top-level property, so the
+                    // list is already bounded by the input, and its `(s, p, o)` is not a
+                    // term id the `visited` set keys on. Deduplication happens one level
+                    // down, where a quoted-triple TERM is what repeats.
+                    pending.push((s, p, o));
+                }
             }
-            namespaces.insert(namespace.to_string(), format!("ns{next}"));
-            next += 1;
         }
     }
+    let mut cursor = 0;
+    while let Some(&(_, predicate, object)) = pending.get(cursor) {
+        cursor += 1;
+        let iri = ser_value(ser_term(graph, predicate)?)?;
+        register_namespace(iri, &mut namespaces, &mut next)?;
+        enqueue_quoted_triple(graph, reifier_index, object, &mut pending, &mut visited)?;
+    }
     Ok(namespaces)
+}
+
+/// Bind the next `nsN` prefix to `iri`'s namespace, unless it already has one.
+///
+/// The namespace is [`split_property_iri`]'s, so a predicate RDF/XML cannot name is
+/// refused HERE — before a single byte is written — rather than at the element that
+/// would have carried it.
+fn register_namespace(
+    iri: &str,
+    namespaces: &mut BTreeMap<String, String>,
+    next: &mut usize,
+) -> Result<(), RdfDiagnostic> {
+    let (namespace, _) = split_property_iri(iri)?;
+    if !namespaces.contains_key(namespace) {
+        namespaces.insert(namespace.to_string(), format!("ns{next}"));
+        *next += 1;
+    }
+    Ok(())
+}
+
+/// Queue the `(s, p, o)` a quoted-triple object stands for, if `object` is one.
+///
+/// This is the same resolution [`write_property`]'s `SerTermKind::Triple` arm performs,
+/// so the pre-pass reaches exactly the predicates the body will write. A triple term with
+/// no reifier binding is left alone rather than diagnosed here: `write_property` raises
+/// that failure with the message it has always raised, and this function's job is
+/// namespaces.
+fn enqueue_quoted_triple(
+    graph: &SerGraph,
+    reifier_index: &ReifierIndex,
+    object: usize,
+    pending: &mut Vec<(usize, usize, usize)>,
+    visited: &mut BTreeSet<usize>,
+) -> Result<(), RdfDiagnostic> {
+    let term = ser_term(graph, object)?;
+    if term.kind != SerTermKind::Triple {
+        return Ok(());
+    }
+    let Some(spo) = term.reifier.and_then(|rf| reifier_index.get(rf)) else {
+        return Ok(());
+    };
+    if visited.insert(object) {
+        pending.push(spo);
+    }
+    Ok(())
 }
 
 /// Write one `<predicate>object</predicate>` property, resolving a quoted-triple object
@@ -1536,7 +1623,7 @@ fn write_property(
     object: usize,
     namespaces: &BTreeMap<String, String>,
 ) -> Result<(), RdfDiagnostic> {
-    let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces);
+    let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces)?;
     let term = ser_term(graph, object)?;
     match term.kind {
         SerTermKind::Iri => {
@@ -1643,39 +1730,135 @@ fn ser_value(term: &SerTerm) -> Result<&str, RdfDiagnostic> {
         .ok_or_else(|| serialize_err("term is missing its value"))
 }
 
-fn serializer_qname(iri: &str, namespaces: &BTreeMap<String, String>) -> String {
-    let (namespace, local) = split_property_iri(iri);
-    let prefix = namespaces.get(namespace).map_or("ns", String::as_str);
-    format!("{prefix}:{local}")
+/// Render `iri` as the `prefix:local` element name RDF/XML spells a predicate with.
+///
+/// The prefix comes from `namespaces`, which [`serializer_namespaces`] has already
+/// populated for EVERY predicate this document will write — including the ones nested
+/// inside a `parseType="Triple"` element. A missing entry is therefore a bug in that
+/// pre-pass, not a case to paper over: the previous code substituted a bare `ns` here,
+/// and since no generated prefix is ever spelled `ns` (they are `ns0`, `ns1`, …), the
+/// element went out bound to an UNDECLARED prefix and the document was not
+/// namespace-well-formed at all. It fails closed instead.
+fn serializer_qname(
+    iri: &str,
+    namespaces: &BTreeMap<String, String>,
+) -> Result<String, RdfDiagnostic> {
+    let (namespace, local) = split_property_iri(iri)?;
+    let prefix = namespaces.get(namespace).ok_or_else(|| {
+        serialize_err(format!(
+            "no prefix is declared for namespace `{namespace}` (predicate `{iri}`); an \
+             RDF/XML element name may not use an undeclared prefix"
+        ))
+    })?;
+    Ok(format!("{prefix}:{local}"))
 }
 
-fn split_property_iri(iri: &str) -> (&str, &str) {
-    let split = iri.rfind(['#', '/', ':']).map_or(0, |index| index + 1);
-    let (namespace, local) = iri.split_at(split);
-    if local.is_empty() || !is_xml_name(local) {
-        (iri, "property")
-    } else {
-        (namespace, local)
+/// Split a predicate IRI into the `(namespace, local)` halves of an RDF/XML element name,
+/// at the LONGEST split for which `local` is a lawful `NCName`.
+///
+/// # What the local part has to satisfy
+///
+/// An element name is a `QName`, and
+///
+/// > `QName ::= PrefixedName | UnprefixedName`
+/// >
+/// > `PrefixedName ::= Prefix ':' LocalPart`
+/// >
+/// > `LocalPart ::= NCName`
+/// >
+/// > `NCName ::= NCNameStartChar NCNameChar*`
+/// >
+/// > `NCNameChar ::= NameChar - ':'`
+/// >
+/// > `NCNameStartChar ::= NameStartChar - ':'`
+///
+/// — Namespaces in XML 1.0 (Third Edition) §3 / §4, over
+///
+/// > `NameStartChar ::= ':' | [A-Z] | '_' | [a-z] | [#xC0-#xD6] | [#xD8-#xF6] |`
+/// > `[#xF8-#x2FF] | [#x370-#x37D] | [#x37F-#x1FFF] | [#x200C-#x200D] |`
+/// > `[#x2070-#x218F] | [#x2C00-#x2FEF] | [#x3001-#xD7FF] | [#xF900-#xFDCF] |`
+/// > `[#xFDF0-#xFFFD] | [#x10000-#xEFFFF]`
+/// >
+/// > `NameChar ::= NameStartChar | '-' | '.' | [0-9] | #xB7 | [#x300-#x36F] |`
+/// > `[#x203F-#x2040]`
+///
+/// — XML 1.0 Fifth Edition §2.3 `[4]` / `[4a]`, transcribed once in
+/// [`purrdf_iri::terminals`] and reached here rather than retyped. The `':'` both XML
+/// classes admit is subtracted in BOTH positions, because a prefixed element name holds
+/// exactly one colon and it is the separator.
+///
+/// # Why the split is searched rather than guessed
+///
+/// The former rule split at the last `'#'`, `'/'` or `':'` and, when the tail that fell
+/// out was not a name, gave up and returned `(iri, "property")`. That fallback is not a
+/// degradation, it is a REWRITE: the whole IRI became the namespace, `property` became
+/// the local part, and the reader on the other side concatenated them back into
+/// `<iri>property` — a predicate the author never wrote, emitted with exit zero. Every
+/// NFD-decomposed local name took that path, because U+0301 is a `NameChar` that no
+/// Unicode property the old class asked about carries.
+///
+/// A delimiter is not what the grammar cares about; the character classes are. So this
+/// walks backwards from the end over `NCNameChar`, remembering the LEFTMOST position that
+/// is also an `NCNameStartChar`, and splits there. Nothing is assumed about where a
+/// namespace "should" end:
+///
+/// * `…/ns#foo` splits at the `'#'` anyway — `'#'` is no `NameChar`, so the walk stops
+///   there of its own accord and the familiar answer falls out of the general rule.
+/// * `…/ns#1abc` splits inside the tail, giving namespace `…/ns#1` and local `abc`.
+///   Concatenation is still the identity, so the predicate reads back unchanged where it
+///   used to come back as `…/ns#1abcproperty`.
+/// * `…/ns#a:b` splits after the colon, for the same reason: `':'` is not an
+///   `NCNameChar`.
+///
+/// # When there is no split at all
+///
+/// RDF/XML offers no second spelling for a predicate — no `rdf:resource`-style escape
+/// hatch, no way to write an element name that is not a `QName` — so an IRI with no
+/// `NCName` suffix (`http://example.org/123`, or anything ending in a delimiter) simply
+/// cannot be serialized in this syntax. That is refused, naming the IRI. An empty
+/// namespace is refused for the same reason: a prefix may not be bound to the empty
+/// string, and no absolute IRI can reach that case anyway, since its scheme separator is
+/// a `':'` the walk cannot cross.
+fn split_property_iri(iri: &str) -> Result<(&str, &str), RdfDiagnostic> {
+    let mut start = None;
+    for (index, ch) in iri.char_indices().rev() {
+        if !is_ncname_char(ch) {
+            break;
+        }
+        if is_ncname_start_char(ch) {
+            start = Some(index);
+        }
     }
+    let split = start.filter(|&index| index > 0).ok_or_else(|| {
+        serialize_err(format!(
+            "predicate `{iri}` has no XML NCName suffix, so RDF/XML cannot name it: an \
+             element name is a QName whose local part must match `NCName ::= \
+             NCNameStartChar NCNameChar*`, and this syntax has no other way to spell a \
+             predicate"
+        ))
+    })?;
+    Ok(iri.split_at(split))
 }
 
-fn is_xml_name(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !is_xml_name_start(first) {
-        return false;
-    }
-    chars.all(is_xml_name_char)
+/// Whether `ch` may OPEN an `NCName`: `NCNameStartChar ::= NameStartChar - ':'`
+/// (Namespaces in XML 1.0 3e §3).
+///
+/// [`is_xml_name_start_char`](purrdf_iri::terminals::is_xml_name_start_char) admits the
+/// `':'` that XML's own `Name` admits, so the subtraction is made here and is not
+/// optional — without it `ns:local` would qualify as a local part, which is the exact
+/// string the namespaces specification had to mint `NCName` to exclude.
+fn is_ncname_start_char(ch: char) -> bool {
+    purrdf_iri::terminals::is_xml_name_start_char(ch) && ch != ':'
 }
 
-fn is_xml_name_start(ch: char) -> bool {
-    ch == '_' || ch.is_alphabetic()
-}
-
-fn is_xml_name_char(ch: char) -> bool {
-    is_xml_name_start(ch) || ch.is_numeric() || matches!(ch, '-' | '.')
+/// Whether `ch` may CONTINUE an `NCName`: `NCNameChar ::= NameChar - ':'`
+/// (Namespaces in XML 1.0 3e §3).
+///
+/// Wider than [`is_ncname_start_char`] by `'-'`, `'.'`, `[0-9]`, U+00B7 MIDDLE DOT, the
+/// combining marks `[#x300-#x36F]` and the two ties `[#x203F-#x2040]` — the scalars that
+/// may follow a name's first character and may not be it.
+fn is_ncname_char(ch: char) -> bool {
+    purrdf_iri::terminals::is_xml_name_char(ch) && ch != ':'
 }
 
 #[cfg(test)]

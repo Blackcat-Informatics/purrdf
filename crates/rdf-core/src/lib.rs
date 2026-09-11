@@ -33,6 +33,9 @@
 // Blank-node label syntax shared by parser and serializer egress contracts.
 pub mod blank_label;
 pub mod cdt_blank;
+// The ONE transcription of which scalars an `IRIREF` writer must escape — the
+// egress mirror of the ingress production in `purrdf_iri::terminals`.
+pub mod iri_escape;
 // The arity-generic binding-pattern adornment lattice shared by the Datalog
 // evaluator's demand keying and the SPARQL property-function access-pattern
 // feasibility check.
@@ -180,6 +183,19 @@ pub use provenance::{
     DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner, ProvenanceError, UnitId,
     UnitInterner, check_provenance,
 };
+/// The exact Turtle/SPARQL terminal character classes (`WS`, `PN_CHARS_BASE`,
+/// `PN_CHARS_U`, `PN_CHARS`, `VARNAME`), re-exported from [`purrdf_iri`].
+///
+/// Same argument as the IRI law above, applied to syntax rather than identity:
+/// a scanner's character classes decide token BOUNDARIES, so every scanner in
+/// the workspace has to ask the same question of the same transcription or the
+/// scanners disagree with each other about where a token ends. Reaching the
+/// classes through this kernel keeps that one transcription reachable from the
+/// crate every codec already depends on, without a second dependency edge.
+/// [`blank_label`] deliberately keeps its own independent transcription of the
+/// same productions as the EGRESS contract, and the two are checked against
+/// each other.
+pub use purrdf_iri::terminals;
 /// The IRI law this kernel interns under, and the typed failure its mutation
 /// surfaces return.
 ///

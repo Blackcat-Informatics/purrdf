@@ -269,11 +269,23 @@ fn is_alias_only(object: &Map<String, Value>) -> bool {
             .all(|key| key == "$ref" || is_annotation_keyword(key))
 }
 
+/// Fold `raw` into an upper-camel LinkML element name.
+///
+/// The word-character class is `is_alphanumeric` INTERSECTED with
+/// [`is_linkml_continue`] (`NCNameChar ::= NameChar - ':'`). The intersection is
+/// what makes the assertion below hold: `is_alphanumeric` admits U+00AA FEMININE
+/// ORDINAL INDICATOR, U+00B5 MICRO SIGN and the `No`/`Nl` numerals such as
+/// U+00B2 SUPERSCRIPT TWO, none of which XML 1.0 5e §2.3 `[4a]` names, so a name
+/// minted from them would be refused by the very predicate this function's
+/// callers check it with. Keeping `is_alphanumeric` as the other half of the
+/// intersection is deliberate: `'-'` and `'.'` ARE `NCNameChar`s, and letting
+/// them through here would stop them acting as word separators and change every
+/// camel-cased name this has ever emitted.
 pub(super) fn element_name(raw: &str) -> String {
     let mut output = String::new();
     let mut capitalize = true;
     for character in raw.chars() {
-        if character.is_alphanumeric() || character == '_' {
+        if (character.is_alphanumeric() && is_linkml_continue(character)) || character == '_' {
             if capitalize {
                 output.extend(character.to_uppercase());
             } else {
@@ -619,19 +631,24 @@ fn push_reason(reasons: &mut Vec<LinkmlSlotReason>, reason: LinkmlSlotReason) {
     }
 }
 
+/// The FIRST scalar an emitted name may carry: `NCNameStartChar ::=`
+/// `NameStartChar - ':'`.
+///
+/// This is the SAME production [`super::is_linkml_identifier`] accepts, and it is
+/// spelled by delegating to it rather than by a second transcription: the
+/// sanitizer's contract is that its output satisfies that predicate — asserted
+/// below and by the `ncname_sanitizer_is_total_valid_and_deterministic`
+/// property — so a minter whose class disagreed with the checker's would emit
+/// names the checker then refuses.
 fn is_linkml_start(character: char) -> bool {
-    character == '_' || character.is_alphabetic()
+    super::is_ncname_start(character)
 }
 
+/// Every SUBSEQUENT scalar an emitted name may carry: `NCNameChar ::=`
+/// `NameChar - ':'`. The continue half of [`is_linkml_start`]'s production, from
+/// the same single transcription.
 fn is_linkml_continue(character: char) -> bool {
-    character == '_'
-        || character == '-'
-        || character == '.'
-        || character.is_alphanumeric()
-        || matches!(
-            character,
-            '\u{300}'..='\u{36f}' | '\u{203f}'..='\u{2040}' | '\u{b7}'
-        )
+    super::is_ncname_char(character)
 }
 
 struct Renderer<'a> {
@@ -2548,7 +2565,10 @@ mod tests {
         for (source, expected) in [
             ("", "ex:_"),
             ("ex:9 cats", "ex:_9_cats"),
-            ("ex:cat🐈", "ex:cat_"),
+            // U+00AA FEMININE ORDINAL INDICATOR is `Alphabetic` and sits BELOW the
+            // production's first non-ASCII range `[#xC0-#xD6]`, so it is not an
+            // `NCNameChar` and is sanitized away.
+            ("ex:cat\u{AA}", "ex:cat_"),
             ("https://outside.example/", "ex:_"),
         ] {
             assert_eq!(
@@ -2558,11 +2578,17 @@ mod tests {
                 expected
             );
         }
-        assert!(
-            !slot_name_seed(&config, "ex:Δelta")
-                .expect("Unicode NCName seed")
-                .requires_rename()
-        );
+        // The valid neighbours of that refusal, each preserved verbatim. The class
+        // is `NCNameStartChar ::= NameStartChar - ':'` (XML 1.0 5e §2.3 `[4]`), not
+        // `char::is_alphabetic`/`is_alphanumeric`, and the production names ranges
+        // those properties do not: `[#x10000-#xEFFFF]` covers the supplementary
+        // planes (a `So` emoji included, which no alphanumeric test admits) and
+        // `[#x200C-#x200D]` names the two zero-width joiners, which are `Cf`.
+        for source in ["ex:Δelta", "ex:cat🐈", "ex:ca\u{200C}t", "ex:caf\u{E9}"] {
+            let seed = slot_name_seed(&config, source).expect("Unicode NCName seed");
+            assert!(!seed.requires_rename(), "{source} is a lawful NCName");
+            assert_eq!(seed.direct_name, source);
+        }
 
         let rehome_config = config
             .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))

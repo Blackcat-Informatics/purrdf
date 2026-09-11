@@ -100,7 +100,22 @@ fn strip_armor(text: &str) -> Result<Vec<u8>> {
 
     let mut idx = start + 1;
     // Skip optional armor headers (Comment, Version, …) up to the blank line.
-    while idx < end && !lines[idx].trim().is_empty() {
+    //
+    // RFC 4880 §6.2 enumerates the parts of an armored message, and it is
+    // explicit about what ends the header block: the headers are followed by
+    // "a blank line", which the same section defines as "a line with nothing
+    // following the line ending" — an EMPTY line, not a line the Unicode
+    // `White_Space` property happens to call empty. `str::trim` answered a
+    // 26-member property where the specification names the absence of
+    // characters, so `\u{A0}` or a stray U+2028 on its own line read as the
+    // separator. `str::lines` has already removed the line ending (and the CR
+    // of a CRLF pair), so `is_empty` IS the clause.
+    //
+    // The `contains(':')` arm below is what keeps the tightening from being an
+    // over-refusal: a non-empty line that is not `<header>: <value>` shaped
+    // ends the header block too, so an armor whose headers are followed by a
+    // whitespace-bearing line still finds its body.
+    while idx < end && !lines[idx].is_empty() {
         if lines[idx].contains(':') {
             idx += 1;
         } else {
@@ -127,6 +142,24 @@ fn strip_armor(text: &str) -> Result<Vec<u8>> {
 
 /// Decode a base64 string (standard alphabet, no line breaks) without pulling
 /// in an external crate — the armor body is small.
+///
+/// # What may be skipped between the characters
+///
+/// RFC 4880 §6.2 forms the armored body from Radix-64: "The Radix-64 data is
+/// formed by taking 3 octets at a time and encoding them", laid out in lines,
+/// with `=` as the pad. The alphabet and the pad are the whole content of a
+/// body line; the line breaks are structure, and [`strip_armor`] has already
+/// removed them before this is called.
+///
+/// So the skip set is `=` and the two characters a transport agent can still
+/// leave INSIDE a line — U+0020 SPACE and U+0009 TAB — and nothing else. It is
+/// deliberately not [`u8::is_ascii_whitespace`], which is set by the WhatWG
+/// Infra definition rather than by this specification and is wrong in both
+/// directions for it: it admits U+000C FORM FEED, which RFC 4880 never names
+/// and which inside a signature body is corruption to report rather than
+/// silence to skip, and it admits the U+000A and U+000D that cannot reach here
+/// at all. A bare CR mid-line survives [`str::lines`] and is exactly that kind
+/// of corruption.
 fn b64_decode(s: &str) -> Result<Vec<u8>> {
     fn val(c: u8) -> Option<u8> {
         match c {
@@ -142,7 +175,7 @@ fn b64_decode(s: &str) -> Result<Vec<u8>> {
     let mut acc: u32 = 0;
     let mut bits = 0u32;
     for &c in s.as_bytes() {
-        if c == b'=' || c.is_ascii_whitespace() {
+        if c == b'=' || c == b' ' || c == b'\t' {
             continue;
         }
         let Some(v) = val(c) else {
@@ -683,5 +716,68 @@ mod tests {
         let err = parse_secret_signing_key(&v5, None)
             .expect_err("unsupported OpenPGP version is rejected");
         assert!(err.0.contains("only OpenPGP v4 public keys are supported"));
+    }
+
+    /// RFC 4880 §6.2: the armor headers are terminated by "a blank line",
+    /// defined there as "a line with nothing following the line ending".
+    #[test]
+    fn the_armor_header_block_ends_at_an_empty_line_and_not_at_a_blankish_one() {
+        // A body that decodes to one known octet, so the assertions are about
+        // where the header block ended and nothing else.
+        let armored = |separator: &str| {
+            format!(
+                "-----BEGIN PGP MESSAGE-----\nComment: x\n{separator}\nAAAA\n-----END PGP MESSAGE-----\n"
+            )
+        };
+        // THE VALID NEIGHBOUR: the clause's own separator still works.
+        assert_eq!(
+            strip_armor(&armored("")).expect("empty line separates"),
+            vec![0, 0, 0]
+        );
+        // ...and so does a CRLF one, because `str::lines` removes the CR.
+        let crlf = armored("").replace('\n', "\r\n");
+        assert_eq!(strip_armor(&crlf).expect("CRLF blank line"), vec![0, 0, 0]);
+
+        // THE VALID NEIGHBOURS the tightening must not cost. A line that is not
+        // empty is not the separator, but it carries no colon either, so the
+        // `contains(':')` arm ends the header block at it all the same and the
+        // body is still found -- which is why narrowing `trim` to `is_empty`
+        // refuses no armor that used to decode.
+        for blankish in [" ", "\t", "  \t "] {
+            assert_eq!(
+                strip_armor(&armored(blankish)).expect("still ends the headers"),
+                vec![0, 0, 0],
+                "{blankish:?}"
+            );
+        }
+
+        // And a separator the Radix-64 alphabet cannot hold is refused rather
+        // than silently folded into the body -- the same answer before and
+        // after this change, stated so the pair is on the record.
+        for outside in ["\u{A0}", "\u{2028}"] {
+            assert!(strip_armor(&armored(outside)).is_err(), "{outside:?}");
+        }
+    }
+
+    /// The Radix-64 skip set is `=`, SPACE and TAB — not
+    /// [`u8::is_ascii_whitespace`], which admits U+000C.
+    #[test]
+    fn the_radix64_reader_skips_what_transport_adds_and_refuses_corruption() {
+        // THE VALID NEIGHBOURS: padding and the intra-line white space a mail
+        // transport leaves behind still decode.
+        assert_eq!(b64_decode("AAAA").expect("plain"), vec![0, 0, 0]);
+        assert_eq!(b64_decode("AA AA").expect("space"), vec![0, 0, 0]);
+        assert_eq!(b64_decode("AA\tAA").expect("tab"), vec![0, 0, 0]);
+        assert_eq!(b64_decode("AA==").expect("pad"), vec![0]);
+
+        // THE REFUSAL: a form feed is not named anywhere in RFC 4880's armor,
+        // and inside a signature body it is corruption. `is_ascii_whitespace`
+        // skipped it in silence.
+        assert!(b64_decode("AA\u{C}AA").is_err(), "form feed is not armor");
+        assert!(
+            b64_decode("AA\rAA").is_err(),
+            "a bare CR mid-line is corruption"
+        );
+        assert!(b64_decode("AA\u{A0}AA").is_err(), "U+00A0 is not armor");
     }
 }

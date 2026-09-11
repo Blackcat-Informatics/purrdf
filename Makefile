@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -52,6 +52,8 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-no-features.py
 	python3 scripts/check-toolchain-pin.py
 	python3 scripts/check-iri-resolver-singleton.py
+	python3 scripts/check-terminal-predicates.py --self-test
+	python3 scripts/check-terminal-predicates.py
 	python3 scripts/check-licenses.py
 	python3 scripts/check-corpus-frozen.py
 	bash scripts/check-generated.sh
@@ -255,6 +257,10 @@ conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python
 
 iri-resolver-hygiene: ## Prove the resolver ring-fence: RFC 3986 reference resolution only in crates/iri/src.
 	python3 scripts/check-iri-resolver-singleton.py
+
+terminal-hygiene: ## Prove no scanner decides a token boundary with a Unicode property.
+	python3 scripts/check-terminal-predicates.py --self-test
+	python3 scripts/check-terminal-predicates.py
 
 rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves.
 	@tree=$$(cargo tree -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \

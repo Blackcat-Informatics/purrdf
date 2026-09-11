@@ -130,6 +130,54 @@ const TAGGED_DIMS: [CoordDim; 3] = [CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm
 /// conforming or widely-written literal, and refusing one would turn a working
 /// query into one that silently returns nothing.
 ///
+/// # What "whitespace" means here, and why it is only four code points
+///
+/// Every whitespace decision in this function — the empty-literal test below and
+/// the token scanner's `skip_whitespace`, which separates every pair of tokens —
+/// is the enumerated terminal
+///
+/// > `WS ::= #x20 | #x9 | #xD | #xA`
+///
+/// answered by [`purrdf_iri::terminals::is_ws`], and **not**
+/// [`char::is_whitespace`] or the [`str::trim`] defined over it, which answer
+/// the Unicode `White_Space` property and so admit twenty-six code points
+/// including U+00A0 NO-BREAK SPACE, U+2028 LINE SEPARATOR and U+3000
+/// IDEOGRAPHIC SPACE.
+///
+/// This is a boundary decision, not a membership one. `str::trim` decides where
+/// the *literal* starts and stops, exactly as `skip_whitespace` decides where
+/// each token does, so a wider class does not merely accept more — it reads the
+/// same bytes as a different literal.
+///
+/// ## Why the narrow class is the right direction
+///
+/// Refusing a whitespace-only literal outright would be the mirror bug, and the
+/// comment inside this function records what it cost the last time: a malformed
+/// `geo:asWKT` object is an *evaluation error*, not an unmatched row, so one bad
+/// literal anywhere in a dataset aborts every `geof:` query that touches it.
+/// That risk is real, and it is why `""`, `" "`, `"\t"`, `"\r\n"` and every
+/// other run of the four are still the empty geometry. Three independent
+/// witnesses say the U+00A0-only literal is not in that set:
+///
+/// * **OGC 22-047r1** `/req/geometry-extension/wkt-literal-empty` speaks of an
+///   *empty* literal, and the WKT grammar it governs enumerates its separator;
+///   nothing in it names a Unicode property.
+/// * **This function already agrees with itself only under the narrow class.**
+///   `skip_whitespace` never skipped U+00A0, so `"\u{A0}POINT(1 2)"` has always
+///   been an error here. Treating the same scalar as "empty" when it stands
+///   alone made one literal empty and the same literal-plus-a-geometry
+///   malformed — a split this crate could not defend.
+/// * **The shipped GeoSPARQL SHACL shape**, as *specified*, agrees: its
+///   `geo:wktLiteral` pattern begins `^\s*$|…`, and `sh:pattern` is defined over
+///   SPARQL `REGEX`, hence XPath/XQuery regular expressions, hence the XML
+///   Schema definition — XSD 1.1 Part 2 §G.4.3 gives `\s` as `[#x20#x9#xA#xD]`,
+///   the same four.
+///
+/// So the literal that stops being "empty" was never a conforming empty literal
+/// under any of them; it becomes the error the rest of this function already
+/// called it. No literal that previously parsed to a geometry changes meaning,
+/// and no run of the four stops being the empty geometry.
+///
 /// # Examples
 ///
 /// ```
@@ -151,16 +199,20 @@ const TAGGED_DIMS: [CoordDim; 3] = [CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm
 /// assert!(wkt::parse("POINTZ(1 2 3)", &default).is_err());
 /// ```
 pub fn parse(lexical: &str, default_crs: &Crs) -> Result<GeometryLiteral, GeoError> {
-    if lexical.trim().is_empty() {
+    // `WS ::= #x20 | #x9 | #xD | #xA`, byte-tested. The test is EXACT over
+    // UTF-8 without decoding: every member is ASCII, and no byte of a multi-byte
+    // sequence is below 0x80, so a non-ASCII scalar can neither be mistaken for
+    // a member nor hide one. `str::trim` is deliberately not used — see this
+    // function's docs for why those twenty-six code points are the wrong class
+    // and why narrowing, not refusing, is the direction taken.
+    if lexical.bytes().all(purrdf_iri::terminals::is_ws) {
         // OGC 22-047r1 /req/geometry-extension/wkt-literal-empty: "An empty RDFS
         // Literal of type geo:wktLiteral shall be interpreted as an empty
         // Geometry." This is the exact mirror of the geoJSON rule in
         // `geojson::geometry_of`, and it is a REQUIREMENT rather than a
         // leniency: refusing here made one empty `geo:asWKT` object anywhere in a
         // dataset abort every `geof:` query that touched it, because a malformed
-        // literal is an evaluation error rather than an unmatched row. The
-        // shipped GeoSPARQL SHACL shape agrees — its `geo:wktLiteral` pattern
-        // begins `^\s*$|...`, admitting the whitespace-only form.
+        // literal is an evaluation error rather than an unmatched row.
         //
         // A collection rather than a `POINT EMPTY`, for the same reason the
         // geoJSON side gives: the empty geometry has no kind of its own, and a
@@ -1072,14 +1124,25 @@ mod tests {
     /// `geo:asWKT` object anywhere in a dataset aborted every `geof:` query that
     /// touched it, rather than contributing no rows.
     ///
-    /// The neighbouring cases are pinned in both directions: whitespace-only
-    /// forms are also empty (the shipped SHACL shape's pattern is `^\s*$|...`),
+    /// The neighbouring cases are pinned in both directions: forms made only of
+    /// `WS ::= #x20 | #x9 | #xD | #xA` are also empty (the shipped SHACL shape's
+    /// pattern is `^\s*$|...`, and `sh:pattern`'s XSD `\s` is those same four),
     /// while a non-empty lexical form that merely *fails* to name a geometry is
     /// still refused — accepting the empty form must not turn the parser lenient.
     #[test]
     fn an_empty_lexical_form_is_the_empty_geometry_and_a_malformed_one_still_is_not() {
         let crs = Crs::new("http://example.org/crs/planar").expect("a non-empty IRI");
-        for empty in ["", " ", "   ", "\t", "\n", " \t\n "] {
+        for empty in [
+            "",
+            " ",
+            "   ",
+            "\t",
+            "\n",
+            "\r",
+            "\r\n",
+            " \t\n ",
+            "\t\r\n \t\r\n ",
+        ] {
             let literal = parse(empty, &crs).unwrap_or_else(|error| {
                 panic!("the empty lexical form {empty:?} must parse, got {error}")
             });
@@ -1106,6 +1169,56 @@ mod tests {
                 "{malformed:?} is not empty and must still be refused"
             );
         }
+    }
+
+    /// "Empty" is `WS ::= #x20 | #x9 | #xD | #xA`, not Unicode whitespace.
+    ///
+    /// The refusal vector is a literal made only of U+00A0 NO-BREAK SPACE. It
+    /// satisfies [`char::is_whitespace`], so the [`str::trim`] this function
+    /// once used called it empty — while the cursor's `skip_whitespace`, five
+    /// hundred lines below, never skipped it, so the same scalar in front of a
+    /// geometry was always an error. One surface, two answers. The narrow class
+    /// is the one every other whitespace decision in this file already made.
+    ///
+    /// Pinned in BOTH directions, because narrowing an "is this empty?" test is
+    /// exactly where over-refusal hides: every run of the four is still the
+    /// empty geometry, and every geometry that parsed before still parses.
+    #[test]
+    fn only_the_four_ws_code_points_make_a_literal_empty() {
+        let crs = Crs::new("http://example.org/crs/planar").expect("a non-empty IRI");
+        // The refusal vectors: Unicode whitespace that `WS` does not name. Each
+        // is a malformed literal, which is what the shape as specified and the
+        // token scanner in this file both already called it.
+        for outside_ws in [
+            "\u{a0}",   // NO-BREAK SPACE
+            "\u{2028}", // LINE SEPARATOR
+            "\u{2029}", // PARAGRAPH SEPARATOR
+            "\u{3000}", // IDEOGRAPHIC SPACE
+            "\u{205f}", // MEDIUM MATHEMATICAL SPACE
+            "\u{b}",    // VERTICAL TAB — Unicode whitespace, not `WS`
+            "\u{c}",    // FORM FEED — ASCII whitespace, not `WS`
+            " \u{a0} ", // and mixed with the real thing
+        ] {
+            assert_refused(outside_ws);
+        }
+        // The consistency this buys: the same scalar in front of a geometry was
+        // always refused, and still is.
+        assert_refused("\u{a0}POINT(1 2)");
+        // The VALID neighbours. Every run of the four is still the empty
+        // geometry — the whole point of not refusing here.
+        for empty in ["", " ", "\t", "\r", "\n", "\r\n", "\t \r\n\t "] {
+            let literal = parse(empty, &crs)
+                .unwrap_or_else(|error| panic!("{empty:?} must still parse, got {error}"));
+            assert!(
+                literal.geometry().is_empty(),
+                "{empty:?} must still denote an empty geometry"
+            );
+        }
+        // …and an ordinary geometry, plus the doctest's tagged one, are
+        // untouched: narrowing the empty test refused nothing that parsed.
+        assert_eq!(bare("POINT Z (1 2 3)"), "POINT Z (1 2 3)");
+        assert_eq!(bare(" \t POINT(1 2) \r\n "), "POINT(1 2)");
+        assert!(read("<http://example.org/crs/other> POINT(1 2)").is_ok());
     }
 
     /// An unknown keyword is refused, and the keyword one letter away from it in

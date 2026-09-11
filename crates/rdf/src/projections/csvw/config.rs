@@ -371,6 +371,33 @@ fn validate_namespace(value: String, role: &str) -> Result<String, ProjectionErr
     Ok(value)
 }
 
+/// Check a caller-supplied CSVW context prefix.
+///
+/// # Why this is deliberately NOT an XML `NCName`
+///
+/// The obvious reading of "prefix" here is the XML/Turtle one, where a prefix is
+/// an `NCName ::= NCNameStartChar NCNameChar*`. That is the wrong production for
+/// this site, and tightening to it would be an unsourced refusal.
+///
+/// What this validates is a key of [`CsvwContext`]'s prefix map, and that map is
+/// handed straight to `CompiledJsonLdContext::from_prefixes`, which turns each
+/// entry into a JSON-LD **term definition** (`{"@id": …, "@prefix": true}`). So
+/// the governing clause is JSON-LD 1.1 §3.1: *"Terms are case sensitive and most
+/// valid strings that are not reserved JSON-LD keywords are valid terms."* A
+/// JSON-LD term is not constrained to `NCName`, and CSVW does not add such a
+/// constraint — the CSVW Metadata Vocabulary reaches compact IRIs through
+/// common properties and the RDFa initial context, neither of which narrows a
+/// prefix to an XML production.
+///
+/// Relative to `NCName` the class below is therefore wrong in both directions on
+/// purpose: it refuses `'.'`, which `NCNameChar` admits, and it admits U+00AA and
+/// the other `Alphabetic`-but-not-`NameStartChar` scalars, which `NCName` does
+/// not. Both are lawful JSON-LD terms; the `'.'` refusal is the one house rule,
+/// and it keeps a prefix from colliding with the `prefix:local` split
+/// [`CsvwContext::expand_iri`] performs. Nothing here decides a token boundary —
+/// a prefix arrives as a whole JSON key, already delimited — so the class is a
+/// MEMBERSHIP test, where a liberal ingress never has to decide where one token
+/// stops and the next begins.
 fn validate_prefix(prefix: &str) -> Result<(), ProjectionError> {
     let mut chars = prefix.chars();
     let Some(first) = chars.next() else {

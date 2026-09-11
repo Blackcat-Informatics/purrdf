@@ -73,20 +73,58 @@ pub fn from_xml(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
 
 /// Parse a SPARQL Results XML `ASK` document into its boolean.
 ///
+/// # Surrounding whitespace, and exactly which four code points that is
+///
+/// `<boolean>` carries an `xsd:boolean`, whose `whiteSpace` facet is `collapse`,
+/// and both the collapsing and the XML that delivers it are defined over the
+/// same enumerated terminal — XML 1.0 §2.3, production 3:
+///
+/// > `S ::= (#x20 | #x9 | #xD | #xA)+`
+///
+/// So `<boolean> true </boolean>` and `<boolean>\n  false\n</boolean>` are the
+/// ordinary pretty-printed spellings and are read as written, while a value
+/// padded with any OTHER whitespace-looking scalar — U+00A0 NO-BREAK SPACE,
+/// U+2028 LINE SEPARATOR, U+3000 IDEOGRAPHIC SPACE, U+000C FORM FEED — is not
+/// an `xsd:boolean` lexical form at all and is refused with the offending text
+/// quoted back.
+///
+/// The trim is therefore [`purrdf_iri::terminals::is_ws`] and not [`str::trim`],
+/// which is defined over [`char::is_whitespace`] and so strips twenty-six code
+/// points. That is not merely a wider accepted language: this trim decides where
+/// the *value* starts and stops, so the wide class silently re-reads
+/// `\u{2028}true` as the boolean `true`, in a reader whose own scanner never
+/// treated U+2028 as markup separation. The narrow class is the one the rest of
+/// this file already uses.
+///
 /// # Errors
 ///
-/// Returns [`Error::Format`] on malformed XML or a document without a
-/// `<boolean>` element.
+/// Returns [`Error::Format`] on malformed XML, a document without a
+/// `<boolean>` element, or a `<boolean>` whose text is not `true` or `false`
+/// once XML `S` is stripped from both ends.
 pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
     let root = parse_root(bytes)?;
     let boolean = root
         .child("boolean")
         .ok_or_else(|| fmt("missing <boolean>"))?;
-    match boolean.text().trim() {
+    let text = boolean.text();
+    match trim_xml_space(&text) {
         "true" => Ok(true),
         "false" => Ok(false),
         other => Err(fmt(&format!("invalid <boolean> value `{other}`"))),
     }
+}
+
+/// Strip leading and trailing XML `S` — and only XML `S` — from `text`.
+///
+/// > `S ::= (#x20 | #x9 | #xD | #xA)+` (XML 1.0 §2.3, production 3)
+///
+/// The predicate comes from [`purrdf_iri::terminals::is_ws`], the workspace's
+/// single transcription of that four-member set, rather than from a local
+/// spelling: every scalar outside ASCII fails `u8::try_from`, so the test is
+/// exact in both directions and cannot drift into [`char::is_whitespace`]'s
+/// twenty-six.
+fn trim_xml_space(text: &str) -> &str {
+    text.trim_matches(|c: char| u8::try_from(c).is_ok_and(purrdf_iri::terminals::is_ws))
 }
 
 /// Decode the additive `<provenance>` element (under `namespace.iri()`) a
@@ -1034,6 +1072,68 @@ mod tests {
         let no = r#"<sparql xmlns="http://www.w3.org/2005/sparql-results#">
           <head></head><boolean>false</boolean></sparql>"#;
         assert!(!from_xml_boolean(no.as_bytes()).expect("ask"));
+    }
+
+    /// `<boolean>`'s surrounding whitespace is XML `S`, and only XML `S`.
+    ///
+    /// > `S ::= (#x20 | #x9 | #xD | #xA)+` (XML 1.0 §2.3, production 3)
+    ///
+    /// An `xsd:boolean`'s `whiteSpace` facet is `collapse`, which collapses over
+    /// that production — not over the Unicode `White_Space` property [`str::trim`]
+    /// implements. So a `<boolean>` padded with U+00A0 or U+2028 is not an
+    /// `xsd:boolean` lexical form and must be refused rather than silently read.
+    ///
+    /// Pinned in both directions, because this is a trim and a trim is where
+    /// over-refusal hides: every pretty-printed spelling a real producer emits
+    /// still parses.
+    #[test]
+    fn only_xml_s_pads_an_ask_boolean() {
+        let doc = |inner: &str| {
+            format!(
+                "<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\
+                 <head></head><boolean>{inner}</boolean></sparql>"
+            )
+        };
+        // The refusal vectors: whitespace-looking scalars XML `S` does not name.
+        for padded in [
+            "\u{a0}true",     // NO-BREAK SPACE
+            "\u{2028}true",   // LINE SEPARATOR
+            "true\u{2029}",   // PARAGRAPH SEPARATOR
+            "\u{3000}false",  // IDEOGRAPHIC SPACE
+            "\u{c}true",      // FORM FEED — ASCII whitespace, not XML `S`
+            "\u{b}true",      // VERTICAL TAB — Unicode whitespace, not XML `S`
+            " \u{a0} false ", // mixed with the real thing
+        ] {
+            assert!(
+                matches!(
+                    from_xml_boolean(doc(padded).as_bytes()),
+                    Err(Error::Format(_))
+                ),
+                "{padded:?} is not an xsd:boolean lexical form and must be refused"
+            );
+        }
+        // The VALID neighbours: every run of the four still reads, in both
+        // polarities, including the multi-line form a pretty-printer emits.
+        for (inner, expected) in [
+            ("true", true),
+            (" true ", true),
+            ("\ttrue\t", true),
+            ("\r\ntrue\r\n", true),
+            ("\n  false\n", false),
+            ("false", false),
+            (" \t\r\n false \t\r\n ", false),
+        ] {
+            assert_eq!(
+                from_xml_boolean(doc(inner).as_bytes()).expect("a padded boolean still reads"),
+                expected,
+                "{inner:?} must still read as {expected}"
+            );
+        }
+        // And the refusal still names a non-boolean for what it is.
+        assert!(matches!(
+            from_xml_boolean(doc("maybe").as_bytes()),
+            Err(Error::Format(_))
+        ));
     }
 
     #[test]

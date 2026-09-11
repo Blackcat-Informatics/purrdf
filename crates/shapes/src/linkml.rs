@@ -16,6 +16,7 @@ use std::error::Error;
 use std::fmt;
 
 use ::purrdf::loss::LossLedger;
+use purrdf_iri::terminals;
 use serde::{
     Serialize,
     de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor},
@@ -703,24 +704,64 @@ fn validate_identifier(label: &str, value: &str) -> Result<(), LinkmlError> {
     Ok(())
 }
 
+/// The FIRST scalar of an `NCName`.
+///
+/// ```text
+/// NCNameStartChar ::= NameStartChar - ':'
+/// NameStartChar   ::= ':' | [A-Z] | '_' | [a-z] | [#xC0-#xD6] | [#xD8-#xF6]
+///                   | [#xF8-#x2FF] | [#x370-#x37D] | [#x37F-#x1FFF]
+///                   | [#x200C-#x200D] | [#x2070-#x218F] | [#x2C00-#x2FEF]
+///                   | [#x3001-#xD7FF] | [#xF900-#xFDCF] | [#xFDF0-#xFFFD]
+///                   | [#x10000-#xEFFFF]
+/// ```
+///
+/// *Namespaces in XML 1.0 (Third Edition)* §3 `[4]`, over XML 1.0 Fifth Edition
+/// §2.3 `[4]`. [`validate_identifier`] names this production in its own refusal
+/// message, so the predicate has to be the production and not a resemblance of
+/// it.
+///
+/// [`char::is_alphabetic`] is not this class, and is wrong in BOTH directions,
+/// which is why substituting it was invisible from either side alone: it
+/// **admits** U+00AA FEMININE ORDINAL INDICATOR, U+00B5 MICRO SIGN and U+00BA
+/// MASCULINE ORDINAL INDICATOR, all of which sit below the production's first
+/// non-ASCII range `[#xC0-#xD6]`, and it **refuses** U+200C ZERO WIDTH
+/// NON-JOINER and U+200D ZERO WIDTH JOINER, which the production names
+/// explicitly at `[#x200C-#x200D]` but Unicode classifies as `Cf`.
+fn is_ncname_start(character: char) -> bool {
+    character != ':' && terminals::is_xml_name_start_char(character)
+}
+
+/// Every SUBSEQUENT scalar of an `NCName`.
+///
+/// ```text
+/// NCNameChar ::= NameChar - ':'
+/// NameChar   ::= NameStartChar | '-' | '.' | [0-9] | #xB7
+///              | [#x300-#x36F] | [#x203F-#x2040]
+/// ```
+///
+/// *Namespaces in XML 1.0 (Third Edition)* §3 `[5]`, over XML 1.0 Fifth Edition
+/// §2.3 `[4a]`. The `':'` is subtracted HERE as well as at the head: `NCName` is
+/// `Name` minus the colon in every position, which is the whole reason the
+/// production exists, so `ns:local` is two `NCName`s and never one.
+///
+/// [`char::is_alphanumeric`] is not this class either: it admits U+00AA and the
+/// `No`/`Nl` numerals (U+00B2 SUPERSCRIPT TWO among them) that `NameChar` does
+/// not name, and refuses the two zero-width joiners that it does.
+fn is_ncname_char(character: char) -> bool {
+    character != ':' && terminals::is_xml_name_char(character)
+}
+
+/// Whether `value` is an XML `NCName`.
+///
+/// `NCName ::= NCNameStartChar NCNameChar*` (*Namespaces in XML 1.0 (Third
+/// Edition)* §3 `[4]`) — the production [`validate_identifier`] refuses by name,
+/// spelled through [`is_ncname_start`] and [`is_ncname_char`].
 fn is_linkml_identifier(value: &str) -> bool {
     let mut characters = value.chars();
     let Some(first) = characters.next() else {
         return false;
     };
-    (first == '_' || first.is_alphabetic())
-        && characters.all(|character| {
-            character == '_'
-                || character == '-'
-                || character == '.'
-                || character.is_alphanumeric()
-                || matches!(
-                    character,
-                    '\u{300}'..='\u{36f}'
-                        | '\u{203f}'..='\u{2040}'
-                        | '\u{b7}'
-                )
-        })
+    is_ncname_start(first) && characters.all(is_ncname_char)
 }
 
 pub(super) fn is_reserved_jsonld_slot(value: &str) -> bool {
@@ -899,6 +940,63 @@ impl<'de> Visitor<'de> for StrictValueVisitor {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_ncname_is_exactly_the_production_and_not_a_unicode_property() {
+        // The valid neighbours FIRST, so the refusals below read as exactness and
+        // not as a narrowed alphabet.
+        for valid in [
+            "café",        // NFC: U+00E9 lies in `[#xD8-#xF6]`
+            "cafe\u{301}", // NFD: U+0301 lies in `[#x300-#x36F]`, a NameChar
+            "_x",          // `'_'` is a NameStartChar
+            "a-b.c",       // `'-'` and `'.'` are NameChars
+            "a0",          // a digit CONTINUES a name
+            "\u{200C}x",   // ZWNJ opens one: `[#x200C-#x200D]`
+            "x\u{200D}",   // ZWJ continues one
+            "\u{4E2D}\u{6587}",
+            "x\u{B7}y", // U+00B7 MIDDLE DOT is a NameChar
+        ] {
+            assert!(
+                is_linkml_identifier(valid),
+                "{valid:?} is an NCName and must be accepted"
+            );
+        }
+
+        // Over-accepted before: `Alphabetic` but below the production's first
+        // non-ASCII range `[#xC0-#xD6]`, so not a NameStartChar.
+        for over in ["\u{AA}", "\u{B5}", "\u{BA}"] {
+            assert!(
+                !is_linkml_identifier(over),
+                "{over:?} is Alphabetic and is NOT an NCNameStartChar"
+            );
+        }
+
+        // The colon is subtracted in BOTH positions — that is what `NCName` is.
+        assert!(!is_linkml_identifier("ns:local"));
+        assert!(!is_linkml_identifier(":local"));
+
+        // Position dependence, and the empty string.
+        assert!(!is_linkml_identifier("0a"));
+        assert!(!is_linkml_identifier("-a"));
+        assert!(!is_linkml_identifier(".a"));
+        assert!(!is_linkml_identifier(""));
+
+        // `No`/`Nl` numerals are `is_alphanumeric` and are not `NameChar`s.
+        assert!(!is_linkml_identifier("a\u{B2}"));
+    }
+
+    #[test]
+    fn the_zero_width_joiners_are_name_characters_in_both_positions() {
+        // Under-accepted before: U+200C/U+200D are `Cf`, so neither
+        // `is_alphabetic` nor `is_alphanumeric` admits them, and the production
+        // names them outright at `[#x200C-#x200D]`.
+        assert!(!'\u{200C}'.is_alphabetic());
+        assert!(!'\u{200D}'.is_alphanumeric());
+        assert!(is_ncname_start('\u{200C}'));
+        assert!(is_ncname_start('\u{200D}'));
+        assert!(is_ncname_char('\u{200C}'));
+        assert!(is_ncname_char('\u{200D}'));
+    }
 
     fn prefixes() -> BTreeMap<String, String> {
         BTreeMap::from([

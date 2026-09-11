@@ -774,7 +774,16 @@ impl<'a> Projector<'a> {
                     super::MAX_OKF_FRONTMATTER_BYTES
                 )));
             }
-            if yaml.starts_with("---") || yaml.trim_end().ends_with("...") {
+            // A document marker ends the frontmatter early, so an emitted one
+            // would silently truncate the block. The guard is on the MARKER,
+            // and YAML 1.2.2 §5.5 recognizes only space and tab as white
+            // space -- "the rest of the (printable) non-break characters are
+            // considered to be non-space" -- so `str::trim_end`'s Unicode
+            // class refused a lawful body ending `...\u{a0}`, where the final
+            // scalar is content and no marker is present. Line breaks are
+            // stripped too: a marker on its own line is still a marker.
+            let tail = yaml.trim_end_matches([' ', '\t', '\r', '\n']);
+            if yaml.starts_with("---") || tail.ends_with("...") {
                 return Err(OkfError::new(format!(
                     "YAML serializer emitted a document marker for `{path}`"
                 )));

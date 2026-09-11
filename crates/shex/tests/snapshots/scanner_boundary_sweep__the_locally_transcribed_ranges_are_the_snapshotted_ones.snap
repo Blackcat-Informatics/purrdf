@@ -1,0 +1,11 @@
+---
+source: crates/shex/tests/scanner_boundary_sweep.rs
+expression: rendered
+---
+STRING_LITERAL2 content
+  U+0000..U+0009
+  U+000B..U+000C
+  U+000E..U+0021
+  U+0023..U+005B
+  U+005D..U+D7FF
+  U+E000..U+10FFFF

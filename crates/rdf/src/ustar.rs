@@ -247,18 +247,27 @@ fn write_octal(field: &mut [u8], value: u64) {
 }
 
 /// Parse a NUL/space-padded octal USTAR numeric field.
-/// Allocation-free: parses directly from the byte slice.
+///
+/// The field grammar is POSIX ustar's: *"Each numeric field is terminated by one
+/// or more `<space>` or NUL characters."* This reader is the one that sets
+/// `body_end` from SIZE, so a field it reads differently from the writer is a
+/// framing disagreement — two readers walk the same archive to different member
+/// lists, with no diagnostic on either side.
+///
+/// The law is [`purrdf_gts::tar::parse_octal`], not a second transcription of
+/// it. The local spelling this replaced was wrong three ways at once, and the
+/// third was the dangerous one: it sliced at the FIRST pad byte, so a
+/// left-padded `b"     644"` sliced to empty and read as **zero** — a SIZE of
+/// zero truncates the member's body silently. It also discarded every byte
+/// after the terminator (`b"644\0x"` read as `0o644`), and reached for
+/// `str::trim`, whose Unicode class admits a TAB that ustar does not name as
+/// padding (`b"\t644"` read as `0o644`).
+///
+/// The width conversion is checked rather than cast: `usize` is 32 bits on the
+/// wasm32 target this workspace must keep building for, and a silently truncated
+/// size is the same framing bug in a new place.
 fn parse_octal(field: &[u8]) -> Option<usize> {
-    let end = field
-        .iter()
-        .position(|&b| b == b'\0' || b == b' ')
-        .unwrap_or(field.len());
-    let s = std::str::from_utf8(&field[..end]).ok()?;
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return Some(0);
-    }
-    usize::from_str_radix(trimmed, 8).ok()
+    usize::try_from(purrdf_gts::tar::parse_octal(field)?).ok()
 }
 
 #[cfg(test)]
@@ -277,6 +286,54 @@ mod tests {
     #[test]
     fn parse_octal_empty_field_is_zero() {
         assert_eq!(parse_octal(&[0u8; 12]), Some(0));
+    }
+
+    /// Every padding shape POSIX ustar admits still reads, including the
+    /// LEFT-padded one that the previous spelling silently read as zero. A
+    /// zero here is not a wrong number, it is a truncated member body.
+    #[test]
+    fn parse_octal_reads_every_lawful_padding_shape() {
+        for field in [
+            &b"0000644\0"[..],
+            &b"0000644 "[..],
+            &b"     644"[..],
+            &b"644\0\0\0"[..],
+            &b"644   "[..],
+            &b" 644\0"[..],
+        ] {
+            assert_eq!(parse_octal(field), Some(0o644), "{field:?}");
+        }
+    }
+
+    /// A non-pad byte AFTER the terminator is a framing disagreement: the
+    /// header states a byte this reader would discard, and SIZE decides where
+    /// the next header begins. TAB is not ustar padding, whatever the Unicode
+    /// whitespace property says.
+    #[test]
+    fn parse_octal_refuses_data_after_the_terminator_and_unpadded_tabs() {
+        for field in [
+            &b"644\0x"[..],
+            &b"644 x"[..],
+            &b"64\08"[..],
+            &b"\t644\0"[..],
+        ] {
+            assert_eq!(parse_octal(field), None, "{field:?}");
+        }
+    }
+
+    /// The size field feeds `body_end`, so a left-padded size must frame the
+    /// member correctly rather than reading as an empty body.
+    #[test]
+    fn a_left_padded_size_field_frames_the_member_body() {
+        let body = b"@prefix ex: <https://example.org/> .\n";
+        let mut header = [0u8; 512];
+        header[..12].copy_from_slice(b"shapes/x.ttl");
+        // Left-padded with spaces rather than zero-filled: lawful ustar, and
+        // what several foreign writers emit.
+        let size = format!("{:>11o}\0", body.len());
+        header[124..136].copy_from_slice(size.as_bytes());
+        header[156] = b'0';
+        assert_eq!(parse_octal(&header[124..136]), Some(body.len()));
     }
 
     #[test]

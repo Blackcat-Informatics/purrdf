@@ -1582,6 +1582,7 @@ name = "purrdf-shex"
 version = "1.1.0"
 dependencies = [
  "criterion",
+ "insta",
  "pretty_assertions",
  "purrdf-core",
  "purrdf-iri",
@@ -1636,6 +1637,7 @@ dependencies = [
  "purrdf-cdt",
  "purrdf-core",
  "purrdf-entail",
+ "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",

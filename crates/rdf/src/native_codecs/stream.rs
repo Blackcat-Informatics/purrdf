@@ -142,9 +142,9 @@ fn stream_line_format<R: Read>(
     format: NativeRdfFormat,
     base: purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let mut lines = LineReader::new(reader);
     match format {
         NativeRdfFormat::HexTuples => {
+            let mut lines = LineReader::new(reader, LineEnd::Ndjson);
             let mut parser = HexTuplesStreamParser::new(base);
             while let Some(line) = lines.next_line()? {
                 parser.push_line(line)?;
@@ -154,6 +154,7 @@ fn stream_line_format<R: Read>(
         // N-Triples / N-Quads: `LineStreamParser::new` re-checks the format and rejects
         // anything else, so the line family cannot be entered by the wrong door.
         other => {
+            let mut lines = LineReader::new(reader, LineEnd::RdfEol);
             let mut parser = LineStreamParser::new(other, base)?;
             while let Some(line) = lines.next_line()? {
                 parser.push_line(line)?;
@@ -163,22 +164,55 @@ fn stream_line_format<R: Read>(
     }
 }
 
-/// A reader that yields logical lines EXACTLY as `str::lines` would, one at a time,
+/// Which characters end a physical line — a question each grammar answers for itself,
+/// and the reason this is a parameter rather than a constant.
+///
+/// The two line-oriented families this crate streams do NOT agree, and papering over the
+/// disagreement in either direction is a defect: giving N-Triples the NDJSON rule drops
+/// statements after a lone `#xD`, and giving NDJSON the RDF rule accepts documents the
+/// NDJSON parser it must match would reject. Each arm therefore reproduces its own
+/// buffered path exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineEnd {
+    /// `EOL ::= [#xD#xA]+` — RDF 1.2 N-Triples §2.2 / N-Quads §2.3. A lone `#xD`, a lone
+    /// `#xA` and the `#xD#xA` pair each end one line, which is what the buffered lane's
+    /// `text_parse::physical_lines` splitter does.
+    RdfEol,
+    /// NDJSON (HexTuples): `#xA` ends a line and a `#xD` immediately before it is part of
+    /// that terminator; a LONE `#xD` is not a terminator. This is `str::lines`, which is
+    /// what the buffered HexTuples path iterates — and it is also the right reading of
+    /// the syntax, since JSON forbids an unescaped `#xD` inside a string, so a lone one
+    /// makes the line invalid JSON rather than two lines.
+    Ndjson,
+}
+
+/// A reader that yields the same physical lines the buffered path splits, one at a time,
 /// reusing a single buffer.
 ///
-/// Matching `str::lines` is the whole point, because the buffered parser is defined in
-/// terms of it. That means, precisely:
+/// Matching the buffered split is the whole point, because a document must not mean one
+/// thing when it is held and another when it is streamed. Under [`LineEnd::RdfEol`] that
+/// means, precisely:
 ///
-/// * lines are split at `\n`, and a `\r` immediately before that `\n` is part of the
-///   terminator (CRLF);
-/// * a trailing `\r` on the FINAL line, when the document does not end in `\n`, is
-///   NOT a terminator and stays in the line — `str::lines` keeps it, so this keeps it;
-/// * a document ending in `\n` yields no extra empty line, and an empty document
+/// * a line ends at `#xA`, at `#xD#xA`, or at a LONE `#xD` — the terminator is stripped
+///   whichever shape it took;
+/// * `#xD#xA` is ONE terminator, so a CRLF document yields no empty line between
+///   statements;
+/// * a document ending in a terminator yields no extra empty line, and an empty document
 ///   yields no lines at all.
 ///
-/// A multi-byte UTF-8 sequence straddling a read-buffer boundary is a non-issue by
-/// construction: `read_until` accumulates until it sees `\n`, and `\n` cannot occur
-/// inside a UTF-8 sequence, so a line is always assembled whole before it is validated.
+/// Under [`LineEnd::Ndjson`] the lone `#xD` is content instead, reproducing `str::lines`.
+///
+/// Two boundary hazards, both handled here rather than left to luck:
+///
+/// * A multi-byte UTF-8 sequence straddling a read-buffer boundary is a non-issue by
+///   construction: the accumulation loop appends whole buffer windows until it finds a
+///   terminator, and no terminator byte can occur inside a UTF-8 sequence, so a line is
+///   always assembled whole before it is validated.
+/// * A `#xD` that is the LAST byte of a read window cannot yet be known to be a lone
+///   `#xD` or the head of a pair. Guessing either way makes the parse depend on the read
+///   granularity — a 1-byte reader would see every CRLF as two terminators — so the
+///   reader refills and looks, and the `#xA` it may find belongs to THIS terminator and
+///   not to the next line.
 struct LineReader<R> {
     inner: BufReader<R>,
     /// The current line's raw bytes INCLUDING its terminator, reused across lines.
@@ -186,14 +220,62 @@ struct LineReader<R> {
     /// Document-global byte offset of the current line's first byte, so a UTF-8
     /// diagnostic names the same index the buffered whole-document validation would.
     offset: usize,
+    /// The grammar's terminator set (see [`LineEnd`]).
+    line_end: LineEnd,
 }
 
 impl<R: Read> LineReader<R> {
-    fn new(reader: R) -> Self {
+    fn new(reader: R, line_end: LineEnd) -> Self {
         Self {
             inner: BufReader::with_capacity(READ_BUFFER_BYTES, reader),
             raw: Vec::new(),
             offset: 0,
+            line_end,
+        }
+    }
+
+    /// Accumulate the next physical line's bytes INCLUDING its terminator into
+    /// `self.raw`, reporting `false` at end of input.
+    fn fill_raw_line(&mut self) -> Result<bool, RdfDiagnostic> {
+        loop {
+            let available = self.inner.fill_buf().map_err(|error| read_error(&error))?;
+            if available.is_empty() {
+                // End of input: whatever has accumulated is a final line with no
+                // terminator, and nothing at all means there is no line left.
+                return Ok(!self.raw.is_empty());
+            }
+            let found = match self.line_end {
+                LineEnd::RdfEol => memchr::memchr2(b'\r', b'\n', available),
+                LineEnd::Ndjson => memchr::memchr(b'\n', available),
+            };
+            let Some(at) = found else {
+                let take = available.len();
+                self.raw.extend_from_slice(available);
+                self.inner.consume(take);
+                continue;
+            };
+            if available[at] == b'\n' {
+                self.raw.extend_from_slice(&available[..=at]);
+                self.inner.consume(at + 1);
+                return Ok(true);
+            }
+            // A `#xD` under `RdfEol`. It ends the line either way; the only open question
+            // is whether an `#xA` after it belongs to this terminator.
+            let pair = available.get(at + 1) == Some(&b'\n');
+            let take = if pair { at + 2 } else { at + 1 };
+            let undecided = at + 1 == available.len();
+            self.raw.extend_from_slice(&available[..take]);
+            self.inner.consume(take);
+            if undecided {
+                // The `#xD` was the last byte of the window: refill and settle the pair
+                // question, so the split cannot depend on the read granularity.
+                let next = self.inner.fill_buf().map_err(|error| read_error(&error))?;
+                if next.first() == Some(&b'\n') {
+                    self.raw.push(b'\n');
+                    self.inner.consume(1);
+                }
+            }
+            return Ok(true);
         }
     }
 
@@ -201,12 +283,7 @@ impl<R: Read> LineReader<R> {
     fn next_line(&mut self) -> Result<Option<&str>, RdfDiagnostic> {
         self.offset += self.raw.len();
         self.raw.clear();
-        if self
-            .inner
-            .read_until(b'\n', &mut self.raw)
-            .map_err(|error| read_error(&error))?
-            == 0
-        {
+        if !self.fill_raw_line()? {
             return Ok(None);
         }
         // Validate the raw bytes INCLUDING the terminator, which is what the buffered
@@ -216,9 +293,15 @@ impl<R: Read> LineReader<R> {
         let raw = std::str::from_utf8(&self.raw).map_err(|e| utf8_error(&e, self.offset))?;
         let line = match raw.strip_suffix('\n') {
             Some(body) => body.strip_suffix('\r').unwrap_or(body),
-            // No `\n`: this is the final line of a document with no trailing newline,
-            // and a `\r` at its end is content, exactly as `str::lines` treats it.
-            None => raw,
+            None => match self.line_end {
+                // A lone `#xD` is a terminator of its own, so it is stripped here too —
+                // including the one that ends a document with no final `#xA`.
+                LineEnd::RdfEol => raw.strip_suffix('\r').unwrap_or(raw),
+                // NDJSON: no `#xA`, so this is the final line of a document with no
+                // trailing newline, and a `#xD` at its end is content — exactly as
+                // `str::lines` (which the buffered HexTuples path iterates) treats it.
+                LineEnd::Ndjson => raw,
+            },
         };
         Ok(Some(line))
     }
@@ -426,6 +509,89 @@ mod tests {
             "<https://example.org/s> <https://example.org/p> <https://example.org/o> .",
             "application/n-triples",
         );
+    }
+
+    /// `EOL ::= [#xD#xA]+` reaches the streaming lane: a LONE `#xD` ends a line here
+    /// exactly as it does in the buffered splitter, at every read granularity.
+    ///
+    /// The 1-byte granularity is the one that matters and it is not decoration: it puts
+    /// a read boundary between EVERY `#xD` and its `#xA`, so a reader that decided the
+    /// pair question from the bytes it happened to be holding would see two terminators
+    /// where the document has one and would silently insert a blank line between every
+    /// pair of statements in a CRLF file.
+    #[test]
+    fn a_lone_carriage_return_ends_a_line_at_every_read_granularity() {
+        let cr = concat!(
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\r",
+            "<https://example.org/s2> <https://example.org/p> \"two\" .\r",
+        );
+        assert_three_way_equivalence(cr, "application/n-triples");
+        let streamed = parse_dataset_from_reader(Cursor::new(cr), "application/n-triples", None)
+            .expect("a lone `#xD` is a terminator, not content");
+        assert_eq!(
+            streamed.quads().count(),
+            2,
+            "both statements must reach the dataset"
+        );
+
+        // Mixed terminators, a comment ended by a lone `#xD`, and a final line with no
+        // terminator at all.
+        let mixed = concat!(
+            "# a comment ended by a lone CR\r",
+            "<https://example.org/s> <https://example.org/p> \"a\" .\r\n",
+            "\r",
+            "<https://example.org/s2> <https://example.org/p> \"b\" .\n",
+            "<https://example.org/s3> <https://example.org/p> \"c\" .",
+        );
+        assert_three_way_equivalence(mixed, "application/n-triples");
+        assert_eq!(
+            parse_dataset(mixed.as_bytes(), "application/n-triples", None)
+                .expect("mixed terminators")
+                .quads()
+                .count(),
+            3
+        );
+    }
+
+    /// HexTuples is NDJSON, whose line separator is `#xA` (optionally preceded by
+    /// `#xD`) and NOT a lone `#xD` — so the streaming reader must NOT apply the RDF
+    /// `EOL` rule to it, and the two lanes must keep agreeing.
+    ///
+    /// JSON forbids an unescaped `#xD` inside a string, so a lone one makes the line
+    /// invalid JSON rather than two lines; both lanes say so, identically. The neighbour
+    /// — the same rows separated by `#xA` — still parses on both.
+    #[test]
+    fn hextuples_keeps_the_ndjson_line_rule() {
+        let row = |n: u32| {
+            format!(
+                "[\"https://example.org/s{n}\",\"https://example.org/p\",\
+                 \"https://example.org/o\",\"globalId\",\"\",\"\"]"
+            )
+        };
+        let cr = format!("{}\r{}\n", row(1), row(2));
+        let buffered = parse_dataset(cr.as_bytes(), "application/x-hextuples", None)
+            .expect_err("a lone `#xD` does not separate NDJSON lines");
+        let streamed = parse_dataset_from_reader(Cursor::new(cr), "application/x-hextuples", None)
+            .expect_err("the streaming lane must agree");
+        assert_eq!(streamed.code, buffered.code);
+        assert_eq!(streamed.message, buffered.message);
+
+        let lf = format!("{}\n{}\n", row(1), row(2));
+        let buffered = parse_dataset(lf.as_bytes(), "application/x-hextuples", None)
+            .expect("the `#xA`-separated neighbour parses");
+        assert_eq!(buffered.quads().count(), 2);
+        for chunk in [1usize, 3, 4096] {
+            let streamed = parse_dataset_from_reader(
+                DribbleReader {
+                    data: lf.as_bytes(),
+                    chunk,
+                },
+                "application/x-hextuples",
+                None,
+            )
+            .expect("streamed neighbour");
+            assert_eq!(canonical(&streamed), canonical(&buffered));
+        }
     }
 
     #[test]

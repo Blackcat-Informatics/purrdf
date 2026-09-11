@@ -63,12 +63,51 @@
 //! relative `IRIREF` is live in the grammar, and the base half of the resolution
 //! context has a caller-supplied source (RFC-3986 §5.1.2). A prefixed name is a
 //! disabled production whose environment the spec declined to define.
+//!
+//! # ShapeMap's terminals are ShapeMap's own, and it has a whitespace production
+//!
+//! This scanner is not the ShExC lexer and must not borrow its classes by
+//! association. The ShapeMap grammar publishes its own terminals section, and it
+//! answers both questions a scanner has to ask, for itself:
+//!
+//! * **Whitespace.** ShapeMap does define one. Its terminals section names the
+//!   skippable text directly — *"The PASSED TOKENS below may appear between any
+//!   terminals or literal strings which appear in the grammar above"* — and
+//!   spells it
+//!
+//!   ```text
+//!   PASSED TOKENS ::= [ \t\r\n]+ | "#" [^\r\n]*
+//!   ```
+//!
+//!   The whitespace alternative enumerates exactly `#x20`, `#x9`, `#xD` and
+//!   `#xA`. Those are the same four scalars as the `WS` terminal
+//!   [`terminals::is_ws`] transcribes, so routing there is not an assumption
+//!   that ShapeMap inherits Turtle's `WS` — it is two grammars independently
+//!   naming one set. (PurRDF implements only the whitespace alternative; the
+//!   `"#" [^\r\n]*` comment alternative is not accepted here, and never was.)
+//!
+//! * **Name characters.** The terminals are tagged with the grammar they come
+//!   from — *"Production numbers followed by a letter correspond to productions
+//!   in other grammars: t: RDF 1.1 Turtle, s: SPARQL 1.1, x: ShEx 2"* — and
+//!   `[164s] PN_CHARS_BASE`, `[165s] PN_CHARS_U` and `[167s] PN_CHARS` carry the
+//!   `s`, so they are SPARQL's productions, quoted verbatim into this grammar.
+//!   That is the citation for reading them from [`terminals`], and it is a
+//!   citation to ShapeMap's own document.
+//!
+//! A Unicode property is never the answer to either. `char::is_whitespace` is
+//! twenty-six scalars where `PASSED TOKENS` names four, and `char::is_alphanumeric`
+//! both admits scalars `PN_CHARS` excludes (U+00AA, U+00B2, U+2460) and excludes
+//! scalars `PN_CHARS` admits (every combining mark in `[#x300-#x36F]` — which is
+//! what an NFD-decomposed `é` is made of). Because a scanner's classes decide
+//! where a token STOPS, either direction re-tokenizes silently rather than
+//! erroring; see [`terminals`] for the worked counterexample.
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
-use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, terminals};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
+use crate::lexer::{UcharDefect, decode_uchar};
 use crate::statement;
 use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
 
@@ -327,6 +366,63 @@ fn term_key(value: &TermValue) -> String {
 
 // ── the parser ────────────────────────────────────────────────────────────────
 
+/// `[145s] LANGTAG ::= "@" ([a-zA-Z])+ ("-" ([a-zA-Z0-9])+)*`, on the body after
+/// the `@`.
+///
+/// **This one is deliberately NOT a `PN_CHARS` run and not a Unicode property.**
+/// `LANGTAG` is the one terminal in the ShapeMap grammar that enumerates plain
+/// ASCII letters and digits, and it is position-dependent besides: the primary
+/// subtag is letters only, every later subtag is letters or digits, and neither
+/// may be empty. Answering it with `char::is_alphanumeric` was wrong twice over —
+/// it admitted `"x"@日本語`, which the production does not name at all, and it
+/// treated the structure as a flat character run, so `"x"@en-` and `"x"@1ab` were
+/// accepted as language tags they are not.
+///
+/// Every real tag still passes, which is the point: `en`, `en-UK`, `zh-Hans`,
+/// `de-CH-1901`, `x-private` and the grandfathered `i-klingon` all begin with an
+/// alphabetic subtag and continue with alphanumeric ones.
+fn is_langtag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    let primary = subtags.next().unwrap_or_default();
+    if primary.is_empty() || !primary.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return false;
+    }
+    subtags.all(|sub| !sub.is_empty() && sub.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+/// `[18t] IRIREF ::= "<" ([^#x00-#x20<>"{}|^`\] | UCHAR)* ">"` — the content class,
+/// as the complement of [`terminals::is_iriref_forbidden`].
+///
+/// A content class is a terminal like any other, and `char::is_control` stood in for
+/// this one while being wrong in **both** directions at once, which is why the error
+/// was invisible from either side alone: it admitted `#x20` SPACE (so `<urn:ex:a b>`
+/// named an IRI with a space in it), refused the lawful U+007F-U+009F, and said
+/// nothing at all about `` ` ``, `|`, `^` and `\`, four of the nine delimiters the
+/// production excludes by name. The enumerated replacement that followed was a THIRD
+/// transcription of a production the workspace already owned, so the exclusion set
+/// now comes from the shared module and this function is just the polarity flip the
+/// scan loop reads more naturally in.
+///
+/// This answers the RAW half of the production only. `'\'` is excluded here because
+/// it is excluded there — the production admits it solely as the lead of the `UCHAR`
+/// alternative — so [`MapParser::parse_iri`] claims the backslash in its own arm,
+/// before this class is ever consulted, and decodes the escape.
+const fn is_iriref_content(c: char) -> bool {
+    !terminals::is_iriref_forbidden(c)
+}
+
+/// `[14t] STRING_LITERAL2 ::= '"' ([^#x22#x5C#xA#xD] | ECHAR | UCHAR)* '"'` — the
+/// content class of the quoted form this scanner accepts.
+///
+/// Exactly four scalars leave it: the closing quote and the escape lead (both handled
+/// by their own arms before this one is reached) and the two line terminators. Every
+/// other control is lawful *content* — a raw TAB inside a literal is a TAB — and
+/// `char::is_control` refused all of them, so a shape map carrying a tabbed lexical
+/// form was reported as an unterminated string.
+const fn is_string_literal_content(c: char) -> bool {
+    !matches!(c, '"' | '\\' | '\n' | '\r')
+}
+
 struct MapParser {
     chars: Vec<char>,
     pos: usize,
@@ -491,11 +587,35 @@ impl MapParser {
     ///
     /// `_:label` is deliberately NOT one: that is `BLANK_NODE_LABEL`, which the grammar
     /// does admit wherever a term is allowed, so it must keep reaching [`Self::parse_blank`].
+    ///
+    /// # Which productions bound the two runs
+    ///
+    /// The name halves are scanned with the productions ShapeMap's terminals section
+    /// keeps defined for them even though their only consumer is commented out —
+    /// `[168s] PN_PREFIX ::= PN_CHARS_BASE ((PN_CHARS | ".")* PN_CHARS)?` before the
+    /// colon and `[169s] PN_LOCAL ::= (PN_CHARS_U | ":" | [0-9] | PLX) ((PN_CHARS |
+    /// "." | ":" | PLX)* (PN_CHARS | ":" | PLX))?` after it. Both bound a run of
+    /// `[167s] PN_CHARS` plus `'.'`, and the local half additionally admits the `'%'`
+    /// that opens `[171s] PERCENT ::= "%" HEX HEX` (via `[170s] PLX`). The trailing
+    /// `'.'` is trimmed because neither production may end on one.
+    ///
+    /// `char::is_alphanumeric` stood here and was wrong on both edges: it admits
+    /// U+00AA and U+2460, which `PN_CHARS` does not, and refuses every combining mark
+    /// in `[#x300-#x36F]`, which `PN_CHARS` does — so an NFD-spelled `ex:café` was
+    /// quoted back at the author as `ex:cafe`, naming a different IRI than the one
+    /// being refused.
+    ///
+    /// This run decides what a REJECTION QUOTES, not what the parser accepts: nothing
+    /// is consumed, and every position that calls it has already established that a
+    /// conforming term cannot start here (a conforming one starts `<`, `_:` or `"`, or
+    /// is the bare keyword the caller checks next). Getting the class right therefore
+    /// cannot widen or narrow the accepted language — it decides only whether the
+    /// diagnostic names the input the author actually wrote.
     fn peek_prefixed_name(&self) -> Option<String> {
         let mut at = self.pos;
         let mut name = String::new();
         while let Some(&c) = self.chars.get(at) {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
+            if terminals::is_pn_chars(c) || c == '.' {
                 name.push(c);
                 at += 1;
             } else {
@@ -509,7 +629,7 @@ impl MapParser {
         name.push(':');
         at += 1;
         while let Some(&c) = self.chars.get(at) {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '%') {
+            if terminals::is_pn_chars(c) || matches!(c, '.' | '%') {
                 name.push(c);
                 at += 1;
             } else {
@@ -544,11 +664,46 @@ impl MapParser {
 
     /// An `IRIREF`: `'<' … '>'`, resolved against the base in scope.
     ///
+    /// ```text
+    /// [18t] IRIREF ::= '<' ([^#x00-#x20<>"{}|^`\] | UCHAR)* '>'
+    /// ```
+    ///
     /// The opening `<` is verified HERE rather than trusted from the caller. It used not
     /// to be, and the one caller that did not pre-check — a literal's `^^` datatype — read
     /// the first character of `"7"^^xsd:integer`'s datatype as the opening bracket and ran
     /// to end-of-input, reporting `unterminated IRI` for a document whose real defect was a
     /// prefixed name.
+    ///
+    /// # The production has two alternatives, and this scan reads both
+    ///
+    /// `UCHAR` is the second one, and a scan that answers only the raw content class
+    /// **over-refuses**: `'\'` is one of the nine delimiters, so the escape's own lead
+    /// character falls out of the body and every escaped spelling — `<urn:ex:\U0001F600>`,
+    /// or any `<…\uXXXX…>` at all — was reported as `unterminated IRI`. That spelling is
+    /// not exotic: it is what this workspace's own IRI egress escape emits, since it
+    /// carries `#x00-#x20`, the nine delimiters and the control blocks as `\uXXXX`, so
+    /// the refusal broke read-back of PurRDF's own output. Refusing a document the
+    /// grammar admits is the mirror of resolving the wrong node, not the safe side of it.
+    ///
+    /// The escape is decoded by [`decode_uchar`], the transcription the ShExC lexer
+    /// scans `IRIREF` with, so the two front ends cannot drift on the three edges that
+    /// decide identity: a bare `'\'` is a hard error rather than a literal backslash;
+    /// `HEX ::= [0-9] | [A-F] | [a-f]`, so the upper- and lower-case spellings of an
+    /// `é` name one IRI and not two; and a value above U+10FFFF or inside the
+    /// U+D800-U+DFFF surrogate block is refused rather than replaced with U+FFFD.
+    ///
+    /// # A decoded scalar is a VALUE, not a re-scanned character
+    ///
+    /// The production's raw content class constrains the characters that stand in the
+    /// *source*; `UCHAR` is the mechanism by which the others are written at all, so
+    /// what it decodes to is not fed back through that class. This is forced, not
+    /// chosen: [`purrdf_core`]'s IRI egress escape emits exactly the excluded scalars
+    /// as `\uXXXX`, so re-refusing them on ingress would mean this parser could not
+    /// read back what the workspace writes. A `UCHAR` denoting U+0020 therefore
+    /// contributes a SPACE to the value, and whether *that* string is an IRI at all is
+    /// the next layer's question — [`Self::resolve`] puts it to [`BaseScope`], which
+    /// answers RFC 3987 rather than the Turtle-family terminal (and refuses the space,
+    /// naming the IRI instead of blaming a runaway bracket scan).
     fn parse_iri(&mut self) -> Result<String> {
         if self.peek() != Some('<') {
             if let Some(name) = self.peek_prefixed_name() {
@@ -564,7 +719,11 @@ impl MapParser {
                     self.pos += 1;
                     return self.resolve(&raw);
                 }
-                Some(c) if c != '<' && c != '"' && c != '{' && c != '}' && !c.is_control() => {
+                Some('\\') => {
+                    let decoded = self.read_uchar()?;
+                    raw.push(decoded);
+                }
+                Some(c) if is_iriref_content(c) => {
                     raw.push(c);
                     self.pos += 1;
                 }
@@ -573,6 +732,58 @@ impl MapParser {
         }
     }
 
+    /// Decode the `UCHAR` whose backslash the cursor stands on, advancing past it.
+    ///
+    /// ```text
+    /// UCHAR ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
+    /// HEX   ::= [0-9] | [A-F] | [a-f]
+    /// ```
+    ///
+    /// Every failure is a hard error rather than a fallback to the raw backslash,
+    /// because no production reachable from here gives `'\'` any other reading.
+    fn read_uchar(&mut self) -> Result<char> {
+        let (decoded, consumed) =
+            decode_uchar(|ahead| self.peek_at(ahead)).map_err(|defect| match defect {
+                UcharDefect::NotAnEscape => {
+                    self.err("a backslash in an IRI must open a \\u/\\U escape")
+                }
+                UcharDefect::BadHex => self.err("bad \\u/\\U escape in IRI (expected hex digits)"),
+                UcharDefect::NotAScalar => {
+                    self.err("\\u/\\U escape in IRI is not a Unicode scalar value")
+                }
+            })?;
+        self.pos += consumed;
+        Ok(decoded)
+    }
+
+    /// `[142s] BLANK_NODE_LABEL ::= "_:" (PN_CHARS_U | [0-9]) ((PN_CHARS | ".")* PN_CHARS)?`
+    ///
+    /// The label body is therefore a run of `[167s] PN_CHARS` plus `'.'`, which is why
+    /// it is [`terminals::is_pn_chars`] and not a Unicode letter property. The two
+    /// differ in both directions and each direction moves the boundary: U+0301
+    /// COMBINING ACUTE is `PN_CHARS` and is not alphanumeric, so `_:café` spelled NFD
+    /// used to end the label at `caf` and then fail on a `́` that had nowhere to go;
+    /// U+2460 CIRCLED DIGIT ONE is alphanumeric and is not `PN_CHARS`, so it used to
+    /// be absorbed into a label the grammar says stops before it.
+    ///
+    /// # The production is position-dependent, and so is the scan
+    ///
+    /// It names **three** classes, not one, and a run of `PN_CHARS` answers only the
+    /// middle of them. Both edges decide identity, so getting either wrong mints a
+    /// blank node the author did not write:
+    ///
+    /// * the FIRST scalar is `PN_CHARS_U | [0-9]` — narrower than `PN_CHARS`, which
+    ///   also carries `'-'`, U+00B7 and the combining marks. A uniform scan read
+    ///   `_:-z` and `_:` + U+0301 + `z` as labels, and neither is one;
+    /// * the LAST may not be `'.'`. A dot is lawful *between* name characters, so the
+    ///   scan over-consumes a trailing run and hands it back — the same pushback the
+    ///   ShExC lexer and the query front end perform. A shape map has no production
+    ///   that admits a bare `'.'` anywhere, so the handed-back dot then ends the
+    ///   parse with the defect named rather than being absorbed into an identity.
+    ///
+    /// Neither edge is an over-refusal risk in the other direction: `_:a.b` keeps its
+    /// internal dot, `_:0z` still begins with a digit, and `_:_z` still begins with
+    /// the one `PN_CHARS_U` member that is not `PN_CHARS_BASE`.
     fn parse_blank(&mut self) -> Result<TermValue> {
         // '_' ':' NAME
         self.pos += 1;
@@ -581,16 +792,35 @@ impl MapParser {
         }
         self.pos += 1;
         let mut label = String::new();
-        while let Some(c) = self.peek() {
-            if c.is_alphanumeric() || c == '_' || c == '-' || c == '.' {
+        match self.peek() {
+            Some(c) if terminals::is_pn_chars_u(c) || c.is_ascii_digit() => {
                 label.push(c);
+                self.pos += 1;
+            }
+            _ => {
+                return Err(
+                    self.err("a blank-node label must begin with PN_CHARS_U or a digit after `_:`")
+                );
+            }
+        }
+        let mut trailing_dots = 0usize;
+        while let Some(c) = self.peek() {
+            if c == '.' {
+                label.push(c);
+                trailing_dots += 1;
+                self.pos += 1;
+            } else if terminals::is_pn_chars(c) {
+                label.push(c);
+                trailing_dots = 0;
                 self.pos += 1;
             } else {
                 break;
             }
         }
-        if label.is_empty() {
-            return Err(self.err("empty blank-node label"));
+        if trailing_dots > 0 {
+            // `'.'` is one byte, so the trimmed byte length is the dot run.
+            label.truncate(label.len() - trailing_dots);
+            self.pos -= trailing_dots;
         }
         Ok(TermValue::blank(label))
     }
@@ -608,7 +838,7 @@ impl MapParser {
                     self.pos += 1;
                     lexical.push(self.parse_escape()?);
                 }
-                Some(c) if !c.is_control() => {
+                Some(c) if is_string_literal_content(c) => {
                     lexical.push(c);
                     self.pos += 1;
                 }
@@ -624,15 +854,17 @@ impl MapParser {
             self.pos += 1;
             let mut tag = String::new();
             while let Some(c) = self.peek() {
-                if c.is_alphanumeric() || c == '-' {
+                if c.is_ascii_alphanumeric() || c == '-' {
                     tag.push(c);
                     self.pos += 1;
                 } else {
                     break;
                 }
             }
-            if tag.is_empty() {
-                return Err(self.err("empty language tag"));
+            if !is_langtag(&tag) {
+                return Err(
+                    self.err("expected a language tag: LANGTAG is [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*")
+                );
             }
             Ok(TermValue::lang_literal(lexical, &tag))
         } else {
@@ -699,9 +931,27 @@ impl MapParser {
         self.pos >= self.chars.len()
     }
 
+    /// Skip the whitespace alternative of ShapeMap's own
+    /// `PASSED TOKENS ::= [ \t\r\n]+ | "#" [^\r\n]*`.
+    ///
+    /// Four scalars — `#x20`, `#x9`, `#xD`, `#xA` — which is the set
+    /// [`terminals::is_ws`] transcribes; see the [module documentation](self) for
+    /// why that is ShapeMap's own citation rather than a loan from ShExC.
+    ///
+    /// `char::is_whitespace` stood here, and the twenty-two extra scalars it skipped
+    /// are not separators in this grammar: U+00A0 NO-BREAK SPACE and U+3000
+    /// IDEOGRAPHIC SPACE between two terminals gave a document no reading at all, yet
+    /// it parsed. `u8::is_ascii_whitespace` is not the correction either — it admits
+    /// U+000C FORM FEED, which `PASSED TOKENS` does not name.
+    ///
+    /// This scanner holds decoded scalars, so it reaches for the scalar-shaped
+    /// [`terminals::is_ws_char`] rather than narrowing to a byte here. The two are
+    /// one table: every `WS` member is ASCII, so the widened search answers `false`
+    /// for U+00A0 and everything above it, which is exactly what the narrowing used
+    /// to prove locally.
     fn skip_ws(&mut self) {
         while let Some(c) = self.peek() {
-            if c.is_whitespace() {
+            if terminals::is_ws_char(c) {
                 self.pos += 1;
             } else {
                 break;
@@ -718,8 +968,39 @@ impl MapParser {
         }
     }
 
-    /// Consume `kw` when it appears as a whole token (not followed by a
-    /// name character), returning whether it matched.
+    /// Consume `kw` when it appears as a whole token, returning whether it matched.
+    ///
+    /// # What decides the follow boundary — and what does not
+    ///
+    /// `'a'`, `"FOCUS"` and `"START"` are literal strings inside productions
+    /// `[4] subjectTerm`, `[6] triplePattern` and `[7] shapeLabel`, matched under the
+    /// rule the terminals section states: *"Text is matched against the longest
+    /// matching terminal."* So the question a keyword's right edge asks is not "is the
+    /// next character a letter?" — a property of one scalar — but "could a LONGER
+    /// terminal have started here?", which only the grammar can answer.
+    ///
+    /// The only terminal in this family built from a run of name characters is a
+    /// Turtle-style name: `[168s] PN_PREFIX` and `[169s] PN_LOCAL`, which ShapeMap
+    /// keeps defined (their consumer, `prefixedName`, is commented out of
+    /// `[136s] iri` — see the [module documentation](self)). Both are runs of
+    /// `[167s] PN_CHARS`, so `PN_CHARS` is exactly the class a keyword must not be
+    /// carved out of the middle of, and [`terminals::is_pn_chars`] is what decides it.
+    /// `START:S1` is one such name, and the callers check
+    /// [`Self::peek_prefixed_name`] BEFORE reaching here so it is refused by name.
+    ///
+    /// **Everything else is a boundary, and refusing those would be the mirror bug.**
+    /// The grammar's own follow sets are punctuation and end-of-input: `','` ends a
+    /// `shapeAssociation` in `[1] shapeMap`, `'}'` closes `[6] triplePattern`, and
+    /// `'<'` opens the `[18t] IRIREF` that `[136s] iri` is. None is `PN_CHARS`, so
+    /// `@START,`, `{_ <p> FOCUS}`, `{FOCUS<p> _}` and `@START` at end-of-input all
+    /// still take the keyword — a "keyword must be followed by whitespace" rule would
+    /// reject every one of them.
+    ///
+    /// `char::is_alphanumeric() || '_'` stood here. It never rejected a conforming
+    /// document, because no conforming follow character is alphanumeric — but it was
+    /// the wrong question asked of the wrong set, and it disagreed with `PN_CHARS` in
+    /// both directions (U+2460 is alphanumeric and not a name character; every
+    /// combining mark in `[#x300-#x36F]` is a name character and not alphanumeric).
     fn take_keyword(&mut self, kw: &str) -> bool {
         let end = self.pos + kw.chars().count();
         if end > self.chars.len() {
@@ -729,7 +1010,7 @@ impl MapParser {
             return false;
         }
         if let Some(next) = self.chars.get(end)
-            && (next.is_alphanumeric() || *next == '_')
+            && terminals::is_pn_chars(*next)
         {
             return false;
         }
