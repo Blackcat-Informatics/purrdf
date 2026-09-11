@@ -71,6 +71,76 @@ const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 /// The `https://w3id.org/sssom/` metadata namespace.
 const SSSOM_NS: &str = "https://w3id.org/sssom/";
 
+// --------------------------------------------------------------------------- //
+// White space
+// --------------------------------------------------------------------------- //
+
+/// The white space SSSOM/TSV names, and the only white space this codec trims
+/// or counts as blank: U+0020 SPACE and U+0009 CHARACTER TABULATION.
+///
+/// # What the two layers say
+///
+/// An SSSOM/TSV file is two grammars stacked in one document, and the question
+/// "which characters are white space?" has to be asked of each. They agree.
+///
+/// * **The metadata block** "is written as the YAML 1.2 serialisation of the
+///   `MappingSet` object, except that the `mappings` slot is not included"
+///   (*The SSSOM/TSV serialisation format*). YAML 1.2.2 §5.5 *White Space
+///   Characters* enumerates its set outright: "YAML recognizes two white space
+///   characters: space (`x20`) and tab (`x09`) … The rest of the (printable)
+///   non-break characters are considered to be non-space characters." U+00A0
+///   NO-BREAK SPACE is one of those non-space characters; YAML is explicit
+///   enough about it to give it its own `\_` escape in a double-quoted scalar.
+///   SSSOM narrows the set further for the one place it legislates directly:
+///   "Every line of the block MUST be preceded by a `#` character; the `#`
+///   character MAY be followed by one or several space characters (U+0020)
+///   before the YAML content."
+/// * **The mappings block** is a matrix "where each line represents an
+///   individual mapping and each column (separated by tab characters, U+0009)
+///   represents one of the slots of the `Mapping` class". A record is a line
+///   and a field boundary is a TAB; nothing in the format gives any other
+///   scalar a structural reading.
+///
+/// # Why [`str::trim`] is the wrong predicate here
+///
+/// Neither grammar names a Unicode property, and [`str::trim`] answers the
+/// 26-member Unicode `White_Space` property. The difference is not a matter of
+/// strictness, because these trims decide **structure**, not membership:
+///
+/// * A line holding only U+00A0 is not blank under either layer. It is a
+///   one-column TSV record whose `subject_id` is U+00A0 — which
+///   [`validate`] would report — and answering "blank" makes the reader drop
+///   it in silence. That is the same silent drop this codec's `RequiredSlot`
+///   enhancement was added to refuse, reintroduced one layer earlier.
+/// * In the other direction, a mapping cell holding U+00A0 is a present value,
+///   and trimming it away made `RequiredSlot` report a missing slot for a row
+///   that has one.
+///
+/// So the property is wrong in both directions at once, which is why neither
+/// half of it showed up as a failing test.
+const SSSOM_WHITE: [char; 2] = [' ', '\t'];
+
+/// `s` with [`SSSOM_WHITE`] removed from both ends.
+fn trim_white(s: &str) -> &str {
+    s.trim_matches(SSSOM_WHITE)
+}
+
+/// `s` with leading [`SSSOM_WHITE`] removed.
+fn trim_white_start(s: &str) -> &str {
+    s.trim_start_matches(SSSOM_WHITE)
+}
+
+/// `s` with trailing [`SSSOM_WHITE`] removed.
+fn trim_white_end(s: &str) -> &str {
+    s.trim_end_matches(SSSOM_WHITE)
+}
+
+/// Whether `s` holds nothing but [`SSSOM_WHITE`] — the format's own reading of
+/// an empty line or an empty field, as opposed to the Unicode property's.
+fn is_blank(s: &str) -> bool {
+    trim_white(s).is_empty()
+}
+
 /// The default check set sssom-py runs (`validation_types=None`), captured from
 /// `sssom.validators.DEFAULT_VALIDATION_TYPES` into the frozen golden. The native
 /// validator implements the two *reachable-through-parse* checks of this set
@@ -262,7 +332,7 @@ impl SssomSetComment {
     pub fn ordinary(content: impl Into<String>) -> Result<Self, SssomCommentError> {
         let content = content.into();
         validate_comment_content(&content)?;
-        if content.trim_start().starts_with('#') {
+        if trim_white_start(&content).starts_with('#') {
             return Err(SssomCommentError::KindMismatch);
         }
         Self::from_raw(format!("# {content}"), SssomCommentPlacement::AfterTable)
@@ -333,7 +403,7 @@ fn classify_comment_line(raw_line: &str) -> Result<SssomCommentKind, SssomCommen
     let Some(after_marker) = raw_line.strip_prefix('#') else {
         return Err(SssomCommentError::MissingMarker);
     };
-    if after_marker.trim_start().starts_with('#') {
+    if trim_white_start(after_marker).starts_with('#') {
         Ok(SssomCommentKind::Provenance)
     } else {
         Ok(SssomCommentKind::Ordinary)
@@ -574,7 +644,13 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
     let table_and_suffix = &lines[header_idx..];
     let suffix_start = table_and_suffix
         .iter()
-        .rposition(|line| !line.starts_with('#') && !line.trim().is_empty())
+        // `is_blank`, never `str::trim`: the last real table line is a
+        // STRUCTURAL boundary (everything after it becomes the trailing
+        // comment envelope), and SSSOM's mappings block separates columns by
+        // "tab characters, U+0009" over lines -- it gives no other scalar a
+        // reading. A line holding only U+00A0 is a one-column record, not the
+        // end of the table.
+        .rposition(|line| !line.starts_with('#') && !is_blank(line))
         .map_or(table_and_suffix.len(), |offset| offset + 1);
 
     // The body is the column-header row plus the data rows. `#` provenance
@@ -604,7 +680,11 @@ pub fn parse_tsv(text: &str) -> Result<SssomMappingSet, RdfDiagnostic> {
             }
             continue;
         }
-        if line.trim().is_empty() {
+        // Skipping a line here DROPS it: it never reaches `parse_body`, so it
+        // never reaches `validate` and produces no diagnostic. Under
+        // `str::trim` a line of U+00A0 vanished exactly that way, though
+        // SSSOM's mappings block reads it as a one-column record.
+        if is_blank(line) {
             continue;
         }
         line_numbers.push((header_idx + offset + 1) as u32);
@@ -631,13 +711,17 @@ fn parse_header(lines: &[&str]) -> Result<(SssomMeta, Vec<SssomSetComment>), Rdf
         let line_no = (offset + 1) as u32;
         // Strip the leading '#'. A bare '#' line is an empty comment; skip it.
         let body = raw.strip_prefix('#').unwrap_or(raw);
-        if body.trim().is_empty() {
+        // SSSOM: "the `#` character MAY be followed by one or several space
+        // characters (U+0020) before the YAML content", and YAML 1.2.2 §5.5
+        // recognizes only space and tab as white space -- so a `#` followed by
+        // U+00A0 is a comment carrying content, not an empty one.
+        if is_blank(body) {
             continue;
         }
         // A `# #…` line is unambiguous set provenance: the second marker keeps it
         // distinct from a YAML scalar. It does not close an open curie_map block,
         // so further indented entries remain valid.
-        if body.trim_start().starts_with('#') {
+        if trim_white_start(body).starts_with('#') {
             let comment =
                 SssomSetComment::from_raw((*raw).to_owned(), SssomCommentPlacement::BeforeTable)
                     .map_err(|error| {
@@ -651,13 +735,52 @@ fn parse_header(lines: &[&str]) -> Result<(SssomMeta, Vec<SssomSetComment>), Rdf
             continue;
         }
 
+        // SSSOM, *Mapping Set* / metadata block: "the `#` character MAY be
+        // followed by one or several space characters (U+0020) before the YAML
+        // content." U+0020, and only U+0020. A TAB standing between the marker
+        // and the content is therefore not white space this rule admits, and the
+        // line has no reading -- so it is refused rather than repaired.
+        //
+        // The refusal has to be EXPLICIT; narrowing a trim does not do it, and
+        // that is the trap. `SSSOM_WHITE` is `[' ', '\t']` because the YAML layer
+        // legitimately admits both (YAML 1.2.2 §5.5), so even with the leading
+        // TAB left in place, `split_key_value` trims `SSSOM_WHITE` off the key
+        // and would absorb it there instead -- `#\tmapping_set_id: v` parsing
+        // exactly as before, with the "fix" invisible.
+        //
+        // YAML 1.2.2 §6.1 says the same thing one layer down for the indented
+        // `curie_map` entries this check also covers: "to maintain portability,
+        // tab characters must not be used in indentation."
+        //
+        // It is deliberately NOT applied to the `# #…` provenance line handled
+        // above: that line carries a retained-verbatim comment, not YAML content,
+        // so the clause does not reach it and refusing it would be an
+        // over-refusal on text SSSOM never parses.
+        if body.trim_start_matches(' ').starts_with('\t') {
+            return Err(RdfDiagnostic::error(
+                "sssom-tsv-parse",
+                format!(
+                    "tab after the `#` metadata marker: SSSOM admits only U+0020 space \
+                     characters before the YAML content, in {raw:?}"
+                ),
+            )
+            .with_location(RdfLocation::default().with_line(line_no)));
+        }
+
         // `#   prefix: uri` (two+ leading spaces) inside a `curie_map:` block.
         // The block is "open" from the `# curie_map:` line until a non-indented
         // scalar (or end of header). PurRDF indents curie entries with three
         // spaces; accept any indent of one or more.
-        let is_indented = body.starts_with(' ') && body.trim_start() != body;
+        // YAML 1.2.2 §6.1: "In general, indentation is defined as a zero or
+        // more space characters at the start of a line", and "to maintain
+        // portability, tab characters must not be used in indentation". So the
+        // indent that opens a `curie_map` entry is U+0020 and only U+0020 --
+        // narrower even than `SSSOM_WHITE`. The `body.trim_start() != body`
+        // clause this replaces was both dead (implied by `starts_with`) and
+        // spelled with the Unicode property.
+        let is_indented = body.starts_with(' ');
         if in_curie_map && is_indented {
-            let entry = body.trim();
+            let entry = trim_white(body);
             let (prefix, uri) = split_key_value(entry).ok_or_else(|| {
                 RdfDiagnostic::error(
                     "sssom-tsv-parse",
@@ -672,7 +795,7 @@ fn parse_header(lines: &[&str]) -> Result<(SssomMeta, Vec<SssomSetComment>), Rdf
         // A non-indented line ends any open curie_map block.
         in_curie_map = false;
 
-        let scalar = body.trim_start();
+        let scalar = trim_white_start(body);
         let (key, value) = split_key_value(scalar).ok_or_else(|| {
             RdfDiagnostic::error(
                 "sssom-tsv-parse",
@@ -718,14 +841,14 @@ fn parse_header(lines: &[&str]) -> Result<(SssomMeta, Vec<SssomSetComment>), Rdf
 /// kept as authored for byte-stable round-trips).
 fn split_key_value(scalar: &str) -> Option<(&str, &str)> {
     let idx = scalar.find(':')?;
-    let key = scalar[..idx].trim();
+    let key = trim_white(&scalar[..idx]);
     if key.is_empty() {
         return None;
     }
     // Skip the colon and a single following space if present.
     let rest = &scalar[idx + 1..];
     let value = rest.strip_prefix(' ').unwrap_or(rest);
-    Some((key, value.trim_end()))
+    Some((key, trim_white_end(value)))
 }
 
 /// Parse the TSV body (column-header row + data rows) into mappings.
@@ -738,7 +861,7 @@ fn parse_body(
     body: &str,
     line_numbers: &[u32],
 ) -> Result<(SssomColumnLayout, Vec<SssomMapping>), RdfDiagnostic> {
-    if body.trim().is_empty() {
+    if is_blank(body) {
         return Err(RdfDiagnostic::error(
             "sssom-tsv-parse",
             "missing TSV column-header row",
@@ -888,7 +1011,11 @@ fn validate_required_slots(mapping: &SssomMapping, out: &mut Vec<SssomDiagnostic
     ];
     for (name, value) in slots {
         debug_assert!(REQUIRED_SLOTS.contains(&name));
-        if value.trim().is_empty() {
+        // A cell holding U+00A0 is a PRESENT value under SSSOM's mappings
+        // block; `str::trim` erased it and reported a missing required slot for
+        // a row that has one -- the over-refusal mirror of the dropped line in
+        // `parse_tsv`.
+        if is_blank(value) {
             out.push(SssomDiagnostic::error(
                 "required slot",
                 "RequiredSlot",
@@ -1249,6 +1376,222 @@ fn resolve_iri(entity: &str, meta: &SssomMeta) -> RdfTerm {
         return RdfTerm::iri(format!("{namespace}{reference}"));
     }
     RdfTerm::iri(entity.to_owned())
+}
+
+#[cfg(test)]
+mod white_space_law {
+    use super::{
+        SSSOM_WHITE, SssomCommentPlacement, SssomSetComment, is_blank, parse_tsv, trim_white,
+        trim_white_end, trim_white_start, validate,
+    };
+    use pretty_assertions::assert_eq;
+
+    /// Every Unicode scalar value, in order.
+    fn all_scalars() -> impl Iterator<Item = char> {
+        (0..=0x0010_FFFF_u32).filter_map(char::from_u32)
+    }
+
+    #[test]
+    fn the_set_is_exactly_the_two_characters_the_layers_name() {
+        // Stated as a total function over the scalars rather than spot-checked,
+        // because the failure mode is a scalar nobody thought to list.
+        assert_eq!(SSSOM_WHITE, [' ', '\t']);
+        for c in all_scalars() {
+            let mine = is_blank(&c.to_string());
+            assert_eq!(mine, c == ' ' || c == '\t', "{c:?}");
+        }
+    }
+
+    #[test]
+    fn the_unicode_property_admits_twenty_four_scalars_this_format_does_not() {
+        // The gap, enumerated: every one of these satisfies `char::is_whitespace`
+        // and none of them is white space in YAML 1.2.2 §5.5 or in a TSV record.
+        let extra: Vec<char> = all_scalars()
+            .filter(|c| c.is_whitespace() && !is_blank(&c.to_string()))
+            .collect();
+        assert!(extra.contains(&'\u{A0}'), "{extra:?}");
+        assert!(extra.contains(&'\u{3000}'), "{extra:?}");
+        assert!(extra.contains(&'\u{2028}'), "{extra:?}");
+        // ...and the two that ARE white space here are not in it.
+        assert!(!extra.contains(&' '));
+        assert!(!extra.contains(&'\t'));
+    }
+
+    #[test]
+    fn a_no_break_space_line_is_a_record_and_not_a_blank() {
+        // The silent drop, from the outside. The row is malformed and must reach
+        // `validate` to say so; under `str::trim` it vanished between the two.
+        let doc = "# mapping_set_id: https://example.org/m\n\
+                   subject_id\tpredicate_id\tobject_id\tmapping_justification\n\
+                   \u{A0}\n";
+        let set = parse_tsv(doc).expect("parses");
+        assert_eq!(set.mappings.len(), 1, "the U+00A0 line is a record");
+        assert!(
+            validate(&set).iter().any(|d| d.message.contains("Missing")),
+            "and it is reported rather than dropped"
+        );
+
+        // THE VALID NEIGHBOUR. A genuinely blank line, and a line of the two
+        // characters the format does name, are still skipped — this is exactness
+        // and not a refusal to skip anything.
+        for blank in ["", " ", "\t", " \t "] {
+            let doc = format!(
+                "# mapping_set_id: https://example.org/m\n\
+                 subject_id\tpredicate_id\tobject_id\tmapping_justification\n\
+                 {blank}\n"
+            );
+            let set = parse_tsv(&doc).expect("parses");
+            assert!(set.mappings.is_empty(), "blank {blank:?} must still skip");
+        }
+    }
+
+    #[test]
+    fn a_no_break_space_cell_is_a_present_required_slot() {
+        // The over-refusal, from the outside: `str::trim` erased this value and
+        // reported a missing slot for a row that has one.
+        let doc = "# mapping_set_id: https://example.org/m\n\
+                   subject_id\tpredicate_id\tobject_id\tmapping_justification\n\
+                   \u{A0}\tex:p\tex:o\tex:j\n";
+        let set = parse_tsv(doc).expect("parses");
+        assert!(
+            !validate(&set)
+                .iter()
+                .any(|d| d.message.contains("Missing required slot: subject_id")),
+            "U+00A0 is a value, not an absence"
+        );
+
+        // THE VALID NEIGHBOUR: a cell of real SSSOM white space is still absent,
+        // so the check still fires where the format says it should.
+        let doc = "# mapping_set_id: https://example.org/m\n\
+                   subject_id\tpredicate_id\tobject_id\tmapping_justification\n\
+                   \u{20}\tex:p\tex:o\tex:j\n";
+        let set = parse_tsv(doc).expect("parses");
+        assert!(
+            validate(&set)
+                .iter()
+                .any(|d| d.message.contains("Missing required slot: subject_id")),
+            "a space-only cell is still an absent slot"
+        );
+    }
+
+    #[test]
+    fn a_header_line_of_no_break_space_carries_content() {
+        // `# \u{A0}key: v` is a YAML scalar, not an empty comment: YAML 1.2.2
+        // §5.5 calls U+00A0 a non-space character, so it does not open the line.
+        let doc = "# \u{A0}key: v\n\
+                   subject_id\tpredicate_id\tobject_id\tmapping_justification\n";
+        let set = parse_tsv(doc).expect("parses");
+        assert_eq!(
+            set.meta.extra.get("\u{A0}key").map(String::as_str),
+            Some("v")
+        );
+
+        // THE VALID NEIGHBOUR: a bare `#`, and a `#` followed by the spaces
+        // SSSOM's own rule names, are still empty comments.
+        for empty in ["#", "# ", "#\t "] {
+            let doc =
+                format!("{empty}\nsubject_id\tpredicate_id\tobject_id\tmapping_justification\n");
+            let set = parse_tsv(&doc).expect("parses");
+            assert!(set.meta.extra.is_empty(), "{empty:?} must stay empty");
+        }
+    }
+
+    #[test]
+    fn a_no_break_space_before_a_hash_does_not_mint_provenance() {
+        // Provenance is `# #…`. Under `str::trim_start` a U+00A0 between the two
+        // markers still read as provenance, and `SssomSetComment::ordinary`
+        // refused to build the matching ordinary comment — an over-refusal on
+        // content the format calls ordinary.
+        let comment = SssomSetComment::ordinary("\u{A0}#not a marker")
+            .expect("U+00A0 does not make this a provenance marker");
+        assert_eq!(comment.placement(), SssomCommentPlacement::AfterTable);
+
+        // THE VALID NEIGHBOUR: a real space before the `#` still does, so the
+        // marker rule is intact.
+        assert!(SssomSetComment::ordinary(" #still a marker").is_err());
+        assert!(SssomSetComment::ordinary("ordinary text").is_ok());
+    }
+
+    /// SSSOM, metadata block: "the `#` character MAY be followed by one or
+    /// several space characters (U+0020) before the YAML content."
+    ///
+    /// U+0020 and only U+0020 — which is NARROWER than the two-character
+    /// `SSSOM_WHITE` the YAML layer below it runs on, and narrower than the
+    /// trims that layer legitimately uses. The marker rule therefore cannot be
+    /// expressed by narrowing a trim: `split_key_value` trims `SSSOM_WHITE` off
+    /// the key, so a leading TAB left in place would be absorbed there instead
+    /// and the line would parse exactly as before.
+    #[test]
+    fn only_a_space_may_stand_between_the_metadata_marker_and_the_yaml() {
+        let doc = |header: &str| {
+            format!("{header}\nsubject_id\tpredicate_id\tobject_id\tmapping_justification\n")
+        };
+
+        // THE VALID NEIGHBOURS: "one or several" includes none at all, and the
+        // clause puts no ceiling on the run.
+        for header in [
+            "#mapping_set_id: v",
+            "# mapping_set_id: v",
+            "#   mapping_set_id: v",
+        ] {
+            let set = parse_tsv(&doc(header)).expect("a U+0020 run is what the clause admits");
+            assert_eq!(
+                set.meta.mapping_set_id.as_deref(),
+                Some("v"),
+                "{header:?} must still parse"
+            );
+        }
+
+        // THE REFUSAL: a TAB is not a space character, at the marker or after a
+        // run of them, and it is refused rather than trimmed into invisibility.
+        for header in ["#\tmapping_set_id: v", "#  \tmapping_set_id: v"] {
+            let error = parse_tsv(&doc(header)).expect_err("a TAB is not U+0020");
+            assert!(
+                error.message.contains("tab") && error.message.contains("U+0020"),
+                "{header:?} must name the marker rule: {}",
+                error.message
+            );
+        }
+
+        // YAML 1.2.2 §6.1: "to maintain portability, tab characters must not be
+        // used in indentation" — so a TAB-indented `curie_map` entry is refused
+        // too, while the space-indented neighbour PurRDF itself writes parses.
+        let indented =
+            |indent: &str| doc(&format!("# curie_map:\n#{indent}ex: https://example.org/"));
+        let set = parse_tsv(&indented("   ")).expect("three spaces is PurRDF's own indent");
+        assert_eq!(
+            set.meta.curie_map.get("ex").map(String::as_str),
+            Some("https://example.org/")
+        );
+        assert!(
+            parse_tsv(&indented("\t")).is_err(),
+            "a TAB indent is not an indent"
+        );
+
+        // A TAB is still content everywhere the clause does not reach: inside a
+        // value, and inside the retained-verbatim `# #…` provenance line.
+        let set = parse_tsv(&doc("# comment: a\tb")).expect("a TAB inside a value is content");
+        assert_eq!(set.meta.comment.as_deref(), Some("a\tb"));
+        let set = parse_tsv(&doc("#\t# provenance")).expect("provenance is not YAML content");
+        assert_eq!(
+            set.set_comments
+                .iter()
+                .map(SssomSetComment::raw_line)
+                .collect::<Vec<_>>(),
+            vec!["#\t# provenance"]
+        );
+    }
+
+    #[test]
+    fn the_trims_agree_with_the_named_set_on_both_edges() {
+        assert_eq!(trim_white(" \tx\t "), "x");
+        assert_eq!(trim_white_start(" \tx\t "), "x\t ");
+        assert_eq!(trim_white_end(" \tx\t "), " \tx");
+        // And leave every other scalar where the author put it.
+        assert_eq!(trim_white("\u{A0}x\u{3000}"), "\u{A0}x\u{3000}");
+        assert_eq!(trim_white_start("\u{2028}x"), "\u{2028}x");
+        assert_eq!(trim_white_end("x\u{205F}"), "x\u{205F}");
+    }
 }
 
 #[cfg(test)]

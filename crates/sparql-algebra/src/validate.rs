@@ -129,7 +129,10 @@ fn iri(value: &str) -> Result<()> {
 }
 
 fn variable(value: &Variable) -> Result<()> {
-    if value.as_str().is_empty() || !value.as_str().chars().all(crate::lexer::is_varname_char) {
+    // `VARNAME` is position-dependent, so this is a whole-string test and not a
+    // per-character one: a name may CONTINUE with a combining mark but may not
+    // BEGIN with one, and no position admits `'-'`.
+    if !crate::lexer::is_varname(value.as_str()) {
         return Err(invalid("invalid query variable name"));
     }
     Ok(())

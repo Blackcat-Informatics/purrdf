@@ -30,6 +30,13 @@
 //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
 //!   [`PrefixMap`], subsuming the SSSOM serializer's hand-rolled prefix logic.
 //!   `oxiri` has none of this — it is the EXTEND deliverable for this slice.
+//! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
+//!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) that
+//!   every scanner above this leaf shares. They live here because a scanner's
+//!   character class decides token BOUNDARIES under maximal munch, so an
+//!   approximation misparses documents rather than merely widening the accepted
+//!   language, and one transcription is the only way to keep the scanners
+//!   agreeing with each other.
 //!
 //! # Hard-fail
 //!
@@ -112,6 +119,7 @@ mod normalize;
 mod parse;
 pub mod pos;
 mod resolve;
+pub mod terminals;
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};

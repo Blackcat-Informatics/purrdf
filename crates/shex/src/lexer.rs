@@ -26,9 +26,26 @@
 //! Every token carries its source byte span so the parser can report
 //! [`ShexError::Syntax`] at a precise offset. The lexer never panics: all
 //! malformed input is a typed [`ShexError::Lex`].
+//!
+//! # Where the character classes come from
+//!
+//! Every terminal character class this scanner decides a token boundary with is
+//! [`purrdf_iri::terminals`], not a local transcription and never a Unicode
+//! property. ShExC does not mint its own: the shexSpec grammar tags
+//! `PN_CHARS_BASE`, `PN_CHARS_U` and `PN_CHARS` `[164s]`, `[165s]` and `[167s]`
+//! — the `s` suffix meaning "this production is SPARQL's" — and spells them
+//! character-for-character as SPARQL and Turtle do. So there is one table, and
+//! this crate reads it rather than re-typing it.
+//!
+//! That matters more here than a shared-code argument suggests, because these
+//! classes are what decide where one token STOPS. A class that is one scalar
+//! too wide does not merely accept more documents; it re-tokenizes documents
+//! both spellings accept, with no diagnostic. See the [`terminals`] module
+//! documentation for the worked counterexample.
 
 use std::sync::OnceLock;
 
+use purrdf_iri::terminals;
 use regex::Regex;
 
 use crate::error::{Result, ShexError};
@@ -154,6 +171,72 @@ pub fn tokenize(input: &str) -> Result<Vec<Spanned>> {
     Lexer::new(input).run()
 }
 
+/// Why a `UCHAR` at a cursor did not decode.
+///
+/// Three arms rather than one error, because the two scanners that share
+/// [`decode_uchar`] report them at different source offsets: a backslash that
+/// opens nothing at all is a defect AT the backslash, while a malformed escape
+/// body is reported at the start of the terminal being scanned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UcharDefect {
+    /// The backslash is followed by something other than `u` or `U`, so it does
+    /// not open a `UCHAR` — and `'\'` has no other reading in any production
+    /// that admits `UCHAR`.
+    NotAnEscape,
+    /// The `u`/`U` is not followed by its full run of `HEX ::= [0-9] | [A-F] |
+    /// [a-f]` digits (input ran out, or a non-hex scalar stands in the run).
+    BadHex,
+    /// The digits are well formed and denote no Unicode scalar value: a value
+    /// above U+10FFFF, or one of the U+D800-U+DFFF surrogates.
+    NotAScalar,
+}
+
+/// Decode the `UCHAR` whose backslash `peek(0)` stands on.
+///
+/// ```text
+/// UCHAR ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
+/// HEX   ::= [0-9] | [A-F] | [a-f]
+/// ```
+///
+/// `peek(ahead)` yields the scalar `ahead` positions past the backslash, or
+/// `None` at end of input. Returns the decoded scalar and how many scalars the
+/// escape consumed (`2 + 4` or `2 + 8`), so a caller advances its own cursor
+/// without re-deriving the width.
+///
+/// # One decoder, two scanners
+///
+/// ShExC and the ShapeMap grammar spell `UCHAR` identically — ShapeMap's `[18t]
+/// IRIREF` is the same production `[18t]` Turtle and SPARQL carry — so this is
+/// the one transcription both read. It is not a convenience: a second copy is
+/// free to differ on exactly the three edges that decide identity rather than
+/// well-formedness (a bare `'\'`, mixed-case hex, and a surrogate), and a
+/// scanner that resolves `\uD800` to U+FFFD names a different node than one
+/// that refuses it.
+///
+/// Mixed-case hex is lawful in both directions of the `HEX` class, so
+/// `é` and `é` decode to the same `é`.
+pub(crate) fn decode_uchar(
+    peek: impl Fn(usize) -> Option<char>,
+) -> std::result::Result<(char, usize), UcharDefect> {
+    let width = match peek(1) {
+        Some('u') => 4,
+        Some('U') => 8,
+        _ => return Err(UcharDefect::NotAnEscape),
+    };
+    let mut value: u32 = 0;
+    for k in 0..width {
+        let digit = peek(2 + k)
+            .and_then(|c| c.to_digit(16))
+            .ok_or(UcharDefect::BadHex)?;
+        value = value * 16 + digit;
+    }
+    // `char::from_u32` is the scalar-value test itself: it refuses both
+    // U+D800-U+DFFF and everything above U+10FFFF, which is exactly the pair
+    // `\U` can spell and Unicode does not name.
+    let decoded = char::from_u32(value).ok_or(UcharDefect::NotAScalar)?;
+    Ok((decoded, 2 + width))
+}
+
 /// `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*` (body, without the `@`).
 fn langtag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -207,10 +290,45 @@ impl<'a> Lexer<'a> {
     /// `/*` always opens a comment: a REGEXP beginning with a literal `*`
     /// would be ambiguous, and the reference grammar resolves it the same
     /// way (`*` at the start of a pattern is meaningless in XPath regexes).
+    ///
+    /// # The whitespace here is ShExC's four code points, not Unicode's twenty-six
+    ///
+    /// The ShExC grammar carries its own pass-token production —
+    ///
+    /// ```text
+    /// @pass ::= [ \t\r\n]+
+    ///         | "#" [^\r\n]*
+    /// ```
+    ///
+    /// — whose whitespace alternative names exactly `#x20`, `#x9`, `#xD` and
+    /// `#xA`: the same four scalars as the shared `WS` terminal, which is why
+    /// this routes to [`terminals::is_ws`]. [`char::is_whitespace`] answers the
+    /// Unicode `White_Space` property, twenty-six scalars, and using it here was
+    /// wrong in both directions at once:
+    ///
+    /// * **It skipped separators the grammar does not have.** U+00A0 NO-BREAK
+    ///   SPACE and U+3000 IDEOGRAPHIC SPACE are `White_Space` and are not
+    ///   `PN_CHARS` either, so a document using one between two terminals has no
+    ///   reading at all — yet it lexed clean.
+    /// * **It swallowed a name character.** U+1680 OGHAM SPACE MARK is
+    ///   `White_Space` *and* sits inside `PN_CHARS_BASE`'s `[#x37F-#x1FFF]`
+    ///   range, so it is lawfully part of a name. Skipping it at a token
+    ///   boundary split one label into two tokens with no error — the silent
+    ///   re-tokenization, not a refusal.
+    ///
+    /// [`u8::is_ascii_whitespace`] is not the fix either: it admits U+000C FORM
+    /// FEED, which `@pass` does not name.
+    ///
+    /// The production is byte-shaped upstream because a byte test for an
+    /// all-ASCII class is exact over UTF-8; this scanner holds decoded scalars,
+    /// so it reaches for [`terminals::is_ws_char`] — the same four-member table
+    /// searched over the whole scalar value. The narrowing argument lives there
+    /// rather than here, because it is a property of the production (every
+    /// member is ASCII) and not of this scanner.
     fn skip_trivia(&mut self) {
         loop {
             match self.cur() {
-                Some(c) if c.is_whitespace() => self.pos += 1,
+                Some(c) if terminals::is_ws_char(c) => self.pos += 1,
                 Some('#') => {
                     while let Some(c) = self.cur() {
                         self.pos += 1;
@@ -276,7 +394,7 @@ impl<'a> Lexer<'a> {
             '-' => self.single(Token::Minus),
             '$' => self.single(Token::Dollar),
             '&' => self.single(Token::Amp),
-            _ if is_pn_chars_base(c) => Ok(self.lex_word_or_pname()),
+            _ if terminals::is_pn_chars_base(c) => Ok(self.lex_word_or_pname()),
             _ => Err(ShexError::lex(format!("unexpected character {c:?}"), start)),
         }
     }
@@ -314,7 +432,11 @@ impl<'a> Lexer<'a> {
                     let decoded = self.read_uchar(start)?;
                     content.push(decoded);
                 }
-                '\u{0}'..='\u{20}' | '<' | '"' | '{' | '}' | '|' | '^' | '`' => {
+                // Everything `[^#x00-#x20<>"{}|^`\]` excludes. The `'>'` and
+                // `'\'` arms above have already claimed the two members that
+                // have a reading here — the terminator and a `UCHAR` lead — so
+                // reaching this arm means the body cannot continue.
+                _ if terminals::is_iriref_forbidden(c) => {
                     return Err(ShexError::lex(
                         format!("character {c:?} is not allowed in an IRI reference"),
                         self.byte_at(self.pos),
@@ -331,30 +453,25 @@ impl<'a> Lexer<'a> {
     /// Read a `\uXXXX` / `\UXXXXXXXX` escape at the cursor (which sits on the
     /// backslash), advancing past it. Anything else after the backslash is a
     /// hard error.
+    ///
+    /// The decoding itself is [`decode_uchar`], shared with the shape map
+    /// scanner; this method only positions the three defects, which is the one
+    /// thing the two scanners do differently.
     fn read_uchar(&mut self, err_at: usize) -> Result<char> {
-        let width = match self.peek(1) {
-            Some('u') => 4,
-            Some('U') => 8,
-            _ => {
-                return Err(ShexError::lex(
+        let (decoded, consumed) =
+            decode_uchar(|ahead| self.peek(ahead)).map_err(|defect| match defect {
+                UcharDefect::NotAnEscape => ShexError::lex(
                     "backslash must start a \\u/\\U escape here",
                     self.byte_at(self.pos),
-                ));
-            }
-        };
-        let mut value: u32 = 0;
-        for k in 0..width {
-            let d = self
-                .peek(2 + k)
-                .and_then(|c| c.to_digit(16))
-                .ok_or_else(|| {
+                ),
+                UcharDefect::BadHex => {
                     ShexError::lex("bad \\u/\\U escape (expected hex digits)", err_at)
-                })?;
-            value = value * 16 + d;
-        }
-        let decoded = char::from_u32(value)
-            .ok_or_else(|| ShexError::lex("\\u/\\U escape is not a Unicode scalar", err_at))?;
-        self.pos += 2 + width;
+                }
+                UcharDefect::NotAScalar => {
+                    ShexError::lex("\\u/\\U escape is not a Unicode scalar", err_at)
+                }
+            })?;
+        self.pos += consumed;
         Ok(decoded)
     }
 
@@ -450,7 +567,7 @@ impl<'a> Lexer<'a> {
         self.pos += 2; // `_:`
         let first = self
             .cur()
-            .filter(|&c| is_pn_chars_u(c) || c.is_ascii_digit());
+            .filter(|&c| terminals::is_pn_chars_u(c) || c.is_ascii_digit());
         let Some(first) = first else {
             return Err(ShexError::lex("malformed blank node label", start));
         };
@@ -463,7 +580,7 @@ impl<'a> Lexer<'a> {
                 label.push(c);
                 trailing_dots += 1;
                 self.pos += 1;
-            } else if is_pn_chars(c) {
+            } else if terminals::is_pn_chars(c) {
                 label.push(c);
                 trailing_dots = 0;
                 self.pos += 1;
@@ -549,7 +666,7 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 CodeName::PName(String::new(), self.lex_pn_local())
             }
-            Some(c) if is_pn_chars_base(c) => match self.lex_word_or_pname() {
+            Some(c) if terminals::is_pn_chars_base(c) => match self.lex_word_or_pname() {
                 Token::PName(p, l) => CodeName::PName(p, l),
                 _ => {
                     return Err(ShexError::lex("expected IRI after '%'", start));
@@ -776,7 +893,7 @@ impl<'a> Lexer<'a> {
                 out.push(c);
                 trailing_dots += 1;
                 self.pos += 1;
-            } else if is_pn_chars(c) {
+            } else if terminals::is_pn_chars(c) {
                 out.push(c);
                 trailing_dots = 0;
                 self.pos += 1;
@@ -805,7 +922,7 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.cur() {
             match c {
                 '\\' => {
-                    let Some(esc) = self.peek(1).filter(|&e| is_pn_local_esc(e)) else {
+                    let Some(esc) = self.peek(1).filter(|&e| terminals::is_pn_local_esc(e)) else {
                         break;
                     };
                     out.push(esc);
@@ -834,8 +951,8 @@ impl<'a> Lexer<'a> {
                     trailing_dots = 0;
                     self.pos += 1;
                 }
-                _ if (first && (is_pn_chars_u(c) || c.is_ascii_digit()))
-                    || (!first && is_pn_chars(c)) =>
+                _ if (first && (terminals::is_pn_chars_u(c) || c.is_ascii_digit()))
+                    || (!first && terminals::is_pn_chars(c)) =>
                 {
                     out.push(c);
                     trailing_dots = 0;
@@ -851,63 +968,6 @@ impl<'a> Lexer<'a> {
         }
         out
     }
-}
-
-/// The set of characters a `PN_LOCAL_ESC` (`\X`) may escape.
-const fn is_pn_local_esc(c: char) -> bool {
-    matches!(
-        c,
-        '_' | '~'
-            | '.'
-            | '-'
-            | '!'
-            | '$'
-            | '&'
-            | '\''
-            | '('
-            | ')'
-            | '*'
-            | '+'
-            | ','
-            | ';'
-            | '='
-            | '/'
-            | '?'
-            | '#'
-            | '@'
-            | '%'
-    )
-}
-
-/// `PN_CHARS_BASE` per the ShExC terminal grammar (shared with Turtle/SPARQL).
-const fn is_pn_chars_base(c: char) -> bool {
-    matches!(c,
-        'A'..='Z'
-        | 'a'..='z'
-        | '\u{C0}'..='\u{D6}'
-        | '\u{D8}'..='\u{F6}'
-        | '\u{F8}'..='\u{2FF}'
-        | '\u{370}'..='\u{37D}'
-        | '\u{37F}'..='\u{1FFF}'
-        | '\u{200C}'..='\u{200D}'
-        | '\u{2070}'..='\u{218F}'
-        | '\u{2C00}'..='\u{2FEF}'
-        | '\u{3001}'..='\u{D7FF}'
-        | '\u{F900}'..='\u{FDCF}'
-        | '\u{FDF0}'..='\u{FFFD}'
-        | '\u{10000}'..='\u{EFFFF}')
-}
-
-/// `PN_CHARS_U ::= PN_CHARS_BASE | '_'`
-const fn is_pn_chars_u(c: char) -> bool {
-    is_pn_chars_base(c) || c == '_'
-}
-
-/// `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x36F] | [#x203F-#x2040]`
-const fn is_pn_chars(c: char) -> bool {
-    is_pn_chars_u(c)
-        || c.is_ascii_digit()
-        || matches!(c, '-' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
 }
 
 #[cfg(test)]

@@ -1912,18 +1912,64 @@ pub(crate) fn substitute_path_placeholder(select: &str, path: Option<&Path>) -> 
 
 // ── Helper functions ───────────────────────────────────────────────────────────
 
+/// Apply the `whiteSpace` = `collapse` normalization every XSD atomic datatype
+/// below fixes, as far as a one-token lexical space can observe it.
+///
+/// XSD 1.1 Part 2 §4.3.6 defines the two steps `collapse` performs:
+///
+/// > `replace` — All occurrences of `#x9` (tab), `#xA` (line feed) and `#xD`
+/// > (carriage return) are replaced with `#x20` (space).
+/// >
+/// > `collapse` — After the processing implied by `replace`, contiguous
+/// > sequences of `#x20`s are collapsed to a single `#x20`, and any `#x20` at
+/// > the start or end of the string are then removed.
+///
+/// So the whole normalization quantifies over exactly four code points — the
+/// same four as XML `S`, "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3
+/// `[3]`) — and [`purrdf_iri::terminals::is_ws_char`] is that class.
+///
+/// # Why trimming is the whole of `collapse` for these datatypes
+///
+/// `collapse` also squeezes INTERNAL runs, which this does not. That is sound
+/// here and only here: every lexical space this helper feeds
+/// (`xsd:integer`, `xsd:decimal`, `xsd:double`, `xsd:float`, `xsd:boolean`) is a
+/// single token containing no `#x20` at all, so an internal run survives
+/// `collapse` as one `#x20` and is refused by the token grammar either way. The
+/// verdict is identical; only the trimming is observable.
+///
+/// # The direction of the error this replaces
+///
+/// These sites called [`str::trim`], which trims the Unicode `White_Space`
+/// property — twenty-six code points where the datatype names four. That is
+/// **over-acceptance**: a SHACL validator handed `"\u{A0}42"` as an
+/// `xsd:integer` stripped the NO-BREAK SPACE and reported a conforming typed
+/// literal, though U+00A0 is not touched by `replace` or `collapse` and the
+/// value is not in `xsd:integer`'s lexical space at all. `sh:datatype`
+/// conformance is a claim about the datatype, so accepting a literal the
+/// datatype refuses makes the report wrong, not merely lenient.
+fn collapse_trim(s: &str) -> &str {
+    s.trim_matches(purrdf_iri::terminals::is_ws_char)
+}
+
 /// `xsd:integer` lexical space: optional sign then one-or-more ASCII digits.
 /// Unbounded — no native-int overflow.
+///
+/// `xsd:integer` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.4.13), so
+/// the lexical form is trimmed with [`collapse_trim`] and not with
+/// [`str::trim`].
 fn is_xsd_integer_lexical(s: &str) -> bool {
-    let s = s.trim();
+    let s = collapse_trim(s);
     let digits = s.strip_prefix(['+', '-']).unwrap_or(s);
     !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// `xsd:decimal` lexical space: optional sign then digits with an optional
 /// single '.' — NO exponent. At least one digit must be present.
+///
+/// `xsd:decimal` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.3), so the
+/// lexical form is trimmed with [`collapse_trim`] and not with [`str::trim`].
 fn is_xsd_decimal_lexical(s: &str) -> bool {
-    let s = s.trim();
+    let s = collapse_trim(s);
     let body = s.strip_prefix(['+', '-']).unwrap_or(s);
     if body.is_empty() {
         return false;
@@ -2008,14 +2054,18 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     match dt {
         "http://www.w3.org/2001/XMLSchema#integer" => is_xsd_integer_lexical(lex),
         "http://www.w3.org/2001/XMLSchema#decimal" => is_xsd_decimal_lexical(lex),
+        // `xsd:double` / `xsd:float` / `xsd:boolean` each fix
+        // `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.5, §3.3.4, §3.3.2), so
+        // they are trimmed with the four code points `collapse` names and not
+        // with `str::trim`'s Unicode `White_Space` property.
         "http://www.w3.org/2001/XMLSchema#double" => {
-            purrdf_xsd::parse_double_xsd10(lex.trim()).is_ok()
+            purrdf_xsd::parse_double_xsd10(collapse_trim(lex)).is_ok()
         }
         "http://www.w3.org/2001/XMLSchema#float" => {
-            purrdf_xsd::parse_float_xsd10(lex.trim()).is_ok()
+            purrdf_xsd::parse_float_xsd10(collapse_trim(lex)).is_ok()
         }
         "http://www.w3.org/2001/XMLSchema#boolean" => {
-            matches!(lex.trim(), "true" | "false" | "1" | "0")
+            matches!(collapse_trim(lex), "true" | "false" | "1" | "0")
         }
         _ => true,
     }
@@ -2030,7 +2080,11 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
     if stored_dt != XSD_INTEGER || !is_xsd_integer_lexical(lex) {
         return false;
     }
-    let trimmed = lex.trim();
+    // The same `whiteSpace` = `collapse` trim `is_xsd_integer_lexical` just
+    // applied: two trims of one lexical form that disagreed about the class
+    // would let a value pass the lexical gate and then be re-read differently by
+    // the bound check.
+    let trimmed = collapse_trim(lex);
     // For sign-constrained but unbounded types, fall back to a lexical sign check
     // when the magnitude exceeds i128 (astronomically large; never in practice).
     let value = trimmed.parse::<i128>().ok();
@@ -2188,7 +2242,10 @@ fn numeric_value(term: &Term) -> Option<f64> {
             | "unsignedShort"
             | "unsignedByte"
     ) {
-        lit.value().trim().parse::<f64>().ok()
+        // Every datatype listed above fixes `whiteSpace` = `collapse`, so the
+        // lexical form is trimmed with the four code points that names — see
+        // [`collapse_trim`].
+        collapse_trim(lit.value()).parse::<f64>().ok()
     } else {
         None
     }
@@ -2328,7 +2385,9 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
         return Some(la.value().cmp(lb.value()));
     }
     if da == XSD_BOOLEAN && db == XSD_BOOLEAN {
-        let bool_of = |lex: &str| match lex.trim() {
+        // `xsd:boolean` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.2),
+        // so the lexical form is trimmed with [`collapse_trim`].
+        let bool_of = |lex: &str| match collapse_trim(lex) {
             "true" | "1" => Some(true),
             "false" | "0" => Some(false),
             _ => None,
@@ -2341,13 +2400,110 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
     None
 }
 
+/// Apply the XPath `x` flag to a `sh:pattern` source, textually, before the
+/// pattern is parsed.
+///
+/// SHACL §4.5.3 defines `sh:pattern` by the SPARQL `REGEX` function, and SPARQL
+/// 1.1 §17.4.3.14 defines `REGEX` as an invocation of XPath `fn:matches`, so the
+/// `x` flag is XPath's. *XPath and XQuery Functions and Operators 3.1* §5.6.2
+/// defines it in one sentence:
+///
+/// > `x`: If present, whitespace characters (`#x9`, `#xA`, `#xD` and `#x20`) in
+/// > the regular expression are removed prior to matching with one exception:
+/// > whitespace characters within character class expressions (`charClassExpr`)
+/// > are not removed. This flag can be used, for example, to break up long
+/// > regular expressions into readable lines.
+///
+/// and pins it with four examples, every one of which this function is tested
+/// against in [`tests::xpath_x_flag_matches_the_specifications_examples`]:
+///
+/// > `fn:matches("helloworld", "hello world", "x")` returns `true()`
+/// >
+/// > `fn:matches("helloworld", "hello[ ]world", "x")` returns `false()`
+/// >
+/// > `fn:matches("hello world", "hello\ sworld", "x")` returns `true()`
+/// >
+/// > `fn:matches("hello world", "hello world", "x")` returns `false()`
+///
+/// # Why the removal is done here and not by `RegexBuilder::ignore_whitespace`
+///
+/// Rust's verbose mode is a different production wearing the same letter, and it
+/// is wrong in three ways at once:
+///
+/// * it removes every code point with the Unicode `White_Space` property —
+///   twenty-six, including U+00A0 NO-BREAK SPACE and U+3000 — where XPath names
+///   exactly four, so a pattern matching a literal IDEOGRAPHIC SPACE silently
+///   stops matching it;
+/// * it treats `#` as a comment introducer running to end of line, so
+///   `"a#b c"` compiles to `a` where XPath compiles it to `a#bc`. XPath regex
+///   has no comment syntax at all;
+/// * it removes whitespace **inside** character classes, which is the one case
+///   XPath explicitly exempts — the specification's second example exists for
+///   exactly this, and `ignore_whitespace` gets it backwards.
+///
+/// # The backslash does not protect whitespace, and the third example is why
+///
+/// Removal is textual and happens *prior to parsing*, so a backslash does not
+/// escape a following space out of it: the source `hello\ sworld` has its space
+/// removed, yielding `hello\sworld`, and the specification's third example
+/// requires that to match `"hello world"`. The backslash is still tracked here,
+/// because it decides whether a `[` or `]` **delimits** a character class —
+/// `\[` opens nothing and `\]` closes nothing — and getting that wrong would
+/// move the exempt region. Note that a removed whitespace character does not
+/// consume the pending escape: it re-binds to whatever follows, which is what
+/// turns `\ s` into `\s`.
+///
+/// `charClassExpr` nests, through `charClassSub` (`[a-z-[aeiou]]`), so the
+/// exempt region is tracked by depth rather than by a single flag. An
+/// unterminated `[` leaves the rest of the pattern exempt and then fails to
+/// compile, which is a named error rather than a silently different pattern.
+fn strip_x_flag_whitespace(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut class_depth = 0_usize;
+    let mut escaped = false;
+    for c in pattern.chars() {
+        if escaped {
+            // Inside a character class nothing is removed; outside one, even an
+            // escaped whitespace character goes, and the escape carries over to
+            // the next character (`\ s` becomes `\s`).
+            if class_depth == 0 && purrdf_iri::terminals::is_ws_char(c) {
+                continue;
+            }
+            out.push(c);
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => {
+                out.push(c);
+                escaped = true;
+            }
+            '[' => {
+                class_depth += 1;
+                out.push(c);
+            }
+            ']' if class_depth > 0 => {
+                class_depth -= 1;
+                out.push(c);
+            }
+            _ if class_depth == 0 && purrdf_iri::terminals::is_ws_char(c) => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Build a compiled `Regex` from a pattern string and optional `sh:flags` string.
 ///
-/// Supported flags (XPath 2.0 subset with Rust `regex` semantics):
+/// Supported flags:
 /// - `i` — case-insensitive
 /// - `s` — dot-all (`.` matches newlines)
 /// - `m` — multi-line (`^`/`$` match line boundaries)
-/// - `x` — ignore unescaped whitespace in pattern
+/// - `x` — remove `#x9`, `#xA`, `#xD` and `#x20` outside character class
+///   expressions, per XPath F&O 3.1 §5.6.2; see [`strip_x_flag_whitespace`],
+///   which performs the removal instead of `RegexBuilder::ignore_whitespace`
+///   because that option implements a different, wider class and adds a comment
+///   syntax XPath does not have.
 ///
 /// **Hard-fail discipline**: any flag character outside `{i, s, m, x}` — including
 /// `q` (the XPath literal-match flag) — is a hard error. Silently ignoring `q`
@@ -2355,26 +2511,22 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
 /// with this crate's policy of hard-failing on any unmodelled SHACL feature, an
 /// unsupported flag returns `Err` immediately.
 ///
-/// **Deviation from XPath 2.0**: patterns are evaluated with Rust `regex` crate
-/// semantics, not XPath 2.0 regex semantics. Behaviour diverges on features such
-/// as Unicode category escapes (`\p{…}`) and backreferences.
+/// **Deviation from XPath**: once the flags are applied, the pattern BODY is
+/// parsed with Rust `regex` crate semantics, not XPath regex semantics.
+/// Behaviour still diverges on character-class subtraction (`[a-z-[aeiou]]`),
+/// the multi-character escapes `\i`, `\I`, `\c`, `\C`, block escapes
+/// (`\p{IsBasicLatin}`), and back-references. That is a separate and much larger
+/// gap than the flag mapping, and it is not addressed here.
 fn build_regex(pattern: &str, flags: Option<&str>) -> Result<regex::Regex, String> {
-    let mut builder = regex::RegexBuilder::new(pattern);
+    let (mut case_insensitive, mut dot_all, mut multi_line, mut strip_whitespace) =
+        (false, false, false, false);
     if let Some(f) = flags {
         for c in f.chars() {
             match c {
-                'i' => {
-                    builder.case_insensitive(true);
-                }
-                's' => {
-                    builder.dot_matches_new_line(true);
-                }
-                'm' => {
-                    builder.multi_line(true);
-                }
-                'x' => {
-                    builder.ignore_whitespace(true);
-                }
+                'i' => case_insensitive = true,
+                's' => dot_all = true,
+                'm' => multi_line = true,
+                'x' => strip_whitespace = true,
                 _ => {
                     return Err(format!(
                         "unsupported sh:flags character {c:?} in sh:pattern \
@@ -2384,6 +2536,19 @@ fn build_regex(pattern: &str, flags: Option<&str>) -> Result<regex::Regex, Strin
             }
         }
     }
+    // The `x` removal is a rewrite of the pattern SOURCE, so it has to happen
+    // before the builder ever sees it — and `ignore_whitespace` stays off, or
+    // Rust would apply its own wider rule on top of XPath's.
+    let source = if strip_whitespace {
+        strip_x_flag_whitespace(pattern)
+    } else {
+        pattern.to_owned()
+    };
+    let mut builder = regex::RegexBuilder::new(&source);
+    builder
+        .case_insensitive(case_insensitive)
+        .dot_matches_new_line(dot_all)
+        .multi_line(multi_line);
     builder.build().map_err(|e| e.to_string())
 }
 
@@ -3205,6 +3370,166 @@ mod tests {
             build_regex("foo", Some("ismx")).is_ok(),
             "combined flags should be accepted"
         );
+    }
+
+    /// Every example XPath F&O 3.1 §5.6.2 gives for the `x` flag, executed.
+    #[test]
+    fn xpath_x_flag_matches_the_specifications_examples() {
+        let matches = |input: &str, pattern: &str, flags: &str| {
+            build_regex(pattern, Some(flags))
+                .expect("pattern compiles")
+                .is_match(input)
+        };
+
+        // `fn:matches("helloworld", "hello world", "x")` returns `true()`
+        assert!(matches("helloworld", "hello world", "x"));
+        // `fn:matches("helloworld", "hello[ ]world", "x")` returns `false()`
+        // — whitespace inside a character class expression is NOT removed.
+        assert!(!matches("helloworld", "hello[ ]world", "x"));
+        // `fn:matches("hello world", "hello\ sworld", "x")` returns `true()`
+        // — removal is textual and prior to parsing, so the escape re-binds and
+        // `\ s` becomes `\s`.
+        assert!(matches("hello world", r"hello\ sworld", "x"));
+        // `fn:matches("hello world", "hello world", "x")` returns `false()`
+        assert!(!matches("hello world", "hello world", "x"));
+
+        // The valid neighbour that must be unaffected: the same patterns without
+        // the flag keep their literal spaces.
+        assert!(matches("hello world", "hello world", ""));
+        assert!(!matches("helloworld", "hello world", ""));
+        assert!(matches("hello world", "hello[ ]world", ""));
+    }
+
+    /// The `x` flag removes exactly four code points, not the Unicode
+    /// `White_Space` property, and `#` is not a comment.
+    #[test]
+    fn xpath_x_flag_is_not_rusts_ignore_whitespace() {
+        let matches = |input: &str, pattern: &str, flags: &str| {
+            build_regex(pattern, Some(flags))
+                .expect("pattern compiles")
+                .is_match(input)
+        };
+
+        // The four XPath names, each removed.
+        assert!(matches("ab", "a\u{9}b", "x"));
+        assert!(matches("ab", "a\u{A}b", "x"));
+        assert!(matches("ab", "a\u{D}b", "x"));
+        assert!(matches("ab", "a\u{20}b", "x"));
+
+        // U+00A0 NO-BREAK SPACE and U+3000 IDEOGRAPHIC SPACE carry the Unicode
+        // `White_Space` property and are NOT named by the flag, so they stay in
+        // the pattern as literals to match. `ignore_whitespace` deleted them,
+        // which made a pattern stop matching the text it was written for.
+        assert!(matches("a\u{A0}b", "a\u{A0}b", "x"));
+        assert!(!matches("ab", "a\u{A0}b", "x"));
+        assert!(matches("a\u{3000}b", "a\u{3000}b", "x"));
+        assert!(!matches("ab", "a\u{3000}b", "x"));
+
+        // XPath regex has no comment syntax: `#` is an ordinary character.
+        // `ignore_whitespace` compiled `"a#b c"` to `a`, which matches "az".
+        assert!(matches("a#bc", "a#b c", "x"));
+        assert!(!matches("az", "a#b c", "x"));
+
+        // Escaped brackets delimit nothing, so the exempt region is not entered
+        // and the space after `\[` is still removed.
+        assert!(matches("a[bc", r"a\[ bc", "x"));
+        // ... while a real class keeps its space, even a `\]`-bearing one.
+        assert!(matches("a]b", r"a[\] ]b", "x"));
+        assert!(matches("a b", r"a[\] ]b", "x"));
+        assert!(!matches("ab", r"a[\] ]b", "x"));
+    }
+
+    /// `collapse_trim` strips a scalar from an edge if and only if the
+    /// `whiteSpace` = `collapse` facet names it — stated as a total function
+    /// over every Unicode scalar, so the class cannot drift toward either the
+    /// Unicode `White_Space` property or the ASCII one.
+    #[test]
+    fn collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
+        for cp in 0..=0x0010_FFFF_u32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            let named = matches!(c, '\u{20}' | '\u{9}' | '\u{D}' | '\u{A}');
+            let padded = format!("{c}x{c}");
+            assert_eq!(
+                collapse_trim(&padded) == "x",
+                named,
+                "{c:?} ({cp:#06X}) must be stripped iff whiteSpace=collapse names it"
+            );
+        }
+        assert_eq!(collapse_trim(" \t\r\n42\n\r\t "), "42");
+        assert_eq!(collapse_trim("4 2"), "4 2");
+        assert_eq!(collapse_trim(""), "");
+        assert_eq!(collapse_trim("   "), "");
+    }
+
+    /// XSD lexical spaces are trimmed with the four code points
+    /// `whiteSpace` = `collapse` names, not with the Unicode property.
+    #[test]
+    fn xsd_lexical_forms_collapse_over_xml_s_only() {
+        const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        const DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        const BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+
+        // The valid neighbours, unchanged: `collapse` still strips every one of
+        // `#x20`, `#x9`, `#xD` and `#xA`, in any combination and at either end.
+        for padded in ["42", " 42 ", "\t42\n", "\r\n 42 \t", "\n42"] {
+            assert!(
+                xsd_lexical_valid(INTEGER, padded),
+                "{padded:?} is xsd:integer padded only with XML S"
+            );
+        }
+        assert!(xsd_lexical_valid(DECIMAL, " -4.25\t"));
+        assert!(xsd_lexical_valid(DOUBLE, "\r\n1.5e3 "));
+        assert!(xsd_lexical_valid(BOOLEAN, "\ttrue\n"));
+
+        // The over-acceptance removed: U+00A0 is not `#x20`, so `collapse` never
+        // touches it and the literal is not in the datatype's lexical space.
+        // `str::trim` stripped it and called the value conforming.
+        for nbsp in ["\u{A0}42", "42\u{A0}", "\u{A0}42\u{A0}"] {
+            assert!(
+                !xsd_lexical_valid(INTEGER, nbsp),
+                "{nbsp:?} is not in the xsd:integer lexical space"
+            );
+        }
+        assert!(!xsd_lexical_valid(DECIMAL, "\u{A0}4.25"));
+        assert!(!xsd_lexical_valid(DOUBLE, "1.5e3\u{2003}"));
+        assert!(!xsd_lexical_valid(BOOLEAN, "true\u{A0}"));
+        // U+000B VERTICAL TAB and U+000C FORM FEED are the other two traps: the
+        // Unicode property admits both, `collapse` names neither.
+        assert!(!xsd_lexical_valid(INTEGER, "\u{B}42"));
+        assert!(!xsd_lexical_valid(INTEGER, "\u{C}42"));
+
+        // Internal whitespace is refused either way, which is why trimming is
+        // the whole of `collapse` for these one-token lexical spaces.
+        assert!(!xsd_lexical_valid(INTEGER, "4 2"));
+        assert!(!xsd_lexical_valid(INTEGER, "4\t2"));
+
+        // The property the replaced code actually asked, pinned so the
+        // over-acceptance above is executed rather than asserted: `str::trim`
+        // stripped every one of these and handed the bare digits on.
+        for unicode_ws in ['\u{A0}', '\u{2003}', '\u{B}', '\u{C}', '\u{3000}'] {
+            assert!(unicode_ws.is_whitespace(), "{unicode_ws:?}");
+            assert_eq!(format!("{unicode_ws}42").trim(), "42");
+        }
+    }
+
+    /// The derived-integer bound check trims with the same class the lexical
+    /// gate does, so the two cannot disagree about one literal.
+    #[test]
+    fn derived_integer_bounds_trim_the_same_class_as_the_lexical_gate() {
+        const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        const NON_NEGATIVE: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+        const POSITIVE: &str = "http://www.w3.org/2001/XMLSchema#positiveInteger";
+
+        // Valid neighbours: XML `S` padding still reaches the bound check.
+        assert!(derived_integer_matches(INTEGER, NON_NEGATIVE, " 7\t"));
+        assert!(derived_integer_matches(INTEGER, POSITIVE, "\n7\r"));
+        assert!(!derived_integer_matches(INTEGER, POSITIVE, " -7 "));
+        // U+00A0 padding is refused at the lexical gate, so it never reaches the
+        // bound check at all.
+        assert!(!derived_integer_matches(INTEGER, NON_NEGATIVE, "\u{A0}7"));
     }
 
     // ── minLength ──────────────────────────────────────────────────────────────

@@ -2700,32 +2700,65 @@ impl<'a> Parser<'a, '_> {
             )),
             Some(Token::LBracket) => {
                 self.expect(&Token::LBracket)?;
-                if !self.eat(&Token::RBracket) {
-                    return Err(ParseError::syntax(
-                        "a populated blank-node property list is not allowed in a \
-                         property-function argument list",
-                        self.span(),
-                    ));
+                if self.at(&Token::RBracket) {
+                    return Err(self.empty_bracket_pair());
                 }
-                Ok(TermPattern::BlankNode(self.fresh_anon()))
+                Err(ParseError::syntax(
+                    "a populated blank-node property list is not allowed in a \
+                     property-function argument list",
+                    self.span(),
+                ))
             }
             _ => self.parse_term_pattern(),
         }
     }
 
-    /// Parse a blank-node property list `[ predicate object … ]` (RDF 1.1 §4.2,
-    /// SPARQL §19.6). Mints a fresh blank node, emits the embedded triples into
-    /// the current block's `triples`/`paths`, and returns the blank node as a term
-    /// for use in subject or object position.
+    /// The refusal every bracket-pair site below shares: a `[` whose matching `]`
+    /// arrives with no predicate-object list between them.
     ///
-    /// An empty `[]` (SPARQL ANON) is legal and simply mints a fresh blank node
-    /// without any associated predicate-object pairs.
+    /// Two productions spell a bracket pair, and neither admits this:
+    /// `BlankNodePropertyListPath ::= '[' PropertyListPathNotEmpty ']'` requires
+    /// at least one predicate-object pair, and the anonymous blank node
+    /// `ANON ::= '[' WS* ']'` is a **terminal**, so it admits only `WS` between
+    /// its brackets — a comment is not `WS`, and a terminal has no interior a
+    /// comment could sit in.
+    ///
+    /// The tokenizer cannot make this call. Its `ANON` scan is necessarily
+    /// comment-blind, because `[ # c` … newline … `?p ?o ]` is a lawful *populated*
+    /// property list and nothing at the lexical level distinguishes it from the
+    /// empty case; teaching the scan to skip comments would only widen acceptance.
+    /// So a real `[]` (or `[ ]`, or `[` tab/CR/LF `]`) arrives here as a single
+    /// `Token::Anon` and never reaches a bracket-pair site at all, and an
+    /// `LBracket` immediately followed by an `RBracket` can only have come from a
+    /// comment between the brackets — which is precisely the input to refuse.
+    fn empty_bracket_pair(&self) -> ParseError {
+        ParseError::syntax(
+            "`[` `]` with nothing between them is not a blank-node property list \
+             (which requires at least one predicate-object pair) and not an \
+             anonymous blank node (`ANON` admits only whitespace between its \
+             brackets, and a comment is not whitespace)",
+            self.span(),
+        )
+    }
+
+    /// Parse a blank-node property list `[ predicate object … ]` (RDF 1.1 §4.2,
+    /// SPARQL §19.6 `BlankNodePropertyListPath ::= '[' PropertyListPathNotEmpty ']'`).
+    /// Mints a fresh blank node, emits the embedded triples into the current
+    /// block's `triples`/`paths`, and returns the blank node as a term for use in
+    /// subject or object position.
+    ///
+    /// The production is `…NotEmpty`, so an empty pair is refused here — see
+    /// [`Self::empty_bracket_pair`] for why only the parser can refuse it. The
+    /// anonymous blank node `[]` is a different production (`ANON`), reaches the
+    /// parser as [`Token::Anon`], and is handled by
+    /// [`Self::parse_term_pattern`].
     fn parse_blank_node_property_list(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
         self.expect(&Token::LBracket)?;
-        let node = TermPattern::BlankNode(self.fresh_anon());
-        if !self.at(&Token::RBracket) {
-            self.parse_predicate_object_list(&SubjectArgs::Term(node.clone()), sink)?;
+        if self.at(&Token::RBracket) {
+            return Err(self.empty_bracket_pair());
         }
+        let node = TermPattern::BlankNode(self.fresh_anon());
+        self.parse_predicate_object_list(&SubjectArgs::Term(node.clone()), sink)?;
         self.expect(&Token::RBracket)?;
         Ok(node)
     }
@@ -2881,14 +2914,14 @@ impl<'a> Parser<'a, '_> {
             )),
             Some(Token::LBracket) => {
                 self.expect(&Token::LBracket)?;
-                if !self.eat(&Token::RBracket) {
-                    return Err(ParseError::syntax(
-                        "a populated blank-node property list is not allowed inside a \
-                         triple term or reifying triple",
-                        self.span(),
-                    ));
+                if self.at(&Token::RBracket) {
+                    return Err(self.empty_bracket_pair());
                 }
-                Ok(TermPattern::BlankNode(self.fresh_anon()))
+                Err(ParseError::syntax(
+                    "a populated blank-node property list is not allowed inside a \
+                     triple term or reifying triple",
+                    self.span(),
+                ))
             }
             _ => self.parse_term_pattern(),
         }
@@ -2929,8 +2962,15 @@ impl<'a> Parser<'a, '_> {
             }
             Some(Token::LBracket) => {
                 self.expect(&Token::LBracket)?;
-                self.expect(&Token::RBracket)?;
-                Ok(TermPattern::BlankNode(self.fresh_anon()))
+                if self.at(&Token::RBracket) {
+                    return Err(self.empty_bracket_pair());
+                }
+                Err(ParseError::syntax(
+                    "a blank-node property list is not a reifier id; \
+                     `VarOrReifierId` admits a variable, an IRI, a labelled blank \
+                     node or the anonymous `[]`",
+                    self.span(),
+                ))
             }
             _ => Ok(TermPattern::BlankNode(self.fresh_anon())),
         }
@@ -5570,6 +5610,125 @@ mod tests {
 
     fn parse(q: &str) -> Query {
         SparqlParser::new().parse_query(q).expect("parse")
+    }
+
+    // ── `'[' ']'` with nothing between the brackets is not a production ────────────
+    //
+    // `BlankNodePropertyListPath ::= '[' PropertyListPathNotEmpty ']'` requires at
+    // least one predicate-object pair, and the anonymous blank node
+    // `ANON ::= '[' WS* ']'` is a TERMINAL, so no comment may sit inside it. Every
+    // bracket-pair arm in this parser accepted the empty pair anyway — and so did
+    // the Turtle/TriG reader — while asserting in its own rustdoc that "an empty
+    // `[]` (SPARQL ANON) is legal". It is legal, but it is a DIFFERENT production:
+    // `[]`, `[ ]` and `[` tab/CR/LF `]` all lex to a single `Token::Anon` and never
+    // reach these arms. The only input that does reach them is `[ #` comment
+    // newline `]`, which no conforming processor accepts.
+    //
+    // The refusal cannot live in the lexer. Its `ANON` scan is comment-blind by
+    // construction, because `[ #` comment newline `?p ?o ]` is a lawful POPULATED
+    // property list and nothing lexical separates the two cases; teaching the scan
+    // about `#` would WIDEN acceptance, not narrow it. Only the parser, which has
+    // the following tokens, can tell them apart.
+
+    fn try_parse(q: &str) -> Result<Query> {
+        SparqlParser::new().parse_query(q)
+    }
+
+    /// A parser configured with one property function, so the property-function
+    /// argument-list arm is reachable from a vector.
+    fn try_parse_with_prop_fn(q: &str) -> Result<Query> {
+        let options = ParserOptions {
+            extension_fn_namespaces: Vec::new(),
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec!["https://example.org/pf/solve".to_owned()],
+        };
+        SparqlParser::new().parse_query_with(q, &options)
+    }
+
+    /// The refusal, at every bracket-pair arm the parser has: the plain
+    /// subject/object list, the triple-term/reifying-triple component, the
+    /// reifier id, and the property-function argument list.
+    #[test]
+    fn an_empty_bracket_pair_is_refused_at_every_arm() {
+        for q in [
+            "SELECT * WHERE { [ # c\n ] }",
+            "SELECT * WHERE { ?s ?p [ # c\n ] }",
+            "SELECT * WHERE { ( [ # c\n ] ) <http://example.org/p> ?o }",
+            "SELECT * WHERE { << ?s ?p [ # c\n ] >> ?q ?r }",
+            "SELECT * WHERE { ?s ?p ?o ~ [ # c\n ] }",
+            "SELECT * WHERE { ?s <https://example.org/pf/solve> ( [ # c\n ] ) }",
+        ] {
+            let err = try_parse_with_prop_fn(q)
+                .expect_err("`[` `]` with only a comment between them is not a production");
+            assert!(
+                matches!(&err, ParseError::Syntax { reason, .. }
+                    if reason.contains("with nothing between them")),
+                "{q:?} must be refused by the empty-bracket-pair arm, got {err:?}"
+            );
+        }
+    }
+
+    /// Every neighbour of that refusal still parses. This is the half that makes
+    /// the refusal a claim rather than a guess: the SAME comment in the SAME
+    /// position is lawful the moment the list is populated, and the anonymous
+    /// blank node — a different production — is untouched in all of its spellings.
+    #[test]
+    fn the_neighbours_of_the_empty_bracket_pair_still_parse() {
+        for q in [
+            "SELECT * WHERE { [ ?p ?o ] }",
+            "SELECT * WHERE { [ # c\n ?p ?o ] }",
+            "SELECT * WHERE { [ # c\n ?p ?o # d\n ] }",
+            "SELECT * WHERE { ?s ?p [] }",
+            "SELECT * WHERE { ?s ?p [ ] }",
+            "SELECT * WHERE { ?s ?p [\t\r\n] }",
+            "SELECT * WHERE { ?s ?p ( ) }",
+            "SELECT * WHERE { ?s ?p ( # c\n ) }",
+            "SELECT * WHERE { << ?s ?p [] >> ?q ?r }",
+            "SELECT * WHERE { ?s ?p ?o ~ [] }",
+        ] {
+            try_parse(q).unwrap_or_else(|e| panic!("must still parse {q:?}: {e}"));
+        }
+        try_parse_with_prop_fn("SELECT * WHERE { ?s <https://example.org/pf/solve> ( [] ) }")
+            .expect("an anonymous blank node is a lawful property-function argument");
+    }
+
+    /// `NIL ::= '(' WS* ')'` is the sibling terminal and still folds to `rdf:nil`
+    /// — the bracket-pair refusal must not have leaked into the parenthesis pair.
+    #[test]
+    fn the_empty_collection_is_still_rdf_nil() {
+        let query = parse("SELECT * WHERE { ?s <http://example.org/p> ( ) }");
+        let rendered = format!("{query:?}");
+        assert!(
+            rendered.contains("22-rdf-syntax-ns#nil"),
+            "`( )` must still be rdf:nil: {rendered}"
+        );
+    }
+
+    /// The two lexer sites had to move together, and this is the vector that says
+    /// why. With the `ANON` scan tightened but `skip_trivia` still liberal,
+    /// `{ [<NBSP>] }` FLIPS from refused to ACCEPTED: the NO-BREAK SPACE stops
+    /// closing the `ANON`, an `LBracket` is emitted instead, the liberal trivia
+    /// skip then eats the NO-BREAK SPACE, the `]` arrives, and the empty-pair arm
+    /// mints a blank node. Tightening both sites is what keeps it refused.
+    /// The flip is nastier than a widened language, because `[ ]` in that exact
+    /// position is NOT accepted: a bare `ANON` is not a triple, so `{ [ ] }` is a
+    /// syntax error. A half-done change would therefore have made the NO-BREAK
+    /// SPACE spelling the only one of the two that parsed.
+    #[test]
+    fn a_non_ws_space_between_the_brackets_is_refused() {
+        assert!(
+            try_parse("SELECT * WHERE { [\u{a0}] }").is_err(),
+            "U+00A0 is not `WS`, so `[<NBSP>]` is neither an ANON nor a property list"
+        );
+        assert!(
+            try_parse("SELECT * WHERE { [ ] }").is_err(),
+            "and its ASCII spelling is a bare ANON, which is not a triple either"
+        );
+        // The neighbours that ARE lawful, in the same two positions, still parse:
+        // the ANON as an object, and the populated property list as a subject.
+        try_parse("SELECT * WHERE { ?s ?p [ ] }").expect("`[ ]` is an ANON in object position");
+        try_parse("SELECT * WHERE { [ ?p ?o ] }")
+            .expect("a populated property list may stand alone");
     }
 
     // -- LANG_DIR: the base direction is exactly `ltr` / `rtl` -----------------------

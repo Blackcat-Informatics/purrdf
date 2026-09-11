@@ -123,9 +123,107 @@ impl core::fmt::Debug for SemActRegistry<'_> {
 
 /// The `Test` extension: `fail(...)` fails; no code and everything else
 /// (notably `print(...)`) succeeds.
+///
+/// # What may precede the function name
+///
+/// The extension publishes its own grammar as one regular expression, and that
+/// expression is the whole law for the leading run:
+///
+/// ```text
+/// /^ *(fail|print) *\( *(?:("(?:[^\\"]|\\\\|\\")*")|([spo])) *\) *$/
+/// ```
+///
+/// `^ *` is **zero or more U+0020 SPACE characters** — not `\s`, not a Unicode
+/// property, and not a tab. So the leading run is stripped with
+/// [`str::trim_start_matches`] over the single character the extension names,
+/// never with [`str::trim_start`], which answers the 26-member Unicode
+/// `White_Space` property.
+///
+/// The difference here is an **over-refusal**, which is the direction that
+/// hides. `"\u{A0}fail(\"x\")"` does not match the expression above, so it is
+/// not the extension's `fail` and the action must SUCCEED — the module doc's
+/// "everything else succeeds". Under [`str::trim_start`] the U+00A0 was stripped
+/// away, the code read as `fail`, and a schema that validates under the
+/// published extension was reported as failing. Nothing looked broken: a
+/// refusal reads as correct strictness right up until someone writes the schema
+/// that should validate and does not.
+///
+/// This still reads the code by its **prefix** rather than by matching the
+/// whole expression: `fail` is recognized where the extension would also
+/// require the parenthesized argument. That looseness is unchanged here and is
+/// deliberate — it is what the shexTest suite exercises — but it is a reading
+/// of the function name, not of white space, and it is stated so a later reader
+/// does not mistake this function for a transcription of the full grammar.
 fn test_extension(act: &SemAct, _ctx: &SemActContext) -> bool {
     match &act.code {
         None => true,
-        Some(code) => !code.trim_start().starts_with("fail"),
+        Some(code) => !code
+            .trim_start_matches(TEST_LEADING_RUN)
+            .starts_with("fail"),
+    }
+}
+
+/// The `^ *` of the `Test` extension's published expression: U+0020 SPACE, and
+/// no other character, may precede the function name.
+const TEST_LEADING_RUN: char = ' ';
+
+#[cfg(test)]
+mod test_extension_leading_run {
+    use super::{SemActContext, SemActRegistry, TEST_EXTENSION, TEST_LEADING_RUN, test_extension};
+    use crate::ast::SemAct;
+    use pretty_assertions::assert_eq;
+
+    fn act(code: &str) -> SemAct {
+        SemAct {
+            name: TEST_EXTENSION.to_owned(),
+            code: Some(code.to_owned()),
+        }
+    }
+
+    #[test]
+    fn only_a_space_may_precede_the_function_name() {
+        let ctx = SemActContext::default();
+        // THE REFUSAL, unchanged: the extension's own `^ *(fail|print)` still
+        // matches behind any run of spaces, and behind none at all.
+        for code in ["fail(\"x\")", " fail(\"x\")", "      fail(s)"] {
+            assert!(!test_extension(&act(code), &ctx), "{code:?} must fail");
+        }
+        // THE VALID NEIGHBOUR: every other scalar is outside `^ *`, so the code
+        // is not the extension's `fail` and the action succeeds. Each of these
+        // satisfies `char::is_whitespace` and `str::trim_start` ate all of them.
+        for lead in [
+            '\u{9}', '\u{A}', '\u{B}', '\u{C}', '\u{D}', '\u{A0}', '\u{2028}', '\u{3000}',
+        ] {
+            assert!(lead.is_whitespace(), "{lead:?}");
+            let code = format!("{lead}fail(\"x\")");
+            assert!(
+                test_extension(&act(&code), &ctx),
+                "{code:?} is not the extension's fail"
+            );
+        }
+        // And the rest of the extension's surface is untouched.
+        assert!(test_extension(&act("print(\"x\")"), &ctx));
+        assert!(test_extension(&act(" print(o)"), &ctx));
+        assert!(test_extension(
+            &SemAct {
+                name: TEST_EXTENSION.to_owned(),
+                code: None,
+            },
+            &ctx
+        ));
+    }
+
+    #[test]
+    fn the_registry_dispatches_the_same_reading() {
+        let registry = SemActRegistry::with_test();
+        let ctx = SemActContext::default();
+        assert_eq!(registry.dispatch(&act("  fail(s)"), &ctx), false);
+        assert_eq!(registry.dispatch(&act("\u{A0}fail(s)"), &ctx), true);
+    }
+
+    /// Keeps the doc's citation from drifting away from the constant it names.
+    #[test]
+    fn the_leading_run_is_one_character() {
+        assert_eq!(TEST_LEADING_RUN, ' ');
     }
 }

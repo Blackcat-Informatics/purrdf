@@ -38,6 +38,10 @@ purrdf-entail = { workspace = true }
 camino = { workspace = true }
 # RIF-in-XML (normative RIF XML syntax) reader for the RIF entailment cases.
 roxmltree = { workspace = true }
+# The ONE transcription of the W3C terminal character classes. The RIF-XML reader
+# scans a DTD internal subset and element content by hand, and its boundaries are
+# XML's `S` terminal — not the Unicode `White_Space` property.
+purrdf-iri = { workspace = true }
 
 [dev-dependencies]
 datatest-stable = { workspace = true }

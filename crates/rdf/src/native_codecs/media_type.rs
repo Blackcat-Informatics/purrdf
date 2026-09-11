@@ -378,21 +378,47 @@ impl<'de> Deserialize<'de> for NativeRdfFormat {
     }
 }
 
+/// `value` with its surrounding HTTP optional whitespace removed.
+///
+/// > `OWS = *( SP / HTAB )`
+///
+/// — RFC 9110 §5.6.3 (RFC 7230 §3.2.3), the run a recipient may find around a header
+/// field's value and its parameters. TWO code points: SPACE and HORIZONTAL TAB.
+///
+/// Deliberately NOT [`str::trim`], which answers [`char::is_whitespace`] — the Unicode
+/// `White_Space` property, twenty-six scalars. The gap is not decoration: `OWS` is what
+/// bounds the `type "/" subtype` token, so trimming U+00A0 (or U+000B, U+2028, U+3000)
+/// makes this function accept a media type no HTTP recipient would parse that way, and
+/// route a document to a codec on the strength of a character the grammar never allowed
+/// to be there. `CR` and `LF` are excluded for the same reason: they end a field, they do
+/// not pad one.
+fn trim_ows(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    let is_ows = |byte: u8| byte == b' ' || byte == b'\t';
+    let start = bytes
+        .iter()
+        .position(|&byte| !is_ows(byte))
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|&byte| !is_ows(byte))
+        .map_or(start, |last| last + 1);
+    &value[start..end]
+}
+
 /// Resolve a media type or local format id to a [`NativeRdfFormat`].
 ///
-/// The input is lowercased and any `;charset=…` parameter is stripped before
+/// The input has its surrounding `OWS = *( SP / HTAB )` (RFC 9110 §5.6.3) removed — and
+/// only that, never the wider Unicode whitespace property — and is lowercased, and any
+/// `;charset=…` parameter is stripped before
 /// matching, so `text/turtle; charset=utf-8` and `Turtle` both resolve to
 /// [`NativeRdfFormat::Turtle`]. Matching scans the internal format table for a row whose
 /// canonical `media_type` OR any `alias` equals the normalized input (aliases include `.`-prefixed
 /// file extensions, so `.jsonld` resolves too). An unrecognized media type is a HARD
 /// error (`native-codec-unsupported-format`) — there is no degraded default codec.
 pub fn classify(media_type: &str) -> Result<NativeRdfFormat, RdfDiagnostic> {
-    let normalized = media_type
-        .split(';')
-        .next()
-        .unwrap_or(media_type)
-        .trim()
-        .to_ascii_lowercase();
+    let normalized =
+        trim_ows(media_type.split(';').next().unwrap_or(media_type)).to_ascii_lowercase();
     FORMATS
         .iter()
         .find(|d| {
@@ -575,6 +601,40 @@ mod tests {
         assert_eq!(classify("nt").unwrap(), NativeRdfFormat::NTriples);
         assert_eq!(classify("rdf").unwrap(), NativeRdfFormat::RdfXml);
         assert_eq!(classify("owl").unwrap(), NativeRdfFormat::RdfXml);
+    }
+
+    /// What surrounds a media type is `OWS = *( SP / HTAB )` (RFC 9110 §5.6.3) — two
+    /// code points — and not the Unicode `White_Space` property `str::trim` answers.
+    ///
+    /// `OWS` bounds the `type "/" subtype` token, so trimming a wider class routes a
+    /// document to a codec on the strength of a character the grammar never allowed to
+    /// sit there.
+    #[test]
+    fn classify_trims_the_ows_the_grammar_names_and_no_more() {
+        // The over-refusal side first: both `OWS` members, on both sides, still trim.
+        for padded in [
+            " text/turtle",
+            "text/turtle ",
+            "\ttext/turtle\t",
+            " \t text/turtle \t ",
+            "  ttl  ",
+        ] {
+            assert_eq!(
+                classify(padded).unwrap_or_else(|e| panic!("`{padded}` is OWS-padded: {e}")),
+                NativeRdfFormat::Turtle,
+                "{padded:?}"
+            );
+        }
+        // And what is not `OWS` is part of the token, so it names no format.
+        for padded in [
+            "\u{a0}text/turtle",
+            "text/turtle\u{a0}",
+            "\u{2028}text/turtle",
+            "\u{3000}ttl",
+        ] {
+            let error = classify(padded).expect_err("a non-OWS scalar is part of the token");
+            assert_eq!(error.code, "native-codec-unsupported-format");
+        }
     }
 
     #[test]

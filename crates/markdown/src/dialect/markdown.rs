@@ -22,6 +22,16 @@
 //! structure its LF twin states; the leading edge is **bounded** rather
 //! than trimmed, so an indented marker is still a marker up to three
 //! spaces and is ordinary content past them ([`after_indent`]).
+//!
+//! What "trims" means here is [`SPACE_OR_TAB`] and never
+//! [`char::is_whitespace`]. Every clause this reader implements — the
+//! blank line of CommonMark §2.1, the ATX heading of §4.2, the thematic
+//! break of §4.1, the table cell of GFM §4.10 — enumerates space-or-tab,
+//! and the one CommonMark clause that does name a Unicode property
+//! (§6.2's flanking delimiter runs) governs emphasis, which this dialect
+//! does not state. The distinction is structural: these trims decide
+//! whether a line closes a unit or opens a row, so widening them moves
+//! unit boundaries in documents a conforming reader slices differently.
 
 use std::sync::Arc;
 
@@ -110,13 +120,19 @@ fn lines(text: &str) -> Vec<(usize, usize)> {
 impl Walker {
     /// One line, read for what it opens or continues.
     ///
-    /// Recognition never looks at a line's trailing whitespace: a
+    /// Recognition never looks at a line's trailing white space: a
     /// heading's title, a movement's name, a rule, and a blank line are
     /// all read from the trimmed text, and a verse number is read from
     /// the digits that open the line's marker text. A document written
     /// with CRLF endings therefore slices into the structure its LF
     /// twin slices into — the `\r` a line ends with is never part of
-    /// what is recognized.
+    /// what is recognized ([`without_line_ending`]).
+    ///
+    /// "White space" is [`SPACE_OR_TAB`]. CommonMark §2.1 calls a line
+    /// blank when it contains "no characters, or … only spaces (U+0020)
+    /// or tabs (U+0009)", so a line holding only U+00A0 is a paragraph
+    /// and must NOT close the open unit — closing it would move a unit
+    /// boundary in a document both readers accept.
     ///
     /// Nor does it insist a marker start at byte zero. A heading, a
     /// movement marker and a verse number are read after a leading run
@@ -131,7 +147,7 @@ impl Walker {
     /// will find them.
     fn line(&mut self, text: &str, start: usize, end: usize) {
         let line = &text[start..end];
-        if !line.trim_start().starts_with('|') {
+        if !trim_leading(without_line_ending(line)).starts_with('|') {
             // A table ended, so the next one starts its rows afresh.
             self.table_row_index = 0;
         }
@@ -149,9 +165,9 @@ impl Walker {
                 .find(|&&i| !self.sections[i].movement)
                 .map_or(1, |&i| self.sections[i].level + 1);
             self.open_section(start, end, level, name, true);
-        } else if line.trim().is_empty() || is_rule(line) {
+        } else if is_blank_line(line) || is_rule(line) {
             self.close_unit();
-        } else if line.trim_start().starts_with('|') {
+        } else if trim_leading(without_line_ending(line)).starts_with('|') {
             self.close_unit();
             self.table_row(line, start, end);
         } else if let Some(number) = verse_number(line) {
@@ -313,6 +329,87 @@ impl Walker {
 /// so three is the last indent that still opens something.
 const MAX_MARKER_INDENT: usize = 3;
 
+/// The white space every clause this dialect implements names: U+0020 SPACE
+/// and U+0009 CHARACTER TABULATION, and nothing else.
+///
+/// # The clauses, quoted
+///
+/// Each construct below is read with this set because its own clause
+/// enumerates this set:
+///
+/// * **Blank line** — CommonMark §2.1: "A line containing no characters, or a
+///   line containing only spaces (U+0020) or tabs (U+0009), is called a blank
+///   line."
+/// * **ATX heading** — CommonMark §4.2: "The raw contents of the heading are
+///   stripped of leading and trailing space or tabs before being parsed as
+///   inline content", and "The optional closing sequence of `#`s must be
+///   preceded by spaces or tabs and may be followed by spaces or tabs only."
+/// * **Thematic break** — CommonMark §4.1: "A line consisting of optionally up
+///   to three spaces of indentation, followed by a sequence of three or more
+///   matching `-`, `_`, or `*` characters, each followed optionally by any
+///   number of spaces or tabs, forms a thematic break."
+/// * **Table cell** — GFM §4.10: "Spaces between pipes and cell content are
+///   trimmed."
+///
+/// # Why this is not [`char::is_whitespace`], even here
+///
+/// CommonMark is the reason the workspace's terminal gate carries an exemption
+/// table at all, because it is the standing example of a specification that
+/// **does** name a Unicode property — §2.1: "A Unicode whitespace character is
+/// a character in the Unicode `Zs` general category, or a tab (U+0009), line
+/// feed (U+000A), form feed (U+000C), or carriage return (U+000D)."
+///
+/// That class is real, and it governs exactly one thing: the left-flanking and
+/// right-flanking delimiter runs of §6.2, which decide where emphasis opens and
+/// closes. **This dialect states no emphasis** — it reads headings, a movement
+/// marker, verses, blank lines, rules and a table, and every one of those is
+/// governed by a clause that enumerates space-or-tab. So no clause this file
+/// implements names a Unicode property, and the exemption CommonMark would
+/// otherwise earn is not earned here.
+///
+/// The difference is structural, not cosmetic. A line holding only U+00A0 is
+/// not a blank line under §2.1; it is a paragraph. Reading it as blank closes
+/// the open unit, which silently moves a unit boundary in a document a
+/// conforming reader slices differently — and a `⁂` movement or a `|` row
+/// behind a U+00A0 is ordinary content under §4.1/§4.10, not a marker.
+const SPACE_OR_TAB: [char; 2] = [' ', '\t'];
+
+/// `line` without its line ending.
+///
+/// CommonMark §2.1: "A line ending is a newline (U+000A), a carriage return
+/// (U+000D) not followed by a newline, or a carriage return and a following
+/// newline." [`lines`] cuts the document at U+000A, so the only remnant a line
+/// can still carry is the U+000D of a CRLF pair — which belongs to the ending
+/// and not to the line. Stripping it here is what makes a CRLF document slice
+/// into the structure its LF twin slices into, and it is done by naming the one
+/// character rather than by trimming, so nothing else at the line's end moves.
+fn without_line_ending(line: &str) -> &str {
+    line.strip_suffix('\r').unwrap_or(line)
+}
+
+/// `s` with [`SPACE_OR_TAB`] removed from both ends.
+fn trim_edges(s: &str) -> &str {
+    s.trim_matches(SPACE_OR_TAB)
+}
+
+/// `s` with leading [`SPACE_OR_TAB`] removed.
+fn trim_leading(s: &str) -> &str {
+    s.trim_start_matches(SPACE_OR_TAB)
+}
+
+/// A whole line reduced to what a clause reads it for: its line ending gone and
+/// both edges trimmed of [`SPACE_OR_TAB`].
+fn line_body(line: &str) -> &str {
+    trim_edges(without_line_ending(line))
+}
+
+/// Whether `line` is a **blank line** in CommonMark's own sense (§2.1): "A line
+/// containing no characters, or a line containing only spaces (U+0020) or tabs
+/// (U+0009)".
+fn is_blank_line(line: &str) -> bool {
+    line_body(line).is_empty()
+}
+
 /// A line's **marker text**: the line after its leading run of spaces,
 /// or `None` where that run puts the line past the marker indent.
 ///
@@ -352,6 +449,20 @@ fn after_indent(line: &str) -> Option<&str> {
 
 /// `# Heading` through `###### Heading`, behind the leading indent
 /// [`after_indent`] admits.
+///
+/// CommonMark §4.2: "The opening sequence of `#` characters must be followed by
+/// spaces or tabs, or by the end of line", and "The raw contents of the heading
+/// are stripped of leading and trailing space or tabs before being parsed as
+/// inline content." Both trims here are therefore [`SPACE_OR_TAB`]: a heading
+/// `# Concordance\u{A0}` names `Concordance\u{A0}`, which is not the
+/// concordance, and trimming the U+00A0 away would open a citation table the
+/// document did not open.
+///
+/// The closing `#` run is read more loosely than §4.2 states — that clause
+/// requires the run to be "preceded by spaces or tabs", and this dialect strips
+/// it whether or not it is, so `# foo#` is the heading `foo` here and `foo#` in
+/// CommonMark. That is a dialect reading of the `#` run and not a reading of
+/// white space.
 fn atx_heading(line: &str) -> Option<(u32, String)> {
     let line = after_indent(line)?;
     let hashes = line.bytes().take_while(|b| *b == b'#').count();
@@ -362,28 +473,47 @@ fn atx_heading(line: &str) -> Option<(u32, String)> {
     if !rest.starts_with([' ', '\t']) {
         return None;
     }
-    let heading = rest.trim().trim_end_matches('#').trim();
+    let heading = trim_edges(trim_edges(without_line_ending(rest)).trim_end_matches('#'));
     Some((u32::try_from(hashes).ok()?, heading.to_owned()))
 }
 
 /// `⁂ *name*`: a movement marker, a section below the nearest heading,
 /// behind the leading indent [`after_indent`] admits.
+///
+/// The U+2042 ASTERISM marker is this dialect's own construct, and it is read
+/// the way CommonMark reads the ATX heading it stands beside (§4.2): the marker
+/// "must be followed by spaces or tabs", and the name is stripped of leading
+/// and trailing [`SPACE_OR_TAB`]. A `⁂` followed by U+00A0 opens no movement,
+/// and a name is never trimmed at a scalar CommonMark would keep.
 fn movement(line: &str) -> Option<String> {
     let rest = after_indent(line)?.strip_prefix('\u{2042}')?;
     if !rest.starts_with([' ', '\t']) {
         return None;
     }
-    let name = rest.trim();
+    let name = line_body(rest);
     let name = name
         .strip_prefix('*')
         .and_then(|n| n.strip_suffix('*'))
         .or_else(|| name.strip_prefix('_').and_then(|n| n.strip_suffix('_')))
         .unwrap_or(name);
-    Some(name.trim().to_owned())
+    Some(trim_edges(name).to_owned())
 }
 
+/// `---`, `***`: a horizontal rule, which closes the open unit.
+///
+/// CommonMark §4.1: "A line consisting of optionally up to three spaces of
+/// indentation, followed by a sequence of three or more matching `-`, `_`, or
+/// `*` characters, each followed optionally by any number of spaces or tabs,
+/// forms a thematic break." The trims are therefore [`SPACE_OR_TAB`] and not a
+/// Unicode property: `\u{A0}---` is a paragraph, not a rule.
+///
+/// This dialect reads a NARROWER rule than §4.1 does, deliberately and on two
+/// axes: it states no `_` run, and it admits no white space BETWEEN the
+/// characters, so CommonMark's `- - -` is ordinary content here. Both are
+/// dialect choices about which lines close a unit; neither is a reading of
+/// white space.
 fn is_rule(line: &str) -> bool {
-    let t = line.trim();
+    let t = line_body(line);
     t.len() >= 3 && (t.bytes().all(|b| b == b'-') || t.bytes().all(|b| b == b'*'))
 }
 
@@ -437,8 +567,17 @@ fn verse_number(line: &str) -> Option<u64> {
 /// onto its verse, and what it lifts is the wreck of two cells cut in
 /// the wrong places. It is neither unmatched nor malformed, so nothing
 /// anywhere reports it.
+///
+/// # What "trimmed" means
+///
+/// GFM §4.10: "Spaces between pipes and cell content are trimmed." So each
+/// cell, and the row itself, is trimmed of [`SPACE_OR_TAB`] — tab included
+/// because CommonMark treats it as white space wherever spaces are admitted,
+/// and nothing wider, because a cell holding U+00A0 holds a value. Trimming it
+/// away is how a backticked name or a verse range silently becomes something
+/// else.
 fn cells(line: &str) -> Vec<String> {
-    let body = line.trim();
+    let body = line_body(line);
     // The row was recognized by its opening `|`, so that one is a
     // delimiter by construction and can be no escaped pipe.
     let body = body.strip_prefix('|').unwrap_or(body);
@@ -461,7 +600,7 @@ fn cells(line: &str) -> Vec<String> {
                 continue;
             }
             (false, '|') => {
-                out.push(std::mem::take(&mut cell).trim().to_owned());
+                out.push(trim_edges(&std::mem::take(&mut cell)).to_owned());
                 closed = true;
             }
             (false, other) => cell.push(other),
@@ -472,7 +611,7 @@ fn cells(line: &str) -> Vec<String> {
         cell.push('\\');
     }
     if !closed {
-        out.push(cell.trim().to_owned());
+        out.push(trim_edges(&cell).to_owned());
     }
     out
 }
@@ -493,8 +632,8 @@ fn verse_range(cell: &str) -> Option<(u64, u64)> {
         .split_once('\u{2013}')
         .or_else(|| cell.split_once('-'))
         .unwrap_or((cell, cell));
-    let first: u64 = a.trim().parse().ok()?;
-    let last: u64 = b.trim().parse().ok()?;
+    let first: u64 = trim_edges(a).parse().ok()?;
+    let last: u64 = trim_edges(b).parse().ok()?;
     (first <= last).then_some((first, last))
 }
 
@@ -505,7 +644,7 @@ fn backticked(cell: &str) -> Vec<String> {
     while let Some(open) = rest.find('`') {
         let after = &rest[open + 1..];
         let Some(close) = after.find('`') else { break };
-        let name = after[..close].trim();
+        let name = trim_edges(&after[..close]);
         if !name.is_empty() {
             out.push(name.to_owned());
         }
@@ -637,5 +776,125 @@ mod tests {
         for row in ["| 1 | `a` | `b` |", "| Verses | Canon source | Anchors |"] {
             assert!(!is_delimiter_row(&cells(row)), "{row}");
         }
+    }
+
+    /// Every Unicode scalar value, in order.
+    fn all_scalars() -> impl Iterator<Item = char> {
+        (0..=0x0010_FFFF_u32).filter_map(char::from_u32)
+    }
+
+    #[test]
+    fn the_trimmed_set_is_exactly_the_two_characters_the_clauses_name() {
+        assert_eq!(SPACE_OR_TAB, [' ', '\t']);
+        for c in all_scalars() {
+            assert_eq!(
+                trim_edges(&c.to_string()).is_empty(),
+                c == ' ' || c == '\t',
+                "{c:?}"
+            );
+        }
+        // The gap between the clause and the property, named: CommonMark §2.1
+        // defines a Unicode whitespace class, it governs §6.2 emphasis, and
+        // every scalar below satisfies it while opening no construct here.
+        for c in [
+            '\u{A0}', '\u{1680}', '\u{2000}', '\u{2028}', '\u{3000}', '\u{B}', '\u{C}',
+        ] {
+            assert!(c.is_whitespace(), "{c:?}");
+            assert!(!trim_edges(&c.to_string()).is_empty(), "{c:?}");
+        }
+    }
+
+    /// CommonMark §2.1: "A line containing no characters, or a line containing
+    /// only spaces (U+0020) or tabs (U+0009), is called a blank line."
+    #[test]
+    fn a_blank_line_is_the_clauses_blank_line_and_not_the_propertys() {
+        // The refusal: a line of U+00A0 is a paragraph, so it does not close a
+        // unit, and the unit around it stays one unit.
+        assert!(!is_blank_line("\u{A0}"));
+        let reading = read("1. first\n\u{A0}\n2. second\n");
+        assert_eq!(reading.units.len(), 2, "the U+00A0 line continues verse 1");
+        // THE VALID NEIGHBOUR. Every line the clause DOES call blank still
+        // closes the unit, including the CRLF spellings — so this is exactness
+        // and not a refusal to recognize blank lines.
+        for blank in ["", " ", "\t", "   \t ", "\r", "  \r"] {
+            assert!(is_blank_line(blank), "{blank:?}");
+        }
+        let reading = read("1. first\n\n2. second\n");
+        assert_eq!(reading.units.len(), 2);
+        let crlf = read("1. first\r\n   \r\n2. second\r\n");
+        assert_eq!(crlf.units.len(), 2, "a CRLF blank line is still blank");
+    }
+
+    /// CommonMark §4.2: "The raw contents of the heading are stripped of leading
+    /// and trailing space or tabs before being parsed as inline content."
+    #[test]
+    fn a_heading_keeps_what_the_clause_does_not_strip() {
+        assert_eq!(
+            atx_heading("## Concordance\u{A0}"),
+            Some((2, "Concordance\u{A0}".to_owned())),
+            "U+00A0 is heading content, so this heading is not `Concordance`"
+        );
+        // THE VALID NEIGHBOUR: the spaces and tabs the clause names are still
+        // stripped, on both edges and around a closing run.
+        assert_eq!(
+            atx_heading("##\tConcordance \t"),
+            Some((2, "Concordance".to_owned()))
+        );
+        assert_eq!(
+            atx_heading("## Concordance ##"),
+            Some((2, "Concordance".to_owned()))
+        );
+        assert_eq!(
+            atx_heading("## Concordance\r"),
+            Some((2, "Concordance".to_owned())),
+            "the CR of a CRLF pair is the line ending, not content"
+        );
+    }
+
+    /// CommonMark §4.1 (thematic break) and GFM §4.10 (tables): both enumerate
+    /// spaces or tabs, so a U+00A0 in front of either marker is content.
+    #[test]
+    fn a_rule_a_row_and_a_movement_are_not_opened_behind_a_no_break_space() {
+        assert!(!is_rule("\u{A0}---"));
+        assert!(movement("\u{A0}\u{2042} *name*").is_none());
+        let reading = read("## H\n\u{A0}| a | b | c |\n");
+        assert!(reading.rows.is_empty(), "that line is prose, not a row");
+
+        // THE VALID NEIGHBOUR: each marker still opens behind the white space
+        // its clause names, and behind none at all.
+        assert!(is_rule("---"));
+        assert!(is_rule("  --- \t"));
+        assert!(is_rule("***\r"));
+        assert_eq!(
+            movement("  \u{2042}\tname"),
+            Some("name".to_owned()),
+            "a tab after the marker is white space under §4.2's sibling rule"
+        );
+        assert_eq!(
+            cells("  | a | b |"),
+            vec!["a".to_owned(), "b".to_owned()],
+            "a row still opens behind the indent"
+        );
+    }
+
+    /// A cell holding U+00A0 holds a value; trimming it away is how a name or a
+    /// verse range silently becomes something else.
+    #[test]
+    fn a_cell_keeps_a_no_break_space_and_still_loses_a_space() {
+        assert_eq!(
+            cells("|\u{A0}a\u{A0}| b |"),
+            vec!["\u{A0}a\u{A0}".to_owned(), "b".to_owned()]
+        );
+        assert_eq!(backticked("`\u{A0}x`"), vec!["\u{A0}x".to_owned()]);
+        // THE VALID NEIGHBOUR: the spaces and tabs GFM names are still trimmed,
+        // so ordinary rows read exactly as they did.
+        assert_eq!(cells("| \ta\t | b |"), vec!["a".to_owned(), "b".to_owned()]);
+        assert_eq!(backticked("` x `"), vec!["x".to_owned()]);
+        assert_eq!(verse_range(" 2 \u{2013} 5 "), Some((2, 5)));
+        assert_eq!(
+            verse_range("2\u{A0}\u{2013}5"),
+            None,
+            "U+00A0 is not a digit"
+        );
     }
 }

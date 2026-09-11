@@ -501,3 +501,122 @@ fn a_label_from_the_import_closure_counts_as_declared() {
     .expect("an imported label is declared");
     assert!(ok.all_conformant());
 }
+
+/// The `UCHAR` alternative of `[18t] IRIREF` is decoded, not refused.
+///
+/// ```text
+/// [18t] IRIREF ::= '<' ([^#x00-#x20<>"{}|^`\] | UCHAR)* '>'
+/// UCHAR        ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
+/// HEX          ::= [0-9] | [A-F] | [a-f]
+/// ```
+///
+/// The alternative is half the production, and answering only the raw content
+/// class over-refused: `'\'` is one of the nine delimiters the class excludes, so
+/// the escape's own lead fell out of the body and a lawful `<urn:example:\u0061>`
+/// was reported as `unterminated IRI`. That spelling is not exotic — it is what
+/// this workspace's own IRI egress escape emits for every scalar the production
+/// excludes raw — so the refusal broke read-back of PurRDF's own output.
+///
+/// The two halves ride in one vector so neither is asserted alone: the escaped
+/// spelling parses AND equals the plain one.
+#[test]
+fn an_iri_uchar_escape_decodes_to_the_same_iri_as_the_plain_spelling() {
+    let node = |src: &str| match &parse_shape_map(src, None).expect("shape map parses").0[0].node {
+        NodeSelector::Node(value) => value.clone(),
+        other => panic!("expected a node selector, got {other:?}"),
+    };
+
+    assert_eq!(
+        node("<urn:example:a>@START"),
+        iri("urn:example:a"),
+        "the plain spelling is unchanged"
+    );
+    assert_eq!(
+        node("<urn:example:\\u0061>@START"),
+        iri("urn:example:a"),
+        "U+0061 is `a`, so the escaped spelling names the same IRI"
+    );
+
+    // Mixed-case hex is lawful in both directions of the `HEX` class, and both
+    // spellings must land on the NFC literal twin rather than on each other only.
+    for src in [
+        "<urn:ex:caf\\u00E9>@START",
+        "<urn:ex:caf\\u00e9>@START",
+        "<urn:ex:café>@START",
+    ] {
+        assert_eq!(
+            node(src),
+            iri("urn:ex:café"),
+            "{src} must agree with its NFC literal twin"
+        );
+    }
+    assert_eq!(
+        node("<urn:ex:\\U0001F600>@START"),
+        iri("urn:ex:\u{1f600}"),
+        "`\\U` carries eight HEX digits"
+    );
+}
+
+/// What a `UCHAR` decodes TO is a value, not a character to re-scan.
+///
+/// The raw content class `[^#x00-#x20<>"{}|^`\]` constrains what may stand in the
+/// *source*; `UCHAR` is how everything else is written at all. Feeding the decoded
+/// scalar back through that class would mean this parser could not read back what
+/// [`purrdf_core`]'s IRI writer emits, since that writer escapes exactly the
+/// excluded set. So the lexical layer admits a `UCHAR` denoting U+0020, and
+/// whether the resulting string is an IRI at all is RFC 3987's question, answered
+/// one layer up by the base resolver — which is why the diagnostic names the IRI
+/// and not a runaway bracket scan.
+#[test]
+fn a_decoded_uchar_is_judged_as_an_iri_not_as_iriref_source() {
+    let spaced = "<urn:ex:a\\u0020b>@START";
+    let err = parse_shape_map(spaced, None)
+        .expect_err("a space is not an IRI character")
+        .to_string();
+    assert!(
+        !err.contains("unterminated"),
+        "the escape was decoded, so the body was never truncated: {err}"
+    );
+    assert!(
+        matches!(parse_shape_map(spaced, None), Err(ShexError::Iri { .. })),
+        "the refusal belongs to the IRI layer: {err}"
+    );
+}
+
+/// Every way a `UCHAR` can fail is a hard error, never a literal backslash.
+///
+/// The production admits `'\'` ONLY as the lead of a `UCHAR`, so there is no
+/// fallback reading to degrade to. The neighbour that must keep working is the
+/// well-formed escape above; these are the four spellings that are not one.
+#[test]
+fn a_malformed_iri_uchar_is_refused_rather_than_absorbed() {
+    for (src, why) in [
+        (r"<urn:ex:a\>@START", "a trailing backslash opens nothing"),
+        (
+            r"<urn:ex:a\n>@START",
+            "`\\n` is not a UCHAR; IRIREF has no ECHAR",
+        ),
+        (r"<urn:ex:a\uZZZZ>@START", "`Z` is not a HEX digit"),
+        (
+            r"<urn:ex:a\u00>@START",
+            "`\\u` carries four HEX digits, not two",
+        ),
+        (
+            r"<urn:ex:a\uD800>@START",
+            "a surrogate is no Unicode scalar value",
+        ),
+        (
+            r"<urn:ex:a\U00110000>@START",
+            "U+110000 is above the Unicode range",
+        ),
+    ] {
+        let err = parse_shape_map(src, None)
+            .expect_err(why)
+            .to_string()
+            .to_ascii_lowercase();
+        assert!(
+            err.contains("escape"),
+            "{src}: the defect is the escape ({why}): {err}"
+        );
+    }
+}

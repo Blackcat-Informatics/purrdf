@@ -117,6 +117,45 @@ use crate::vocab::{
 /// This crate's sibling bound on RDF 1.2 triple-term nesting is 16.
 pub(crate) const MAX_EXPRESSION_DEPTH: usize = 256;
 
+/// Apply the `whiteSpace` = `collapse` normalization an XSD atomic datatype fixes, as far as
+/// a single-token lexical space can observe it.
+///
+/// XSD 1.1 Part 2 §4.3.6 states the two steps in full:
+///
+/// > `replace` — All occurrences of `#x9` (tab), `#xA` (line feed) and `#xD` (carriage
+/// > return) are replaced with `#x20` (space).
+/// >
+/// > `collapse` — After the processing implied by `replace`, contiguous sequences of `#x20`s
+/// > are collapsed to a single `#x20`, and any `#x20` at the start or end of the string are
+/// > then removed.
+///
+/// The whole normalization therefore quantifies over four code points and no others — the
+/// same four as XML `S`, "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3 `[3]`) — and
+/// [`purrdf_iri::terminals::is_ws_char`] is that class.
+///
+/// Squeezing internal runs is not performed, and does not need to be: every lexical space
+/// this is applied to here (`xsd:boolean`, `xsd:integer`, `xsd:nonNegativeInteger`) is a
+/// single token containing no `#x20`, so an internal run survives `collapse` as one `#x20`
+/// and is refused by the token grammar either way. The verdict is identical; only the
+/// trimming is observable.
+///
+/// # Why this is not [`str::trim`], and why the direction matters HERE
+///
+/// `str::trim` trims the Unicode `White_Space` property — twenty-six code points, including
+/// U+00A0 NO-BREAK SPACE, U+2028, U+3000 and the `[#x2000-#x200A]` block — where the
+/// datatype names four. Every one of the extra twenty-two is **over-acceptance**: the
+/// lexical form `"\u{A0}2"` is not in `xsd:nonNegativeInteger`'s lexical space at all, and a
+/// trim that strips the NO-BREAK SPACE turns it into the cardinality bound `2`.
+///
+/// This is a reasoner, so an ill-typed literal admitted here does not surface as a lenient
+/// parse: it becomes a premise. A cardinality restriction, an `owl:hasSelf` truth value or a
+/// length facet read out of a literal the datatype refuses makes every consequence drawn
+/// from it a DERIVED verdict resting on input the ontology does not state — reported with
+/// the same certificate as a sound one.
+fn collapse_trim(lexical: &str) -> &str {
+    lexical.trim_matches(purrdf_iri::terminals::is_ws_char)
+}
+
 /// Which constraining facet a predicate of an `owl:withRestrictions` list cell states.
 ///
 /// The facet IRIs sit in the XML Schema namespace, which the OWL-2-RDF mapping does not
@@ -770,7 +809,11 @@ impl<'a> CeExtractor<'a> {
         };
         match slot {
             FacetSlot::Length | FacetSlot::MinLength | FacetSlot::MaxLength => {
-                let length = lexical_form.trim().parse::<u64>().ok()?;
+                // `xsd:length`/`minLength`/`maxLength` take an `xsd:nonNegativeInteger`
+                // (XSD 1.1 Part 2 §4.3.1), which fixes `whiteSpace` = `collapse` — see
+                // `collapse_trim`. `None` here makes the whole range opaque rather than
+                // dropping the facet, so an ill-typed bound cannot shrink a range.
+                let length = collapse_trim(lexical_form).parse::<u64>().ok()?;
                 Some(match slot {
                     FacetSlot::Length => Facet::Length(length),
                     FacetSlot::MinLength => Facet::MinLength(length),
@@ -872,7 +915,11 @@ impl<'a> CeExtractor<'a> {
     /// than being guessed either way.
     fn self_restriction(&mut self, role: Role, lit: u32) -> Concept {
         let truth = match self.interner.value(lit) {
-            TermValue::Literal { lexical_form, .. } => match lexical_form.trim() {
+            // `owl:hasSelf` takes an `xsd:boolean`, whose lexical space is
+            // "`{true, false, 1, 0}`" and which fixes `whiteSpace` = `collapse`
+            // (XSD 1.1 Part 2 §3.3.2) — see `collapse_trim`. A value the datatype
+            // refuses is `None`, which is the opaque reading, not a guessed truth.
+            TermValue::Literal { lexical_form, .. } => match collapse_trim(lexical_form) {
                 "true" | "1" => Some(true),
                 "false" | "0" => Some(false),
                 _ => None,
@@ -929,7 +976,12 @@ impl<'a> CeExtractor<'a> {
     fn card(&self, lit: u32) -> Result<u32, EntailError> {
         match self.interner.value(lit) {
             TermValue::Literal { lexical_form, .. } => {
-                let n = lexical_form.trim().parse::<u32>().map_err(|_| {
+                // The OWL-2-RDF mapping types a cardinality as
+                // `xsd:nonNegativeInteger`, which fixes `whiteSpace` = `collapse`
+                // (XSD 1.1 Part 2 §3.4.13 `xsd:integer`, from which it derives) — see
+                // `collapse_trim`. A lexical form the datatype refuses is a malformed
+                // graph and a hard error, never a bound guessed from it.
+                let n = collapse_trim(lexical_form).parse::<u32>().map_err(|_| {
                     EntailError::Parse(format!("non-integer cardinality literal: {lexical_form:?}"))
                 })?;
                 if n == u32::MAX {
@@ -1664,4 +1716,162 @@ fn one_of(ids: Vec<u32>) -> Concept {
         return Concept::Nominal(vec![ids[0]]);
     }
     Concept::Or(ids.into_iter().map(|a| Concept::Nominal(vec![a])).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral};
+
+    use super::build_until;
+    use crate::EntailError;
+    use crate::owl_dl::Kb;
+    use crate::report::Construct;
+
+    const NS: &str = "http://example.org/test#";
+    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    const RDFS_SUBCLASSOF_IRI: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    const OWL_CLASS_IRI: &str = "http://www.w3.org/2002/07/owl#Class";
+    const OWL_OBJECTPROPERTY_IRI: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
+    const OWL_RESTRICTION_IRI: &str = "http://www.w3.org/2002/07/owl#Restriction";
+    const OWL_ONPROPERTY_IRI: &str = "http://www.w3.org/2002/07/owl#onProperty";
+    const OWL_MAXCARDINALITY_IRI: &str = "http://www.w3.org/2002/07/owl#maxCardinality";
+    const OWL_HASSELF_IRI: &str = "http://www.w3.org/2002/07/owl#hasSelf";
+    const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+
+    /// `A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty p ; <facet> "<lexical>"^^<dt> ]`.
+    fn restriction_ontology(
+        facet: &str,
+        lexical: &str,
+        datatype: &str,
+    ) -> std::sync::Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let ty = b.intern_iri(RDF_TYPE_IRI);
+        let class = b.intern_iri(OWL_CLASS_IRI);
+        let objp = b.intern_iri(OWL_OBJECTPROPERTY_IRI);
+        let subclass_of = b.intern_iri(RDFS_SUBCLASSOF_IRI);
+        let restriction_class = b.intern_iri(OWL_RESTRICTION_IRI);
+        let on_property = b.intern_iri(OWL_ONPROPERTY_IRI);
+        let facet = b.intern_iri(facet);
+        let big_a = b.intern_iri(&format!("{NS}A"));
+        let p = b.intern_iri(&format!("{NS}p"));
+        let restriction = b.intern_blank("restriction", BlankScope::DEFAULT);
+        let bound = b.intern_literal(RdfLiteral::typed(lexical, datatype));
+
+        b.push_quad(big_a, ty, class, None);
+        b.push_quad(p, ty, objp, None);
+        b.push_quad(restriction, ty, restriction_class, None);
+        b.push_quad(restriction, on_property, p, None);
+        b.push_quad(restriction, facet, bound, None);
+        b.push_quad(big_a, subclass_of, restriction, None);
+
+        b.freeze().expect("freeze")
+    }
+
+    fn parse_cardinality(lexical: &str) -> Result<Kb, EntailError> {
+        build_until(
+            restriction_ontology(OWL_MAXCARDINALITY_IRI, lexical, XSD_NON_NEGATIVE_INTEGER)
+                .as_ref(),
+            None,
+        )
+    }
+
+    fn parse_has_self(lexical: &str) -> Kb {
+        build_until(
+            restriction_ontology(OWL_HASSELF_IRI, lexical, XSD_BOOLEAN).as_ref(),
+            None,
+        )
+        .expect("owl:hasSelf never refuses the whole run")
+    }
+
+    /// `collapse_trim` strips a scalar from an edge if and only if the `whiteSpace` =
+    /// `collapse` facet names it — stated as a total function over every Unicode scalar, so
+    /// the class cannot drift toward either the Unicode property or the ASCII one.
+    ///
+    /// This is the one predicate all three lexical-form readings in this file route through
+    /// (the `xsd:length`/`minLength`/`maxLength` facet bounds, `owl:hasSelf`, and the
+    /// cardinality bounds), so pinning it here pins the facet site that has no cheap
+    /// end-to-end fixture of its own.
+    #[test]
+    fn collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
+        for cp in 0..=0x0010_FFFF_u32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            let named = matches!(c, '\u{20}' | '\u{9}' | '\u{D}' | '\u{A}');
+            let padded = format!("{c}x{c}");
+            assert_eq!(
+                super::collapse_trim(&padded) == "x",
+                named,
+                "{c:?} ({cp:#06X}) must be stripped iff whiteSpace=collapse names it"
+            );
+        }
+        // Runs at both ends go, and an interior member survives as content the token
+        // grammar then refuses — `collapse` squeezes it, it never deletes it.
+        assert_eq!(super::collapse_trim(" \t\r\n42\n\r\t "), "42");
+        assert_eq!(super::collapse_trim("4 2"), "4 2");
+        assert_eq!(super::collapse_trim(""), "");
+        assert_eq!(super::collapse_trim("   "), "");
+    }
+
+    /// A cardinality bound is read after `whiteSpace` = `collapse`, which names four code
+    /// points — so XML `S` padding is still accepted and Unicode whitespace is not.
+    #[test]
+    fn a_cardinality_bound_collapses_over_xml_s_and_not_unicode_whitespace() {
+        // The valid neighbours, unchanged: every member of `S`, at either end, still
+        // collapses away and the axiom is read.
+        for padded in ["2", " 2 ", "\t2\n", "\r\n 2 \t", "+2"] {
+            assert!(
+                parse_cardinality(padded).is_ok(),
+                "{padded:?} is an xsd:nonNegativeInteger padded only with XML S"
+            );
+        }
+        // The over-acceptance removed: `collapse` never touches U+00A0, so `"\u{A0}2"` is
+        // not in the lexical space and the malformed graph is a named refusal instead of
+        // the silently-read bound `2`.
+        for unicode_ws in [
+            "\u{A0}2",
+            "2\u{A0}",
+            "\u{2003}2",
+            "\u{B}2",
+            "\u{C}2",
+            "\u{3000}2",
+        ] {
+            let err = parse_cardinality(unicode_ws)
+                .err()
+                .unwrap_or_else(|| panic!("{unicode_ws:?} must not be read as a bound"));
+            assert!(
+                matches!(err, EntailError::Parse(_)),
+                "{unicode_ws:?} must refuse as a parse error, got {err:?}"
+            );
+        }
+        // And a genuinely non-numeric bound is still refused, so the change narrowed the
+        // class rather than replacing the check.
+        assert!(parse_cardinality("two").is_err());
+    }
+
+    /// `owl:hasSelf` reads a truth value only from a literal `xsd:boolean` admits.
+    #[test]
+    fn has_self_reads_a_truth_value_only_from_the_boolean_lexical_space() {
+        // The valid neighbours: the four lexical forms, with XML `S` padding, all decode.
+        for truthy in ["true", " true ", "\ttrue\n", "1", "\r\n1", "false", "0 "] {
+            assert!(
+                !parse_has_self(truthy)
+                    .boundaries()
+                    .contains(&Construct::UnrecognizedTerm),
+                "{truthy:?} is in the xsd:boolean lexical space"
+            );
+        }
+        // The over-acceptance removed: U+00A0 is not collapsed away, so the literal is not
+        // a boolean and the restriction becomes the opaque reading under its own named
+        // boundary rather than a guessed `∃r.Self`.
+        for not_boolean in ["\u{A0}true", "true\u{A0}", "\u{2003}1", "yes"] {
+            assert!(
+                parse_has_self(not_boolean)
+                    .boundaries()
+                    .contains(&Construct::UnrecognizedTerm),
+                "{not_boolean:?} is not in the xsd:boolean lexical space"
+            );
+        }
+    }
 }

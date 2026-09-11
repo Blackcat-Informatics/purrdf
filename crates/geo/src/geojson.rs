@@ -94,6 +94,17 @@ use crate::json::{self, JsonValue};
 ///
 /// An empty or whitespace-only lexical form is the empty geometry
 /// (Requirement 27), represented as an empty `GeometryCollection`.
+/// "Whitespace" is RFC 8259 §2's insignificant whitespace,
+///
+/// > `ws = *( %x20 / %x09 / %x0A / %x0D )`
+///
+/// — the same four code points [`crate::json`]'s scanner skips between tokens,
+/// and not the twenty-six of [`char::is_whitespace`]. The two must be the same
+/// set or this function contradicts the parser it delegates to: U+00A0 is not
+/// `ws`, so `"\u{A0}{\"type\":\"Point\",\"coordinates\":[1,2]}"` has always been
+/// malformed JSON here, and a wider test would have made the same scalar mean
+/// "empty geometry" when it stood alone. See [`crate::wkt::parse`] for the full
+/// argument; this is the GeoJSON half of the identical decision.
 ///
 /// # Errors
 ///
@@ -111,7 +122,12 @@ pub fn parse(lexical: &str, crs: &Crs) -> Result<GeometryLiteral, GeoError> {
 /// The geometry a lexical form denotes, before a coordinate reference system is
 /// attached to it.
 fn geometry_of(lexical: &str) -> Result<Geometry, GeoError> {
-    if lexical.trim().is_empty() {
+    // RFC 8259 §2 `ws = *( %x20 / %x09 / %x0A / %x0D )`, byte-tested and so
+    // exact over UTF-8 (no member is above 0x7F, and no byte of a multi-byte
+    // sequence is below 0x80). `purrdf_iri::terminals::is_ws` is the workspace's
+    // one transcription of that four-member set; JSON and the Turtle/SPARQL
+    // grammars enumerate it independently and arrive at the same four.
+    if lexical.bytes().all(purrdf_iri::terminals::is_ws) {
         // Requirement 27. See the module docs for why the empty geometry is a
         // collection rather than a `POINT EMPTY`.
         return Ok(Geometry::empty(
@@ -744,6 +760,46 @@ mod tests {
         assert!(
             !parsed(r#"{"type":"Point","coordinates":[1,2]}"#).is_empty(),
             "a real geometry is not empty"
+        );
+    }
+
+    /// "Whitespace-only" is RFC 8259 §2 `ws = *( %x20 / %x09 / %x0A / %x0D )`,
+    /// the four code points [`crate::json`]'s scanner skips — not the
+    /// twenty-six of [`char::is_whitespace`].
+    ///
+    /// The two have to be the same set or this crate contradicts itself: the
+    /// JSON scanner never skipped U+00A0, so a literal with one in front of an
+    /// object has always been malformed, and the `str::trim` this function once
+    /// used called the same scalar "an empty geometry" when it stood alone.
+    /// Pinned in both directions — the refusal vectors below, and every run of
+    /// the four still parsing.
+    #[test]
+    fn only_rfc_8259_ws_makes_a_geojson_literal_empty() {
+        // Refusal vectors: Unicode whitespace RFC 8259 does not name.
+        for outside_ws in [
+            "\u{a0}",   // NO-BREAK SPACE
+            "\u{2028}", // LINE SEPARATOR
+            "\u{3000}", // IDEOGRAPHIC SPACE
+            "\u{c}",    // FORM FEED — JSON's `ws` does not name it
+            " \u{a0} ", // mixed with the real thing
+        ] {
+            let _ = refusal(outside_ws);
+        }
+        // The consistency this buys: the same scalar ahead of a real geometry
+        // was always refused by the JSON scanner, and still is.
+        let _ = refusal("\u{a0}{\"type\":\"Point\",\"coordinates\":[1,2]}");
+        // The VALID neighbours: every run of the four is still empty…
+        for empty in ["", " ", "\t", "\r", "\n", "\r\n", "\t \r\n\t "] {
+            assert!(
+                parsed(empty).is_empty(),
+                "{empty:?} must still denote the empty geometry"
+            );
+        }
+        // …and a real geometry padded with them still parses, so narrowing the
+        // empty test refused nothing the scanner accepted.
+        assert!(
+            !parsed(" \t\r\n{\"type\":\"Point\",\"coordinates\":[1,2]}\n ").is_empty(),
+            "a padded geometry is still a geometry"
         );
     }
 
