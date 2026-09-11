@@ -59,6 +59,12 @@
 //!   number, and the last rows reach past the end), one naming every verse a
 //!   `u64` can spell, and one too malformed to read. All three are data the
 //!   model carries out, not refusals.
+//! * **A concordance subsection, and an escaped pipe.** The last rows sit
+//!   under a heading of their own inside the concordance, so they are citation
+//!   rows by containment rather than by the innermost heading, and each
+//!   divides two source paths inside one cell with `\|` — the pipe that is
+//!   content rather than a delimiter. Both put the cell scan's escape handling
+//!   on the measured path instead of only in the vectors.
 
 use std::fmt::Write as _;
 use std::hint::black_box;
@@ -102,6 +108,10 @@ const ROW_EVERY: usize = 8;
 const ROW_VERSES: u64 = 3;
 /// How many rows name verses wholly past the document's end, lifting nothing.
 const ROWS_PAST_THE_END: u64 = 4;
+/// How many rows sit under the concordance's own subsection rather than
+/// directly under its heading, and so are read as citations by containment
+/// alone. Each divides two paths inside one cell with an escaped pipe.
+const NESTED_ROWS: u64 = 4;
 
 /// The words the generated prose is built from. Small and fixed, so a line is
 /// reproducible by hand from its index.
@@ -215,6 +225,32 @@ fn concordance(text: &mut String, units: usize) {
         ),
     );
     text.push_str("| overview | `canon/index.md` | `anchor-overview` |\n");
+    nested_rows(text);
+}
+
+/// The concordance's own subsection, and the rows under it.
+///
+/// They are inside the concordance by **containment**: no concordance
+/// heading is the innermost section in force at their lines, and the law
+/// reads them as citation rows all the same. Each divides two source paths
+/// inside one cell with `\|`, the pipe that is content rather than a
+/// delimiter, so the cell scan sees an escape on the hot path rather than
+/// only in the vectors.
+fn nested_rows(text: &mut String) {
+    text.push_str(
+        "\n### Later hands\n\nRows a second survey carried over, kept under a heading of their own.\n\n",
+    );
+    text.push_str("| Verses | Canon source | Anchors |\n|---|---|---|\n");
+    for row in 0..NESTED_ROWS {
+        let first = row * ROW_EVERY as u64 * 3 + 2;
+        let last = first + ROW_VERSES - 1;
+        put(
+            text,
+            format_args!(
+                "| {first}\u{2013}{last} | `canon/later-{row}.md` \\| `canon/index.md` | `later-anchor-{row}` |\n"
+            ),
+        );
+    }
 }
 
 /// Appends formatted text. Writing to a `String` is infallible — the only
@@ -276,6 +312,16 @@ fn check(units: usize, model: &Document<'_>) {
         model.malformed_rows().len(),
         1,
         "the unreadable row is carried out, not dropped"
+    );
+    assert_eq!(
+        model
+            .citations()
+            .iter()
+            .filter(|c| c.anchors().iter().any(|a| a.starts_with("later-anchor-")))
+            .filter(|c| c.sources().len() == 2 && !c.lifted().is_empty())
+            .count(),
+        NESTED_ROWS as usize,
+        "the subsection's rows lift by containment, and the escaped pipe keeps both paths of each"
     );
 }
 

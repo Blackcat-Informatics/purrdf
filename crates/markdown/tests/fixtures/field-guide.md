@@ -64,3 +64,14 @@ Every anchor named below is a node of the atlas, not of this guide.
 | 1–3 | `atlas/outer-reefs.logic.ttl` | `reef-shelf`, `tide-line` |
 | 3–5 | `atlas/inner-lagoon.logic.ttl`; `atlas/outer-reefs.logic.ttl` | `lagoon-floor` (prose); `salt-pan` |
 | 7–9 | `atlas/tide-tables.logic.ttl` | `spring-tide`, `neap-tide` |
+
+### Beds surveyed twice
+
+Two beds were walked in different seasons and the atlas kept a file for
+each walk. Where a row names both, the pipe that divides them is written
+`\|`, so that the column it sits in is not cut in half by it.
+
+| Verses | Canon source | Anchors |
+|---|---|---|
+| 4–5 | `atlas/inner-lagoon.logic.ttl` \| `atlas/salt-pans.logic.ttl` | `pan-crust` |
+| 6 | `atlas/tide-tables.logic.ttl` | `marker-stone` |

@@ -84,7 +84,14 @@
 //!
 //! A `## Concordance` table (`| Verses | Canon source | Anchors |`)
 //! lifts into citation triples from each verse in a range to its
-//! anchors. Each row's lift onto one verse is also its own
+//! anchors. *Inside* the concordance is containment, not innermost: a
+//! concordance organised into subsections holds its rows at a depth, and
+//! a row at **any** depth under the heading is a citation row, while a
+//! table no concordance section holds is structure and lifts nothing. A
+//! row's cells are delimited by its **unescaped** pipes only — `\|` is a
+//! literal `|` in a cell and `\\` a literal `\`, and any other backslash
+//! is content — so a path or a note may carry a pipe. Each row's lift
+//! onto one verse is also its own
 //! content-addressed **citation node**, which `rdf:reifies` the RDF 1.2
 //! triple term `<<( <unit> <cites> <anchor> )>>` and carries that row's
 //! source paths — so a verse two rows cover keeps each row's paths

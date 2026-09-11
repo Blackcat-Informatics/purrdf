@@ -468,7 +468,9 @@ impl Profile {
              a continuation snaps backward to a line start, else to a scalar boundary, never before the unit's start\n\
              never inside a scalar ; never across a heading\n\
              concordance section heading Concordance, ASCII case-insensitive\n\
+             a table row lifts when a concordance section is in force at any depth, by containment\n\
              concordance row | verses | canon sources | anchors |\n\
+             cells are delimited by unescaped | only ; \\| is a pipe, \\\\ is a backslash, any other \\ is content\n\
              verse range n, n-n, or n\u{2013}n ; both endpoints u64, the first at or under the last\n\
              a cell lifts its backticked names only, in the order written\n\
              a row that lifts nothing here and a row too malformed to read are data, never a refusal\n\

@@ -6,9 +6,16 @@
 //!
 //! Everything Markdown-specific in this crate is here — ATX headings,
 //! the U+2042 movement marker, `N.` verses, blank-line paragraphs,
-//! horizontal rules, the `## Concordance` table — and nothing else in
-//! the crate reads a line. See [`crate::dialect`] for the contract this
-//! reader satisfies.
+//! horizontal rules, the `## Concordance` table and the GFM escapes its
+//! cells are read through — and nothing else in the crate reads a line.
+//! See [`crate::dialect`] for the contract this reader satisfies.
+//!
+//! Two of the concordance's rules are containment rules rather than
+//! line rules, and both are places where a wrong reading loses a row in
+//! silence rather than refusing it: a table row is a citation row when
+//! the concordance is in force at **any** depth above it
+//! ([`Walker::in_concordance`]), and a row's cells are delimited by its
+//! **unescaped** pipes only ([`cells`]).
 
 use std::sync::Arc;
 
@@ -195,13 +202,34 @@ impl Walker {
             .collect();
     }
 
+    /// Whether a concordance section is **in force**: whether *any*
+    /// section still open is the concordance heading, and not merely the
+    /// innermost one.
+    ///
+    /// The law reads a row *inside* the concordance as a citation, and
+    /// inside is containment. A concordance organised into
+    /// subsections — one per volume, one per surveyor — holds its rows
+    /// at a depth, and every one of them is still inside the concordance
+    /// section's own span. Asking only which section is innermost is the
+    /// reading that loses every one of those rows, and loses them in
+    /// **silence**: a row read as nothing is neither a citation nor a
+    /// defect, so no surface of the model reports it and the author
+    /// never learns the table did not lift.
+    ///
+    /// The stack holds exactly the sections in force, so the containment
+    /// question is answered by looking at all of it rather than at its
+    /// top. A heading at or above the concordance's own level pops it
+    /// ([`Walker::open_section`]), so a table after the concordance has
+    /// closed still lifts nothing — which is the other half of the law,
+    /// and the one this must not trade away.
     fn in_concordance(&self) -> bool {
         self.stack
-            .last()
-            .is_some_and(|&i| self.sections[i].heading.eq_ignore_ascii_case(CONCORDANCE))
+            .iter()
+            .any(|&i| self.sections[i].heading.eq_ignore_ascii_case(CONCORDANCE))
     }
 
-    /// One `| a | b | c |` line inside a concordance section.
+    /// One `| a | b | c |` line inside a concordance section, at any
+    /// depth under its heading.
     ///
     /// A row that states a verse range and three cells is a citation.
     /// A row that does not is either the table's own frame — its header
@@ -211,6 +239,11 @@ impl Walker {
     /// only of a row that could not be read as data. Everything else is
     /// reported, because a row that names verses and anchors and lifts
     /// nothing is exactly the failure a silent parser hides.
+    ///
+    /// A subsection of the concordance starts its own table, so its
+    /// header line is the row at index 0 of that table: the run of table
+    /// rows is counted from the last line that was not one, and a
+    /// heading is not one.
     fn table_row(&mut self, line: &str, start: usize, end: usize) {
         if !self.in_concordance() {
             return;
@@ -298,12 +331,72 @@ fn verse_number(line: &str) -> Option<u64> {
     line[..digits].parse().ok()
 }
 
-/// The cells of a `| a | b | c |` row, trimmed.
+/// The cells of a `| a | b | c |` row: the fields its **unescaped** `|`
+/// characters delimit, each unescaped and then trimmed.
+///
+/// # The cell-escape law
+///
+/// A `\` escapes the character after it, and exactly two escapes are
+/// recognized:
+///
+/// * `\|` is a literal `|` and is no delimiter at all — not between two
+///   cells, and not as the row's own leading or trailing delimiter. It
+///   is GFM's spelling of a pipe inside a table cell, so a row carrying
+///   one is ordinary input rather than a hostile one.
+/// * `\\` is a literal `\`, which is what keeps `\\|` a delimiter
+///   standing after a literal backslash rather than an escaped pipe.
+///
+/// A `\` before anything else is content and keeps its backslash: `\n`
+/// in a cell is the two characters `\` and `n`, and a `\` at the end of
+/// the line escapes nothing and is content. Nothing else about a cell is
+/// interpreted — this is the table's own escape, not Markdown's inline
+/// grammar, and the cell's value is what the verse range and the
+/// backticked names are then read from.
+///
+/// Splitting on every `|` regardless is the silent failure this exists
+/// to close, and it is worse than a wrong answer: such a row still
+/// states three cells, so it still reads as a citation and still lifts
+/// onto its verse, and what it lifts is the wreck of two cells cut in
+/// the wrong places. It is neither unmatched nor malformed, so nothing
+/// anywhere reports it.
 fn cells(line: &str) -> Vec<String> {
-    let t = line.trim();
-    let t = t.strip_prefix('|').unwrap_or(t);
-    let t = t.strip_suffix('|').unwrap_or(t);
-    t.split('|').map(|c| c.trim().to_owned()).collect()
+    let body = line.trim();
+    // The row was recognized by its opening `|`, so that one is a
+    // delimiter by construction and can be no escaped pipe.
+    let body = body.strip_prefix('|').unwrap_or(body);
+    let mut out: Vec<String> = Vec::new();
+    let mut cell = String::new();
+    let mut escaped = false;
+    // Whether the last character read was a delimiter: how the row's
+    // optional trailing `|` is told from an empty final cell.
+    let mut closed = false;
+    for c in body.chars() {
+        closed = false;
+        match (escaped, c) {
+            (true, '|' | '\\') => cell.push(c),
+            (true, other) => {
+                cell.push('\\');
+                cell.push(other);
+            }
+            (false, '\\') => {
+                escaped = true;
+                continue;
+            }
+            (false, '|') => {
+                out.push(std::mem::take(&mut cell).trim().to_owned());
+                closed = true;
+            }
+            (false, other) => cell.push(other),
+        }
+        escaped = false;
+    }
+    if escaped {
+        cell.push('\\');
+    }
+    if !closed {
+        out.push(cell.trim().to_owned());
+    }
+    out
 }
 
 /// `|---|---|---|`, `|:--|--:|`: the line that separates a table's
@@ -373,6 +466,40 @@ mod tests {
             vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]
         );
         assert_eq!(cells("| 2–5 | `x` | `y` |").len(), 3);
+    }
+
+    #[test]
+    fn a_row_splits_at_its_unescaped_pipes_and_keeps_the_escaped_ones_as_content() {
+        // `\|` is a pipe in a cell, and never a delimiter — between
+        // cells, or as the row's own leading or trailing one.
+        assert_eq!(
+            cells(r"| 1 | `a\|b.ttl` | `x` |"),
+            vec!["1".to_owned(), "`a|b.ttl`".to_owned(), "`x`".to_owned()]
+        );
+        assert_eq!(cells(r"| a \| b |"), vec!["a | b".to_owned()]);
+        assert_eq!(
+            cells(r"| a | b\|"),
+            vec!["a".to_owned(), "b|".to_owned()],
+            "an escaped pipe at the line's end is content, not the closing delimiter"
+        );
+        // `\\` is a backslash, so the pipe after it still delimits.
+        assert_eq!(
+            cells(r"| a\\ | b |"),
+            vec![r"a\".to_owned(), "b".to_owned()]
+        );
+        // Any other backslash is content, backslash and all, and one at
+        // the end of the line escapes nothing.
+        assert_eq!(
+            cells(r"| a\nb | c\ |"),
+            vec![r"a\nb".to_owned(), r"c\".to_owned()]
+        );
+        assert_eq!(cells(r"| a | b\"), vec!["a".to_owned(), r"b\".to_owned()]);
+        // And a row with no backslash in it splits exactly as before.
+        assert_eq!(
+            cells("| 2\u{2013}5 | `x` | `y` |"),
+            vec!["2\u{2013}5".to_owned(), "`x`".to_owned(), "`y`".to_owned()]
+        );
+        assert_eq!(cells("|"), vec![String::new()]);
     }
 
     #[test]

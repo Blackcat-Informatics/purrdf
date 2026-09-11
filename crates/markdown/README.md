@@ -85,7 +85,15 @@ set of N-Triples lines (valid Turtle):
 - **Citations from a concordance table**: a `## Concordance` section whose
   rows are `| Verses | Canon source | Anchors |` lifts into a `cites` triple
   from every verse in the row's range (`2–5`, `2-5`, or `4`) to each
-  backticked anchor. Each row's lift onto one verse is also its own
+  backticked anchor. *Inside* the concordance is containment, not
+  innermost: a concordance organised into subsections — one per volume, one
+  per hand — holds its rows at a depth, and a row at **any** depth under the
+  heading is a citation row, while a table no concordance section holds is
+  structure and lifts nothing. A row's cells are delimited by its
+  **unescaped** pipes only: `\|` is a literal `|` in a cell (GFM's own
+  spelling) and `\\` a literal `\`, and a backslash before anything else is
+  content, so a canon source path or a note beside an anchor may carry a
+  pipe. Each row's lift onto one verse is also its own
   content-addressed **citation node**, which `rdf:reifies` the RDF 1.2
   triple term `<<( <unit> <cites> <anchor> )>>` and carries that row's
   backticked paths as `canonSource` — so a verse two rows cover keeps each
@@ -125,18 +133,18 @@ Sliced under `Vocabulary::under("urn:example:doc:")` with the profile
 shortened to its first eight characters):
 
 ```text
-<urn:example:doc:unit:sha256:fc637034…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:document> <urn:example:book> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:section> <urn:example:doc:section:sha256:4beebcd0…> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:f402e0a3…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:document> <urn:example:book> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:section> <urn:example:doc:section:sha256:18115fa1…> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 ```
 
 The byte span and the scalar span differ by two because the document's
@@ -160,9 +168,9 @@ row's own **citation node**, which reifies the edge and carries the row's
 source, and then the asserted edge itself.
 
 ```text
-<urn:example:doc:citation:sha256:b162a72d…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
-<urn:example:doc:citation:sha256:b162a72d…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
-<urn:example:doc:unit:sha256:fc637034…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
+<urn:example:doc:citation:sha256:b7e1a12b…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
+<urn:example:doc:citation:sha256:b7e1a12b…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
+<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
 ```
 
 `<<( … )>>` is the RDF 1.2 **triple term** — the non-asserting form, the

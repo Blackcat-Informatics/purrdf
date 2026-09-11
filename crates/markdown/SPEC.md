@@ -221,9 +221,23 @@ ASCII case — in practice the line `## Concordance` — is a **concordance
 section**. Table rows inside it are read as citations; table rows
 anywhere else are structure and are read as nothing.
 
+**Inside is containment (§1.1), not innermost.** A concordance MAY be
+organised into subsections — one per volume, one per surveyor — and the
+rows under such a subsection are inside the concordance section's span
+exactly as the rows directly under its heading are. An implementation
+MUST read a table row as a citation row whenever a concordance section is
+in force at that line, at **any** depth, and MUST NOT ask only which
+section is innermost. A row lost to the innermost reading is lost in
+silence: it is read as nothing, so it is neither a citation nor a
+malformed row, and no surface reports it — which is the one failure this
+law forbids by name. A heading at or above the concordance's own level
+closes it, and the rows of a table after that are structure again; an
+implementation MUST NOT lift them.
+
 A row is `| verses | canon sources | anchors |`, in that column order. Its
-cells are the `|`-separated fields of the trimmed line with one leading
-and one trailing `|` removed, each trimmed.
+cells are the fields of the trimmed line delimited by its **unescaped**
+`|` characters, with one leading and one trailing unescaped `|` removed,
+each **unescaped** and then trimmed (§4.1).
 
 * The **verse range** cell is `4`, `2-5`, or `2–5` with an en dash
   (U+2013). Both endpoints MUST parse as `u64` and the first MUST be at or
@@ -245,7 +259,35 @@ dropped in silence either. An implementation MUST report malformed rows
 as data, so that a consumer can name them, count them, or fail its own
 build on them.
 
-### 4.1 The multi-document canon
+### 4.1 The cell-escape law
+
+A `\` inside a table row escapes the character after it. Exactly two
+escapes are recognized, and an implementation MUST recognize both and no
+others:
+
+* `\|` is a literal `|`. It is **not** a delimiter — neither between two
+  cells nor as the row's own leading or trailing delimiter — and the cell
+  holding it carries a `|`. This is GFM's own spelling of a pipe inside a
+  table cell, so a row carrying one is ordinary input.
+* `\\` is a literal `\`, which is what keeps the `|` of `\\|` a delimiter
+  standing after a literal backslash rather than an escaped pipe.
+
+A `\` before any other character is ordinary content and keeps its
+backslash: `\n` in a cell is the two characters `\` and `n`, and a `\` at
+the end of a row's line escapes nothing and is content. Nothing else about
+a cell is interpreted; this is the table's escape, not Markdown's inline
+grammar.
+
+A cell's **value** is the text its delimiters bound with those two escapes
+resolved, then trimmed. The verse range and the backticked names are read
+from that value, so a canon source path or a note MAY carry a `|`.
+Splitting a row on every `|` regardless of escape is non-conforming, and
+it fails silently rather than loudly: such a row still states three cells,
+so it still reads as a citation and still lifts onto its verse, carrying
+the wreck of two cells cut in the wrong places. It is neither unmatched
+nor malformed, so nothing reports it.
+
+### 4.2 The multi-document canon
 
 A citation lifts onto the **first piece** of each verse of its range that
 this document carries: a citation states one fact about a verse, not one
@@ -275,7 +317,7 @@ states no more runs than it lifted verses, plus one, so the cost of
 answering a row is bounded by the document. A row that lifted nothing at
 all states its whole range as one run.
 
-### 4.2 The anchor lift
+### 4.3 The anchor lift
 
 Where the profile declares a **canon base**, an anchor is lifted to the
 IRI `base ++ anchor` — **pure concatenation**, never RFC 3986 reference
@@ -326,8 +368,9 @@ heading, movement, verse, paragraph, rule and table-row forms, the `u64`
 verse bound, the trimmed-line rule that makes CRLF state its LF twin's
 structure, and the byte-order-mark rule; `max_bytes`; `overlap`; the
 split law with its cut, resume and snap clauses; the concordance law —
-the trigger heading, the column order, the verse-range spellings, the
-backtick rule, the report-never-refuse rule, and the anchor lift with its
+the trigger heading, the containment reading of *inside it*, the column
+order, the cell-escape law, the verse-range spellings, the backtick rule,
+the report-never-refuse rule, and the anchor lift with its
 containment test; the three identity formulas; the digest algorithm tag;
 and the emission law of §11, term list and reification shape included.
 
@@ -581,7 +624,7 @@ declared canon base that is no IRI reference at all — the empty base
 among them — or is one carrying no scheme; and an anchor that mints no
 lawful IRI under a declared canon base or mints one outside it. An
 implementation MUST NOT refuse anything else, and in particular MUST NOT
-refuse a concordance row that lifts nothing here (§4.1) or one that is
+refuse a concordance row that lifts nothing here (§4.2) or one that is
 malformed (§4).
 
 **Every refusal is stated before output, and the projection is
@@ -593,7 +636,7 @@ The projection is total only because every law it applies has already
 been answered for on these exact bytes, and a profile supplied at
 projection time is a law nothing answered for: a document admitted with
 no canon base had its anchors walked against nothing, because none are
-minted (§4.2), so projecting it under a base would mint the very IRIs
+minted (§4.3), so projecting it under a base would mint the very IRIs
 the anchor lift exists to check. That is a containment bypass spelled
 entirely in admitted calls, and the projection's signature is what
 closes it.

@@ -314,8 +314,8 @@ fn every_heading_and_movement_starts_a_section_with_its_level_ordinal_parent_and
     let sections = sections(&claims);
     assert_eq!(
         sections.len(),
-        6,
-        "title, two movements, field notes, tide tables, concordance"
+        7,
+        "title, two movements, field notes, tide tables, concordance, and the concordance's own subsection"
     );
     let title = sections[0];
     assert_eq!(
@@ -377,6 +377,16 @@ fn every_heading_and_movement_starts_a_section_with_its_level_ordinal_parent_and
         Some(&*format!("\"Concordance\"^^<{}>", v().dt_heading))
     );
     assert_eq!(concordance.span.map(|s| s.1), Some(GUIDE.len() as u64));
+    // The concordance's own subsection is deeper, so it nests under the
+    // concordance rather than closing it — and the concordance's span
+    // still holds every row of it.
+    let beds = sections[6];
+    assert_eq!(integer(beds, &v().level), Some(3));
+    assert_eq!(
+        object(beds, &v().parent).as_deref(),
+        Some(&*format!("<{}>", concordance.subject))
+    );
+    assert_eq!(beds.span.map(|s| s.1), Some(GUIDE.len() as u64));
 }
 
 #[test]
@@ -972,7 +982,11 @@ fn a_citation_node_is_content_addressed_over_the_row_and_the_unit_it_lifted_onto
             assert!(seen.insert(minted), "one node per (row, unit)");
         }
     }
-    assert_eq!(seen.len(), 8, "3 + 3 + 2 lifts");
+    assert_eq!(
+        seen.len(),
+        11,
+        "3 + 3 + 2 lifts, then 2 + 1 in the subsection"
+    );
 
     // The pair is what is addressed, and both halves of it are load
     // bearing: one row over two verses is two nodes, and two rows over
@@ -1337,8 +1351,8 @@ fn the_whole_guide_slices_to_its_recorded_counts() {
     assert_eq!(verses, 8);
     assert_eq!(
         all.len(),
-        8 + 4,
-        "the headnote, two notes, and the concordance prose are paragraphs"
+        8 + 5,
+        "the headnote, two notes, the concordance prose, and its subsection's prose are paragraphs"
     );
     let count = |predicate: &str| -> usize {
         all.iter()
@@ -1352,26 +1366,29 @@ fn the_whole_guide_slices_to_its_recorded_counts() {
             .filter(|(_, p, _)| p == predicate)
             .count()
     };
-    // Two anchors per row, and seven of the guide's verses are lifted
-    // onto by a row; verse 3 is lifted onto by two.
-    assert_eq!(count(&v().cites), 16);
-    assert_eq!(count(&v().scalar_start), 12);
-    assert_eq!(count(&v().scalar_end), 12);
-    assert_eq!(count(&v().content_digest), 12);
+    // Two anchors per row in the first table and one in each row of the
+    // subsection's; every verse but 2 is lifted onto, verse 3 by two
+    // rows, and verses 4 and 5 by two.
+    assert_eq!(count(&v().cites), 19);
+    assert_eq!(count(&v().scalar_start), 13);
+    assert_eq!(count(&v().scalar_end), 13);
+    assert_eq!(count(&v().content_digest), 13);
     assert_eq!(
         count(&v().canon_source),
         0,
         "no source path hangs on a unit any more"
     );
-    // Eight (row, unit) lifts: 3 + 3 + 2. Each states one reification
-    // per anchor, and one path per source of its own row.
+    // Eleven (row, unit) lifts: 3 + 3 + 2 from the first table, and
+    // 2 + 1 from the subsection's, which the innermost reading lost
+    // whole. Each states one reification per anchor, and one path per
+    // source of its own row.
     let rows: BTreeSet<String> = all.iter().flat_map(|u| citation_nodes(u)).collect();
-    assert_eq!(rows.len(), 8);
-    assert_eq!(on_citations(purrdf_markdown::RDF_REIFIES), 16);
+    assert_eq!(rows.len(), 11);
+    assert_eq!(on_citations(purrdf_markdown::RDF_REIFIES), 19);
     assert_eq!(
         on_citations(&v().canon_source),
-        11,
-        "3\u{d7}1 + 3\u{d7}2 + 2\u{d7}1: one more than the flat form stated, which is the loss repaired"
+        16,
+        "3\u{d7}1 + 3\u{d7}2 + 2\u{d7}1 + 2\u{d7}2 + 1\u{d7}1: the escaped pipe keeps both paths of the row that names two"
     );
     assert_eq!(
         integer(&claims[0], &v().byte_length),
@@ -2640,14 +2657,24 @@ fn the_lattice_answers_which_unit_holds_a_byte_which_units_a_range_touches_and_w
     assert_eq!(document.units_under(tables).count(), 4);
     assert_eq!(
         document.units_under(&document.sections()[5]).count(),
+        2,
+        "the concordance prose and its subsection's prose; no table row is a unit"
+    );
+    assert_eq!(
+        document.units_under(&document.sections()[6]).count(),
         1,
-        "the concordance prose; its table rows are no unit"
+        "the subsection's own prose"
     );
 
     // The section tree, read off the levels.
     assert_eq!(title.children(), &[1, 2, 3, 5]);
     assert_eq!(notes.children(), &[4]);
     assert_eq!(tables.children(), [0_usize; 0]);
+    assert_eq!(
+        document.sections()[5].children(),
+        &[6],
+        "the concordance holds its subsection"
+    );
     assert_eq!(
         document
             .child_sections(title)
@@ -2819,7 +2846,11 @@ fn a_content_anchor_quotes_a_unit_exactly_and_snaps_its_context_to_scalars_and_t
 fn a_row_states_its_own_anchors_beside_its_own_sources_which_the_flat_projection_cannot() {
     let document = model(GUIDE, &v1());
     let rows = document.citations();
-    assert_eq!(rows.len(), 3, "three data rows; the frame is not one");
+    assert_eq!(
+        rows.len(),
+        5,
+        "three data rows, then the subsection's two; neither table's frame is one"
+    );
     assert_eq!(rows[0].verses(), (1, 3));
     assert_eq!(rows[0].anchors(), ["reef-shelf", "tide-line"]);
     assert_eq!(rows[0].sources(), ["atlas/outer-reefs.logic.ttl"]);
@@ -3017,6 +3048,236 @@ fn a_row_too_malformed_to_read_is_reported_as_data_and_the_rows_beside_it_still_
         "the readable row for verse 2 lifts, the malformed ones lift nothing"
     );
     parses_whole(&claims);
+}
+
+/// The rows both halves of the containment vector read, written once so
+/// that the flat document and the subsectioned one differ in nothing but
+/// the heading between the prose and the table.
+const NESTED_ROWS: &str = "| Verses | Canon source | Anchors |\n|---|---|---|\n\
+                           | 1\u{2013}3 | `atlas/a.ttl` | `alpha` |\n\
+                           | 2 | `atlas/b.ttl` | `beta` |\n";
+
+/// One row's claim and its lift, with no node identity in it: the verse
+/// range, the sources, the anchors, and the verses it lifted onto.
+type LiftedRow = ((u64, u64), Vec<String>, Vec<String>, Vec<u64>);
+
+/// What every row of a document claims and what it lifted: the part of a
+/// concordance two differently-spelled documents must agree on.
+fn lifted_rows(document: &Document<'_>) -> Vec<LiftedRow> {
+    document
+        .citations()
+        .iter()
+        .map(|row| {
+            (
+                row.verses(),
+                row.sources().to_vec(),
+                row.anchors().to_vec(),
+                row.lifted().iter().map(|&(verse, _)| verse).collect(),
+            )
+        })
+        .collect()
+}
+
+/// §4: *inside* the concordance is §1.1's containment, not the innermost
+/// section. A concordance organised into subsections — one per volume,
+/// one per surveyor — must lift exactly what the same rows lift written
+/// flat, because the rows are inside the concordance's span either way.
+///
+/// The failure this closes is silent, which is why the assertion is
+/// equality with the flat twin rather than a count: under the innermost
+/// reading every row of the subsectioned document is read as nothing, so
+/// it is neither a citation nor a malformed row, and the model states
+/// `citations=0 malformed=0 unmatched=0` — a document that looks in every
+/// report exactly like one whose concordance was empty.
+#[test]
+fn a_concordance_with_a_subsection_lifts_exactly_what_the_flat_form_lifts() {
+    let verses = "# T\n\n1. One.\n\n2. Two.\n\n3. Three.\n\n## Concordance\n\n";
+    let flat = format!("{verses}{NESTED_ROWS}");
+    let subsectioned = format!("{verses}### Book one\n\n{NESTED_ROWS}");
+    let flat = model(&flat, &v1());
+    let subsectioned = model(&subsectioned, &v1());
+
+    assert_eq!(lifted_rows(&subsectioned), lifted_rows(&flat));
+    assert_eq!(
+        lifted_rows(&flat).len(),
+        2,
+        "and it is not that both lifted nothing"
+    );
+    assert_eq!(
+        subsectioned.citations()[0].lifted(),
+        [(1, 0), (2, 1), (3, 2)],
+        "onto the very units the flat document lifts onto"
+    );
+    assert!(
+        subsectioned.malformed_rows().is_empty(),
+        "and no row of it was read as a defect either"
+    );
+    assert_eq!(subsectioned.unmatched_citations().count(), 0);
+}
+
+/// The same law at a depth the innermost reading cannot reach even by
+/// accident, and with the subsection's own table carrying its own frame.
+#[test]
+fn a_row_two_levels_under_the_concordance_heading_still_lifts() {
+    let text = "# T\n\n1. One.\n\n## Concordance\n\n### Book one\n\n\u{2042} *the first hand*\n\n\
+                | Verses | Canon source | Anchors |\n|---|---|---|\n\
+                | 1 | `atlas/a.ttl` | `alpha` |\n";
+    let document = model(text, &v1());
+    assert_eq!(document.citations().len(), 1);
+    assert_eq!(document.citations()[0].lifted(), [(1, 0)]);
+    assert_eq!(document.citations()[0].anchors(), ["alpha"]);
+    assert!(
+        document.malformed_rows().is_empty(),
+        "the subsection's table carries its own header and delimiter, and both are frame"
+    );
+    let claims = slice_of(text, GUIDE_ID, &v1()).expect("slices");
+    assert_eq!(
+        verse_one_cites(&claims),
+        vec![format!("\"alpha\"^^<{}>", v().dt_anchor)]
+    );
+    parses_whole(&claims);
+}
+
+/// The neighbouring valid case, and the half of §4 the containment
+/// reading must not trade away: a table no concordance section **holds**
+/// lifts nothing at all. Containment is what admits a row, so a table
+/// before the concordance, a table in the section whose heading closed
+/// it, and a table under a subsection of *that* section are all
+/// structure — and none of them is a defect either.
+#[test]
+fn a_table_no_concordance_section_holds_lifts_nothing_and_is_no_defect() {
+    let table = |path: &str, anchor: &str| {
+        format!(
+            "| Verses | Canon source | Anchors |\n|---|---|---|\n| 1 | `{path}` | `{anchor}` |\n\n"
+        )
+    };
+    let text = format!(
+        "# T\n\n1. One.\n\n## Tide tables\n\n{}## Concordance\n\n{}## Afterword\n\n{}### Later notes\n\n{}",
+        table("atlas/before.ttl", "not-a-citation"),
+        table("atlas/a.ttl", "alpha"),
+        table("atlas/after.ttl", "nor-this-one"),
+        table("atlas/deeper.ttl", "nor-this-one-either"),
+    );
+    let document = model(&text, &v1());
+    assert_eq!(
+        document.citations().len(),
+        1,
+        "only the row a concordance section holds"
+    );
+    assert_eq!(document.citations()[0].anchors(), ["alpha"]);
+    assert!(
+        document.malformed_rows().is_empty(),
+        "a table elsewhere is structure, and structure is no defect"
+    );
+    let claims = slice_of(&text, GUIDE_ID, &v1()).expect("slices");
+    assert_eq!(
+        verse_one_cites(&claims),
+        vec![format!("\"alpha\"^^<{}>", v().dt_anchor)],
+        "the verse cites what the concordance said and nothing the other tables said"
+    );
+    parses_whole(&claims);
+}
+
+/// §4's cell-escape law: `\|` is a pipe in a cell and never a delimiter,
+/// so the cell's value carries the `|` and the row's other cells are
+/// read at the columns their author wrote them in.
+///
+/// Split on every `|` regardless, this row still states three cells, so
+/// it still reads as a citation and still lifts onto verse 1 — carrying
+/// the wreck of two cells cut in the wrong places, reported by nothing.
+/// That is why the assertions are on the values and not on the count.
+#[test]
+fn an_escaped_pipe_is_a_cell_value_and_never_a_delimiter() {
+    let text = "# T\n\n1. One.\n\n2. Two.\n\n## Concordance\n\n\
+                | Verses | Canon source | Anchors |\n|---|---|---|\n\
+                | 1 | `atlas/a\\|b.ttl` | `alpha` |\n\
+                | 2 | `atlas/c.ttl` \\| `atlas/d.ttl` | `beta` (west \\| east) |\n";
+    let document = model(text, &v1());
+    assert!(
+        document.malformed_rows().is_empty(),
+        "both rows read as citations, cut at the columns their author wrote"
+    );
+    let rows = document.citations();
+    assert_eq!(rows.len(), 2);
+
+    assert_eq!(rows[0].verses(), (1, 1));
+    assert_eq!(
+        rows[0].sources(),
+        ["atlas/a|b.ttl"],
+        "the cell's value carries the literal pipe the author escaped"
+    );
+    assert_eq!(rows[0].anchors(), ["alpha"], "and the anchor is intact");
+
+    assert_eq!(rows[1].verses(), (2, 2));
+    assert_eq!(
+        rows[1].sources(),
+        ["atlas/c.ttl", "atlas/d.ttl"],
+        "a pipe dividing two paths inside one cell keeps both of them in that cell"
+    );
+    assert_eq!(
+        rows[1].anchors(),
+        ["beta"],
+        "prose carrying a pipe beside a backticked anchor lifts nothing, as prose"
+    );
+
+    // And the path travels into the graph with its pipe, on the citation
+    // node of the row that wrote it.
+    let claims = slice_of(text, GUIDE_ID, &v1()).expect("slices");
+    let one = *units(&claims)
+        .iter()
+        .find(|u| integer(u, &v().verse) == Some(1))
+        .expect("verse 1");
+    let node = citation_nodes(one);
+    assert_eq!(
+        citation_objects(one, &node[0], &v().canon_source),
+        vec![format!("\"atlas/a|b.ttl\"^^<{}>", v().dt_path)]
+    );
+    parses_whole(&claims);
+}
+
+/// The rest of the escape law, stated by the edges it has to answer:
+/// `\\` is a literal backslash and the `|` after it still delimits; a `\`
+/// before anything else is content and keeps its backslash; and a `\` at
+/// the end of a row's line escapes nothing, so it becomes content of a
+/// trailing cell rather than swallowing the row's closing delimiter.
+#[test]
+fn the_escape_law_answers_an_escaped_backslash_and_a_trailing_one() {
+    let text = "# T\n\n1. One.\n\n2. Two.\n\n3. Three.\n\n## Concordance\n\n\
+                | Verses | Canon source | Anchors |\n|---|---|---|\n\
+                | 1 | `atlas\\\\a.ttl` | `alpha` |\n\
+                | 2 | `atlas/b\\nc.ttl` | `beta` |\n\
+                | 3 | `atlas/d.ttl` | `gamma` |\\\n";
+    let document = model(text, &v1());
+    assert!(
+        document.malformed_rows().is_empty(),
+        "every one of the three reads as a citation"
+    );
+    let rows = document.citations();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows[0].sources(),
+        ["atlas\\a.ttl"],
+        "`\\\\` is one literal backslash, and the pipe after it still delimited"
+    );
+    assert_eq!(rows[0].anchors(), ["alpha"]);
+    assert_eq!(
+        rows[1].sources(),
+        ["atlas/b\\nc.ttl"],
+        "a backslash before anything else is content, backslash and all"
+    );
+    assert_eq!(rows[2].verses(), (3, 3));
+    assert_eq!(
+        rows[2].sources(),
+        ["atlas/d.ttl"],
+        "a trailing backslash escapes nothing and takes no cell with it"
+    );
+    assert_eq!(rows[2].anchors(), ["gamma"]);
+    assert_eq!(
+        rows[2].lifted(),
+        [(3, 2)],
+        "so the row still lifts onto the verse it names"
+    );
+    parses_whole(&slice_of(text, GUIDE_ID, &v1()).expect("slices"));
 }
 
 // --- the interval relations ----------------------------------------------
@@ -3428,6 +3689,13 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         "U+2042",
         "`## Concordance`",
         "lifts nothing here, and is not an error",
+        // The two containment rules of the concordance, each of which
+        // loses a row in silence when it is read the other way.
+        "**Inside is containment (§1.1), not innermost.**",
+        "at **any** depth",
+        "### 4.1 The cell-escape law",
+        "is a literal `|`",
+        "is a literal `\\`",
         // The emission law, with the shapes the vectors pin.
         "<citation> rdf:reifies <<( <unit> <cites> <anchor> )>>",
         "the RDF 1.2 **triple term**",
