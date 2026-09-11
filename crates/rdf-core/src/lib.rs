@@ -129,14 +129,15 @@ pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::embedding;
 pub use ir::embedding::*;
 pub use ir::{
-    BlankScope, BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION,
-    CanonError, CanonHash, CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff,
-    DatasetSink, DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH,
-    GlobalDictionary, GlobalTermId, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider,
-    MutableDataset, PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization,
-    PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap,
-    PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView,
-    PipelineBundle, PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
+    BlankScope, BudgetExceeded, BundleDigestWork, CANON_CORPUS_DIGEST, CANON_PROFILE_ID,
+    CANON_PROFILE_VERSION, CanonError, CanonHash, CanonScopeName, CanonicalRelabeling,
+    Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink, DeltaDatasetView, DeltaViewId,
+    FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary, GlobalTermId, GraphLayer,
+    GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset, PIPELINE_ROOT_DOMAIN,
+    PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagePart, PageProvider,
+    PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
+    PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle,
+    PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
     QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
     RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError, SubsetPageProvider, TermId,
     TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder, blank_count_view,

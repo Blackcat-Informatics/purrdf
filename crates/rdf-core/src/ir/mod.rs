@@ -89,7 +89,10 @@ pub use paged::{
     PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
     PagedQueryView, SubsetPageProvider,
 };
-pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
+pub use pipeline_bundle::{
+    BundleDigestWork, CanonScopeName, GraphLayer, HandleEntry, HandleKey, PIPELINE_ROOT_DOMAIN,
+    PipelineBundle, PipelineBundleError, PipelineViewBundle,
+};
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, TermId, TermValue};
 

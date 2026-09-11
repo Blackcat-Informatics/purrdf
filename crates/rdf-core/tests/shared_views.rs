@@ -1999,3 +1999,718 @@ fn a_shared_ledger_does_not_move_per_view_admission() {
         .stats();
     assert_eq!(with_ledger, without_ledger);
 }
+
+// ─── Pipeline carriers: the flat bundle and the view bundle agree ─────────────
+
+use purrdf_core::{
+    BundleDigestWork, ContentStore, DatasetProvenance, GraphLayer, OriginKind, PipelineBundle,
+    PipelineBundleError, PipelineViewBundle, QuadHandle, RdfLookaside, RdfLookasideKind,
+    RdfLookasideResource,
+};
+
+const CG1: &str = "http://example.org/carrier/g1";
+const CG2: &str = "http://example.org/carrier/g2";
+const CG3: &str = "http://example.org/carrier/g3";
+const CDECLARED: &str = "http://example.org/carrier/declared";
+const CABSENT: &str = "http://example.org/carrier/absent";
+
+/// A synthetic pipeline-side handle payload. Concrete pipeline types plug into the
+/// same lane; the kernel never learns what they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Note(&'static str);
+
+/// The carrier fixture: two quad-bearing named graphs, a declaration-only named
+/// graph, default-graph rows, one blank LABEL living in two scopes, a co-referent
+/// blank, a triple term, a reifier declaration, a statement annotation and a
+/// direction-and-language literal.
+///
+/// Every one of those is a way the two carriers could disagree: a scope renaming
+/// that conflated two same-label blanks, a statement layer selected by membership
+/// rather than by its own graph slot, a declaration the root forgot, a literal whose
+/// direction did not survive composition.
+fn carrier_fixture() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri(P);
+    let q = b.intern_iri("http://example.org/q");
+    let o = b.intern_iri("http://example.org/o");
+    let g1 = b.intern_iri(CG1);
+    let g2 = b.intern_iri(CG2);
+    let declared = b.intern_iri(CDECLARED);
+    let shared = b.intern_blank("n", BlankScope::DEFAULT);
+    let scoped = b.intern_blank("n", BlankScope(4));
+    let plain = b.intern_literal(RdfLiteral::simple("plain"));
+    let tagged = b.intern_literal(RdfLiteral::language_tagged("hello", "en"));
+    let directional = b.intern_literal(RdfLiteral {
+        direction: Some(RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("مرحبا", "ar")
+    });
+    b.push_quad(shared, p, plain, None);
+    b.push_quad(scoped, p, o, None);
+    b.push_quad(shared, p, directional, Some(g1));
+    let triple = b.intern_triple(shared, p, directional);
+    b.push_quad(scoped, q, triple, Some(g1));
+    let reifier = b.intern_blank("statement", BlankScope(7));
+    b.push_reifier_in_graph(reifier, triple, Some(g1));
+    b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+    b.push_quad(o, p, o, Some(g2));
+    b.declare_named_graph(declared);
+    b.freeze().unwrap()
+}
+
+/// A contribution wholly contained in `graph`, whose blanks reuse the fixture's
+/// LABEL and scopes on purpose: a carrier that renamed scopes carelessly would
+/// either conflate these nodes with the base's or break their co-reference, and
+/// either shows up as a moved digest.
+fn contained_contribution(graph: &str) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri(P);
+    let q = b.intern_iri("http://example.org/q");
+    let o = b.intern_iri("http://example.org/o");
+    let g = b.intern_iri(graph);
+    let node = b.intern_blank("n", BlankScope::DEFAULT);
+    let elsewhere = b.intern_blank("n", BlankScope(4));
+    b.push_quad(node, p, o, Some(g));
+    b.push_quad(node, q, elsewhere, Some(g));
+    b.push_quad(elsewhere, p, o, Some(g));
+    b.freeze().unwrap()
+}
+
+/// Two lookaside resources, two blobs, and a provenance with BOTH public rows
+/// (occurrences) and private state no public projection can see (an interned origin
+/// set, and a unit/artifact pair that authored nothing).
+fn loadout() -> (RdfLookaside, Arc<ContentStore>, DatasetProvenance) {
+    let mut lookaside = RdfLookaside::default();
+    lookaside.resources.push(
+        RdfLookasideResource::new(RdfLookasideKind::Reasoning)
+            .with_name("closure")
+            .with_digest("d0"),
+    );
+    lookaside.resources.push(
+        RdfLookasideResource::new(RdfLookasideKind::Reasoning)
+            .with_name("explanations")
+            .with_digest("d1"),
+    );
+
+    let mut blobs = ContentStore::new();
+    blobs.insert(b"first blob payload".to_vec());
+    blobs.insert(b"second blob payload".to_vec());
+
+    let mut provenance = DatasetProvenance::new();
+    let unit = provenance.register_unit("units/core", OriginKind::Source);
+    let artifact = provenance.register_artifact("units/core/core.ttl");
+    provenance.record_occurrence(
+        QuadHandle::from_index(0),
+        unit,
+        artifact,
+        Some("core.ttl:1".to_owned()),
+    );
+    let second = provenance.register_unit("units/derived", OriginKind::Generated);
+    let second_artifact = provenance.register_artifact("units/derived/derived.ttl");
+    provenance.record_occurrence(QuadHandle::from_index(1), second, second_artifact, None);
+    // Private: interned but never projected.
+    provenance.intern_origin_set(vec![(unit, artifact), (second, second_artifact)]);
+    provenance.register_unit("units/registered-only", OriginKind::Source);
+    provenance.register_artifact("units/registered-only/unused.ttl");
+
+    (lookaside, Arc::new(blobs), provenance)
+}
+
+fn flat_carrier(base: &Arc<RdfDataset>) -> PipelineBundle<Note> {
+    let (lookaside, blobs, provenance) = loadout();
+    PipelineBundle::new(base.clone(), lookaside, blobs, provenance)
+}
+
+fn view_carrier(base: &Arc<RdfDataset>, ledger: &Arc<RetentionLedger>) -> PipelineViewBundle<Note> {
+    let (lookaside, blobs, provenance) = loadout();
+    PipelineViewBundle::from_dataset(
+        base,
+        lookaside,
+        blobs,
+        provenance,
+        ledger,
+        ViewLimits::default(),
+    )
+    .unwrap()
+}
+
+/// The core acceptance property: a flat carrier and a view carrier over the same
+/// content publish the SAME identities — the bundle digest, every per-graph digest,
+/// and the pipeline root — while reaching them by completely different routes (a
+/// materialized projection and a panicking canonicalization on one side, an in-place
+/// composite read and a fallible one on the other).
+#[test]
+fn flat_and_view_carriers_agree_on_every_identity_they_publish() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+    let flat = flat_carrier(&base);
+    let view = view_carrier(&base, &ledger);
+
+    assert_eq!(flat.digest(), view.digest().unwrap(), "bundle digest");
+
+    let graphs = flat.named_graph_iris();
+    assert_eq!(
+        graphs,
+        vec![CDECLARED.to_owned(), CG1.to_owned(), CG2.to_owned()],
+        "the leaf set must include the declaration-only graph"
+    );
+    assert_eq!(graphs, view.named_graph_iris());
+    for graph in &graphs {
+        assert_eq!(
+            flat.graph_digest(graph),
+            view.graph_digest(graph).unwrap(),
+            "per-graph digest of <{graph}>"
+        );
+    }
+    // Absence is an empty subgraph on both carriers, never an error.
+    assert_eq!(
+        flat.graph_digest(CABSENT),
+        view.graph_digest(CABSENT).unwrap()
+    );
+
+    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap(), "root");
+
+    // Non-vacuity: the fixture's graphs are genuinely different from each other, the
+    // declaration-only graph is genuinely empty, and the root is a DIFFERENT identity
+    // from the digest rather than the same bytes under another name.
+    assert_ne!(flat.graph_digest(CG1), flat.graph_digest(CG2));
+    assert_eq!(flat.graph_digest(CDECLARED), flat.graph_digest(CABSENT));
+    assert_ne!(flat.digest(), flat.pipeline_root());
+    assert!(
+        canonicalize_graph_view(&*base, CG1, CanonHash::Sha256)
+            .nquads
+            .contains("<urn:purrdf:rdfc:reifies>"),
+        "the fixture's statement layer must actually reach the per-graph identity"
+    );
+}
+
+/// The additive pin invariant survives a BLANK-BEARING accumulation on both
+/// carriers. An IRI-only contribution cannot see this: standardize-apart renames
+/// blank SCOPES on both sides, so a carrier that let a renaming leak into a pinned
+/// graph's identity would only be caught by blanks.
+#[test]
+fn accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+    let mut flat = flat_carrier(&base);
+    let mut view = view_carrier(&base, &ledger);
+
+    // <g1> is the graph with the scoped blanks, the triple term and the statement
+    // layer. Pin it on both carriers.
+    let pinned = flat.graph_digest(CG1);
+    assert_eq!(pinned, view.graph_digest(CG1).unwrap());
+    flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
+    view.pin_handle(CG1, Note("g1"), pinned).unwrap();
+
+    let contribution = contained_contribution(CG3);
+    flat.accumulate_named_graph(CG3, &contribution, Note("g3"))
+        .expect("flat accumulate must not disturb the pinned graph");
+    view.accumulate_named_graph(CG3, &contribution, Note("g3"))
+        .expect("view accumulate must not disturb the pinned graph");
+
+    assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
+    assert_eq!(view.handle(CG1).unwrap().content_digest, pinned);
+    assert_eq!(
+        flat.graph_digest(CG1),
+        pinned,
+        "the pin still verifies (flat)"
+    );
+    assert_eq!(
+        view.graph_digest(CG1).unwrap(),
+        pinned,
+        "the pin still verifies (view)"
+    );
+
+    // The contribution genuinely landed, identically, on both carriers.
+    assert_eq!(flat.graph_digest(CG3), view.graph_digest(CG3).unwrap());
+    assert_ne!(flat.graph_digest(CG3), flat.graph_digest(CABSENT));
+    assert_eq!(flat.digest(), view.digest().unwrap());
+    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+}
+
+/// Reseating the per-graph memo rather than clearing a SHARED one: a clone taken
+/// before an accumulation answers for its OWN content. Under the clear-in-place
+/// behaviour the clone read the digests the other carrier computed against its NEW
+/// dataset — a wrong answer, not a stale one.
+#[test]
+fn a_clone_taken_before_accumulate_reads_its_own_content_on_both_carriers() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+    let mut flat = flat_carrier(&base);
+    let mut view = view_carrier(&base, &ledger);
+
+    let before = flat.graph_digest(CG2);
+    assert_eq!(before, view.graph_digest(CG2).unwrap());
+    let flat_snapshot = flat.clone();
+    let view_snapshot = view.clone();
+
+    // Accumulate INTO the graph that was already read, so the two contents differ.
+    let contribution = contained_contribution(CG2);
+    flat.accumulate_named_graph(CG2, &contribution, Note("grown"))
+        .unwrap();
+    view.accumulate_named_graph(CG2, &contribution, Note("grown"))
+        .unwrap();
+
+    assert_ne!(
+        flat.graph_digest(CG2),
+        before,
+        "the fixture must actually move <g2>, or the test proves nothing"
+    );
+    assert_eq!(flat.graph_digest(CG2), view.graph_digest(CG2).unwrap());
+
+    assert_eq!(
+        flat_snapshot.graph_digest(CG2),
+        before,
+        "the pre-accumulate flat clone answers for its own content"
+    );
+    assert_eq!(
+        view_snapshot.graph_digest(CG2).unwrap(),
+        before,
+        "the pre-accumulate view clone answers for its own content"
+    );
+    assert_eq!(
+        flat_snapshot.digest(),
+        view_snapshot.digest().unwrap(),
+        "and the two clones still agree with each other"
+    );
+    assert_eq!(flat_snapshot.digest(), flat_carrier(&base).digest());
+}
+
+/// Containment is checked on BOTH carriers, with the same typed refusal, and the
+/// neighbouring single-graph contribution — the case the rule exists to admit —
+/// still succeeds on both.
+#[test]
+fn a_contribution_reaching_outside_its_graph_is_refused_by_both_carriers() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+
+    // A contribution that also says something in the DEFAULT graph. On the view
+    // carrier `GraphPlacement::Named` would silently relocate that row.
+    let straying = {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri(P);
+        let o = b.intern_iri("http://example.org/o");
+        let s = b.intern_iri("http://example.org/s");
+        let g = b.intern_iri(CG3);
+        b.push_quad(s, p, o, Some(g));
+        b.push_quad(o, p, s, None);
+        b.freeze().unwrap()
+    };
+
+    let mut flat = flat_carrier(&base);
+    let mut view = view_carrier(&base, &ledger);
+    let flat_before = flat.digest();
+    let view_before = view.digest().unwrap();
+
+    let flat_err = flat
+        .accumulate_named_graph(CG3, &straying, Note("x"))
+        .expect_err("the flat carrier must refuse a straying contribution");
+    let view_err = view
+        .accumulate_named_graph(CG3, &straying, Note("x"))
+        .expect_err("the view carrier must refuse a straying contribution");
+    for err in [&flat_err, &view_err] {
+        assert!(
+            matches!(
+                err,
+                PipelineBundleError::GraphContainment {
+                    layer: GraphLayer::Quad,
+                    found: None,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+    assert_eq!(flat.digest(), flat_before, "a refusal folds nothing");
+    assert_eq!(view.digest().unwrap(), view_before);
+    assert!(flat.handle(CG3).is_none() && view.handle(CG3).is_none());
+
+    // The twin that IS contained still folds, on both carriers, to the same identity.
+    let contained = contained_contribution(CG3);
+    flat.accumulate_named_graph(CG3, &contained, Note("ok"))
+        .expect("the contained twin must still be admitted (flat)");
+    view.accumulate_named_graph(CG3, &contained, Note("ok"))
+        .expect("the contained twin must still be admitted (view)");
+    assert_eq!(flat.digest(), view.digest().unwrap());
+    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+}
+
+/// Exact invalidation: an accumulation re-canonicalizes exactly the graph it
+/// touched. The untouched leaves are answered from the reseated memo, and a SECOND
+/// carrier over the same frozen base is answered from the ledger's shared memo —
+/// the analysis is paid for once between them.
+#[test]
+fn accumulate_on_the_view_carrier_recomputes_only_the_graph_it_touched() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+    let mut view = view_carrier(&base, &ledger);
+
+    let g1 = view.graph_digest(CG1).unwrap();
+    let g2 = view.graph_digest(CG2).unwrap();
+    let before = view.digest_work();
+    assert_eq!(
+        before,
+        BundleDigestWork {
+            graph_canonicalizations: 2,
+            ..BundleDigestWork::default()
+        },
+        "two graphs read, two canonicalizations"
+    );
+
+    view.accumulate_named_graph(CG3, &contained_contribution(CG3), Note("g3"))
+        .unwrap();
+
+    let after = view.digest_work();
+    assert_eq!(
+        after.graph_canonicalizations,
+        before.graph_canonicalizations + 1,
+        "exactly the accumulated graph is canonicalized again"
+    );
+
+    // The untouched leaves are served, not recomputed.
+    assert_eq!(view.graph_digest(CG1).unwrap(), g1);
+    assert_eq!(view.graph_digest(CG2).unwrap(), g2);
+    let served = view.digest_work();
+    assert_eq!(
+        served.graph_canonicalizations, after.graph_canonicalizations,
+        "an untouched graph is never re-canonicalized after an accumulation"
+    );
+    assert_eq!(served.graph_cache_hits, after.graph_cache_hits + 2);
+
+    // A second carrier over the same base pays for the per-graph analysis once
+    // between them: its own memo is empty, so the answer comes from the ledger.
+    let hits_before = ledger.snapshot().memo_hits;
+    let second = view_carrier(&base, &ledger);
+    assert_eq!(second.digest_work(), BundleDigestWork::default());
+    assert_eq!(second.graph_digest(CG1).unwrap(), g1);
+    assert_eq!(
+        ledger.snapshot().memo_hits,
+        hits_before + 1,
+        "the shared ledger memo answered"
+    );
+    assert_eq!(
+        second.digest_work().graph_canonicalizations,
+        0,
+        "and nothing was canonicalized to do it"
+    );
+}
+
+/// The root tracks content, moves only when content moves, and an accumulation
+/// moves exactly one leaf's contribution to it.
+#[test]
+fn the_pipeline_root_moves_with_one_leaf_and_stands_still_otherwise() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+    let mut view = view_carrier(&base, &ledger);
+    let mut flat = flat_carrier(&base);
+
+    let root_before = view.pipeline_root().unwrap();
+    assert_eq!(root_before, flat.pipeline_root());
+    // Reading it twice does not move it.
+    assert_eq!(view.pipeline_root().unwrap(), root_before);
+
+    let g1 = view.graph_digest(CG1).unwrap();
+    let g2 = view.graph_digest(CG2).unwrap();
+    let work_before = view.digest_work();
+
+    let contribution = contained_contribution(CG3);
+    view.accumulate_named_graph(CG3, &contribution, Note("g3"))
+        .unwrap();
+    flat.accumulate_named_graph(CG3, &contribution, Note("g3"))
+        .unwrap();
+
+    let root_after = view.pipeline_root().unwrap();
+    assert_ne!(root_after, root_before, "a new leaf must move the root");
+    assert_eq!(root_after, flat.pipeline_root(), "on both carriers alike");
+    assert_eq!(view.graph_digest(CG1).unwrap(), g1, "untouched leaf");
+    assert_eq!(view.graph_digest(CG2).unwrap(), g2, "untouched leaf");
+    assert_eq!(
+        view.digest_work().graph_canonicalizations,
+        work_before.graph_canonicalizations + 1,
+        "exactly one leaf — the accumulated graph — is canonicalized again; the root \
+         re-folds the others from the memo the accumulation left intact"
+    );
+}
+
+/// Admission stays per view and is re-checked CUMULATIVELY as the carrier grows: a
+/// ceiling the composed carrier would breach refuses the append, and the
+/// adequately-sized twin — the same contribution, one row of headroom more —
+/// succeeds.
+#[test]
+fn cumulative_admission_refuses_an_oversized_append_and_admits_its_twin() {
+    let base = carrier_fixture();
+    let contribution = contained_contribution(CG3);
+    let total = base.rdf_row_count() + contribution.rdf_row_count();
+    let ledger = RetentionLedger::new();
+
+    let build = |max_rows: usize| {
+        let (lookaside, blobs, provenance) = loadout();
+        PipelineViewBundle::<Note>::from_dataset(
+            &base,
+            lookaside,
+            blobs,
+            provenance,
+            &ledger,
+            ViewLimits {
+                max_rows,
+                ..ViewLimits::default()
+            },
+        )
+        .expect("the base alone is within both ceilings")
+    };
+
+    let mut tight = build(total - 1);
+    let before = tight.digest().unwrap();
+    let err = tight
+        .accumulate_named_graph(CG3, &contribution, Note("x"))
+        .expect_err("a cumulative breach must hard-fail");
+    assert!(
+        matches!(err, PipelineBundleError::AdmissionBreach(_)),
+        "{err}"
+    );
+    assert_eq!(
+        tight.digest().unwrap(),
+        before,
+        "a refused append publishes nothing"
+    );
+    assert!(tight.handle(CG3).is_none());
+
+    let mut roomy = build(total);
+    roomy
+        .accumulate_named_graph(CG3, &contribution, Note("ok"))
+        .expect("the adequately-sized twin must be admitted");
+    assert!(roomy.handle(CG3).is_some());
+}
+
+/// `stats_fingerprint` is a cache DISCRIMINATOR, never an identity input. Two views
+/// with the same content and different fingerprints publish the same digest, the
+/// same per-graph digests and the same root.
+#[test]
+fn content_equal_views_with_different_fingerprints_publish_equal_identities() {
+    // Blank-free on purpose: composing the same base twice then deduplicates to one
+    // content, while charging retention twice.
+    let base = {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri(P);
+        let o = b.intern_iri("http://example.org/o");
+        let s = b.intern_iri("http://example.org/s");
+        let g = b.intern_iri(CG1);
+        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, Some(g));
+        b.freeze().unwrap()
+    };
+    let once = CompositeDatasetView::new(vec![base.clone()], ViewLimits::default()).unwrap();
+    let twice = CompositeDatasetView::new(vec![base.clone(), base], ViewLimits::default()).unwrap();
+    assert_eq!(
+        surface(&once),
+        surface(&twice),
+        "the two views must hold the same rows, or the test proves nothing"
+    );
+    assert_ne!(
+        once.stats_fingerprint(),
+        twice.stats_fingerprint(),
+        "the fixture must actually differ in fingerprint"
+    );
+
+    let ledger = RetentionLedger::new();
+    let carrier = |view: CompositeDatasetView| {
+        let (lookaside, blobs, provenance) = loadout();
+        PipelineViewBundle::<Note>::from_view(
+            view,
+            lookaside,
+            blobs,
+            provenance,
+            &ledger,
+            ViewLimits::default(),
+        )
+    };
+    let a = carrier(once);
+    let b = carrier(twice);
+    assert_eq!(a.digest().unwrap(), b.digest().unwrap());
+    assert_eq!(a.named_graph_iris(), b.named_graph_iris());
+    for graph in a.named_graph_iris() {
+        assert_eq!(
+            a.graph_digest(&graph).unwrap(),
+            b.graph_digest(&graph).unwrap()
+        );
+    }
+    assert_eq!(a.pipeline_root().unwrap(), b.pipeline_root().unwrap());
+}
+
+/// Carrier fidelity in BOTH directions: every lookaside resource, blob, provenance
+/// record — public and private — and typed handle survives the conversion, the
+/// handles still validate against their pins, and the two carriers fold the same
+/// sidecar bytes into both identities.
+#[test]
+fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+    let mut flat = flat_carrier(&base);
+    let d1 = flat.graph_digest(CG1);
+    let d2 = flat.graph_digest(CG2);
+    flat.pin_handle(CG1, Note("g1"), d1).unwrap();
+    flat.pin_handle(CG2, Note("g2"), d2).unwrap();
+    let flat_digest = flat.digest();
+    let flat_root = flat.pipeline_root();
+
+    let assert_loadout = |lookaside: &RdfLookaside,
+                          blobs: &ContentStore,
+                          provenance: &DatasetProvenance,
+                          what: &str| {
+        assert_eq!(lookaside.resources.len(), 2, "{what}: lookaside resources");
+        assert_eq!(
+            lookaside
+                .resources
+                .iter()
+                .map(|r| (r.name.clone(), r.content_digest.clone()))
+                .collect::<Vec<_>>(),
+            flat.lookaside()
+                .resources
+                .iter()
+                .map(|r| (r.name.clone(), r.content_digest.clone()))
+                .collect::<Vec<_>>(),
+            "{what}: lookaside records"
+        );
+        assert_eq!(blobs.len(), 2, "{what}: blobs");
+        assert_eq!(
+            blobs.iter().map(|(d, _)| *d).collect::<BTreeSet<_>>(),
+            flat.blobs()
+                .iter()
+                .map(|(d, _)| *d)
+                .collect::<BTreeSet<_>>(),
+            "{what}: blob digests"
+        );
+        assert_eq!(
+            provenance.public_projection(),
+            flat.provenance().public_projection(),
+            "{what}: public provenance"
+        );
+        assert_eq!(provenance.occurrences.len(), 2, "{what}: occurrences");
+        assert_eq!(
+            provenance.origin_sets.len(),
+            1,
+            "{what}: private origin sets"
+        );
+        assert_eq!(provenance.units.len(), 3, "{what}: private units");
+        assert_eq!(provenance.artifacts.len(), 3, "{what}: private artifacts");
+    };
+
+    let view = flat
+        .to_view_bundle(&ledger, ViewLimits::default())
+        .expect("conversion to the view carrier");
+    assert_loadout(
+        view.lookaside(),
+        view.blobs(),
+        view.provenance(),
+        "to_view_bundle",
+    );
+    assert_eq!(view.handles(), flat.handles(), "typed handles travel");
+    assert_eq!(view.digest().unwrap(), flat_digest);
+    assert_eq!(view.pipeline_root().unwrap(), flat_root);
+    for (graph, entry) in view.handles() {
+        assert_eq!(
+            view.graph_digest(graph).unwrap(),
+            entry.content_digest,
+            "the handle over <{graph}> still validates against its pin"
+        );
+    }
+
+    // `into_view_bundle` is the by-value spelling of the same conversion.
+    let moved = flat
+        .clone()
+        .into_view_bundle(&ledger, ViewLimits::default())
+        .expect("by-value conversion");
+    assert_eq!(moved.digest().unwrap(), flat_digest);
+    assert_eq!(moved.handles(), flat.handles());
+
+    // One accumulate on the view carrier: the sidecars and pins are unmoved by it.
+    let mut grown = view;
+    grown
+        .accumulate_named_graph(CG3, &contained_contribution(CG3), Note("g3"))
+        .expect("accumulate on the converted carrier");
+    assert_loadout(
+        grown.lookaside(),
+        grown.blobs(),
+        grown.provenance(),
+        "after accumulate",
+    );
+    assert_eq!(grown.handle(CG1).unwrap().content_digest, d1);
+    assert_eq!(grown.handle(CG2).unwrap().content_digest, d2);
+    assert_eq!(grown.handle(CG3).unwrap().payload, Note("g3"));
+    for (graph, entry) in grown.handles() {
+        assert_eq!(grown.graph_digest(graph).unwrap(), entry.content_digest);
+    }
+
+    // The reverse conversion exists and is checked in the same terms.
+    let back = grown
+        .to_flat_bundle()
+        .expect("conversion back to the flat carrier");
+    assert_loadout(
+        back.lookaside(),
+        back.blobs(),
+        back.provenance(),
+        "to_flat_bundle",
+    );
+    assert_eq!(back.handles(), grown.handles());
+    assert_eq!(back.digest(), grown.digest().unwrap());
+    assert_eq!(back.pipeline_root(), grown.pipeline_root().unwrap());
+    for (graph, entry) in back.handles() {
+        assert_eq!(back.graph_digest(graph), entry.content_digest);
+    }
+    // A round trip that ends where it started.
+    let round = back
+        .to_view_bundle(&ledger, ViewLimits::default())
+        .expect("round trip");
+    assert_eq!(round.digest().unwrap(), grown.digest().unwrap());
+    assert_eq!(
+        round.pipeline_root().unwrap(),
+        grown.pipeline_root().unwrap()
+    );
+}
+
+/// The view carrier composes a delta snapshot without compacting it, and registers
+/// BOTH the base it branched from and its delta with the shared ledger.
+#[test]
+fn a_delta_rides_the_view_carrier_without_compaction() {
+    let base = carrier_fixture();
+    let delta = Arc::new(delta_of(&base));
+    let ledger = RetentionLedger::new();
+    let (lookaside, blobs, provenance) = loadout();
+    let carrier = PipelineViewBundle::<Note>::from_delta(
+        &delta,
+        lookaside,
+        blobs,
+        provenance,
+        &ledger,
+        ViewLimits::default(),
+    )
+    .unwrap();
+
+    // The delta's effective content is the base's, so the identities agree with the
+    // flat carrier's.
+    let flat = flat_carrier(&base);
+    assert_eq!(carrier.digest().unwrap(), flat.digest());
+    assert_eq!(carrier.pipeline_root().unwrap(), flat.pipeline_root());
+    assert_eq!(carrier.named_graph_iris(), flat.named_graph_iris());
+
+    // Both owners are on the ledger, and the base is charged once even though a
+    // second carrier over the very same base is alive.
+    let second = view_carrier(&base, &ledger);
+    assert_eq!(ledger.snapshot().distinct_owners, 2, "base + delta overlay");
+    assert_eq!(
+        carrier.accounting().retained,
+        ledger.snapshot(),
+        "the carrier reports the ledger-wide reading verbatim"
+    );
+    assert_eq!(
+        carrier.view_stats().work.materializations,
+        0,
+        "reading a view carrier never materializes"
+    );
+    drop(second);
+    drop(carrier);
+    assert_eq!(
+        ledger.snapshot().distinct_owners,
+        0,
+        "released by the last reader"
+    );
+}
