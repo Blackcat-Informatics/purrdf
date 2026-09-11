@@ -2,17 +2,29 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Hygiene gate: every CI job that runs a workspace gate must install the exact
-toolchain `rust-toolchain.toml` pins, and the two jobs that deliberately do NOT
-must say so out loud.
+"""Hygiene gate: `rust-toolchain.toml` must name the floating `nightly` channel,
+every CI job that runs a workspace gate must install the channel it names, and
+the jobs that deliberately do NOT must say so out loud.
 
-The workspace pins a DATED nightly for development and CI. Nightly clippy and
-rustdoc carry lints stable lacks, so a finding is a real finding rather than a
-channel artifact -- but only while the compiler a developer runs and the compiler
-CI runs are the same build. A floating channel, or a CI job left on `stable`
-after the pin moved, reintroduces exactly the divergence the pin exists to
-remove: a gate that is green on one machine and red on another, with no way to
-tell a genuine failure from a channel difference.
+The workspace names a FLOATING `nightly` for development and CI. Nightly clippy
+and rustdoc carry lints stable lacks, and the current default borrow checker is
+markedly stronger than an older one, so a finding is a real finding rather than a
+channel artifact. Floating is the point: a dated channel freezes that analysis
+surface as of one day, and every lint sharpened afterwards stops being a finding
+and becomes invisible debt. So a date in `rust-toolchain.toml` is drift, and
+fails here.
+
+Byte-determinism is not a counter-argument. It is a property of the code --
+sorted, deduplicated, explicitly ordered output, identities content-addressed
+over this workspace's own declared law -- and the goldens and vectors prove it on
+whatever compiler CI runs. A golden that moved under a compiler bump would be a
+serializer defect to fix, not a reason to stop bumping.
+
+What must still agree is the CHANNEL NAME: every CI job that runs a workspace
+gate must install the channel `rust-toolchain.toml` names, and the jobs that
+deliberately do NOT must say so out loud. A job left on `stable` while developers
+run nightly makes a failure impossible to attribute -- green on one machine, red
+on another, with no way to tell a genuine failure from a channel difference.
 
 Drift here is invisible without a gate. `dtolnay/rust-toolchain` selects a
 toolchain with `rustup default`, which sits at the BOTTOM of rustup's precedence
@@ -46,6 +58,12 @@ TOOLCHAIN_FILE = REPO / "rust-toolchain.toml"
 WORKFLOW_DIR = REPO / ".github" / "workflows"
 
 CHANNEL_RE = re.compile(r'^\s*channel\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
+# The one channel this workspace develops and gates on, floating by design.
+FLOATING_CHANNEL = "nightly"
+# `nightly-2026-09-02` and friends: a channel welded to one day's analysis surface.
+DATED_CHANNEL_RE = re.compile(r"^(?:nightly|beta|stable)-\d{4}-\d{2}-\d{2}$")
+# `1.96`, `1.96.0`, `1.96.0-x86_64-unknown-linux-gnu`: an exact release, equally frozen.
+RELEASE_CHANNEL_RE = re.compile(r"^\d+\.\d+(?:\.\d+)?\b")
 ACTION_RE = re.compile(r"uses:\s*dtolnay/rust-toolchain@")
 LIST_ITEM_RE = re.compile(r"^(\s*)-\s")
 TOOLCHAIN_INPUT_RE = re.compile(r'^\s*toolchain:\s*"?([^"\s#]+)"?', re.MULTILINE)
@@ -88,20 +106,39 @@ def steps(text: str) -> list[str]:
 
 
 def pinned_channel(text: str) -> str:
-    """Return the channel `rust-toolchain.toml` pins, rejecting a floating one."""
+    """Return the channel `rust-toolchain.toml` names, rejecting a frozen one.
+
+    A floating `nightly` is the required state. A dated channel, or an exact
+    release, is the drift: it freezes the lint and borrow-checker surface as of
+    one day, so every check sharpened afterwards silently stops running and the
+    findings it would have made turn into debt nobody sees.
+    """
     match = CHANNEL_RE.search(text)
     if match is None:
         raise SystemExit("rust-toolchain.toml: no [toolchain] channel = \"...\" found")
     channel = match.group(1)
-    if channel in {"nightly", "beta", "stable"}:
+    if channel == FLOATING_CHANNEL:
+        return channel
+    if DATED_CHANNEL_RE.match(channel) or RELEASE_CHANNEL_RE.match(channel):
         raise SystemExit(
-            f'rust-toolchain.toml: channel = "{channel}" floats. This workspace\n'
-            "has byte-deterministic serializers, a byte-deterministic GTS writer,\n"
-            "frozen corpora and content-addressed goldens; the compiler must not\n"
-            'change underneath them day to day. Pin a date, e.g. "nightly-2026-09-02",\n'
-            'or an exact release, e.g. "1.96.0".'
+            f'rust-toolchain.toml: channel = "{channel}" is frozen. It pins the\n'
+            "lint and borrow-checker surface to a single day, so every check that\n"
+            "gets sharper afterwards stops being a finding and becomes invisible\n"
+            "debt while the gates still report green. Byte-determinism is not a\n"
+            "reason to freeze: it is a property of the code -- sorted, deduplicated,\n"
+            "explicitly ordered output, identities content-addressed over this\n"
+            "workspace's own declared law -- and the goldens and vectors prove it on\n"
+            "whatever compiler runs them. A golden that moves under a compiler bump\n"
+            f'is a serializer defect to fix. Use channel = "{FLOATING_CHANNEL}".'
         )
-    return channel
+    raise SystemExit(
+        f'rust-toolchain.toml: channel = "{channel}" is not the development\n'
+        "channel. Nightly clippy and rustdoc carry lints the other channels lack,\n"
+        "and its default borrow checker is the stronger one; that analysis surface\n"
+        "is the whole reason this workspace builds on nightly, while the `msrv` CI\n"
+        "job holds the stable floor and proves no nightly-only feature crept in.\n"
+        f'Use channel = "{FLOATING_CHANNEL}".'
+    )
 
 
 def audit(text: str, channel: str) -> list[str]:
@@ -162,7 +199,7 @@ def audit(text: str, channel: str) -> list[str]:
 
 def self_test() -> None:
     """Prove the gate is capable of failing, per the repo's self-test convention."""
-    pin = "nightly-2026-09-02"
+    pin = FLOATING_CHANNEL
     drifting = (
         "jobs:\n  a:\n    steps:\n"
         "      - uses: dtolnay/rust-toolchain@abc # v1\n"
@@ -217,14 +254,29 @@ def self_test() -> None:
     # would be a false positive if step splitting mis-attributed the first's
     # `with:` block. Over-refusal is as much a bug as under-refusal.
     assert not audit(matching + matching, pin), "back-to-back matching steps must pass"
-    for floating in ("nightly", "stable", "beta"):
+    # The channel rule, in BOTH directions. A refusal is a claim too: it is not
+    # enough to show the frozen spellings are rejected, the floating one this
+    # workspace actually uses must be shown to pass, end to end -- accepted by
+    # `pinned_channel` AND agreeing with a workflow that installs it.
+    for frozen in ("nightly-2026-09-02", "beta-2026-09-02", "1.96", "1.96.0"):
         try:
-            pinned_channel(f'[toolchain]\nchannel = "{floating}"\n')
+            pinned_channel(f'[toolchain]\nchannel = "{frozen}"\n')
         except SystemExit:
             pass
         else:  # pragma: no cover - guards the guard
-            raise AssertionError(f"floating channel {floating!r} must be rejected")
-    assert pinned_channel('[toolchain]\nchannel = "nightly-2026-09-02"\n') == "nightly-2026-09-02"
+            raise AssertionError(f"frozen channel {frozen!r} must be rejected")
+    for wrong in ("stable", "beta"):
+        try:
+            pinned_channel(f'[toolchain]\nchannel = "{wrong}"\n')
+        except SystemExit:
+            pass
+        else:  # pragma: no cover - guards the guard
+            raise AssertionError(f"non-development channel {wrong!r} must be rejected")
+    floating = pinned_channel(f'[toolchain]\nchannel = "{FLOATING_CHANNEL}"\n')
+    assert floating == FLOATING_CHANNEL, "a floating nightly must be accepted"
+    assert not audit(matching, floating), (
+        "a floating nightly with agreeing workflows must pass"
+    )
     print("check-toolchain-pin.py: self-test OK")
 
 

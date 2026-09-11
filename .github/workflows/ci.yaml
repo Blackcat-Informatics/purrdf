@@ -24,7 +24,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Format
         run: cargo fmt --all --check
@@ -114,7 +114,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Run workspace tests (includes doc tests)
         run: cargo test --workspace --locked
@@ -131,7 +131,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |
@@ -159,7 +159,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install cargo-c (the pinned header-contract generator)
         # Pinned to the exact cargo-c whose bundled cbindgen the committed
@@ -182,7 +182,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       # Document exactly the 22 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
@@ -244,7 +244,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
           targets: wasm32-unknown-unknown
 
       - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
@@ -329,7 +329,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |
@@ -367,7 +367,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |

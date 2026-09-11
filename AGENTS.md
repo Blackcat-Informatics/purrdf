@@ -117,14 +117,18 @@ make metadata   # regenerate + verify generated artifacts
 make bench      # criterion benchmarks (report-only; not a gate)
 ```
 
-Toolchain: `rust-toolchain.toml` pins a **dated nightly** for development and
-for every CI gate. That is a lint decision, not a licence: nightly clippy and
-rustdoc carry lints stable lacks, so a finding is a real finding rather than a
-channel artifact. The date is mandatory — a floating `nightly` would re-resolve
-to a different compiler daily, which no workspace with byte-deterministic
-serializers, a byte-deterministic GTS writer, frozen corpora, and
-content-addressed goldens can accept. Bump it deliberately, in its own commit,
-with the gates re-run.
+Toolchain: `rust-toolchain.toml` names a **floating nightly** for development and
+for every CI gate. That is an analysis decision, not a licence: nightly clippy
+and rustdoc carry lints stable lacks, and its default borrow checker is the
+stronger one, so a finding is a real finding rather than a channel artifact.
+Floating is the point — a dated channel freezes that surface as of one day, and
+every check sharpened afterwards stops being a finding and becomes invisible debt
+while the gates still report green. Byte-determinism is no argument for freezing:
+it is a property of the code — sorted, deduplicated, explicitly ordered output,
+identities content-addressed over this workspace's own declared law — and the
+goldens and vectors prove it on whatever compiler runs them. A golden that moved
+under a compiler bump would be a serializer defect to fix, not a reason to stop
+bumping.
 
 **The source stays nightly-free.** There are zero `#![feature(...)]` attributes
 in `crates/` and `bindings/`, and adding one is forbidden. What consumers need

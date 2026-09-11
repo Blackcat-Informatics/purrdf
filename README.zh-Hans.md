@@ -648,8 +648,8 @@ SBOM——见 [`docs/RELEASE.md`](./docs/RELEASE.md)。
 上构建。提高 MSRV 是一项记入变更日志的显著变更；它随**次版本**提升进行，绝不在修订版发布中出现。
 README 中的 MSRV 徽章由人工维护，必须与 `rust-version` 一同更新。
 
-贡献者使用一个带日期的 nightly（`rust-toolchain.toml`）以获得更锐利的 clippy 与
-rustdoc lint 覆盖面，但工作区**不含任何 nightly 独有特性**——MSRV 作业正是在每次变更上
+贡献者使用浮动的 nightly（`rust-toolchain.toml`）以获得更锐利的 clippy 与 rustdoc
+lint 覆盖面，以及更强的默认借用检查器，但工作区**不含任何 nightly 独有特性**——MSRV 作业正是在每次变更上
 证明这一点的手段。构建 PurRDF 只需要 stable 1.96，不需要其他任何东西。
 
 ## GMEOW 家族

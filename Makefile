@@ -308,7 +308,7 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 	else \
 		echo "ABSENT — rust-toolchain.toml is NOT enforced on this machine."; \
 		echo '                                     `cargo`/`rustc` resolve to whatever is on PATH, so the'; \
-		echo "                                     dated-nightly pin is honoured only in CI, and \`make wasm\`"; \
+		echo "                                     nightly channel is honoured only in CI, and \`make wasm\`"; \
 		echo "                                     cannot detect or install the wasm32 target (it SKIPs)."; \
 	fi
 	@printf 'active rustc:                        '

@@ -782,8 +782,9 @@ notable change recorded in the changelog; it rides a **minor** bump and never
 ships in a patch release. The README MSRV badge is maintained by hand and must be bumped together with
 `rust-version`.
 
-Contributors run a dated nightly (`rust-toolchain.toml`) for its sharper clippy and
-rustdoc lint surface, but the workspace contains **no nightly-only features** — the
+Contributors run nightly (`rust-toolchain.toml`) for its sharper clippy and
+rustdoc lint surface and its stronger default borrow checker, but the workspace
+contains **no nightly-only features** — the
 MSRV job is what proves that on every change. Building PurRDF needs nothing beyond
 stable 1.96.
 
