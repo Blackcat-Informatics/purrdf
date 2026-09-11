@@ -235,8 +235,11 @@ fn a_graph_that_cannot_anchor_a_decode_names_what_it_lacks() {
     let amputated: String = turtle
         .lines()
         .filter(|line| !(line.contains(&format!("<{}>", v().byte_start)) && line.contains("unit:")))
-        .map(|line| format!("{line}\n"))
-        .collect();
+        .fold(String::new(), |mut kept, line| {
+            kept.push_str(line);
+            kept.push('\n');
+            kept
+        });
     let dataset = parse_dataset(amputated.as_bytes(), "text/turtle", None).expect("still a graph");
     assert!(matches!(
         decode_document(&dataset, &v(), DOC_ID),
@@ -248,11 +251,15 @@ fn a_graph_that_cannot_anchor_a_decode_names_what_it_lacks() {
     // A graph shorn of its source digest cannot prove a rebuild, so
     // it refuses by the fact it lacks rather than answering unproven.
     let digest_line = |line: &&str| line.contains(&format!("<{}>", v().source_digest));
-    let undigested: String = turtle
-        .lines()
-        .filter(|line| !digest_line(line))
-        .map(|line| format!("{line}\n"))
-        .collect();
+    let undigested: String =
+        turtle
+            .lines()
+            .filter(|line| !digest_line(line))
+            .fold(String::new(), |mut kept, line| {
+                kept.push_str(line);
+                kept.push('\n');
+                kept
+            });
     let dataset = parse_dataset(undigested.as_bytes(), "text/turtle", None).expect("still a graph");
     assert_eq!(
         decode_document(&dataset, &v(), DOC_ID),
@@ -318,8 +325,11 @@ fn a_continues_edge_naming_a_spanless_piece_is_refused_by_the_piece_it_names() {
     let sheared: String = turtle
         .lines()
         .filter(|line| !line.starts_with(&format!("<{continued}>")))
-        .map(|line| format!("{line}\n"))
-        .collect();
+        .fold(String::new(), |mut kept, line| {
+            kept.push_str(line);
+            kept.push('\n');
+            kept
+        });
     let dataset = parse_dataset(sheared.as_bytes(), "text/turtle", None).expect("still a graph");
     assert!(matches!(
         decode_document(&dataset, &v(), DOC_ID),
@@ -354,8 +364,11 @@ fn a_cover_the_graph_half_extracts_and_the_span_half_refuses_names_the_missing_b
     let sheared: String = turtle
         .lines()
         .filter(|line| !line.starts_with(&format!("<{}>", structure.subject)))
-        .map(|line| format!("{line}\n"))
-        .collect();
+        .fold(String::new(), |mut kept, line| {
+            kept.push_str(line);
+            kept.push('\n');
+            kept
+        });
     let dataset = parse_dataset(sheared.as_bytes(), "text/turtle", None).expect("still a graph");
     assert_eq!(
         decode_document(&dataset, &v(), DOC_ID),
