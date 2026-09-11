@@ -142,7 +142,7 @@ shortened to its first eight characters):
 <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:document> <urn:example:book> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineagePath> .
 <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -226,6 +226,15 @@ join without a mapping, and the mapping is the part that never gets written.
 A deployment sovereign over its own terms keeps `under(base)` and loses
 nothing: the law, the identities, and the split are the same either way, and
 the profile's contract id tells the two apart.
+No derived IRI wears two roles: the classes, the predicates, and the
+datatypes are three disjoint sets, so a section's heading text is carried by
+`heading` and typed with `headingText`, and a lineage by `lineage` typed with
+`lineagePath`. That is what lets the designated namespace be *described* — no
+OWL or SHACL document can call one IRI both a datatype property and a
+datatype — and a namespace offered for interchange has to be describable.
+The term set is inside the contract id along with the base, so a renamed term
+is a different law and says so, while every unit and section keeps its
+identity because a term moves no boundary.
 An empty, unwritable, or merely *relative* IRI is a typed error naming the
 field, not a default: the crate asks the workspace IRI law — reached through
 `purrdf-core`, so it is the same law the kernel interns under — and refuses up

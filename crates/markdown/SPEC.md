@@ -429,10 +429,13 @@ clauses. Its digest is the **chunking id**.
 
 **The emission preimage** is the chunking preimage **verbatim, as a
 prefix**, followed by every further clause that decides a byte of the
-emitted graph: the vocabulary (as one base where every IRI derives from
-one, else one line per IRI); the canon base, written `canon base <value>`
-where one is declared and `canon base none` where none is — the absence
-MUST be stated and MUST NOT be left implied by a missing line; the
+emitted graph: the vocabulary, written as one base **and the local names
+derived under it** where every IRI derives from one base and as one line
+per IRI otherwise — the names are stated, and not only the base, because
+a base names a namespace and not a term set (§6); the canon base, written
+`canon base <value>` where one is declared and `canon base none` where
+none is — the absence MUST be stated and
+MUST NOT be left implied by a missing line; the
 section-level rule for movements; the rest of the concordance law — the
 trigger heading, the containment reading of *inside it*, the column
 order, the cell-escape law, the verse-range spellings, the backtick rule,
@@ -624,29 +627,48 @@ these local names to it, and takes the base itself as the node base:
 | unit ordinal, section ordinal | `ordinal` | citation class | `Citation` |
 | section heading text | `heading` | the unit a citation is of | `unit` |
 
-with the datatype IRIs `digest`, `media`, `profile`, `heading`,
-`lineage`, `anchor` and `path`.
+with the datatype IRIs `digest` (a source digest), `media` (a media
+type), `profile` (a slicing profile's label), `headingText` (a section's
+heading and the document's title), `lineagePath` (a heading lineage),
+`anchor` (a canon anchor under no canon base) and `path` (a canon source
+path).
 
 `canonSource` is a term **about a citation**, not about a unit: it
 annotates the citation node a row's lift mints (§11), which is what keeps
 a row's paths beside that row's own anchors. `Citation` and `unit` are
 about that node too: the class it is stated with, and the back-edge to
 the unit it is an edge of, both of which it carries whatever its row
-lifted (§11.1). Extending the term set
-therefore changes the emission preimage, and so re-mints every contract
-id and every citation node under it (§5) — and leaves every unit and
-section where it was, because a term set moves no boundary. That is the
-mechanism working, and an implementation MUST NOT hold a term set
-constant to preserve an id.
+lifted (§11.1).
 
-Two local names are deliberately **dual-role**: `heading` is both the
-predicate carrying a section's heading text and the datatype of that
-literal (and of the document's title), and `lineage` is both the
-predicate and the datatype. That is a decision about a *derived* default,
-not a constraint of the law: a deployment that needs the predicate and
-the datatype to be distinct terms MUST set those fields explicitly rather
-than deriving them from a base, and this specification places no
-requirement on how it names them.
+The emission preimage states these local names, and not merely the base
+they are derived under (§5), because a base names a namespace and not a
+term set: two producers deriving different names under one base emit
+different graphs. Renaming a term, or extending the set, therefore
+changes that preimage and re-mints every contract id and every citation
+node under it (§5) — and leaves every unit and section where it was,
+because a term set moves no boundary. That is the mechanism working, and
+an implementation MUST NOT hold a term set constant to preserve an id.
+
+**No IRI of this term set is written in two roles.** Every local name
+above is distinct, so the classes, the predicates and the datatypes of a
+derived vocabulary are three disjoint sets of IRIs, and an implementation
+deriving a vocabulary from a base MUST use these names and MUST NOT
+collapse two of them into one. The datatype of a heading is accordingly
+`headingText` and not `heading`, and the datatype of a lineage
+`lineagePath` and not `lineage`: the bare names are the predicates that
+carry those literals.
+
+That is a requirement rather than a preference because the namespace
+designated below is meant to be *exchanged* under, and a namespace that
+is exchanged is described: no OWL or SHACL document can declare one IRI
+both an `owl:DatatypeProperty` and an `rdfs:Datatype`, so a term set that
+asked it to could not be described at all, and no reasoner or shape
+validator would accept the description. A caller setting the fields
+explicitly remains sovereign over its own terms and MAY spend fewer of
+them — this law can neither stop that nor name what it costs, and places
+no requirement on how such a caller names anything. Under the designated
+namespace the question does not arise: the description is well-formed by
+construction.
 
 The namespace this specification **designates** is
 

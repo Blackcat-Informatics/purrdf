@@ -1583,14 +1583,14 @@ fn every_claim_parses_as_turtle_and_canonicalizes_under_purrdf() {
 /// is the deliberate step that records which. They are the real values
 /// a report about a law change should quote.
 const DECLARED_CONTRACT_ID: &str =
-    "259253766e9f192e8a9e6b3c9e5796791ca125bf935c44b1daed93d1fe6a612a";
+    "1eecf8d78eee96f4d3fd083479157d0b93b0dd97a36fa911d48d531060227974";
 const DECLARED_CHUNKING_ID: &str =
     "40c979545ccb6e9a3007d38c93adb72c9735f39080a519e6d399bd6e0ed1e872";
 
 /// The same profile with the byte bound widened to 4096 and nothing
 /// else touched: a split constant, so **both** ids move, and these are
 /// the values they move to.
-const WIDER_CONTRACT_ID: &str = "be23e622b0771150a7f8429065da6a06e80e1f13d4e4c0ceae11fbd98cc0f7d7";
+const WIDER_CONTRACT_ID: &str = "0c285f009f9a8b7b893d7bbb48babe9ae60b8463298ffe05723b662142a477a5";
 const WIDER_CHUNKING_ID: &str = "2a832603cbd4458673dc826e8b9018d0b489530fa46b31bc95a243927af9bc49";
 
 /// A second canon base, under another authority: the third profile of
@@ -2787,6 +2787,70 @@ fn a_vocabulary_that_is_not_under_one_base_is_its_own_profile() {
         ),
         Err(MarkdownError::InvalidVocabulary { field: "cites", .. })
     ));
+}
+
+/// The compact vocabulary line states the **term set** and not only the
+/// base, because a base names a namespace and not a set of terms: the
+/// local names are the crate's, and a producer deriving other ones under
+/// the same base emits a different graph.
+///
+/// So the emission preimage writes them out, and the dual-role spelling
+/// this crate used to derive — one IRI as a section's `heading`
+/// predicate and as the datatype of that literal — is a different law
+/// with a different contract id. It is the same *cut*, though: not one
+/// unit boundary moved, so the chunking id stands still and every unit
+/// keeps its identity, which is the whole point of the two ids.
+#[test]
+fn the_term_set_is_inside_the_contract_id_and_the_dual_role_spelling_is_another_law() {
+    let stage = String::from_utf8(v1().emission_bytes()).expect("utf8");
+    assert!(stage.contains(&format!("vocabulary {SLICE_BASE}\n")));
+    let terms = stage
+        .lines()
+        .find(|line| line.starts_with("terms "))
+        .expect("the law names the terms it derives");
+    let named: BTreeSet<&str> = terms
+        .strip_prefix("terms ")
+        .expect("the keyword")
+        .split(' ')
+        .collect();
+    for local in [
+        "Document",
+        "Unit",
+        "heading",
+        "headingText",
+        "lineage",
+        "lineagePath",
+        "canonSource",
+        "path",
+    ] {
+        assert!(named.contains(local), "{local} is named in the law");
+    }
+    assert_eq!(named.len(), 35, "every derived term is named once");
+
+    let mut dual = v1();
+    dual.vocabulary.dt_heading.clone_from(&v().heading);
+    dual.vocabulary.dt_lineage.clone_from(&v().lineage);
+    assert_ne!(
+        dual.contract_id().to_hex(),
+        v1().contract_id().to_hex(),
+        "a term that moved is a law that moved"
+    );
+    assert_eq!(
+        dual.chunking_id().to_hex(),
+        v1().chunking_id().to_hex(),
+        "and a term moves no boundary"
+    );
+    let subjects = |profile: &Profile| -> Vec<String> {
+        slice(GUIDE, profile)
+            .iter()
+            .map(|c| c.subject.clone())
+            .collect()
+    };
+    assert_eq!(
+        subjects(&dual),
+        subjects(&v1()),
+        "so every node of the document keeps its identity"
+    );
 }
 
 /// A whole small document whose one concordance row names `anchor` for
@@ -4423,7 +4487,10 @@ fn the_standard_vocabulary_is_the_designated_namespace_term_for_term_and_slices_
     assert_eq!(standard.unit_class, format!("{STANDARD_NAMESPACE}Unit"));
     assert_eq!(standard.text, format!("{STANDARD_NAMESPACE}text"));
     assert_eq!(standard.cites, format!("{STANDARD_NAMESPACE}cites"));
-    assert_eq!(standard.dt_lineage, format!("{STANDARD_NAMESPACE}lineage"));
+    assert_eq!(
+        standard.dt_lineage,
+        format!("{STANDARD_NAMESPACE}lineagePath")
+    );
     assert_eq!(
         standard.scalar_start,
         format!("{STANDARD_NAMESPACE}scalarStart")
@@ -4436,9 +4503,17 @@ fn the_standard_vocabulary_is_the_designated_namespace_term_for_term_and_slices_
         standard.content_digest,
         format!("{STANDARD_NAMESPACE}contentDigest")
     );
-    // The deliberate dual roles: one local name in two fields.
-    assert_eq!(standard.heading, standard.dt_heading);
-    assert_eq!(standard.lineage, standard.dt_lineage);
+    // The predicate and the datatype of the same literal are two terms,
+    // because the namespace is meant to be described: `heading` carries
+    // a section's heading text and `headingText` types it.
+    assert_eq!(standard.heading, format!("{STANDARD_NAMESPACE}heading"));
+    assert_eq!(
+        standard.dt_heading,
+        format!("{STANDARD_NAMESPACE}headingText")
+    );
+    assert_ne!(standard.heading, standard.dt_heading);
+    assert_eq!(standard.lineage, format!("{STANDARD_NAMESPACE}lineage"));
+    assert_ne!(standard.lineage, standard.dt_lineage);
     // A document sliced under it parses as Turtle, whole.
     let profile = Profile::new("designated-md-v1", 1, standard);
     let claims = slice_of(GUIDE, GUIDE_ID, &profile).expect("slices");
@@ -4460,6 +4535,188 @@ fn the_standard_vocabulary_is_the_designated_namespace_term_for_term_and_slices_
             .expect("utf8")
             .contains(&format!("vocabulary {STANDARD_NAMESPACE}\n"))
     );
+}
+
+/// The IRIs a run of claims writes, gathered by the **position** they
+/// are written in: `class` for the object of an `rdf:type` line,
+/// `predicate` for the predicate of a line — inside a reified triple
+/// term as well as outside one — and `datatype` for the datatype IRI of
+/// a typed literal.
+///
+/// It reads the rendered lines rather than the vocabulary, because the
+/// question is about the bytes a consumer receives. Every line is one
+/// N-Triples triple written by the crate's own writer, so the subject
+/// and the predicate are the first two space-separated tokens and an
+/// IRI never carries a space.
+fn iris_by_role(claims: &[Claim]) -> BTreeMap<&'static str, BTreeSet<String>> {
+    let bare = |token: &str| {
+        token
+            .trim_start_matches('<')
+            .trim_end_matches('>')
+            .to_owned()
+    };
+    let mut written: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
+    for line in claims.iter().flat_map(|c| c.turtle.lines()) {
+        let tokens: Vec<&str> = line.split(' ').collect();
+        let predicate = bare(tokens[1]);
+        if predicate == purrdf_markdown::RDF_TYPE {
+            written.entry("class").or_default().insert(bare(tokens[2]));
+        }
+        written.entry("predicate").or_default().insert(predicate);
+        if tokens[2] == "<<(" {
+            // The predicate of the triple term a citation node reifies.
+            written
+                .entry("predicate")
+                .or_default()
+                .insert(bare(tokens[4]));
+        }
+        let mut rest = line;
+        while let Some((_, tail)) = rest.split_once("^^<") {
+            let (datatype, tail) = tail.split_once('>').expect("a datatype IRI closes");
+            written
+                .entry("datatype")
+                .or_default()
+                .insert(datatype.to_owned());
+            rest = tail;
+        }
+    }
+    written
+}
+
+/// No IRI the slicer writes is written in two positions: the classes,
+/// the predicates and the datatypes of an emitted graph are three
+/// disjoint sets of IRIs.
+///
+/// This is the property that lets the designated namespace be
+/// *described*: no OWL or SHACL document can call one IRI an
+/// `owl:DatatypeProperty` and an `rdfs:Datatype` at once, so a namespace
+/// offered for interchange must never ask it to. It is asked of the
+/// emitted bytes and over whatever roles the scan finds, rather than of
+/// the two terms that once doubled up, so a term added later that reuses
+/// a name fails here.
+#[test]
+fn no_iri_the_slicer_writes_is_both_a_predicate_and_a_datatype() {
+    assert!(
+        !GUIDE.contains("^^<"),
+        "the fixture writes no `^^<` of its own, so every one in the output is a datatype"
+    );
+    let designated = Profile::new(
+        "designated-md-v1",
+        1,
+        Vocabulary::standard().expect("the designated namespace derives one"),
+    );
+    let mut designated_canon = designated.clone();
+    designated_canon.canon_base = Some(CANON_BASE.to_owned());
+    for profile in [
+        &designated,
+        &designated_canon,
+        &v1(),
+        &under_canon(CANON_BASE),
+        &small(),
+    ] {
+        let written = iris_by_role(&slice(GUIDE, profile));
+        assert_eq!(
+            written.keys().copied().collect::<Vec<_>>(),
+            ["class", "datatype", "predicate"],
+            "the guide exercises all three positions"
+        );
+        for (left_role, left) in &written {
+            for (right_role, right) in &written {
+                if left_role >= right_role {
+                    continue;
+                }
+                let shared: Vec<&String> = left.intersection(right).collect();
+                assert!(
+                    shared.is_empty(),
+                    "{left_role} and {right_role} share {shared:?} under {}",
+                    profile.name
+                );
+            }
+        }
+        // The two that used to double up, named so the vector says what
+        // it is guarding: the predicate and the datatype of the same
+        // literal are two IRIs.
+        let v = &profile.vocabulary;
+        assert!(written["predicate"].contains(&v.heading));
+        assert!(written["datatype"].contains(&v.dt_heading));
+        assert!(written["predicate"].contains(&v.lineage));
+        assert!(written["datatype"].contains(&v.dt_lineage));
+    }
+    // The neighbouring case, so the property above is not vacuous: a
+    // caller is still sovereign over its own terms and may point a
+    // datatype field at a predicate's IRI — this crate derives no such
+    // vocabulary, and the scan sees it the moment one is emitted.
+    let mut dual = v1();
+    dual.vocabulary.dt_heading.clone_from(&v().heading);
+    dual.vocabulary.dt_lineage.clone_from(&v().lineage);
+    let written = iris_by_role(&slice(GUIDE, &dual));
+    assert_eq!(
+        written["predicate"]
+            .intersection(&written["datatype"])
+            .cloned()
+            .collect::<Vec<String>>(),
+        vec![v().heading, v().lineage],
+        "the two roles a derived vocabulary no longer puts on one IRI"
+    );
+}
+
+/// The heading and lineage literals of the designated namespace carry
+/// their own datatype IRIs — `headingText` and `lineagePath`, neither of
+/// which is a predicate — and the document they sit in still parses and
+/// canonicalizes whole.
+#[test]
+fn the_designated_heading_and_lineage_literals_carry_their_own_datatypes() {
+    let standard = Vocabulary::standard().expect("the designated namespace derives one");
+    let profile = Profile::new("designated-md-v1", 1, standard.clone());
+    let claims = slice(GUIDE, &profile);
+    let datatype_of =
+        |claim: &Claim, predicate: &str| object(claim, predicate).map(|term| typed_parts(&term).1);
+    assert_eq!(
+        datatype_of(&claims[0], &standard.title).as_deref(),
+        Some(&*format!("{STANDARD_NAMESPACE}headingText")),
+        "the document's title is a heading text"
+    );
+    let section = sections(&claims)[0];
+    assert_eq!(
+        object(section, &standard.heading).map(|term| typed_parts(&term)),
+        Some((TITLE.to_owned(), format!("{STANDARD_NAMESPACE}headingText")))
+    );
+    let lineages: Vec<(String, String)> = units(&claims)
+        .iter()
+        .filter_map(|u| object(u, &standard.lineage))
+        .map(|term| typed_parts(&term))
+        .collect();
+    assert!(!lineages.is_empty(), "the guide's units sit under headings");
+    for (lexical, datatype) in &lineages {
+        assert_eq!(datatype, &format!("{STANDARD_NAMESPACE}lineagePath"));
+        assert_ne!(lexical, "", "and a stated lineage is never the empty one");
+    }
+    assert!(
+        lineages.iter().any(|(lexical, _)| lexical.contains(" > ")),
+        "and a lineage is a path through the heading stack"
+    );
+    // Neither datatype is a predicate of the namespace.
+    for datatype in [&standard.dt_heading, &standard.dt_lineage] {
+        assert!(
+            !claims
+                .iter()
+                .flat_map(|c| c.turtle.lines())
+                .any(|line| line.split(' ').nth(1) == Some(&*format!("<{datatype}>"))),
+            "{datatype} is written in no predicate position"
+        );
+    }
+    // And the graph is still a graph.
+    parses_whole(&claims);
+    for claim in &claims {
+        let dataset = parse_dataset(claim.turtle.as_bytes(), "text/turtle", None)
+            .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
+        let canonical = try_canonicalize_with(&dataset, CanonHash::Sha256)
+            .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
+        assert_eq!(
+            canonical.nquads.lines().count(),
+            claim.turtle.lines().count()
+        );
+    }
 }
 
 // --- the PURREMB bridge ----------------------------------------------------
@@ -4818,6 +5075,14 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         // The canon base, inside the contract id and stated either way.
         "`canon base none`",
         "MUST NOT be left implied by a missing line",
+        // The term set: inside the id beside the base, and every term of
+        // it in one role.
+        "the vocabulary, written as one base **and the local names\nderived under it**",
+        "**No IRI of this term set is written in two roles.**",
+        "MUST use these names and MUST NOT\ncollapse two of them into one",
+        "`headingText`",
+        "`lineagePath`",
+        "both an `owl:DatatypeProperty` and an `rdfs:Datatype`",
         // Which id is field 3, and what a citation's identity carries.
         "Field 3 is the chunking id and MUST NOT be the contract id.",
         "triple terms the node reifies",

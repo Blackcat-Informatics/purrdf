@@ -194,7 +194,17 @@
 //! specification designates for documents meant to be *exchanged* — an
 //! opinion about interchange, asked for by name, never reached for on a
 //! caller's behalf. The vocabulary is part of the profile's identity:
-//! the same law under two vocabularies is two profiles.
+//! the same law under two vocabularies is two profiles, and the local
+//! names are inside it beside the base, so a renamed term is a law that
+//! says it changed.
+//!
+//! No derived IRI wears two roles. The classes, the predicates and the
+//! datatypes are three disjoint sets — a heading's text is carried by
+//! `heading` and typed with `headingText` — because a namespace offered
+//! for interchange has to be describable, and no OWL or SHACL document
+//! can declare one IRI both an `owl:DatatypeProperty` and an
+//! `rdfs:Datatype`. A caller setting the fields itself is sovereign over
+//! its own terms and may spend fewer of them.
 //!
 //! Caller-supplied is not unchecked. Every IRI a caller states — each
 //! field of the vocabulary, the source id, the canon base, and every

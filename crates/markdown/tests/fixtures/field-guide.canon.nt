@@ -1,14 +1,14 @@
 <https://example.org/doc/field-guide> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/slice/Document> .
 <https://example.org/doc/field-guide> <https://example.org/slice/byteLength> "3743"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/doc/field-guide> <https://example.org/slice/mediaType> "text/markdown"^^<https://example.org/slice/media> .
-<https://example.org/doc/field-guide> <https://example.org/slice/sliceProfile> "example-slice-md-v1:28bb96ba56e8a22db27098abaf215fdd883ab57e7288b4aa1748478e8ce93827"^^<https://example.org/slice/profile> .
+<https://example.org/doc/field-guide> <https://example.org/slice/sliceProfile> "example-slice-md-v1:f6e45ba74f652345b4d7d5450d3368435c01df79f93797f2344420a852df533f"^^<https://example.org/slice/profile> .
 <https://example.org/doc/field-guide> <https://example.org/slice/sourceDigest> "sha256:06b9bc11df601740ec4fe4fb9249957d2b616763fd9c494d225c1f4c589a6fcf"^^<https://example.org/slice/digest> .
-<https://example.org/doc/field-guide> <https://example.org/slice/title> "A Field Guide to the Marrow Archipelago"^^<https://example.org/slice/heading> .
+<https://example.org/doc/field-guide> <https://example.org/slice/title> "A Field Guide to the Marrow Archipelago"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/slice/Section> .
 <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> <https://example.org/slice/byteEnd> "3743"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> <https://example.org/slice/byteStart> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> <https://example.org/slice/heading> "A Field Guide to the Marrow Archipelago"^^<https://example.org/slice/heading> .
+<https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> <https://example.org/slice/heading> "A Field Guide to the Marrow Archipelago"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> <https://example.org/slice/level> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> <https://example.org/slice/ordinal> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/slice/Unit> .
@@ -16,7 +16,7 @@
 <https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <https://example.org/slice/byteStart> "43"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <https://example.org/slice/contentDigest> "278b954b71870f6ec3c475368e626d210fd42f5eaa14bb94f4d36f2617ff7abe"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <https://example.org/slice/ordinal> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <https://example.org/slice/scalarEnd> "239"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:0bdb5ddaba547b0f97e6ce0632af2b1f084e7f9b5c32536eba33eacee2aeac88> <https://example.org/slice/scalarStart> "43"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -26,7 +26,7 @@
 <https://example.org/slice/section:sha256:a559851c9cff0d0f1666ee739f458149ce7e2d679f43037f3b759243be2592f7> <https://example.org/slice/byteEnd> "986"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:a559851c9cff0d0f1666ee739f458149ce7e2d679f43037f3b759243be2592f7> <https://example.org/slice/byteStart> "246"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:a559851c9cff0d0f1666ee739f458149ce7e2d679f43037f3b759243be2592f7> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/section:sha256:a559851c9cff0d0f1666ee739f458149ce7e2d679f43037f3b759243be2592f7> <https://example.org/slice/heading> "the outer reefs"^^<https://example.org/slice/heading> .
+<https://example.org/slice/section:sha256:a559851c9cff0d0f1666ee739f458149ce7e2d679f43037f3b759243be2592f7> <https://example.org/slice/heading> "the outer reefs"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:a559851c9cff0d0f1666ee739f458149ce7e2d679f43037f3b759243be2592f7> <https://example.org/slice/level> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:a559851c9cff0d0f1666ee739f458149ce7e2d679f43037f3b759243be2592f7> <https://example.org/slice/ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:a559851c9cff0d0f1666ee739f458149ce7e2d679f43037f3b759243be2592f7> <https://example.org/slice/parent> <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> .
@@ -42,7 +42,7 @@
 <https://example.org/slice/unit:sha256:42b578873847ab4f2291375e07aec2ae61555885e39224d6e6ed591831ed9a6c> <https://example.org/slice/cites> <https://example.org/canon#tide-line> .
 <https://example.org/slice/unit:sha256:42b578873847ab4f2291375e07aec2ae61555885e39224d6e6ed591831ed9a6c> <https://example.org/slice/contentDigest> "cd1d89624afa4df15344daf37fb0dcb2fbb3ebcf4d435a41a601a073c34b0ab1"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:42b578873847ab4f2291375e07aec2ae61555885e39224d6e6ed591831ed9a6c> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:42b578873847ab4f2291375e07aec2ae61555885e39224d6e6ed591831ed9a6c> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the outer reefs"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:42b578873847ab4f2291375e07aec2ae61555885e39224d6e6ed591831ed9a6c> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the outer reefs"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:42b578873847ab4f2291375e07aec2ae61555885e39224d6e6ed591831ed9a6c> <https://example.org/slice/ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:42b578873847ab4f2291375e07aec2ae61555885e39224d6e6ed591831ed9a6c> <https://example.org/slice/scalarEnd> "408"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:42b578873847ab4f2291375e07aec2ae61555885e39224d6e6ed591831ed9a6c> <https://example.org/slice/scalarStart> "267"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -64,7 +64,7 @@
 <https://example.org/slice/unit:sha256:4c67fea2b7f89fca13f00d6f0a8b5b94064173aa9d9138572abb1bc5c4422d2e> <https://example.org/slice/cites> <https://example.org/canon#tide-line> .
 <https://example.org/slice/unit:sha256:4c67fea2b7f89fca13f00d6f0a8b5b94064173aa9d9138572abb1bc5c4422d2e> <https://example.org/slice/contentDigest> "522ef33c632de9f66a8ecad04d7f1f381959716a43de78e1943e27ba13e78846"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:4c67fea2b7f89fca13f00d6f0a8b5b94064173aa9d9138572abb1bc5c4422d2e> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:4c67fea2b7f89fca13f00d6f0a8b5b94064173aa9d9138572abb1bc5c4422d2e> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the outer reefs"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:4c67fea2b7f89fca13f00d6f0a8b5b94064173aa9d9138572abb1bc5c4422d2e> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the outer reefs"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:4c67fea2b7f89fca13f00d6f0a8b5b94064173aa9d9138572abb1bc5c4422d2e> <https://example.org/slice/ordinal> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:4c67fea2b7f89fca13f00d6f0a8b5b94064173aa9d9138572abb1bc5c4422d2e> <https://example.org/slice/scalarEnd> "553"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:4c67fea2b7f89fca13f00d6f0a8b5b94064173aa9d9138572abb1bc5c4422d2e> <https://example.org/slice/scalarStart> "410"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -91,7 +91,7 @@
 <https://example.org/slice/unit:sha256:4d5b09f1bdbb5edc28eea285842904939bde64745fff12a52a21195d27e5c468> <https://example.org/slice/cites> <https://example.org/canon#tide-line> .
 <https://example.org/slice/unit:sha256:4d5b09f1bdbb5edc28eea285842904939bde64745fff12a52a21195d27e5c468> <https://example.org/slice/contentDigest> "637d1ea32f0049afcc2b0686b844956c83319456dea1b8fa51af7dc5db40d782"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:4d5b09f1bdbb5edc28eea285842904939bde64745fff12a52a21195d27e5c468> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:4d5b09f1bdbb5edc28eea285842904939bde64745fff12a52a21195d27e5c468> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the outer reefs"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:4d5b09f1bdbb5edc28eea285842904939bde64745fff12a52a21195d27e5c468> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the outer reefs"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:4d5b09f1bdbb5edc28eea285842904939bde64745fff12a52a21195d27e5c468> <https://example.org/slice/ordinal> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:4d5b09f1bdbb5edc28eea285842904939bde64745fff12a52a21195d27e5c468> <https://example.org/slice/scalarEnd> "979"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:4d5b09f1bdbb5edc28eea285842904939bde64745fff12a52a21195d27e5c468> <https://example.org/slice/scalarStart> "555"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -102,7 +102,7 @@
 <https://example.org/slice/section:sha256:9cf5fc35ea8fe65c0570dc987a64fb4ac9cdfbddb561fb206db9131e751aaa25> <https://example.org/slice/byteEnd> "1365"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:9cf5fc35ea8fe65c0570dc987a64fb4ac9cdfbddb561fb206db9131e751aaa25> <https://example.org/slice/byteStart> "986"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:9cf5fc35ea8fe65c0570dc987a64fb4ac9cdfbddb561fb206db9131e751aaa25> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/section:sha256:9cf5fc35ea8fe65c0570dc987a64fb4ac9cdfbddb561fb206db9131e751aaa25> <https://example.org/slice/heading> "the inner lagoon"^^<https://example.org/slice/heading> .
+<https://example.org/slice/section:sha256:9cf5fc35ea8fe65c0570dc987a64fb4ac9cdfbddb561fb206db9131e751aaa25> <https://example.org/slice/heading> "the inner lagoon"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:9cf5fc35ea8fe65c0570dc987a64fb4ac9cdfbddb561fb206db9131e751aaa25> <https://example.org/slice/level> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:9cf5fc35ea8fe65c0570dc987a64fb4ac9cdfbddb561fb206db9131e751aaa25> <https://example.org/slice/ordinal> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:9cf5fc35ea8fe65c0570dc987a64fb4ac9cdfbddb561fb206db9131e751aaa25> <https://example.org/slice/parent> <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> .
@@ -125,7 +125,7 @@
 <https://example.org/slice/unit:sha256:b01b9fac9b9fe9b76c454cdc702f05edc54148915fcf35812306ad1c00ae43dd> <https://example.org/slice/cites> <https://example.org/canon#salt-pan> .
 <https://example.org/slice/unit:sha256:b01b9fac9b9fe9b76c454cdc702f05edc54148915fcf35812306ad1c00ae43dd> <https://example.org/slice/contentDigest> "c9817c8139f781a63277abe89fefa643a80f678af3b9d2e5ff779f9a7d23f539"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:b01b9fac9b9fe9b76c454cdc702f05edc54148915fcf35812306ad1c00ae43dd> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:b01b9fac9b9fe9b76c454cdc702f05edc54148915fcf35812306ad1c00ae43dd> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the inner lagoon"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:b01b9fac9b9fe9b76c454cdc702f05edc54148915fcf35812306ad1c00ae43dd> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the inner lagoon"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:b01b9fac9b9fe9b76c454cdc702f05edc54148915fcf35812306ad1c00ae43dd> <https://example.org/slice/ordinal> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:b01b9fac9b9fe9b76c454cdc702f05edc54148915fcf35812306ad1c00ae43dd> <https://example.org/slice/scalarEnd> "1141"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:b01b9fac9b9fe9b76c454cdc702f05edc54148915fcf35812306ad1c00ae43dd> <https://example.org/slice/scalarStart> "1005"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -151,7 +151,7 @@
 <https://example.org/slice/unit:sha256:1c847b83ac6ff936e15b5df2366b920c9a69cfcf25834fc40131f8bfab96e06e> <https://example.org/slice/cites> <https://example.org/canon#salt-pan> .
 <https://example.org/slice/unit:sha256:1c847b83ac6ff936e15b5df2366b920c9a69cfcf25834fc40131f8bfab96e06e> <https://example.org/slice/contentDigest> "6236db95f20066db2212a984d32c1c63c36b2ac3f476c95406511a9e36928794"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:1c847b83ac6ff936e15b5df2366b920c9a69cfcf25834fc40131f8bfab96e06e> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:1c847b83ac6ff936e15b5df2366b920c9a69cfcf25834fc40131f8bfab96e06e> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the inner lagoon"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:1c847b83ac6ff936e15b5df2366b920c9a69cfcf25834fc40131f8bfab96e06e> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > the inner lagoon"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:1c847b83ac6ff936e15b5df2366b920c9a69cfcf25834fc40131f8bfab96e06e> <https://example.org/slice/ordinal> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:1c847b83ac6ff936e15b5df2366b920c9a69cfcf25834fc40131f8bfab96e06e> <https://example.org/slice/scalarEnd> "1355"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:1c847b83ac6ff936e15b5df2366b920c9a69cfcf25834fc40131f8bfab96e06e> <https://example.org/slice/scalarStart> "1143"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -162,7 +162,7 @@
 <https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> <https://example.org/slice/byteEnd> "2593"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> <https://example.org/slice/byteStart> "1365"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> <https://example.org/slice/heading> "Field notes"^^<https://example.org/slice/heading> .
+<https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> <https://example.org/slice/heading> "Field notes"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> <https://example.org/slice/level> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> <https://example.org/slice/ordinal> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> <https://example.org/slice/parent> <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> .
@@ -171,7 +171,7 @@
 <https://example.org/slice/unit:sha256:41d7f9d3bc2d52fc7ed3b501a19a463c7e75c35e3db069ac4956463aeb4adef6> <https://example.org/slice/byteStart> "1381"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:41d7f9d3bc2d52fc7ed3b501a19a463c7e75c35e3db069ac4956463aeb4adef6> <https://example.org/slice/contentDigest> "4b107edfabac6499e6db939ac2a77ef186aadbda7d53c48a211cddc02dbb00ec"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:41d7f9d3bc2d52fc7ed3b501a19a463c7e75c35e3db069ac4956463aeb4adef6> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:41d7f9d3bc2d52fc7ed3b501a19a463c7e75c35e3db069ac4956463aeb4adef6> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:41d7f9d3bc2d52fc7ed3b501a19a463c7e75c35e3db069ac4956463aeb4adef6> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:41d7f9d3bc2d52fc7ed3b501a19a463c7e75c35e3db069ac4956463aeb4adef6> <https://example.org/slice/ordinal> "6"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:41d7f9d3bc2d52fc7ed3b501a19a463c7e75c35e3db069ac4956463aeb4adef6> <https://example.org/slice/scalarEnd> "1771"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:41d7f9d3bc2d52fc7ed3b501a19a463c7e75c35e3db069ac4956463aeb4adef6> <https://example.org/slice/scalarStart> "1373"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -181,7 +181,7 @@
 <https://example.org/slice/section:sha256:6cf050494feb777046a8f9ac3de96ab45b8b7b9d1a2cfcd3968375e13673253a> <https://example.org/slice/byteEnd> "2593"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:6cf050494feb777046a8f9ac3de96ab45b8b7b9d1a2cfcd3968375e13673253a> <https://example.org/slice/byteStart> "1786"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:6cf050494feb777046a8f9ac3de96ab45b8b7b9d1a2cfcd3968375e13673253a> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/section:sha256:6cf050494feb777046a8f9ac3de96ab45b8b7b9d1a2cfcd3968375e13673253a> <https://example.org/slice/heading> "Tide tables"^^<https://example.org/slice/heading> .
+<https://example.org/slice/section:sha256:6cf050494feb777046a8f9ac3de96ab45b8b7b9d1a2cfcd3968375e13673253a> <https://example.org/slice/heading> "Tide tables"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:6cf050494feb777046a8f9ac3de96ab45b8b7b9d1a2cfcd3968375e13673253a> <https://example.org/slice/level> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:6cf050494feb777046a8f9ac3de96ab45b8b7b9d1a2cfcd3968375e13673253a> <https://example.org/slice/ordinal> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:6cf050494feb777046a8f9ac3de96ab45b8b7b9d1a2cfcd3968375e13673253a> <https://example.org/slice/parent> <https://example.org/slice/section:sha256:4ee80a66cf7f380bbe55507731fd021e4625049480b3916bc239bc5fc33f5555> .
@@ -190,7 +190,7 @@
 <https://example.org/slice/unit:sha256:e734d415271ad2f50c6d0b463b943fec6ac746427b9c0cd7b695114f0d5a7dc9> <https://example.org/slice/byteStart> "1804"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:e734d415271ad2f50c6d0b463b943fec6ac746427b9c0cd7b695114f0d5a7dc9> <https://example.org/slice/contentDigest> "86ea1e5d4155c7f63d7cb7da7b6dea5db2b0accb63f322ec01dd102f7fd732e5"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:e734d415271ad2f50c6d0b463b943fec6ac746427b9c0cd7b695114f0d5a7dc9> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:e734d415271ad2f50c6d0b463b943fec6ac746427b9c0cd7b695114f0d5a7dc9> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes > Tide tables"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:e734d415271ad2f50c6d0b463b943fec6ac746427b9c0cd7b695114f0d5a7dc9> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes > Tide tables"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:e734d415271ad2f50c6d0b463b943fec6ac746427b9c0cd7b695114f0d5a7dc9> <https://example.org/slice/ordinal> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:e734d415271ad2f50c6d0b463b943fec6ac746427b9c0cd7b695114f0d5a7dc9> <https://example.org/slice/scalarEnd> "1911"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:e734d415271ad2f50c6d0b463b943fec6ac746427b9c0cd7b695114f0d5a7dc9> <https://example.org/slice/scalarStart> "1791"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -206,7 +206,7 @@
 <https://example.org/slice/unit:sha256:88caf85b233f7937d6cdb2ac2d4cf9f1f677766fdafb30aaf4a8c731a17441e6> <https://example.org/slice/cites> <https://example.org/canon#marker-stone> .
 <https://example.org/slice/unit:sha256:88caf85b233f7937d6cdb2ac2d4cf9f1f677766fdafb30aaf4a8c731a17441e6> <https://example.org/slice/contentDigest> "422b44826fbfd8f115a1a889b53ca5e12598fc89fc06139421a7565b72595891"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:88caf85b233f7937d6cdb2ac2d4cf9f1f677766fdafb30aaf4a8c731a17441e6> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:88caf85b233f7937d6cdb2ac2d4cf9f1f677766fdafb30aaf4a8c731a17441e6> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes > Tide tables"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:88caf85b233f7937d6cdb2ac2d4cf9f1f677766fdafb30aaf4a8c731a17441e6> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes > Tide tables"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:88caf85b233f7937d6cdb2ac2d4cf9f1f677766fdafb30aaf4a8c731a17441e6> <https://example.org/slice/ordinal> "8"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:88caf85b233f7937d6cdb2ac2d4cf9f1f677766fdafb30aaf4a8c731a17441e6> <https://example.org/slice/scalarEnd> "2031"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:88caf85b233f7937d6cdb2ac2d4cf9f1f677766fdafb30aaf4a8c731a17441e6> <https://example.org/slice/scalarStart> "1913"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -225,7 +225,7 @@
 <https://example.org/slice/unit:sha256:887c70714b46aac4659877e60abd9fedc5347f23da03be592972ac13c05efd3c> <https://example.org/slice/cites> <https://example.org/canon#spring-tide> .
 <https://example.org/slice/unit:sha256:887c70714b46aac4659877e60abd9fedc5347f23da03be592972ac13c05efd3c> <https://example.org/slice/contentDigest> "9ebcd492c93031e262f6b437fce81b9aa135860b491372516878c1526cd00fd0"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:887c70714b46aac4659877e60abd9fedc5347f23da03be592972ac13c05efd3c> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:887c70714b46aac4659877e60abd9fedc5347f23da03be592972ac13c05efd3c> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes > Tide tables"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:887c70714b46aac4659877e60abd9fedc5347f23da03be592972ac13c05efd3c> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes > Tide tables"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:887c70714b46aac4659877e60abd9fedc5347f23da03be592972ac13c05efd3c> <https://example.org/slice/ordinal> "9"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:887c70714b46aac4659877e60abd9fedc5347f23da03be592972ac13c05efd3c> <https://example.org/slice/scalarEnd> "2161"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:887c70714b46aac4659877e60abd9fedc5347f23da03be592972ac13c05efd3c> <https://example.org/slice/scalarStart> "2033"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -244,7 +244,7 @@
 <https://example.org/slice/unit:sha256:bc6b375dcadf3acfc3c253e13e2634706b13bcb93d6dbe6c310714dab01a0943> <https://example.org/slice/cites> <https://example.org/canon#spring-tide> .
 <https://example.org/slice/unit:sha256:bc6b375dcadf3acfc3c253e13e2634706b13bcb93d6dbe6c310714dab01a0943> <https://example.org/slice/contentDigest> "187b12311cc423a25ee483534c91eafe6785aff00136ce410094fbf9a781325c"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:bc6b375dcadf3acfc3c253e13e2634706b13bcb93d6dbe6c310714dab01a0943> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:bc6b375dcadf3acfc3c253e13e2634706b13bcb93d6dbe6c310714dab01a0943> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes > Tide tables"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:bc6b375dcadf3acfc3c253e13e2634706b13bcb93d6dbe6c310714dab01a0943> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Field notes > Tide tables"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:bc6b375dcadf3acfc3c253e13e2634706b13bcb93d6dbe6c310714dab01a0943> <https://example.org/slice/ordinal> "10"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:bc6b375dcadf3acfc3c253e13e2634706b13bcb93d6dbe6c310714dab01a0943> <https://example.org/slice/scalarEnd> "2576"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:bc6b375dcadf3acfc3c253e13e2634706b13bcb93d6dbe6c310714dab01a0943> <https://example.org/slice/scalarStart> "2163"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -255,7 +255,7 @@
 <https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> <https://example.org/slice/byteEnd> "3743"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> <https://example.org/slice/byteStart> "2593"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> <https://example.org/slice/heading> "Concordance"^^<https://example.org/slice/heading> .
+<https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> <https://example.org/slice/heading> "Concordance"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> <https://example.org/slice/level> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> <https://example.org/slice/ordinal> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> <https://example.org/slice/parent> <https://example.org/slice/section:sha256:e1b85de840a551cdce3baadd06884aefdf12990ed5d911a29e15f2a0b37e256e> .
@@ -264,7 +264,7 @@
 <https://example.org/slice/unit:sha256:65dde72843320d34626bf8ca2f62ea7c576895125c97aabf29560228ee350abb> <https://example.org/slice/byteStart> "2609"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:65dde72843320d34626bf8ca2f62ea7c576895125c97aabf29560228ee350abb> <https://example.org/slice/contentDigest> "39e437f917559c58a9658ef3f8136fd3aa1defc2a712925fd55391500dbc8b6f"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:65dde72843320d34626bf8ca2f62ea7c576895125c97aabf29560228ee350abb> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:65dde72843320d34626bf8ca2f62ea7c576895125c97aabf29560228ee350abb> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Concordance"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:65dde72843320d34626bf8ca2f62ea7c576895125c97aabf29560228ee350abb> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Concordance"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:65dde72843320d34626bf8ca2f62ea7c576895125c97aabf29560228ee350abb> <https://example.org/slice/ordinal> "11"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:65dde72843320d34626bf8ca2f62ea7c576895125c97aabf29560228ee350abb> <https://example.org/slice/scalarEnd> "2661"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:65dde72843320d34626bf8ca2f62ea7c576895125c97aabf29560228ee350abb> <https://example.org/slice/scalarStart> "2594"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -274,7 +274,7 @@
 <https://example.org/slice/section:sha256:6a9cf4cd33fe33c9296b5f1011c02975f0a66dad41f39400376e126a5985c1c1> <https://example.org/slice/byteEnd> "3408"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:6a9cf4cd33fe33c9296b5f1011c02975f0a66dad41f39400376e126a5985c1c1> <https://example.org/slice/byteStart> "2981"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:6a9cf4cd33fe33c9296b5f1011c02975f0a66dad41f39400376e126a5985c1c1> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/section:sha256:6a9cf4cd33fe33c9296b5f1011c02975f0a66dad41f39400376e126a5985c1c1> <https://example.org/slice/heading> "Beds surveyed twice"^^<https://example.org/slice/heading> .
+<https://example.org/slice/section:sha256:6a9cf4cd33fe33c9296b5f1011c02975f0a66dad41f39400376e126a5985c1c1> <https://example.org/slice/heading> "Beds surveyed twice"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:6a9cf4cd33fe33c9296b5f1011c02975f0a66dad41f39400376e126a5985c1c1> <https://example.org/slice/level> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:6a9cf4cd33fe33c9296b5f1011c02975f0a66dad41f39400376e126a5985c1c1> <https://example.org/slice/ordinal> "6"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:6a9cf4cd33fe33c9296b5f1011c02975f0a66dad41f39400376e126a5985c1c1> <https://example.org/slice/parent> <https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> .
@@ -283,7 +283,7 @@
 <https://example.org/slice/unit:sha256:295ae64154926d6a891a16e2aa55f984f3a3438e056aeb863c1082d2af04884d> <https://example.org/slice/byteStart> "3006"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:295ae64154926d6a891a16e2aa55f984f3a3438e056aeb863c1082d2af04884d> <https://example.org/slice/contentDigest> "32b04cd4202f0e644f6f0c84cf9a33a3c42c34a4ce8b0922a987bc9f98f0eb1c"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:295ae64154926d6a891a16e2aa55f984f3a3438e056aeb863c1082d2af04884d> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:295ae64154926d6a891a16e2aa55f984f3a3438e056aeb863c1082d2af04884d> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Concordance > Beds surveyed twice"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:295ae64154926d6a891a16e2aa55f984f3a3438e056aeb863c1082d2af04884d> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Concordance > Beds surveyed twice"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:295ae64154926d6a891a16e2aa55f984f3a3438e056aeb863c1082d2af04884d> <https://example.org/slice/ordinal> "12"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:295ae64154926d6a891a16e2aa55f984f3a3438e056aeb863c1082d2af04884d> <https://example.org/slice/scalarEnd> "3191"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:295ae64154926d6a891a16e2aa55f984f3a3438e056aeb863c1082d2af04884d> <https://example.org/slice/scalarStart> "2985"^^<http://www.w3.org/2001/XMLSchema#integer> .
@@ -293,7 +293,7 @@
 <https://example.org/slice/section:sha256:2ca1247dd6665090f33d1eb913a676bce03415b4ab77b262bb051144aef37112> <https://example.org/slice/byteEnd> "3743"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:2ca1247dd6665090f33d1eb913a676bce03415b4ab77b262bb051144aef37112> <https://example.org/slice/byteStart> "3408"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:2ca1247dd6665090f33d1eb913a676bce03415b4ab77b262bb051144aef37112> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/section:sha256:2ca1247dd6665090f33d1eb913a676bce03415b4ab77b262bb051144aef37112> <https://example.org/slice/heading> "Heads the chart leaves unnamed"^^<https://example.org/slice/heading> .
+<https://example.org/slice/section:sha256:2ca1247dd6665090f33d1eb913a676bce03415b4ab77b262bb051144aef37112> <https://example.org/slice/heading> "Heads the chart leaves unnamed"^^<https://example.org/slice/headingText> .
 <https://example.org/slice/section:sha256:2ca1247dd6665090f33d1eb913a676bce03415b4ab77b262bb051144aef37112> <https://example.org/slice/level> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:2ca1247dd6665090f33d1eb913a676bce03415b4ab77b262bb051144aef37112> <https://example.org/slice/ordinal> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/section:sha256:2ca1247dd6665090f33d1eb913a676bce03415b4ab77b262bb051144aef37112> <https://example.org/slice/parent> <https://example.org/slice/section:sha256:4fd3ca1f5bd342d0843517f67a4ad6631010c5cb213445f5ecd1844123d988fb> .
@@ -302,7 +302,7 @@
 <https://example.org/slice/unit:sha256:e78cd1b4295e4a82e5e5c5b9e345f4485012de76ed8e8c9a81467af40f6abb2c> <https://example.org/slice/byteStart> "3444"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:e78cd1b4295e4a82e5e5c5b9e345f4485012de76ed8e8c9a81467af40f6abb2c> <https://example.org/slice/contentDigest> "af984ff44477680e0e87d83d7fefc0402c7f82e04b6e3c22e371ff95cbbc175e"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
 <https://example.org/slice/unit:sha256:e78cd1b4295e4a82e5e5c5b9e345f4485012de76ed8e8c9a81467af40f6abb2c> <https://example.org/slice/document> <https://example.org/doc/field-guide> .
-<https://example.org/slice/unit:sha256:e78cd1b4295e4a82e5e5c5b9e345f4485012de76ed8e8c9a81467af40f6abb2c> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Concordance > Heads the chart leaves unnamed"^^<https://example.org/slice/lineage> .
+<https://example.org/slice/unit:sha256:e78cd1b4295e4a82e5e5c5b9e345f4485012de76ed8e8c9a81467af40f6abb2c> <https://example.org/slice/lineage> "A Field Guide to the Marrow Archipelago > Concordance > Heads the chart leaves unnamed"^^<https://example.org/slice/lineagePath> .
 <https://example.org/slice/unit:sha256:e78cd1b4295e4a82e5e5c5b9e345f4485012de76ed8e8c9a81467af40f6abb2c> <https://example.org/slice/ordinal> "13"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:e78cd1b4295e4a82e5e5c5b9e345f4485012de76ed8e8c9a81467af40f6abb2c> <https://example.org/slice/scalarEnd> "3626"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://example.org/slice/unit:sha256:e78cd1b4295e4a82e5e5c5b9e345f4485012de76ed8e8c9a81467af40f6abb2c> <https://example.org/slice/scalarStart> "3421"^^<http://www.w3.org/2001/XMLSchema#integer> .

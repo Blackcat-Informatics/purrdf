@@ -38,46 +38,91 @@ pub const STANDARD_NAMESPACE: &str = "https://w3id.org/purrdf/markdown#";
 /// spelling of it is a different chunking id.
 pub const PURREMB_PARAMETER_ENCODING: &str = "text/plain;charset=utf-8";
 
-/// The local names [`Vocabulary::under`] appends to a base, in the
-/// order the profile's stage description lists them.
-const LOCAL_NAMES: [&str; 36] = [
-    "Document",
-    "Section",
-    "Movement",
-    "Unit",
-    "Citation",
-    "sourceDigest",
-    "mediaType",
-    "byteLength",
-    "sliceProfile",
-    "title",
-    "document",
-    "parent",
-    "level",
-    "ordinal",
-    "heading",
-    "byteStart",
-    "byteEnd",
-    "scalarStart",
-    "scalarEnd",
-    "text",
-    "contentDigest",
-    "section",
-    "verse",
-    "lineage",
-    "continues",
-    "cites",
-    "canonSource",
-    "unit",
-    "digest",
-    "media",
-    "profile",
-    "heading",
-    "lineage",
-    "anchor",
-    "path",
-    "",
+/// What a term of the set **is** where it is written: the one
+/// distinction an OWL or SHACL description of a namespace rests on,
+/// since no vocabulary can describe one IRI as an `owl:DatatypeProperty`
+/// and an `rdfs:Datatype` at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum TermRole {
+    /// Written as the object of an `rdf:type` line, and nowhere else.
+    Class,
+    /// Written in the predicate position of a line.
+    Predicate,
+    /// Written as the datatype IRI of a typed literal.
+    Datatype,
+    /// No term at all: the base node IRIs are minted under, which names
+    /// individuals rather than describing them.
+    NodeBase,
+}
+
+/// The term set: what each term is, and the local name
+/// [`Vocabulary::under`] appends to a base to derive it, in the order
+/// the profile's stage description lists them.
+///
+/// Every local name in the table is distinct, so **every IRI a derived
+/// vocabulary states wears exactly one role** — the designated
+/// namespace's IRIs among them, which is what lets an OWL or SHACL
+/// description of that namespace be written at all.
+///
+/// That is why the datatype of a heading is `headingText` rather than
+/// `heading`, and the datatype of a lineage `lineagePath` rather than
+/// `lineage`: the bare names are predicates, and each datatype name says
+/// which lexical space its literals live in, exactly as `digest`,
+/// `media`, `profile`, `anchor` and `path` do for theirs.
+const TERMS: [(TermRole, &str); 36] = [
+    (TermRole::Class, "Document"),
+    (TermRole::Class, "Section"),
+    (TermRole::Class, "Movement"),
+    (TermRole::Class, "Unit"),
+    (TermRole::Class, "Citation"),
+    (TermRole::Predicate, "sourceDigest"),
+    (TermRole::Predicate, "mediaType"),
+    (TermRole::Predicate, "byteLength"),
+    (TermRole::Predicate, "sliceProfile"),
+    (TermRole::Predicate, "title"),
+    (TermRole::Predicate, "document"),
+    (TermRole::Predicate, "parent"),
+    (TermRole::Predicate, "level"),
+    (TermRole::Predicate, "ordinal"),
+    (TermRole::Predicate, "heading"),
+    (TermRole::Predicate, "byteStart"),
+    (TermRole::Predicate, "byteEnd"),
+    (TermRole::Predicate, "scalarStart"),
+    (TermRole::Predicate, "scalarEnd"),
+    (TermRole::Predicate, "text"),
+    (TermRole::Predicate, "contentDigest"),
+    (TermRole::Predicate, "section"),
+    (TermRole::Predicate, "verse"),
+    (TermRole::Predicate, "lineage"),
+    (TermRole::Predicate, "continues"),
+    (TermRole::Predicate, "cites"),
+    (TermRole::Predicate, "canonSource"),
+    (TermRole::Predicate, "unit"),
+    (TermRole::Datatype, "digest"),
+    (TermRole::Datatype, "media"),
+    (TermRole::Datatype, "profile"),
+    (TermRole::Datatype, "headingText"),
+    (TermRole::Datatype, "lineagePath"),
+    (TermRole::Datatype, "anchor"),
+    (TermRole::Datatype, "path"),
+    (TermRole::NodeBase, ""),
 ];
+
+/// The local names a derived vocabulary appends to its base, in table
+/// order, separated by one space: the second half of the compact stage
+/// line, and the field-by-field statement of which term this crate's
+/// [`Vocabulary::under`] derives where.
+///
+/// The node base's empty name is not among them; `vocabulary <base>` is
+/// the line that states it.
+fn derived_terms() -> String {
+    TERMS
+        .iter()
+        .map(|(_, local)| *local)
+        .filter(|local| !local.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// Every IRI the slicer emits, supplied by the caller. The fields are
 /// public so a caller can set any of them; [`Vocabulary::under`] fills
@@ -163,9 +208,15 @@ pub struct Vocabulary {
     pub dt_media: String,
     /// Datatype of a profile literal (`<name>:<contract id hex>`).
     pub dt_profile: String,
-    /// Datatype of a heading or title literal.
+    /// Datatype of a heading or title literal. A derived vocabulary
+    /// names it `headingText`, never `heading`: the bare name is the
+    /// predicate [`Self::heading`], and one IRI cannot be described as
+    /// both a property and a datatype.
     pub dt_heading: String,
-    /// Datatype of a lineage literal.
+    /// Datatype of a lineage literal. A derived vocabulary names it
+    /// `lineagePath`, never `lineage`, for the reason
+    /// [`Self::dt_heading`] gives — and because the literal *is* a path:
+    /// the heading stack joined with ` > `.
     pub dt_lineage: String,
     /// Datatype of a canon anchor literal (when no canon base is set).
     pub dt_anchor: String,
@@ -222,8 +273,8 @@ impl Vocabulary {
             dt_digest: iri("digest"),
             dt_media: iri("media"),
             dt_profile: iri("profile"),
-            dt_heading: iri("heading"),
-            dt_lineage: iri("lineage"),
+            dt_heading: iri("headingText"),
+            dt_lineage: iri("lineagePath"),
             dt_anchor: iri("anchor"),
             dt_path: iri("path"),
         };
@@ -296,8 +347,8 @@ impl Vocabulary {
             ("digest", &self.dt_digest),
             ("media", &self.dt_media),
             ("profile", &self.dt_profile),
-            ("heading", &self.dt_heading),
-            ("lineage", &self.dt_lineage),
+            ("headingText", &self.dt_heading),
+            ("lineagePath", &self.dt_lineage),
             ("anchor", &self.dt_anchor),
             ("path", &self.dt_path),
             ("", &self.node_base),
@@ -362,14 +413,25 @@ impl Vocabulary {
         let fields = self.fields();
         let derived = fields
             .iter()
-            .zip(LOCAL_NAMES)
-            .all(|((_, iri), local)| *iri == format!("{base}{local}"));
+            .zip(TERMS)
+            .all(|((_, iri), (_, local))| *iri == format!("{base}{local}"));
         derived.then_some(base)
     }
 
-    /// The vocabulary as the stage description states it: one line
-    /// naming the base when every IRI derives from it, else one line per
-    /// IRI.
+    /// The vocabulary as the stage description states it: the base and
+    /// the terms derived under it when every IRI derives from one, else
+    /// one line per IRI.
+    ///
+    /// The compact form states **both** facts because the base alone
+    /// does not determine the IRIs. The local names are this crate's,
+    /// and a producer that derived other ones under the same base — as
+    /// this crate itself did when the datatype of a heading was
+    /// `heading` rather than `headingText` — would emit a different
+    /// graph. These bytes are the preimage of
+    /// [`Profile::contract_id`], which promises that cannot happen
+    /// unseen, so the names are written out and a change to any of them
+    /// re-mints the id. The explicit form needs no such line: it writes
+    /// every IRI out already.
     fn stage_lines(&self) -> String {
         self.common_base().map_or_else(
             || {
@@ -381,7 +443,7 @@ impl Vocabulary {
                 }
                 out
             },
-            |base| format!("vocabulary {base}\n"),
+            |base| format!("vocabulary {base}\nterms {}\n", derived_terms()),
         )
     }
 }
@@ -533,6 +595,13 @@ impl Profile {
     /// typed literal, and two profiles that differed only there emitted
     /// different bytes while sharing an id, which is the one thing this
     /// id promises not to do.
+    ///
+    /// The vocabulary is in here as the base *and* the local names
+    /// derived under it, for the same reason: a base names a namespace,
+    /// not a term set, and the names are this crate's rather than the
+    /// caller's. Writing them out is what makes the id notice a renamed
+    /// or an added term — the change that moves a byte of the graph and
+    /// not one unit boundary.
     ///
     /// The whole of [`Self::chunking_bytes`] is a **prefix** of these
     /// bytes, which is the relation the two ids rest on: the emission
@@ -825,13 +894,74 @@ const fn is_control(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::*;
+
+    /// The property that makes the designated namespace describable:
+    /// every IRI a derived vocabulary states is written in **one** role,
+    /// so no OWL or SHACL description of it has to call one IRI a
+    /// property and a datatype at once.
+    ///
+    /// It is asked of the whole term set rather than of the two terms
+    /// that once doubled up (`heading` and `lineage` were each a
+    /// predicate and a datatype), so a term added later that reuses a
+    /// name fails here — in this crate, on the run that added it —
+    /// rather than in a reasoner somebody else is holding.
+    #[test]
+    fn every_derived_iri_wears_exactly_one_role() {
+        for base in ["urn:test:", STANDARD_NAMESPACE] {
+            let vocabulary = Vocabulary::under(base).expect("a vocabulary");
+            let mut roles: BTreeMap<&str, BTreeSet<TermRole>> = BTreeMap::new();
+            let mut names: BTreeSet<&str> = BTreeSet::new();
+            for ((field, iri), (role, local)) in vocabulary.fields().into_iter().zip(TERMS) {
+                assert_eq!(
+                    field, local,
+                    "the field table and the term table name the same term at each position"
+                );
+                assert_eq!(
+                    iri,
+                    format!("{base}{local}"),
+                    "and the field carries that term derived under the base"
+                );
+                roles.entry(iri).or_default().insert(role);
+                names.insert(local);
+            }
+            assert_eq!(
+                names.len(),
+                TERMS.len(),
+                "every local name of the set is its own"
+            );
+            for (iri, wears) in &roles {
+                assert_eq!(
+                    wears.len(),
+                    1,
+                    "{iri} is written in more than one role: {wears:?}"
+                );
+            }
+            assert_eq!(
+                roles.len(),
+                TERMS.len(),
+                "and every term of the set is its own IRI"
+            );
+        }
+    }
 
     #[test]
     fn a_vocabulary_under_one_base_states_itself_as_that_base() {
         let v = Vocabulary::under("urn:test:").expect("a vocabulary");
         assert_eq!(v.common_base(), Some("urn:test:"));
-        assert_eq!(v.stage_lines(), "vocabulary urn:test:\n");
+        assert_eq!(
+            v.stage_lines(),
+            format!("vocabulary urn:test:\nterms {}\n", derived_terms())
+        );
+        // The terms line is the term set itself, so a renamed local name
+        // is a different law and a different id.
+        assert!(v.stage_lines().contains(" ordinal heading byteStart "));
+        assert!(
+            v.stage_lines()
+                .ends_with(" profile headingText lineagePath anchor path\n")
+        );
         let mut custom = v;
         custom.text = "urn:other:body".to_owned();
         assert_eq!(custom.common_base(), None);
@@ -892,7 +1022,10 @@ mod tests {
         assert_eq!(standard.common_base(), Some(STANDARD_NAMESPACE));
         assert_eq!(
             standard.stage_lines(),
-            format!("vocabulary {STANDARD_NAMESPACE}\n")
+            format!(
+                "vocabulary {STANDARD_NAMESPACE}\nterms {}\n",
+                derived_terms()
+            )
         );
     }
 }
