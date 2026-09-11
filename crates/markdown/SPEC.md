@@ -101,6 +101,44 @@ its LF twin states, while every span still carries the document's own
 bytes, the `\r` among them. A `\r` inside a unit's span is part of that
 unit's verbatim text and MUST NOT be stripped.
 
+**The leading edge is bounded rather than trimmed.** The trailing edge
+trims away without a bound; past a certain indent, though, a line stops
+looking like structure at all, and that is where the leading edge stops.
+
+A line's **leading run** is its run of U+0020 SPACE characters at byte
+zero of the line. A line's **marker text** is the line from the byte
+after that run. A heading (§2.1), a movement marker (§2.1) and a verse
+number (§2.2) are recognized **in the marker text**, and only when the
+leading run is **at most three** spaces. So `   # Title` states the
+heading `# Title` states, `  1. one` is verse 1, and ` ⁂ *m*` is a
+movement marker.
+
+A leading run of **four or more** spaces opens no marker. The line is
+ordinary content: it continues the unit it falls in, or opens a
+paragraph where none is open. This is not a refusal, and this law
+defines no indented code block — an implementation MUST NOT treat such a
+line as one. It simply declines to read a marker that far in, which is
+where CommonMark places its indented-code threshold.
+
+A **tab** (U+0009) in the leading run opens no marker either, wherever
+in the run it falls: a line whose first non-space character is a tab
+states no heading, no movement and no verse. CommonMark expands a tab to
+the next four-column tab stop, so a run of nought to three spaces
+followed by a tab reaches column four exactly, at or past the bound
+above; this law states that outcome directly, so an implementation
+decides it on a line's bytes and MUST NOT expand a tab to do it.
+
+The leading run is read for **recognition only**, exactly as the byte
+order mark below is. Its spaces are part of the source and therefore
+part of whatever span holds them: they stay inside a unit's span, inside
+that unit's verbatim literal, and inside a section's heading span, and
+an implementation MUST NOT trim them from any of the three. Because
+recognition begins after the run, a heading's title, a movement's name
+and a verse number are exactly what they would be had the run not been
+written: the run is never part of a title. A document and its
+space-free twin therefore state the same structure over spans shifted by
+the runs, and nothing else about them differs.
+
 A **byte order mark** (U+FEFF) at byte zero of the source is a statement
 about the encoding. Structure detection MUST skip it, so a document that
 opens with one states the same structure as the document that does not,
@@ -111,17 +149,20 @@ content and stays inside the unit that holds it.
 
 ### 2.1 Headings and movements
 
-An **ATX heading** is a line opening with one to six `#` characters
-followed by a space or a **tab**. Its level is the number of hashes. Its
-title is the rest of the line, trimmed, with trailing `#` characters
-removed and trimmed again. A title MAY be **empty**: `# #` is a heading
+An **ATX heading** is a line whose marker text (§2) opens with one to
+six `#` characters followed by a space or a **tab**. Its level is the
+number of hashes. Its title is the rest of that marker text, trimmed,
+with trailing `#` characters removed and trimmed again — so the leading
+run is no part of a title, and `   #   ` is a heading whose title is
+empty. A title MAY be **empty**: `# #` is a heading
 with an empty title, which is a title, and not the absence of one. Seven
 or more hashes open no heading, and hashes running straight into text
 (`#Title`) open no heading — the space or the tab is the mark.
 
-A **movement marker** is a line opening with U+2042 (ASTERISM, `⁂`)
-followed by a space or a tab. Its name is the rest of the line, trimmed,
-with one surrounding pair of `*` or `_` removed and trimmed again. A
+A **movement marker** is a line whose marker text (§2) opens with U+2042
+(ASTERISM, `⁂`) followed by a space or a tab. Its name is the rest of
+that marker text, trimmed, with one surrounding pair of `*` or `_`
+removed and trimmed again, so the leading run is no part of a name. A
 movement's level is one deeper than the nearest enclosing **heading**,
 ignoring enclosing movements, so consecutive movements are **siblings**
 rather than a descending chain.
@@ -137,8 +178,9 @@ movement, if the document has one.
 
 ### 2.2 Verses, paragraphs and rules
 
-A **verse** is a line opening with one or more ASCII digits followed by
-`.` and then a space or a **tab**. The digits MUST parse as a `u64`; a
+A **verse** is a line whose marker text (§2) opens with one or more
+ASCII digits followed by `.` and then a space or a **tab**; the leading
+run is no part of the number. The digits MUST parse as a `u64`; a
 longer run of digits is no verse number at all, and the line is ordinary
 prose. Nothing is truncated and nothing wraps, so a verse number a
 consumer reads back is the number the document wrote. A verse runs from
@@ -366,7 +408,8 @@ profile's name; its version; its vocabulary (as one base where every IRI
 derives from one, else one line per IRI); the dialect grammar — the
 heading, movement, verse, paragraph, rule and table-row forms, the `u64`
 verse bound, the trimmed-line rule that makes CRLF state its LF twin's
-structure, and the byte-order-mark rule; `max_bytes`; `overlap`; the
+structure, the leading-indent bound with its tab clause, and the
+byte-order-mark rule; `max_bytes`; `overlap`; the
 split law with its cut, resume and snap clauses; the concordance law —
 the trigger heading, the containment reading of *inside it*, the column
 order, the cell-escape law, the verse-range spellings, the backtick rule,

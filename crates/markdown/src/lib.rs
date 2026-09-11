@@ -56,11 +56,18 @@
 //! written with CRLF endings slices into the structure its LF twin
 //! slices into while every span still carries the document's own bytes,
 //! the `\r` among them; and a verse number is a `u64`, so a longer run
-//! of digits is no verse number at all and the line stays a paragraph. A
-//! byte order mark opening the document is a statement about the
-//! encoding, so the first line's structure is read after it while every
-//! span still counts the document's own bytes; anywhere else the mark is
-//! ordinary content.
+//! of digits is no verse number at all and the line stays a paragraph.
+//! The leading edge is bounded rather than trimmed: a heading, a
+//! movement marker and a verse number are read behind up to **three**
+//! leading spaces, while four or more — or a tab anywhere in that run,
+//! which CommonMark expands to column four — open no marker and leave
+//! the line as ordinary content. A byte order mark opening the document
+//! is a statement about the encoding, so the first line's structure is
+//! read after it while every span still counts the document's own
+//! bytes; anywhere else the mark is ordinary content. All three are
+//! read for recognition alone: the `\r`, the leading spaces and the
+//! mark are exactly where the source put them, in every span and in
+//! every literal.
 //!
 //! Everything in that paragraph is Markdown, and it is all in one
 //! module — the crate's `dialect`, internal and documented at length in

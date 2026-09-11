@@ -459,6 +459,8 @@ impl Profile {
              unit verse ^\\d+\\.[ \\t] ; the number is a u64 or the line is prose\n\
              unit paragraph blank-line ; rule ^(-{{3,}}|\\*{{3,}})$ and table row ^\\| close a unit\n\
              structure is read on a line's trimmed text ; CRLF states its LF twin's structure\n\
+             a heading, a movement or a verse is read behind up to 3 leading spaces\n\
+             4 or more leading spaces, or a tab in that run, is no marker but ordinary content\n\
              U+FEFF at byte zero is encoding, elsewhere content ; every span counts the document's own bytes\n\
              max_bytes {max_bytes}\n\
              overlap {overlap}\n\

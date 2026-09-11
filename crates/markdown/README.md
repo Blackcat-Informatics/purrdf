@@ -133,18 +133,18 @@ Sliced under `Vocabulary::under("urn:example:doc:")` with the profile
 shortened to its first eight characters):
 
 ```text
-<urn:example:doc:unit:sha256:f402e0a3…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:document> <urn:example:book> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:section> <urn:example:doc:section:sha256:18115fa1…> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:6904ec84…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:document> <urn:example:book> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:section> <urn:example:doc:section:sha256:86591774…> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 ```
 
 The byte span and the scalar span differ by two because the document's
@@ -168,9 +168,9 @@ row's own **citation node**, which reifies the edge and carries the row's
 source, and then the asserted edge itself.
 
 ```text
-<urn:example:doc:citation:sha256:b7e1a12b…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
-<urn:example:doc:citation:sha256:b7e1a12b…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
-<urn:example:doc:unit:sha256:f402e0a3…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
+<urn:example:doc:citation:sha256:fb919753…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
+<urn:example:doc:citation:sha256:fb919753…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
+<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
 ```
 
 `<<( … )>>` is the RDF 1.2 **triple term** — the non-asserting form, the
@@ -305,6 +305,25 @@ backward to the start of a line, never before the unit's own start, and
 carries a `continues` triple to the previous piece. The overlap sits strictly
 under the bound. A split never crosses a heading, and every piece keeps its
 verse number and section.
+
+## Indented markers, and where a marker stops being one
+
+A heading, a movement marker, and a verse number are read behind a leading
+run of **up to three spaces**, so `   # Title` is a heading and `  1. one`
+is verse 1. Four or more leading spaces open no marker: the line is
+ordinary content and falls into the paragraph around it. That is not a
+refusal and it is not a code block — the dialect states none; it declines
+to read a marker that far in, which is where CommonMark puts its
+indented-code threshold. A **tab** in the leading run opens no marker
+either, wherever in the run it falls: CommonMark expands a tab to the next
+four-column tab stop, so nought to three spaces followed by a tab reaches
+column four exactly, and the law says so directly rather than expanding
+anything.
+
+The run is read for recognition only. The leading spaces stay inside the
+unit's span and inside its verbatim literal, and a heading's title, a
+movement's name, and a verse number are what they would be had the run
+never been written — the run is never part of a title.
 
 ## A leading byte order mark
 

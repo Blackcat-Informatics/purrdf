@@ -343,7 +343,16 @@ fn every_heading_and_movement_starts_a_section_with_its_level_ordinal_parent_and
             Some(&*format!("<{}>", title.subject))
         );
         let (start, end) = movement.span.expect("span");
-        assert!(GUIDE[start as usize..].starts_with('\u{2042}'));
+        assert!(
+            start == 0 || GUIDE.as_bytes()[start as usize - 1] == b'\n',
+            "a section's span opens at its line's first byte, leading run and all"
+        );
+        assert!(
+            GUIDE[start as usize..]
+                .trim_start_matches(' ')
+                .starts_with('\u{2042}'),
+            "and the marker is read behind the leading run the law admits"
+        );
         let next = sections[i + 2].span.expect("span").0;
         assert_eq!(end, next, "a movement ends where the next section begins");
     }
@@ -566,7 +575,11 @@ fn an_oversize_unit_splits_at_the_bound_on_a_boundary_and_continues_from_the_sna
         before_a_heading,
         vec![
             ("Field notes".to_owned(), 3_u64, 2_u64, 2_usize),
-            ("Tide tables".to_owned(), 4, 3, 3),
+            // Four pieces, not three: the paragraph before this heading
+            // carries the sheet's own four-space-indented margin line,
+            // which is content rather than a heading and lengthens the
+            // unit the split then cuts.
+            ("Tide tables".to_owned(), 4, 3, 4),
             ("Concordance".to_owned(), 5, 2, 5),
         ],
         "a split leaves the sections of the document at the ordinals and levels they already held"
@@ -1669,6 +1682,322 @@ fn a_byte_order_mark_after_the_first_byte_is_ordinary_content() {
             &text[start as usize..end as usize]
         );
     }
+}
+
+// --- the leading indent ----------------------------------------------------
+
+/// The deepest leading run a marker is still read behind.
+const LEADING_RUN: &str = "   ";
+
+/// [`MARKED`] with every non-blank line opened by [`LEADING_RUN`]: the
+/// heading, the paragraph, the verse, the concordance heading, and every
+/// row of its table, each behind the deepest run the law admits.
+fn indented_twin() -> String {
+    let mut out = String::new();
+    for line in MARKED.split_inclusive('\n') {
+        if !line.trim().is_empty() {
+            out.push_str(LEADING_RUN);
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+#[test]
+fn each_marker_the_law_names_is_read_behind_a_leading_run_of_spaces() {
+    // A heading behind one space, and the verse under it: one section
+    // and one verse, not two paragraphs under no title at all.
+    let claims = slice_of(" # Title\n\n1. one\n", GUIDE_ID, &v1()).expect("slices");
+    assert_eq!(sections(&claims).len(), 1);
+    assert_eq!(
+        typed_value(&claims[0], &v().title).as_deref(),
+        Some("Title")
+    );
+    let u = units(&claims);
+    assert_eq!(u.len(), 1, "the verse is the document's only unit");
+    assert_eq!(integer(u[0], &v().verse), Some(1));
+
+    // A heading behind the deepest run the law admits, with no trailing
+    // newline to close it.
+    let claims = slice_of("   # Title", GUIDE_ID, &v1()).expect("slices");
+    let s = sections(&claims);
+    assert_eq!(s.len(), 1);
+    assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("Title"));
+    assert_eq!(
+        s[0].span,
+        Some((0, 10)),
+        "the heading span opens at the run's first byte and runs to the last"
+    );
+
+    // A verse behind two spaces: the run is no part of its number.
+    let claims = slice_of("  1. one", GUIDE_ID, &v1()).expect("slices");
+    let u = units(&claims);
+    assert_eq!(u.len(), 1);
+    assert_eq!(integer(u[0], &v().verse), Some(1));
+    assert_eq!(
+        unescape(&object(u[0], &v().text).expect("text")),
+        "  1. one",
+        "and the run is inside the verbatim literal all the same"
+    );
+
+    // A movement marker behind one space: a section, not a paragraph.
+    let claims = slice_of(" \u{2042} *m*", GUIDE_ID, &v1()).expect("slices");
+    let s = sections(&claims);
+    assert_eq!(s.len(), 1);
+    assert!(is_movement(s[0]));
+    assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("m"));
+    assert!(
+        units(&claims).is_empty(),
+        "a movement marker line is a section, never a unit"
+    );
+}
+
+#[test]
+fn nought_to_three_leading_spaces_open_a_marker_and_four_leave_an_ordinary_unit() {
+    for indent in 0..=3_usize {
+        let run = " ".repeat(indent);
+        let text = format!("{run}# T\n\n{run}\u{2042} *m*\n\n{run}1. one\n");
+        let claims = slice_of(&text, GUIDE_ID, &v1()).expect("slices");
+        let s = sections(&claims);
+        assert_eq!(s.len(), 2, "{indent} spaces open a heading and a movement");
+        assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("T"));
+        assert!(is_movement(s[1]), "{indent} spaces");
+        assert_eq!(typed_value(s[1], &v().heading).as_deref(), Some("m"));
+        assert_eq!(
+            integer(s[1], &v().level),
+            Some(2),
+            "a movement still sits one under the heading it is behind"
+        );
+        let u = units(&claims);
+        assert_eq!(u.len(), 1, "{indent} spaces");
+        assert_eq!(integer(u[0], &v().verse), Some(1), "{indent} spaces");
+        assert_eq!(
+            unescape(&object(u[0], &v().text).expect("text")),
+            format!("{run}1. one"),
+            "the run is in the literal, never in the number"
+        );
+    }
+
+    // Four spaces is where a marker stops being one, and nothing is
+    // refused: the three lines are ordinary content, they slice into
+    // ordinary units, and they carry no verse and open no section.
+    let deep = "    # T\n\n    \u{2042} *m*\n\n    1. one\n";
+    let claims = slice_of(deep, GUIDE_ID, &v1()).expect("four spaces is content, never a refusal");
+    assert!(
+        sections(&claims).is_empty(),
+        "four spaces open neither a heading nor a movement"
+    );
+    assert_eq!(
+        object(&claims[0], &v().title),
+        None,
+        "a document with no heading claims no title"
+    );
+    let u = units(&claims);
+    assert_eq!(u.len(), 3, "one paragraph per line");
+    assert!(u.iter().all(|piece| object(piece, &v().verse).is_none()));
+    assert_eq!(
+        u.iter()
+            .map(|piece| unescape(&object(piece, &v().text).expect("text")))
+            .collect::<Vec<_>>(),
+        vec![
+            "    # T".to_owned(),
+            "    \u{2042} *m*".to_owned(),
+            "    1. one".to_owned()
+        ],
+        "each line is kept whole, its run among the bytes"
+    );
+}
+
+#[test]
+fn a_tab_in_the_leading_run_opens_no_marker_because_it_reaches_the_fourth_column() {
+    // CommonMark expands a tab to the next four-column tab stop, so a
+    // run of nought to three spaces followed by a tab reaches column
+    // four exactly — at or past the bound above. The law states that
+    // outcome directly, on the line's bytes, and it is total: a tab
+    // anywhere in the leading run opens no marker.
+    for run in ["\t", " \t", "  \t", "   \t"] {
+        let text = format!("{run}# T\n\n{run}\u{2042} *m*\n\n{run}1. one\n");
+        let claims =
+            slice_of(&text, GUIDE_ID, &v1()).expect("a leading tab is content, never a refusal");
+        assert!(sections(&claims).is_empty(), "{run:?}");
+        let u = units(&claims);
+        assert_eq!(u.len(), 3, "{run:?}");
+        assert!(
+            u.iter().all(|piece| object(piece, &v().verse).is_none()),
+            "{run:?}"
+        );
+        assert_eq!(
+            unescape(&object(u[0], &v().text).expect("text")),
+            format!("{run}# T"),
+            "and the tab stays in the verbatim literal"
+        );
+    }
+    // A tab *after* the marker is in no leading run at all, and it is
+    // still the separator a heading and a verse are read by (§2.1).
+    let claims = slice_of("   #\tT\n\n   1.\tone\n", GUIDE_ID, &v1()).expect("slices");
+    assert_eq!(
+        typed_value(sections(&claims)[0], &v().heading).as_deref(),
+        Some("T")
+    );
+    assert_eq!(integer(units(&claims)[0], &v().verse), Some(1));
+}
+
+#[test]
+fn an_indented_document_states_its_twins_structure_over_spans_shifted_by_the_leading_run() {
+    let indented = indented_twin();
+    let plain = slice(MARKED, &v1());
+    let with_run = slice(&indented, &v1());
+    assert_eq!(with_run.len(), plain.len());
+    assert_eq!(sections(&plain).len(), 2);
+    assert_eq!(sections(&with_run).len(), 2);
+    assert_eq!(
+        object(&with_run[0], &v().title),
+        object(&plain[0], &v().title),
+        "the first line is a heading behind its run, not a paragraph"
+    );
+
+    // The run moves an offset by itself once for every indented line
+    // that opens at or before it, so a plain line start and a plain
+    // line end move by different multiples of it — and both exactly.
+    let shifted = |offset: u64| -> u64 {
+        let runs = MARKED[..offset as usize]
+            .split_inclusive('\n')
+            .filter(|line| !line.trim().is_empty())
+            .count();
+        offset + (runs * LEADING_RUN.len()) as u64
+    };
+
+    // Minted over a shifted span, so a node IRI is expected to move;
+    // everything the document says about itself is expected not to.
+    let minted = [
+        v().parent,
+        v().in_section,
+        v().continues,
+        v().byte_start,
+        v().byte_end,
+        v().scalar_start,
+        v().scalar_end,
+    ];
+    for (a, b) in plain.iter().zip(&with_run).skip(1) {
+        assert_eq!(a.kind, b.kind);
+        let (a_start, a_end) = a.span.expect("span");
+        let (b_start, b_end) = b.span.expect("span");
+        assert_eq!(
+            (b_start, b_end),
+            (shifted(a_start), shifted(a_end)),
+            "every span moved by the runs before it and by nothing else"
+        );
+        assert!(
+            indented[b_start as usize..].starts_with(LEADING_RUN),
+            "a span opens at its line's first byte, the run among them"
+        );
+        let (a_pairs, b_pairs) = (pairs(a), pairs(b));
+        assert_eq!(a_pairs.len(), b_pairs.len());
+        for ((a_p, a_o), (b_p, b_o)) in a_pairs.iter().zip(&b_pairs) {
+            assert_eq!(a_p, b_p);
+            if minted.contains(a_p) {
+                continue;
+            }
+            if *a_p == v().content_digest {
+                // The run is inside the span, so it is inside the very
+                // bytes the digest states — which is the whole reason
+                // the literal keeps it. This is where the run parts
+                // company with the byte order mark, which falls before
+                // every span and enters no digest at all.
+                let hex = typed_parts(b_o).0;
+                assert_eq!(
+                    ContentDigest::from_hex(&hex),
+                    Some(ContentDigest::of(
+                        &indented.as_bytes()[b_start as usize..b_end as usize]
+                    ))
+                );
+                assert_ne!(a_o, b_o, "a run inside the span is a run inside the digest");
+                continue;
+            }
+            if *a_p == v().text {
+                // A unit's literal is the verbatim bytes of its span,
+                // so it keeps every run its lines were written with —
+                // and is the plain twin's literal once they come off.
+                let literal = unescape(b_o);
+                assert_eq!(literal, indented[b_start as usize..b_end as usize]);
+                assert!(literal.starts_with(LEADING_RUN));
+                assert_eq!(
+                    literal
+                        .lines()
+                        .map(|l| l.strip_prefix(LEADING_RUN).expect("an indented line"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    unescape(a_o),
+                );
+                continue;
+            }
+            assert_eq!(a_o, b_o, "{a_p}");
+        }
+    }
+
+    // And what the run never entered: the heading it sits under, the
+    // verse number, and the lift of a concordance table written behind
+    // a run of its own.
+    let cited = units(&with_run)
+        .into_iter()
+        .find(|u| integer(u, &v().verse) == Some(1))
+        .expect("verse 1");
+    assert_eq!(
+        objects(cited, &v().cites),
+        vec![format!("\"a-one\"^^<{}>", v().dt_anchor)],
+        "an indented concordance still lifts"
+    );
+    assert_eq!(
+        object(cited, &v().lineage).as_deref(),
+        Some(&*format!("\"T\"^^<{}>", v().dt_lineage)),
+        "and the run is no part of the heading the verse is under"
+    );
+}
+
+#[test]
+fn a_heading_whose_title_is_empty_after_the_leading_run_states_that_empty_title() {
+    let source = "   #   \n\nbody\n";
+    let claims = slice_of(source, GUIDE_ID, &v1()).expect("slices");
+    let s = sections(&claims);
+    assert_eq!(s.len(), 1);
+    assert_eq!(
+        typed_value(s[0], &v().heading).as_deref(),
+        Some(""),
+        "the run is no part of the title, and nothing else is left of it"
+    );
+    assert_eq!(
+        typed_value(&claims[0], &v().title).as_deref(),
+        Some(""),
+        "an empty title is a title, not the absence of one"
+    );
+    assert_eq!(integer(s[0], &v().level), Some(1));
+    assert_eq!(
+        s[0].span,
+        Some((0, source.len() as u64)),
+        "the section runs to the end of the source"
+    );
+    assert_eq!(
+        model(source, &v1()).sections()[0].heading_span(),
+        Span::new(0, 7),
+        "and the span its identity is minted over carries the run and the \
+         trailing spaces alike"
+    );
+    assert_eq!(
+        object(units(&claims)[0], &v().lineage).as_deref(),
+        Some(&*format!("\"\"^^<{}>", v().dt_lineage))
+    );
+    // One space further in and the same line is no heading at all — it
+    // is content, and content is what it stays.
+    let claims = slice_of("    #   \n\nbody\n", GUIDE_ID, &v1()).expect("slices");
+    assert!(
+        sections(&claims).is_empty(),
+        "one space further in and the hashes open nothing"
+    );
+    assert_eq!(units(&claims).len(), 2);
+    assert_eq!(
+        unescape(&object(units(&claims)[0], &v().text).expect("text")),
+        "    #   "
+    );
 }
 
 #[test]
@@ -3687,6 +4016,15 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         "never across a heading",
         // The dialect and the concordance.
         "U+2042",
+        // The leading-indent bound, both halves of it, and the tab
+        // clause that keeps it total.
+        "A line's **leading run** is its run of U+0020 SPACE characters",
+        "leading run is **at most three** spaces",
+        "A leading run of **four or more** spaces opens no marker.",
+        "MUST NOT treat such a\nline as one",
+        "A **tab** (U+0009) in the leading run opens no marker either",
+        "MUST NOT expand a tab to do it",
+        "MUST NOT trim them from any of the three",
         "`## Concordance`",
         "lifts nothing here, and is not an error",
         // The two containment rules of the concordance, each of which

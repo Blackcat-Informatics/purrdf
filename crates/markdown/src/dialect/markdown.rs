@@ -16,6 +16,12 @@
 //! the concordance is in force at **any** depth above it
 //! ([`Walker::in_concordance`]), and a row's cells are delimited by its
 //! **unescaped** pipes only ([`cells`]).
+//!
+//! Both edges of a line are read, and neither is ever taken from a
+//! span. The trailing edge trims away, so a CRLF document states the
+//! structure its LF twin states; the leading edge is **bounded** rather
+//! than trimmed, so an indented marker is still a marker up to three
+//! spaces and is ordinary content past them ([`after_indent`]).
 
 use std::sync::Arc;
 
@@ -107,14 +113,22 @@ impl Walker {
     /// Recognition never looks at a line's trailing whitespace: a
     /// heading's title, a movement's name, a rule, and a blank line are
     /// all read from the trimmed text, and a verse number is read from
-    /// the line's opening digits. A document written with CRLF endings
-    /// therefore slices into the structure its LF twin slices into —
-    /// the `\r` a line ends with is never part of what is recognized.
+    /// the digits that open the line's marker text. A document written
+    /// with CRLF endings therefore slices into the structure its LF
+    /// twin slices into — the `\r` a line ends with is never part of
+    /// what is recognized.
     ///
-    /// It is trimmed for recognition only. Every span still counts the
-    /// document's own bytes, so a `\r` inside a unit's span stays in
-    /// that unit's verbatim literal, where a reader who returns to the
-    /// bytes at the span will find it.
+    /// Nor does it insist a marker start at byte zero. A heading, a
+    /// movement marker and a verse number are read after a leading run
+    /// of at most three spaces, and past that run they are not read at
+    /// all: see [`after_indent`] for the law and for what a tab in that
+    /// run means.
+    ///
+    /// Both edges are read for recognition only. Every span still
+    /// counts the document's own bytes, so a `\r` a line ends with and
+    /// the spaces a line opens with alike stay in the unit's verbatim
+    /// literal, where a reader who returns to the bytes at the span
+    /// will find them.
     fn line(&mut self, text: &str, start: usize, end: usize) {
         let line = &text[start..end];
         if !line.trim_start().starts_with('|') {
@@ -277,8 +291,52 @@ impl Walker {
     }
 }
 
-/// `# Heading` through `###### Heading`.
+/// The deepest leading indent a marker may still be read behind, in
+/// spaces. CommonMark puts its indented-code threshold at four columns,
+/// so three is the last indent that still opens something.
+const MAX_MARKER_INDENT: usize = 3;
+
+/// A line's **marker text**: the line after its leading run of spaces,
+/// or `None` where that run puts the line past the marker indent.
+///
+/// # The leading-indent law
+///
+/// A heading, a movement marker and a verse number are recognized after
+/// a leading run of at most [`MAX_MARKER_INDENT`] U+0020 SPACE
+/// characters, so `   # Title` is the heading `# Title` is, and
+/// `  1. one` is verse 1. A run of **four or more** spaces opens no
+/// marker at all: the line is ordinary content and falls into the
+/// paragraph or verse around it. That is not a refusal and it is not a
+/// code block — this dialect states no code block; it declines to read
+/// a marker that far in, which is where CommonMark puts the threshold.
+///
+/// A **tab** in the leading run opens no marker either, wherever in the
+/// run it falls. CommonMark expands a tab to the next four-column tab
+/// stop, so a run of nought to three spaces followed by a tab reaches
+/// column four exactly — at or past the bound above. Stating it as *a
+/// tab in the leading run is no marker* is that same outcome, and it is
+/// decided without ever expanding a tab, on a line's bytes alone.
+///
+/// The run is read for **recognition only**, exactly as the byte order
+/// mark is ([`lines`]). Every span still counts the document's own
+/// bytes, so the leading spaces stay inside the unit's span and inside
+/// its verbatim literal; and because recognition begins after them, a
+/// heading's title, a movement's name and a verse number are what they
+/// would be had the run never been written. The run is never part of a
+/// title.
+fn after_indent(line: &str) -> Option<&str> {
+    let indent = line.bytes().take_while(|b| *b == b' ').count();
+    if indent > MAX_MARKER_INDENT {
+        return None;
+    }
+    let rest = &line[indent..];
+    (!rest.starts_with('\t')).then_some(rest)
+}
+
+/// `# Heading` through `###### Heading`, behind the leading indent
+/// [`after_indent`] admits.
 fn atx_heading(line: &str) -> Option<(u32, String)> {
+    let line = after_indent(line)?;
     let hashes = line.bytes().take_while(|b| *b == b'#').count();
     if hashes == 0 || hashes > 6 {
         return None;
@@ -291,9 +349,10 @@ fn atx_heading(line: &str) -> Option<(u32, String)> {
     Some((u32::try_from(hashes).ok()?, heading.to_owned()))
 }
 
-/// `⁂ *name*`: a movement marker, a section below the nearest heading.
+/// `⁂ *name*`: a movement marker, a section below the nearest heading,
+/// behind the leading indent [`after_indent`] admits.
 fn movement(line: &str) -> Option<String> {
-    let rest = line.strip_prefix('\u{2042}')?;
+    let rest = after_indent(line)?.strip_prefix('\u{2042}')?;
     if !rest.starts_with([' ', '\t']) {
         return None;
     }
@@ -311,7 +370,8 @@ fn is_rule(line: &str) -> bool {
     t.len() >= 3 && (t.bytes().all(|b| b == b'-') || t.bytes().all(|b| b == b'*'))
 }
 
-/// `12. text`: a numbered verse line.
+/// `12. text`: a numbered verse line, behind the leading indent
+/// [`after_indent`] admits.
 ///
 /// A verse number is a `u64`, and that is the dialect's bound, not an
 /// accident of the parse. A run of digits that overflows it is not a
@@ -320,6 +380,7 @@ fn is_rule(line: &str) -> bool {
 /// wraps, so a number a consumer reads back is the number the document
 /// wrote.
 fn verse_number(line: &str) -> Option<u64> {
+    let line = after_indent(line)?;
     let digits = line.bytes().take_while(u8::is_ascii_digit).count();
     if digits == 0 {
         return None;
@@ -454,6 +515,55 @@ mod tests {
         assert_eq!(verse_number("12. Hear the first thing"), Some(12));
         assert_eq!(verse_number("12.Hear"), None);
         assert!(is_rule("---"));
+    }
+
+    /// The leading-indent law, asked of the three readers it governs:
+    /// nought to three spaces open the marker, four decline it, and a
+    /// tab in the run declines it wherever it falls.
+    #[test]
+    fn a_marker_is_read_behind_three_leading_spaces_and_never_behind_four_or_a_tab() {
+        for indent in 0..=MAX_MARKER_INDENT {
+            let pad = " ".repeat(indent);
+            assert_eq!(
+                atx_heading(&format!("{pad}## Concordance")),
+                Some((2, "Concordance".to_owned())),
+                "{indent} spaces"
+            );
+            assert_eq!(
+                movement(&format!("{pad}\u{2042} *the foundation*")),
+                Some("the foundation".to_owned()),
+                "{indent} spaces"
+            );
+            assert_eq!(
+                verse_number(&format!("{pad}12. Hear the first thing")),
+                Some(12),
+                "{indent} spaces"
+            );
+        }
+        // Four spaces, and every deeper run, is ordinary content. So is
+        // a tab anywhere in the run: CommonMark expands it to the next
+        // four-column stop, which is the bound above.
+        for run in ["    ", "     ", "\t", " \t", "  \t", "   \t"] {
+            assert_eq!(
+                atx_heading(&format!("{run}## Concordance")),
+                None,
+                "{run:?}"
+            );
+            assert_eq!(
+                movement(&format!("{run}\u{2042} *the foundation*")),
+                None,
+                "{run:?}"
+            );
+            assert_eq!(
+                verse_number(&format!("{run}12. Hear the first thing")),
+                None,
+                "{run:?}"
+            );
+        }
+        // The run is no part of what the marker states.
+        assert_eq!(after_indent("   # T"), Some("# T"));
+        assert_eq!(after_indent("    # T"), None);
+        assert_eq!(atx_heading("   #   "), Some((1, String::new())));
     }
 
     #[test]

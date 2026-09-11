@@ -21,7 +21,7 @@ at a shadow and open again a slow count later, and the third nothing at
 all that a diver has yet named, only a cold green water that the light
 gives up on well before the floor of it is reached by any lamp we own.
 
-⁂ *the inner lagoon*
+  ⁂ *the inner lagoon*
 
 4. The lagoon is warm to the depth of an arm, and it keeps the colour
 of weak tea until the afternoon wind turns it the colour of slate.
@@ -36,8 +36,10 @@ The salt pans open west of the lagoon and dry white by midsummer. Walk
 them at first light, when the crust still carries a person, and mark
 the pans you cross so the next surveyor can retrace the same ground.
 A bed worth a second visit carries a 🐚 in the margin of the sheet.
+    # 3 crossings, north pan, spring tide — the sheet's own margin, in
+the sheet's own hand, and no heading of this guide.
 
-### Tide tables
+ ### Tide tables
 
 The marker stone at the head of the pans carries the character 中, cut
 by a surveyor whose notebook has never been found.
@@ -45,7 +47,7 @@ by a surveyor whose notebook has never been found.
 6. The spring tide arrives two days after the new moon and lifts the
 water over the outer bar by the height of a hand.
 
-7. The neap tide leaves the shelf dry for a morning, which is the only
+   7. The neap tide leaves the shelf dry for a morning, which is the only
 window in which the third step can be reached on foot.
 
 8. Keep the tide tables in pencil. The pans flood on the spring tide
