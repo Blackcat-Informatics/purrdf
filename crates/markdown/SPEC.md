@@ -833,11 +833,32 @@ unit's surrounding context.
 
 Where a deployment records the plan or the derivation behind a slicing
 run — who sliced what, under which profile, to what end — this
-specification recommends the **gmeow** ontology's Plan concept, which
-models exactly that and composes with the profile identity of §5. PROV-O
-MAY be used instead or as well, and nothing here is normative about
-either: this law states what a document *is*, and a deployment states how
-it came to run.
+specification recommends `logic:Plan`,
+`https://blackcatinformatics.ca/logic/Plan`, defined by the **gmeow**
+ontology's logic slice at `<https://blackcatinformatics.ca/gmeow/slices/logic>`
+and composing with the profile identity of §5.
+
+It is recommended for two reasons. The first is structure: a `logic:Plan` is
+a transaction program whose primitive operations invoke action schemas and
+whose success criterion is a goal expression, so it carries ordering, guards,
+branching, concurrency, loops and fallback, and quantifies its own success
+over nondeterministic outcomes through `logic:planSuccessMode` — none of
+which a plan node reduced to a descriptive label can carry. The second is
+that the slice it is defined in is a provable layer, so a recorded plan is
+machine-checkable structure rather than annotation a reader must take on
+trust.
+
+PROV-O is not a rival here. gmeow authors declared bridge rows from the
+plan/enactment spine onto PROV-O — `logic:Plan` to `prov:Plan`,
+`logic:Enactment` to `prov:Activity` — alongside its OPMW and OBI bridges,
+each row disclosing what the projection loses rather than claiming an
+identity it does not have. A deployment that records the provable form
+therefore gives up no PROV interoperability; it can project onto PROV-O where
+interoperability is what it needs. Nothing in this section is normative: this
+law states what a document *is*, and a deployment states how it came to run.
+
+One honest caveat: the gmeow namespace is not yet publicly dereferenceable.
+The IRIs above are stable identifiers, not URLs that resolve today.
 
 ## 11. The emission law
 

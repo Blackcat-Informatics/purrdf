@@ -123,6 +123,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and explicit copy counters. Shared-governor and fallible-view variants withhold
   publication after errors, cancellation or exhausted budgets. UPDATE WHERE
   evaluation reads mutation snapshots without compacting the whole base.
+- **markdown:** New crate `purrdf-markdown`, a structural Markdown-to-RDF 1.2
+  slicer. A document becomes a graph of its own headings, verses and paragraphs
+  over verbatim byte spans of the source, and the resulting nodes carry
+  content-addressed identities that two independent runs of the same law agree
+  on. The law is published, not implied: `SPEC.md` ships inside the crate and
+  states the dialect grammar, the split law, the concordance law, the three
+  identities and their verification law, ordering, conformance and the emission
+  law, and the crate's vectors are read against that document. The vocabulary is
+  a designated namespace, `https://w3id.org/purrdf/markdown#`, whose term set is
+  part of the contract identity; no IRI outside it is emitted, and no term of it
+  is written in two roles.
+- **purrdf:** The umbrella exposes the slicer as `purrdf::markdown`, so a
+  consumer slices a document without naming `purrdf-markdown` as a separate
+  dependency.
+- **core:** The IRI re-export widens from `IriError` alone to `BaseIri`, `Iri`
+  and `parse_iri` beside it. A producer that mints IRIs for the kernel can now
+  refuse up front exactly what the kernel would refuse at intern time, asking
+  the same question of the same law rather than reimplementing it or taking its
+  own dependency on `purrdf-iri`.
 
 ## [1.1.0] - 2026-09-04
 

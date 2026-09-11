@@ -119,9 +119,19 @@ One crate is in the release set above with no crates.io record yet:
 [`scripts/release-crates.sh`](../scripts/release-crates.sh) names it; the
 ledger is held to the registry in both directions by the preflight, so the
 entry leaves the moment the record exists. The release lane publishes the
-fourteen crates ahead of it, skips it, and stops cleanly at its first
-dependent for the one-time token step described below; nothing depends on it
-inside the workspace today, so the stop is at the end of the set.
+fourteen crates ahead of it, skips it visibly, carries on through every later
+crate that does not depend on it, and stops cleanly at the first one that
+does, for the one-time token step described below.
+
+That first dependent is the flagship umbrella, `purrdf`, twenty-first in
+publish order: `crates/purrdf/Cargo.toml` takes `purrdf-markdown` as a normal
+dependency, and it is the only crate in the workspace that does — so
+`purrdf-slice` through `purrdf-validate` publish normally and the stop lands
+on the umbrella. The stop is therefore **not** at the end of the set. It is
+two crates short of it, and `purrdf-wasm` — twenty-second, and a dependent of
+`purrdf` — is never attempted behind it. Both the umbrella and the wasm
+binding stay unpublished until the token step has created the
+`purrdf-markdown` record and the run is resumed.
 
 The three crates that once had no crates.io record — `purrdf-cdt`,
 `purrdf-text`, `purrdf-geo` — were bootstrapped during the 0.13.0 release:

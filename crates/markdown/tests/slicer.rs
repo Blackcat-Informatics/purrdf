@@ -5094,8 +5094,16 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         "The **verification law** for such a chunk is",
         // Ordering, provenance, conformance, determinism.
         "rdf:Seq",
-        "gmeow",
-        "PROV-O",
+        // Provenance guidance: the recommendation is only usable if it
+        // names the term, and only honest if it says the namespace does
+        // not resolve yet. A bare ontology name pins nothing.
+        "`https://blackcatinformatics.ca/logic/Plan`",
+        "<https://blackcatinformatics.ca/gmeow/slices/logic>",
+        "`logic:planSuccessMode`",
+        "the slice it is defined in is a provable layer",
+        "PROV-O is not a rival here.",
+        "gives up no PROV interoperability",
+        "not yet publicly dereferenceable",
     ] {
         assert!(SPEC.contains(clause), "the specification states {clause:?}");
     }

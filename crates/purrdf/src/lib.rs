@@ -283,13 +283,14 @@ mod tests {
             .expect("shex facade parses");
     }
 
-    /// The `text` module is reachable from the facade and answers, so the
+    /// The `markdown` module is reachable from the facade and answers, so the
     /// module map's completeness claim ("anything a consumer legitimately
-    /// imports is reachable from `purrdf` alone") covers it.
+    /// imports is reachable from `purrdf` alone") covers the slicer.
     ///
-    /// The slicer is reached the same way: a document is sliced through the
-    /// facade alone, and the model it returns answers a lattice question —
-    /// never merely a type that names itself.
+    /// A document is sliced through the facade alone, and the model it returns
+    /// is asked a containment question — which unit holds a given byte — rather
+    /// than merely named, because a re-export that compiles while exposing
+    /// nothing usable is the failure this catches.
     #[test]
     fn facade_exposes_markdown_slicer() {
         let vocabulary =
@@ -308,9 +309,12 @@ mod tests {
         assert_eq!(unit.verse(), Some(1));
     }
 
+    /// The `text` module is reachable from the facade and answers, so the
+    /// module map's completeness claim covers full-text search too.
+    ///
     /// A re-export that compiles but exposes nothing usable is the failure this
-    /// catches, so the test builds a real index and retrieves from it rather
-    /// than merely naming a type.
+    /// catches, so the test builds a real index over a real dataset and ranks a
+    /// retrieval out of it rather than merely naming a type.
     #[test]
     fn facade_exposes_full_text_search() {
         let mut builder = RdfDatasetBuilder::new();
