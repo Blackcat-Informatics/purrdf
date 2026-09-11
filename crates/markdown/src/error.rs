@@ -266,4 +266,18 @@ impl std::fmt::Display for MarkdownError {
     }
 }
 
-impl std::error::Error for MarkdownError {}
+impl std::error::Error for MarkdownError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // A refusal borrowed from another law hands that law's finding
+        // through the standard chain too, so an error-chain consumer
+        // reads the cause without matching this crate's variants.
+        match self {
+            Self::MalformedSourceId { cause, .. }
+            | Self::MalformedVocabulary { cause, .. }
+            | Self::MalformedCanonBase { cause, .. } => Some(cause),
+            Self::TamperedUnit { cause, .. } => Some(cause),
+            Self::CoverDefect { cause } => Some(cause),
+            _ => None,
+        }
+    }
+}

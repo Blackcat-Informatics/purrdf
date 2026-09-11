@@ -131,6 +131,7 @@ impl From<ReconstructError> for DecodeError {
 /// One node's text-bearing facts, gathered before the rules read them.
 #[derive(Default)]
 struct NodeFacts {
+    in_document: Option<String>,
     text: Option<String>,
     verbatim: Option<String>,
     byte_start: Option<u64>,
@@ -146,9 +147,11 @@ struct NodeFacts {
 ///
 /// `dataset` is any RDF 1.2 dataset holding the document's claims —
 /// parsed back from Turtle, merged from several sources, or built by
-/// hand; the rules read predicates and literal shapes and nothing
-/// else, so extra triples beside the claims are ignored rather than
-/// refused. `vocabulary` is the caller's own — the one the graph was
+/// hand, other documents' claims among them; the rules read
+/// predicates and literal shapes and nothing else, and only nodes
+/// stating membership in the named document enter its cover, so extra
+/// triples beside the claims — a second document whole — are ignored
+/// rather than refused. `vocabulary` is the caller's own — the one the graph was
 /// emitted under — and `document_id` names the document node the byte
 /// length and source digest are read from.
 ///
@@ -220,6 +223,10 @@ pub fn decode_document(
             && let TermRef::Iri(piece) = quad.o
         {
             node.continues = Some(piece.to_owned());
+        } else if predicate == vocabulary.in_document
+            && let TermRef::Iri(owner) = quad.o
+        {
+            node.in_document = Some(owner.to_owned());
         }
     }
 
@@ -234,8 +241,15 @@ pub fn decode_document(
         .and_then(purrdf_core::ContentDigest::from_hex)
         .ok_or(DecodeError::MalformedSourceDigest { stated })?;
 
+    // Only the named document's own nodes enter the cover: a dataset
+    // may hold several documents' claims — the merge the identities
+    // exist to make safe — and every text-bearing node of a lawful
+    // emission states the document it belongs to. A node claiming no
+    // document, or another's, contributes nothing here, exactly as any
+    // other extra triple does.
+    let mine = |node: &&NodeFacts| node.in_document.as_deref() == Some(document_id);
     let mut spans: Vec<VerbatimSpan<'_>> = Vec::new();
-    for (subject, node) in &nodes {
+    for (subject, node) in nodes.iter().filter(|(_, node)| mine(node)) {
         if let Some(text) = &node.verbatim {
             spans.push(VerbatimSpan {
                 byte_start: require(node.verbatim_start, subject, "verbatimStart")?,
@@ -250,6 +264,7 @@ pub fn decode_document(
                 Some(piece) => {
                     let it = nodes
                         .get(piece.as_str())
+                        .filter(|p| mine(&p))
                         .filter(|p| p.byte_start.is_some() && p.byte_end.is_some())
                         .ok_or_else(|| DecodeError::UnknownContinuedPiece {
                             subject: (*subject).to_owned(),

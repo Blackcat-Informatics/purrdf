@@ -901,6 +901,15 @@ impl<'a> Document<'a> {
 
     /// The verbatim bytes of a structure span: `&source[span]`, exactly
     /// as [`Unit::quote`] answers for a unit.
+    ///
+    /// # Panics
+    ///
+    /// `span` must be a span of **this** document on scalar boundaries
+    /// — one the model itself stated, as every span in
+    /// [`Self::structures`] is. A span from another document, one past
+    /// the source's end, a reversed one, or one cutting a scalar in
+    /// half names no text of this source, and the slice panics rather
+    /// than answer with bytes the span does not denote.
     #[must_use]
     pub fn structure_text(&self, span: Span) -> &'a str {
         &self.source[span.start as usize..span.end as usize]

@@ -88,7 +88,14 @@ const GUIDE: &str = include_str!("fixtures/field-guide.md");
 #[test]
 fn the_field_guide_roundtrips_under_the_declared_law_and_under_splitting_bounds() {
     assert_roundtrips(GUIDE, &profile());
-    for (max_bytes, overlap) in [(200, 40), (200, 0), (64, 63), (5, 2)] {
+    // (64, 63) and (8, 7) are the overlap-one-under-the-bound
+    // geometries: piece starts can advance by single bytes, so a late
+    // piece's span may reach back across several predecessors. The
+    // decode law never compares it against those — the shared region
+    // it checks always lies within the one piece its edge declares,
+    // because piece ends never decrease — and these bounds hold that
+    // as an executed fact rather than an argument.
+    for (max_bytes, overlap) in [(200, 40), (200, 0), (64, 63), (8, 7), (5, 2)] {
         let bounded = tight(max_bytes, overlap);
         // The bound is small enough that the guide's long units MUST
         // split, and the graph must say so: a split law that regressed
@@ -172,6 +179,41 @@ fn every_shape_of_document_roundtrips_byte_for_byte() {
         assert_roundtrips(text, &profile());
         assert_roundtrips(text, &tight(6, 3));
     }
+}
+
+/// A dataset may hold several documents' claims — the merge the
+/// content-addressed identities exist to make safe — and each document
+/// decodes by its own membership edges: only nodes stating the named
+/// document enter its cover, so the other document's spans are the
+/// extra triples the law ignores rather than a refusal it trips over.
+#[test]
+fn two_documents_in_one_dataset_each_decode_by_their_own_membership() {
+    let first = "# One\n\n1. alpha\n";
+    let second = "# Two\n\nbeta gamma\n";
+    let other_id = "https://example.org/doc/other";
+    let a = slice(first, &profile());
+    let b = slice_markdown(
+        &SourceDocument {
+            id: other_id,
+            bytes: second.as_bytes(),
+        },
+        &profile(),
+    )
+    .expect("slices");
+    let merged: String = a
+        .iter()
+        .chain(b.iter())
+        .map(|c| c.turtle.as_str())
+        .collect();
+    let dataset = parse_dataset(merged.as_bytes(), "text/turtle", None).expect("one graph");
+    assert_eq!(
+        decode_document(&dataset, &v(), DOC_ID).as_deref(),
+        Ok(first)
+    );
+    assert_eq!(
+        decode_document(&dataset, &v(), other_id).as_deref(),
+        Ok(second)
+    );
 }
 
 /// The graph half's refusals, each beside the neighbouring graph that
