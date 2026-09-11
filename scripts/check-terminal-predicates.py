@@ -87,6 +87,15 @@ tightening aimed at whitespace would break if it reached into IRIREF bodies.
 A corpus with no offenders is evidence of no observed regression; it is never
 evidence of no over-refusal, which by definition lives in input the corpus does
 not contain. That is what the exhaustive per-predicate sweeps are for.
+
+``--census-refusals`` measures the populations the other refusals moved — the
+comment-emptied bracket pair, the leading byte-order mark, and a name whose
+first scalar its head class forbids. Every refusal is owed a count before it
+lands, and a count that lives only in a review thread is a count nobody can
+re-run. At the time of writing: 0, 0, and 1 — the single hit being
+``vectors/shexTest/negativeSyntax/PN_LOCAL-dash-start.shex``, a negative-syntax
+vector whose whole purpose is to be refused. Neither census is a gate; a hit is
+a file to open.
 """
 
 from __future__ import annotations
@@ -579,6 +588,15 @@ def self_test() -> None:
     for blanker in (strip_comment_lines, strip_test_modules):
         assert len(blanker(in_test)) == len(in_test), f"{blanker.__name__} moved offsets"
 
+    # The census patterns are a claim too. A shape that silently matches nothing
+    # would report a reassuring zero forever, which is worse than not measuring.
+    for bad in ("ex:-a", "ex:.a", "_:-a", "_:.a", "ex:́a", "_:·a", ":-a"):
+        assert HEAD_CLASS_VIOLATION.search(bad), f"head-class shape must match {bad!r}"
+    for good in ("ex:a", "ex:_a", "ex:0a", "ex::a", "_:a", "_:0a", "ex:a-b", "ex:a.b"):
+        assert not HEAD_CLASS_VIOLATION.search(good), f"lawful name matched: {good!r}"
+    assert COMMENT_EMPTIED_BRACKET.search("[ # c\n ]"), "comment-emptied bracket"
+    assert not COMMENT_EMPTIED_BRACKET.search("[ ?p ?o ]"), "a populated list must not match"
+
     print("check-terminal-predicates.py: self-test OK")
 
 
@@ -601,12 +619,68 @@ def stale_scanners() -> list[str]:
     return stale
 
 
+# The refusals this workspace's tightening added BEYOND the whitespace and
+# invisible-scalar family `census()` measures. Each is a population question a
+# reviewer would otherwise have to take on trust, so each is measured here
+# rather than asserted in a review thread that disappears.
+#
+# Matched as source shapes, not by tokenizing: a Python re-implementation of the
+# scanner would be a sixth transcription of the thing this gate exists to keep
+# singular. The shapes are deliberately WIDE — they over-report rather than
+# under-report, so a non-zero count is a file to open, never a verdict.
+COMMENT_EMPTIED_BRACKET = re.compile(r"\[[ \t]*(?:#[^\n]*)?\n(?:\s*#[^\n]*\n)*\s*\]")
+LEADING_BOM = "﻿"
+# A prefixed name or blank label whose FIRST scalar the head class forbids:
+# `-`, `.`, or a combining mark. `PN_LOCAL` heads on PN_CHARS_U | ':' | [0-9] |
+# PLX; `BLANK_NODE_LABEL` on PN_CHARS_U | [0-9].
+HEAD_CLASS_VIOLATION = re.compile(
+    r"(?<![\w:])(?:[A-Za-z_][\w.-]*)?:[-.̀-ͯ·‿⁀]"
+    r"|_:[-.̀-ͯ·‿⁀]"
+)
+
+
+def census_refusals() -> int:
+    """Report the corpus population of every refusal this change added."""
+    seen: set[Path] = set()
+    hits: dict[str, list[str]] = {"comment-emptied-bracket": [], "leading-bom": [], "head-class": []}
+    for pattern in CENSUS_GLOBS:
+        for path in REPO_ROOT.glob(pattern):
+            if not path.is_file() or path.suffix not in CENSUS_EXTS or path in seen:
+                continue
+            seen.add(path)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if text.startswith(LEADING_BOM):
+                hits["leading-bom"].append(rel)
+            for match in COMMENT_EMPTIED_BRACKET.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                hits["comment-emptied-bracket"].append(f"{rel}:{line}")
+            for match in HEAD_CLASS_VIOLATION.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                hits["head-class"].append(f"{rel}:{line}: {match.group(0)!r}")
+
+    print(f"refusal census: {len(seen)} files over {len(CENSUS_GLOBS)} globs")
+    for kind, found in hits.items():
+        print(f"  {kind:26s} {len(found)}")
+        for hit in found:
+            print(f"      {hit}")
+    # Not a gate. A hit is a file to READ: a negative-syntax vector SHOULD
+    # contain a head-class violation, and finding one there is the corpus
+    # working as intended.
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if "--self-test" in argv:
         self_test()
         return 0
     if "--census" in argv:
         return census()
+    if "--census-refusals" in argv:
+        return census_refusals()
     offenders, matched = scan()
     stale = sorted(set(ALLOWLIST) - matched) + [(entry, "") for entry in stale_scanners()]
 

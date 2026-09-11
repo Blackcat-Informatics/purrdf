@@ -724,10 +724,20 @@ pub(super) fn extract_markdown_links(
         let Some(close) = find_unescaped(bytes, open + 1, b']') else {
             break;
         };
-        let mut paren = close + 1;
-        while paren < bytes.len() && bytes[paren].is_ascii_whitespace() {
-            paren += 1;
-        }
+        // The `(` must be ADJACENT to the `]`:
+        //
+        // > An inline link consists of a link text followed immediately by a left
+        // > parenthesis `(`, an optional link destination, an optional link title, and a
+        // > right parenthesis `)`.
+        //
+        // — CommonMark 0.31.2 §6.3 *Links*. "immediately" is the whole clause: the four
+        // components INSIDE the parentheses may be separated by spaces, tabs and up to
+        // one line ending (that is what `is_commonmark_link_space` answers, one line
+        // below), but the gap between the link text and the `(` is not one of those
+        // separations. `[a] (b)` is a bracketed run followed by a parenthesised run — two
+        // pieces of literal text — and reading it as a link minted an OKF edge from a
+        // document that names none. This used to skip an `is_ascii_whitespace` run here.
+        let paren = close + 1;
         if paren >= bytes.len() || bytes[paren] != b'(' {
             cursor = close + 1;
             continue;
@@ -1074,6 +1084,58 @@ mod tests {
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].target, "a.md");
         assert_eq!(links[1].target, "\u{a0}b.md");
+    }
+
+    /// A CommonMark inline link's `(` follows the link text IMMEDIATELY.
+    ///
+    /// > An inline link consists of a link text followed immediately by a left
+    /// > parenthesis `(`, an optional link destination, an optional link title, and a
+    /// > right parenthesis `)`. These four components may be separated by spaces, tabs,
+    /// > and up to one line ending.
+    ///
+    /// — CommonMark 0.31.2 §6.3 *Links*. The separations the second sentence allows are
+    /// the ones BETWEEN the four components inside the parentheses; the gap between the
+    /// text and the `(` is not among them. This reader used to skip an ASCII-whitespace
+    /// run there, so `[a] (b.md)` minted an OKF edge that the document does not contain —
+    /// and, being over-acceptance rather than a drop, it produced extra triples with exit
+    /// zero. Measured before tightening: no OKF fixture, vector or corpus in this
+    /// repository holds a `]`-whitespace-`(` sequence, so nothing that parsed as a link
+    /// stops doing so.
+    #[test]
+    fn a_link_parenthesis_must_follow_the_text_immediately() {
+        for separated in [
+            "See [a] (b.md).\n",
+            "See [a]\t(b.md).\n",
+            "See [a]\n(b.md).\n",
+            "See [a]  (b.md).\n",
+        ] {
+            assert!(
+                extract_markdown_links(separated, "d.md")
+                    .expect("scan")
+                    .is_empty(),
+                "{separated:?} is bracketed text beside parenthesised text, not a link"
+            );
+        }
+        // THE NEIGHBOURS, executed. Adjacency is the only thing that changed: the
+        // separations CommonMark does allow — around the destination, inside the
+        // parentheses — still hold, as does an empty link text and an adjacent link
+        // whose destination itself opens with whitespace-adjacent punctuation.
+        for (body, target) in [
+            ("See [a](b.md).\n", "b.md"),
+            ("See [a](  b.md  ).\n", "b.md"),
+            ("See [a](\n b.md \n).\n", "b.md"),
+            ("See [a](\tb.md\t).\n", "b.md"),
+            ("See []( b.md ).\n", "b.md"),
+            ("See [a b](b.md).\n", "b.md"),
+        ] {
+            let links = extract_markdown_links(body, "d.md").expect("scan");
+            assert_eq!(links.len(), 1, "{body:?} is one link");
+            assert_eq!(links[0].target, target, "{body:?}");
+        }
+        // And a separated pair does not swallow a REAL link that follows it.
+        let links = extract_markdown_links("[a] (x.md) then [b](y.md).\n", "d.md").expect("scan");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "y.md");
     }
 
     #[test]

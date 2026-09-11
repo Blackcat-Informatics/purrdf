@@ -887,10 +887,48 @@ impl<'a> TokenCursor<'a> {
         }
     }
 
+    /// Consume the statement terminator, which is not optional.
+    ///
+    /// > `ntriplesDoc ::= triple? (EOL triple?)* EOL?`
+    /// >
+    /// > `triple ::= subject predicate object '.'`
+    ///
+    /// — RDF 1.2 N-Triples §2.2 (N-Quads §2.2 spells `quad ::= subject predicate object`
+    /// `graphLabel? '.'`). The `'.'` is a literal inside `triple`, not an optional
+    /// trailing element of `ntriplesDoc`: what `ntriplesDoc` makes optional is the
+    /// `triple` itself and the final `EOL`, so a line that HAS a subject, predicate and
+    /// object has a `'.'` too. There is no production in this family under which
+    /// `<s> <p> <o>` alone is a statement.
+    ///
+    /// # This used to accept the terminator's ABSENCE
+    ///
+    /// The match arm read `Some(Token::Dot) | None => Ok(())`, so running off the end of
+    /// the token stream was as good as finding the dot. Nothing was dropped and nothing
+    /// was misparsed — the three terms still became the triple the author meant — which
+    /// is exactly why it survived: the defect is pure over-acceptance, a document this
+    /// grammar does not define being read as though it did, and it only ever shows up
+    /// when the file moves to a conforming parser that refuses it.
+    ///
+    /// # What is NOT refused
+    ///
+    /// [`parse_one_line`] returns before a cursor is built for a line that is empty or
+    /// comment-only after `WS` trimming, and `trim_ws` removes a trailing `#xD`, so none
+    /// of a blank final line, a comment-only final line, a file with no final newline, or
+    /// a file whose last line ends in a bare `\r` reaches this function at all. A quad's
+    /// `graphLabel` is consumed by the term loop before it, so `<s> <p> <o> <g> .`
+    /// arrives here at the dot like any triple.
     fn expect_dot(&mut self) -> Result<(), RdfDiagnostic> {
         let col = self.col();
         match self.bump() {
-            Some(Token::Dot) | None => Ok(()),
+            Some(Token::Dot) => Ok(()),
+            None => Err(err_at(
+                "the statement terminator '.' is missing: `triple ::= subject predicate \
+                 object '.'` (RDF 1.2 N-Triples §2.2) ends every statement with a '.', \
+                 and the line ended without one"
+                    .to_owned(),
+                self.lineno,
+                col,
+            )),
             other => Err(err_at(
                 format!("expected '.' terminator, found {other:?}"),
                 self.lineno,
