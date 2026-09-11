@@ -1151,9 +1151,18 @@ graph's own edge, and the piece it names is the one the shared bytes
 are held against — never whichever span a sorted walk last extended,
 because two pieces of one chain can end at one cut and the walk then
 credits the shared bytes to the earlier while the edge names the later.
-An overlap with no `continues` edge, with an edge naming a span the
-graph does not carry, or with an edge naming one that does not cover
-the shared bytes, MUST be refused **even when the shared bytes agree**:
+The declared piece MUST start **strictly before** the continuation —
+the split's own geometry (§3), and the clause that closes
+self-reference: a span naming its own range would be found, cover its
+own overlap, and agree with itself byte for byte, laundering any
+overlap into legality. A declaration naming the span itself, a span
+starting where it starts, or any later span therefore answers for
+nothing. An empty span covers nothing, contributes nothing, and is
+ignored rather than refused — it asserts no byte. An overlap with no
+`continues` edge, with an edge naming a span the graph does not carry,
+or with an edge naming one that does not cover the shared bytes or
+does not start strictly before them, MUST be refused **even when the
+shared bytes agree**:
 two spans sliced from one file agree wherever they overlap, so
 agreement is evidence they came from the same file and none at all that
 the structure is lawful.

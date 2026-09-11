@@ -121,8 +121,11 @@ pub enum ReconstructError {
         at: u64,
     },
     /// The reconstructed bytes are not UTF-8, which no lawful set of
-    /// spans can produce: every span's text is UTF-8 whole, and every
-    /// span boundary is one of some text.
+    /// spans can produce: every span's text is UTF-8 whole, every
+    /// admitted overlap agrees with a strictly earlier piece, and so
+    /// every appended tail begins on a scalar boundary. It is kept as
+    /// the typed last line — never an `expect` — so a defect in that
+    /// argument would fail loudly and by name rather than by panic.
     InvalidUtf8 {
         /// The byte offset where decoding stopped.
         valid_up_to: usize,
@@ -264,7 +267,12 @@ pub fn reconstruct(
     }
     let mut ordered: Vec<&VerbatimSpan<'_>> =
         spans.iter().filter(|s| s.byte_start < s.byte_end).collect();
-    ordered.sort_unstable_by_key(|s| (s.byte_start, s.byte_end));
+    // The text is inside the sort key so the order is total: two spans
+    // over one range with different texts — no lawful cover has them,
+    // but a hostile one may — sort the same way on every run and every
+    // host, and the walk below therefore accepts or refuses such a
+    // cover deterministically rather than by allocation order.
+    ordered.sort_unstable_by_key(|s| (s.byte_start, s.byte_end, s.text));
 
     // The coverage walk, before a buffer exists: `frontier` is one past
     // the last covered byte, and `owner` the span that put it there.
@@ -287,11 +295,14 @@ pub fn reconstruct(
     // binary search over the very ordering the walk reads, so the
     // lookup costs no second structure and nothing is built for the
     // common cover — the one with no overlap at all.
+    // The first span of the equal-range group, so a duplicated range is
+    // answered by the same representative on every run.
     let find = |key: (u64, u64)| -> Option<&VerbatimSpan<'_>> {
+        let at = ordered.partition_point(|s| (s.byte_start, s.byte_end) < key);
         ordered
-            .binary_search_by_key(&key, |s| (s.byte_start, s.byte_end))
-            .ok()
-            .map(|i| ordered[i])
+            .get(at)
+            .filter(|s| (s.byte_start, s.byte_end) == key)
+            .copied()
     };
     let mut frontier = 0u64;
     let mut owner: Option<&VerbatimSpan<'_>> = None;
@@ -305,10 +316,19 @@ pub fn reconstruct(
         if span.byte_start < frontier {
             let covering = owner.expect("bytes below the frontier have an owner");
             let shared_end = frontier.min(span.byte_end);
+            // The declared piece must start STRICTLY before the
+            // continuation — the split law's own geometry, and the
+            // clause that closes self-reference: a span naming its own
+            // range would be found, cover its own overlap, and agree
+            // with itself byte for byte, laundering any overlap into
+            // legality. Strictly-earlier makes self-declaration and
+            // same-start declaration answer for nothing, and a
+            // duplicated range is then always refused at its second
+            // twin, deterministically.
             let declared = span
                 .continues
                 .and_then(find)
-                .filter(|p| p.byte_start <= span.byte_start && shared_end <= p.byte_end);
+                .filter(|p| p.byte_start < span.byte_start && shared_end <= p.byte_end);
             let Some(piece) = declared else {
                 return Err(ReconstructError::UndeclaredOverlap {
                     byte_start: span.byte_start,
@@ -317,6 +337,10 @@ pub fn reconstruct(
                     covered_end: covering.byte_end,
                 });
             };
+            // Both narrowings are bounded by a resident `&str`'s
+            // length — `shared` by this span's text, `from + shared`
+            // by the declared piece's, both via the length check
+            // above — so neither can truncate on a 32-bit target.
             let shared = (shared_end - span.byte_start) as usize;
             let of_continuation = &span.text.as_bytes()[..shared];
             let from = (span.byte_start - piece.byte_start) as usize;
@@ -360,6 +384,9 @@ pub fn reconstruct(
     for span in &ordered {
         let written = bytes.len() as u64;
         if span.byte_end > written {
+            // Bounded by this span's own text: the proven cover keeps
+            // `written` between `byte_start` and `byte_end`, whose
+            // distance is the text's length, checked above.
             let skip = (written - span.byte_start) as usize;
             bytes.extend_from_slice(&span.text.as_bytes()[skip..]);
         }
@@ -606,6 +633,96 @@ mod tests {
                 byte_start: 0,
                 byte_end: 1,
             })
+        );
+    }
+
+    /// The overlap law cannot be laundered by self-reference. A span
+    /// naming its own range as the piece it continues would be found
+    /// by the lookup, cover its own overlap, and agree with itself
+    /// byte for byte — so the declared piece must start strictly
+    /// earlier, and a self-declaration, a same-start declaration, and
+    /// a duplicated range all answer for nothing. The smuggling this
+    /// closes is real: through the self-gate, a continuation could
+    /// split a scalar and rebuild bytes no lawful cover states.
+    #[test]
+    fn a_continuation_cannot_declare_itself_and_a_split_scalar_cannot_be_smuggled() {
+        let digest = ContentDigest::of(b"abcd");
+        let piece = VerbatimSpan {
+            byte_start: 0,
+            byte_end: 2,
+            text: "ab",
+            continues: None,
+        };
+        // The laundering shape: the later span contradicts the earlier
+        // about byte 1 and "declares" the overlap against itself.
+        let selfish = VerbatimSpan {
+            byte_start: 1,
+            byte_end: 4,
+            text: "Xcd",
+            continues: Some((1, 4)),
+        };
+        assert_eq!(
+            reconstruct(4, &digest, &[piece, selfish]),
+            Err(ReconstructError::UndeclaredOverlap {
+                byte_start: 1,
+                byte_end: 4,
+                covered_start: 0,
+                covered_end: 2,
+            })
+        );
+        // A same-start declaration is no answer either.
+        let same_start = VerbatimSpan {
+            byte_start: 0,
+            byte_end: 4,
+            text: "abcd",
+            continues: Some((0, 2)),
+        };
+        assert_eq!(
+            reconstruct(4, &digest, &[piece, same_start]),
+            Err(ReconstructError::UndeclaredOverlap {
+                byte_start: 0,
+                byte_end: 4,
+                covered_start: 0,
+                covered_end: 2,
+            })
+        );
+        // The scalar smuggle the self-gate would have admitted: a
+        // continuation whose tail begins mid-scalar, its stated digest
+        // matching the invalid bytes it would rebuild. Refused as the
+        // undeclared overlap it is, before a byte exists.
+        let smuggle = VerbatimSpan {
+            byte_start: 1,
+            byte_end: 4,
+            text: "\u{e9}!",
+            continues: Some((1, 4)),
+        };
+        let smuggled = ContentDigest::of(&[0x61, 0x62, 0xA9, 0x21]);
+        assert_eq!(
+            reconstruct(4, &smuggled, &[piece, smuggle]),
+            Err(ReconstructError::UndeclaredOverlap {
+                byte_start: 1,
+                byte_end: 4,
+                covered_start: 0,
+                covered_end: 2,
+            })
+        );
+        // The honest neighbour: the same overlap declared against the
+        // strictly earlier piece it agrees with, decoding whole.
+        let lawful = VerbatimSpan {
+            byte_start: 1,
+            byte_end: 4,
+            text: "bcd",
+            continues: Some((0, 2)),
+        };
+        assert_eq!(
+            reconstruct(4, &digest, &[piece, lawful]).as_deref(),
+            Ok("abcd")
+        );
+        // With every route refused earlier, the UTF-8 refusal is the
+        // typed last line rather than a panic, and its finding renders.
+        assert_eq!(
+            ReconstructError::InvalidUtf8 { valid_up_to: 2 }.to_string(),
+            "reconstructed bytes are not UTF-8 after byte 2"
         );
     }
 }

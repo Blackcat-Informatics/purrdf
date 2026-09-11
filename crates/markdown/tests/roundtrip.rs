@@ -296,8 +296,13 @@ fn no_two_structure_nodes_are_adjacent_and_none_is_empty() {
             "the guide has structure between its units"
         );
         runs.sort_unstable();
+        // Every run, the last included: `windows(2)` alone would leave
+        // the final run unasserted and a one-run document unasserted
+        // entirely.
+        for &(start, end) in &runs {
+            assert!(start < end, "a structure span covers bytes");
+        }
         for pair in runs.windows(2) {
-            assert!(pair[0].0 < pair[0].1, "a structure span covers bytes");
             assert!(
                 pair[0].1 < pair[1].0,
                 "two structure runs never touch: a maximal run absorbed its neighbour"
