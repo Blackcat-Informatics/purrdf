@@ -691,6 +691,16 @@ struct ReboundLiterals {
     index: hashbrown::HashTable<LocalId>,
 }
 
+/// A probe translated into the retained composite's handles: the three term
+/// axes plus the one selected graph the cursor may read (`None` = every
+/// selected graph).
+type SelectedProbe = (
+    Option<CompositeViewId>,
+    Option<CompositeViewId>,
+    Option<CompositeViewId>,
+    Option<CompositeViewId>,
+);
+
 /// One composite view projected onto a chosen set of its named graphs.
 ///
 /// The projection is a RENAMING, never a rebuild. [`ids`](Self::ids) is the dense
@@ -906,15 +916,7 @@ impl SelectedGraphs {
     /// `None` for the whole result means the pattern names nothing here — a bound
     /// axis this projection does not hold, a graph outside the selection, or the
     /// default graph, which selection by graph name never admits.
-    fn probe_pattern(
-        &self,
-        (s, p, o, g): Pattern<LocalId>,
-    ) -> Option<(
-        Option<CompositeViewId>,
-        Option<CompositeViewId>,
-        Option<CompositeViewId>,
-        Option<CompositeViewId>,
-    )> {
+    fn probe_pattern(&self, (s, p, o, g): Pattern<LocalId>) -> Option<SelectedProbe> {
         let axis = |value: Option<LocalId>| match value {
             None => Some(None),
             Some(id) => self.inner(id).map(Some),

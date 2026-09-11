@@ -630,6 +630,30 @@ fn iri_named_graphs<D: DatasetView>(view: &D) -> Vec<HandleKey> {
 
 /// Whether every row and declaration of `contribution` names `graph` and nothing
 /// else — the containment invariant the module docs state.
+/// Register every owner one composite source keeps resident: a native base, a
+/// delta's base and overlay, or — for a graph selection — every owner of the
+/// composite it retains, recursively, since a selection can be taken over a
+/// composite that itself holds one. The ledger deduplicates by owner identity,
+/// so an owner reached along two paths is charged once.
+fn retain_source_owners(
+    source: &CompositeSource,
+    ledger: &Arc<RetentionLedger>,
+    retained: &mut Vec<RetentionGuard>,
+) {
+    if let Some(base) = source.dataset() {
+        retained.push(ledger.retain_dataset(base));
+    }
+    if let Some(delta) = source.delta() {
+        retained.push(ledger.retain_dataset(delta.base()));
+        retained.push(ledger.retain_dataset(delta.delta()));
+    }
+    if let Some((selected, _)) = source.selection() {
+        for inner in selected.sources() {
+            retain_source_owners(inner, ledger, retained);
+        }
+    }
+}
+
 fn check_containment(contribution: &RdfDataset, graph: &str) -> Result<(), PipelineBundleError> {
     let names = |slot: Option<crate::TermId>| matches!(slot.map(|id| contribution.resolve(id)), Some(TermRef::Iri(iri)) if iri == graph);
     let violation =
@@ -1193,8 +1217,11 @@ impl<H> PipelineViewBundle<H> {
     ///
     /// Accepts an owned [`CompositeDatasetView`] or a shared `Arc` of one. Every
     /// native source is registered with `ledger`; a delta source registers both the
-    /// base it branched from and its delta, which is exactly what that source charges
-    /// into its own [`ViewStats`].
+    /// base it branched from and its delta; a graph selection registers every owner
+    /// of the composite it retains, recursively, since a selection can be taken
+    /// over a composite that itself holds one. Together that is exactly what each
+    /// source keeps resident, and the ledger deduplicates any owner reached along
+    /// more than one path.
     ///
     /// No graph of a caller-composed view is treated as SOLE-OWNED by one base:
     /// placement and source order are the composing caller's
@@ -1222,13 +1249,7 @@ impl<H> PipelineViewBundle<H> {
         let view = view.into();
         let mut retained = Vec::new();
         for source in view.sources() {
-            if let Some(base) = source.dataset() {
-                retained.push(ledger.retain_dataset(base));
-            }
-            if let Some(delta) = source.delta() {
-                retained.push(ledger.retain_dataset(delta.base()));
-                retained.push(ledger.retain_dataset(delta.delta()));
-            }
+            retain_source_owners(source, ledger, &mut retained);
         }
         Self {
             view,

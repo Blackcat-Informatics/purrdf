@@ -3426,3 +3426,89 @@ fn a_selection_places_binds_and_retains_like_any_other_source() {
     .expect_err("a selection over a ceiling is refused");
     assert_eq!(refused.code, "view-retention-limit");
 }
+
+#[test]
+fn a_selection_backed_carrier_keeps_its_owners_resident_in_the_ledger() {
+    let base = identity_fixture();
+    let composite =
+        Arc::new(CompositeDatasetView::new(vec![base.clone()], ViewLimits::default()).unwrap());
+    let select = |view: Arc<CompositeDatasetView>| {
+        CompositeSource::from_selection(view, [TermValue::iri(GRAPH)], ViewLimits::default())
+            .expect("a held graph selects")
+    };
+
+    // The control: the same base kept resident through a native carrier.
+    let control_ledger = RetentionLedger::new();
+    let (lookaside, blobs, provenance) = loadout();
+    let control = PipelineViewBundle::<Note>::from_dataset(
+        &base,
+        lookaside,
+        blobs,
+        provenance,
+        &control_ledger,
+        ViewLimits::default(),
+    )
+    .expect("the control carrier admits");
+    let expected = control_ledger.snapshot();
+    assert_eq!(expected.distinct_owners, 1);
+
+    // A selection-backed carrier keeps the SAME owner resident: the ledger must
+    // see through the selection to the base it retains.
+    let ledger = RetentionLedger::new();
+    let selected = CompositeDatasetView::from_bound_sources(
+        vec![select(Arc::clone(&composite))],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    let (lookaside, blobs, provenance) = loadout();
+    let carrier = PipelineViewBundle::<Note>::from_view(
+        selected,
+        lookaside,
+        blobs,
+        provenance,
+        &ledger,
+        ViewLimits::default(),
+    );
+    let seen = ledger.snapshot();
+    assert_eq!(seen.distinct_owners, 1, "the selection's base is resident");
+    assert_eq!(seen.retained_payload_bytes, expected.retained_payload_bytes);
+
+    // Recursion: a selection over a composite that itself holds a selection
+    // still reaches the one underlying owner.
+    let nested_ledger = RetentionLedger::new();
+    let inner = Arc::new(
+        CompositeDatasetView::from_bound_sources(
+            vec![select(Arc::clone(&composite))],
+            ViewLimits::default(),
+        )
+        .unwrap(),
+    );
+    let nested =
+        CompositeDatasetView::from_bound_sources(vec![select(inner)], ViewLimits::default())
+            .unwrap();
+    let (lookaside, blobs, provenance) = loadout();
+    let nested_carrier = PipelineViewBundle::<Note>::from_view(
+        nested,
+        lookaside,
+        blobs,
+        provenance,
+        &nested_ledger,
+        ViewLimits::default(),
+    );
+    let nested_seen = nested_ledger.snapshot();
+    assert_eq!(nested_seen.distinct_owners, 1);
+    assert_eq!(
+        nested_seen.retained_payload_bytes,
+        expected.retained_payload_bytes
+    );
+
+    // And the residency ends with the last reader, in both shapes.
+    drop(carrier);
+    let after = ledger.snapshot();
+    assert_eq!(after.distinct_owners, 0);
+    assert_eq!(after.retained_payload_bytes, 0);
+    drop(nested_carrier);
+    assert_eq!(nested_ledger.snapshot().distinct_owners, 0);
+    drop(control);
+    assert_eq!(control_ledger.snapshot().distinct_owners, 0);
+}
