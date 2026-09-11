@@ -803,6 +803,14 @@ fn offence_is_a_property_of_the_position() {
 /// * Everything above `#x20` that is not a delimiter is content, U+00A0 and the
 ///   rest of the Unicode whitespace included. Narrowing the class to "no
 ///   whitespace" would refuse IRIs this workspace's own writers emit.
+///
+/// Two of the nine delimiters carry a second reading and so are asserted apart
+/// from the run: `'>'` CLOSES the body rather than ending it, and `'\'` opens the
+/// production's `UCHAR` alternative. A raw `\b` is still refused — `ECHAR` is not
+/// reachable from `IRIREF`, so nothing follows the backslash that could make it
+/// one — but the refusal is a malformed escape, not a truncated body, and the
+/// well-formed neighbour that must still parse is asserted where the decoder is
+/// (`an_iri_uchar_escape_decodes_to_the_same_iri_as_the_plain_spelling`).
 #[test]
 fn the_shape_map_iriref_body_stops_at_the_scalars_the_production_excludes() {
     for c in ['\u{a0}', '\u{1680}', '\u{2000}', '\u{200b}', '\u{3000}'] {
@@ -815,7 +823,7 @@ fn the_shape_map_iriref_body_stops_at_the_scalars_the_production_excludes() {
     }
     for c in [
         ' ', '\t', '\n', '\r', '\u{0b}', '\u{0c}', '\u{1f}', // the #x00-#x20 range
-        '<', '"', '{', '}', '|', '^', '`', '\\', // eight of the nine delimiters
+        '<', '"', '{', '}', '|', '^', '`', // seven of the nine delimiters
     ] {
         assert_eq!(
             shape_map(&format!("<urn:ex:a{c}b>@START")),
@@ -824,8 +832,12 @@ fn the_shape_map_iriref_body_stops_at_the_scalars_the_production_excludes() {
             u32::from(c)
         );
     }
-    // The ninth delimiter is `'>'`, which does not "end the body" so much as CLOSE
-    // it — so it gets its own reading rather than a refusal.
+    // The eighth delimiter is `'\'`, which is excluded from the RAW content class
+    // and admitted as the lead of `UCHAR`: `\b` opens no escape, so it is refused
+    // for being a malformed one rather than for ending the body.
+    assert_eq!(shape_map(r"<urn:ex:a\b>@START"), Reading::Refused);
+    // The ninth is `'>'`, which does not "end the body" so much as CLOSE it — so
+    // it gets its own reading rather than a refusal.
     assert_eq!(
         shape_map("<urn:ex:a>@START"),
         sole_node(TermValue::iri("urn:ex:a"))

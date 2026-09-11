@@ -171,6 +171,72 @@ pub fn tokenize(input: &str) -> Result<Vec<Spanned>> {
     Lexer::new(input).run()
 }
 
+/// Why a `UCHAR` at a cursor did not decode.
+///
+/// Three arms rather than one error, because the two scanners that share
+/// [`decode_uchar`] report them at different source offsets: a backslash that
+/// opens nothing at all is a defect AT the backslash, while a malformed escape
+/// body is reported at the start of the terminal being scanned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UcharDefect {
+    /// The backslash is followed by something other than `u` or `U`, so it does
+    /// not open a `UCHAR` — and `'\'` has no other reading in any production
+    /// that admits `UCHAR`.
+    NotAnEscape,
+    /// The `u`/`U` is not followed by its full run of `HEX ::= [0-9] | [A-F] |
+    /// [a-f]` digits (input ran out, or a non-hex scalar stands in the run).
+    BadHex,
+    /// The digits are well formed and denote no Unicode scalar value: a value
+    /// above U+10FFFF, or one of the U+D800-U+DFFF surrogates.
+    NotAScalar,
+}
+
+/// Decode the `UCHAR` whose backslash `peek(0)` stands on.
+///
+/// ```text
+/// UCHAR ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
+/// HEX   ::= [0-9] | [A-F] | [a-f]
+/// ```
+///
+/// `peek(ahead)` yields the scalar `ahead` positions past the backslash, or
+/// `None` at end of input. Returns the decoded scalar and how many scalars the
+/// escape consumed (`2 + 4` or `2 + 8`), so a caller advances its own cursor
+/// without re-deriving the width.
+///
+/// # One decoder, two scanners
+///
+/// ShExC and the ShapeMap grammar spell `UCHAR` identically — ShapeMap's `[18t]
+/// IRIREF` is the same production `[18t]` Turtle and SPARQL carry — so this is
+/// the one transcription both read. It is not a convenience: a second copy is
+/// free to differ on exactly the three edges that decide identity rather than
+/// well-formedness (a bare `'\'`, mixed-case hex, and a surrogate), and a
+/// scanner that resolves `\uD800` to U+FFFD names a different node than one
+/// that refuses it.
+///
+/// Mixed-case hex is lawful in both directions of the `HEX` class, so
+/// `é` and `é` decode to the same `é`.
+pub(crate) fn decode_uchar(
+    peek: impl Fn(usize) -> Option<char>,
+) -> std::result::Result<(char, usize), UcharDefect> {
+    let width = match peek(1) {
+        Some('u') => 4,
+        Some('U') => 8,
+        _ => return Err(UcharDefect::NotAnEscape),
+    };
+    let mut value: u32 = 0;
+    for k in 0..width {
+        let digit = peek(2 + k)
+            .and_then(|c| c.to_digit(16))
+            .ok_or(UcharDefect::BadHex)?;
+        value = value * 16 + digit;
+    }
+    // `char::from_u32` is the scalar-value test itself: it refuses both
+    // U+D800-U+DFFF and everything above U+10FFFF, which is exactly the pair
+    // `\U` can spell and Unicode does not name.
+    let decoded = char::from_u32(value).ok_or(UcharDefect::NotAScalar)?;
+    Ok((decoded, 2 + width))
+}
+
 /// `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*` (body, without the `@`).
 fn langtag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -387,30 +453,25 @@ impl<'a> Lexer<'a> {
     /// Read a `\uXXXX` / `\UXXXXXXXX` escape at the cursor (which sits on the
     /// backslash), advancing past it. Anything else after the backslash is a
     /// hard error.
+    ///
+    /// The decoding itself is [`decode_uchar`], shared with the shape map
+    /// scanner; this method only positions the three defects, which is the one
+    /// thing the two scanners do differently.
     fn read_uchar(&mut self, err_at: usize) -> Result<char> {
-        let width = match self.peek(1) {
-            Some('u') => 4,
-            Some('U') => 8,
-            _ => {
-                return Err(ShexError::lex(
+        let (decoded, consumed) =
+            decode_uchar(|ahead| self.peek(ahead)).map_err(|defect| match defect {
+                UcharDefect::NotAnEscape => ShexError::lex(
                     "backslash must start a \\u/\\U escape here",
                     self.byte_at(self.pos),
-                ));
-            }
-        };
-        let mut value: u32 = 0;
-        for k in 0..width {
-            let d = self
-                .peek(2 + k)
-                .and_then(|c| c.to_digit(16))
-                .ok_or_else(|| {
+                ),
+                UcharDefect::BadHex => {
                     ShexError::lex("bad \\u/\\U escape (expected hex digits)", err_at)
-                })?;
-            value = value * 16 + d;
-        }
-        let decoded = char::from_u32(value)
-            .ok_or_else(|| ShexError::lex("\\u/\\U escape is not a Unicode scalar", err_at))?;
-        self.pos += 2 + width;
+                }
+                UcharDefect::NotAScalar => {
+                    ShexError::lex("\\u/\\U escape is not a Unicode scalar", err_at)
+                }
+            })?;
+        self.pos += consumed;
         Ok(decoded)
     }
 

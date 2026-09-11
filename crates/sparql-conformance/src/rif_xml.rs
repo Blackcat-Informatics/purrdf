@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_entail::{Atom, Materialization, Regime, RifTerm, Rule, RuleSet};
+use purrdf_iri::terminals;
 use roxmltree::{Document, Node, ParsingOptions};
 
 /// An `Import` directive: the external RDF graph's location and its entailment
@@ -381,16 +382,40 @@ fn expand_internal_entities(text: &str) -> String {
 
 /// Parse `<!ENTITY name "value">` declarations out of a DTD internal subset,
 /// returning `(name, value)` pairs in declaration order.
+///
+/// # The separator is `S`, not Unicode whitespace
+///
+/// ```text
+/// GEDecl ::= '<!ENTITY' S Name S EntityDef S? '>'
+/// S      ::= (#x20 | #x9 | #xD | #xA)+
+/// ```
+///
+/// XML 1.0 Fifth Edition §4.2 `[71]` and §2.3 `[3]`. `S` enumerates four code
+/// points; [`char::is_whitespace`] answers the Unicode `White_Space` property,
+/// which additionally admits U+00A0, U+000C, U+2028, U+2029, U+3000 and the
+/// U+2000-U+200A run. None of those ends a `Name`: they are `NameChar`s or they
+/// are nothing at all, so reading one as a separator would cut an entity name
+/// short at a scalar the XML processor keeps inside it. This is a boundary
+/// decision, so it is spelled with the production.
+///
+/// `S` is tested through [`terminals::is_ws_char`]: XML's `S` and the
+/// Turtle/SPARQL `WS` that predicate transcribes enumerate the SAME four code
+/// points, and the workspace keeps exactly one range table for that set rather
+/// than a private copy per scanner.
+///
+/// The `Name` slice needs no trim of its own once the boundary is exact: it
+/// begins after a maximal leading run of `S` and ends at the first `S`, so by
+/// construction it contains none.
 fn scan_entities(subset: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut rest = subset;
     while let Some(pos) = rest.find("<!ENTITY") {
         rest = &rest[pos + "<!ENTITY".len()..];
-        let after_name = rest.trim_start();
+        let after_name = rest.trim_start_matches(terminals::is_ws_char);
         let name_end = after_name
-            .find(|c: char| c.is_whitespace())
+            .find(terminals::is_ws_char)
             .unwrap_or(after_name.len());
-        let name = after_name[..name_end].trim().to_owned();
+        let name = after_name[..name_end].to_owned();
         let after = &after_name[name_end..];
         // The value is delimited by the next quote character (either " or ').
         let Some(q_off) = after.find(['"', '\'']) else {
@@ -465,8 +490,22 @@ fn only_element<'a, 'input>(
     Ok(child)
 }
 
-/// The concatenated, trimmed text content of an element (entity references are
-/// already expanded by roxmltree).
+/// The concatenated text content of an element, stripped of the serializer's
+/// layout (entity references are already expanded by roxmltree).
+///
+/// # What is stripped is `S`, and only `S`
+///
+/// `S ::= (#x20 | #x9 | #xD | #xA)+` (XML 1.0 Fifth Edition §2.3 `[3]`). The
+/// only whitespace an XML serializer inserts around element content as layout is
+/// `S` — that is the class §2.10 white-space handling is written over — so `S` is
+/// exactly what a reader may take back out. Everything else in the content is
+/// CONTENT: U+00A0 NO-BREAK SPACE is a perfectly ordinary XML character and an
+/// RFC 3987 `ucschar`, so it survives IRI validation, and this string becomes a
+/// `Const`'s IRI, a typed literal's lexical form, a `Var`'s name or an `Import`
+/// location. Trimming it with [`str::trim`] would silently launder a scalar out
+/// of a term and make the reader report a DIFFERENT term than the document
+/// names, which in a conformance harness means a scoreboard moved by a reader
+/// bug.
 fn text_of(node: &Node<'_, '_>) -> String {
     let mut s = String::new();
     for child in node.children() {
@@ -474,5 +513,5 @@ fn text_of(node: &Node<'_, '_>) -> String {
             s.push_str(t);
         }
     }
-    s.trim().to_owned()
+    s.trim_matches(terminals::is_ws_char).to_owned()
 }

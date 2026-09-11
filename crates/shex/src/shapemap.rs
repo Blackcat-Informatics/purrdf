@@ -107,6 +107,7 @@ use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, terminals};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
+use crate::lexer::{UcharDefect, decode_uchar};
 use crate::statement;
 use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
 
@@ -402,10 +403,10 @@ fn is_langtag(tag: &str) -> bool {
 /// now comes from the shared module and this function is just the polarity flip the
 /// scan loop reads more naturally in.
 ///
-/// `UCHAR` (`\uXXXX` / `\UXXXXXXXX`) is not decoded here, so the `'\'` that opens one
-/// is refused rather than absorbed verbatim: a backslash in the raw IRI is a
-/// different IRI than the one the escape denotes, and refusing names the defect
-/// instead of resolving the wrong node.
+/// This answers the RAW half of the production only. `'\'` is excluded here because
+/// it is excluded there — the production admits it solely as the lead of the `UCHAR`
+/// alternative — so [`MapParser::parse_iri`] claims the backslash in its own arm,
+/// before this class is ever consulted, and decodes the escape.
 const fn is_iriref_content(c: char) -> bool {
     !terminals::is_iriref_forbidden(c)
 }
@@ -663,11 +664,46 @@ impl MapParser {
 
     /// An `IRIREF`: `'<' … '>'`, resolved against the base in scope.
     ///
+    /// ```text
+    /// [18t] IRIREF ::= '<' ([^#x00-#x20<>"{}|^`\] | UCHAR)* '>'
+    /// ```
+    ///
     /// The opening `<` is verified HERE rather than trusted from the caller. It used not
     /// to be, and the one caller that did not pre-check — a literal's `^^` datatype — read
     /// the first character of `"7"^^xsd:integer`'s datatype as the opening bracket and ran
     /// to end-of-input, reporting `unterminated IRI` for a document whose real defect was a
     /// prefixed name.
+    ///
+    /// # The production has two alternatives, and this scan reads both
+    ///
+    /// `UCHAR` is the second one, and a scan that answers only the raw content class
+    /// **over-refuses**: `'\'` is one of the nine delimiters, so the escape's own lead
+    /// character falls out of the body and every escaped spelling — `<urn:ex:\U0001F600>`,
+    /// or any `<…\uXXXX…>` at all — was reported as `unterminated IRI`. That spelling is
+    /// not exotic: it is what this workspace's own IRI egress escape emits, since it
+    /// carries `#x00-#x20`, the nine delimiters and the control blocks as `\uXXXX`, so
+    /// the refusal broke read-back of PurRDF's own output. Refusing a document the
+    /// grammar admits is the mirror of resolving the wrong node, not the safe side of it.
+    ///
+    /// The escape is decoded by [`decode_uchar`], the transcription the ShExC lexer
+    /// scans `IRIREF` with, so the two front ends cannot drift on the three edges that
+    /// decide identity: a bare `'\'` is a hard error rather than a literal backslash;
+    /// `HEX ::= [0-9] | [A-F] | [a-f]`, so the upper- and lower-case spellings of an
+    /// `é` name one IRI and not two; and a value above U+10FFFF or inside the
+    /// U+D800-U+DFFF surrogate block is refused rather than replaced with U+FFFD.
+    ///
+    /// # A decoded scalar is a VALUE, not a re-scanned character
+    ///
+    /// The production's raw content class constrains the characters that stand in the
+    /// *source*; `UCHAR` is the mechanism by which the others are written at all, so
+    /// what it decodes to is not fed back through that class. This is forced, not
+    /// chosen: [`purrdf_core`]'s IRI egress escape emits exactly the excluded scalars
+    /// as `\uXXXX`, so re-refusing them on ingress would mean this parser could not
+    /// read back what the workspace writes. A `UCHAR` denoting U+0020 therefore
+    /// contributes a SPACE to the value, and whether *that* string is an IRI at all is
+    /// the next layer's question — [`Self::resolve`] puts it to [`BaseScope`], which
+    /// answers RFC 3987 rather than the Turtle-family terminal (and refuses the space,
+    /// naming the IRI instead of blaming a runaway bracket scan).
     fn parse_iri(&mut self) -> Result<String> {
         if self.peek() != Some('<') {
             if let Some(name) = self.peek_prefixed_name() {
@@ -683,6 +719,10 @@ impl MapParser {
                     self.pos += 1;
                     return self.resolve(&raw);
                 }
+                Some('\\') => {
+                    let decoded = self.read_uchar()?;
+                    raw.push(decoded);
+                }
                 Some(c) if is_iriref_content(c) => {
                     raw.push(c);
                     self.pos += 1;
@@ -690,6 +730,30 @@ impl MapParser {
                 _ => return Err(self.err("unterminated IRI")),
             }
         }
+    }
+
+    /// Decode the `UCHAR` whose backslash the cursor stands on, advancing past it.
+    ///
+    /// ```text
+    /// UCHAR ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
+    /// HEX   ::= [0-9] | [A-F] | [a-f]
+    /// ```
+    ///
+    /// Every failure is a hard error rather than a fallback to the raw backslash,
+    /// because no production reachable from here gives `'\'` any other reading.
+    fn read_uchar(&mut self) -> Result<char> {
+        let (decoded, consumed) =
+            decode_uchar(|ahead| self.peek_at(ahead)).map_err(|defect| match defect {
+                UcharDefect::NotAnEscape => {
+                    self.err("a backslash in an IRI must open a \\u/\\U escape")
+                }
+                UcharDefect::BadHex => self.err("bad \\u/\\U escape in IRI (expected hex digits)"),
+                UcharDefect::NotAScalar => {
+                    self.err("\\u/\\U escape in IRI is not a Unicode scalar value")
+                }
+            })?;
+        self.pos += consumed;
+        Ok(decoded)
     }
 
     /// `[142s] BLANK_NODE_LABEL ::= "_:" (PN_CHARS_U | [0-9]) ((PN_CHARS | ".")* PN_CHARS)?`

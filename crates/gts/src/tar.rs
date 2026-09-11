@@ -878,7 +878,26 @@ fn verify_checksum(header: &[u8], offset: usize) -> Result<(), TarError> {
 /// A header field is fixed-width and machine-written; there is no lawful input
 /// that needs the property, and reading a corrupt size as a plausible number is
 /// how a truncated archive becomes a silently short extraction.
-fn parse_octal(field: &[u8]) -> Option<u64> {
+///
+/// # The terminator ends the field, not just the digits
+///
+/// "Terminated by" is the whole of what follows the number: POSIX gives the
+/// field one value and one terminating run, so every byte after the first SPACE
+/// or NUL must itself be SPACE or NUL. Stopping at the terminator and ignoring
+/// the tail admitted `b"644\0x"` as `0o644` — and one of the fields read through
+/// here is SIZE, which sets the member's body boundary and therefore where the
+/// NEXT header begins. A byte the header states and this reader discards is the
+/// exact shape of a framing disagreement: two readers walk the same archive to
+/// different member lists, with no diagnostic on either side, in a crate whose
+/// whole job is byte-exact transport.
+///
+/// The refusal is narrow by construction — it can only reject a field that
+/// carries a non-pad byte AFTER a pad byte, which no conforming writer emits and
+/// [`write_octal`] cannot produce. Every lawful padding shape still reads: right
+/// pad (`b"0000644\0"`, `b"0000644 "`), left pad (`b"     644"`), a run of either
+/// (`b"644\0\0\0"`, `b"644   "`), both ends at once, and an all-pad field.
+#[must_use]
+pub fn parse_octal(field: &[u8]) -> Option<u64> {
     let is_pad = |byte: &u8| *byte == 0 || *byte == b' ';
     let start = field.iter().position(|byte| !is_pad(byte));
     let Some(start) = start else {
@@ -886,10 +905,11 @@ fn parse_octal(field: &[u8]) -> Option<u64> {
         // reads as zero (an absent `mtime`, a zero `size`).
         return Some(0);
     };
-    let digits = field[start..]
-        .iter()
-        .position(is_pad)
-        .map_or(&field[start..], |len| &field[start..start + len]);
+    let rest = &field[start..];
+    let (digits, terminator) = rest.split_at(rest.iter().position(is_pad).unwrap_or(rest.len()));
+    if !terminator.iter().all(is_pad) {
+        return None;
+    }
     let text = std::str::from_utf8(digits).ok()?;
     u64::from_str_radix(text, 8).ok()
 }
@@ -1107,6 +1127,44 @@ mod tests {
             parse_octal(b"64x\0\0\0\0\0"),
             None,
             "8 and 9 aside, not octal"
+        );
+    }
+
+    /// The terminator ends the FIELD: a non-pad byte after it is refused.
+    ///
+    /// POSIX, *ustar Interchange Format*: "Each numeric field is terminated by
+    /// one or more `<space>` or NUL characters." The reader used to stop at the
+    /// first terminator and discard the rest of the fixed-width field, so
+    /// `b"644\0x"` read as `0o644` and `b"64\08"` as `0o64`. One of the fields
+    /// read this way is SIZE, which sets the member's body boundary — a byte the
+    /// header states and the reader ignores is a framing disagreement, not a
+    /// cosmetic one.
+    ///
+    /// Paired with the neighbours in
+    /// [`a_numeric_field_is_padded_by_space_and_nul_and_by_nothing_else`] and
+    /// [`every_value_the_writer_emits_reads_back`], which are every lawful
+    /// padding shape and must keep reading.
+    #[test]
+    fn a_non_pad_byte_after_the_terminator_is_refused() {
+        // THE VALID NEIGHBOURS, restated here so the refusal is never alone:
+        // a terminator run of either character, at either end, still reads.
+        assert_eq!(parse_octal(b"644\0\0\0"), Some(0o644));
+        assert_eq!(parse_octal(b"644   "), Some(0o644));
+        assert_eq!(parse_octal(b"644 \0 "), Some(0o644));
+
+        // THE REFUSALS: a byte the field states that the reader would discard.
+        assert_eq!(parse_octal(b"644\0x"), None, "data after a NUL terminator");
+        assert_eq!(parse_octal(b"644 x"), None, "data after a SPACE terminator");
+        assert_eq!(
+            parse_octal(b"64\08"),
+            None,
+            "a digit after the terminator is the worst case: it reads as a \
+             plausible, wrong number"
+        );
+        assert_eq!(
+            parse_octal(b"644\0 \t"),
+            None,
+            "the tail is judged by the same two-character set as the pad"
         );
     }
 

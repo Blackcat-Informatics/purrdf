@@ -146,6 +146,33 @@ SCANNERS: dict[str, str] = {
         "decides GeoJSON lexical emptiness and hands the rest to the cursor in "
         "crates/geo/src/json.rs, so it scans without holding a cursor itself"
     ),
+    "crates/geo/src/json.rs": (
+        "IS the GeoJSON cursor -- a thousand lines of self.pos arithmetic -- but "
+        "exposes no `fn peek`, so the structure test misses it. Listing only its "
+        "caller above named the file that is NOT the scanner and omitted the one "
+        "that is. Its whitespace skip spells RFC 8259's `ws = *( %x20 / %x09 / "
+        "%x0A / %x0D )` correctly today, and JSON's `ws` is one of the three "
+        "enumerated terminals this gate exists to defend, so a one-line edit here "
+        "must not pass unseen"
+    ),
+    "crates/shapes/src/text_ingest.rs": (
+        "scans raw document text for Turtle/SPARQL prefix directives and decides "
+        "the directive-head boundary itself, with no cursor struct at all. A "
+        "Unicode-whitespace boundary here scanned a phantom `@prefix` out of a "
+        "string literal and flipped a `purrdf validate` verdict from a hard error "
+        "to a reported Violation"
+    ),
+    "crates/rdf/src/projections/csvw/config.rs": (
+        "listed so the reasoned NON-fix below cannot be quietly reversed: two "
+        "separate audits reached the same conclusion here independently, and a "
+        "third would too unless it is written down"
+    ),
+    "crates/sparql-conformance/src/rif_xml.rs": (
+        "decides where an XML element name ends while walking a manifest. Harness "
+        "support rather than a shipped codec, but a harness that mis-reads a "
+        "manifest moves a scoreboard, and the scoreboard is this repository's "
+        "conformance claim"
+    ),
 }
 
 # Inside a scanner, these substitute a Unicode property for an enumerated
@@ -197,6 +224,8 @@ TERMINAL_FN = re.compile(
     r"\bfn\s+is_"
     r"(?:pn_chars(?:_base|_u)?"
     r"|pn_local(?:_start|_esc)?"
+    r"|pn_prefix"
+    r"|ncname(?:_start|_char)?"
     r"|blank_node_label_start"
     r"|varname(?:_start|_continue|_char)?"
     r"|xml_name(?:_start)?(?:_char)?"
@@ -221,11 +250,35 @@ TERMINAL_FN_MEANING = (
 # clears them.
 DELEGATES = re.compile(r"\bpurrdf_iri::terminals\b|\bterminals::is_\w+")
 
+# A delegating call, for subtraction. Naming the shared predicate is not enough
+# on its own: `terminals::is_percent(c) || c == 'x'` mentions it and then widens
+# the terminal anyway, which is the defect wearing the fix's clothes.
+DELEGATED_CALL = re.compile(r"\b(?:purrdf_iri::)?terminals::is_\w+(?:\s*\([^()]*\))?")
+# An alternation surviving that subtraction ADDS an acceptance branch the
+# production does not have. `&&` is deliberately not refused: narrowing a shared
+# class is how a real production is expressed — `NCNameChar ::= NameChar - ':'`
+# is exactly `is_xml_name_char(c) && c != ':'`, and refusing it would push
+# authors back to retyping the table, which is the thing being prevented.
+WIDENS_DELEGATION = re.compile(r"\|\|")
+
 # (repo-relative path, rule id) -> why this occurrence is NOT the defect.
 # Every entry must keep matching; a stale one fails this gate. This table is the
 # workspace's deviation ledger for terminal predicates: a reason here is a
 # design decision on the record, not a skip.
 ALLOWLIST: dict[tuple[str, str], str] = {
+    ("crates/rdf/src/projections/csvw/config.rs", "unicode-name-class"): (
+        "validates JSON-LD TERM keys, not XML NCNames. JSON-LD 1.1 §3.1: 'Terms "
+        "are case sensitive and most valid strings that are not reserved JSON-LD "
+        "keywords are valid terms', and CSVW adds no NCName constraint -- so "
+        "tightening this to NCName would be an UNSOURCED refusal, the mirror bug "
+        "this gate is otherwise here to prevent. The class is deliberately wrong "
+        "in both directions relative to NCName: it refuses '.', which NCNameChar "
+        "admits, to protect the prefix:local split, and it admits U+00AA, which "
+        "NCName excludes -- both lawful JSON-LD terms. And nothing here decides a "
+        "token boundary: a prefix arrives as a whole, already-delimited JSON key, "
+        "so this is a membership test, which is the one thing a liberal class may "
+        "safely be."
+    ),
     ("crates/rdf-core/src/blank_label.rs", TERMINAL_FN_RULE): (
         "deliberately a SECOND, independent transcription, retained as the "
         "oracle the shared module is checked against. The two are not derived "
@@ -279,6 +332,37 @@ def strip_comment_lines(source: str) -> str:
     return "\n".join(out)
 
 
+def find_item_terminator(source: str, start: int, limit: int) -> int | None:
+    """The offset of the first `;` in ``source[start:limit]`` that is real code.
+
+    Skips `//` line comments, `/* */` block comments, string literals and char
+    literals, so punctuation inside prose cannot be mistaken for an item's
+    terminator. Returns ``None`` when the span holds no such semicolon.
+    """
+    cursor = start
+    while cursor < limit:
+        pair = source[cursor : cursor + 2]
+        char = source[cursor]
+        if pair == "//":
+            newline = source.find("\n", cursor)
+            cursor = limit if newline < 0 else newline + 1
+            continue
+        if pair == "/*":
+            close = source.find("*/", cursor + 2)
+            cursor = limit if close < 0 else close + 2
+            continue
+        if char in "\"'":
+            cursor += 1
+            while cursor < limit and source[cursor] != char:
+                cursor += 2 if source[cursor] == "\\" else 1
+            cursor += 1
+            continue
+        if char == ";":
+            return cursor
+        cursor += 1
+    return None
+
+
 def strip_test_modules(source: str) -> str:
     """Blank out every ``#[cfg(test)]`` item, preserving each byte offset.
 
@@ -297,8 +381,15 @@ def strip_test_modules(source: str) -> str:
         # code, and the gate reports OK while seeing nothing. That is a silent
         # false negative in the gate built to prevent silent false negatives,
         # and it is reachable by adding one ordinary `use` line to a scanner.
-        semicolon = source.find(";", match.end())
-        if 0 <= semicolon < opening:
+        # Search for the `;` with inline comments masked. `strip_comment_lines`
+        # only blanks WHOLE-line comments, so `#[cfg(test)] // ;` would
+        # otherwise present a semicolon that is not the item's terminator, and
+        # the module would go unstripped — making a test-only probe of a
+        # Unicode property fail the gate. That direction is over-refusal rather
+        # than blindness, but a gate that fires on correct test code teaches
+        # authors to route around it just as surely.
+        semicolon = find_item_terminator(source, match.end(), opening)
+        if semicolon is not None:
             continue
         depth = 0
         for offset in range(opening, len(source)):
@@ -335,6 +426,21 @@ def function_body(source: str, start: int) -> str:
     return source[opening:]
 
 
+def delegates_purely(body: str) -> bool:
+    """Whether *body* asks the shared module and does not then widen its answer.
+
+    Mentioning the shared predicate is not the same as deferring to it. Subtract
+    the delegating calls and look at what is left: an ``||`` surviving that
+    subtraction is an acceptance branch the production does not have, so the
+    body has retyped the terminal with extra steps. Narrowing is untouched — a
+    real production is often a shared class minus something, and refusing that
+    would push authors back to retyping the whole table.
+    """
+    if not DELEGATES.search(body):
+        return False
+    return not WIDENS_DELEGATION.search(DELEGATED_CALL.sub("", body))
+
+
 def is_scanner(source: str, rel: str = "") -> bool:
     """Whether *source* decides token boundaries: it holds a character cursor,
     or it is named in the ``SCANNERS`` ledger because its cursor lives
@@ -360,7 +466,7 @@ def findings_for(source: str, rel: str = "") -> list[tuple[str, int, str]]:
             found.append((NON_ASCII_RULE, index + 1, NON_ASCII_MEANING))
 
     for match in TERMINAL_FN.finditer(source):
-        if DELEGATES.search(function_body(source, match.start())):
+        if delegates_purely(function_body(source, match.start())):
             continue
         line_no = source.count("\n", 0, match.start()) + 1
         found.append((TERMINAL_FN_RULE, line_no, TERMINAL_FN_MEANING))
@@ -541,12 +647,45 @@ def self_test() -> None:
         "is_blank_node_label_start", "is_varname_start", "is_varname_continue",
         "is_ws", "is_ws_char", "is_iriref_forbidden_byte",
         "is_xml_name_start_char", "is_xml_name_char",
+        "is_ncname_start", "is_ncname_char", "is_pn_prefix",
     ):
         forked = f"fn {owned}(c: char) -> bool {{ c.is_alphanumeric() }}"
         assert TERMINAL_FN_RULE in rules(forked), f"{owned} must be covered"
 
     fixed = "fn is_pn_chars_base(c: char) -> bool { terminals::is_pn_chars_base(c) }"
     assert TERMINAL_FN_RULE not in rules(fixed), "delegation must clear the fork"
+
+    # Naming the shared predicate is not deferring to it. A body that delegates
+    # and THEN adds an acceptance branch has retyped the terminal with extra
+    # steps, and it is the shape most likely to be written by someone who read
+    # this gate's message and wanted past it.
+    for widened in (
+        "fn is_percent(c: char) -> bool { terminals::is_percent(c) || c == 'x' }",
+        "fn is_ws(c: char) -> bool { terminals::is_ws_char(c) || c == '\\u{a0}' }",
+        "fn is_pn_chars(c: char) -> bool { c == '-' || terminals::is_pn_chars(c) }",
+    ):
+        assert TERMINAL_FN_RULE in rules(widened), f"partial delegation: {widened}"
+    # Narrowing is NOT widening, and refusing it would push authors back to
+    # retyping the table: `NCNameChar ::= NameChar - ':'` is exactly this shape.
+    for narrowed in (
+        "fn is_xml_name_char(c: char) -> bool { terminals::is_xml_name_char(c) && c != ':' }",
+        "fn is_iriref_forbidden(c: char) -> bool { !terminals::is_iriref_forbidden(c) }",
+        "fn is_ws_char(c: char) -> bool { u8::try_from(c).is_ok_and(terminals::is_ws) }",
+    ):
+        assert TERMINAL_FN_RULE not in rules(narrowed), f"narrowing is lawful: {narrowed}"
+
+    # The bodyless bound must read CODE, not prose. A `;` inside an inline
+    # comment is not an item terminator, and treating it as one leaves a test
+    # module unstripped — the gate then fires on correct test code, which
+    # teaches authors to route around it just as surely as blindness does.
+    commented = (
+        "#[cfg(test)] // ends here ;\nmod t { fn u(c: char) { c.is_whitespace(); } }\n"
+    )
+    assert not findings_for(strip_test_modules(commented)), (
+        "a `;` inside a comment is not an item terminator"
+    )
+    assert find_item_terminator("// ; \n x ;", 0, 10) == 9, "comment `;` must be skipped"
+    assert find_item_terminator('let s = \";\"; ', 0, 13) == 11, "string `;` must be skipped"
     assert NON_ASCII_RULE not in rules(fixed), "and leave nothing behind"
     assert not rules("terminals::is_ws(b);"), "the fix itself must be silent"
 

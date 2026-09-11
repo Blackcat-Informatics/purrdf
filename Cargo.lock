@@ -1637,6 +1637,7 @@ dependencies = [
  "purrdf-cdt",
  "purrdf-core",
  "purrdf-entail",
+ "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",

@@ -735,6 +735,38 @@ fn parse_header(lines: &[&str]) -> Result<(SssomMeta, Vec<SssomSetComment>), Rdf
             continue;
         }
 
+        // SSSOM, *Mapping Set* / metadata block: "the `#` character MAY be
+        // followed by one or several space characters (U+0020) before the YAML
+        // content." U+0020, and only U+0020. A TAB standing between the marker
+        // and the content is therefore not white space this rule admits, and the
+        // line has no reading -- so it is refused rather than repaired.
+        //
+        // The refusal has to be EXPLICIT; narrowing a trim does not do it, and
+        // that is the trap. `SSSOM_WHITE` is `[' ', '\t']` because the YAML layer
+        // legitimately admits both (YAML 1.2.2 §5.5), so even with the leading
+        // TAB left in place, `split_key_value` trims `SSSOM_WHITE` off the key
+        // and would absorb it there instead -- `#\tmapping_set_id: v` parsing
+        // exactly as before, with the "fix" invisible.
+        //
+        // YAML 1.2.2 §6.1 says the same thing one layer down for the indented
+        // `curie_map` entries this check also covers: "to maintain portability,
+        // tab characters must not be used in indentation."
+        //
+        // It is deliberately NOT applied to the `# #…` provenance line handled
+        // above: that line carries a retained-verbatim comment, not YAML content,
+        // so the clause does not reach it and refusing it would be an
+        // over-refusal on text SSSOM never parses.
+        if body.trim_start_matches(' ').starts_with('\t') {
+            return Err(RdfDiagnostic::error(
+                "sssom-tsv-parse",
+                format!(
+                    "tab after the `#` metadata marker: SSSOM admits only U+0020 space \
+                     characters before the YAML content, in {raw:?}"
+                ),
+            )
+            .with_location(RdfLocation::default().with_line(line_no)));
+        }
+
         // `#   prefix: uri` (two+ leading spaces) inside a `curie_map:` block.
         // The block is "open" from the `# curie_map:` line until a non-indented
         // scalar (or end of header). PurRDF indents curie entries with three
@@ -1478,6 +1510,76 @@ mod white_space_law {
         // marker rule is intact.
         assert!(SssomSetComment::ordinary(" #still a marker").is_err());
         assert!(SssomSetComment::ordinary("ordinary text").is_ok());
+    }
+
+    /// SSSOM, metadata block: "the `#` character MAY be followed by one or
+    /// several space characters (U+0020) before the YAML content."
+    ///
+    /// U+0020 and only U+0020 — which is NARROWER than the two-character
+    /// `SSSOM_WHITE` the YAML layer below it runs on, and narrower than the
+    /// trims that layer legitimately uses. The marker rule therefore cannot be
+    /// expressed by narrowing a trim: `split_key_value` trims `SSSOM_WHITE` off
+    /// the key, so a leading TAB left in place would be absorbed there instead
+    /// and the line would parse exactly as before.
+    #[test]
+    fn only_a_space_may_stand_between_the_metadata_marker_and_the_yaml() {
+        let doc = |header: &str| {
+            format!("{header}\nsubject_id\tpredicate_id\tobject_id\tmapping_justification\n")
+        };
+
+        // THE VALID NEIGHBOURS: "one or several" includes none at all, and the
+        // clause puts no ceiling on the run.
+        for header in [
+            "#mapping_set_id: v",
+            "# mapping_set_id: v",
+            "#   mapping_set_id: v",
+        ] {
+            let set = parse_tsv(&doc(header)).expect("a U+0020 run is what the clause admits");
+            assert_eq!(
+                set.meta.mapping_set_id.as_deref(),
+                Some("v"),
+                "{header:?} must still parse"
+            );
+        }
+
+        // THE REFUSAL: a TAB is not a space character, at the marker or after a
+        // run of them, and it is refused rather than trimmed into invisibility.
+        for header in ["#\tmapping_set_id: v", "#  \tmapping_set_id: v"] {
+            let error = parse_tsv(&doc(header)).expect_err("a TAB is not U+0020");
+            assert!(
+                error.message.contains("tab") && error.message.contains("U+0020"),
+                "{header:?} must name the marker rule: {}",
+                error.message
+            );
+        }
+
+        // YAML 1.2.2 §6.1: "to maintain portability, tab characters must not be
+        // used in indentation" — so a TAB-indented `curie_map` entry is refused
+        // too, while the space-indented neighbour PurRDF itself writes parses.
+        let indented =
+            |indent: &str| doc(&format!("# curie_map:\n#{indent}ex: https://example.org/"));
+        let set = parse_tsv(&indented("   ")).expect("three spaces is PurRDF's own indent");
+        assert_eq!(
+            set.meta.curie_map.get("ex").map(String::as_str),
+            Some("https://example.org/")
+        );
+        assert!(
+            parse_tsv(&indented("\t")).is_err(),
+            "a TAB indent is not an indent"
+        );
+
+        // A TAB is still content everywhere the clause does not reach: inside a
+        // value, and inside the retained-verbatim `# #…` provenance line.
+        let set = parse_tsv(&doc("# comment: a\tb")).expect("a TAB inside a value is content");
+        assert_eq!(set.meta.comment.as_deref(), Some("a\tb"));
+        let set = parse_tsv(&doc("#\t# provenance")).expect("provenance is not YAML content");
+        assert_eq!(
+            set.set_comments
+                .iter()
+                .map(SssomSetComment::raw_line)
+                .collect::<Vec<_>>(),
+            vec!["#\t# provenance"]
+        );
     }
 
     #[test]
