@@ -37,8 +37,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use purrdf_rdf::{
-    CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError, CanonHash,
-    RESERVED_NAMESPACE, RdfDatasetBuilder, TermPosition, ViewCanonError, parse_dataset,
+    CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
+    CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
+    CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
+    CanonHash, RESERVED_NAMESPACE, RdfDatasetBuilder, TermPosition, ViewCanonError, parse_dataset,
     try_canonicalize_flat_view, try_canonicalize_with,
 };
 use sha2::{Digest, Sha256};
@@ -520,8 +522,196 @@ fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
 }
 
 /// The profile identity is readable from the library, not only from the document.
+///
+/// The presentation coordinates (profile §3.3, §9) are pinned here alongside the
+/// profile id/version because a consumer's complete pin is the four coordinates
+/// `(profile, version, presentation, hash)` — a presentation id or version that
+/// drifted from the document silently would leave that pin unverifiable.
 #[test]
 fn the_profile_identity_is_readable_from_the_api() {
     assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
     assert_eq!(CANON_PROFILE_VERSION, 2);
+    assert_eq!(CANON_PRESENTATION_OVERLAY_ID, "overlay");
+    assert_eq!(CANON_PRESENTATION_OVERLAY_VERSION, 1);
+    assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_ID, "flat-assertion");
+    assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_VERSION, 1);
+}
+
+/// §3.3's first table row: a genuine quad is unchanged by the flat presentation. A
+/// dataset with no reifiers, annotations or triple terms must canonicalize to the
+/// SAME bytes under either presentation, because presentation only changes how an
+/// already-admitted reifier or annotation row is spelled — it has nothing to say
+/// about content the overlay never touched.
+#[test]
+fn flat_view_leaves_an_ordinary_quad_unchanged() {
+    let root = corpus_root();
+    let bytes = std::fs::read(root.join("cases/plain-rdf11.ttl")).expect("plain RDF 1.1 case");
+    let dataset = parse_dataset(&bytes, "text/turtle", None).expect("parses");
+    let overlay = try_canonicalize_with(&dataset, CanonHash::Sha256)
+        .expect("plain RDF 1.1 canonicalizes under the overlay presentation")
+        .nquads;
+    let flat = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
+        .expect("plain RDF 1.1 canonicalizes under the flat presentation")
+        .nquads;
+    assert_eq!(
+        flat, overlay,
+        "a dataset carrying no reifiers or annotations must produce identical bytes \
+         under either presentation (profile §3.3, first table row)"
+    );
+}
+
+/// §3.3's second table row: a reifier declared in a NAMED graph lowers to an
+/// ordinary `rdf:reifies` row carrying that SAME graph — the graph the reifier was
+/// DECLARED in, not merely the graph its underlying triple happens to be asserted
+/// in. The two are made to differ on purpose: the triple is asserted as an ordinary
+/// quad in one named graph, and the reifier binding over that same triple term is
+/// declared in a DIFFERENT named graph, so the row landing in the declaring graph —
+/// rather than the assertion's graph — is the only way both expected lines can
+/// appear.
+#[test]
+fn a_named_graph_reifier_lowers_to_flat_rdf_reifies_in_its_declaring_graph() {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    let r = b.intern_iri("http://example.org/r");
+    let g_asserted = b.intern_iri("http://example.org/g-asserted");
+    let g_declared = b.intern_iri("http://example.org/g-declared");
+    b.push_quad(s, p, o, Some(g_asserted));
+    let triple = b.intern_triple(s, p, o);
+    b.push_reifier_in_graph(r, triple, Some(g_declared));
+    let dataset = b.freeze().expect("valid dataset");
+    let flat = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
+        .expect("a named-graph reifier canonicalizes under the flat presentation")
+        .nquads;
+
+    let expected_assertion_row = "<http://example.org/s> <http://example.org/p> <http://example.org/o> \
+         <http://example.org/g-asserted> .";
+    let expected_reifies_row = format!(
+        "<http://example.org/r> <{RDF_REIFIES}> <<( <http://example.org/s> \
+         <http://example.org/p> <http://example.org/o> )>> <http://example.org/g-declared> ."
+    );
+    assert!(
+        flat.lines().any(|line| line == expected_assertion_row),
+        "the base assertion must stay in its own graph, unchanged: {flat}"
+    );
+    assert!(
+        flat.lines().any(|line| line == expected_reifies_row),
+        "the reifier row must land in the graph it was DECLARED in, not the \
+         assertion's graph: {flat}"
+    );
+    assert_eq!(
+        flat.lines().count(),
+        2,
+        "exactly these two rows are expected, no more: {flat}"
+    );
+    assert!(!flat.contains(RESERVED_NAMESPACE));
+}
+
+/// §3.3's fourth table row: an annotation declared in a NAMED graph lowers to an
+/// ordinary `(r, p, o)` quad carrying that SAME graph, with no sentinel and no
+/// extra token — the annotation-side twin of the reifier test above.
+#[test]
+fn a_named_graph_annotation_lowers_to_a_flat_row_in_its_own_graph() {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    let g = b.intern_iri("http://example.org/g");
+    b.push_annotation_in_graph(s, p, o, Some(g));
+    let dataset = b.freeze().expect("valid dataset");
+    let flat = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
+        .expect("a named-graph annotation canonicalizes under the flat presentation")
+        .nquads;
+    assert_eq!(
+        flat,
+        "<http://example.org/s> <http://example.org/p> <http://example.org/o> \
+         <http://example.org/g> .\n",
+        "an annotation declared in a named graph must lower to an ordinary quad \
+         carrying that SAME graph, with no annotation sentinel and no extra token \
+         (profile §3.3, fourth table row)"
+    );
+    assert!(!flat.contains(RESERVED_NAMESPACE));
+}
+
+/// §3.3's row-level dedup: a reifier binding asserted BOTH as a declared reifier
+/// AND as the literal `rdf:reifies` quad it denotes (the REAL predicate, not the
+/// overlay's sentinel) must canonicalize identically to the SAME binding asserted
+/// only one of those two ways, and the row must be emitted exactly once — never
+/// counted twice for being spelled twice.
+#[test]
+fn a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation() {
+    let mut only_native = RdfDatasetBuilder::new();
+    let s = only_native.intern_iri("http://example.org/s");
+    let p = only_native.intern_iri("http://example.org/p");
+    let o = only_native.intern_iri("http://example.org/o");
+    let r = only_native.intern_iri("http://example.org/r");
+    let triple = only_native.intern_triple(s, p, o);
+    only_native.push_reifier(r, triple);
+    let dataset = only_native.freeze().expect("valid dataset");
+    let single = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256)
+        .expect("a genuine reifier canonicalizes under the flat presentation")
+        .nquads;
+
+    let mut doubly_spelled = RdfDatasetBuilder::new();
+    let s2 = doubly_spelled.intern_iri("http://example.org/s");
+    let p2 = doubly_spelled.intern_iri("http://example.org/p");
+    let o2 = doubly_spelled.intern_iri("http://example.org/o");
+    let r2 = doubly_spelled.intern_iri("http://example.org/r");
+    let triple2 = doubly_spelled.intern_triple(s2, p2, o2);
+    doubly_spelled.push_reifier(r2, triple2);
+    let rdf_reifies = doubly_spelled.intern_iri(RDF_REIFIES);
+    doubly_spelled.push_quad(r2, rdf_reifies, triple2, None);
+    let dataset2 = doubly_spelled.freeze().expect("valid dataset");
+    let doubled = try_canonicalize_flat_view(&*dataset2, CanonHash::Sha256)
+        .expect("a reifier binding spelled both ways still canonicalizes")
+        .nquads;
+
+    assert_eq!(
+        doubled, single,
+        "a reifier binding asserted both as a declared reifier and as the literal \
+         rdf:reifies quad it denotes must canonicalize identically to the binding \
+         asserted only one of those two ways (profile §3.3)"
+    );
+    assert_eq!(
+        doubled.lines().count(),
+        1,
+        "the doubly-spelled row must be emitted exactly once: {doubled}"
+    );
+}
+
+/// §3.3's row-level guarantee — "no reserved namespace IRI ever participates in a
+/// flat canonical document" — checked across the WHOLE golden corpus rather than
+/// only the two cases that exercise the fold: every golden must still admit under
+/// the flat presentation (presentation is orthogonal to admissibility), and none
+/// of its flat canonical bytes may mention `RESERVED_NAMESPACE`.
+#[test]
+fn no_corpus_golden_leaks_the_reserved_namespace_under_the_flat_presentation() {
+    let mut checked = 0usize;
+    for case in load_manifest() {
+        if !matches!(case.expect, Expectation::Golden) {
+            continue;
+        }
+        let bytes =
+            std::fs::read(&case.file).unwrap_or_else(|e| panic!("read {:?}: {e}", case.file));
+        let dataset = parse_dataset(&bytes, media_type_for(&case.file), None)
+            .unwrap_or_else(|e| panic!("{} must parse: {e}", case.rel));
+        let flat = try_canonicalize_flat_view(&*dataset, CanonHash::Sha256).unwrap_or_else(|e| {
+            panic!(
+                "{} must canonicalize under the flat presentation too: {e:?}",
+                case.rel
+            )
+        });
+        assert!(
+            !flat.nquads.contains(RESERVED_NAMESPACE),
+            "{} leaked the reserved namespace under the flat presentation: {}",
+            case.rel,
+            flat.nquads
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 15,
+        "not every corpus golden was checked under the flat presentation: {checked}"
+    );
 }
