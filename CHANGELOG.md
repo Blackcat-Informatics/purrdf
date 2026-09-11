@@ -138,9 +138,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   on a caller's behalf, for deployments that want a shared one; it is a stable
   identifier that does not dereference today, a redirect for it is being
   registered, and nothing rests on that because RDF asks no IRI to resolve.
-  Beside the caller's terms an emitted graph carries four IRIs of the standard's
-  — `rdf:type`, `rdf:reifies`, `xsd:integer`, `xsd:hexBinary` — and the caller's
-  own source id and canon anchors.
+  Beside the caller's terms an emitted graph carries no IRI but these: four of
+  the standard's — `rdf:type`, `rdf:reifies`, `xsd:integer`, `xsd:hexBinary` —
+  the caller's own source id, and, where a concordance lifts under a declared
+  canon base, the anchors it mints.
 - **purrdf:** The umbrella exposes the slicer as `purrdf::markdown`, so a
   consumer slices a document without naming `purrdf-markdown` as a separate
   dependency.

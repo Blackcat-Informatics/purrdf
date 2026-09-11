@@ -75,8 +75,11 @@ drifts. The same bytes under the same profile give byte-for-byte identical
 output on every target, and a concordance table lifts into RDF 1.2 reified
 citations. We surveyed the standards that map documents to RDF and found none
 that combines determinism, byte-span addressability, and law-content-addressed
-identity for Markdown; if one exists we would rather hear of it than claim it
-does not. It slices the dialect
+identity for Markdown. The specification's
+[related work](./crates/markdown/SPEC.md#12-related-work) section names every
+standard we examined and, for each, which of those three it does not provide;
+if one we missed has all three, we would rather hear which than claim none
+does. It slices the dialect
 the specification writes out; it is not a CommonMark implementation.
 
 ## Why does this exist?

@@ -1058,3 +1058,157 @@ document carries the one character the two disagree about.
 
 An implementation SHOULD therefore reach every one of these forms through
 one canonical writer rather than maintain its own escaper beside it.
+
+## 12. Related work
+
+Nothing in this section is normative. It records the standards that were
+examined before this law was written, so that the absence this document
+rests on can be checked rather than taken on trust. That absence is the
+claim that no existing standard provides all three of the following for
+a Markdown document at once:
+
+* **total from bytes** — the mapping is a deterministic total function
+  of the source bytes and a declared configuration: every document
+  maps, nothing has to be marked up first, and nothing is dropped in
+  silence;
+* **byte span** — every node names a verbatim byte range of the source,
+  counted in bytes rather than in characters, code units, or a
+  structural path;
+* **content-addressed law** — the mapping law is itself identified by a
+  digest of its own statement (§5), so a changed law re-mints rather
+  than drifts under the old name.
+
+Each entry names what it does not provide of those three. That is the
+whole of the comparison, and it is not a judgement: every specification
+below is doing what it was designed to do, and none of them was
+designed for this intersection.
+
+### 12.1 Addressing vocabularies and fragment syntaxes
+
+* **Web Annotation Data Model** and **Web Annotation Vocabulary**
+  (<https://www.w3.org/TR/annotation-model/>,
+  <https://www.w3.org/TR/annotation-vocab/>). Missing: *total from
+  bytes*, *content-addressed law*. Its `oa:DataPositionSelector` is
+  byte-counted and is the closest standard match for the second
+  property; it is a vocabulary for recording annotations a consumer
+  produces rather than a mapping from a document, and it carries no
+  digest of the source or of the procedure.
+* **NIF 2.0** (<https://persistence.uni-leipzig.org/nlp2rdf/specification/core.html>).
+  Missing: all three. Offsets are into a context string rather than the
+  byte stream, and its own core specification and ontology disagree on
+  whether the unit is a code point or a code unit. Its
+  context-hash IRI content-addresses the addressed *text*, which is the
+  nearest prior art to §8.
+* **EARMARK** (<https://essepuntato.it/earmark/shell/current/shell.html>).
+  Missing: all three. It is the closest conceptual match — the bytes,
+  the range and the thing the range means are three disjoint classes —
+  but a range's unit is not fixed to bytes, and it models markup a
+  producer supplies rather than deriving it.
+* **DoCO**, **PO**, **DEO**, **C4O**, **FaBiO** and the **Collections
+  Ontology** (<https://sparontologies.github.io/doco/current/doco.html>
+  and the sibling documents there,
+  <https://doi.org/10.3233/SW-130121>). Missing: all three. These
+  describe document components and their order; no member of the family
+  carries a character or byte offset.
+* **RFC 5147**, fragment identifiers for `text/plain`
+  (<https://www.rfc-editor.org/rfc/rfc5147.txt>). Missing: *total from
+  bytes*, *byte span* (`char=` and `line=` count characters and lines),
+  *content-addressed law*. Its `length=` and `md5=` integrity checks
+  content-address the text being addressed, which is the one instance
+  of that idea in this list.
+* **RFC 7111**, fragment identifiers for `text/csv`
+  (<https://www.rfc-editor.org/rfc/rfc7111.txt>). Missing: all three.
+  A fragment syntax over rows, columns and cells, not a mapping.
+* **RFC 9535** JSONPath, and its Normalized Path
+  (<https://www.rfc-editor.org/rfc/rfc9535.txt>). Missing: all three.
+  Its Normalized Path is a canonical, unique structural address for a
+  node of a JSON value — an address, not a span, and not a mapping into
+  RDF.
+* **XPointer Framework** (<https://www.w3.org/TR/xptr-framework/>) and
+  **EPUB CFI** (<https://w3c.github.io/epub-specs/epub33/epubcfi/>).
+  Missing: all three. Both address a parsed tree; CFI counts UTF-16
+  code units.
+* **Text Fragments** (<https://wicg.github.io/scroll-to-text-fragment/>).
+  Missing: all three. A quote-based address for a rendered page.
+
+### 12.2 Mappings into RDF
+
+* **RDFa 1.1 Core** and **HTML+RDFa 1.1**
+  (<https://www.w3.org/TR/rdfa-core/>,
+  <https://www.w3.org/TR/rdfa-in-html/>). Missing: all three. Triple
+  production is gated on RDFa attributes, so a document carrying none
+  yields the empty graph; and with vocabulary expansion enabled the
+  output is a function of the network as well as the bytes.
+* **Microdata to RDF** (<https://www.w3.org/TR/microdata-rdf/>).
+  Missing: all three. Annotation-driven in the same way, and its two
+  document-order mechanisms were withdrawn — which is the datum behind
+  §7's choice of a plain ordinal over a collection.
+* **GRDDL** (<https://www.w3.org/TR/grddl/>). Missing: all three. It
+  defines no mapping; it defines the *link* to one, and the linked
+  transformation is named by a URL and never fingerprinted.
+* **JSON-LD 1.1** (<https://www.w3.org/TR/json-ld11/>) and **RDF/JSON**
+  (<https://www.w3.org/TR/rdf-json/>). Missing: all three. Both treat
+  the document as a carrier of a graph rather than as an artifact to be
+  described; JSON-LD skips unmapped keys and ill-formed values rather
+  than refusing them, and neither pins blank node labels.
+* **CSVW** — the Tabular Data Model, Tabular Metadata and `csv2rdf`
+  (<https://www.w3.org/TR/tabular-data-model/>,
+  <https://www.w3.org/TR/tabular-metadata/>,
+  <https://www.w3.org/TR/csv2rdf/>). Missing: *byte span* (a row is
+  addressed by row number), *content-addressed law*. It is total, and
+  it is the closest the tabular family comes; its totality is relative
+  to metadata a processor may discover from the network rather than
+  from local configuration.
+* **R2RML** (<https://www.w3.org/TR/r2rml/>) and **RML**
+  (<https://rml.io/specs/rml/>). Missing: *total from bytes* — a term
+  map yields nothing for a null, and RML both aborts on a data error
+  and generates nothing for a missing value — *byte span*, and
+  *content-addressed law*. RML's collection extension is the strongest
+  ordering mechanism here, and its order is the order the term maps
+  were declared in rather than the source's own.
+* **A Direct Mapping of Relational Data to RDF**
+  (<https://www.w3.org/TR/rdb-direct-mapping/>). Missing: *byte span*,
+  *content-addressed law*. It is the one total, automatic mapping in
+  this list, and it reaches that by minting every IRI from schema
+  names — which §6 forbids.
+* **SPARQL-Generate**
+  (<https://ci.mines-stetienne.fr/sparql-generate/>). Missing: all
+  three. A query-shaped mapping language; an unmatched path yields
+  nothing rather than a refusal.
+* **Façade-X**, as implemented by SPARQL Anything
+  (<https://sparql-anything.readthedocs.io/stable/>) and as being
+  standardized by the W3C Data Façades Community Group
+  (<https://www.w3.org/community/facade-x/>). Missing: *byte span* — a
+  node is addressed by a structural path or a row number — and
+  *content-addressed law*. It is the closest existing work to a general
+  structural slicer, and it mints predicates from source key strings,
+  which §6 forbids.
+* **WoT JSON Schema in RDF**
+  (<https://w3c.github.io/wot-thing-description/ontology/jsonschema.html>).
+  Missing: all three. It describes schemas rather than instances.
+
+### 12.3 Provenance and canonicalization
+
+* **PROV-O** (<https://www.w3.org/TR/prov-o/>). Missing: all three,
+  and it is not a rival for any of them — §10 states what this
+  document recommends for recording a run. It is listed because
+  `prov:Plan` is the standard place a mapping law would be named, and
+  it is deliberately left open: a plan is an entity identified by an
+  IRI, with no structure and no digest required of it, so the law can
+  be named and cannot be fingerprinted.
+* **RDF Dataset Canonicalization (RDFC-1.0)**
+  (<https://www.w3.org/TR/rdf-canon/>). Missing: all three. It is the
+  standard tool for content-addressing RDF, and what it addresses is
+  the emitted dataset, not the law that emitted it; it states in terms
+  that it does not define a graph signature.
+
+### 12.4 The state of the three properties
+
+Of everything above, the nearest each hold exactly one: the Direct
+Mapping is total, `oa:DataPositionSelector` is byte-counted, and RFC
+5147's `md5=` content-addresses the text it addresses — though not the
+law that addressed it. None holds two, and none is about Markdown.
+
+If a standard does hold all three, then this section is the part of this
+document that is wrong, and its authors would rather be told which one
+than go on asserting an absence.

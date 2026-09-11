@@ -307,6 +307,18 @@ impl Vocabulary {
     /// the same either way, and the profile's contract id tells the two
     /// apart.
     ///
+    /// One honest caveat, and it belongs here beside the argument rather
+    /// than only on [`STANDARD_NAMESPACE`]: the designated namespace is
+    /// **not publicly dereferenceable**. It is a stable identifier, not
+    /// a URL that resolves today; a redirect for it is being registered,
+    /// and no date is promised. Nothing rests on that — RDF does not
+    /// require an IRI to dereference, so the term set this returns, the
+    /// node identities minted under it, and the contract id computed
+    /// over both are what they would be either way. It is restated here
+    /// because this is the doc a caller reads while deciding whether to
+    /// adopt the namespace, and an argument for adopting it that can be
+    /// read apart from the caveat is an argument that oversells.
+    ///
     /// # Errors
     ///
     /// Neither [`MarkdownError::InvalidVocabulary`] nor
