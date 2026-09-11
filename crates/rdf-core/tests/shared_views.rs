@@ -2714,3 +2714,202 @@ fn a_delta_rides_the_view_carrier_without_compaction() {
         "released by the last reader"
     );
 }
+
+// ─── Ownership and observability, at the carrier level ───────────────────────
+
+/// The two accounting categories, read off a CARRIER and a separate composite that
+/// share one base on one ledger: the base's bytes are RETAINED once between them,
+/// while each view keeps its own INCREMENTAL bookkeeping. Nothing is counted in
+/// both columns, and the deduplicated reading is strictly smaller than the naive
+/// sum of the two views' own restatements.
+#[test]
+fn a_carrier_and_a_separate_composite_share_one_retention_and_keep_their_own_work() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+    let carrier = view_carrier(&base, &ledger);
+    // A SEPARATE composite over the SAME base — two occurrences of it, so its own
+    // per-view charge is visibly different from the carrier's.
+    let separate =
+        CompositeDatasetView::new(vec![base.clone(), base.clone()], ViewLimits::default()).unwrap();
+    let separate_guard = ledger.retain_dataset(&base);
+
+    // RETAINED: one allocation, one resident, counted once however many readers.
+    let shared = ledger.snapshot();
+    assert_eq!(shared.distinct_owners, 1, "one base, one resident");
+    assert_eq!(shared.retained_sources, 1);
+    assert_eq!(shared.retained_payload_bytes, base.rdf_payload_bytes());
+    assert_eq!(
+        separate_guard.owner_key(),
+        ledger.retain_dataset(&base).owner_key(),
+        "the same allocation keys the same owner"
+    );
+
+    let from_carrier = carrier.accounting();
+    let from_separate = ViewAccountingReport::new(ledger.snapshot(), &separate.stats());
+    assert_eq!(
+        from_carrier.retained, from_separate.retained,
+        "both readers see ONE retention reading, not one apiece"
+    );
+    assert_eq!(
+        from_carrier.retained.retained_payload_bytes,
+        base.rdf_payload_bytes()
+    );
+
+    // INCREMENTAL: per view, and genuinely different between these two views.
+    assert_eq!(carrier.view_stats().retained_sources, 1);
+    assert_eq!(separate.stats().retained_sources, 2);
+    assert_eq!(
+        from_carrier.incremental_auxiliary_bytes,
+        carrier.view_stats().auxiliary_bytes
+    );
+    assert_eq!(
+        from_separate.incremental_auxiliary_bytes,
+        separate.stats().auxiliary_bytes
+    );
+    assert_eq!(from_carrier.incremental_work, carrier.view_stats().work);
+    assert_eq!(from_separate.incremental_work, separate.stats().work);
+
+    // NO DOUBLE COUNT: each report's total is its own incremental bookkeeping plus
+    // the ONE retained reading — never the sum of both views' restatements.
+    assert_eq!(
+        from_carrier.total_accounted_bytes(),
+        base.rdf_payload_bytes()
+            + from_carrier.retained.memo_bytes
+            + carrier.view_stats().auxiliary_bytes
+    );
+    assert!(
+        from_carrier.total_accounted_bytes()
+            < carrier.view_stats().retained_payload_bytes
+                + separate.stats().retained_payload_bytes
+                + carrier.view_stats().auxiliary_bytes,
+        "the deduplicated total must be strictly below the naive per-view sum"
+    );
+
+    // NON-VACUITY: the per-view scope is deliberately unchanged by any of this —
+    // the separate composite still charges the base to itself twice.
+    assert_eq!(
+        separate.stats().retained_payload_bytes,
+        2 * base.rdf_payload_bytes()
+    );
+}
+
+/// The base a carrier and a separate reader share is released by whichever of them
+/// drops LAST, in either order: no order leaves a residue, and neither order
+/// releases the base while a reader is still holding it.
+#[test]
+fn a_carrier_and_a_separate_reader_release_one_base_under_either_drop_order() {
+    let base = carrier_fixture();
+    for carrier_first in [false, true] {
+        let ledger = RetentionLedger::new();
+        let mut carrier = Some(view_carrier(&base, &ledger));
+        let separate =
+            CompositeDatasetView::new(vec![base.clone()], ViewLimits::default()).unwrap();
+        let mut separate_guard = Some(ledger.retain_dataset(&base));
+        assert_eq!(ledger.snapshot().distinct_owners, 1);
+        assert_eq!(
+            ledger.snapshot().retained_payload_bytes,
+            base.rdf_payload_bytes()
+        );
+
+        // Whichever goes first, the SURVIVOR keeps the base resident.
+        if carrier_first {
+            drop(carrier.take());
+        } else {
+            drop(separate_guard.take());
+        }
+        let midway = ledger.snapshot();
+        assert_eq!(
+            midway.distinct_owners, 1,
+            "a surviving reader keeps the owner (carrier_first={carrier_first})"
+        );
+        assert_eq!(
+            midway.retained_payload_bytes,
+            base.rdf_payload_bytes(),
+            "and its bytes (carrier_first={carrier_first})"
+        );
+
+        // The LAST reader releases everything.
+        if carrier_first {
+            drop(separate_guard.take());
+        } else {
+            drop(carrier.take());
+        }
+        let after = ledger.snapshot();
+        assert_eq!(
+            after.distinct_owners, 0,
+            "released by the last reader (carrier_first={carrier_first})"
+        );
+        assert_eq!(after.live_guards, 0);
+        assert_eq!(after.retained_payload_bytes, 0);
+        assert_eq!(after.memo_entries, 0);
+        // The separate composite is still readable: it never depended on the ledger
+        // for its content, only for reporting its residency.
+        assert_eq!(separate.quads().count(), base.quads().count());
+    }
+}
+
+/// Admission is a HARD gate at carrier CONSTRUCTION, not only at accumulation: a
+/// budget the base cannot fit in refuses the carrier with the typed breach, retains
+/// nothing on the way out, and the adequately-sized twin — one row of headroom more
+/// — composes and reads its whole base.
+#[test]
+fn an_undersized_budget_refuses_the_view_carrier_and_admits_its_adequate_twin() {
+    let base = carrier_fixture();
+    let rows = base.rdf_row_count();
+    let ledger = RetentionLedger::new();
+    let build = |max_rows: usize| {
+        let (lookaside, blobs, provenance) = loadout();
+        PipelineViewBundle::<Note>::from_dataset(
+            &base,
+            lookaside,
+            blobs,
+            provenance,
+            &ledger,
+            ViewLimits {
+                max_rows,
+                ..ViewLimits::default()
+            },
+        )
+    };
+
+    let err = build(rows - 1).expect_err("a base the budget cannot hold must be refused");
+    match &err {
+        PipelineBundleError::AdmissionBreach(diagnostic) => {
+            assert_eq!(diagnostic.code, "view-retention-limit");
+            assert_eq!(
+                diagnostic.message,
+                format!("view retains {rows} rows, limit is {}", rows - 1)
+            );
+        }
+        other => panic!("expected an admission breach, got {other}"),
+    }
+    assert_eq!(
+        ledger.snapshot(),
+        RetentionSnapshot::default(),
+        "a refused carrier retains nothing"
+    );
+
+    // THE NEIGHBOURING CASE: exactly enough budget is admitted, and the admitted
+    // carrier genuinely holds the whole base rather than a truncation of it.
+    let admitted = build(rows).expect("the adequately sized twin must be admitted");
+    assert_eq!(admitted.view().quads().count(), base.quads().count());
+    assert_eq!(
+        admitted.view().reifier_quads().count(),
+        base.reifier_quads().count()
+    );
+    assert_eq!(
+        admitted.view().annotation_quads().count(),
+        base.annotation_quads().count()
+    );
+    assert_eq!(
+        admitted.named_graph_iris(),
+        vec![CDECLARED.to_owned(), CG1.to_owned(), CG2.to_owned()],
+        "the declaration-only graph survives the tightest budget that admits at all"
+    );
+    assert_eq!(
+        admitted.digest().unwrap(),
+        flat_carrier(&base).digest(),
+        "and it publishes the flat carrier's identity"
+    );
+    assert_eq!(ledger.snapshot().distinct_owners, 1);
+}

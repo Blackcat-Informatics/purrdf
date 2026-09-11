@@ -22,6 +22,11 @@
 //!   refusal that also rejects valid input is the mirror of a silent drop.
 //! * **Accounting.** The report names the declaration-only graphs that were
 //!   deliberately NOT interned, and its scratch figure is non-zero and monotone.
+//! * **The keystone.** All of it assembled at once: a `PipelineViewBundle` over a
+//!   largish shared base, grown by a named-graph accumulation, joined by a delta
+//!   carrier and pinned to a typed handle, is ingested and emitted THROUGH its
+//!   composed view — freezing nothing, and shipping the bytes the materialized
+//!   flat path ships.
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -32,9 +37,11 @@ use purrdf_rdf::gts_compose::{
     SnapshotBuilder, emit_gts,
 };
 use purrdf_rdf::{
-    CompositeDatasetView, CompositeSource, DatasetView, FallibleDatasetView, GraphMatch,
-    MutableDataset, QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder, RdfStoreCapabilities, TermId,
-    TermRef, TermValue, ViewLimits, parse_dataset,
+    BlankScope, CompositeDatasetView, CompositeSource, ContentStore, DatasetMut, DatasetProvenance,
+    DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch, MutableDataset,
+    PipelineViewBundle, QuadIds, QuadRef, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfLookaside, RdfStoreCapabilities, RdfTextDirection, RetentionLedger, TermId, TermRef,
+    TermValue, ViewLimits, parse_dataset,
 };
 
 /// The named graph every relocated default-graph row lands in.
@@ -144,7 +151,7 @@ fn composite_over(dataset: &Arc<RdfDataset>) -> CompositeDatasetView {
 
 /// A delta view over `dataset` with an EMPTY delta: the same RDF surface,
 /// reached through the mutable branch's snapshot publication instead.
-fn delta_over(dataset: &Arc<RdfDataset>) -> purrdf_rdf::DeltaDatasetView {
+fn delta_over(dataset: &Arc<RdfDataset>) -> DeltaDatasetView {
     MutableDataset::new(Arc::clone(dataset))
         .snapshot_view()
         .expect("an empty delta publishes")
@@ -896,4 +903,445 @@ fn a_claimed_statement_layer_must_be_enumerable() {
     let _ = empty
         .add_view(&ProbeView::honest(plain))
         .expect("a view with no statement layer ingests");
+}
+
+// ---------------------------------------------------------------------------
+// The keystone: a view carrier travels the whole pipeline and publishes bytes
+// ---------------------------------------------------------------------------
+//
+// Everything above proves one seam at a time. This is the seam ASSEMBLED: a
+// `PipelineViewBundle` is built over a shared base, grown by one named-graph
+// accumulation, joined by a delta carrier over the same base, pinned to a typed
+// handle — and then ingested and emitted as GTS *through its composed view*, with
+// no dataset ever frozen on the way.
+//
+// What the assembly has to prove, and each is a way the seam could be a lie:
+//
+// * **Nothing is copied to publish.** The view's own `freezes` and
+//   `materializations` counters must not move across ingest-and-emit. A carrier
+//   that quietly materialized would still emit the right bytes — and would have
+//   paid for the whole dataset to do it.
+// * **The bytes are the flat bytes.** A second, identically-constructed carrier is
+//   materialized and ingested through the FLAT surface. Equality is BYTE equality
+//   on the emitted container, not isomorphism: GTS blank wire values are the
+//   view's qualified labels, so anything that renamed a scope shows up here.
+// * **The receipt is bound and sane.** Rows are consumed, and the declaration-only
+//   graph is NAMED as omitted rather than silently skipped.
+// * **Accumulation invalidates exactly one leaf**, and a second reader of the same
+//   base is answered from the shared ledger memo rather than re-canonicalizing.
+
+/// The keystone's pipeline-side handle payload. Concrete pipeline types plug into
+/// the same lane; the kernel never learns what they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Note(&'static str);
+
+/// The base's first quad-bearing named graph — scoped blanks, a triple term and the
+/// statement layer live here.
+const KEY_G1: &str = "https://example.org/keystone/g1";
+/// The base's second quad-bearing named graph.
+const KEY_G2: &str = "https://example.org/keystone/g2";
+/// The graph folded in by `accumulate_named_graph`; absent from the base.
+const KEY_G3: &str = "https://example.org/keystone/g3";
+/// Declared by the base and left empty everywhere — the graph the ingest report
+/// must NAME rather than drop.
+const KEY_DECLARED: &str = "https://example.org/keystone/declared";
+/// How many row groups the base carries. Six ordinary quads per group, plus a
+/// statement-layer triple every eighth group.
+const KEYSTONE_GROUPS: usize = 60;
+
+/// A largish shared base: several hundred quads across two named graphs and the
+/// default graph, one blank LABEL living in two scopes per group, triple terms,
+/// reifier declarations, statement annotations, all three literal shapes — and one
+/// named graph declared and never filled.
+///
+/// Every element is a way the view path and the flat path could disagree: a scope
+/// renaming that conflated two same-label blanks, a statement layer selected by
+/// membership rather than by its own graph slot, a direction that did not survive
+/// composition, a declaration one surface forgot.
+fn keystone_base() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p");
+    let q = b.intern_iri("https://example.org/q");
+    let g1 = b.intern_iri(KEY_G1);
+    let g2 = b.intern_iri(KEY_G2);
+    let declared = b.intern_iri(KEY_DECLARED);
+    let plain = b.intern_literal(RdfLiteral::simple("bare"));
+    let tagged = b.intern_literal(RdfLiteral::language_tagged("cat", "en"));
+    let directional = b.intern_literal(RdfLiteral {
+        direction: Some(RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("مرحبا", "ar")
+    });
+    for i in 0..KEYSTONE_GROUPS {
+        let s = b.intern_iri(&format!("https://example.org/s{i}"));
+        let o = b.intern_iri(&format!("https://example.org/o{i}"));
+        // Default-graph rows, relocated to <selected> at ingest time.
+        b.push_quad(s, p, o, None);
+        b.push_quad(s, q, plain, None);
+        // Named-graph rows, one literal shape each.
+        b.push_quad(s, p, directional, Some(g1));
+        b.push_quad(s, q, tagged, Some(g2));
+        // One local label in two scopes: two nodes a label-keyed identity would
+        // conflate, kept structurally distinguishable so canonicalization stays
+        // linear rather than exploring automorphisms.
+        let shared = b.intern_blank(&format!("n{i}"), BlankScope::DEFAULT);
+        let scoped = b.intern_blank(&format!("n{i}"), BlankScope(4));
+        b.push_quad(shared, p, o, Some(g1));
+        b.push_quad(scoped, q, o, Some(g1));
+        if i % 8 == 0 {
+            let triple = b.intern_triple(shared, p, directional);
+            let reifier = b.intern_blank(&format!("st{i}"), BlankScope(7));
+            b.push_reifier_in_graph(reifier, triple, Some(g1));
+            b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
+        }
+    }
+    // A named graph owning no row at all.
+    b.declare_named_graph(declared);
+    b.freeze().expect("the keystone base freezes")
+}
+
+/// A small contribution wholly contained in `KEY_G3`, whose blanks deliberately
+/// reuse the base's LABEL and scopes: a carrier that renamed scopes carelessly
+/// would either conflate these nodes with the base's or break their co-reference,
+/// and either moves the emitted bytes.
+fn keystone_contribution() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p");
+    let q = b.intern_iri("https://example.org/q");
+    let g = b.intern_iri(KEY_G3);
+    let node = b.intern_blank("n0", BlankScope::DEFAULT);
+    let elsewhere = b.intern_blank("n0", BlankScope(4));
+    for i in 0..6 {
+        let o = b.intern_iri(&format!("https://example.org/c{i}"));
+        b.push_quad(node, p, o, Some(g));
+        b.push_quad(elsewhere, q, o, Some(g));
+    }
+    b.push_quad(node, q, elsewhere, Some(g));
+    b.freeze().expect("the keystone contribution freezes")
+}
+
+/// A delta view whose EFFECTIVE content is exactly `base`'s, reached through a real
+/// mutation round trip rather than an untouched passthrough — so the delta
+/// machinery (suppression rows, delta-only ids) is genuinely in the read path.
+fn keystone_delta(base: &Arc<RdfDataset>) -> Arc<DeltaDatasetView> {
+    let mut mutable = MutableDataset::new(Arc::clone(base));
+    let scratch = QuadValues::triple(
+        TermValue::iri("https://example.org/scratch"),
+        TermValue::iri("https://example.org/p"),
+        TermValue::iri("https://example.org/o"),
+    );
+    assert!(
+        mutable
+            .insert(scratch.clone())
+            .expect("the scratch row inserts")
+    );
+    assert!(mutable.remove(&scratch), "and is taken back out again");
+    Arc::new(mutable.snapshot_view().expect("the delta publishes"))
+}
+
+/// The sidecars every keystone carrier travels with. Identical on both the measured
+/// and the reference carrier, so nothing here can explain a byte difference.
+fn keystone_loadout() -> (RdfLookaside, Arc<ContentStore>, DatasetProvenance) {
+    (
+        RdfLookaside::default(),
+        Arc::new(ContentStore::new()),
+        DatasetProvenance::new(),
+    )
+}
+
+/// A carrier over `base` with one named graph accumulated into it — the exact
+/// construction the measured carrier and its byte-parity reference both use, so
+/// the two composites agree on source order, placement and standardized scopes.
+fn keystone_carrier(
+    base: &Arc<RdfDataset>,
+    contribution: &Arc<RdfDataset>,
+    ledger: &Arc<RetentionLedger>,
+) -> PipelineViewBundle<Note> {
+    let (lookaside, blobs, provenance) = keystone_loadout();
+    let mut carrier = PipelineViewBundle::from_dataset(
+        base,
+        lookaside,
+        blobs,
+        provenance,
+        ledger,
+        ViewLimits::default(),
+    )
+    .expect("the base is within the default ceilings");
+    carrier
+        .accumulate_named_graph(KEY_G3, contribution, Note("g3"))
+        .expect("a contained contribution folds in");
+    carrier
+}
+
+/// A carrier over `delta`, composing the delta snapshot without compacting it.
+fn keystone_delta_carrier(
+    delta: &Arc<DeltaDatasetView>,
+    ledger: &Arc<RetentionLedger>,
+) -> PipelineViewBundle<Note> {
+    let (lookaside, blobs, provenance) = keystone_loadout();
+    PipelineViewBundle::from_delta(
+        delta,
+        lookaside,
+        blobs,
+        provenance,
+        ledger,
+        ViewLimits::default(),
+    )
+    .expect("the delta is within the default ceilings")
+}
+
+/// The emitted container bytes — what actually ships.
+fn emitted(builder: &SnapshotBuilder) -> Vec<u8> {
+    emit_gts(
+        builder,
+        "dist",
+        Some(vec!["identity".to_owned()]),
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+        DEFAULT_RSYNCABLE_THRESHOLD,
+        &MediumPlan::undicted(None),
+    )
+    .expect("the keystone emits")
+}
+
+#[test]
+fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
+    let base = keystone_base();
+    let contribution = keystone_contribution();
+    let delta = keystone_delta(&base);
+    let ledger = RetentionLedger::new();
+
+    // NON-VACUITY: the fixture really is the largish, trap-bearing base claimed.
+    assert!(
+        base.quads().count() > 300,
+        "the keystone base must be largish: {}",
+        base.quads().count()
+    );
+    assert!(base.reifier_quads().count() >= 8 && base.annotation_quads().count() >= 8);
+    assert!(
+        base.named_graphs().count() >= 3,
+        "the base declares more graphs than it fills"
+    );
+
+    // ---- The measured carrier: composed, grown, pinned. Nothing frozen. -------
+    let (lookaside, blobs, provenance) = keystone_loadout();
+    let mut carrier = PipelineViewBundle::<Note>::from_dataset(
+        &base,
+        lookaside,
+        blobs,
+        provenance,
+        &ledger,
+        ViewLimits::default(),
+    )
+    .expect("the base composes within the default ceilings");
+
+    let g1 = carrier.graph_digest(KEY_G1).expect("<g1> canonicalizes");
+    let g2 = carrier.graph_digest(KEY_G2).expect("<g2> canonicalizes");
+    assert_ne!(g1, g2, "the two graphs differ, or the leaves prove nothing");
+    carrier
+        .pin_handle(KEY_G1, Note("g1"), g1)
+        .expect("a handle pinned to its own graph's digest attaches");
+
+    let before_accumulate = carrier.digest_work();
+    assert_eq!(
+        before_accumulate.graph_canonicalizations, 2,
+        "two graphs read, two canonicalizations"
+    );
+
+    carrier
+        .accumulate_named_graph(KEY_G3, &contribution, Note("g3"))
+        .expect("a contained contribution appends");
+
+    // EXACT INVALIDATION: the accumulation canonicalized the graph it touched and
+    // nothing else, and the untouched leaves are afterwards SERVED from the memo.
+    let after_accumulate = carrier.digest_work();
+    assert_eq!(
+        after_accumulate.graph_canonicalizations,
+        before_accumulate.graph_canonicalizations + 1,
+        "exactly the accumulated graph is canonicalized again"
+    );
+    assert_eq!(carrier.graph_digest(KEY_G1).expect("<g1>"), g1);
+    assert_eq!(carrier.graph_digest(KEY_G2).expect("<g2>"), g2);
+    let served = carrier.digest_work();
+    assert_eq!(
+        served.graph_canonicalizations, after_accumulate.graph_canonicalizations,
+        "an untouched leaf is never re-canonicalized after an accumulation"
+    );
+    assert_eq!(
+        served.graph_cache_hits,
+        after_accumulate.graph_cache_hits + 2,
+        "both untouched leaves came from the memo"
+    );
+
+    // THE PIN STILL VALIDATES across the accumulation — the growth was additive.
+    assert_eq!(
+        carrier.handle(KEY_G1).expect("the pin survives").payload,
+        Note("g1")
+    );
+    assert_eq!(
+        carrier
+            .handle(KEY_G1)
+            .expect("the pin survives")
+            .content_digest,
+        g1
+    );
+    assert_eq!(
+        carrier.graph_digest(KEY_G1).expect("<g1>"),
+        carrier
+            .handle(KEY_G1)
+            .expect("the pin survives")
+            .content_digest,
+        "the handle still agrees with the graph it claims to project"
+    );
+    assert!(
+        carrier.handle(KEY_G3).is_some(),
+        "and the fold pinned its own"
+    );
+
+    // A SECOND READER of the same base is answered from the SHARED ledger memo
+    // rather than paying for the analysis twice. Its own memo is empty, so nothing
+    // but the ledger can be answering.
+    let second_reader = keystone_carrier(&base, &contribution, &ledger);
+    assert_eq!(second_reader.digest_work().graph_cache_hits, 0);
+    let hits_before = ledger.snapshot().memo_hits;
+    assert_eq!(
+        second_reader
+            .graph_digest(KEY_G1)
+            .expect("<g1> on the second reader"),
+        g1
+    );
+    assert_eq!(
+        ledger.snapshot().memo_hits,
+        hits_before + 1,
+        "the shared ledger memo answered the second reader"
+    );
+    assert_eq!(
+        second_reader.digest_work().graph_canonicalizations,
+        0,
+        "and nothing was canonicalized to do it"
+    );
+
+    let delta_carrier = keystone_delta_carrier(&delta, &ledger);
+
+    // ---- The measured path: ingest both carriers' VIEWS, then emit. ----------
+    let composite_work = carrier.view_stats().work;
+    let delta_work = delta_carrier.view_stats().work;
+    // Non-vacuity for the zero-delta claim below: the freeze counter IS live. The
+    // accumulation's `GraphPlacement::Named` derived one graph dictionary, and that
+    // dictionary cost exactly one freeze.
+    assert_eq!(
+        composite_work.freezes, 1,
+        "composing the accumulated graph's dictionary is the one freeze charged"
+    );
+    assert_eq!(delta_work.freezes, 0, "a preserved delta charges none");
+    assert_eq!(composite_work.materializations, 0);
+    assert_eq!(delta_work.materializations, 0);
+
+    let mut measured = SnapshotBuilder::new();
+    let base_report = measured
+        .add_view_scoped(carrier.view(), Some(SELECTED), Some("base"))
+        .expect("the composed carrier ingests");
+    let delta_report = measured
+        .add_view_scoped(delta_carrier.view(), Some(SELECTED), Some("delta"))
+        .expect("the delta carrier ingests");
+    let measured_bytes = emitted(&measured);
+
+    // NOTHING WAS COPIED TO PUBLISH IT.
+    assert_eq!(
+        carrier.view_stats().work.freezes,
+        composite_work.freezes,
+        "ingesting and emitting a composite view must freeze nothing"
+    );
+    assert_eq!(
+        carrier.view_stats().work.materializations,
+        composite_work.materializations,
+        "ingesting and emitting a composite view must materialize nothing"
+    );
+    assert_eq!(
+        carrier.view_stats().work.copied_rows,
+        composite_work.copied_rows,
+        "and must replay no row at an ownership boundary"
+    );
+    assert_eq!(delta_carrier.view_stats().work.freezes, delta_work.freezes);
+    assert_eq!(
+        delta_carrier.view_stats().work.materializations,
+        delta_work.materializations
+    );
+
+    // ---- The receipt ---------------------------------------------------------
+    assert!(
+        base_report.rows_consumed > base.quads().count(),
+        "every table of the base plus the contribution is consumed: {}",
+        base_report.rows_consumed
+    );
+    assert!(base_report.terms_interned > 0 && base_report.scratch_bytes > 0);
+    assert_eq!(
+        base_report.declarations_omitted,
+        vec![KEY_DECLARED.to_owned()],
+        "the report names exactly the graph that owns no row"
+    );
+    assert_eq!(
+        delta_report.declarations_omitted,
+        vec![KEY_DECLARED.to_owned()],
+        "the delta carries the same declaration, and states the same omission"
+    );
+    let totals = measured.ingest_totals();
+    assert_eq!(
+        totals.rows_consumed,
+        base_report.rows_consumed + delta_report.rows_consumed
+    );
+    assert_eq!(
+        totals.terms_interned,
+        base_report.terms_interned + delta_report.terms_interned
+    );
+    // The omission is an omission: the empty graph's IRI never reached the table.
+    let rendered = format!("{:?}", measured.snapshot_payload());
+    assert!(
+        !rendered.contains(KEY_DECLARED),
+        "a declaration-only graph must never be interned"
+    );
+    for present in [KEY_G1, KEY_G2, KEY_G3, SELECTED, "مرحبا", "cat"] {
+        assert!(rendered.contains(present), "the ingestion lost {present:?}");
+    }
+
+    // ---- The reference: the SAME carriers, materialized, ingested flat -------
+    // A second, identically-constructed pair — so the measured carriers' own work
+    // counters stay untouched by the freeze this reference path deliberately pays.
+    let reference_main = keystone_carrier(&base, &contribution, &ledger);
+    let reference_delta = keystone_delta_carrier(&delta, &ledger);
+    let flat_main = reference_main.materialize().expect("the reference freezes");
+    let flat_delta = reference_delta
+        .materialize()
+        .expect("the reference delta freezes");
+    assert_eq!(
+        reference_main.view_stats().work.materializations,
+        1,
+        "the reference path is the one that pays for a materialization"
+    );
+
+    let mut reference = SnapshotBuilder::new();
+    reference
+        .add_dataset_scoped(&flat_main, Some(SELECTED), Some("base"))
+        .expect("the materialized carrier ingests flat");
+    reference
+        .add_dataset_scoped(&flat_delta, Some(SELECTED), Some("delta"))
+        .expect("the materialized delta ingests flat");
+
+    assert_eq!(
+        measured.snapshot_content_id(),
+        reference.snapshot_content_id(),
+        "the view path must mint the flat path's snapshot"
+    );
+    assert_eq!(
+        measured.snapshot_payload(),
+        reference.snapshot_payload(),
+        "term table included"
+    );
+    assert_eq!(
+        measured_bytes,
+        emitted(&reference),
+        "and the emitted container bytes — blank wire values included — must be equal"
+    );
 }
