@@ -48,6 +48,11 @@ pub mod backend;
 pub mod collections;
 pub mod content_id;
 pub mod content_store;
+// The cover law: verbatim byte spans back into the document they cover,
+// byte for byte -- the decode half of every ordered codec (the Markdown
+// slicer first among them), kept in the kernel so two formats cannot
+// drift apart on it.
+pub mod cover;
 // The static, allocation-free read view over an RDF dataset (purrdf P2):
 // `DatasetView` + `GraphMatch`. PyO3-free, oxigraph-free — pure kernel.
 pub mod dataset_view;

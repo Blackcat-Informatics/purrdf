@@ -167,6 +167,22 @@ pub enum MarkdownError {
         /// What the kernel's verification law found.
         cause: EmbeddingError,
     },
+    /// The assembled model's spans would not decode back to the very
+    /// bytes they cover: the codec's own emission would be unlawful
+    /// under the decode law, and the document is refused rather than
+    /// sliced into a graph nothing can rebuild.
+    ///
+    /// Every admitted document is held to this before a model exists
+    /// to render — in every build, not behind a debug assertion —
+    /// because a cover defect discovered by a *consumer's* decode is a
+    /// silent drop that already shipped. Seeing this refusal means a
+    /// defect in this crate's slicing law, not in the document; it is
+    /// stated as a refusal rather than a panic so it fails loudly, by
+    /// name, and carries the cover law's own finding.
+    CoverDefect {
+        /// What the kernel's cover law found.
+        cause: purrdf_core::cover::ReconstructError,
+    },
 }
 
 impl std::fmt::Display for MarkdownError {
@@ -233,6 +249,12 @@ impl std::fmt::Display for MarkdownError {
                     verses.0, verses.1
                 )
             }
+            Self::CoverDefect { cause } => {
+                write!(
+                    f,
+                    "the emitted spans would not decode back to the source: {cause}"
+                )
+            }
             Self::TamperedUnit { span, cause } => {
                 write!(
                     f,
@@ -244,4 +266,18 @@ impl std::fmt::Display for MarkdownError {
     }
 }
 
-impl std::error::Error for MarkdownError {}
+impl std::error::Error for MarkdownError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // A refusal borrowed from another law hands that law's finding
+        // through the standard chain too, so an error-chain consumer
+        // reads the cause without matching this crate's variants.
+        match self {
+            Self::MalformedSourceId { cause, .. }
+            | Self::MalformedVocabulary { cause, .. }
+            | Self::MalformedCanonBase { cause, .. } => Some(cause),
+            Self::TamperedUnit { cause, .. } => Some(cause),
+            Self::CoverDefect { cause } => Some(cause),
+            _ => None,
+        }
+    }
+}
