@@ -203,12 +203,88 @@ fn a_graph_that_cannot_anchor_a_decode_names_what_it_lacks() {
             ..
         })
     ));
+    // A graph shorn of its source digest cannot prove a rebuild, so
+    // it refuses by the fact it lacks rather than answering unproven.
+    let digest_line = |line: &&str| line.contains(&format!("<{}>", v().source_digest));
+    let undigested: String = turtle
+        .lines()
+        .filter(|line| !digest_line(line))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let dataset = parse_dataset(undigested.as_bytes(), "text/turtle", None).expect("still a graph");
+    assert_eq!(
+        decode_document(&dataset, &v(), DOC_ID),
+        Err(DecodeError::MissingDocumentFact {
+            predicate: "sourceDigest"
+        })
+    );
+    // A digest that is stated and unreadable is a different fact from
+    // one that is absent, and it is named with the literal that
+    // carried it.
+    let misdigested: String = turtle
+        .lines()
+        .map(|line| {
+            if digest_line(&line) {
+                format!(
+                    "<{DOC_ID}> <{}> \"sha256:zz\"^^<{}> .\n",
+                    v().source_digest,
+                    v().dt_digest
+                )
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    let dataset =
+        parse_dataset(misdigested.as_bytes(), "text/turtle", None).expect("still a graph");
+    assert_eq!(
+        decode_document(&dataset, &v(), DOC_ID),
+        Err(DecodeError::MalformedSourceDigest {
+            stated: "sha256:zz".to_owned()
+        })
+    );
     // The neighbour: the whole graph still decodes.
     let (_, whole) = graph_of(&claims);
     assert_eq!(
         decode_document(&whole, &v(), DOC_ID).as_deref(),
         Ok("# T\n\nbody\n")
     );
+}
+
+/// The refusal a partial or carelessly merged graph produces: a
+/// `continues` edge naming a piece whose span the graph does not
+/// carry. It is the merge-shaped defect, so it is minted from a real
+/// split chain rather than a hand-built one.
+#[test]
+fn a_continues_edge_naming_a_spanless_piece_is_refused_by_the_piece_it_names() {
+    let text = "# H\n\nab\ncd\nef\ngh\nij\n";
+    let claims = slice(text, &tight(4, 1));
+    let (turtle, _) = graph_of(&claims);
+    // The piece the first continues edge names, read off the graph.
+    let continued = turtle
+        .lines()
+        .find(|line| line.contains(&format!("<{}>", v().continues)))
+        .and_then(|line| line.rsplit_once(" <"))
+        .map(|(_, tail)| tail.trim_end_matches(" ."))
+        .map(|iri| iri.trim_end_matches('>').to_owned())
+        .expect("the chain declares a piece");
+    // Remove the piece whole — the shape a partial merge produces —
+    // and the edge names a node the graph does not carry. (A piece
+    // that kept its text and lost only its offsets refuses earlier,
+    // as its own `IncompleteSpan`.)
+    let sheared: String = turtle
+        .lines()
+        .filter(|line| !line.starts_with(&format!("<{continued}>")))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let dataset = parse_dataset(sheared.as_bytes(), "text/turtle", None).expect("still a graph");
+    assert!(matches!(
+        decode_document(&dataset, &v(), DOC_ID),
+        Err(DecodeError::UnknownContinuedPiece { piece, .. }) if piece == continued
+    ));
+    // The neighbour: the unmutated chain decodes whole.
+    let (_, whole) = graph_of(&claims);
+    assert_eq!(decode_document(&whole, &v(), DOC_ID).as_deref(), Ok(text));
 }
 
 /// "Maximal run" in its checkable form, held over the graph: no two

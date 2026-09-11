@@ -550,7 +550,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-datalog`](./crates/datalog/) | chase 之下的不动点基底：一个列式关系存储与 DL 子句 IR 上的确定性半朴素求值器。由门面 crate 重新导出为 `purrdf::datalog`，因为蕴涵机制接口带有它的类型。 |
 | [`purrdf-text`](./crates/text/) | RDF 1.2 字面量上的确定性全文检索：一个内存倒排索引与精确定点 BM25 排名，从 SPARQL 经由调用方提供的属性函数 IRI 调用。 |
 | [`purrdf-validate`](./crates/validate/) | 共享的宿主边界：SARIF 2.1.0 诊断，以及 Python/wasm/C 绑定所调用的蕴涵机制字符串接口。 |
-| [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化切片器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址的 profile 之下——且这张图可逐字节解码回原文档，并以其自身声明的源摘要作证。由门面 crate 重新导出为 `purrdf::markdown`。 |
+| [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化编解码器（codec），遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址的 profile 之下——且这张图可逐字节解码回原文档，并以其自身声明的源摘要作证。由门面 crate 重新导出为 `purrdf::markdown`。 |
 | [`purrdf-slice`](./crates/slice/) | 切片目录：清单、带类型的工件、所有权/依赖分析。 |
 | [`purrdf-iri`](./crates/iri/) | 零依赖的 IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
 | [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |
