@@ -69,6 +69,21 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
   `purrdf-iri`, `purrdf-xsd`, and `purrdf-events` must keep **zero runtime
   dependencies**.
+* **Terminal ring-fence: a scanner's character classes are exact, in both
+  directions.** They decide **token boundaries**, not merely membership, so
+  substituting a Unicode property for a production's enumerated set does not
+  just widen the accepted language — it silently *re-tokenizes documents both
+  the liberal and the conforming parser accept*. `?s<NBSP>?p` lexed as one
+  variable, turning a join into a cross product with exit zero and no
+  diagnostic. Every W3C terminal is spelled **once**, in
+  `purrdf_iri::terminals`, with its production cited and its ranges asserted at
+  compile time; scanners call it rather than retyping a table.
+  `scripts/check-terminal-predicates.py` (in `make check`, or
+  `make terminal-hygiene`) refuses a Unicode-property test inside a file that
+  holds a character cursor. This is **not** "Unicode properties are bad": a
+  production that *names* one — CommonMark's whitespace does — must be
+  implemented with it, and the gate's `ALLOWLIST` is the reasoned ledger for
+  exactly those cases.
 * **Everything is wasm-able.** Every release crate (all 22 published crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that

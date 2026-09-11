@@ -652,8 +652,9 @@ pub(crate) fn is_pn_chars(c: char) -> bool {
 mod tests {
     use super::{
         ESCAPE_MARKER, LabelAlphabet, decode_blank_label, encode_blank_label, escape_label,
-        is_pn_chars, is_pn_chars_u, is_valid_blank_node_label, is_valid_blank_node_label_prefix,
-        is_valid_label, is_valid_ncname, is_valid_xml_text, retarget_owned_label,
+        is_pn_chars, is_pn_chars_base, is_pn_chars_u, is_valid_blank_node_label,
+        is_valid_blank_node_label_prefix, is_valid_label, is_valid_ncname, is_valid_xml_text,
+        retarget_owned_label,
     };
     use crate::BlankScope;
     use std::borrow::Cow;
@@ -1404,6 +1405,15 @@ mod tests {
             let Some(c) = char::from_u32(cp) else {
                 continue;
             };
+            // `PN_CHARS_BASE` is asserted on its own rather than left to follow
+            // from `PN_CHARS_U`: both sides define `_U` as `'_' || base`, so a
+            // disagreement at `'_'` -- the one scalar `_U` admits regardless of
+            // the base table -- would cancel out and go unseen.
+            assert_eq!(
+                is_pn_chars_base(c),
+                purrdf_iri::terminals::is_pn_chars_base(c),
+                "{c:?}"
+            );
             assert_eq!(
                 is_pn_chars_u(c),
                 purrdf_iri::terminals::is_pn_chars_u(c),
