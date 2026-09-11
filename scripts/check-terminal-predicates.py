@@ -47,6 +47,17 @@ scans characters without a single ``lex_``-prefixed function.
 the workspace's deviation ledger for this property. An entry that stops matching
 is reported as STALE so the table cannot rot, the same discipline the
 conformance harnesses apply to their xfail ledgers.
+
+``--self-test`` proves the rules fire, in both directions. ``--census`` reports
+the corpus population a tightening can move, classified by *position* — a
+U+00A0 inside an IRIREF body is content and cannot re-tokenize anything, while a
+bare one sits at a token boundary. At the time this gate was written the answer
+over 4,326 corpus files was **one** occurrence, and it was the instructive kind:
+``<urn:ex:\xa0>`` in the frozen W3C RDFC-1.0 fixtures — a LAWFUL IRI that a
+tightening aimed at whitespace would break if it reached into IRIREF bodies.
+A corpus with no offenders is evidence of no observed regression; it is never
+evidence of no over-refusal, which by definition lives in input the corpus does
+not contain. That is what the exhaustive per-predicate sweeps are for.
 """
 
 from __future__ import annotations
@@ -100,6 +111,17 @@ SCANNER_RULES: dict[str, tuple[re.Pattern[str], str]] = {
     "unicode-name-class": (
         re.compile(r"\.is_alphanumeric\(\)|\.is_alphabetic\(\)"),
         "a Unicode letter property where the grammar enumerates PN_CHARS",
+    ),
+    # A content class is a terminal too, and `is_control` misses it in BOTH
+    # directions: `IRIREF ::= '<' ([^#x00-#x20<>\"{}|^`\\] | UCHAR)* '>'`
+    # excludes SPACE (which `is_control` admits) and permits U+007F-U+009F
+    # (which `is_control` refuses), so one spelling simultaneously accepts a
+    # malformed IRI and rejects a lawful one.
+    "unicode-control-class": (
+        re.compile(r"\.is_control\(\)"),
+        "a Unicode control property where the grammar enumerates its content "
+        "class (IRIREF excludes SPACE and admits U+007F-U+009F; is_control "
+        "gets both backwards)",
     ),
 }
 
@@ -291,6 +313,123 @@ def scan() -> tuple[list[str], set[tuple[str, str]]]:
 
 SCANNER_SHELL = "impl P {\n    fn peek(&self) -> Option<char> { None }\n    fn f(&self) { let _ = self.pos; %s }\n}\n"
 
+# ``--census``: the corpus population a terminal tightening can possibly move.
+# Recorded here, glob and all, so the NEXT tightening re-runs the measurement
+# instead of re-inventing it -- or worse, inheriting a number from a previous
+# change that measured a different tree with a different entry point.
+CENSUS_GLOBS = (
+    "vectors/**/*",
+    "queries/**/*",
+    "crates/**/tests/data/**/*",
+    "crates/**/tests/fixtures/**/*",
+    "crates/**/corpus/**/*",
+    "docs/book/po/*.po",
+    "docs/playground/examples/*",
+    "bindings/python/tests/**/*",
+    "crates/rdf-wasm/js/**/*",
+)
+CENSUS_EXTS = {
+    ".ttl", ".trig", ".nt", ".nq", ".rq", ".ru", ".srx", ".srj", ".shex",
+    ".smap", ".shaclc", ".json", ".jsonld", ".po", ".py", ".js", ".ts", ".md",
+}
+
+# `WS`, and the Unicode `White_Space` property it is a four-member subset of.
+# Spelled out rather than reached through `str.isspace()`, which ALSO counts
+# U+001C..U+001F and would invent offenders that do not exist -- the same
+# substitute-a-convenient-predicate mistake this gate exists to refuse, made in
+# the measurement instead of the scanner.
+WS_FOUR = {0x20, 0x09, 0x0D, 0x0A}
+UNICODE_WHITE_SPACE = (
+    set(range(0x09, 0x0E))
+    | {0x20, 0x85, 0xA0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000}
+    | set(range(0x2000, 0x200B))
+)
+# Invisible, not `White_Space`, and absorbed into names by the old catch-all.
+INVISIBLE_FORMAT = {0x200B, 0x200E, 0x200F, 0x2060, 0xFEFF, 0x00AD}
+# `PN_CHARS_BASE` admits `[#x200C-#x200D]`: lawful NAME characters, never
+# offenders. Sweeping "invisible format characters" hoovers these up and then
+# reports a valid query as wrong.
+LAWFUL_IN_NAMES = {0x200C, 0x200D}
+
+
+def census_position(line: str, index: int) -> str:
+    """Where ``line[index]`` sits: inside a literal, an IRIREF, or bare.
+
+    "This file contains a U+00A0" is not the question a tightening asks. A
+    scalar inside a quoted literal or an IRIREF body is *content*, untouched by
+    a scanner whose WS and name classes narrowed; only a BARE one sits at a
+    token boundary and can change how the document parses.
+    """
+    quote: str | None = None
+    in_iri = False
+    cursor = 0
+    while cursor < index:
+        char = line[cursor]
+        if quote is not None:
+            if char == "\\":
+                cursor += 2
+                continue
+            if char == quote:
+                quote = None
+        elif in_iri:
+            if char == ">":
+                in_iri = False
+        elif char in "\"'":
+            quote = char
+        elif char == "<":
+            in_iri = True
+        elif char == "#":
+            return "comment"
+        cursor += 1
+    if quote is not None:
+        return "string-body"
+    if in_iri:
+        return "iriref-body"
+    return "BARE"
+
+
+def census() -> int:
+    """Report every offending scalar in the corpora, by position."""
+    seen: set[Path] = set()
+    counts: dict[tuple[int, str], int] = {}
+    bare: list[str] = []
+    for pattern in CENSUS_GLOBS:
+        for path in REPO_ROOT.glob(pattern):
+            if not path.is_file() or path.suffix not in CENSUS_EXTS:
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            for number, line in enumerate(text.splitlines(), 1):
+                for index, char in enumerate(line):
+                    code = ord(char)
+                    if code in LAWFUL_IN_NAMES:
+                        continue
+                    offends = (
+                        code in UNICODE_WHITE_SPACE and code not in WS_FOUR
+                    ) or code in INVISIBLE_FORMAT
+                    if not offends:
+                        continue
+                    where = census_position(line, index)
+                    counts[(code, where)] = counts.get((code, where), 0) + 1
+                    if where == "BARE":
+                        rel = path.relative_to(REPO_ROOT).as_posix()
+                        bare.append(f"{rel}:{number}: U+{code:04X}")
+
+    print(f"census: {len(seen)} files over {len(CENSUS_GLOBS)} globs")
+    for (code, where), total in sorted(counts.items()):
+        print(f"  U+{code:04X}  {where:12s} {total}")
+    print(f"bare (tokenization-affecting) occurrences: {len(bare)}")
+    for hit in bare:
+        print(f"  {hit}")
+    # Not a gate. A bare occurrence is a file to READ, not a failure: it may be
+    # a vector that deliberately pins the refusal.
+    return 0
+
 
 def self_test() -> None:
     """Prove the gate fires on the shipped defect and stays silent on its fix.
@@ -308,6 +447,7 @@ def self_test() -> None:
     assert "unicode-whitespace" in rules("s.trim_start();"), "trim reaches the same set"
     assert "ascii-whitespace" in rules("c.is_ascii_whitespace();"), "U+000B, U+000C"
     assert "unicode-name-class" in rules("c.is_alphanumeric();"), "the PN_CHARS defect"
+    assert "unicode-control-class" in rules("c.is_control();"), "the content-class defect"
 
     # The verbatim shape the silent misparse took, which no delegation clears.
     was_shipped = "fn is_pn_chars_base(c: char) -> bool { (c as u32) > 0x7F }"
@@ -347,6 +487,8 @@ def main(argv: list[str]) -> int:
     if "--self-test" in argv:
         self_test()
         return 0
+    if "--census" in argv:
+        return census()
     offenders, matched = scan()
     stale = sorted(set(ALLOWLIST) - matched)
 
