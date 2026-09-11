@@ -35,7 +35,7 @@ use crate::bundle::{RdfBundle, UnitMetadata};
 // The byte-emitting compose core now lives in the pyo3-free `gts_compose` module
 // (P6); this surface is the thin pyo3 wrapper that delegates to it.
 use crate::gts_compose::{
-    BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, MediumPlan, SnapshotBuilder, emit_gts,
+    BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, IngestReport, MediumPlan, SnapshotBuilder, emit_gts,
 };
 use crate::ir::RdfDataset;
 use crate::provenance::{DatasetProvenance, OriginKind};
@@ -529,6 +529,170 @@ type NamedGraphRow<'py> = (
 /// closure consumes.
 type BorrowedNamedGraphRow<'a> = (&'a [u8], PyRdfFormat, Option<&'a str>, Option<&'a str>);
 
+/// The ingest-relevant half of a snapshot build, lowered to GIL-free borrows: the
+/// base document, the optional RDF 1.2 statement layer, the caller's further named
+/// graphs, and the ONE document base they all resolve against.
+///
+/// Blob rows, the transform chain and the signing key are deliberately absent —
+/// none of them reaches the term dictionary, so none of them is accounted by an
+/// [`IngestReport`]. What this struct carries is exactly what the report describes.
+/// Both the producer ([`compile_gts_native`]) and the receipt accessor
+/// ([`gts_ingest_report`]) build one of these and run it through
+/// [`IngestSources::ingest_into`], so the receipt can never describe a different
+/// build from the one the producer performed.
+struct IngestSources<'a> {
+    /// The base graph. Its `graph_name` slot is always `None`: base quads keep
+    /// whatever graph the source document put them in.
+    base: BorrowedNamedGraphRow<'a>,
+    /// The RDF 1.2 statement layer, when the caller supplied one.
+    rdf12: Option<BorrowedNamedGraphRow<'a>>,
+    /// The alignment graph and any further named graphs, in caller order.
+    named_graphs: Vec<BorrowedNamedGraphRow<'a>>,
+    /// One document base for every source above: they are parts of the SAME
+    /// compilation, so a relative reference means the same thing in each.
+    document_base: Option<&'a str>,
+}
+
+impl IngestSources<'_> {
+    /// Parse and ingest every source into `builder`, in the fixed order the
+    /// producer's byte-identity depends on: the base graph, then the RDF 1.2
+    /// statement layer, then the caller's named graphs.
+    fn ingest_into(&self, builder: &mut SnapshotBuilder) -> PyResult<()> {
+        let rows = std::iter::once(self.base)
+            .chain(self.rdf12)
+            .chain(self.named_graphs.iter().copied());
+        for (data, format, graph_name, scope) in rows {
+            let dataset = parse_rdf_dataset(data, format, self.document_base)?;
+            builder
+                .add_dataset_scoped(&dataset, graph_name, scope)
+                .map_err(PyValueError::new_err)?;
+        }
+        Ok(())
+    }
+}
+
+/// Lower the RDF 1.2 statement-layer arguments to one ingest row, enforcing that
+/// `rdf12_data` and `rdf12_format` travel together.
+fn rdf12_row<'a>(
+    data: Option<&'a Bound<'_, PyBytes>>,
+    format: Option<PyRdfFormat>,
+    graph_name: Option<&'a str>,
+    scope: Option<&'a str>,
+) -> PyResult<Option<BorrowedNamedGraphRow<'a>>> {
+    let Some(data) = data else {
+        return Ok(None);
+    };
+    let format = format.ok_or_else(|| PyValueError::new_err("rdf12_data requires rdf12_format"))?;
+    Ok(Some((data.as_bytes(), format, graph_name, scope)))
+}
+
+/// Lower the `(data, format, graph_name, scope)` rows passed from Python to the
+/// GIL-free borrows the detached ingest closure consumes.
+fn borrowed_named_graph_rows<'a>(rows: &'a [NamedGraphRow<'_>]) -> Vec<BorrowedNamedGraphRow<'a>> {
+    rows.iter()
+        .map(|(data, format, graph_name, scope)| {
+            (
+                data.as_bytes(),
+                *format,
+                graph_name.as_deref(),
+                scope.as_deref(),
+            )
+        })
+        .collect()
+}
+
+/// Lower an [`IngestReport`] to this module's structured-result shape: a dict with
+/// snake_case keys, the same convention every other multi-field answer on the
+/// Python surface uses (the SHACL report, the ShEx entries, the relational rows).
+fn ingest_report_dict(py: Python<'_>, report: &IngestReport) -> PyResult<Py<PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("rows_consumed", report.rows_consumed)?;
+    out.set_item("terms_interned", report.terms_interned)?;
+    out.set_item("declarations_omitted", report.declarations_omitted.clone())?;
+    out.set_item("scratch_bytes", report.scratch_bytes)?;
+    Ok(out.unbind())
+}
+
+/// The ingestion receipt for the SAME sources a snapshot build consumes: how many
+/// rows were read, how many term rows were minted, the peak scratch bytes held,
+/// and — the reason this surface exists — the declaration-only graph names that
+/// were deliberately NOT interned.
+///
+/// A named graph that holds no row has nowhere in the frozen `dist` snapshot
+/// payload to be written to, so ingestion omits it; interning its IRI would add a
+/// term row and shift `snapshot_content_id`, so the omission is total rather than
+/// partial. A total omission has to be STATED, or the Python producer would drop a
+/// caller's graph name in silence.
+///
+/// Every producer entry point here returns bare `bytes` (or, for
+/// `snapshot_content_id_native`, a bare `str`), and neither can carry an extra
+/// field. The receipt therefore rides the SAME companion-accessor channel
+/// `snapshot_content_id_native` already uses — the same source arguments, a
+/// different facet of the same build — rather than breaking a frozen return type.
+/// The argument list is `compile_gts_native`'s ingest half, so one accessor covers
+/// both producer shapes: pass `base_data` alone for the single-dataset entry points
+/// (`gts_from_quads`, `gts_from_rdf12_bytes`, `feedback_bundle_native`,
+/// `snapshot_content_id_native`), and add `rdf12_data` / `named_graphs` to mirror a
+/// `compile_gts_native` call.
+///
+/// Returns a dict with the keys `rows_consumed`, `terms_interned`,
+/// `declarations_omitted` (a sorted, deduplicated list of graph IRIs) and
+/// `scratch_bytes`.
+#[pyfunction]
+#[pyo3(signature = (
+    base_data,
+    base_format,
+    *,
+    base_scope=None,
+    rdf12_data=None,
+    rdf12_format=None,
+    rdf12_graph_name=None,
+    rdf12_scope=None,
+    named_graphs=None,
+    base=None,
+))]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn gts_ingest_report(
+    py: Python<'_>,
+    base_data: &Bound<'_, PyBytes>,
+    base_format: PyRdfFormat,
+    base_scope: Option<String>,
+    rdf12_data: Option<&Bound<'_, PyBytes>>,
+    rdf12_format: Option<PyRdfFormat>,
+    rdf12_graph_name: Option<String>,
+    rdf12_scope: Option<String>,
+    named_graphs: Option<Vec<NamedGraphRow<'_>>>,
+    base: Option<String>,
+) -> PyResult<Py<PyDict>> {
+    let named_graphs = named_graphs.unwrap_or_default();
+    let sources = IngestSources {
+        base: (
+            base_data.as_bytes(),
+            base_format,
+            None,
+            base_scope.as_deref(),
+        ),
+        rdf12: rdf12_row(
+            rdf12_data,
+            rdf12_format,
+            rdf12_graph_name.as_deref(),
+            rdf12_scope.as_deref(),
+        )?,
+        named_graphs: borrowed_named_graph_rows(&named_graphs),
+        document_base: base.as_deref(),
+    };
+    // The builder is local to this call, so its CUMULATIVE totals are exactly this
+    // call's totals — the same figures the producer's own builder accumulates over
+    // the same sources in the same order.
+    let report = py.detach(move || -> PyResult<IngestReport> {
+        let mut builder = SnapshotBuilder::default();
+        sources.ingest_into(&mut builder)?;
+        Ok(builder.ingest_totals())
+    })?;
+    ingest_report_dict(py, &report)
+}
+
 /// The full statement-complete compiler, mirroring `gts_producer.compile_gts`.
 ///
 /// `base_data` is the canonicalized RDF 1.1 base graph as RDF bytes (the caller
@@ -583,26 +747,23 @@ fn compile_gts_native(
     // Convert EVERY Python-side argument to plain/owned Rust data BEFORE
     // releasing the GIL; the parse + snapshot-build + emit core runs detached.
     let base_bytes = base_data.as_bytes();
-    let rdf12_bytes: Option<(&[u8], PyRdfFormat)> = match rdf12_data {
-        Some(data) => {
-            let format = rdf12_format
-                .ok_or_else(|| PyValueError::new_err("rdf12_data requires rdf12_format"))?;
-            Some((data.as_bytes(), format))
-        }
-        None => None,
-    };
     let named_graphs = named_graphs.unwrap_or_default();
-    let named_graph_rows: Vec<BorrowedNamedGraphRow<'_>> = named_graphs
-        .iter()
-        .map(|(data, format, graph_name, scope)| {
-            (
-                data.as_bytes(),
-                *format,
-                graph_name.as_deref(),
-                scope.as_deref(),
-            )
-        })
-        .collect();
+    // The ingest-relevant half of this compile, gathered ONCE: the base graph, the
+    // RDF 1.2 statement layer, the caller's named graphs, and the single document
+    // base all three resolve their relative references against. `gts_ingest_report`
+    // builds the same value from the same arguments and runs the same ingestion, so
+    // the receipt a caller can ask for describes THIS build.
+    let sources = IngestSources {
+        base: (base_bytes, base_format, None, base_scope.as_deref()),
+        rdf12: rdf12_row(
+            rdf12_data,
+            rdf12_format,
+            rdf12_graph_name.as_deref(),
+            rdf12_scope.as_deref(),
+        )?,
+        named_graphs: borrowed_named_graph_rows(&named_graphs),
+        document_base: base.as_deref(),
+    };
     let doc_blob_rows = blob_rows_from_py(doc_blobs)?;
     let report_blob_rows = blob_rows_from_py(report_blobs)?;
     let slice_rows = slice_artifact_rows_from_py(slice_artifacts)?;
@@ -610,33 +771,7 @@ fn compile_gts_native(
 
     let bytes: Vec<u8> = py.detach(move || {
         let mut builder = SnapshotBuilder::default();
-        // One document base for every source document this compile ingests: the base
-        // graph, the RDF 1.2 statement layer, and each named graph are all parts of the
-        // SAME compilation, so a relative reference means the same thing in each.
-        let document_base = base.as_deref();
-
-        let base_dataset = parse_rdf_dataset(base_bytes, base_format, document_base)?;
-        builder
-            .add_dataset_scoped(&base_dataset, None, base_scope.as_deref())
-            .map_err(PyValueError::new_err)?;
-
-        if let Some((data, format)) = rdf12_bytes {
-            let dataset = parse_rdf_dataset(data, format, document_base)?;
-            builder
-                .add_dataset_scoped(
-                    &dataset,
-                    rdf12_graph_name.as_deref(),
-                    rdf12_scope.as_deref(),
-                )
-                .map_err(PyValueError::new_err)?;
-        }
-
-        for (data, format, graph_name, scope) in named_graph_rows {
-            let dataset = parse_rdf_dataset(data, format, document_base)?;
-            builder
-                .add_dataset_scoped(&dataset, graph_name, scope)
-                .map_err(PyValueError::new_err)?;
-        }
+        sources.ingest_into(&mut builder)?;
 
         // S3: assemble the self-describing RdfBundle from the slice
         // catalog rows, hard-fail `validate()`, and fold each ontology artifact in as
@@ -647,7 +782,7 @@ fn compile_gts_native(
         if !slice_rows.is_empty() {
             // The bundle assembler still consumes a flat oxigraph quad list for its hot
             // dataset; re-parse the base here (only when slice artifacts are present).
-            let flat_base = parse_rdf(base_bytes, base_format, document_base)?;
+            let flat_base = parse_rdf(base_bytes, base_format, sources.document_base)?;
             let bundle_blobs =
                 assemble_slice_bundle(&flat_base, &slice_rows).map_err(PyValueError::new_err)?;
             all_doc_blobs.extend(bundle_blobs);
@@ -737,6 +872,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gts_from_quads, m)?)?;
     m.add_function(wrap_pyfunction!(gts_from_rdf12_bytes, m)?)?;
     m.add_function(wrap_pyfunction!(compile_gts_native, m)?)?;
+    m.add_function(wrap_pyfunction!(gts_ingest_report, m)?)?;
     m.add_function(wrap_pyfunction!(snapshot_content_id_native, m)?)?;
     m.add_function(wrap_pyfunction!(feedback_bundle_native, m)?)?;
     m.add_function(wrap_pyfunction!(to_json_ld, m)?)?;

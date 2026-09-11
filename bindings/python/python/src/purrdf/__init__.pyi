@@ -1017,6 +1017,41 @@ def snapshot_content_id_native(
     data: bytes, *, format: RdfFormat, base: str | None = ...
 ) -> str: ...
 
+# The ingestion receipt for the same sources a snapshot build consumes. The producer
+# entry points return bare `bytes` (or a bare `str`), which cannot carry an extra
+# field, so the receipt rides a companion accessor — the same relationship
+# `snapshot_content_id_native` has to `gts_from_quads`. Its arguments are
+# `compile_gts_native`'s ingest half, so one accessor answers for both producer
+# shapes: pass `base_data` alone for the single-dataset entry points, or add
+# `rdf12_data` / `named_graphs` to mirror a `compile_gts_native` call.
+#
+# `declarations_omitted` is the load-bearing key: a named graph holding no row has
+# no slot in the frozen `dist` snapshot payload, and interning its IRI would shift
+# `snapshot_content_id`, so ingestion omits it — and names it here rather than
+# dropping it in silence.
+class GtsIngestReport(TypedDict):
+    #: Rows read across all three tables (ordinary, reifier, annotation).
+    rows_consumed: int
+    #: Term rows this ingestion added to the snapshot dictionary.
+    terms_interned: int
+    #: The declaration-only graph IRIs that were NOT interned, sorted and deduplicated.
+    declarations_omitted: list[str]
+    #: Peak scratch bytes held by the intern indexes and sort buffers.
+    scratch_bytes: int
+
+def gts_ingest_report(
+    base_data: bytes,
+    base_format: RdfFormat,
+    *,
+    base_scope: str | None = ...,
+    rdf12_data: bytes | None = ...,
+    rdf12_format: RdfFormat | None = ...,
+    rdf12_graph_name: str | None = ...,
+    rdf12_scope: str | None = ...,
+    named_graphs: list[_NamedGraphRow] | None = ...,
+    base: str | None = ...,
+) -> GtsIngestReport: ...
+
 # ── Text-format codecs via purrdf-gts (JSON-LD-star + RDF/XML) ─────────────────
 # RDF bytes ↔ JSON-LD-star / RDF/XML through the purrdf-gts codec set. The compat
 # `Graph.serialize`/`parse` route these formats here; serialize takes RDF bytes in
@@ -1667,6 +1702,7 @@ class entail:
 _gts_from_quads = gts_from_quads
 _gts_from_rdf12_bytes = gts_from_rdf12_bytes
 _compile_gts_native = compile_gts_native
+_gts_ingest_report = gts_ingest_report
 _snapshot_content_id_native = snapshot_content_id_native
 _feedback_bundle_native = feedback_bundle_native
 _to_json_ld = to_json_ld
@@ -1684,6 +1720,7 @@ class gts:
     gts_from_quads = _gts_from_quads
     gts_from_rdf12_bytes = _gts_from_rdf12_bytes
     compile_gts_native = _compile_gts_native
+    gts_ingest_report = _gts_ingest_report
     snapshot_content_id_native = _snapshot_content_id_native
     feedback_bundle_native = _feedback_bundle_native
     to_json_ld = _to_json_ld

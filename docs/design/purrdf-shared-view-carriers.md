@@ -11,8 +11,11 @@ carriers, and they are interchangeable by content:
   unions a new dataset: a deep copy, paid once per accumulation.
 - `PipelineViewBundle` owns an `Arc<CompositeDatasetView>`. Folding a named
   graph into it appends a retained source through `CompositeDatasetView::extend`.
-  No row is copied and nothing is frozen, and the bases it retains are charged
-  once to a shared `RetentionLedger` however many carriers hold them.
+  No source row is copied and no whole-surface materialization occurs; what an
+  IRI-named placement does charge is **one graph-dictionary freeze per append**,
+  over the appended contribution's own dictionary rather than over the
+  accumulated surface. The bases it retains are charged once to a shared
+  `RetentionLedger` however many carriers hold them.
 
 Both delegate their entire non-dataset state — lookaside, blobs, provenance,
 typed handles, the digest fold, the per-graph memo and the pin check — to one
@@ -76,6 +79,20 @@ re-verified across the conversion rather than assumed to survive it.
 Adoption is therefore incremental and reversible. There is no flag day, no
 workspace-wide switch, and no call site that must move because another one did.
 
+### One source-compatibility note: the comparison helpers
+
+`datasets_isomorphic` and `dataset_diff` became generic over **two** view types
+(`fn datasets_isomorphic<A: DatasetView, B: DatasetView>(a: &A, b: &B)`, and the
+same shape for `dataset_diff`), because comparing a composed view against a flat
+dataset is exactly the question a caller mid-adoption asks, and the old
+single-type form could not express it. An ordinary call — two values, inference
+picks the types — compiles unchanged. What needs an edit is code that named the
+old single-type form explicitly: coercing either function to a concrete `fn`
+pointer, or turbofishing it with one type argument. Both now need the two types
+spelled out (`datasets_isomorphic::<RdfDataset, RdfDataset>`, or a `fn(&A, &B) ->
+bool` pointer type with both arguments given). Nothing about the answer changed;
+only the arity of the type parameter list did.
+
 ## 2. Declaration-only graphs at GTS output
 
 A `DatasetView` may address a named graph that holds no row — a *declaration-only*
@@ -101,6 +118,11 @@ The ruling is that ingestion **omits** such a graph and **states** the omission.
 - `SnapshotBuilder::ingest_totals` accumulates the receipt across every `add_*`
   call on one builder, so the flat surfaces — whose frozen signatures cannot
   return a report — remain interrogable.
+- The Python producer surface returns bare snapshot bytes, and bytes cannot carry
+  a field, so the receipt rides a companion accessor there: `gts_ingest_report`
+  takes the same source arguments a producer call takes and returns the totals as
+  a dict, `declarations_omitted` included. The omission is therefore stated on
+  that host too, rather than being a fact only a Rust caller can reach.
 
 Two alternatives were rejected.
 
@@ -423,23 +445,55 @@ ingests **byte-identically to before**.
 Two questions are separable and have different answers, so they are measured
 separately.
 
+**How to read this section.** The *mechanism counters* are the normative content.
+They are what the code charges, they are what the tests assert, and they are a
+function of the shape alone rather than of whatever ran it. Every wall-clock
+figure below is one **observed sample** — one run, one machine, non-normative —
+kept only because it is the one thing that answers "does the asymmetry actually
+show up", and dated so a reader can weigh how old it is. A sample may not
+reproduce under other hardware, other load or another allocator. Where a timing
+and a counter appear to disagree, **the counter governs**.
+
 ### Carrier traversal: no observed crossover
 
 Accumulating contributions onto a carrier and reading digests off it favours the
-view carrier at every shape measured, and the gap widens with stage count rather
-than closing. The mechanism is visible in the work counters, which is why the
-benches report them alongside wall time: the flat carrier's `RdfDataset::union`
-freezes a new dataset per accumulation and replays every row of both operands
-into it, so its cost is quadratic in the number of accumulations, while
-`CompositeDatasetView::extend` aliases only the new contribution against the
-identity space the retained sources already agreed on.
+view carrier at every shape measured, and the gap widens with accumulation count
+rather than closing. The mechanism is visible in the work counters, which is why
+the benches report them alongside wall time.
 
-On the reference machine-run, at 16 accumulations:
+Per accumulation, the two carriers charge:
 
-| Carrier | copies | freezes | wall |
-| --- | --- | --- | --- |
-| union (flat) | 16096 | 16 | 56.5 ms |
-| extend (view) | 0 | 1 | 1.29 ms |
+| Carrier | row copies | dictionary freezes |
+| --- | --- | --- |
+| union (flat) | every row of both operands, replayed into a new dataset | one **whole-surface** refreeze |
+| extend (view) | none | one **graph dictionary**, for the IRI-named placement |
+
+That table is read down the column, not across a single accumulation. The flat
+carrier replays the accumulated surface every time, so its row copies are
+quadratic in the number of accumulations and each of its freezes covers
+everything accumulated so far. The view carrier copies no source row at all and
+charges one dictionary freeze per named append: `n` appends charge `n` freezes,
+each over the contribution being appended rather than over the surface it is
+appended to.
+
+`extend`'s own aliasing cost deserves a separate statement, because the tempting
+summary — that an append costs only what the new contribution costs — is not
+true. Appending source `k+1` aliases that source's terms against the identity
+space the `k` already-retained sources agreed on, so **one append is
+`O(prefix × new-source terms)`**. What is saved relative to composing from
+scratch is that the earlier source *pairs* are never re-aliased: composing `k`
+sources afresh is `O(k² · terms)`, while extending an existing composite pays
+only the new source against the prefix. `n` appends therefore remain quadratic in
+`n` — with a much smaller constant than the flat carrier's row replay, which is
+why the gap widens, but quadratic all the same.
+
+Observed sample, 16 accumulations — one run, one machine, 2026-09,
+non-normative:
+
+| Carrier | wall |
+| --- | --- |
+| union (flat) | 56.5 ms |
+| extend (view) | 1.29 ms |
 
 There is no crossover to look for here. A caller accumulating onto a carrier
 should use the view carrier.
@@ -448,7 +502,8 @@ should use the view carrier.
 
 End to end — carrier construction, accumulation, ingestion and emitted
 `purrdf.gts` bytes — view ingestion matches or beats materialize-then-flat at
-moderate source counts:
+moderate source counts. Observed sample — one run, one machine, 2026-09,
+non-normative:
 
 | Shape | view | materialize-then-flat |
 | --- | --- | --- |
@@ -459,7 +514,10 @@ At `k=32` composed sources the picture stops being clean: wall-clock measurement
 puts the view path at 3.75 ms, while the criterion medians over the same shape
 favour the flat path. **The two measurement methods disagree**, and a disagreement
 is reported as a disagreement rather than resolved by picking the flattering
-number.
+number. The mechanism does not break the tie either: by `k=32` the
+`O(prefix × new-source terms)` aliasing has accumulated into a quadratic term of
+its own, which is precisely the region where a materialize-then-flat path can
+legitimately win.
 
 The guidance follows from that honestly. A caller composing many tens of sources
 before emitting should measure its own shape, and may legitimately choose the
@@ -490,11 +548,12 @@ The integration proof asserts this directly rather than arguing it. It samples t
 view's own `ViewWork` immediately before ingestion and again after emission, and
 requires that `freezes`, `materializations` and `copied_rows` are **unchanged**
 across the whole path. Publishing bytes costs zero copies. The proof is also
-explicitly non-vacuous: it first asserts that the composite's `freezes` counter
-reads `1` at the sampling point — the one freeze charged by accumulation, where
-`GraphPlacement::Named` derives the rewritten graph's dictionary — so the
-zero-movement claim is made against a counter demonstrated to be live, not against
-one that never increments. `materializations` is `0` in absolute terms throughout,
+explicitly non-vacuous: it first asserts that the composite's `freezes` counter is
+already non-zero at the sampling point. One dictionary freeze is charged per named
+append — that is where `GraphPlacement::Named` derives the rewritten graph's
+dictionary — so a carrier accumulated once, as this one is, reads `1`, and the
+zero-movement claim is made against a counter demonstrated to be live rather than
+against one that never increments. `materializations` is `0` in absolute terms throughout,
 and a carrier over a preserved delta charges neither.
 
 The one whole-surface materialization that remains is the caller-explicit
@@ -530,4 +589,5 @@ The measurement shapes quoted above are the ones the criterion benches build:
 `crates/rdf-core/benches/shared_views.rs` for carrier traversal and
 `crates/rdf/benches/gts_ingest.rs` for the path through to emitted bytes. Both
 report the work counters beside the wall time, because a wall time without the
-copy count does not say *why* a shape is fast.
+copy count does not say *why* a shape is fast — and because it is the counters,
+not the sampled timings, that this document states normatively.
