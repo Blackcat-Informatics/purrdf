@@ -389,6 +389,43 @@ fn is_langtag(tag: &str) -> bool {
     subtags.all(|sub| !sub.is_empty() && sub.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
+/// `[18t] IRIREF ::= "<" ([^#x00-#x20<>"{}|^`\] | UCHAR)* ">"` — the content class.
+///
+/// A content class is a terminal like any other, and `char::is_control` stood in for
+/// this one while being wrong in **both** directions at once, which is why the error
+/// was invisible from either side alone:
+///
+/// * it **admits** `#x20` SPACE, and the production excludes the whole `#x00-#x20`
+///   range, so `<urn:ex:a b>` used to name an IRI with a space in it;
+/// * it **refuses** `U+007F-U+009F`, which the production admits, so a lawful IRI
+///   carrying a C1 control was reported as unterminated;
+/// * and it says nothing at all about `` ` ``, `|`, `^` and `\`, four of the nine
+///   delimiters the production excludes by name — so those were absorbed too.
+///
+/// Enumerating the production is therefore not pedantry: each of those four scalars
+/// is a *delimiter* somewhere in the Turtle family, and admitting one here lets a
+/// shape map name a node no conforming processor would resolve the same way.
+///
+/// `UCHAR` (`\uXXXX` / `\UXXXXXXXX`) is not decoded here, so the `'\'` that opens one
+/// is refused rather than absorbed verbatim: a backslash in the raw IRI is a
+/// different IRI than the one the escape denotes, and refusing names the defect
+/// instead of resolving the wrong node.
+const fn is_iriref_content(c: char) -> bool {
+    c as u32 > 0x20 && !matches!(c, '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\')
+}
+
+/// `[14t] STRING_LITERAL2 ::= '"' ([^#x22#x5C#xA#xD] | ECHAR | UCHAR)* '"'` — the
+/// content class of the quoted form this scanner accepts.
+///
+/// Exactly four scalars leave it: the closing quote and the escape lead (both handled
+/// by their own arms before this one is reached) and the two line terminators. Every
+/// other control is lawful *content* — a raw TAB inside a literal is a TAB — and
+/// `char::is_control` refused all of them, so a shape map carrying a tabbed lexical
+/// form was reported as an unterminated string.
+const fn is_string_literal_content(c: char) -> bool {
+    !matches!(c, '"' | '\\' | '\n' | '\r')
+}
+
 struct MapParser {
     chars: Vec<char>,
     pos: usize,
@@ -650,7 +687,7 @@ impl MapParser {
                     self.pos += 1;
                     return self.resolve(&raw);
                 }
-                Some(c) if c != '<' && c != '"' && c != '{' && c != '}' && !c.is_control() => {
+                Some(c) if is_iriref_content(c) => {
                     raw.push(c);
                     self.pos += 1;
                 }
@@ -668,6 +705,25 @@ impl MapParser {
     /// used to end the label at `caf` and then fail on a `́` that had nowhere to go;
     /// U+2460 CIRCLED DIGIT ONE is alphanumeric and is not `PN_CHARS`, so it used to
     /// be absorbed into a label the grammar says stops before it.
+    ///
+    /// # The production is position-dependent, and so is the scan
+    ///
+    /// It names **three** classes, not one, and a run of `PN_CHARS` answers only the
+    /// middle of them. Both edges decide identity, so getting either wrong mints a
+    /// blank node the author did not write:
+    ///
+    /// * the FIRST scalar is `PN_CHARS_U | [0-9]` — narrower than `PN_CHARS`, which
+    ///   also carries `'-'`, U+00B7 and the combining marks. A uniform scan read
+    ///   `_:-z` and `_:` + U+0301 + `z` as labels, and neither is one;
+    /// * the LAST may not be `'.'`. A dot is lawful *between* name characters, so the
+    ///   scan over-consumes a trailing run and hands it back — the same pushback the
+    ///   ShExC lexer and the query front end perform. A shape map has no production
+    ///   that admits a bare `'.'` anywhere, so the handed-back dot then ends the
+    ///   parse with the defect named rather than being absorbed into an identity.
+    ///
+    /// Neither edge is an over-refusal risk in the other direction: `_:a.b` keeps its
+    /// internal dot, `_:0z` still begins with a digit, and `_:_z` still begins with
+    /// the one `PN_CHARS_U` member that is not `PN_CHARS_BASE`.
     fn parse_blank(&mut self) -> Result<TermValue> {
         // '_' ':' NAME
         self.pos += 1;
@@ -676,16 +732,35 @@ impl MapParser {
         }
         self.pos += 1;
         let mut label = String::new();
-        while let Some(c) = self.peek() {
-            if terminals::is_pn_chars(c) || c == '.' {
+        match self.peek() {
+            Some(c) if terminals::is_pn_chars_u(c) || c.is_ascii_digit() => {
                 label.push(c);
+                self.pos += 1;
+            }
+            _ => {
+                return Err(
+                    self.err("a blank-node label must begin with PN_CHARS_U or a digit after `_:`")
+                );
+            }
+        }
+        let mut trailing_dots = 0usize;
+        while let Some(c) = self.peek() {
+            if c == '.' {
+                label.push(c);
+                trailing_dots += 1;
+                self.pos += 1;
+            } else if terminals::is_pn_chars(c) {
+                label.push(c);
+                trailing_dots = 0;
                 self.pos += 1;
             } else {
                 break;
             }
         }
-        if label.is_empty() {
-            return Err(self.err("empty blank-node label"));
+        if trailing_dots > 0 {
+            // `'.'` is one byte, so the trimmed byte length is the dot run.
+            label.truncate(label.len() - trailing_dots);
+            self.pos -= trailing_dots;
         }
         Ok(TermValue::blank(label))
     }
@@ -703,7 +778,7 @@ impl MapParser {
                     self.pos += 1;
                     lexical.push(self.parse_escape()?);
                 }
-                Some(c) if !c.is_control() => {
+                Some(c) if is_string_literal_content(c) => {
                     lexical.push(c);
                     self.pos += 1;
                 }
