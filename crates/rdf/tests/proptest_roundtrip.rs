@@ -284,8 +284,8 @@ fn arb_dataset_rdfxml() -> impl Strategy<Value = std::sync::Arc<RdfDataset>> {
     prop::collection::vec(quad, 0..16).prop_map(dataset_from_quads)
 }
 
-// ── AC1 differential generators: scoped blanks, nested triples, blank graph
-// names, and both reifier spellings ─────────────────────────────────────────
+// ── Wrapper-agreement differential generators: scoped blanks, nested triples,
+// blank graph names, and both reifier spellings ─────────────────────────────
 
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
@@ -388,7 +388,8 @@ fn arb_diff_quad_no_sentinel() -> impl Strategy<Value = RdfQuad> {
 /// Two independently-generated quad sources. [`dataset_from_quad_sources`] and
 /// [`flat_dataset_from_quad_sources`] standardize each source apart under its
 /// own fresh [`BlankScope`], so a blank label repeated across the two sources
-/// still names two DISTINCT nodes — the "scoped blanks" surface AC1 requires.
+/// still names two DISTINCT nodes — the "scoped blanks" surface the
+/// wrapper-agreement differential requires.
 fn arb_diff_sources() -> impl Strategy<Value = (Vec<RdfQuad>, Vec<RdfQuad>)> {
     (
         prop::collection::vec(arb_diff_quad(), 0..6),
@@ -539,7 +540,7 @@ proptest! {
         prop_assert!(text.contains(&format!("rdf:nodeID=\"{qualified}\"")), "{}", text);
     }
 
-    /// AC1 differential: `try_canonicalize_flat_view` agrees with the
+    /// Wrapper-agreement differential: `try_canonicalize_flat_view` agrees with the
     /// PRE-DELEGATION flatten-and-canonicalize route —
     /// `flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&d))` then
     /// `canonicalize_with` — over generated datasets carrying scoped blanks (two

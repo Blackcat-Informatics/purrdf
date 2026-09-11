@@ -207,8 +207,8 @@ fn the_view_ingestion_path_drops_the_same_datatype_iris_as_the_flat_path() {
 }
 
 // ============================================================================
-// The flat-assertion presentation's AC1 differential, identity algebra, and
-// sentinel-absence corpus.
+// The flat-assertion presentation's flat/native wrapper-agreement differential,
+// identity algebra, and sentinel-absence corpus.
 //
 // The oracle below reproduces the PRE-DELEGATION body of
 // `canonical_flat_nquads_with`, exactly as it stood at commit `863cf2f8`
@@ -227,8 +227,8 @@ fn the_view_ingestion_path_drops_the_same_datatype_iris_as_the_flat_path() {
 // function under test below the two un-fold/re-freeze helpers.
 // ============================================================================
 
-/// The AC1 differential oracle: the pre-delegation flatten-and-canonicalize
-/// route.
+/// The flat/native wrapper-agreement differential oracle: the pre-delegation
+/// flatten-and-canonicalize route.
 fn reference_flat_canon(dataset: &RdfDataset, hash: CanonHash) -> String {
     let flat = flat_dataset_from_quads(&flat_rdf_quads_from_dataset(dataset))
         .expect("an already-valid dataset's own flat quad stream must re-freeze");
@@ -379,8 +379,9 @@ fn differential_annotations() {
 }
 
 /// The reifier+annotation case, pinned EXPLICITLY under both SHA-256 and
-/// SHA-384 (not merely through the shared both-hashes helper), per AC1's own
-/// requirement that this exact case run under both algorithms.
+/// SHA-384 (not merely through the shared both-hashes helper), per the
+/// flat/native wrapper-agreement differential's own requirement that this
+/// exact case run under both algorithms.
 #[test]
 fn differential_reifier_and_annotation_case_under_both_hash_algorithms() {
     let mut b = RdfDatasetBuilder::new();

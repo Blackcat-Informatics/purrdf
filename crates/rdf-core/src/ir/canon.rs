@@ -4179,7 +4179,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // G1: the flat presentation must not leak the overlay's reserved sentinel for a
+    // The flat presentation must not leak the overlay's reserved sentinel for a
     // base quad that merely SPELLS a statement-layer row, and the two spellings of
     // one row must co-canonicalize under FlatAssertion exactly as they already did
     // under Overlay.
@@ -4243,7 +4243,7 @@ mod tests {
         assert_eq!(
             folded, lowered,
             "the sentinel-spelled row and the native reifier it denotes must produce \
-             the SAME flat bytes — G1: the sentinel must not leak, and the two \
+             the SAME flat bytes — the sentinel must not leak, and the two \
              spellings must not split identity"
         );
         assert!(
