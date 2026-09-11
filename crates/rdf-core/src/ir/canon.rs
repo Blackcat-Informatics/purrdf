@@ -150,7 +150,10 @@ use super::dataset::{QuadIds, RdfDataset, TermRef};
 use super::skolem::{TermMapper, rebuild_dataset};
 use super::term::{BlankScope, TermId, TermValue};
 use crate::content_store::ContentDigest;
-use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
+use crate::dataset_view::{
+    DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch, ViewTermId,
+    checkpointed_drain,
+};
 
 /// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -236,6 +239,55 @@ pub const CANON_CORPUS_DIGEST: &str =
 /// owed because two inputs v1 refused now canonicalize, and a refusal is part of the
 /// contract a consumer pinned.
 pub const CANON_PROFILE_VERSION: u32 = 2;
+
+/// The identifier of the RDFC-1.0 overlay presentation: the RDF 1.2 statement layer
+/// (reifiers, annotations) rendered through this profile's reserved sentinel IRIs
+/// ([`RESERVED_NAMESPACE`]) — see [`CanonPresentation::Overlay`] for the exact shape.
+/// Every entry point in this module named WITHOUT a `flat` infix ([`canonicalize`],
+/// [`try_canonicalize_view`], [`canonicalize_graph_view`], …) pins this presentation;
+/// it is the only presentation this module offered before
+/// [`CANON_PRESENTATION_FLAT_ASSERTION_ID`] existed.
+///
+/// A consumer minting identity from this module's output pins FOUR coordinates
+/// together: [`CANON_PROFILE_ID`] and [`CANON_PROFILE_VERSION`] say which algorithm
+/// and which admissibility rule were agreed, this identifier (paired with
+/// [`CANON_PRESENTATION_OVERLAY_VERSION`]) says which SHAPE the statement layer takes
+/// in the output, and [`CanonHash`] is the last free choice. Like
+/// [`CANON_PROFILE_ID`], this is a bare token rather than an IRI, so nothing can
+/// dereference it or mistake it for vocabulary PurRDF does not publish.
+pub const CANON_PRESENTATION_OVERLAY_ID: &str = "overlay";
+
+/// The version of [`CANON_PRESENTATION_OVERLAY_ID`] this build implements.
+///
+/// Incremented by any change to the bytes the overlay presentation produces for a
+/// given admitted view — never by a change that only affects
+/// [`CANON_PRESENTATION_FLAT_ASSERTION_ID`]'s output, which versions independently.
+/// What is ADMITTED (the reserved vocabulary and the refusal rule) is shared between
+/// the two presentations and versioned once, by [`CANON_PROFILE_VERSION`].
+pub const CANON_PRESENTATION_OVERLAY_VERSION: u32 = 1;
+
+/// The identifier of the flat assertion presentation: the RDF 1.2 statement layer
+/// lowered to ORDINARY quads carrying each row's own real predicate (`rdf:reifies`
+/// for a reifier binding, the annotation's own predicate for an annotation row) —
+/// no sentinel is ever minted. See [`CanonPresentation::FlatAssertion`] for the exact
+/// shape and the id-level dedup law, and `docs/RDF12-CANON-PROFILE.md` §3.3 for the
+/// normative specification. [`try_canonicalize_flat_view`] and its `_flat_` siblings
+/// pin this presentation.
+///
+/// Paired with [`CANON_PRESENTATION_FLAT_ASSERTION_VERSION`] as the third pinned
+/// coordinate alongside [`CANON_PROFILE_ID`]/[`CANON_PROFILE_VERSION`] — see
+/// [`CANON_PRESENTATION_OVERLAY_ID`] for the shared rationale.
+pub const CANON_PRESENTATION_FLAT_ASSERTION_ID: &str = "flat-assertion";
+
+/// The version of [`CANON_PRESENTATION_FLAT_ASSERTION_ID`] this build implements.
+///
+/// Incremented by any change to the bytes the flat presentation produces for a given
+/// admitted view — never by a change that only affects
+/// [`CANON_PRESENTATION_OVERLAY_ID`]'s output, which versions independently. What is
+/// ADMITTED is shared between the two presentations and versioned once, by
+/// [`CANON_PROFILE_VERSION`]: a dataset the profile refuses is refused under either
+/// presentation, so this version cannot move by itself.
+pub const CANON_PRESENTATION_FLAT_ASSERTION_VERSION: u32 = 1;
 
 /// The RDFC-1.0 hash algorithm. SHA-256 is the default; SHA-384 is the spec's
 /// alternative (RDFC-1.0 §3, exercised by W3C suite `test075`). EXTEND beyond
@@ -556,6 +608,168 @@ pub fn try_graph_digest_view<D: DatasetView>(
     ))
 }
 
+// -----------------------------------------------------------------------------
+// The flat-presentation, fault-aware entry points.
+//
+// Every function below composes two things the overlay-pinned family above never
+// had to: the [`FlatAssertion`](CanonPresentation::FlatAssertion) presentation, and
+// [`checkpointed_drain`]'s two-checkpoint completeness law over a
+// [`FallibleDatasetView`]. A canonical run internally drains `view` several times
+// over one call — component collection runs once to build [`CanonState`], once more
+// for the reserved-vocabulary sweep, and once more to serialize the result (three
+// passes, not one) — and [`checkpointed_drain`] does not checkpoint each pass
+// individually: it samples [`FallibleDatasetView::operation_status`] once before the
+// FIRST of those passes and once after the LAST, bracketing the whole run rather than
+// each pass on its own. That is sufficient rather than a gap, because a view's fault
+// is STICKY once raised (`FallibleDatasetView`'s own contract: "the first operational
+// failure becomes sticky, every iterator stops yielding"), so a fault raised during
+// ANY internal pass is still observable at the final sample — the AFTER checkpoint is
+// what refuses a view that faulted BETWEEN internal passes, not only one already
+// broken before the run began.
+// -----------------------------------------------------------------------------
+
+/// The `Result` shape [`try_canonicalize_flat_view`] and
+/// [`try_canonicalize_flat_graph_view`] share. Named purely to satisfy clippy's
+/// `type_complexity` lint on a signature that nests one generic inside another —
+/// the type itself hides nothing a caller could not already see spelled out.
+type FlatViewResult<D> = Result<
+    Canonicalized<<D as DatasetView>::Id>,
+    ViewCanonError<<D as FallibleDatasetView>::Error, <D as FallibleDatasetView>::Evidence>,
+>;
+
+/// Canonicalize any [`FallibleDatasetView`] under profile [`CANON_PROFILE_ID`] in the
+/// [`FlatAssertion`](CanonPresentation::FlatAssertion) presentation
+/// ([`CANON_PRESENTATION_FLAT_ASSERTION_ID`] /
+/// [`CANON_PRESENTATION_FLAT_ASSERTION_VERSION`]), with an explicit hash algorithm —
+/// the flat-presentation, fault-aware sibling of [`try_canonicalize_view`].
+///
+/// Where [`try_canonicalize_view`] emits the RDFC-1.0 overlay — a reifier or
+/// annotation row rendered through the profile's reserved sentinel IRIs — this entry
+/// point emits every statement-layer row as an ORDINARY quad carrying its row's own
+/// real predicate (`rdf:reifies`, or the annotation's own predicate); a row that
+/// already exists as a genuine base quad is emitted exactly once (the id-level dedup
+/// law). What is ADMITTED is unchanged from the overlay — only what is EMITTED
+/// differs — so the refusals below are exactly [`try_canonicalize_view`]'s.
+///
+/// [`Canonicalized::nquads`] is isomorphism-invariant, exactly as under the overlay:
+/// two isomorphic views produce byte-equal flat documents. [`Canonicalized::labels`]
+/// is invariant only UP TO AUTOMORPHISM — where a graph carries a nontrivial
+/// automorphism, the n-degree search's tie-break among otherwise-equivalent
+/// candidates is enumeration-order-dependent, so two isomorphic-but-not-identical
+/// views may assign automorphic blanks different (but structurally equivalent)
+/// labels. Label issuance does not read the presentation axis at all, so this is the
+/// same caveat the overlay carries, unchanged.
+///
+/// See the module-level note above this function for why bracketing the run's THREE
+/// internal drain passes with only two checkpoints is complete rather than a gap.
+///
+/// # Implementor obligation
+/// Like every consumer generic over `D: DatasetView` that takes a whole pass over a
+/// view (see the termination and snapshot-ingestion obligations documented on
+/// [`DatasetView`] itself), this entry point trusts that `view` presents
+/// structurally valid rows. A view that never passed freeze validation and hands
+/// this function a dangling or cyclic reference has committed a contract violation
+/// of its own making — one this function can neither detect nor recover from.
+///
+/// # Errors
+/// [`ViewCanonError::Refused`] wrapping [`CanonError::ReservedVocabulary`] if any
+/// term of `view` is an IRI in [`RESERVED_NAMESPACE`]; wrapping
+/// [`CanonError::BudgetExceeded`] if the n-degree search's call/permutation budget
+/// ([`RDFC_CALL_LIMIT`]) is exhausted first. [`ViewCanonError::NotReady`] if either
+/// checkpoint observes the view's backing data at fault.
+pub fn try_canonicalize_flat_view<D: FallibleDatasetView>(
+    view: &D,
+    hash: CanonHash,
+) -> FlatViewResult<D> {
+    match checkpointed_drain(view, |v| {
+        CanonState::new(v, CanonScope::Dataset, CanonPresentation::FlatAssertion, hash)
+            .run_fallible()
+    }) {
+        Ok(Ok(canonicalized)) => Ok(canonicalized),
+        Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
+        Err(failure) => Err(failure.into()),
+    }
+}
+
+/// Canonicalize one named graph of any [`FallibleDatasetView`] in the
+/// [`FlatAssertion`](CanonPresentation::FlatAssertion) presentation — the graph
+/// scope of [`canonicalize_graph_view`] composed with
+/// [`try_canonicalize_flat_view`]'s presentation and fault-checkpointing. Selection
+/// is exactly [`canonicalize_graph_view`]'s rule (graph-FAITHFUL selection,
+/// graph-ERASING emission); a `graph` the view interns nowhere, or interns but never
+/// uses as a graph name, canonicalizes to the empty document rather than an error,
+/// exactly as there. See [`try_canonicalize_flat_view`] for the presentation, the
+/// labels-up-to-automorphism caveat, and the checkpoint-brackets-the-whole-run law
+/// this entry point shares.
+///
+/// # Errors
+/// Exactly [`try_canonicalize_flat_view`]'s refusals, scoped to the selected
+/// subgraph: a reserved IRI in ANOTHER graph does not refuse this one.
+pub fn try_canonicalize_flat_graph_view<D: FallibleDatasetView>(
+    view: &D,
+    graph: &str,
+    hash: CanonHash,
+) -> FlatViewResult<D> {
+    match checkpointed_drain(view, |v| match graph_scope(v, graph) {
+        Some(scope) => {
+            CanonState::new(v, scope, CanonPresentation::FlatAssertion, hash).run_fallible()
+        }
+        None => Ok(empty_canonicalized()),
+    }) {
+        Ok(Ok(canonicalized)) => Ok(canonicalized),
+        Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
+        Err(failure) => Err(failure.into()),
+    }
+}
+
+/// Whether any [`FallibleDatasetView`] is admissible to canonicalization under
+/// profile [`CANON_PROFILE_ID`] — the flat-presentation, fault-aware sibling of
+/// [`check_admissible_view`]. Admissibility does not depend on presentation (see
+/// [`CanonPresentation::FlatAssertion`]'s documentation: only what is EMITTED
+/// differs, never what is ADMITTED), so this predicate agrees with
+/// [`check_admissible_view`] on every input; it exists so a flat-presentation caller
+/// can screen a view before deciding whether to canonicalize it, exactly as
+/// [`check_admissible_view`] does for the overlay. See
+/// [`try_canonicalize_flat_view`] for the checkpoint-brackets-the-whole-run law this
+/// entry point shares.
+///
+/// # Errors
+/// [`ViewCanonError::Refused`] wrapping [`CanonError::ReservedVocabulary`] naming the
+/// least offending `(position, iri)`. [`ViewCanonError::NotReady`] if either
+/// checkpoint observes the view's backing data at fault.
+pub fn check_admissible_flat_view<D: FallibleDatasetView>(
+    view: &D,
+) -> Result<(), ViewCanonError<D::Error, D::Evidence>> {
+    match checkpointed_drain(view, |v| {
+        reserved_vocabulary(v, CanonScope::Dataset, CanonPresentation::FlatAssertion)
+    }) {
+        Ok(None) => Ok(()),
+        Ok(Some(violation)) => Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(
+            violation,
+        ))),
+        Err(failure) => Err(failure.into()),
+    }
+}
+
+/// The chosen-algorithm [`ContentDigest`] of `view`'s WHOLE-DATASET flat canonical
+/// form — the [`FlatAssertion`](CanonPresentation::FlatAssertion) sibling of
+/// [`graph_digest_view`]/[`try_graph_digest_view`], taken over the whole dataset
+/// rather than one named graph (this module offers no flat PER-GRAPH digest entry
+/// point). Byte-identical to hashing [`try_canonicalize_flat_view`]'s
+/// [`Canonicalized::nquads`] under the same `hash`, because that is exactly what
+/// this function does.
+///
+/// # Errors
+/// Exactly [`try_canonicalize_flat_view`]'s refusals, unchanged.
+pub fn try_flat_digest_view<D: FallibleDatasetView>(
+    view: &D,
+    hash: CanonHash,
+) -> Result<ContentDigest, ViewCanonError<D::Error, D::Evidence>> {
+    Ok(ContentDigest::of(
+        try_canonicalize_flat_view(view, hash)?.nquads.as_bytes(),
+    ))
+}
+
 /// The [`CanonScope`] naming `graph` in `view`, or `None` when `view` interns no such
 /// IRI (so no quad or statement row can carry it as a graph name).
 fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id>> {
@@ -873,9 +1087,16 @@ enum CanonScope<Id> {
 /// admitted statement-layer row is shaped.
 ///
 /// Exhaustive, deliberately with NO [`Default`]: every caller states which one it
-/// means, so a presentation can never be reached by omission. Crate-internal in this
-/// task — every PUBLIC entry point in this module pins [`Overlay`](Self::Overlay), the
-/// only behavior a caller outside this crate can observe.
+/// means, so a presentation can never be reached by omission. The type itself stays
+/// crate-internal: no entry point accepts it as a parameter, so a caller never
+/// threads this enum across the crate boundary — a caller SELECTS a presentation by
+/// which entry point it calls instead. [`canonicalize`], [`try_canonicalize_view`],
+/// [`canonicalize_graph_view`] and their kin pin [`Overlay`](Self::Overlay);
+/// [`try_canonicalize_flat_view`], [`try_canonicalize_flat_graph_view`],
+/// [`check_admissible_flat_view`] and [`try_flat_digest_view`] pin
+/// [`FlatAssertion`](Self::FlatAssertion). See [`CANON_PRESENTATION_OVERLAY_ID`] /
+/// [`CANON_PRESENTATION_FLAT_ASSERTION_ID`] for the stable, versioned identifiers a
+/// consumer pins for each.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CanonPresentation {
     /// The RDFC-1.0 overlay this module has always emitted: a reifier row becomes a
@@ -891,14 +1112,9 @@ pub(crate) enum CanonPresentation {
     /// What is ADMITTED is unchanged from [`Overlay`](Self::Overlay) — only what is
     /// EMITTED differs.
     ///
-    /// This task wires the presentation fully through `collect_components` and
-    /// every internal caller and exercises it with this module's own unit tests,
-    /// but deliberately stops short of a production call site (public or
-    /// crate-internal) that requests it outside a test — a later task's job. The
-    /// `cfg_attr` below is that boundary stated precisely: it lifts `dead_code`
-    /// ONLY for a non-test build (where nothing yet constructs this variant), never
-    /// for the test build that actually exercises it.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Its production consumers are [`try_canonicalize_flat_view`],
+    /// [`try_canonicalize_flat_graph_view`], [`check_admissible_flat_view`] and
+    /// [`try_flat_digest_view`].
     FlatAssertion,
 }
 
@@ -1587,6 +1803,90 @@ impl From<BudgetExceeded> for CanonError {
 impl From<ReservedVocabulary> for CanonError {
     fn from(err: ReservedVocabulary) -> Self {
         Self::ReservedVocabulary(err)
+    }
+}
+
+/// The refusal surfaced by a [`FallibleDatasetView`]-generic view-canon entry point:
+/// [`try_canonicalize_flat_view`], [`try_canonicalize_flat_graph_view`],
+/// [`check_admissible_flat_view`] and [`try_flat_digest_view`].
+///
+/// Two DIFFERENT kinds of refusal, and a caller must be able to tell them apart
+/// without parsing a message. [`Refused`](Self::Refused) is exactly [`CanonError`] —
+/// the input itself is inadmissible (reserved vocabulary) or the n-degree search
+/// exhausted its budget, the same two refusals [`try_canonicalize_view`] already
+/// returns for an infallible view. [`NotReady`](Self::NotReady) is the OTHER kind
+/// entirely: [`checkpointed_drain`]'s two-checkpoint completeness law observed the
+/// view's OWN backing data at fault, either already broken before a single row was
+/// read or faulted somewhere over the run — so nothing about the DATASET was ever
+/// judged, because the view could not even be read to completion. Collapsing the two
+/// into one opaque error would make that distinction a string a caller has to parse
+/// back out of a message; keeping them apart means one obliges the caller to fix
+/// their INPUT and the other to retry or repair their VIEW.
+///
+/// [`NotReady`](Self::NotReady) carries the fault TYPED, not erased to a `String`:
+/// `error`/`evidence` are exactly [`FallibleDatasetView::Error`] /
+/// [`FallibleDatasetView::Evidence`], the same typed pair
+/// [`FallibleDatasetView::operation_status`] itself reports. A caller that already
+/// handles the view's own typed error elsewhere can match on that SAME type here
+/// instead of re-deriving it from rendered text, so the audit record stays
+/// machine-readable end to end.
+///
+/// Deliberately exhaustive (NOT `#[non_exhaustive]`), matching [`CanonError`]: a
+/// consumer that had to prepare for a hidden third variant could never write an
+/// exhaustive match, and every refusal this module's flat-presentation entry points
+/// can produce is named above.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ViewCanonError<E, Ev> {
+    /// [`checkpointed_drain`] observed the view's backing data at fault — see
+    /// [`DrainCheckpoint`] for which of its two checkpoints reports `checkpoint`.
+    NotReady {
+        /// Which checkpoint observed the fault.
+        checkpoint: DrainCheckpoint,
+        /// The view's own typed operational root cause.
+        error: E,
+        /// The view's own deterministic evidence at the failure boundary.
+        evidence: Ev,
+    },
+    /// Canonicalization refused the input itself: reserved vocabulary, or n-degree
+    /// budget exhaustion. Exactly [`try_canonicalize_view`]'s refusals.
+    Refused(CanonError),
+}
+
+impl<E: std::fmt::Display, Ev: std::fmt::Debug> std::fmt::Display for ViewCanonError<E, Ev> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotReady {
+                checkpoint,
+                error,
+                evidence,
+            } => write!(
+                f,
+                "the view was not ready at the {checkpoint:?} checkpoint: {error} \
+                 (evidence: {evidence:?})"
+            ),
+            Self::Refused(err) => err.fmt(f),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static, Ev: std::fmt::Debug> std::error::Error
+    for ViewCanonError<E, Ev>
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotReady { error, .. } => Some(error),
+            Self::Refused(err) => Some(err),
+        }
+    }
+}
+
+impl<E, Ev> From<DrainFailure<E, Ev>> for ViewCanonError<E, Ev> {
+    fn from(failure: DrainFailure<E, Ev>) -> Self {
+        Self::NotReady {
+            checkpoint: failure.checkpoint,
+            error: failure.error,
+            evidence: failure.evidence,
+        }
     }
 }
 
@@ -2308,6 +2608,9 @@ fn write_u_escape(ch: char, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RdfStoreCapabilities;
+    use crate::ir::dataset::QuadRef;
+    use crate::dataset_view::ViewOperationStatus;
     use crate::ir::RdfDatasetBuilder;
     use crate::{RdfLiteral, RdfTextDirection};
     use std::sync::Arc;
@@ -3703,5 +4006,400 @@ mod tests {
             flat_twice_g.nquads, flat_once_g.nquads,
             "spelling one named-graph row twice must not change the flat canonical form"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The public flat-presentation, fault-aware entry points: `try_canonicalize_flat_view`,
+    // `try_canonicalize_flat_graph_view`, `check_admissible_flat_view`,
+    // `try_flat_digest_view`.
+    // -----------------------------------------------------------------------
+
+    /// The refused case: the reserved-vocabulary rule is unchanged by presentation,
+    /// so both flat entry points that admit-or-refuse must refuse it typed, exactly
+    /// as the overlay family does. The neighbouring VALID case pins the mirror
+    /// half: an IRI adjacent to, but outside, [`RESERVED_NAMESPACE`] — used as a
+    /// GRAPH name, the position [`the_fold_is_shape_exact_and_its_near_misses_still_refuse`]
+    /// never exercises — must be admitted and appear in the output.
+    #[test]
+    fn flat_entry_points_refuse_reserved_vocabulary_typed_and_admit_a_neighbouring_iri() {
+        let mut b = RdfDatasetBuilder::new();
+        let (r, o) = (iri(&mut b, "r"), iri(&mut b, "o"));
+        let bad = b.intern_iri(SENTINEL_REIFIES);
+        b.push_quad(r, bad, o, None);
+        let ds = b.freeze().expect("valid");
+
+        match try_canonicalize_flat_view(&*ds, CanonHash::Sha256) {
+            Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(err))) => {
+                assert_eq!(&*err.iri, SENTINEL_REIFIES);
+            }
+            other => panic!("expected a typed reserved-vocabulary refusal; got {other:?}"),
+        }
+        assert!(
+            matches!(
+                check_admissible_flat_view(&*ds),
+                Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(_)))
+            ),
+            "check_admissible_flat_view must refuse the same input the same way"
+        );
+
+        // The neighbour: outside `RESERVED_NAMESPACE` (`urn:purrdf:rdfc:`) even
+        // though it shares two path segments with it.
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let neighbour_graph = b.intern_iri("urn:purrdf:other:annotation");
+        b.push_quad(s, p, o, Some(neighbour_graph));
+        let ds = b.freeze().expect("valid");
+
+        let admitted = try_canonicalize_flat_view(&*ds, CanonHash::Sha256)
+            .expect("an IRI outside the reserved namespace must be admitted");
+        assert!(
+            admitted.nquads.contains("<urn:purrdf:other:annotation>"),
+            "the neighbouring graph name must appear in the output: {}",
+            admitted.nquads
+        );
+        assert!(check_admissible_flat_view(&*ds).is_ok());
+    }
+
+    /// The exact W3C RDFC-1.0 `test074` poison shape, reproduced natively: `n`
+    /// mutually symmetric blank nodes, every ORDERED pair (including self-loops)
+    /// linked by the same predicate — a complete symmetric digraph. `n = 10` is the
+    /// documented minimal shape (see `crates/rdf/tests/gts_certify.rs`'s
+    /// `poison_symmetric_source`, and `crates/rdf/tests/rdfc_w3c.rs`'s heavy-offgate
+    /// `test074`) that exceeds [`RDFC_CALL_LIMIT`] (a single ambiguous hash group of
+    /// 10 mutually-symmetric blanks contributes up to `10! = 3,628,800` permutations
+    /// to one `hash_n_degree` call) while its blank COUNT stays nowhere near any
+    /// count-based pre-reject a caller might apply upstream of this module.
+    fn poison_symmetric_dataset(n: usize) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = iri(&mut b, "p");
+        let blanks: Vec<TermId> = (0..n)
+            .map(|i| b.intern_blank(&format!("e{i}"), BlankScope::DEFAULT))
+            .collect();
+        for &a in &blanks {
+            for &c in &blanks {
+                b.push_quad(a, p, c, None);
+            }
+        }
+        b.freeze().expect("valid")
+    }
+
+    /// A LEGITIMATE, non-symmetric neighbour of [`poison_symmetric_dataset`]:
+    /// `pairs` independent symmetric blank-node PAIRS, each tied to its own unique
+    /// ground anchor so pairs are mutually distinguishable (no CROSS-pair symmetry)
+    /// while remaining internally ambiguous — RDFC-1.0's simplest automorphism
+    /// shape (see [`symmetric_ring_resolves_deterministically`]). Each pair's
+    /// n-degree resolution is O(1), so the total search stays far under
+    /// [`RDFC_CALL_LIMIT`] regardless of `pairs`: a graph that merely LOOKS
+    /// expensive (many blanks) must not be refused for the reason the genuinely
+    /// poisoned shape above is — the over-refusal mirror of the poison case.
+    fn large_non_symmetric_dataset(pairs: u32) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let link = iri(&mut b, "link");
+        for i in 0..pairs {
+            let anchor = iri(&mut b, &format!("anchor{i}"));
+            let x = b.intern_blank(&format!("x{i}"), BlankScope::DEFAULT);
+            let y = b.intern_blank(&format!("y{i}"), BlankScope::DEFAULT);
+            b.push_quad(anchor, link, x, None);
+            b.push_quad(anchor, link, y, None);
+            b.push_quad(x, link, y, None);
+            b.push_quad(y, link, x, None);
+        }
+        b.freeze().expect("valid")
+    }
+
+    /// Budget exhaustion refuses typed through the public flat entry point, exactly
+    /// as [`try_canonicalize_view`] does for the overlay; the paired valid
+    /// neighbour — legitimately large, but not globally symmetric — stays green
+    /// through the SAME entry point.
+    #[test]
+    fn try_canonicalize_flat_view_refuses_budget_exhaustion_and_a_large_neighbour_stays_green() {
+        let poison = poison_symmetric_dataset(10);
+        match try_canonicalize_flat_view(&*poison, CanonHash::Sha256) {
+            Err(ViewCanonError::Refused(CanonError::BudgetExceeded(err))) => {
+                assert_eq!(err.blank_count, 10);
+            }
+            other => panic!("expected a typed budget-exceeded refusal; got {other:?}"),
+        }
+
+        let large = large_non_symmetric_dataset(200);
+        let admitted = try_canonicalize_flat_view(&*large, CanonHash::Sha256)
+            .expect("a large non-symmetric graph must not be refused for budget reasons");
+        assert_ne!(admitted.nquads, "");
+        assert_eq!(admitted.labels.len(), 400, "every pair's two blanks get a label");
+    }
+
+    /// `try_canonicalize_flat_view` accepts `RdfDataset` directly AND `Arc<RdfDataset>`
+    /// — both satisfy `FallibleDatasetView` (the latter via the blanket `Arc<T>`
+    /// impl), both with `Error = Infallible`, and both must produce byte-identical
+    /// output for the same content.
+    #[test]
+    fn try_canonicalize_flat_view_accepts_both_rdfdataset_and_arc_rdfdataset() {
+        let arc_ds = presentation_fixture();
+        let owned_ds = Arc::try_unwrap(presentation_fixture())
+            .expect("a freshly built, singly-owned dataset must unwrap");
+        let via_arc =
+            try_canonicalize_flat_view(&arc_ds, CanonHash::Sha256).expect("admissible fixture");
+        let via_owned =
+            try_canonicalize_flat_view(&owned_ds, CanonHash::Sha256).expect("admissible fixture");
+        assert_eq!(via_arc.nquads, via_owned.nquads);
+    }
+
+    /// A two-graph fixture: graph `gA` carries a reifier, an annotation on it, and
+    /// an ordinary quad (the same three-row shape [`presentation_fixture`]
+    /// exercises); graph `gB` carries unrelated content the graph scope must not
+    /// admit.
+    fn two_graph_flat_fixture() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let ga = iri(&mut b, "gA");
+        let gb = iri(&mut b, "gB");
+        let (s, pred, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let reifier = b.intern_blank("r", BlankScope::DEFAULT);
+        let triple = b.intern_triple(s, pred, o);
+        b.push_reifier_in_graph(reifier, triple, Some(ga));
+        let conf = iri(&mut b, "confidence");
+        let score = b.intern_literal(RdfLiteral::typed(
+            "0.9",
+            "http://www.w3.org/2001/XMLSchema#decimal",
+        ));
+        b.push_annotation_in_graph(reifier, conf, score, Some(ga));
+        let (os, op, oo) = (iri(&mut b, "os"), iri(&mut b, "op"), iri(&mut b, "oo"));
+        b.push_quad(os, op, oo, Some(ga));
+        let (bs, bp, bo) = (iri(&mut b, "bs"), iri(&mut b, "bp"), iri(&mut b, "bo"));
+        b.push_quad(bs, bp, bo, Some(gb));
+        b.freeze().expect("valid")
+    }
+
+    /// Composition sanity: `try_canonicalize_flat_graph_view` on graph A equals
+    /// `try_canonicalize_flat_view` on a dataset containing only graph A's rows
+    /// (`project_named_graph`, already graph-erased) — the same relationship the
+    /// overlay family's `graph_scoped_canonicalization_matches_the_named_graph_projection`
+    /// pins, held under the flat presentation instead.
+    #[test]
+    fn flat_graph_scope_is_flat_dataset_scope_composed_with_projection() {
+        let ds = two_graph_flat_fixture();
+        let graph = "http://example.org/gA";
+        let projected = ds.project_named_graph(graph);
+        let via_projection =
+            try_canonicalize_flat_view(&projected, CanonHash::Sha256).expect("admissible");
+        let via_graph_scope = try_canonicalize_flat_graph_view(&*ds, graph, CanonHash::Sha256)
+            .expect("admissible");
+        assert_eq!(via_graph_scope.nquads, via_projection.nquads);
+        assert!(
+            !via_graph_scope.nquads.contains("<http://example.org/bs>"),
+            "graph B's content must not leak into graph A's scope: {}",
+            via_graph_scope.nquads
+        );
+    }
+
+    /// `try_flat_digest_view` is exactly hashing `try_canonicalize_flat_view`'s
+    /// `nquads` under the same algorithm — the flat sibling of the law
+    /// `graph_digest_view`/`try_graph_digest_view` state for the overlay's per-graph
+    /// digest, held here over the whole-dataset flat digest instead.
+    #[test]
+    fn try_flat_digest_view_hashes_the_flat_canonical_document() {
+        let ds = presentation_fixture();
+        let flat =
+            try_canonicalize_flat_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
+        let digest =
+            try_flat_digest_view(&*ds, CanonHash::Sha256).expect("admissible fixture");
+        assert_eq!(digest, ContentDigest::of(flat.nquads.as_bytes()));
+
+        // SHA-384 travels the same seam.
+        let flat384 =
+            try_canonicalize_flat_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
+        let digest384 =
+            try_flat_digest_view(&*ds, CanonHash::Sha384).expect("admissible fixture");
+        assert_eq!(digest384, ContentDigest::of(flat384.nquads.as_bytes()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Fault closure through the PUBLIC flat entry points: a `FallibleDatasetView`
+    // whose backing data faults must never let a `Canonicalized` escape, and must
+    // report which checkpoint saw it — the same law
+    // `dataset_view::tests::checkpointed_drain` pins directly, exercised here at
+    // this module's own public boundary.
+    // -----------------------------------------------------------------------
+
+    /// The typed root cause a [`FlatProbeView`] reports once faulted — the same
+    /// controllable-status probe pattern `dataset_view`'s own `checkpointed_drain`
+    /// tests use (`ProbeView`/`ProbeFault`, private to that module's own test
+    /// suite), reproduced here because these public entry points are THIS module's
+    /// own fault-closure boundary and need their own instance of the same harness.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct FlatProbeFault(&'static str);
+
+    impl std::fmt::Display for FlatProbeFault {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for FlatProbeFault {}
+
+    /// A [`FallibleDatasetView`] wrapping a real [`RdfDataset`] (so a run reads
+    /// genuine content, including the RDF 1.2 side tables) whose
+    /// [`operation_status`](FallibleDatasetView::operation_status) is driven by two
+    /// independent controls: `pre_faulted`, fixed at construction (the view was
+    /// already broken before anyone drained it), and `faulted_by_read`, a `Cell`
+    /// flipped by the FIRST read accessor a run touches (the view faults PARTWAY
+    /// THROUGH). The entry points under test own their drain closure internally, so
+    /// unlike `dataset_view`'s `ProbeView` tests — which inject the fault from the
+    /// closure the TEST supplies — the fault here has to be a side effect of being
+    /// READ.
+    struct FlatProbeView {
+        inner: Arc<RdfDataset>,
+        pre_faulted: bool,
+        faulted_by_read: std::cell::Cell<bool>,
+    }
+
+    impl FlatProbeView {
+        /// Already `Failed` at construction: the FIRST checkpoint observes the
+        /// fault, so the drain closure must never run at all.
+        fn already_failed(inner: Arc<RdfDataset>) -> Self {
+            Self {
+                inner,
+                pre_faulted: true,
+                faulted_by_read: std::cell::Cell::new(false),
+            }
+        }
+
+        /// `Ready` at construction, but the FIRST read accessor a run touches flips
+        /// it to `Failed` — `Ready` at the first checkpoint, `Failed` by the second.
+        fn faults_on_first_read(inner: Arc<RdfDataset>) -> Self {
+            Self {
+                inner,
+                pre_faulted: false,
+                faulted_by_read: std::cell::Cell::new(false),
+            }
+        }
+
+        fn mark_read(&self) {
+            self.faulted_by_read.set(true);
+        }
+    }
+
+    impl DatasetView for FlatProbeView {
+        type Id = TermId;
+        type ProbePlan = ();
+
+        fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.mark_read();
+            self.inner.quads()
+        }
+
+        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
+            self.mark_read();
+            DatasetView::quad_refs(&*self.inner)
+        }
+
+        fn resolve(&self, id: TermId) -> TermRef<'_> {
+            self.inner.resolve(id)
+        }
+
+        fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+            self.inner.term_id_by_value(value)
+        }
+
+        fn capabilities(&self) -> RdfStoreCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            _plan: &(),
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> impl Iterator<Item = QuadIds> + '_ {
+            self.quads_for_pattern(s, p, o, g)
+        }
+
+        fn term_count(&self) -> usize {
+            self.inner.term_count()
+        }
+
+        fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.mark_read();
+            self.inner.reifier_quads()
+        }
+
+        fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.mark_read();
+            self.inner.annotation_quads()
+        }
+    }
+
+    impl FallibleDatasetView for FlatProbeView {
+        type Error = FlatProbeFault;
+        type Evidence = u32;
+
+        fn operation_status(&self) -> ViewOperationStatus<FlatProbeFault, u32> {
+            if self.pre_faulted || self.faulted_by_read.get() {
+                ViewOperationStatus::Failed {
+                    error: FlatProbeFault("the flat probe view faulted"),
+                    evidence: 7,
+                }
+            } else {
+                ViewOperationStatus::Ready { evidence: 0 }
+            }
+        }
+    }
+
+    /// A view already `Failed` at the FIRST checkpoint is refused before the run
+    /// ever starts — the `Before` checkpoint's error and evidence are returned.
+    #[test]
+    fn try_canonicalize_flat_view_refuses_a_view_already_failed_before_the_drain() {
+        let view = FlatProbeView::already_failed(presentation_fixture());
+        match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+            Err(ViewCanonError::NotReady {
+                checkpoint,
+                error,
+                evidence,
+            }) => {
+                assert_eq!(checkpoint, DrainCheckpoint::Before);
+                assert_eq!(error, FlatProbeFault("the flat probe view faulted"));
+                assert_eq!(evidence, 7);
+            }
+            other => panic!("expected NotReady at the Before checkpoint; got {other:?}"),
+        }
+    }
+
+    /// A view `Ready` at the first checkpoint but faulted by the second — the run
+    /// faulted partway through — is refused with the `After` checkpoint's error and
+    /// evidence, and NO `Canonicalized` escapes even though the run completed.
+    #[test]
+    fn try_canonicalize_flat_view_refuses_a_view_that_faults_mid_run_and_publishes_nothing() {
+        let view = FlatProbeView::faults_on_first_read(presentation_fixture());
+        match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+            Err(ViewCanonError::NotReady {
+                checkpoint,
+                error,
+                evidence,
+            }) => {
+                assert_eq!(checkpoint, DrainCheckpoint::After);
+                assert_eq!(error, FlatProbeFault("the flat probe view faulted"));
+                assert_eq!(evidence, 7);
+            }
+            other => panic!(
+                "expected a NotReady refusal at the After checkpoint, with no \
+                 Canonicalized escaping; got {other:?}"
+            ),
+        }
+    }
+
+    /// The same fault closure through `check_admissible_flat_view`, which drains
+    /// the reserved-vocabulary sweep alone rather than the full canonical run.
+    #[test]
+    fn check_admissible_flat_view_refuses_a_view_that_faults_mid_run() {
+        let view = FlatProbeView::faults_on_first_read(presentation_fixture());
+        match check_admissible_flat_view(&view) {
+            Err(ViewCanonError::NotReady { checkpoint, .. }) => {
+                assert_eq!(checkpoint, DrainCheckpoint::After);
+            }
+            other => panic!("expected NotReady at the After checkpoint; got {other:?}"),
+        }
     }
 }

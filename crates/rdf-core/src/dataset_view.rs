@@ -640,8 +640,15 @@ impl<T: FallibleDatasetView> FallibleDatasetView for Arc<T> {
 /// the fault, because the two mean different things — `Before` says the view was
 /// already broken when the drain arrived, `After` says the drain itself ran over a
 /// source that faulted partway through.
+///
+/// Public: it is now part of a public error's own vocabulary rather than an
+/// implementation detail of this module alone. The `purrdf-core` flat-presentation
+/// view-canon entry points (`try_canonicalize_flat_view` and its siblings) carry this
+/// value directly in their own typed refusal, so a caller distinguishing "the view
+/// was already broken" from "the view faulted mid-run" names this type rather than
+/// re-deriving the distinction from a rendered message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DrainCheckpoint {
+pub enum DrainCheckpoint {
     /// Sampled before a single row was drained.
     Before,
     /// Sampled after every row has been drained.
@@ -1201,7 +1208,7 @@ mod tests {
     #[test]
     fn an_always_ready_view_publishes() {
         let view = ProbeView::new(false);
-        let out = checkpointed_drain(&view, |v| v.term_count());
+        let out = checkpointed_drain(&view, DatasetView::term_count);
         assert_eq!(out, Ok(0));
     }
 
