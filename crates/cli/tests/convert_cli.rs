@@ -1687,6 +1687,36 @@ fn canonical_without_to_emits_canonical_nquads() {
     );
 }
 
+/// `--canonical` on a dataset carrying the canonicalizer's OWN reserved vocabulary
+/// (`urn:purrdf:rdfc:...`) is a REFUSED conversion, reported as an ordinary runtime
+/// error (exit 1, a diagnostic on stderr) — not a process abort. This is the CLI's
+/// untrusted-input contract for `--canonical`: `try_canonicalize_flat_view`'s refusal
+/// comes back as a value the CLI maps into [`CliError::Runtime`], never a panic that
+/// would take the whole process down over a caller-supplied document.
+#[test]
+fn canonical_refuses_reserved_vocabulary_without_aborting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    const RESERVED_VOCAB_NQUADS: &str = concat!(
+        "<http://example.org/s> <http://example.org/p> ",
+        "<urn:purrdf:rdfc:sentinel> .\n",
+    );
+    let seed = write_file(dir, "reserved.nq", RESERVED_VOCAB_NQUADS);
+    let out = path(dir, "out.canon");
+    let o = run(&["convert", "--from", "nquads", "--canonical", &seed, &out]);
+    assert_eq!(
+        o.status.code(),
+        Some(1),
+        "a reserved-vocabulary dataset must be refused as an ordinary runtime failure, \
+         not abort the process: {}",
+        stderr(&o)
+    );
+    assert!(
+        !stderr(&o).is_empty(),
+        "the refusal must carry a diagnostic on stderr"
+    );
+}
+
 // ── Relative IRI references and the document base ───────────────────────────────
 //
 // A relative IRI reference used to be interned VERBATIM when no base was in scope, so
