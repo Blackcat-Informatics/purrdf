@@ -632,6 +632,77 @@ impl<T: FallibleDatasetView> FallibleDatasetView for Arc<T> {
     }
 }
 
+/// Which side of a [`checkpointed_drain`] a sample was taken at.
+///
+/// The two-checkpoint completeness law names its own halves: [`Before`](Self::Before)
+/// is sampled before a single row is drained, [`After`](Self::After) after every row
+/// has been drained. A caller surfacing a [`DrainFailure`] reports which one observed
+/// the fault, because the two mean different things — `Before` says the view was
+/// already broken when the drain arrived, `After` says the drain itself ran over a
+/// source that faulted partway through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DrainCheckpoint {
+    /// Sampled before a single row was drained.
+    Before,
+    /// Sampled after every row has been drained.
+    After,
+}
+
+/// What [`checkpointed_drain`] returns when a checkpoint observed an operational
+/// failure: which checkpoint, and the view's own typed root cause and evidence at
+/// that boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DrainFailure<Error, Evidence> {
+    /// Which checkpoint observed the failure.
+    pub(crate) checkpoint: DrainCheckpoint,
+    /// The view's own typed root cause.
+    pub(crate) error: Error,
+    /// The view's own evidence at the failure boundary.
+    pub(crate) evidence: Evidence,
+}
+
+/// Sample twice; neither sample Ready ⇒ nothing partial is published.
+///
+/// Takes an atomic [`FallibleDatasetView::operation_status`] checkpoint before `drain`
+/// runs and again after, and returns `drain`'s output ONLY when BOTH samples are
+/// [`ViewOperationStatus::Ready`]. A view that faults mid-read stops yielding rather
+/// than erroring, so the first sample alone cannot see a fault introduced during the
+/// drain, and the second alone cannot distinguish an already-broken view from one that
+/// simply finished — checking only one checkpoint would let a boundary publish a
+/// result computed over a truncated read as if it were complete. Either checkpoint
+/// being [`Failed`](ViewOperationStatus::Failed) refuses the whole result and `drain`'s
+/// output is discarded, never returned.
+///
+/// This is the completeness law every checkpointing consumer of a
+/// [`FallibleDatasetView`] needs (first written as the pack encoder's own private
+/// two-sample helper); hoisted here so a second consumer states it once rather than
+/// restating — and risking drifting from — the same rule.
+pub(crate) fn checkpointed_drain<D, F, T>(
+    view: &D,
+    drain: F,
+) -> Result<T, DrainFailure<D::Error, D::Evidence>>
+where
+    D: FallibleDatasetView,
+    F: FnOnce(&D) -> T,
+{
+    if let ViewOperationStatus::Failed { error, evidence } = view.operation_status() {
+        return Err(DrainFailure {
+            checkpoint: DrainCheckpoint::Before,
+            error,
+            evidence,
+        });
+    }
+    let out = drain(view);
+    match view.operation_status() {
+        ViewOperationStatus::Ready { .. } => Ok(out),
+        ViewOperationStatus::Failed { error, evidence } => Err(DrainFailure {
+            checkpoint: DrainCheckpoint::After,
+            error,
+            evidence,
+        }),
+    }
+}
+
 /// The **write companion** to [`DatasetView`] — the mutation surface a copy-on-write
 /// or backed-by-store dataset exposes (purrdf P5; backend contract C4).
 ///
@@ -1019,5 +1090,153 @@ mod tests {
         // The trait read view agrees with the inherent iterators.
         assert_eq!(DatasetView::quads(&*ds).count(), 2);
         assert_eq!(DatasetView::quad_refs(&*ds).count(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // `checkpointed_drain`: the two-checkpoint completeness law, hoisted out of
+    // the pack encoder so any `FallibleDatasetView` consumer can share it.
+    // -----------------------------------------------------------------------
+
+    /// The typed root cause a [`ProbeView`] reports once told to fault.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ProbeFault(&'static str);
+
+    impl std::fmt::Display for ProbeFault {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for ProbeFault {}
+
+    /// A [`FallibleDatasetView`] whose [`operation_status`](FallibleDatasetView::operation_status)
+    /// is driven directly by the test rather than by how many rows have actually been
+    /// read. `checkpointed_drain` only ever calls `operation_status` — never a
+    /// row-reading method — so a real truncating reader (like `BudgetedView` in
+    /// `tests/pack_container.rs`, a separate compilation unit unreachable from this
+    /// in-module test) is not needed to exercise its law: a controllable status is
+    /// the whole surface under test.
+    struct ProbeView {
+        inner: Arc<RdfDataset>,
+        status: std::cell::Cell<u8>,
+    }
+
+    impl ProbeView {
+        /// `0` = Ready, `1` = Failed. A `Cell<u8>` rather than a
+        /// `Cell<ViewOperationStatus<..>>` because the status carries a
+        /// non-`Copy` payload (the fault); the discriminant alone is all
+        /// `operation_status` needs to reconstruct it.
+        fn new(faulted: bool) -> Self {
+            Self {
+                inner: RdfDatasetBuilder::new().freeze().expect("empty dataset freezes"),
+                status: std::cell::Cell::new(u8::from(faulted)),
+            }
+        }
+
+        fn fault_now(&self) {
+            self.status.set(1);
+        }
+    }
+
+    impl DatasetView for ProbeView {
+        type Id = TermId;
+        type ProbePlan = ();
+
+        fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.inner.quads()
+        }
+
+        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
+            DatasetView::quad_refs(&*self.inner)
+        }
+
+        fn resolve(&self, id: TermId) -> TermRef<'_> {
+            self.inner.resolve(id)
+        }
+
+        fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+            self.inner.term_id_by_value(value)
+        }
+
+        fn capabilities(&self) -> RdfStoreCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            _plan: &(),
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> impl Iterator<Item = QuadIds> + '_ {
+            self.quads_for_pattern(s, p, o, g)
+        }
+
+        fn term_count(&self) -> usize {
+            self.inner.term_count()
+        }
+    }
+
+    impl FallibleDatasetView for ProbeView {
+        type Error = ProbeFault;
+        type Evidence = u32;
+
+        fn operation_status(&self) -> ViewOperationStatus<ProbeFault, u32> {
+            if self.status.get() == 0 {
+                ViewOperationStatus::Ready { evidence: 0 }
+            } else {
+                ViewOperationStatus::Failed {
+                    error: ProbeFault("the probe view was told to fault"),
+                    evidence: 1,
+                }
+            }
+        }
+    }
+
+    /// An always-`Ready` view publishes: both checkpoints observe `Ready`, so
+    /// `checkpointed_drain` returns the drain closure's output.
+    #[test]
+    fn an_always_ready_view_publishes() {
+        let view = ProbeView::new(false);
+        let out = checkpointed_drain(&view, |v| v.term_count());
+        assert_eq!(out, Ok(0));
+    }
+
+    /// A view already `Failed` at the FIRST sample is refused before the drain
+    /// closure ever runs — the `Before` checkpoint's error is returned, and the
+    /// closure's would-be output never reaches the caller.
+    #[test]
+    fn a_view_failed_at_first_sample_returns_the_before_checkpoint_error_without_draining() {
+        let view = ProbeView::new(true);
+        let mut drained = false;
+        let out = checkpointed_drain(&view, |_| {
+            drained = true;
+            "never published"
+        });
+        assert!(!drained, "the drain closure must not run at all");
+        let failure = out.expect_err("an already-failed view must be refused");
+        assert_eq!(failure.checkpoint, DrainCheckpoint::Before);
+        assert_eq!(failure.error, ProbeFault("the probe view was told to fault"));
+    }
+
+    /// A view `Ready` at the first sample but `Failed` by the second — the drain
+    /// faulted partway through — is refused with the `After` checkpoint's error, and
+    /// the closure's output (even though it ran to completion) is NOT published.
+    #[test]
+    fn a_view_that_faults_during_the_drain_returns_the_after_checkpoint_error_and_drops_the_output()
+     {
+        let view = ProbeView::new(false);
+        let out = checkpointed_drain(&view, |v| {
+            // The fault happens INSIDE the drain, after the `Before` checkpoint
+            // already observed `Ready`.
+            v.fault_now();
+            "computed but must never be published"
+        });
+        let failure = out.expect_err("a view that faulted mid-drain must be refused");
+        assert_eq!(failure.checkpoint, DrainCheckpoint::After);
+        assert_eq!(failure.error, ProbeFault("the probe view was told to fault"));
     }
 }

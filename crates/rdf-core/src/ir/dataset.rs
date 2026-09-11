@@ -1386,6 +1386,25 @@ impl RdfDataset {
         self.term_id_by_iri(RDF_REIFIES)
     }
 
+    /// Enforce, rather than merely assert in prose, the invariant
+    /// [`rdf_reifies_id`](Self::rdf_reifies_id)'s doc states: a non-empty reifier
+    /// table always has `rdf:reifies` interned. Silently treating the `None` case as
+    /// "no reifiers" — the old behavior — would turn a broken invariant into a
+    /// SILENT DROP of every row the table actually holds, exactly the failure mode
+    /// this crate refuses to ship. Unreachable through the public API: the only
+    /// producer of a non-empty reifier table is
+    /// [`super::builder::RdfDatasetBuilder::push_reifier_in_graph`], which interns
+    /// the predicate itself before the row is stored.
+    fn assert_reifier_table_invariant(&self) {
+        assert!(
+            self.reifiers.is_empty() || self.rdf_reifies_id().is_some(),
+            "broken invariant: {} reifier row(s) stored but `rdf:reifies` was never \
+             interned — every construction path that populates the reifier table must \
+             intern the predicate (see `RdfDatasetBuilder::push_reifier_in_graph`)",
+            self.reifiers.len()
+        );
+    }
+
     /// Iterate the reifier side-table AS resolved virtual quads: each
     /// `(reifier, triple-term, graph)` declaration becomes a
     /// `(reifier, rdf:reifies, triple-term)` quad in the graph that declared it
@@ -1394,13 +1413,20 @@ impl RdfDataset {
     /// The RDF 1.2 reification layer is stored in a SEPARATE side-table — it is NOT in
     /// the `quads` table — so this view is the only way a triple-pattern matcher can see
     /// it. Yields in the reifier table's frozen `(reifier, triple)` sorted order, so the
-    /// output is deterministic. If the dataset has no reifiers (and so never interned
-    /// `rdf:reifies`), this yields nothing.
+    /// output is deterministic. An EMPTY reifier table yields nothing.
+    ///
+    /// # Panics
+    /// If the reifier table is non-empty but `rdf:reifies` was never interned — a
+    /// broken invariant (see [`assert_reifier_table_invariant`](Self::assert_reifier_table_invariant)),
+    /// unreachable through the public API. Silently yielding nothing in that case
+    /// would drop every row the table holds instead of surfacing the corruption.
     pub fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.assert_reifier_table_invariant();
         // `flat_map` over the `Option<TermId>` so the iterator type is fixed whether or
-        // not `rdf:reifies` is interned; an empty option ⇒ an empty stream. The `g`
-        // slot carries the reifier declaration's own graph, so a `GRAPH ?g` probe binds
-        // `?g` to it.
+        // not `rdf:reifies` is interned; an empty option ⇒ an empty stream (only
+        // reachable with an empty reifier table — the assert above rules out the
+        // non-empty case). The `g` slot carries the reifier declaration's own graph,
+        // so a `GRAPH ?g` probe binds `?g` to it.
         self.rdf_reifies_id().into_iter().flat_map(move |reifies| {
             self.reifiers_with_graph()
                 .map(move |(reifier, triple, g)| QuadIds {
@@ -1427,11 +1453,16 @@ impl RdfDataset {
     /// Yields exactly the rows of `reifier_quads().filter(|q| q.s == reifier)`, in the
     /// same order (contiguity makes the two streams identical, not merely equal as
     /// sets); a reifier with no rows yields nothing.
+    ///
+    /// # Panics
+    /// Exactly [`reifier_quads`](Self::reifier_quads)'s broken-invariant panic, and
+    /// for the same reason: unreachable through the public API.
     pub fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
+        self.assert_reifier_table_invariant();
         let start = self.reifiers.partition_point(|(r, _, _)| *r < reifier);
         // `flat_map` over the `Option<TermId>` for the same fixed-iterator-type reason
         // as `reifier_quads`; an un-interned `rdf:reifies` ⇒ an empty reifier table ⇒
-        // an empty stream.
+        // an empty stream (the assert above rules out the non-empty case).
         self.rdf_reifies_id().into_iter().flat_map(move |reifies| {
             self.reifiers[start..]
                 .iter()
@@ -2570,6 +2601,33 @@ mod tests {
         let ds = b.freeze().expect("valid");
         assert_eq!(ds.reifier_quads().count(), 0);
         assert_eq!(ds.annotation_quads().count(), 0);
+    }
+
+    /// [`RdfDataset::assert_reifier_table_invariant`]'s broken-invariant guard has no
+    /// construction reaching it: [`RdfDataset::from_parts`] is `pub(crate)` and its
+    /// only caller ([`super::builder::RdfDatasetBuilder::freeze`]) always builds
+    /// `reifiers` and `rdf:reifies`'s interning together
+    /// (`push_reifier_in_graph` interns the predicate before the row is stored, and
+    /// there is no other producer of the `reifiers` field). The guard therefore
+    /// documents the invariant rather than being independently exercisable, and the
+    /// neighbour this test pins is the valid case the guard must NEVER refuse: a
+    /// builder-produced dataset with a non-empty reifier table iterates both
+    /// `reifier_quads` and `reifier_quads_of` without panicking, repeatedly (not just
+    /// once — the assert re-checks the invariant on every call).
+    #[test]
+    fn the_reifier_table_invariant_guard_never_fires_on_a_builder_produced_dataset() {
+        let (ds, _) = reifier_probe_fixture();
+        assert!(
+            ds.reifier_quads().count() > 0,
+            "fixture must actually carry reifiers to exercise the non-empty branch"
+        );
+        // Call both methods more than once: the guard runs on every call, so a
+        // single successful call would not show it is safe to call again.
+        for _ in 0..2 {
+            assert!(ds.reifier_quads().count() > 0);
+            let any_reifier = ds.reifier_quads().next().expect("at least one row").s;
+            assert!(ds.reifier_quads_of(any_reifier).count() > 0);
+        }
     }
 
     #[test]
