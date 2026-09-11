@@ -398,6 +398,9 @@ mod tests {
         let ttl = "<rel> <http://example.org/p> <http://example.org/o> .\n";
         let dataset = parse_turtle_to_dataset(ttl, Some("http://example.org/dir/doc.ttl"))
             .expect("a based document parses");
+        // LAW: test-only, self-built fixture Turtle (`ttl` above) — never
+        // caller-supplied and never reachable through a binding, so the panicking
+        // wrapper is sound here.
         let nt = ::purrdf::canonical_flat_nquads(dataset.as_ref()).expect("serialize");
         assert!(
             nt.contains("<http://example.org/dir/rel>"),

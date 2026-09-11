@@ -293,6 +293,10 @@ impl RegimeClosure {
 /// * A malformed input document (the native codec's own diagnostic).
 /// * An exhausted evaluation ceiling or a dataset that cannot be frozen (the
 ///   `purrdf-entail` error).
+/// * A materialized closure carrying a reserved-vocabulary IRI, or one that
+///   exhausts the RDFC-1.0 n-degree search budget — the document is wholly
+///   caller-supplied, so this refusal comes back as an `Err` (via
+///   [`purrdf_core::try_canonicalize_flat_view`]) rather than panicking.
 ///
 /// # Examples
 ///
@@ -336,10 +340,41 @@ pub fn materialize_to_nquads_string(
     let rules = regime_rule_set(parsed, regime, program)?;
     let (closure, report) = materialize(&dataset, regime_plan(parsed, &rules))
         .map_err(|error| render_entail_error(regime, &error))?;
+    // The materialized closure is wholly caller-supplied (the document parsed above),
+    // so it goes through the typed, non-panicking canonicalization entry point rather
+    // than `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
+    // reserved-vocabulary or budget-exhausting closure must come back as an `Err`
+    // value across the wasm/Python/C-ABI boundary, not abort the process.
+    let nquads = caller_flat_nquads(
+        closure.as_ref(),
+        &format!("entailment regime \"{regime}\": the materialized closure"),
+    )?;
     Ok(RegimeClosure {
-        nquads: purrdf_rdf::canonical_flat_nquads(closure.as_ref())?,
+        nquads,
         report: render_reasoning_report(&report),
     })
+}
+
+/// Canonicalize `dataset` — content the CALLER supplied or that was derived from
+/// content the caller supplied — as flat N-Quads, refusing a reserved-vocabulary
+/// or search-budget-exhausting result as a value rather than the panic
+/// [`purrdf_rdf::canonical_flat_nquads`] raises for the same refusal.
+///
+/// `context` opens the diagnostic (e.g. `"extract-module"`, or
+/// `"entailment regime \"rdfs\": the materialized closure"`) so a caller can tell
+/// which service and input refused.
+fn caller_flat_nquads(dataset: &purrdf_core::RdfDataset, context: &str) -> Result<String, String> {
+    match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256) {
+        Ok(canonicalized) => Ok(canonicalized.nquads),
+        Err(purrdf_core::ViewCanonError::Refused(err)) => {
+            Err(format!("{context} was refused canonicalization: {err}"))
+        }
+        Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
+            // LAW: `&RdfDataset`'s `FallibleDatasetView::Error` is `Infallible` — a
+            // frozen dataset never faults, so this arm is unreachable by construction
+            // and needs no runtime check to prove it.
+        },
+    }
 }
 
 /// The plan that closes `regime` under `rules` — the ONE map from a regime spelling
@@ -2201,7 +2236,10 @@ impl ReasonerSession {
         }
         .map_err(|error| format!("extract-module: {error}"))?;
         Ok(ReasoningAnswer {
-            answer: purrdf_rdf::canonical_flat_nquads(extraction.module().as_ref())?,
+            // `self.dataset` is `ReasonerSession::open`'s caller-supplied `document`
+            // (see `extract_module_to_string`), so the extracted module is
+            // caller-supplied content too: refuse as a value, never panic.
+            answer: caller_flat_nquads(extraction.module().as_ref(), "extract-module")?,
             certificate: render_module_certificate(&extraction),
             proof: extraction.proof().map(render_dl_proof),
         })
@@ -2217,7 +2255,10 @@ impl ReasonerSession {
         let justification =
             justify(&self.dataset, &parsed).map_err(|error| format!("justify: {error}"))?;
         Ok(ReasoningAnswer {
-            answer: purrdf_rdf::canonical_flat_nquads(justification.ontology().as_ref())?,
+            // `self.dataset` is `ReasonerSession::open`'s caller-supplied `document`
+            // (see `justify_to_string`), so the justification's ontology is
+            // caller-supplied content too: refuse as a value, never panic.
+            answer: caller_flat_nquads(justification.ontology().as_ref(), "justify")?,
             certificate: render_justification(&justification)?,
             proof: None,
         })
@@ -4867,6 +4908,35 @@ mod tests {
         assert!(error.contains("rif"), "{error}");
     }
 
+    /// The document is wholly caller-supplied, so a closure carrying a
+    /// reserved-vocabulary IRI ([`purrdf_core::RESERVED_NAMESPACE`]) must come back
+    /// as an `Err` VALUE rather than aborting the process — the gap this module's
+    /// migration off the panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper
+    /// closes.
+    #[test]
+    fn a_reserved_vocabulary_closure_is_refused_as_a_value_not_a_panic() {
+        let document = format!(
+            "<http://example.org/s> <http://example.org/p> <{}bad> .\n",
+            purrdf_core::RESERVED_NAMESPACE
+        );
+        let error = materialize_to_nquads_string("simple", &document, "").expect_err(
+            "a document carrying a reserved-vocabulary IRI must refuse canonicalization \
+             as a value, not panic",
+        );
+        assert!(error.contains("refused canonicalization"), "{error}");
+    }
+
+    /// The valid neighbour of the refusal above: an ORDINARY object IRI (no
+    /// reserved prefix) in the exact same shape still materializes — the refusal
+    /// above is not an over-refusal of ordinary documents.
+    #[test]
+    fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_materializes() {
+        let document = "<http://example.org/s> <http://example.org/p> <http://example.org/bad> .\n";
+        let closed = materialize_to_nquads_string("simple", document, "")
+            .expect("an ordinary document must still materialize");
+        assert!(closed.nquads().contains("http://example.org/bad"));
+    }
+
     /// An `Import` is I/O, and this boundary performs none — so it says so by name.
     #[test]
     fn a_rif_import_is_refused_with_its_location() {
@@ -5250,6 +5320,17 @@ mod tests {
     /// `A ⊑ C` — asserted nowhere, entailed by the chain.
     const CHAIN_AXIOM: &str = "<http://example.org/A> \
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n";
+
+    /// [`TAXONOMY`], with `B` replaced by a reserved-vocabulary IRI
+    /// ([`purrdf_core::RESERVED_NAMESPACE`]). `A ⊑ B` and `B ⊑ C` still hold, so
+    /// both the `A`-seeded module and [`CHAIN_AXIOM`]'s justification (which needs
+    /// exactly that chain) carry the reserved IRI through to their output dataset.
+    const TAXONOMY_RESERVED: &str = "\
+<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <urn:purrdf:rdfc:B> .
+<urn:purrdf:rdfc:B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/D> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
+<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
+";
 
     /// Every service, as `(name, produced)`, over `document`.
     ///
@@ -5793,6 +5874,27 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         }
     }
 
+    /// The ontology document is wholly caller-supplied, so an extracted module
+    /// carrying a reserved-vocabulary IRI must refuse canonicalization as an
+    /// `Err` VALUE — through [`ReasonerSession::extract_module`]'s
+    /// [`purrdf_core::try_canonicalize_flat_view`] migration — rather than
+    /// panicking through [`purrdf_rdf::canonical_flat_nquads`].
+    #[test]
+    fn extract_module_refuses_a_reserved_vocabulary_module_as_a_value() {
+        let error = extract_module_to_string(TAXONOMY_RESERVED, "<http://example.org/A>\n", "bot")
+            .expect_err("a module carrying a reserved-vocabulary IRI must refuse, not panic");
+        assert!(error.contains("refused canonicalization"), "{error}");
+    }
+
+    /// The valid neighbour of the refusal above: the ORDINARY [`TAXONOMY`] (no
+    /// reserved IRI), same seed and method, still extracts successfully.
+    #[test]
+    fn extract_module_still_admits_the_ordinary_taxonomy() {
+        let extracted = extract_module_to_string(TAXONOMY, "<http://example.org/A>\n", "bot")
+            .expect("an ordinary taxonomy must still extract");
+        assert!(extracted.answer().contains("<http://example.org/A>"));
+    }
+
     /// A justification is minimal AND sufficient, and both halves are RE-DECIDED
     /// here rather than restated from the search that found it.
     #[test]
@@ -5829,6 +5931,28 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         let error = justify_to_string(TAXONOMY, reversed).expect_err("not entailed");
         assert!(error.starts_with("justify: "), "{error}");
         assert!(error.contains("does not entail"), "{error}");
+    }
+
+    /// The ontology document is wholly caller-supplied, so a justification
+    /// carrying a reserved-vocabulary IRI must refuse canonicalization as an
+    /// `Err` VALUE — through [`ReasonerSession::justify`]'s
+    /// [`purrdf_core::try_canonicalize_flat_view`] migration — rather than
+    /// panicking through [`purrdf_rdf::canonical_flat_nquads`].
+    #[test]
+    fn justify_refuses_a_reserved_vocabulary_justification_as_a_value() {
+        let error = justify_to_string(TAXONOMY_RESERVED, CHAIN_AXIOM).expect_err(
+            "a justification carrying a reserved-vocabulary IRI must refuse, not panic",
+        );
+        assert!(error.contains("refused canonicalization"), "{error}");
+    }
+
+    /// The valid neighbour of the refusal above: the ORDINARY [`TAXONOMY`] (no
+    /// reserved IRI), same axiom, still justifies successfully.
+    #[test]
+    fn justify_still_admits_the_ordinary_taxonomy() {
+        let why = justify_to_string(TAXONOMY, CHAIN_AXIOM)
+            .expect("an ordinary taxonomy must still justify");
+        assert_eq!(why.answer().lines().count(), 2, "{}", why.answer());
     }
 
     /// A chase proof RE-DERIVES its conclusion; the certificate reports what the

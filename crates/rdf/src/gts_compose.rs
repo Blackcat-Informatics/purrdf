@@ -1872,6 +1872,9 @@ mod tests {
                 .unwrap();
         let expected =
             crate::RdfDataset::union(&sources.iter().map(AsRef::as_ref).collect::<Vec<_>>());
+        // LAW: `actual`/`expected` are round-tripped from the test's own self-built
+        // `sources` fixture — never caller-supplied and never reachable through a
+        // binding, so the panicking wrapper is sound here.
         assert_eq!(
             crate::canonical_flat_nquads(&actual).unwrap(),
             crate::canonical_flat_nquads(&expected).unwrap(),
