@@ -189,7 +189,7 @@ differs.
 | Base quad spelling an annotation (§3.1's fold shape, sentinel as the quad's own GRAPH) `r p o ⟨urn:purrdf:rdfc:annotation⟩ .` | `r p o .` — the SAME row a native annotation `(r, p, o)` lowers to |
 
 `rdf:reifies` here is the RDF 1.2 vocabulary's OWN reification predicate
-(`http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies`), not a purrdf sentinel — the
+(`http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies`), not a PurRDF sentinel — the
 flat presentation never mints or reads a `urn:purrdf:rdfc:` IRI, and **no reserved
 namespace IRI ever participates in a flat canonical document**. A reifier row is
 written in the graph it was DECLARED in; an annotation row is written in its OWN
