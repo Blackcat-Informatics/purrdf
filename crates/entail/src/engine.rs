@@ -1385,12 +1385,18 @@ fn write_surface(value: &TermValue, out: &mut String) {
 /// surface can carry a bare `<` or `>` — which is what keeps a bracketed IRI and a
 /// `<<( … )>>` triple term apart. A spec `rdf:`/`rdfs:`/`owl:` IRI contains none of them,
 /// so a clause constant's surface is its plain bracketed text.
+///
+/// The membership question is [`purrdf_core::iri_escape::is_iriref_escape_required`],
+/// which is the one place this workspace answers it. This function once spelled the
+/// set out for itself as `is_control() || ' '` plus the nine delimiters — the same
+/// set, reached independently, and one of five such transcriptions. Five agreeing
+/// tables are not five confirmations; they are five chances to disagree later.
 fn write_iri_escaped(iri: &str, out: &mut String) {
     for ch in iri.chars() {
-        match ch {
-            c if c.is_control() || c == ' ' => write_u_escape(c, out),
-            '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => write_u_escape(ch, out),
-            _ => out.push(ch),
+        if purrdf_core::iri_escape::is_iriref_escape_required(ch) {
+            write_u_escape(ch, out);
+        } else {
+            out.push(ch);
         }
     }
 }

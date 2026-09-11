@@ -47,6 +47,10 @@ pretty_assertions = { workspace = true }
 purrdf-rdf = { workspace = true }
 # Acceleration-program baselines; light feature set, see crates/logic.
 criterion = { workspace = true }
+# Tracked range snapshots for the shape-map content class this crate transcribes
+# for itself, so a transcription edit reaches review as a diff. Test-only; see
+# tests/scanner_boundary_sweep.rs.
+insta = { workspace = true }
 
 [[bench]]
 name = "prepared_validate"

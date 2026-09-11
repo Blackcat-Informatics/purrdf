@@ -20,6 +20,46 @@
 //! with no token type at all, so its observable is the parsed map. Checking one
 //! and arguing the other by prose would leave precisely the gap this file is for.
 //!
+//! # What this file is NOT an oracle for
+//!
+//! Read this before citing the sweep as coverage for a **table** change, because
+//! the sweep will not tell you. Every probe's expected answer is read off the
+//! very predicate the scanner consults, and the probe corpus is derived from that
+//! predicate too. So for the six classes this crate does not transcribe — `WS`,
+//! `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS` and the two `VARNAME` positions, all
+//! of them `purrdf_iri::terminals` functions — widening a range by one scalar
+//! moves the corpus, the `admits` answer and the scanner in lockstep, and every
+//! sweep here stays green. That was measured, not assumed: one scalar added to
+//! `PN_CHARS_BASE`'s `[#x2C00-#x2FEF]` left both sweeps passing.
+//!
+//! That is a statement of scope rather than a defect to repair here. A scanner
+//! test carrying its own copy of the tables would be a third transcription of a
+//! production the workspace already owns, which is the very mistake
+//! `purrdf_iri::terminals` exists to end. This file proves the **composition**;
+//! the tables' contents are proved in two other places, and a tightening is
+//! covered only if one of them moved:
+//!
+//! * `purrdf_iri::terminals` itself — an independent `matches!` transcription of
+//!   each class, checked against the range table over all 1,114,112 scalars, plus
+//!   the `terminal!` macro's `cardinality`, `ranges_all_ascii` and
+//!   `ranges_sorted_disjoint` const assertions. This is the primary table oracle.
+//! * `purrdf-sparql-algebra`'s sibling `tests/scanner_boundary_sweep.rs`, whose
+//!   `the_derived_ranges_are_the_snapshotted_ones` renders those same six classes
+//!   into a tracked snapshot, so a table edit reaches review as a range diff.
+//!   That snapshot is deliberately **not** duplicated here — see
+//!   [`UNSHARED_PRODUCTIONS`] for the one class it does not cover and
+//!   [`the_locally_transcribed_ranges_are_the_snapshotted_ones`] for where that
+//!   one is pinned instead.
+//!
+//! The two content classes are the exception, and the difference is worth
+//! understanding rather than levelling away: `[18t] IRIREF` and
+//! `[14t] STRING_LITERAL2` are each spelled **twice** — once by the scanner
+//! (`terminals::is_iriref_forbidden`, and `shapemap.rs`'s own
+//! `is_string_literal_content`) and once, independently, by [`iriref_content`]
+//! and [`string_literal_content`] below. Where the two transcriptions have to
+//! agree scalar for scalar, the sweep *is* a table oracle; where the expectation
+//! delegates to the implementation, it cannot be.
+//!
 //! # Boundary-exhaustive, which is where completeness is possible
 //!
 //! A `format!`-plus-scan call for every scalar, times several productions, times
@@ -59,6 +99,7 @@
 //! vectors carry that reasoning, and the sweep carries the coverage.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
@@ -116,6 +157,21 @@ const PRODUCTIONS: [Production; 8] = [
     ("IRIREF content", iriref_content),
     ("STRING_LITERAL2 content", string_literal_content),
 ];
+
+/// The member of [`PRODUCTIONS`] the query front end's sibling sweep does not
+/// carry, and whose ranges are therefore pinned nowhere else in the workspace.
+///
+/// `[14t] STRING_LITERAL2`'s content class is a shape-map terminal: `shapemap.rs`
+/// scans it with its own `matches!`, and [`string_literal_content`] transcribes
+/// that independently for this file. Nothing outside `purrdf-shex` renders it.
+///
+/// The other seven members of [`PRODUCTIONS`] are excluded on purpose. Each is
+/// the same class the sibling sweep already snapshots — the same six
+/// `purrdf_iri::terminals` functions and the same nine-delimiter `IRIREF`
+/// content rule, run through the same derivation — so re-rendering them would
+/// copy a snapshot rather than add an oracle, and would leave two files to keep
+/// in step for no claim either one does not already make.
+const UNSHARED_PRODUCTIONS: [Production; 1] = [("STRING_LITERAL2 content", string_literal_content)];
 
 /// The subset of [`PRODUCTIONS`] that decides where a NAME stops.
 const NAME_PRODUCTIONS: [Production; 5] = [
@@ -493,6 +549,37 @@ fn shape_map_sweeps() -> Vec<Sweep> {
 }
 
 // ── The three derivations the rest of this rests on ───────────────────────────
+
+/// The ranges of [`UNSHARED_PRODUCTIONS`], snapshotted, so an edit to this
+/// crate's own transcription shows up as a reviewable range diff instead of a
+/// green run.
+///
+/// This is the narrow half of the table oracle described at the top of the file,
+/// and it is narrow deliberately. The sweeps cannot see a table change for the
+/// classes whose expectation delegates to the implementation; for
+/// `[14t] STRING_LITERAL2` they can, because the scanner and this file hold two
+/// separate transcriptions — but that argument protects the *pair*, not either
+/// copy alone. Editing both to agree on a wrong class would keep the sweeps
+/// green, and this is what makes that edit visible.
+///
+/// Rendered from [`UNSHARED_PRODUCTIONS`] rather than from [`PRODUCTIONS`]: see
+/// that constant for why the other seven are the sibling crate's to pin.
+#[test]
+fn the_locally_transcribed_ranges_are_the_snapshotted_ones() {
+    let mut rendered = String::new();
+    for (name, admits) in UNSHARED_PRODUCTIONS {
+        writeln!(rendered, "{name}").expect("writing to a String cannot fail");
+        for (lo, hi) in derived_ranges(admits) {
+            if lo == hi {
+                writeln!(rendered, "  U+{lo:04X}")
+            } else {
+                writeln!(rendered, "  U+{lo:04X}..U+{hi:04X}")
+            }
+            .expect("writing to a String cannot fail");
+        }
+    }
+    insta::assert_snapshot!(rendered);
+}
 
 /// **Derivation one.** U+1680 OGHAM SPACE MARK is the *only* scalar that is both
 /// Unicode `White_Space` and a name character.

@@ -27,6 +27,32 @@
 //! membership test can see. So this file feeds probes through the real scanners
 //! and asserts the resulting token split.
 //!
+//! # What the SWEEPS are not an oracle for, and which test here is
+//!
+//! Read this before citing a sweep as coverage for a **table** change, because
+//! the sweeps will not tell you. Each probe's expected answer is read off the
+//! very predicate the scanner consults, and the probe corpus is derived from that
+//! predicate as well. Widen a `purrdf_iri::terminals` range by one scalar and the
+//! corpus, the `admits` answer and the scanner all move together: every sweep in
+//! this file and in `purrdf-shex`'s sibling stays green. That was measured, not
+//! assumed — one scalar added to `PN_CHARS_BASE`'s `[#x2C00-#x2FEF]` was invisible
+//! to all four sweeps.
+//!
+//! The one test here that does see it is
+//! [`the_derived_ranges_are_the_snapshotted_ones`], which renders the ranges
+//! instead of consuming them, so the same edit lands in review as a range diff.
+//! Treat that snapshot as load-bearing rather than as a curiosity: it is the only
+//! table oracle in either scanner-sweep file, and `purrdf-shex`'s sibling sweep
+//! depends on it for the six classes the two crates share, holding a snapshot of
+//! its own only for the shape-map content class this crate never scans.
+//!
+//! The other, and primary, table oracle is not in a test crate at all:
+//! `purrdf_iri::terminals` proves each class against an independent `matches!`
+//! transcription over all 1,114,112 scalars and pins its shape with the
+//! `terminal!` macro's `cardinality`, `ranges_all_ascii` and
+//! `ranges_sorted_disjoint` const assertions. None of that is duplicated here,
+//! and none of it is what the sweeps below are for.
+//!
 //! # Boundary-exhaustive, which is where completeness is possible
 //!
 //! A `format!`-plus-tokenize call for all 1,114,112 scalars, times several
