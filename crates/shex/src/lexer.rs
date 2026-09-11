@@ -26,9 +26,26 @@
 //! Every token carries its source byte span so the parser can report
 //! [`ShexError::Syntax`] at a precise offset. The lexer never panics: all
 //! malformed input is a typed [`ShexError::Lex`].
+//!
+//! # Where the character classes come from
+//!
+//! Every terminal character class this scanner decides a token boundary with is
+//! [`purrdf_iri::terminals`], not a local transcription and never a Unicode
+//! property. ShExC does not mint its own: the shexSpec grammar tags
+//! `PN_CHARS_BASE`, `PN_CHARS_U` and `PN_CHARS` `[164s]`, `[165s]` and `[167s]`
+//! — the `s` suffix meaning "this production is SPARQL's" — and spells them
+//! character-for-character as SPARQL and Turtle do. So there is one table, and
+//! this crate reads it rather than re-typing it.
+//!
+//! That matters more here than a shared-code argument suggests, because these
+//! classes are what decide where one token STOPS. A class that is one scalar
+//! too wide does not merely accept more documents; it re-tokenizes documents
+//! both spellings accept, with no diagnostic. See the [`terminals`] module
+//! documentation for the worked counterexample.
 
 use std::sync::OnceLock;
 
+use purrdf_iri::terminals;
 use regex::Regex;
 
 use crate::error::{Result, ShexError};
@@ -207,10 +224,44 @@ impl<'a> Lexer<'a> {
     /// `/*` always opens a comment: a REGEXP beginning with a literal `*`
     /// would be ambiguous, and the reference grammar resolves it the same
     /// way (`*` at the start of a pattern is meaningless in XPath regexes).
+    ///
+    /// # The whitespace here is ShExC's four code points, not Unicode's twenty-six
+    ///
+    /// The ShExC grammar carries its own pass-token production —
+    ///
+    /// ```text
+    /// @pass ::= [ \t\r\n]+
+    ///         | "#" [^\r\n]*
+    /// ```
+    ///
+    /// — whose whitespace alternative names exactly `#x20`, `#x9`, `#xD` and
+    /// `#xA`: the same four scalars as the shared `WS` terminal, which is why
+    /// this routes to [`terminals::is_ws`]. [`char::is_whitespace`] answers the
+    /// Unicode `White_Space` property, twenty-six scalars, and using it here was
+    /// wrong in both directions at once:
+    ///
+    /// * **It skipped separators the grammar does not have.** U+00A0 NO-BREAK
+    ///   SPACE and U+3000 IDEOGRAPHIC SPACE are `White_Space` and are not
+    ///   `PN_CHARS` either, so a document using one between two terminals has no
+    ///   reading at all — yet it lexed clean.
+    /// * **It swallowed a name character.** U+1680 OGHAM SPACE MARK is
+    ///   `White_Space` *and* sits inside `PN_CHARS_BASE`'s `[#x37F-#x1FFF]`
+    ///   range, so it is lawfully part of a name. Skipping it at a token
+    ///   boundary split one label into two tokens with no error — the silent
+    ///   re-tokenization, not a refusal.
+    ///
+    /// [`u8::is_ascii_whitespace`] is not the fix either: it admits U+000C FORM
+    /// FEED, which `@pass` does not name.
+    ///
+    /// The production is byte-shaped upstream because a byte test for an
+    /// all-ASCII class is exact over UTF-8; this scanner holds decoded scalars,
+    /// so it narrows first. `u8::try_from` fails above U+00FF, and every
+    /// Latin-1 scalar it does yield — U+00A0 among them — is outside `WS`, so
+    /// no non-ASCII scalar can alias a member.
     fn skip_trivia(&mut self) {
         loop {
             match self.cur() {
-                Some(c) if c.is_whitespace() => self.pos += 1,
+                Some(c) if u8::try_from(c).is_ok_and(terminals::is_ws) => self.pos += 1,
                 Some('#') => {
                     while let Some(c) = self.cur() {
                         self.pos += 1;
@@ -276,7 +327,7 @@ impl<'a> Lexer<'a> {
             '-' => self.single(Token::Minus),
             '$' => self.single(Token::Dollar),
             '&' => self.single(Token::Amp),
-            _ if is_pn_chars_base(c) => Ok(self.lex_word_or_pname()),
+            _ if terminals::is_pn_chars_base(c) => Ok(self.lex_word_or_pname()),
             _ => Err(ShexError::lex(format!("unexpected character {c:?}"), start)),
         }
     }
@@ -450,7 +501,7 @@ impl<'a> Lexer<'a> {
         self.pos += 2; // `_:`
         let first = self
             .cur()
-            .filter(|&c| is_pn_chars_u(c) || c.is_ascii_digit());
+            .filter(|&c| terminals::is_pn_chars_u(c) || c.is_ascii_digit());
         let Some(first) = first else {
             return Err(ShexError::lex("malformed blank node label", start));
         };
@@ -463,7 +514,7 @@ impl<'a> Lexer<'a> {
                 label.push(c);
                 trailing_dots += 1;
                 self.pos += 1;
-            } else if is_pn_chars(c) {
+            } else if terminals::is_pn_chars(c) {
                 label.push(c);
                 trailing_dots = 0;
                 self.pos += 1;
@@ -549,7 +600,7 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 CodeName::PName(String::new(), self.lex_pn_local())
             }
-            Some(c) if is_pn_chars_base(c) => match self.lex_word_or_pname() {
+            Some(c) if terminals::is_pn_chars_base(c) => match self.lex_word_or_pname() {
                 Token::PName(p, l) => CodeName::PName(p, l),
                 _ => {
                     return Err(ShexError::lex("expected IRI after '%'", start));
@@ -776,7 +827,7 @@ impl<'a> Lexer<'a> {
                 out.push(c);
                 trailing_dots += 1;
                 self.pos += 1;
-            } else if is_pn_chars(c) {
+            } else if terminals::is_pn_chars(c) {
                 out.push(c);
                 trailing_dots = 0;
                 self.pos += 1;
@@ -834,8 +885,8 @@ impl<'a> Lexer<'a> {
                     trailing_dots = 0;
                     self.pos += 1;
                 }
-                _ if (first && (is_pn_chars_u(c) || c.is_ascii_digit()))
-                    || (!first && is_pn_chars(c)) =>
+                _ if (first && (terminals::is_pn_chars_u(c) || c.is_ascii_digit()))
+                    || (!first && terminals::is_pn_chars(c)) =>
                 {
                     out.push(c);
                     trailing_dots = 0;
@@ -877,37 +928,6 @@ const fn is_pn_local_esc(c: char) -> bool {
             | '@'
             | '%'
     )
-}
-
-/// `PN_CHARS_BASE` per the ShExC terminal grammar (shared with Turtle/SPARQL).
-const fn is_pn_chars_base(c: char) -> bool {
-    matches!(c,
-        'A'..='Z'
-        | 'a'..='z'
-        | '\u{C0}'..='\u{D6}'
-        | '\u{D8}'..='\u{F6}'
-        | '\u{F8}'..='\u{2FF}'
-        | '\u{370}'..='\u{37D}'
-        | '\u{37F}'..='\u{1FFF}'
-        | '\u{200C}'..='\u{200D}'
-        | '\u{2070}'..='\u{218F}'
-        | '\u{2C00}'..='\u{2FEF}'
-        | '\u{3001}'..='\u{D7FF}'
-        | '\u{F900}'..='\u{FDCF}'
-        | '\u{FDF0}'..='\u{FFFD}'
-        | '\u{10000}'..='\u{EFFFF}')
-}
-
-/// `PN_CHARS_U ::= PN_CHARS_BASE | '_'`
-const fn is_pn_chars_u(c: char) -> bool {
-    is_pn_chars_base(c) || c == '_'
-}
-
-/// `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x36F] | [#x203F-#x2040]`
-const fn is_pn_chars(c: char) -> bool {
-    is_pn_chars_u(c)
-        || c.is_ascii_digit()
-        || matches!(c, '-' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
 }
 
 #[cfg(test)]

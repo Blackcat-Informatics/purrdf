@@ -63,9 +63,47 @@
 //! relative `IRIREF` is live in the grammar, and the base half of the resolution
 //! context has a caller-supplied source (RFC-3986 §5.1.2). A prefixed name is a
 //! disabled production whose environment the spec declined to define.
+//!
+//! # ShapeMap's terminals are ShapeMap's own, and it has a whitespace production
+//!
+//! This scanner is not the ShExC lexer and must not borrow its classes by
+//! association. The ShapeMap grammar publishes its own terminals section, and it
+//! answers both questions a scanner has to ask, for itself:
+//!
+//! * **Whitespace.** ShapeMap does define one. Its terminals section names the
+//!   skippable text directly — *"The PASSED TOKENS below may appear between any
+//!   terminals or literal strings which appear in the grammar above"* — and
+//!   spells it
+//!
+//!   ```text
+//!   PASSED TOKENS ::= [ \t\r\n]+ | "#" [^\r\n]*
+//!   ```
+//!
+//!   The whitespace alternative enumerates exactly `#x20`, `#x9`, `#xD` and
+//!   `#xA`. Those are the same four scalars as the `WS` terminal
+//!   [`terminals::is_ws`] transcribes, so routing there is not an assumption
+//!   that ShapeMap inherits Turtle's `WS` — it is two grammars independently
+//!   naming one set. (PurRDF implements only the whitespace alternative; the
+//!   `"#" [^\r\n]*` comment alternative is not accepted here, and never was.)
+//!
+//! * **Name characters.** The terminals are tagged with the grammar they come
+//!   from — *"Production numbers followed by a letter correspond to productions
+//!   in other grammars: t: RDF 1.1 Turtle, s: SPARQL 1.1, x: ShEx 2"* — and
+//!   `[164s] PN_CHARS_BASE`, `[165s] PN_CHARS_U` and `[167s] PN_CHARS` carry the
+//!   `s`, so they are SPARQL's productions, quoted verbatim into this grammar.
+//!   That is the citation for reading them from [`terminals`], and it is a
+//!   citation to ShapeMap's own document.
+//!
+//! A Unicode property is never the answer to either. `char::is_whitespace` is
+//! twenty-six scalars where `PASSED TOKENS` names four, and `char::is_alphanumeric`
+//! both admits scalars `PN_CHARS` excludes (U+00AA, U+00B2, U+2460) and excludes
+//! scalars `PN_CHARS` admits (every combining mark in `[#x300-#x36F]` — which is
+//! what an NFD-decomposed `é` is made of). Because a scanner's classes decide
+//! where a token STOPS, either direction re-tokenizes silently rather than
+//! erroring; see [`terminals`] for the worked counterexample.
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
-use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, terminals};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
@@ -327,6 +365,30 @@ fn term_key(value: &TermValue) -> String {
 
 // ── the parser ────────────────────────────────────────────────────────────────
 
+/// `[145s] LANGTAG ::= "@" ([a-zA-Z])+ ("-" ([a-zA-Z0-9])+)*`, on the body after
+/// the `@`.
+///
+/// **This one is deliberately NOT a `PN_CHARS` run and not a Unicode property.**
+/// `LANGTAG` is the one terminal in the ShapeMap grammar that enumerates plain
+/// ASCII letters and digits, and it is position-dependent besides: the primary
+/// subtag is letters only, every later subtag is letters or digits, and neither
+/// may be empty. Answering it with `char::is_alphanumeric` was wrong twice over —
+/// it admitted `"x"@日本語`, which the production does not name at all, and it
+/// treated the structure as a flat character run, so `"x"@en-` and `"x"@1ab` were
+/// accepted as language tags they are not.
+///
+/// Every real tag still passes, which is the point: `en`, `en-UK`, `zh-Hans`,
+/// `de-CH-1901`, `x-private` and the grandfathered `i-klingon` all begin with an
+/// alphabetic subtag and continue with alphanumeric ones.
+fn is_langtag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    let primary = subtags.next().unwrap_or_default();
+    if primary.is_empty() || !primary.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return false;
+    }
+    subtags.all(|sub| !sub.is_empty() && sub.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
 struct MapParser {
     chars: Vec<char>,
     pos: usize,
@@ -491,11 +553,35 @@ impl MapParser {
     ///
     /// `_:label` is deliberately NOT one: that is `BLANK_NODE_LABEL`, which the grammar
     /// does admit wherever a term is allowed, so it must keep reaching [`Self::parse_blank`].
+    ///
+    /// # Which productions bound the two runs
+    ///
+    /// The name halves are scanned with the productions ShapeMap's terminals section
+    /// keeps defined for them even though their only consumer is commented out —
+    /// `[168s] PN_PREFIX ::= PN_CHARS_BASE ((PN_CHARS | ".")* PN_CHARS)?` before the
+    /// colon and `[169s] PN_LOCAL ::= (PN_CHARS_U | ":" | [0-9] | PLX) ((PN_CHARS |
+    /// "." | ":" | PLX)* (PN_CHARS | ":" | PLX))?` after it. Both bound a run of
+    /// `[167s] PN_CHARS` plus `'.'`, and the local half additionally admits the `'%'`
+    /// that opens `[171s] PERCENT ::= "%" HEX HEX` (via `[170s] PLX`). The trailing
+    /// `'.'` is trimmed because neither production may end on one.
+    ///
+    /// `char::is_alphanumeric` stood here and was wrong on both edges: it admits
+    /// U+00AA and U+2460, which `PN_CHARS` does not, and refuses every combining mark
+    /// in `[#x300-#x36F]`, which `PN_CHARS` does — so an NFD-spelled `ex:café` was
+    /// quoted back at the author as `ex:cafe`, naming a different IRI than the one
+    /// being refused.
+    ///
+    /// This run decides what a REJECTION QUOTES, not what the parser accepts: nothing
+    /// is consumed, and every position that calls it has already established that a
+    /// conforming term cannot start here (a conforming one starts `<`, `_:` or `"`, or
+    /// is the bare keyword the caller checks next). Getting the class right therefore
+    /// cannot widen or narrow the accepted language — it decides only whether the
+    /// diagnostic names the input the author actually wrote.
     fn peek_prefixed_name(&self) -> Option<String> {
         let mut at = self.pos;
         let mut name = String::new();
         while let Some(&c) = self.chars.get(at) {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
+            if terminals::is_pn_chars(c) || c == '.' {
                 name.push(c);
                 at += 1;
             } else {
@@ -509,7 +595,7 @@ impl MapParser {
         name.push(':');
         at += 1;
         while let Some(&c) = self.chars.get(at) {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '%') {
+            if terminals::is_pn_chars(c) || matches!(c, '.' | '%') {
                 name.push(c);
                 at += 1;
             } else {
@@ -573,6 +659,15 @@ impl MapParser {
         }
     }
 
+    /// `[142s] BLANK_NODE_LABEL ::= "_:" (PN_CHARS_U | [0-9]) ((PN_CHARS | ".")* PN_CHARS)?`
+    ///
+    /// The label body is therefore a run of `[167s] PN_CHARS` plus `'.'`, which is why
+    /// it is [`terminals::is_pn_chars`] and not a Unicode letter property. The two
+    /// differ in both directions and each direction moves the boundary: U+0301
+    /// COMBINING ACUTE is `PN_CHARS` and is not alphanumeric, so `_:café` spelled NFD
+    /// used to end the label at `caf` and then fail on a `́` that had nowhere to go;
+    /// U+2460 CIRCLED DIGIT ONE is alphanumeric and is not `PN_CHARS`, so it used to
+    /// be absorbed into a label the grammar says stops before it.
     fn parse_blank(&mut self) -> Result<TermValue> {
         // '_' ':' NAME
         self.pos += 1;
@@ -582,7 +677,7 @@ impl MapParser {
         self.pos += 1;
         let mut label = String::new();
         while let Some(c) = self.peek() {
-            if c.is_alphanumeric() || c == '_' || c == '-' || c == '.' {
+            if terminals::is_pn_chars(c) || c == '.' {
                 label.push(c);
                 self.pos += 1;
             } else {
@@ -624,15 +719,17 @@ impl MapParser {
             self.pos += 1;
             let mut tag = String::new();
             while let Some(c) = self.peek() {
-                if c.is_alphanumeric() || c == '-' {
+                if c.is_ascii_alphanumeric() || c == '-' {
                     tag.push(c);
                     self.pos += 1;
                 } else {
                     break;
                 }
             }
-            if tag.is_empty() {
-                return Err(self.err("empty language tag"));
+            if !is_langtag(&tag) {
+                return Err(
+                    self.err("expected a language tag: LANGTAG is [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*")
+                );
             }
             Ok(TermValue::lang_literal(lexical, &tag))
         } else {
@@ -699,9 +796,25 @@ impl MapParser {
         self.pos >= self.chars.len()
     }
 
+    /// Skip the whitespace alternative of ShapeMap's own
+    /// `PASSED TOKENS ::= [ \t\r\n]+ | "#" [^\r\n]*`.
+    ///
+    /// Four scalars — `#x20`, `#x9`, `#xD`, `#xA` — which is the set
+    /// [`terminals::is_ws`] transcribes; see the [module documentation](self) for
+    /// why that is ShapeMap's own citation rather than a loan from ShExC.
+    ///
+    /// `char::is_whitespace` stood here, and the twenty-two extra scalars it skipped
+    /// are not separators in this grammar: U+00A0 NO-BREAK SPACE and U+3000
+    /// IDEOGRAPHIC SPACE between two terminals gave a document no reading at all, yet
+    /// it parsed. `u8::is_ascii_whitespace` is not the correction either — it admits
+    /// U+000C FORM FEED, which `PASSED TOKENS` does not name.
+    ///
+    /// The narrowing to a byte is exact rather than a guess: `u8::try_from` fails
+    /// above U+00FF, and every Latin-1 scalar it does yield (U+00A0 the one that
+    /// matters) is outside `WS`, so nothing non-ASCII can alias a member.
     fn skip_ws(&mut self) {
         while let Some(c) = self.peek() {
-            if c.is_whitespace() {
+            if u8::try_from(c).is_ok_and(terminals::is_ws) {
                 self.pos += 1;
             } else {
                 break;
@@ -718,8 +831,39 @@ impl MapParser {
         }
     }
 
-    /// Consume `kw` when it appears as a whole token (not followed by a
-    /// name character), returning whether it matched.
+    /// Consume `kw` when it appears as a whole token, returning whether it matched.
+    ///
+    /// # What decides the follow boundary — and what does not
+    ///
+    /// `'a'`, `"FOCUS"` and `"START"` are literal strings inside productions
+    /// `[4] subjectTerm`, `[6] triplePattern` and `[7] shapeLabel`, matched under the
+    /// rule the terminals section states: *"Text is matched against the longest
+    /// matching terminal."* So the question a keyword's right edge asks is not "is the
+    /// next character a letter?" — a property of one scalar — but "could a LONGER
+    /// terminal have started here?", which only the grammar can answer.
+    ///
+    /// The only terminal in this family built from a run of name characters is a
+    /// Turtle-style name: `[168s] PN_PREFIX` and `[169s] PN_LOCAL`, which ShapeMap
+    /// keeps defined (their consumer, `prefixedName`, is commented out of
+    /// `[136s] iri` — see the [module documentation](self)). Both are runs of
+    /// `[167s] PN_CHARS`, so `PN_CHARS` is exactly the class a keyword must not be
+    /// carved out of the middle of, and [`terminals::is_pn_chars`] is what decides it.
+    /// `START:S1` is one such name, and the callers check
+    /// [`Self::peek_prefixed_name`] BEFORE reaching here so it is refused by name.
+    ///
+    /// **Everything else is a boundary, and refusing those would be the mirror bug.**
+    /// The grammar's own follow sets are punctuation and end-of-input: `','` ends a
+    /// `shapeAssociation` in `[1] shapeMap`, `'}'` closes `[6] triplePattern`, and
+    /// `'<'` opens the `[18t] IRIREF` that `[136s] iri` is. None is `PN_CHARS`, so
+    /// `@START,`, `{_ <p> FOCUS}`, `{FOCUS<p> _}` and `@START` at end-of-input all
+    /// still take the keyword — a "keyword must be followed by whitespace" rule would
+    /// reject every one of them.
+    ///
+    /// `char::is_alphanumeric() || '_'` stood here. It never rejected a conforming
+    /// document, because no conforming follow character is alphanumeric — but it was
+    /// the wrong question asked of the wrong set, and it disagreed with `PN_CHARS` in
+    /// both directions (U+2460 is alphanumeric and not a name character; every
+    /// combining mark in `[#x300-#x36F]` is a name character and not alphanumeric).
     fn take_keyword(&mut self, kw: &str) -> bool {
         let end = self.pos + kw.chars().count();
         if end > self.chars.len() {
@@ -729,7 +873,7 @@ impl MapParser {
             return false;
         }
         if let Some(next) = self.chars.get(end)
-            && (next.is_alphanumeric() || *next == '_')
+            && terminals::is_pn_chars(*next)
         {
             return false;
         }
