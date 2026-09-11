@@ -294,6 +294,9 @@ fn differential_blank_coreference_across_graphs() {
 /// label-keyed (rather than scope-keyed) canonicalizer would silently conflate.
 #[test]
 fn differential_blank_label_collision_across_scopes() {
+    /// A fresh dataset with one blank labelled `"n"` in its own scope — building
+    /// two of these with different `local_p` predicates and unioning them is how
+    /// this test produces two DIFFERENT blanks sharing one label across scopes.
     fn one_labeled(local_p: &str) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let n = b.intern_blank("n", BlankScope::DEFAULT);

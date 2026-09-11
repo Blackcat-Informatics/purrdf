@@ -126,14 +126,23 @@ struct FailAfterSealProvider {
 }
 
 impl PageProvider for FailAfterSealProvider {
+    /// A single-page provider: exactly one page id is ever valid to request.
     fn page_count(&self) -> usize {
         1
     }
 
+    /// Fixed for the provider's lifetime — a provider never ages its own
+    /// generation mid-run, only a new seal does.
     fn generation(&self) -> PageGeneration {
         PageGeneration(7)
     }
 
+    /// Succeeds exactly once, then faults on every later call: the FIRST
+    /// materialization hands back the real page, and every subsequent one
+    /// (a re-fetch after the page has already been sealed and cached) is a
+    /// cancellation — exercising the "the view was ready when sealed, but the
+    /// provider it is backed by breaks afterward" boundary rather than an
+    /// always-broken provider.
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
         let call = self.calls.fetch_add(1, Ordering::Relaxed);
         if call == 0 {
@@ -427,14 +436,23 @@ struct SucceedsThenFaultsSecondPageProvider {
 }
 
 impl PageProvider for SucceedsThenFaultsSecondPageProvider {
+    /// Exactly two pages: page 0 always materializes, page 1 only once (the
+    /// seal pass) — see [`materialize`](Self::materialize).
     fn page_count(&self) -> usize {
         2
     }
 
+    /// Fixed for the provider's lifetime, matching
+    /// [`FailAfterSealProvider::generation`].
     fn generation(&self) -> PageGeneration {
         PageGeneration(41)
     }
 
+    /// Page 0 always succeeds; page 1 succeeds exactly once — the seal pass
+    /// [`PagedDataset::from_provider`] must complete before this scenario
+    /// exists — and faults on every call after that, so a query-time read
+    /// that reaches page 1 always observes the fault. Any other page id is
+    /// unreachable because [`page_count`](Self::page_count) names exactly two.
     fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
         match page.0 {
             0 => Ok(PageMaterialization::new(

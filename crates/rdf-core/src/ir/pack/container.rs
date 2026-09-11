@@ -231,6 +231,9 @@ impl std::fmt::Display for PackCheckpoint {
 /// public surface while sharing the underlying two-sample law with every other
 /// [`crate::FallibleDatasetView`] consumer.
 impl From<DrainCheckpoint> for PackCheckpoint {
+    /// Preserve which checkpoint fired: `Before` and `After` carry the same
+    /// two-sample meaning as [`DrainCheckpoint`], only spelled in pack's own
+    /// public vocabulary.
     fn from(checkpoint: DrainCheckpoint) -> Self {
         match checkpoint {
             DrainCheckpoint::Before => Self::BeforeRows,

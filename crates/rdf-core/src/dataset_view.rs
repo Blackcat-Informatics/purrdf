@@ -1114,6 +1114,9 @@ mod tests {
     struct ProbeFault(&'static str);
 
     impl std::fmt::Display for ProbeFault {
+        /// Render the fault message verbatim — `ProbeFault` exists only to be
+        /// printed inside a [`DrainFailure`], so there is no format to preserve
+        /// beyond the message itself.
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str(self.0)
         }
@@ -1147,6 +1150,9 @@ mod tests {
             }
         }
 
+        /// Flip the status latch to `Failed` — the test's OWN trigger, called
+        /// from the `drain` closure `checkpointed_drain` invokes, standing in
+        /// for a real view that broke partway through its own read.
         fn fault_now(&self) {
             self.status.set(1);
         }
@@ -1198,6 +1204,10 @@ mod tests {
         type Error = ProbeFault;
         type Evidence = u32;
 
+        /// Report the latch's current value verbatim: `Ready` until
+        /// [`fault_now`](ProbeView::fault_now) has been called, `Failed`
+        /// thereafter — the whole point of `ProbeView` is that this is the
+        /// ONLY thing that determines the status a checkpoint observes.
         fn operation_status(&self) -> ViewOperationStatus<ProbeFault, u32> {
             if self.status.get() == 0 {
                 ViewOperationStatus::Ready { evidence: 0 }

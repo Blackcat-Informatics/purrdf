@@ -2027,6 +2027,10 @@ pub enum ViewCanonError<E, Ev> {
 }
 
 impl<E: std::fmt::Display, Ev: std::fmt::Debug> std::fmt::Display for ViewCanonError<E, Ev> {
+    /// Name which of the two refusal kinds fired: `NotReady` reports the
+    /// checkpoint and the view's own error/evidence verbatim, `Refused`
+    /// defers to [`CanonError`]'s own rendering — the two are never
+    /// conflated into one generic message.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotReady {
@@ -2046,6 +2050,10 @@ impl<E: std::fmt::Display, Ev: std::fmt::Debug> std::fmt::Display for ViewCanonE
 impl<E: std::error::Error + 'static, Ev: std::fmt::Debug> std::error::Error
     for ViewCanonError<E, Ev>
 {
+    /// Both variants chain to a real underlying error — `NotReady` to the
+    /// view's own typed fault, `Refused` to the wrapped [`CanonError`] — so a
+    /// caller walking the standard `source()` chain never bottoms out early
+    /// on this wrapper.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NotReady { error, .. } => Some(error),
@@ -2055,6 +2063,10 @@ impl<E: std::error::Error + 'static, Ev: std::fmt::Debug> std::error::Error
 }
 
 impl<E, Ev> From<DrainFailure<E, Ev>> for ViewCanonError<E, Ev> {
+    /// A [`DrainFailure`] is always a not-ready-view refusal, never an
+    /// input refusal — the conversion is total and loses nothing: the
+    /// checkpoint, error, and evidence all carry straight through into
+    /// [`ViewCanonError::NotReady`].
     fn from(failure: DrainFailure<E, Ev>) -> Self {
         Self::NotReady {
             checkpoint: failure.checkpoint,
@@ -2135,6 +2147,11 @@ fn reserved_vocabulary<D: DatasetView>(
 }
 
 impl<'a, D: DatasetView> CanonState<'a, D> {
+    /// Seed canonicalization state for `scope`: every blank the scope's
+    /// components reach is recorded once (via `seen`, per component) with its
+    /// full incidence list, `canonical` starts a fresh [`CANON_PREFIX`]
+    /// issuer, and `budget` starts at [`RDFC_CALL_LIMIT`] — the n-degree
+    /// budget this run may spend before [`try_canonicalize_view`] refuses it.
     fn new(
         ds: &'a D,
         scope: CanonScope<D::Id>,
@@ -4071,9 +4088,15 @@ mod tests {
     /// arms handle separately.
     #[test]
     fn the_flat_dedup_law_emits_a_doubly_spelled_row_exactly_once() {
+        /// The real `rdf:reifies` predicate IRI, interned fresh — used here to spell
+        /// the same reifier row a second way (real predicate, not sentinel) so the
+        /// test can assert the dedup law folds both spellings into one component.
         fn reifies_iri(b: &mut RdfDatasetBuilder) -> TermId {
             b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies")
         }
+        /// How many distinct components the flat presentation emits for `ds` — a raw
+        /// [`collect_components`] walk at the id level, counting every callback
+        /// invocation rather than rendering and deduplicating text.
         fn component_count(ds: &RdfDataset) -> usize {
             let mut n = 0;
             collect_components(
@@ -4550,6 +4573,10 @@ mod tests {
             "native + sentinel-spelled + real-predicate must still yield exactly one row"
         );
 
+        /// How many distinct components the flat presentation emits for `ds` — the
+        /// same raw, id-level [`collect_components`] count used by the sibling test
+        /// above, reproduced locally because this test's scope is a separate `#[test]`
+        /// function.
         fn component_count(ds: &RdfDataset) -> usize {
             let mut n = 0;
             collect_components(
@@ -4860,6 +4887,9 @@ mod tests {
     struct FlatProbeFault(&'static str);
 
     impl std::fmt::Display for FlatProbeFault {
+        /// Render the fault message verbatim — the same trivial rendering
+        /// `dataset_view::tests::ProbeFault` uses, kept in lock-step because
+        /// both exist only to be printed inside a [`ViewCanonError`].
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str(self.0)
         }
@@ -4904,6 +4934,9 @@ mod tests {
             }
         }
 
+        /// Flip the fault latch: called from every row-reading accessor below, never
+        /// from a lookup accessor, so `faulted_by_read` records "some row stream was
+        /// touched" rather than "the view was touched at all".
         fn mark_read(&self) {
             self.faulted_by_read.set(true);
         }
@@ -4913,30 +4946,48 @@ mod tests {
         type Id = TermId;
         type ProbePlan = ();
 
+        /// A row-reading accessor: trips [`mark_read`](Self::mark_read) before
+        /// delegating, so a run that only calls this still faults on its second
+        /// checkpoint.
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
             self.mark_read();
             self.inner.quads()
         }
 
+        /// A row-reading accessor: trips [`mark_read`](Self::mark_read) before
+        /// delegating, same as [`quads`](Self::quads).
         fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
             self.mark_read();
             DatasetView::quad_refs(&*self.inner)
         }
 
+        /// A point lookup, not a row stream — deliberately does NOT trip
+        /// [`mark_read`](Self::mark_read), so a run that only resolves ids the drain
+        /// closure already holds never manufactures a fault it didn't earn.
         fn resolve(&self, id: TermId) -> TermRef<'_> {
             self.inner.resolve(id)
         }
 
+        /// A point lookup; does not trip [`mark_read`](Self::mark_read), matching
+        /// [`resolve`](Self::resolve).
         fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
             self.inner.term_id_by_value(value)
         }
 
+        /// A point lookup; does not trip [`mark_read`](Self::mark_read).
         fn capabilities(&self) -> RdfStoreCapabilities {
             self.inner.capabilities()
         }
 
+        /// No plan differentiation to offer: this probe's `ProbePlan` is `()`, so
+        /// every call is a no-op regardless of which slots are bound.
         fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
 
+        /// Ignores the (unit) plan and falls back to the unindexed
+        /// [`quads_for_pattern`](DatasetView::quads_for_pattern) default, which itself
+        /// reads through [`quads`](Self::quads) — so this still participates in the
+        /// fault-on-read contract without tripping [`mark_read`](Self::mark_read)
+        /// twice.
         fn quads_for_pattern_with_plan(
             &self,
             _plan: &(),
@@ -4948,15 +4999,21 @@ mod tests {
             self.quads_for_pattern(s, p, o, g)
         }
 
+        /// A point lookup; does not trip [`mark_read`](Self::mark_read).
         fn term_count(&self) -> usize {
             self.inner.term_count()
         }
 
+        /// A row-reading accessor: trips [`mark_read`](Self::mark_read), matching
+        /// [`quads`](Self::quads) — the flat presentation's reifier sweep must be able
+        /// to fault a run exactly like its base-quad sweep does.
         fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
             self.mark_read();
             self.inner.reifier_quads()
         }
 
+        /// A row-reading accessor: trips [`mark_read`](Self::mark_read), matching
+        /// [`reifier_quads`](Self::reifier_quads).
         fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
             self.mark_read();
             self.inner.annotation_quads()
@@ -4967,6 +5024,10 @@ mod tests {
         type Error = FlatProbeFault;
         type Evidence = u32;
 
+        /// `Failed` iff EITHER control says so: `pre_faulted` (broken since
+        /// construction) or `faulted_by_read` (broken by a row-reading accessor
+        /// during this run) — the two controls are independent inputs to one
+        /// observable status, never checked separately by a caller.
         fn operation_status(&self) -> ViewOperationStatus<FlatProbeFault, u32> {
             if self.pre_faulted || self.faulted_by_read.get() {
                 ViewOperationStatus::Failed {

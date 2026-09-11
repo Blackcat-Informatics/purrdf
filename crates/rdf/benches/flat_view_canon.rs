@@ -190,6 +190,10 @@ fn borrowed_route<D: FallibleDatasetView>(view: &D, hash: CanonHash) -> Canonica
     try_canonicalize_flat_view(view, hash).expect("the view admits under the flat presentation")
 }
 
+/// Register every owned-vs-borrowed comparison group. Each shape's pair is
+/// asserted byte-identical BEFORE it is timed (see the parity block below), so
+/// a reported timing difference is never mistaken for two routes silently
+/// disagreeing on the answer.
 fn benches(c: &mut Criterion) {
     let hash = CanonHash::Sha256;
 
