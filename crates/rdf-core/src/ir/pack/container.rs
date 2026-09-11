@@ -63,11 +63,22 @@
 //!
 //! # Determinism
 //!
-//! [`PackBuilder::build_bytes`] is a pure function of `dataset`'s VALUE content
+//! [`PackBuilder::build_bytes`] is a pure function of the source's VALUE content
 //! (no hash-iteration order, no wall-clock, no RNG reaches the output — see the
 //! byte-determinism discipline each of [`super::dict`]/[`super::triples`]/
 //! [`super::side`] already upholds and this module inherits by construction):
 //! two calls on the same dataset produce byte-identical output.
+//!
+//! # One encoder, flat or shared
+//!
+//! [`PackBuilder::build_view_bytes`] writes this same format from any
+//! [`crate::FallibleDatasetView`], and [`PackBuilder::build_bytes`] is a
+//! DELEGATION to it through the frozen dataset's own view impl. There is no
+//! second encoder and no fallback path, so flat/view byte parity is structural:
+//! a composite, a delta or a graph selection holding the content a flat dataset
+//! holds writes the flat dataset's bytes, because it runs the flat dataset's
+//! code. View-local ids never reach the output — every term is resolved to its
+//! value and the unified id space is re-derived from canonical value order.
 //!
 //! # Verification on open
 //!
@@ -82,7 +93,9 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities, try_canonicalize_with};
+use crate::dataset_view::{DatasetView, FallibleDatasetView, ViewOperationStatus};
+use crate::ir::canon::try_canonicalize_view;
+use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities};
 
 use super::dict::{PackDict, PackDictError};
 use super::side::{self, PackSideError, SideTables, SideTablesRef};
@@ -188,6 +201,31 @@ fn flags_to_capabilities(flags: u32) -> RdfStoreCapabilities {
 // Errors
 // ---------------------------------------------------------------------------
 
+/// Which of [`PackBuilder::build_view_bytes`]'s two operational checkpoints
+/// observed a source view's failure.
+///
+/// The distinction is not cosmetic. A view that faults mid-read STOPS YIELDING
+/// rather than erroring, so `BeforeRows` says the view was already broken when
+/// the encoder arrived, while `AfterRows` says the row stream this pack would
+/// have described was truncated underneath it — a pack framed over that
+/// truncation would carry a canonical-identity digest its source never had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackCheckpoint {
+    /// Sampled before a single row was drained.
+    BeforeRows,
+    /// Sampled after every row was drained and the identity digest taken.
+    AfterRows,
+}
+
+impl std::fmt::Display for PackCheckpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BeforeRows => "before rows",
+            Self::AfterRows => "after rows",
+        })
+    }
+}
+
 /// Why building or opening a pack container failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -235,6 +273,20 @@ pub enum PackError {
         /// contents.
         computed: [u8; 32],
     },
+    /// The source [`crate::FallibleDatasetView`] handed to
+    /// [`PackBuilder::build_view_bytes`] reported an operational failure at one of
+    /// the two checkpoints that method samples, so no bytes were produced.
+    ///
+    /// Distinct from every other variant here: nothing is wrong with the FORMAT.
+    /// The container never got a complete reading of its source, and a pack is a
+    /// claim about a dataset's whole content — publishing one over a partial read
+    /// would be the silent truncation this variant exists to refuse.
+    ViewNotReady {
+        /// Which checkpoint observed the failure.
+        checkpoint: PackCheckpoint,
+        /// The view's own typed root cause, rendered through its `Display`.
+        cause: String,
+    },
     /// The DICT section failed to decode.
     Dict(PackDictError),
     /// The TRIPLES section failed to decode.
@@ -267,6 +319,10 @@ impl std::fmt::Display for PackError {
                     hex32(computed)
                 )
             }
+            Self::ViewNotReady { checkpoint, cause } => write!(
+                f,
+                "pack-container: source view not ready {checkpoint}: {cause}"
+            ),
             Self::Dict(e) => write!(f, "pack-container: dict section: {e}"),
             Self::Triples(e) => write!(f, "pack-container: triples section: {e}"),
             Self::Side(e) => write!(f, "pack-container: side section: {e}"),
@@ -286,6 +342,9 @@ impl std::error::Error for PackError {
     /// The rest return `None` because they are container-level facts with nothing
     /// beneath them: a bad magic, a truncation, an unsupported version, a digest that
     /// did not match, or a canonicalization budget spent are each complete as stated.
+    /// [`Self::ViewNotReady`] joins them because the source view's root cause is a
+    /// caller-supplied associated type this enum cannot name; it is rendered into
+    /// `cause` at the boundary instead, so nothing about it is lost.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Dict(inner) => Some(inner),
@@ -296,6 +355,7 @@ impl std::error::Error for PackError {
             | Self::Truncated
             | Self::Malformed(_)
             | Self::SectionDigestMismatch { .. }
+            | Self::ViewNotReady { .. }
             | Self::RdfcDigestMismatch { .. } => None,
             Self::CanonRefused(inner) => Some(inner),
         }
@@ -385,8 +445,9 @@ fn hex32(digest: &[u8; 32]) -> String {
 // ---------------------------------------------------------------------------
 
 /// The offline factory writer: assembles a self-contained, byte-deterministic
-/// pack file from an [`RdfDataset`]. See the [module docs](self) for the exact
-/// on-disk layout.
+/// pack file from an [`RdfDataset`] or from any shared
+/// [`FallibleDatasetView`] over the same content. See the [module docs](self) for
+/// the exact on-disk layout and the one-encoder guarantee the two share.
 #[derive(Debug, Clone, Copy)]
 pub struct PackBuilder;
 
@@ -399,6 +460,10 @@ impl PackBuilder {
     /// Deterministic: byte-identical output for the same dataset across calls
     /// (no hash-iteration order, wall-clock, or RNG reaches the output).
     ///
+    /// A delegation to [`build_view_bytes`](Self::build_view_bytes) through the
+    /// frozen dataset's own view impl, so this and the shared-view surface are one
+    /// encoder by construction rather than by agreement.
+    ///
     /// # Errors
     ///
     /// [`PackError::CanonRefused`] if canonicalization refuses the dataset — its
@@ -409,32 +474,58 @@ impl PackBuilder {
     /// sections fails to re-open — a broken-invariant bug in this module or
     /// an upstream submodule, not a data-dependent error.
     pub fn build_bytes(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
-        let encoded_dict = PackDict::encode(dataset);
-        let dict_bytes = encoded_dict.to_bytes();
-        let n_terms = encoded_dict.n_terms();
-        let dict = PackDict::open(&dict_bytes)?;
+        // ONE ENCODER. The frozen dataset IS a `FallibleDatasetView` whose status
+        // is `Ready` by construction, so the flat surface is a delegation through
+        // the very core the view surface runs — not a second definition of "write
+        // a pack". Flat/view byte parity is structural rather than tested into
+        // existence, and neither checkpoint can refuse an infallible source.
+        Self::build_view_bytes(dataset)
+    }
 
-        let triples_bytes = Triples::encode(&dict, dataset).to_bytes();
-        let triples_ref = TriplesRef::from_bytes(&triples_bytes)?;
-
-        let side_bytes = SideTables::encode(&dict, dataset).to_bytes();
-        let side_ref = SideTablesRef::from_bytes(&side_bytes)?;
-
-        let base_named_graphs = triples_ref.named_graph_ids().next().is_some();
-        let capabilities = side::capabilities(&dict, &side_ref, base_named_graphs);
-
-        let canonicalized =
-            try_canonicalize_with(dataset, CanonHash::Sha256).map_err(PackError::CanonRefused)?;
-        let rdfc_digest: [u8; 32] = Sha256::digest(canonicalized.nquads.as_bytes()).into();
-
-        Ok(assemble(
-            n_terms,
-            capabilities,
-            rdfc_digest,
-            &dict_bytes,
-            &triples_bytes,
-            &side_bytes,
-        ))
+    /// Build the complete pack file for any [`FallibleDatasetView`] — a composite,
+    /// a delta snapshot, a graph selection over one, or a frozen dataset — WITHOUT
+    /// materializing it first.
+    ///
+    /// Byte-identical to [`build_bytes`](Self::build_bytes) over a flat dataset
+    /// holding the same content, because it IS that function's body: the dict,
+    /// triples and side encoders read the [`DatasetView`] seam and resolve every
+    /// term to its value, so nothing view-local survives into the output and the
+    /// section order, the unified id space and the canonical-identity digest are
+    /// all functions of content alone.
+    ///
+    /// # Declaration-only graphs
+    ///
+    /// The pack format derives its graphs from rows: a named graph that owns no
+    /// quad, reifier or annotation row leaves no bytes here, exactly as it leaves
+    /// none through [`build_bytes`](Self::build_bytes) over the frozen dataset
+    /// that declared it. A view path that encoded the declaration would change
+    /// the format, so it deliberately does not; a caller that must carry an
+    /// empty declaration across this boundary states it explicitly on the far
+    /// side, the same discipline every row-derived output surface asks for.
+    ///
+    /// # Operational refusal
+    ///
+    /// A fallible view's status is sampled TWICE: before a single row is drained,
+    /// and again after every row has been drained and the identity digest taken. A
+    /// view that faults mid-read stops yielding rather than erroring, so without
+    /// the second sample this would frame a pack over a truncation and stamp it
+    /// with a digest of the truncated content. Neither sample `Ready` ⇒ no bytes:
+    /// the error is returned and nothing partial is published.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::ViewNotReady`] if either checkpoint observed an operational
+    /// failure; [`PackError::CanonRefused`] if canonicalization refuses the view —
+    /// its call budget exhausted by a pathologically symmetric blank graph, or an
+    /// IRI found in the canonicalization profile's reserved namespace. The
+    /// dict/triples/side encode steps are infallible; the ONLY way this method
+    /// otherwise fails is if one of THIS module's own just-written sections fails
+    /// to re-open — a broken-invariant bug, not a data-dependent error.
+    pub fn build_view_bytes<D: FallibleDatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
+        checkpoint(view, PackCheckpoint::BeforeRows)?;
+        let bytes = encode_view(view)?;
+        checkpoint(view, PackCheckpoint::AfterRows)?;
+        Ok(bytes)
     }
 
     /// A public convenience alias for [`build_bytes`](Self::build_bytes) —
@@ -446,6 +537,55 @@ impl PackBuilder {
     pub fn from_dataset(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
         Self::build_bytes(dataset)
     }
+}
+
+/// Sample a fallible view's operational status at one encode boundary.
+fn checkpoint<D: FallibleDatasetView>(view: &D, at: PackCheckpoint) -> Result<(), PackError> {
+    match view.operation_status() {
+        ViewOperationStatus::Ready { .. } => Ok(()),
+        ViewOperationStatus::Failed { error, .. } => Err(PackError::ViewNotReady {
+            checkpoint: at,
+            cause: error.to_string(),
+        }),
+    }
+}
+
+/// THE encoder. Both public surfaces run exactly this body, so a section's bytes,
+/// the header's capability flags and the canonical-identity digest mean the same
+/// thing however the source was spelled.
+///
+/// Scratch is bounded by the source's own dimensions: one dictionary's values, one
+/// partition list, two side-table column sets — the same buffers the flat path
+/// always allocated, with no per-row owned copy retained beyond its use.
+fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
+    let encoded_dict = PackDict::encode(view);
+    let dict_bytes = encoded_dict.to_bytes();
+    let n_terms = encoded_dict.n_terms();
+    let dict = PackDict::open(&dict_bytes)?;
+
+    let triples_bytes = Triples::encode(&dict, view).to_bytes();
+    let triples_ref = TriplesRef::from_bytes(&triples_bytes)?;
+
+    let side_bytes = SideTables::encode(&dict, view).to_bytes();
+    let side_ref = SideTablesRef::from_bytes(&side_bytes)?;
+
+    let base_named_graphs = triples_ref.named_graph_ids().next().is_some();
+    let capabilities = side::capabilities(&dict, &side_ref, base_named_graphs);
+
+    // Recomputed from the pack's OWN sections, never copied from the source view's
+    // `capabilities()` claim — the header must describe what was actually written.
+    let canonicalized =
+        try_canonicalize_view(view, CanonHash::Sha256).map_err(PackError::CanonRefused)?;
+    let rdfc_digest: [u8; 32] = Sha256::digest(canonicalized.nquads.as_bytes()).into();
+
+    Ok(assemble(
+        n_terms,
+        capabilities,
+        rdfc_digest,
+        &dict_bytes,
+        &triples_bytes,
+        &side_bytes,
+    ))
 }
 
 /// Assemble the header + directory + 8-byte-aligned section bytes, in the

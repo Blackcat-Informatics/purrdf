@@ -8,3 +8,8 @@ cases/annotation-simple.ttl	cases/annotation-named-graph.trig	differ
 cases/literal-forms.ttl	cases/directional-literals.ttl	differ
 cases/unicode-lexical-forms.ttl	cases/literal-forms.ttl	differ
 cases/triple-term-object.ttl	cases/triple-term-nested.ttl	differ
+# The two folded cases (profile §3.1) spell ONE statement-layer row each. Folding
+# reads that row and nothing more: it never fabricates the asserted triple the genuine
+# fixture also carries, so the spelled row and the full structure stay distinct.
+cases/poison-forgery.ttl	cases/reifier-simple.ttl	differ
+cases/poison-sentinel-graph.trig	cases/annotation-simple.ttl	differ

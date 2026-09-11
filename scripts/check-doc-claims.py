@@ -3042,7 +3042,7 @@ def rdf12_canon_profile_claim(matrix: dict[str, tuple[int, int]]) -> list[Claim]
         Claim(
             "the root README's RDF 1.2 canonicalization-profile row",
             _README,
-            r"\| RDF 1\.2 canonicalization profile \(`purrdf-rdfc12` v1\) \| "
+            r"\| RDF 1\.2 canonicalization profile \(`purrdf-rdfc12` v2\) \| "
             r"first-party vectors \(`vectors/rdf12-canon/`\) \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* \|",
             {"passed": passed, "total": passed + ledgered},

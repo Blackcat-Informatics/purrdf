@@ -6,8 +6,8 @@
 //! tables — [`ReifierRow`](crate::ir::dataset::ReifierRow)s and
 //! [`AnnotationRow`](crate::ir::dataset::AnnotationRow)s — over the unified
 //! [`PackTermId`] space [`PackDict`] mints, reproducing
-//! [`RdfDataset::reifier_quads`], [`RdfDataset::annotation_quads`], and
-//! [`RdfDataset::annotations_of_with_graph`] byte-for-byte (as a SET of
+//! [`crate::RdfDataset::reifier_quads`], [`crate::RdfDataset::annotation_quads`],
+//! and [`crate::RdfDataset::annotations_of_with_graph`] byte-for-byte (as a SET of
 //! `TermValue`-resolved rows; see the exact mapping below).
 //!
 //! # The exact source mapping this module reproduces
@@ -84,7 +84,9 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::{RdfDataset, RdfStoreCapabilities, TermValue};
+use crate::dataset_view::DatasetView;
+use crate::ir::composite::owned_value;
+use crate::{RdfStoreCapabilities, TermValue};
 
 use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for};
 use super::dict::{PackDict, PackTermId};
@@ -287,37 +289,47 @@ pub struct SideTables {
 }
 
 impl SideTables {
-    /// Scan `dataset`'s reifier and annotation side-tables and build the
+    /// Scan `view`'s reifier and annotation side-tables and build the
     /// self-contained, unified-id encoding (see the [module docs](self)).
-    /// `dict` MUST be [`PackDict::encode`]'s output for this exact `dataset`
+    /// `dict` MUST be [`PackDict::encode`]'s output for this exact `view`
     /// (its side-table closure guarantees every reference
     /// resolves) — see [`resolve_any`].
+    ///
+    /// The two layers arrive through the [`DatasetView`] seam as virtual quads —
+    /// `(reifier, rdf:reifies, triple-term, graph)` and
+    /// `(reifier, predicate, object, graph)` — so the binding's triple term is the
+    /// reifier row's `o` slot and the indirection predicate is never stored in a
+    /// row (it is the separate `reifies_predicate` field, exactly as before).
     ///
     /// # Panics
     ///
     /// Panics (via [`resolve_any`]'s `expect`) if `dict` was not built from
-    /// `dataset` — a caller-side contract violation, not a data-dependent error.
+    /// `view` — a caller-side contract violation, not a data-dependent error.
     #[must_use]
-    pub fn encode(dict: &PackDict, dataset: &RdfDataset) -> Self {
-        let mut reifier_rows: Vec<(PackTermId, PackTermId, PackTermId)> = dataset
-            .reifiers_with_graph()
-            .map(|(reifier, triple, graph)| {
-                let r = resolve_any(dict, &dataset.term_value(reifier));
-                let t = resolve_any(dict, &dataset.term_value(triple));
-                let g = graph.map_or(0, |g| resolve_any(dict, &dataset.term_value(g)));
+    pub fn encode<D: DatasetView>(dict: &PackDict, view: &D) -> Self {
+        let mut reifier_rows: Vec<(PackTermId, PackTermId, PackTermId)> = view
+            .reifier_quads()
+            .map(|binding| {
+                let r = resolve_any(dict, &owned_value(view, binding.s));
+                let t = resolve_any(dict, &owned_value(view, binding.o));
+                let g = binding
+                    .g
+                    .map_or(0, |g| resolve_any(dict, &owned_value(view, g)));
                 (r, t, g)
             })
             .collect();
         reifier_rows.sort_unstable();
         reifier_rows.dedup();
 
-        let mut annotation_rows: Vec<(PackTermId, PackTermId, PackTermId, PackTermId)> = dataset
-            .annotations_with_graph()
-            .map(|(reifier, pred, obj, graph)| {
-                let r = resolve_any(dict, &dataset.term_value(reifier));
-                let p = resolve_any(dict, &dataset.term_value(pred));
-                let o = resolve_any(dict, &dataset.term_value(obj));
-                let g = graph.map_or(0, |g| resolve_any(dict, &dataset.term_value(g)));
+        let mut annotation_rows: Vec<(PackTermId, PackTermId, PackTermId, PackTermId)> = view
+            .annotation_quads()
+            .map(|annotation| {
+                let r = resolve_any(dict, &owned_value(view, annotation.s));
+                let p = resolve_any(dict, &owned_value(view, annotation.p));
+                let o = resolve_any(dict, &owned_value(view, annotation.o));
+                let g = annotation
+                    .g
+                    .map_or(0, |g| resolve_any(dict, &owned_value(view, g)));
                 (r, p, o, g)
             })
             .collect();
@@ -701,7 +713,7 @@ pub fn capabilities(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RdfDatasetBuilder, TermId};
+    use crate::{RdfDataset, RdfDatasetBuilder, TermId};
     use std::collections::HashSet;
 
     fn iri(name: &str) -> TermValue {

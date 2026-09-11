@@ -76,12 +76,13 @@ enum TermRole {
 /// `lineage`: the bare names are predicates, and each datatype name says
 /// which lexical space its literals live in, exactly as `digest`,
 /// `media`, `profile`, `anchor` and `path` do for theirs.
-const TERMS: [(TermRole, &str); 36] = [
+const TERMS: [(TermRole, &str); 41] = [
     (TermRole::Class, "Document"),
     (TermRole::Class, "Section"),
     (TermRole::Class, "Movement"),
     (TermRole::Class, "Unit"),
     (TermRole::Class, "Citation"),
+    (TermRole::Class, "Structure"),
     (TermRole::Predicate, "sourceDigest"),
     (TermRole::Predicate, "mediaType"),
     (TermRole::Predicate, "byteLength"),
@@ -105,6 +106,9 @@ const TERMS: [(TermRole, &str); 36] = [
     (TermRole::Predicate, "cites"),
     (TermRole::Predicate, "canonSource"),
     (TermRole::Predicate, "unit"),
+    (TermRole::Predicate, "verbatim"),
+    (TermRole::Predicate, "verbatimStart"),
+    (TermRole::Predicate, "verbatimEnd"),
     (TermRole::Datatype, "digest"),
     (TermRole::Datatype, "media"),
     (TermRole::Datatype, "profile"),
@@ -112,6 +116,7 @@ const TERMS: [(TermRole, &str); 36] = [
     (TermRole::Datatype, "lineagePath"),
     (TermRole::Datatype, "anchor"),
     (TermRole::Datatype, "path"),
+    (TermRole::Datatype, "verbatimText"),
     (TermRole::NodeBase, ""),
 ];
 
@@ -154,6 +159,12 @@ pub struct Vocabulary {
     /// unit. Every citation node states it, whatever the row lifted, so
     /// a node that reifies nothing still says what it is.
     pub citation_class: String,
+    /// The class of a structure node: one maximal run of bytes that no
+    /// unit span and no heading line covers — a blank run, a horizontal
+    /// rule, a table row, the newline a split cut landed on. They are
+    /// the bytes with no structural owner, carried so the graph covers
+    /// every byte of the source and decodes back to it.
+    pub structure_class: String,
     /// The document's source digest, typed [`Self::dt_digest`].
     pub source_digest: String,
     /// The document's media type, typed [`Self::dt_media`].
@@ -173,7 +184,12 @@ pub struct Vocabulary {
     pub level: String,
     /// Document order among sections, or among units.
     pub ordinal: String,
-    /// A section's heading text, typed [`Self::dt_heading`].
+    /// A section's heading text — the words alone, markers and
+    /// whitespace trimmed — as the section's one **plain** `xsd:string`
+    /// literal. Plain because the words are content: a plain-literal
+    /// index that never saw a chapter title would report absence for
+    /// the densest text a document carries. The line's own bytes travel
+    /// typed, in [`Self::verbatim`].
     pub heading: String,
     /// The first byte of a span.
     pub byte_start: String,
@@ -209,16 +225,30 @@ pub struct Vocabulary {
     /// lifted onto — such a node reifies nothing, so without it nothing
     /// in the graph would point at it at all.
     pub in_unit: String,
+    /// A node's verbatim bytes over its verbatim span, typed
+    /// [`Self::dt_verbatim`] — **typed**, never plain, so a full-text or
+    /// embedding index that selects plain strings still sees exactly one
+    /// text per unit and no structural bytes. On a section it carries
+    /// the heading or movement line itself; on a structure node, the
+    /// node's whole run.
+    pub verbatim: String,
+    /// The first byte of the span [`Self::verbatim`] quotes.
+    pub verbatim_start: String,
+    /// One past the last byte of the span [`Self::verbatim`] quotes.
+    pub verbatim_end: String,
     /// Datatype of a digest literal (`sha256:<hex>`).
     pub dt_digest: String,
     /// Datatype of a media type literal.
     pub dt_media: String,
     /// Datatype of a profile literal (`<name>:<contract id hex>`).
     pub dt_profile: String,
-    /// Datatype of a heading or title literal. A derived vocabulary
-    /// names it `headingText`, never `heading`: the bare name is the
-    /// predicate [`Self::heading`], and one IRI cannot be described as
-    /// both a property and a datatype.
+    /// Datatype of the document's title literal — the one heading
+    /// spelling that stays typed, because its words are already the
+    /// first heading's plain literal and a second plain copy would put
+    /// one text in an index twice. A derived vocabulary names it
+    /// `headingText`, never `heading`: the bare name is the predicate
+    /// [`Self::heading`], and one IRI cannot be described as both a
+    /// property and a datatype.
     pub dt_heading: String,
     /// Datatype of a lineage literal. A derived vocabulary names it
     /// `lineagePath`, never `lineage`, for the reason
@@ -229,6 +259,11 @@ pub struct Vocabulary {
     pub dt_anchor: String,
     /// Datatype of a canon source path literal.
     pub dt_path: String,
+    /// Datatype of a verbatim literal. A derived vocabulary names it
+    /// `verbatimText`, never `verbatim`, for the reason
+    /// [`Self::dt_heading`] gives: the bare name is the predicate, and
+    /// one IRI cannot be described as both a property and a datatype.
+    pub dt_verbatim: String,
 }
 
 impl Vocabulary {
@@ -254,6 +289,7 @@ impl Vocabulary {
             movement_class: iri("Movement"),
             unit_class: iri("Unit"),
             citation_class: iri("Citation"),
+            structure_class: iri("Structure"),
             source_digest: iri("sourceDigest"),
             media_type: iri("mediaType"),
             byte_length: iri("byteLength"),
@@ -277,6 +313,9 @@ impl Vocabulary {
             cites: iri("cites"),
             canon_source: iri("canonSource"),
             in_unit: iri("unit"),
+            verbatim: iri("verbatim"),
+            verbatim_start: iri("verbatimStart"),
+            verbatim_end: iri("verbatimEnd"),
             dt_digest: iri("digest"),
             dt_media: iri("media"),
             dt_profile: iri("profile"),
@@ -284,6 +323,7 @@ impl Vocabulary {
             dt_lineage: iri("lineagePath"),
             dt_anchor: iri("anchor"),
             dt_path: iri("path"),
+            dt_verbatim: iri("verbatimText"),
         };
         vocabulary.validate()?;
         Ok(vocabulary)
@@ -333,13 +373,14 @@ impl Vocabulary {
 
     /// Every field, in the order the stage description lists them, with
     /// the node base last.
-    fn fields(&self) -> [(&'static str, &str); 36] {
+    fn fields(&self) -> [(&'static str, &str); 41] {
         [
             ("Document", &self.document_class),
             ("Section", &self.section_class),
             ("Movement", &self.movement_class),
             ("Unit", &self.unit_class),
             ("Citation", &self.citation_class),
+            ("Structure", &self.structure_class),
             ("sourceDigest", &self.source_digest),
             ("mediaType", &self.media_type),
             ("byteLength", &self.byte_length),
@@ -363,6 +404,9 @@ impl Vocabulary {
             ("cites", &self.cites),
             ("canonSource", &self.canon_source),
             ("unit", &self.in_unit),
+            ("verbatim", &self.verbatim),
+            ("verbatimStart", &self.verbatim_start),
+            ("verbatimEnd", &self.verbatim_end),
             ("digest", &self.dt_digest),
             ("media", &self.dt_media),
             ("profile", &self.dt_profile),
@@ -370,6 +414,7 @@ impl Vocabulary {
             ("lineagePath", &self.dt_lineage),
             ("anchor", &self.dt_anchor),
             ("path", &self.dt_path),
+            ("verbatimText", &self.dt_verbatim),
             ("", &self.node_base),
         ]
     }
@@ -651,14 +696,21 @@ impl Profile {
                  unit id H(kind, source id, chunking id, byte start, byte end, alg, alg(span))\n\
                  section id H(kind, source id, chunking id, heading span, alg(heading line))\n\
                  citation id H(kind, source id, chunking id, row span, alg(row line, unit id, reified terms))\n\
+                 structure id H(kind, source id, chunking id, byte span, alg(span))\n\
                  alg {DIGEST_ALGORITHM}\n\
                  emit document type, sourceDigest, mediaType, byteLength, sliceProfile, title\n\
                  emit section type, document, parent, level, ordinal, heading, byteStart, byteEnd\n\
+                 emit section verbatim, verbatimStart, verbatimEnd over its own heading line\n\
+                 a heading literal is plain ; the words are content, and the marks stay in verbatim\n\
                  emit unit type, text, document, section, ordinal, verse, lineage, continues\n\
                  emit unit byteStart, byteEnd, scalarStart, scalarEnd, contentDigest\n\
                  emit unit cites anchor, once per anchor of every row that lifted onto it\n\
                  emit citation type and citation unit for every citation node, whatever its row lifted\n\
                  emit citation rdf:reifies <<( unit cites anchor )>> and citation canonSource path\n\
+                 emit one structure node per maximal run of bytes inside no unit span and no heading line\n\
+                 emit structure type, document, byteStart, byteEnd, verbatim, verbatimStart, verbatimEnd\n\
+                 a verbatim literal is typed verbatimText and quotes its span's bytes exactly\n\
+                 the unit texts and the verbatim literals cover every byte ; decode rebuilds the source and proves sourceDigest\n\
                  emit an offset as xsd:integer and a content digest as lowercase hex xsd:hexBinary\n\
                  emit one claim per node as N-Triples lines, sorted bytewise and de-duplicated\n\
                  escaping is purrdf-core's canonical writer ; C0 and DEL as \\uXXXX\n",
@@ -979,7 +1031,7 @@ mod tests {
         assert!(v.stage_lines().contains(" ordinal heading byteStart "));
         assert!(
             v.stage_lines()
-                .ends_with(" profile headingText lineagePath anchor path\n")
+                .ends_with(" profile headingText lineagePath anchor path verbatimText\n")
         );
         let mut custom = v;
         custom.text = "urn:other:body".to_owned();

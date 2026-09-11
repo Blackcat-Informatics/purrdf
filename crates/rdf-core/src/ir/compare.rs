@@ -1,13 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The `RdfDataset`-direct structural comparator (C1/C2): the equality oracle
+//! The IR-direct structural comparator (C1/C2): the equality oracle
 //! for importer equivalence and downstream tests.
 //!
-//! [`datasets_isomorphic`] decides whether two frozen datasets are
+//! [`datasets_isomorphic`] decides whether two datasets are
 //! **RDF-structurally isomorphic**: the same quads (under a blank-node bijection),
 //! the same reifier bindings, and the same annotations. It operates **directly on
-//! [`RdfDataset`]** and **NEVER consults oxigraph**. That is deliberate and is the
+//! the IR** — on any [`DatasetView`], the frozen
+//! [`RdfDataset`](super::dataset::RdfDataset) and the composite/delta views alike,
+//! with the two sides independently typed so a view and a dataset compare without
+//! either being materialized — and **NEVER consults oxigraph**. That is deliberate
+//! and is the
 //! acceptance gate of (design doc *Appendix C0*, point 4): oxigraph
 //! canonicalizes typed-literal lexical forms (`0.70` → `0.7`, `+00:00` → `Z`) and
 //! drops the reifier/annotation overlay entirely — so two datasets that differ only
@@ -41,32 +45,42 @@
 //! count and annotation presence remain part of the compared structure.
 
 use super::canon;
-use super::dataset::RdfDataset;
+use crate::dataset_view::DatasetView;
 
-/// IR-direct structural comparison. Returns `true` iff the two datasets are
+/// IR-direct structural comparison. Returns `true` iff the two views are
 /// RDF-structurally isomorphic: the same quads (under a blank-node bijection), the
 /// same reifier bindings, and the same annotations. **Oxigraph is NEVER consulted.**
 ///
 /// Backed by full RDFC-1.0 canonicalization, this is an **exact** oracle: it never
 /// reports a false positive *or* a false negative (the simplified comparator's
 /// pathological-symmetry false negative is gone).
-pub fn datasets_isomorphic(a: &RdfDataset, b: &RdfDataset) -> bool {
+///
+/// The two sides are **independently** typed, so a composite view, a delta view and a
+/// frozen [`RdfDataset`](super::dataset::RdfDataset) are all comparable against each
+/// other, in any combination, without materializing either side: identity is decided
+/// from the canonical bytes, which carry no view-local ids (see
+/// [`canon::canonicalize_view`]). `&RdfDataset` call sites are the `RdfDataset`
+/// instantiation and are unaffected.
+pub fn datasets_isomorphic<A: DatasetView, B: DatasetView>(a: &A, b: &B) -> bool {
     // Cheap structural rejections that do not depend on blank labeling — they avoid
-    // running the (poison-guarded) canonicalizer on obviously-different inputs.
-    if a.quad_count() != b.quad_count() {
+    // running the (poison-guarded) canonicalizer on obviously-different inputs. Each
+    // is an EXACT count off the view's own accessors, never `len_hint` (a hint a view
+    // is free to approximate or omit would turn a pre-reject into a wrong verdict).
+    if a.quads().count() != b.quads().count() {
         return false;
     }
-    if a.reifiers().count() != b.reifiers().count() {
+    if a.reifier_quads().count() != b.reifier_quads().count() {
         return false;
     }
-    if a.annotations().count() != b.annotations().count() {
+    if a.annotation_quads().count() != b.annotation_quads().count() {
         return false;
     }
-    if canon::blank_count(a) != canon::blank_count(b) {
+    if canon::blank_count_view(a) != canon::blank_count_view(b) {
         return false;
     }
     // The exact oracle: byte-equal canonical N-Quads ⇔ RDF isomorphism.
-    canon::canonicalize(a).nquads == canon::canonicalize(b).nquads
+    canon::canonicalize_view(a, canon::CanonHash::Sha256).nquads
+        == canon::canonicalize_view(b, canon::CanonHash::Sha256).nquads
 }
 
 /// A structural diff between two datasets, for test diagnostics. Counts only; the
@@ -86,12 +100,13 @@ pub struct DatasetDiff {
 }
 
 /// A richer diff for test diagnostics: structural counts plus the isomorphism verdict.
-pub fn dataset_diff(a: &RdfDataset, b: &RdfDataset) -> DatasetDiff {
+/// View-generic and cross-type on the same terms as [`datasets_isomorphic`].
+pub fn dataset_diff<A: DatasetView, B: DatasetView>(a: &A, b: &B) -> DatasetDiff {
     DatasetDiff {
-        quad_counts: (a.quad_count(), b.quad_count()),
-        reifier_counts: (a.reifiers().count(), b.reifiers().count()),
-        annotation_counts: (a.annotations().count(), b.annotations().count()),
-        blank_counts: (canon::blank_count(a), canon::blank_count(b)),
+        quad_counts: (a.quads().count(), b.quads().count()),
+        reifier_counts: (a.reifier_quads().count(), b.reifier_quads().count()),
+        annotation_counts: (a.annotation_quads().count(), b.annotation_quads().count()),
+        blank_counts: (canon::blank_count_view(a), canon::blank_count_view(b)),
         isomorphic: datasets_isomorphic(a, b),
     }
 }
@@ -99,7 +114,7 @@ pub fn dataset_diff(a: &RdfDataset, b: &RdfDataset) -> DatasetDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::RdfDatasetBuilder;
+    use crate::ir::{RdfDataset, RdfDatasetBuilder};
     use crate::{RdfLiteral, RdfTextDirection};
     use std::sync::Arc;
 

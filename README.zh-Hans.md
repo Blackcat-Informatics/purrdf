@@ -71,7 +71,12 @@ PurRDF 附带一个 Markdown → RDF 1.2 的结构化切片器
 内容寻址；而生成这些标识所依据的 profile，又按切片法则自身的内容寻址——因此法则一旦
 变更，标识随之重新生成，而不是就此漂移。同样的字节、同样的 profile，在每个目标上给出
 逐字节相同的输出；一张对照表（concordance table）则提升为 RDF 1.2 的具体化引用
-（reified citation）。我们调研了将文档映射到 RDF 的各项标准，未发现有哪一项就 Markdown
+（reified citation）。这张图是**编解码器（codec）的输出，而不是索引**：输出的字节区间
+覆盖源文档的每一个字节——标题行、连续空行、分隔线与表格行都作为带类型的原文字面量，
+与编号章节一同写入图中——因此，按规范定义的解码规则，仅凭三元组即可逐字节重建文档，
+并可用图中自带的源摘要（source digest，即源文档的哈希值）校验重建结果。简单字面量
+（simple literal）只承载内容（编号章节的正文、标题的文字），字节则由带类型字面量承载；
+文本索引只索引简单字面量，因此每个词只被索引一次，其中不含任何结构字节。我们调研了将文档映射到 RDF 的各项标准，未发现有哪一项就 Markdown
 把三件事合于一处：确定性、字节区间可寻址，以及按法则内容寻址的标识。规范中的
 [相关工作](./crates/markdown/SPEC.md#12-related-work)一节列出了我们考察过的每一项标准，
 并逐项说明它未能提供这三者中的哪些；若有我们遗漏的标准同时具备这三者，我们更愿意听到
@@ -214,9 +219,11 @@ ORDER BY ?rank
   SHA-384）。在 RDF 1.2 构造之上有两种规范形式，并以不同的名字区分：**扁平形式**
   （`canonical_flat_nquads`；CLI 的 `--canonical` 与 wasm 的 `Dataset.canonicalize()`
   所运行的形式）把具体化节点与注解改写为普通的 `rdf:reifies`/注解三元组，再在 RDFC-1.0
-  下将其规范化；而原生的 `purrdf::canonicalize` 是第一方的 **`purrdf-rdfc12` v1**
+  下将其规范化；而原生的 `purrdf::canonicalize` 是第一方的 **`purrdf-rdfc12` v2**
   profile，它改为把它们降为保留的 `urn:purrdf:rdfc:` 命名空间，并拒绝任何已经携带该
-  命名空间的输入。该 profile 只在 RDF 1.1 子集上与 RDFC-1.0 逐字节一致，对其输出计算的
+  命名空间的输入——除非其写法恰好是该 profile 自身输出所用的那两种形态，这两种形态会
+  被折回陈述层，因此对规范化文档再次规范化会逐字节返回原文。该 profile 只在 RDF 1.1
+  子集上与 RDFC-1.0 逐字节一致，对其输出计算的
   摘要不得标为 RDFC-1.0——见
   [`docs/RDF12-CANON-PROFILE.md`](./docs/RDF12-CANON-PROFILE.md)。在二者之外，还有一种
   **便于评审的规范 Turtle** 渲染（`purrdf-core` 中的 `render_canonical_turtle`、
@@ -545,7 +552,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-datalog`](./crates/datalog/) | chase 之下的不动点基底：一个列式关系存储与 DL 子句 IR 上的确定性半朴素求值器。由门面 crate 重新导出为 `purrdf::datalog`，因为蕴涵机制接口带有它的类型。 |
 | [`purrdf-text`](./crates/text/) | RDF 1.2 字面量上的确定性全文检索：一个内存倒排索引与精确定点 BM25 排名，从 SPARQL 经由调用方提供的属性函数 IRI 调用。 |
 | [`purrdf-validate`](./crates/validate/) | 共享的宿主边界：SARIF 2.1.0 诊断，以及 Python/wasm/C 绑定所调用的蕴涵机制字符串接口。 |
-| [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化切片器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址的 profile 之下。由门面 crate 重新导出为 `purrdf::markdown`。 |
+| [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化编解码器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址 Profile 之下——且这张图可逐字节解码还原为原文档，并以图中自带的源摘要（哈希）为证。由门面 crate 重新导出为 `purrdf::markdown`。 |
 | [`purrdf-slice`](./crates/slice/) | 切片目录：清单、带类型的工件、所有权/依赖分析。 |
 | [`purrdf-iri`](./crates/iri/) | 零依赖的 IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
 | [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |
@@ -613,7 +620,7 @@ IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `No
 | 蕴涵（OWL 2 DL 一致性） | 随库固化的 W3C OWL 2 套件 | **258 / 262** 一致，4 例入台账，0 未入台账 |
 | 蕴涵（OWL 2 RL，W3C 蕴涵测试） | 随库固化的 W3C OWL 2 蕴涵套件 | **50 / 50** 一致，0 例入账，0 未入台账——负例通道 **23 / 23**（未发现不可靠之处），正例通道 **27 / 27** |
 | RDFC-1.0 | W3C 规范化夹具 | 绿 |
-| RDF 1.2 规范化 profile（`purrdf-rdfc12` v1） | 第一方向量（`vectors/rdf12-canon/`） | **5 / 5** |
+| RDF 1.2 规范化 profile（`purrdf-rdfc12` v2） | 第一方向量（`vectors/rdf12-canon/`） | **5 / 5** |
 | GTS | 冻结的跨语言向量（`vectors/`） | **38 / 39** 逐字节折叠为其已提交的期望值，1 处入台账的分歧 |
 
 ## 能力如何增长

@@ -98,8 +98,8 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::dataset_view::GraphMatch;
-use crate::{RdfDataset, TermId};
+use crate::dataset_view::{DatasetView, GraphMatch};
+use crate::ir::composite::owned_value;
 
 use super::bits::{
     BitVec, DeltaListRef, IntVector, IntVectorRef, PackBitsError, RankSelectRef, bits_for,
@@ -189,21 +189,21 @@ const TRIPLES_FORMAT_VERSION: u8 = 1;
 
 /// Resolve `id`'s unified [`PackTermId`] via `dict`'s single id-space lookup
 /// (`id_by_value` — see [`super::dict`]'s module docs: one unified id per
-/// distinct value, regardless of role), memoized per `TermId` so repeated
+/// distinct value, regardless of role), memoized per view-local id so repeated
 /// subjects/predicates/objects/graph names in the quad scan cost one
-/// `term_value`+lookup each, not one per quad. Used for every quad component —
-/// `s`, `p`, `o`, and `g` alike — since the dictionary no longer splits
-/// predicates into a separate id space.
-fn resolve_unified(
-    dataset: &RdfDataset,
+/// value resolution + lookup each, not one per quad. Used for every quad
+/// component — `s`, `p`, `o`, and `g` alike — since the dictionary no longer
+/// splits predicates into a separate id space.
+fn resolve_unified<D: DatasetView>(
+    view: &D,
     dict: &PackDict,
-    cache: &mut FastMap<TermId, PackTermId>,
-    id: TermId,
+    cache: &mut FastMap<D::Id, PackTermId>,
+    id: D::Id,
 ) -> PackTermId {
     if let Some(&u) = cache.get(&id) {
         return u;
     }
-    let value = dataset.term_value(id);
+    let value = owned_value(view, id);
     let u = dict.id_by_value(&value).expect(
         "PackDict::encode covers every role a quad component can play (incl. the \
          graph-name amendment), so every quad's s/p/o/g term resolves here",
@@ -357,7 +357,7 @@ pub struct Triples {
 }
 
 impl Triples {
-    /// Scan `dataset`'s quads, partition them by graph (partition 0 = default
+    /// Scan `view`'s quads, partition them by graph (partition 0 = default
     /// graph, always present even if empty; each named graph gets its own
     /// partition, stored ascending by graph unified id), and build each
     /// partition's bitmap-triples + FoQ indexes. `dict` resolves every quad
@@ -365,29 +365,34 @@ impl Triples {
     /// single unified [`PackTermId`] via [`PackDict::id_by_value`] (see
     /// [`super::dict`]'s module docs: this dictionary mints ONE id per distinct
     /// value, regardless of role) — `dict` MUST be the dictionary built from
-    /// this exact `dataset` (via [`PackDict::encode`]), so every reference
+    /// this exact `view` (via [`PackDict::encode`]), so every reference
     /// resolves; see the [module docs](self).
+    ///
+    /// Reads the [`DatasetView`] seam only, so a frozen dataset, a delta, a
+    /// composite and a selection over one all partition through this same body.
+    /// Partition order is the unified graph id's, which is a function of the
+    /// graph names' canonical value order alone — never of the view's own ids.
     ///
     /// # Panics
     ///
     /// Panics (via the internal resolver's `expect`) if `dict` was not built
-    /// from `dataset` (a quad component has no unified id) — a caller-side
+    /// from `view` (a quad component has no unified id) — a caller-side
     /// contract violation, not a data-dependent error.
     #[must_use]
-    pub fn encode(dict: &PackDict, dataset: &RdfDataset) -> Self {
-        let mut cache: FastMap<TermId, PackTermId> = FastMap::default();
+    pub fn encode<D: DatasetView>(dict: &PackDict, view: &D) -> Self {
+        let mut cache: FastMap<D::Id, PackTermId> = FastMap::default();
 
         let mut default_triples: Vec<(u64, u64, u64)> = Vec::new();
         let mut named: BTreeMap<PackTermId, Vec<(u64, u64, u64)>> = BTreeMap::new();
 
-        for q in dataset.quads() {
-            let s_uni = resolve_unified(dataset, dict, &mut cache, q.s);
-            let p_uni = resolve_unified(dataset, dict, &mut cache, q.p);
-            let o_uni = resolve_unified(dataset, dict, &mut cache, q.o);
+        for q in view.quads() {
+            let s_uni = resolve_unified(view, dict, &mut cache, q.s);
+            let p_uni = resolve_unified(view, dict, &mut cache, q.p);
+            let o_uni = resolve_unified(view, dict, &mut cache, q.o);
             match q.g {
                 None => default_triples.push((s_uni, p_uni, o_uni)),
                 Some(g) => {
-                    let g_uni = resolve_unified(dataset, dict, &mut cache, g);
+                    let g_uni = resolve_unified(view, dict, &mut cache, g);
                     named.entry(g_uni).or_default().push((s_uni, p_uni, o_uni));
                 }
             }
@@ -1216,7 +1221,7 @@ impl<'a> TriplesRef<'a> {
 mod tests {
     use super::*;
     use crate::ir::pack::dict::PackDict;
-    use crate::{RdfDatasetBuilder, TermValue};
+    use crate::{RdfDataset, RdfDatasetBuilder, TermValue};
 
     fn iri(name: &str) -> TermValue {
         TermValue::iri(format!("http://example.org/{name}"))

@@ -28,10 +28,12 @@ crate everything else in the workspace builds on. It owns:
 - **Structured diagnostics** — typed `RdfDiagnostic`s with source locations;
   deliberately SARIF-free (the SARIF boundary is
   [`purrdf-validate`](https://crates.io/crates/purrdf-validate)).
-- **Canonicalization** — `canonicalize` is the first-party `purrdf-rdfc12` v1
+- **Canonicalization** — `canonicalize` is the first-party `purrdf-rdfc12` v2
   profile: W3C RDFC-1.0 in full, plus a lowering of reifiers and annotations
   into a reserved `urn:purrdf:rdfc:` namespace (input already carrying it is
-  refused). It agrees with RDFC-1.0 byte for byte on the RDF 1.1 subset, which
+  refused, except in the two shapes the profile itself emits, which fold back —
+  so the canonical document re-canonicalizes to itself). It agrees with
+  RDFC-1.0 byte for byte on the RDF 1.1 subset, which
   the W3C fixture suite gates; a digest over its RDF 1.2 output must not be
   labelled RDFC-1.0 (`CANON_PROFILE_ID`/`CANON_PROFILE_VERSION` name the
   profile at runtime). Plus dataset diff and isomorphism checks.

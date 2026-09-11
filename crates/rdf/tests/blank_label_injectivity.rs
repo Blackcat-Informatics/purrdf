@@ -23,9 +23,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use proptest::prelude::*;
+use purrdf_rdf::gts_compose::{GtsIngestError, SnapshotBuilder};
 use purrdf_rdf::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, SerializeGraph, TermRef, canonicalize,
-    parse_dataset, serialize_dataset,
+    BlankScope, CompositeDatasetView, CompositeSource, RdfDataset, RdfDatasetBuilder,
+    SerializeGraph, TermRef, ViewLimits, canonicalize, parse_dataset, serialize_dataset,
 };
 
 const NTRIPLES: &str = "application/n-triples";
@@ -202,6 +203,147 @@ fn standardize_apart_keeps_per_document_blanks_distinct() {
         "the scope envelopes restore both pairs exactly: {text}"
     );
     assert_eq!(serialize(&reparsed), text);
+}
+
+// ---------------------------------------------------------------------------
+// The GTS snapshot's blank WIRE encoding
+// ---------------------------------------------------------------------------
+
+/// A single-quad dataset whose subject is the blank node `label`.
+fn blank_subject(label: &str) -> Arc<RdfDataset> {
+    parse(&format!(
+        "_:{label} <https://example.org/p> <https://example.org/o> .\n"
+    ))
+}
+
+/// A single-source composite view in an explicitly SHARED blank identity space,
+/// so the view reports the source's own `(label, scope)` pairs unchanged.
+fn view_over(dataset: &Arc<RdfDataset>) -> CompositeDatasetView {
+    CompositeDatasetView::from_shared_sources(
+        vec![CompositeSource::new(Arc::clone(dataset))],
+        ViewLimits::default(),
+    )
+    .expect("a single retained source composes")
+}
+
+/// The GTS snapshot's scoped blank encoding `"{scope}-{label}"` is NOT injective
+/// over `(scope, label)`, and the non-injectivity is not cosmetic.
+///
+/// `(Some("a"), "b-c")` and `(Some("a-b"), "c")` are two different blank nodes
+/// that both spell `a-b-c`. Encoding both would leave two term rows with equal
+/// content sort keys, and blank rows carry no other distinguishing column — so
+/// the stable canonical sort would order them by INGESTION order and the emitted
+/// bytes would stop being a pure function of the content. The encoding itself is
+/// frozen (changing it moves every existing scoped caller's bytes), so the
+/// collision is refused at the moment the second row would be minted.
+#[test]
+fn the_snapshot_blank_wire_encoding_refuses_a_collision_it_cannot_represent() {
+    let mut builder = SnapshotBuilder::new();
+    let _ = builder
+        .add_view_scoped(&view_over(&blank_subject("b-c")), None, Some("a"))
+        .expect("the first key mints its row");
+    let err = builder
+        .add_view_scoped(&view_over(&blank_subject("c")), None, Some("a-b"))
+        .expect_err("the colliding key must be refused, not silently merged");
+    match &err {
+        GtsIngestError::BlankWireCollision {
+            wire_value,
+            held_scope,
+            held_label,
+            incoming_scope,
+            incoming_label,
+        } => {
+            assert_eq!(wire_value, "a-b-c");
+            assert_eq!(held_scope.as_deref(), Some("a"));
+            assert_eq!(held_label, "b-c");
+            assert_eq!(incoming_scope.as_deref(), Some("a-b"));
+            assert_eq!(incoming_label, "c");
+        }
+        other => panic!("expected a blank wire collision, got {other:?}"),
+    }
+}
+
+/// THE OVER-REFUSAL TWIN: neighbouring `(scope, label)` pairs that do NOT
+/// collide must all still ingest, and stay distinct terms.
+#[test]
+fn neighbouring_scoped_blank_labels_still_ingest_and_stay_distinct() {
+    let cases = [
+        (Some("a"), "b"),
+        (Some("a-b"), "c"),
+        (Some("a"), "b-d"),
+        (Some("ab"), "c"),
+        (None, "a-b-c-d"),
+    ];
+    let mut builder = SnapshotBuilder::new();
+    for (scope, label) in cases {
+        let _ = builder
+            .add_view_scoped(&view_over(&blank_subject(label)), None, scope)
+            .unwrap_or_else(|err| panic!("({scope:?}, {label:?}) must ingest: {err}"));
+    }
+    let rendered = format!("{:?}", builder.snapshot_payload());
+    for wire in ["a-b", "a-b-c", "a-b-d", "ab-c", "a-b-c-d"] {
+        assert!(
+            rendered.contains(wire),
+            "the wire value {wire:?} must be present: {rendered}"
+        );
+    }
+    assert!(builder.poison().is_none(), "no refusal fired");
+}
+
+/// The MULTI-SOURCE determinism contract, driven with SCOPED BLANK NODES.
+///
+/// With IRIs alone this passes vacuously — IRIs carry their own identity. Blank
+/// nodes are where an ingestion-order dependency could hide, because a blank
+/// term row's only content is its wire value. The existing flat contract says
+/// the emitted bytes are a pure function of the content, whatever order the
+/// independent sources arrive in; the view surface mirrors that contract exactly
+/// and adds nothing to it.
+#[test]
+fn two_ingestion_orders_of_scoped_blank_sources_agree_byte_for_byte() {
+    // Three independent documents that all spell the SAME local labels.
+    let sources: Vec<(Arc<RdfDataset>, &str)> = vec![
+        (parse(PROBE), "s0"),
+        (parse(PROBE), "s1"),
+        (parse(MERGED), "s2"),
+    ];
+    let ingest = |order: Vec<usize>| {
+        let mut builder = SnapshotBuilder::new();
+        for index in order {
+            let (dataset, scope) = &sources[index];
+            let _ = builder
+                .add_view_scoped(&view_over(dataset), None, Some(scope))
+                .expect("each independently scoped source ingests");
+        }
+        builder
+    };
+    let forward = ingest(vec![0, 1, 2]);
+    let reversed = ingest(vec![2, 1, 0]);
+    let shuffled = ingest(vec![1, 2, 0]);
+
+    assert_eq!(
+        forward.snapshot_content_id(),
+        reversed.snapshot_content_id()
+    );
+    assert_eq!(
+        forward.snapshot_content_id(),
+        shuffled.snapshot_content_id()
+    );
+    assert_eq!(forward.snapshot_payload(), reversed.snapshot_payload());
+
+    // NON-VACUITY: the three scopes really did keep the equal labels apart, so
+    // the agreement above is about ORDER and not about an empty term table.
+    let rendered = format!("{:?}", forward.snapshot_payload());
+    for scope in ["s0-", "s1-", "s2-"] {
+        assert!(rendered.contains(scope), "scope {scope:?} lost: {rendered}");
+    }
+
+    // …and the FLAT surface, which is the frozen reference, agrees with both.
+    let mut flat = SnapshotBuilder::new();
+    for (dataset, scope) in &sources {
+        flat.add_dataset_scoped(dataset, None, Some(scope))
+            .expect("the flat surface ingests each scoped source");
+    }
+    assert_eq!(flat.snapshot_content_id(), forward.snapshot_content_id());
 }
 
 /// A generator over labels that are legal `BLANK_NODE_LABEL`s and cover every

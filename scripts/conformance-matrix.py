@@ -980,10 +980,10 @@ def native_suites() -> list[SuiteResult]:
             detail="65 vectors (64 eval + 1 negative), sharded",
         ),
         _suite_cargo(
-            "RDF 1.2 canonicalization profile", "purrdf-rdfc12 v1 (first-party)",
+            "RDF 1.2 canonicalization profile", "purrdf-rdfc12 v2 (first-party)",
             ["cargo", "test", "-p", "purrdf-rdf", "--locked",
              "--test", "rdf12_canon_profile"],
-            detail="17 goldens + 9 refusals, frozen and content-addressed",
+            detail="19 goldens + 7 refusals, frozen and content-addressed",
         ),
         _suite_codec(),
         _suite_sparql(),

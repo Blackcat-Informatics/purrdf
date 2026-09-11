@@ -306,6 +306,11 @@ fn check(units: usize, model: &Document<'_>) {
         "at least one unit is cut by the split law"
     );
     assert!(
+        !model.structures().is_empty(),
+        "the cover carries structure runs between the units, so the \
+         harness reports the codec's whole emission and not an index's"
+    );
+    assert!(
         model.units().iter().any(|u| u.lineage().len() == 5),
         "a unit under a movement carries a five-deep heading stack"
     );

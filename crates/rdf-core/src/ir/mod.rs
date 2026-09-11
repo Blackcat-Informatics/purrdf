@@ -63,8 +63,11 @@ pub use bundle::{GtsBundle, RdfEnvelope};
 pub use canon::{
     BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
     CanonHash, CanonicalRelabeling, Canonicalized, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
-    ReservedVocabulary, TermPosition, canonical_relabel, canonical_relabel_with_mapping,
-    canonicalize, canonicalize_with, check_admissible, try_canonicalize, try_canonicalize_with,
+    ReservedVocabulary, TermPosition, blank_count_view, canonical_relabel,
+    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
+    canonicalize_with, check_admissible, check_admissible_view, graph_digest_view,
+    try_canonicalize, try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
+    try_graph_digest_view,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
@@ -77,8 +80,8 @@ pub use global::{GlobalDictionary, GlobalTermId};
 pub use ingest::{DatasetSink, FrozenDatasetSource};
 pub use mutable::{DeltaDatasetView, DeltaViewId, MutableDataset, QuadValues};
 pub use pack::{
-    PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
-    restore_pack, verify_pack,
+    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
+    pack_digest, restore_pack, verify_pack,
 };
 pub use paged::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
@@ -86,9 +89,17 @@ pub use paged::{
     PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
     PagedQueryView, SubsetPageProvider,
 };
-pub use pipeline_bundle::{HandleEntry, HandleKey, PipelineBundle, PipelineBundleError};
+pub use pipeline_bundle::{
+    BundleDigestWork, CanonScopeName, GraphLayer, HandleEntry, HandleKey, PIPELINE_ROOT_DOMAIN,
+    PipelineBundle, PipelineBundleError, PipelineViewBundle,
+};
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, TermId, TermValue};
 
-pub use composite::{CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement};
-pub use view_accounting::{ViewLimits, ViewStats, ViewWork};
+pub use composite::{
+    CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,
+};
+pub use view_accounting::{
+    OwnerKey, OwnerMutability, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
+    ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
+};
