@@ -238,6 +238,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   single function type, so a caller that stored either of these in a function
   pointer or passed it where a concrete `fn` was expected must now name the
   instantiation it means.
+- **core:** `CompositeSource::from_selection` retains chosen graphs of an
+  existing `Arc<CompositeDatasetView>` as one composable source. A single
+  selection filters ordinary quads, reifier rows, annotation rows and
+  declaration membership together, keeps the retained composite's owners and
+  canonical blank scopes rather than copying or re-scoping anything, admits
+  under the same view limits as every other source, and composes with
+  `with_graph_placement` and `with_scope_binding` unchanged. Selecting a graph
+  the composite does not hold is the typed `view-graph-selection` refusal, and
+  a carrier assembled over a selection keeps the selection's underlying owners
+  registered with the retention ledger, transitively.
+- **core:** `PackBuilder::build_view_bytes` writes the existing pack format
+  from any `FallibleDatasetView` — composite, delta or graph selection —
+  through the one encoder; `build_bytes` over a frozen dataset is now a
+  delegation through it, so flat and view output are byte-identical by
+  construction. The view's operational status is checkpointed before and after
+  the drain, and a view that faults mid-read yields no pack bytes at all.
 - **gts:** `SnapshotBuilder::add_view` and `add_view_scoped` ingest any
   `FallibleDatasetView` into a snapshot directly — no temporary dataset, no text
   round trip, no per-row owned term reconstruction — with the same

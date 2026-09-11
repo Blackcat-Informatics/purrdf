@@ -63,13 +63,32 @@ A caller that wants the view path opts in per call site:
    delta sources with the ledger. `PipelineViewBundle::from_delta` rides a
    `DeltaDatasetView` as a composed source without compacting its base,
    registering both the base and the delta overlay.
-2. Fold contributions in with `PipelineViewBundle::accumulate_named_graph`, whose
+2. Carry forward a SELECTION of an existing composite where the next stage
+   needs some of its graphs and not the rest.
+   `CompositeSource::from_selection(view, graphs, limits)` retains chosen
+   graphs of an `Arc<CompositeDatasetView>` as one composable source: a single
+   selection filters ordinary quads, reifier rows, annotation rows and
+   declaration membership together, keeps the retained composite's owners and
+   canonical blank scopes (nothing is re-scoped, so co-reference survives), and
+   admits under the same view limits as every other source. Selection is
+   distinct from placement: the selected source still accepts
+   `with_graph_placement` and `with_scope_binding` afterwards, exactly like a
+   native or delta source. A graph the composite does not hold —
+   declaration-only counts as held — is a typed refusal.
+3. Fold contributions in with `PipelineViewBundle::accumulate_named_graph`, whose
    contract matches `PipelineBundle::accumulate_named_graph` — same containment
    rule, same pin preservation, same resulting digests — without the deep copy.
-3. Serialize with `SnapshotBuilder::add_view` or
+4. Serialize with `SnapshotBuilder::add_view` or
    `SnapshotBuilder::add_view_scoped`, which take any `FallibleDatasetView`
    directly: no temporary `RdfDataset`, no text round trip, no per-row owned term
-   reconstruction.
+   reconstruction. For the stable-cache output format, write the pack the same
+   way: `PackBuilder::build_view_bytes` takes any `FallibleDatasetView` —
+   composite, delta or selection — through the one existing encoder
+   (`build_bytes` over a frozen dataset is a delegation through it, so
+   flat/view byte parity is structural), with the view's operational status
+   checkpointed before and after the drain. Declaration-only graphs are
+   row-derived out of a pack from either path, exactly as they always were;
+   the boundary is stated on `build_view_bytes` itself.
 
 The two carriers convert in both directions at explicit, accounted boundaries:
 `PipelineBundle::to_view_bundle` / `into_view_bundle` and
@@ -542,7 +561,10 @@ it is made by calling `materialize()`.**
 ## 10. Remaining materialization boundary
 
 There is **no** remaining materialization of the composed surface on the
-carrier → pin-validation → GTS path.
+carrier → pin-validation → GTS path, and none on the stable-cache pack output
+path either: `PackBuilder::build_view_bytes` writes the pack from the view
+directly, so the output conversion that previously forced a frozen dataset at
+the cached-product boundary no longer exists.
 
 A view carrier can be constructed, accumulated into, digested per graph and as a
 whole, have its pipeline root computed, have its typed handles pinned and
@@ -591,7 +613,9 @@ re-exported from the `purrdf_core` and `purrdf_rdf` crate roots; the ingestion
 receipt and its refusals live in `purrdf_rdf::gts_compose`.
 
 The measurement shapes quoted above are the ones the criterion benches build:
-`crates/rdf-core/benches/shared_views.rs` for carrier traversal and
+`crates/rdf-core/benches/shared_views.rs` for carrier traversal and for the
+stable-cache pack output path (its `pack_output` group observes flat, composite,
+delta and selection variants separately, per the acceptance contract), and
 `crates/rdf/benches/gts_ingest.rs` for the path through to emitted bytes. Both
 report the work counters beside the wall time, because a wall time without the
 copy count does not say *why* a shape is fast — and because it is the counters,
