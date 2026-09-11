@@ -3,22 +3,23 @@
 
 //! The codec's round trip, byte for byte: Markdown to RDF to Markdown.
 //!
-//! The decode leg is the real one. Every claim's Turtle is parsed back
-//! through `purrdf-rdf` — the same parser any consumer holds — and the
-//! spans are read off the *graph* by the decode law's two extraction
-//! rules, never off the model or the `Claim` structs. What these
-//! vectors prove is therefore the codec's whole promise: a consumer
-//! holding only the triples rebuilds the document exactly, and the
-//! digest proves it did.
+//! The decode leg is the shipped one. Every claim's Turtle is parsed
+//! back through `purrdf-rdf` — the same parser any consumer holds —
+//! and handed to [`decode_document`], the crate's own graph half of
+//! the decode law, so what these vectors prove is the codec's whole
+//! promise as a consumer actually reaches it: hold the triples, call
+//! the law, get the document, and the digest proves it.
 //!
-//! The refusals are proven in pairs, per the workspace discipline:
-//! every typed refusal of [`reconstruct`] is executed beside the
-//! neighbouring input that must still succeed, because an over-refusal
-//! hides behind passing tests exactly as a silent drop does.
+//! The span half's refusal vectors live beside the law itself, in the
+//! kernel's own suite; here are the graph half's — and the invariants
+//! that are about the *emission*: structure runs maximal and covering,
+//! plain literals exactly the content, split chains present in the
+//! graphs that claim to exercise them.
 
-use purrdf_core::ContentDigest;
+use pretty_assertions::assert_eq;
+use purrdf_core::ir::RdfDataset;
 use purrdf_markdown::{
-    Claim, Profile, ReconstructError, SourceDocument, VerbatimSpan, Vocabulary, reconstruct,
+    Claim, ClaimKind, DecodeError, Profile, SourceDocument, Vocabulary, decode_document,
     slice_markdown,
 };
 use purrdf_rdf::parse_dataset;
@@ -55,161 +56,21 @@ fn slice(text: &str, profile: &Profile) -> Vec<Claim> {
     .expect("slices")
 }
 
-/// One text-carrying span as read back off the graph, owned.
-struct GraphSpan {
-    byte_start: u64,
-    byte_end: u64,
-    text: String,
-    continues: Option<(u64, u64)>,
-}
-
-/// What the decode law needs, extracted from the parsed triples alone:
-/// the declared byte length, the stated source digest, and one span per
-/// text-carrying fact — the two extraction rules of the law, and no
-/// class dispatch.
-struct GraphDocument {
-    byte_length: u64,
-    source_digest: ContentDigest,
-    spans: Vec<GraphSpan>,
-}
-
-/// Every claim parsed back through the workspace parser and folded into
-/// the decode law's inputs.
-fn graph_document(claims: &[Claim]) -> GraphDocument {
-    use purrdf_core::ir::TermRef;
-
+/// The claims as one Turtle document, parsed back through the
+/// workspace parser: the graph a consumer holds.
+fn graph_of(claims: &[Claim]) -> (String, std::sync::Arc<RdfDataset>) {
     let turtle: String = claims.iter().map(|c| c.turtle.as_str()).collect();
     let dataset = parse_dataset(turtle.as_bytes(), "text/turtle", None).expect("the graph parses");
-
-    // (subject, predicate) -> object, gathered as strings; the decode
-    // law reads five predicates and two literal shapes and nothing
-    // else.
-    let mut byte_length: Option<u64> = None;
-    let mut source_digest: Option<ContentDigest> = None;
-    // subject -> facts the two extraction rules read.
-    #[derive(Default)]
-    struct Node {
-        text: Option<String>,
-        verbatim: Option<String>,
-        byte_start: Option<u64>,
-        byte_end: Option<u64>,
-        verbatim_start: Option<u64>,
-        verbatim_end: Option<u64>,
-        continues: Option<String>,
-    }
-    let mut nodes: std::collections::BTreeMap<String, Node> = std::collections::BTreeMap::new();
-
-    let voc = v();
-    for quad in dataset.iter() {
-        let TermRef::Iri(subject) = quad.s else {
-            continue;
-        };
-        let TermRef::Iri(predicate) = quad.p else {
-            continue;
-        };
-        let literal_value = match quad.o {
-            TermRef::Literal { lexical, .. } => Some(lexical.to_owned()),
-            _ => None,
-        };
-        let int_value = literal_value.as_deref().and_then(|s| s.parse::<u64>().ok());
-        if subject == DOC_ID {
-            if predicate == voc.byte_length {
-                byte_length = int_value;
-            }
-            if predicate == voc.source_digest {
-                let stated = literal_value.clone().expect("a digest literal");
-                let hex = stated.strip_prefix("sha256:").expect("the algorithm tag");
-                source_digest = Some(ContentDigest::from_hex(hex).expect("a digest"));
-            }
-        }
-        let node = nodes.entry(subject.to_owned()).or_default();
-        if predicate == voc.text {
-            // The unit rule reads the one *plain* literal: `xsd:string`,
-            // no language. Anything else under the text predicate is
-            // not the unit's text.
-            if let TermRef::Literal {
-                lexical,
-                datatype,
-                language: None,
-                ..
-            } = quad.o
-                && matches!(dataset.resolve(datatype), TermRef::Iri(XSD_STRING))
-            {
-                node.text = Some(lexical.to_owned());
-            }
-        } else if predicate == voc.verbatim {
-            node.verbatim = literal_value;
-        } else if predicate == voc.byte_start {
-            node.byte_start = int_value;
-        } else if predicate == voc.byte_end {
-            node.byte_end = int_value;
-        } else if predicate == voc.verbatim_start {
-            node.verbatim_start = int_value;
-        } else if predicate == voc.verbatim_end {
-            node.verbatim_end = int_value;
-        } else if predicate == voc.continues
-            && let TermRef::Iri(piece) = quad.o
-        {
-            node.continues = Some(piece.to_owned());
-        }
-    }
-
-    let mut spans = Vec::new();
-    for node in nodes.values() {
-        // Rule one: a node stating `verbatim` contributes it over its
-        // verbatim span.
-        if let Some(text) = &node.verbatim {
-            spans.push(GraphSpan {
-                byte_start: node.verbatim_start.expect("a verbatim span start"),
-                byte_end: node.verbatim_end.expect("a verbatim span end"),
-                text: text.clone(),
-                continues: None,
-            });
-        }
-        // Rule two: a unit contributes its plain text over its byte
-        // span, with `continues` resolved to the named piece's own
-        // span.
-        if let Some(text) = &node.text {
-            let continues = node.continues.as_ref().map(|piece| {
-                let it = nodes
-                    .get(piece)
-                    .expect("the continued piece is in the graph");
-                (
-                    it.byte_start.expect("the piece's span start"),
-                    it.byte_end.expect("the piece's span end"),
-                )
-            });
-            spans.push(GraphSpan {
-                byte_start: node.byte_start.expect("a span start"),
-                byte_end: node.byte_end.expect("a span end"),
-                text: text.clone(),
-                continues,
-            });
-        }
-    }
-    GraphDocument {
-        byte_length: byte_length.expect("the document states its length"),
-        source_digest: source_digest.expect("the document states its digest"),
-        spans,
-    }
+    (turtle, dataset)
 }
 
-/// Markdown to RDF to Markdown, through the parser, byte for byte.
+/// Markdown to RDF to Markdown, through the parser and the shipped
+/// decode law, byte for byte.
 fn assert_roundtrips(text: &str, profile: &Profile) {
     let claims = slice(text, profile);
-    let graph = graph_document(&claims);
-    let spans: Vec<VerbatimSpan<'_>> = graph
-        .spans
-        .iter()
-        .map(|s| VerbatimSpan {
-            byte_start: s.byte_start,
-            byte_end: s.byte_end,
-            text: &s.text,
-            continues: s.continues,
-        })
-        .collect();
-    let rebuilt = reconstruct(graph.byte_length, &graph.source_digest, &spans)
-        .expect("the graph decodes back to a document");
+    let (first, dataset) = graph_of(&claims);
+    let rebuilt =
+        decode_document(&dataset, &v(), DOC_ID).expect("the graph decodes back to a document");
     assert_eq!(rebuilt, text, "and the document is the very bytes sliced");
     // The encode leg is deterministic in the bytes and the profile:
     // the same input renders the same graph, byte for byte.
@@ -217,7 +78,6 @@ fn assert_roundtrips(text: &str, profile: &Profile) {
         .iter()
         .map(|c| c.turtle.as_str())
         .collect();
-    let first: String = claims.iter().map(|c| c.turtle.as_str()).collect();
     assert_eq!(first, again);
 }
 
@@ -229,11 +89,48 @@ const GUIDE: &str = include_str!("fixtures/field-guide.md");
 fn the_field_guide_roundtrips_under_the_declared_law_and_under_splitting_bounds() {
     assert_roundtrips(GUIDE, &profile());
     for (max_bytes, overlap) in [(200, 40), (200, 0), (64, 63), (5, 2)] {
-        assert_roundtrips(GUIDE, &tight(max_bytes, overlap));
+        let bounded = tight(max_bytes, overlap);
+        // The bound is small enough that the guide's long units MUST
+        // split, and the graph must say so: a split law that regressed
+        // to never splitting would otherwise round-trip green here
+        // while the chains it claims to exercise never existed.
+        let (turtle, _) = graph_of(&slice(GUIDE, &bounded));
+        assert!(
+            turtle.contains(&format!("<{}>", v().continues)),
+            "a {max_bytes}-byte bound splits the guide's units"
+        );
+        assert_roundtrips(GUIDE, &bounded);
     }
     let mut based = profile();
     based.canon_base = Some("https://example.org/canon#".to_owned());
     assert_roundtrips(GUIDE, &based);
+}
+
+/// The shared-cut geometry, in a real graph rather than a hand-built
+/// span array: two pieces of one chain ending at one cut, the very
+/// case where the walk's frontier and the declared piece part company.
+#[test]
+fn a_real_split_chain_with_a_shared_cut_declares_its_overlaps_and_roundtrips() {
+    let text = "# H\n\nab\ncd\nef\ngh\nij\n";
+    let bounded = tight(4, 1);
+    let claims = slice(text, &bounded);
+    let unit_spans: Vec<(u64, u64)> = claims
+        .iter()
+        .filter(|c| c.kind == ClaimKind::Unit)
+        .map(|c| c.span.expect("a unit span"))
+        .collect();
+    assert!(
+        unit_spans
+            .iter()
+            .any(|a| unit_spans.iter().any(|b| a != b && a.1 == b.1)),
+        "two pieces of the chain end at one cut: {unit_spans:?}"
+    );
+    let (turtle, dataset) = graph_of(&claims);
+    assert!(
+        turtle.contains(&format!("<{}>", v().continues)),
+        "and the chain declares its pieces"
+    );
+    assert_eq!(decode_document(&dataset, &v(), DOC_ID).as_deref(), Ok(text));
 }
 
 #[test]
@@ -277,18 +174,53 @@ fn every_shape_of_document_roundtrips_byte_for_byte() {
     }
 }
 
-/// The A1 rider of the convergence: "maximal run" in its checkable
-/// form. No two structure nodes may be adjacent — one's end equal to
-/// the next's start — because a maximal run would have absorbed its
-/// neighbour. Held over the graph, so a per-line emitter cannot
-/// regress in behind the model's back.
+/// The graph half's refusals, each beside the neighbouring graph that
+/// still decodes: a decode anchored to a document node that is absent
+/// or unreadable, and a text-bearing node shorn of its span.
+#[test]
+fn a_graph_that_cannot_anchor_a_decode_names_what_it_lacks() {
+    let claims = slice("# T\n\nbody\n", &profile());
+    let (turtle, dataset) = graph_of(&claims);
+    // The wrong document id anchors nothing: the facts are absent.
+    assert_eq!(
+        decode_document(&dataset, &v(), "https://example.org/doc/other"),
+        Err(DecodeError::MissingDocumentFact {
+            predicate: "byteLength"
+        })
+    );
+    // A cover whose text-bearing node lost its offsets is named by
+    // what it left out: drop the byteStart line of the one unit.
+    let amputated: String = turtle
+        .lines()
+        .filter(|line| !(line.contains(&format!("<{}>", v().byte_start)) && line.contains("unit:")))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let dataset = parse_dataset(amputated.as_bytes(), "text/turtle", None).expect("still a graph");
+    assert!(matches!(
+        decode_document(&dataset, &v(), DOC_ID),
+        Err(DecodeError::IncompleteSpan {
+            missing: "byteStart",
+            ..
+        })
+    ));
+    // The neighbour: the whole graph still decodes.
+    let (_, whole) = graph_of(&claims);
+    assert_eq!(
+        decode_document(&whole, &v(), DOC_ID).as_deref(),
+        Ok("# T\n\nbody\n")
+    );
+}
+
+/// The A-series invariants of the emission, held over the graph. No
+/// two structure runs touch — a maximal run absorbed its neighbour —
+/// and none is empty, the last included.
 #[test]
 fn no_two_structure_nodes_are_adjacent_and_none_is_empty() {
     for p in [profile(), tight(6, 3)] {
         let claims = slice(GUIDE, &p);
         let mut runs: Vec<(u64, u64)> = claims
             .iter()
-            .filter(|c| c.kind == purrdf_markdown::ClaimKind::Structure)
+            .filter(|c| c.kind == ClaimKind::Structure)
             .map(|c| c.span.expect("a structure span"))
             .collect();
         assert!(
@@ -311,17 +243,16 @@ fn no_two_structure_nodes_are_adjacent_and_none_is_empty() {
     }
 }
 
-/// "Plain means content, typed means bytes" — the A2 rider, held over
-/// every literal of the graph: a unit's text and a section's heading
-/// words are the only plain literals a claim carries, so an index that
-/// selects plain strings sees content and not a byte of structure.
+/// Plain means content, typed means bytes — held over every literal of
+/// the graph: a unit's text and a section's heading words are the only
+/// plain literals a claim carries, so an index that selects plain
+/// strings sees content and not a byte of structure.
 #[test]
 fn the_only_plain_literals_are_unit_texts_and_heading_words() {
     use purrdf_core::ir::TermRef;
     let claims = slice(GUIDE, &tight(200, 40));
     let voc = v();
-    let turtle: String = claims.iter().map(|c| c.turtle.as_str()).collect();
-    let dataset = parse_dataset(turtle.as_bytes(), "text/turtle", None).expect("parses");
+    let (_, dataset) = graph_of(&claims);
     let mut plain = 0usize;
     for quad in dataset.iter() {
         let TermRef::Iri(predicate) = quad.p else {

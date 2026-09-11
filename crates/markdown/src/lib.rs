@@ -267,7 +267,9 @@ mod split;
 use purrdf_core::{BaseIri, parse_iri};
 
 pub use crate::claims::render;
-pub use crate::decode::{ReconstructError, VerbatimSpan, reconstruct};
+pub use crate::decode::{
+    DecodeError, ReconstructError, VerbatimSpan, decode_document, reconstruct,
+};
 pub use crate::error::MarkdownError;
 pub use crate::identity::{citation_iri, section_iri, structure_iri, unit_iri};
 pub use crate::model::{
