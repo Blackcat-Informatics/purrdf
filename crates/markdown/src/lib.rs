@@ -117,13 +117,14 @@
 //!
 //! The output is a pure, deterministic function of the bytes and a
 //! declared [`Profile`]: the same input slices to byte-identical claims
-//! on every target, and every parameter of the law is inside the
-//! profile's identity, so a change re-mints it rather than drifting.
+//! on every target, and every parameter of the law — the canon base
+//! among them — is inside [`Profile::contract_id`], so a change re-mints
+//! it rather than drifting.
 //!
 //! A unit's IRI is `<node base>unit:sha256:<hex>`, the hex being the
 //! SHA-256 of a length-prefixed preimage of the kind, the source id,
-//! the profile's contract id, the byte span, the digest algorithm tag,
-//! and the SHA-256 of the span's bytes. Two byte-identical paragraphs in
+//! the profile's **chunking** id, the byte span, the digest algorithm
+//! tag, and the SHA-256 of the span's bytes. Two byte-identical paragraphs in
 //! one document are two nodes, because the span is inside the identity;
 //! an insertion moves every later span and re-mints every later unit
 //! while leaving their text untouched; a same-length substitution
@@ -134,21 +135,44 @@
 //!
 //! A citation node is minted the same way over the pair it names — the
 //! concordance row's own line span, and a digest of that line together
-//! with the unit's IRI — so a row that lifts onto two verses is two
-//! nodes and a unit that re-mints re-mints every citation of it.
+//! with the unit's IRI and the anchor terms the row mints — so a row
+//! that lifts onto two verses is two nodes, a unit that re-mints
+//! re-mints every citation of it, and a row read under two canon bases
+//! is two nodes rather than one node reifying two different triples.
 //!
-//! # Two identities, and which is which
+//! # Two preimages, three ids, and which is which
 //!
-//! A profile states **two** ids and they are never equal.
-//! [`Profile::contract_id`] is this crate's own law id, derived over the
-//! line-oriented preimage of [`Profile::stage_bytes`]; it is what the
-//! graph states and what every node identity carries.
-//! [`Profile::purremb_chunking_stage`] is the same law as a PURREMB
-//! chunking stage, whose canonical form is TLV-framed and which an
-//! embedding family therefore *can* reproduce — the id derived from it
-//! is the one a chunk target carries. The law id is not a chunking-stage
-//! id and no family can derive it; a consumer that wires it into one has
-//! named an id nothing on the other side can check.
+//! One preimage cannot do both jobs, so there are two.
+//! [`Profile::chunking_bytes`] states only what decides where a unit
+//! starts and ends: the name, the version, the dialect grammar, and the
+//! split law with its constants. [`Profile::emission_bytes`] is those
+//! bytes verbatim followed by everything else that decides a byte of the
+//! graph — the vocabulary, the canon base (its absence stated, not
+//! implied), the concordance lift, the identity formulas and the
+//! emission law.
+//!
+//! From them, three ids, and no two of them are ever equal:
+//!
+//! * [`Profile::chunking_id`], over the chunking preimage, is the third
+//!   field of every node identity. A node is addressed by the law that
+//!   cut it, so declaring a canon base or renaming a predicate leaves
+//!   every unit and section where it was and the two graphs merge.
+//! * [`Profile::contract_id`] is the law id, over the emission preimage,
+//!   and it is what the graph states as `sliceProfile`. Two runs that
+//!   agree on it agree on **every byte they emit** — which is why the
+//!   canon base is inside it: a declared base turns every citation
+//!   object from a typed literal into a minted IRI.
+//! * [`Profile::purremb_chunking_stage`] carries the chunking preimage
+//!   as a PURREMB stage, whose canonical form is TLV-framed and which an
+//!   embedding family therefore *can* reproduce — the id derived from it
+//!   is the one a chunk target carries. Neither of the other two is a
+//!   chunking-stage id and no family can derive them; a consumer that
+//!   wires one into a family has named an id nothing on the other side
+//!   can check.
+//!
+//! The split is what a consumer feels. Embeddings are addressed by the
+//! chunking id, so they survive a renamed term and a newly declared
+//! canon base and are invalidated exactly when a unit's bytes move.
 //!
 //! [`Unit::text_chunk_target`] hands a unit over as the kernel's own
 //! chunk subject, and [`verify_unit`] proves a unit against bytes by
@@ -339,7 +363,7 @@ pub struct Claim {
 /// [`MarkdownError::MalformedVocabulary`] when one of them is no IRI
 /// reference at all; [`MarkdownError::InvalidProfileName`] when its
 /// name carries a control character, which the line-oriented stage
-/// description of [`Profile::stage_bytes`] cannot frame;
+/// description of [`Profile::chunking_bytes`] cannot frame;
 /// [`MarkdownError::InvalidMaxBytes`] when its byte bound is under
 /// [`MIN_MAX_BYTES`], a bound no split could honour without cutting
 /// inside a scalar; [`MarkdownError::InvalidOverlap`] when its overlap

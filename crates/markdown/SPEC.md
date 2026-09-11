@@ -48,8 +48,9 @@ where a byte span counts bytes, over the same source, from scalar zero.
 
 **Profile** — the declared law: a name, a version, a vocabulary, the byte
 bound `max_bytes`, the overlap `overlap`, and an optional canon IRI base.
-Every one of those except the canon base is inside the profile's
-identity (§5).
+Every one of them, the canon base included, is inside the profile's
+**contract id**; the name, the version and the two constants are also
+inside its **chunking id** (§5).
 
 **Document** — the whole source, and the root of the containment order.
 
@@ -408,40 +409,69 @@ anchor is a typed literal, and no anchor is refused at all.
 
 ## 5. Identity
 
-Node IRIs are **content-addressed** and carry the whole law inside them.
+Node IRIs are **content-addressed** and carry the law that cut them
+inside them.
 
-The **profile's contract id** is a digest over a canonical, line-oriented
-*stage description* that states **the whole law**, one fact per line: the
-profile's name; its version; its vocabulary (as one base where every IRI
-derives from one, else one line per IRI); the dialect grammar — the
-heading, movement, verse, paragraph, rule and table-row forms, the `u64`
-verse bound, the trimmed-line rule that makes CRLF state its LF twin's
-structure, the leading-indent bound with its tab clause, and the
-byte-order-mark rule; `max_bytes`; `overlap`; the
-split law with its cut, resume and snap clauses; the concordance law —
-the trigger heading, the containment reading of *inside it*, the column
+A profile has **two** canonical, line-oriented preimages, and they answer
+two different questions. Both are UTF-8 plain text, one fact of the law
+per line, unframed: a newline ends one fact and begins the next, and no
+field is length-prefixed or quoted.
+
+**The chunking preimage** states only what decides where a unit starts
+and ends and what bytes are in it: the profile's name; its version; the
+dialect grammar — the heading, movement, verse, paragraph, rule and
+table-row forms, the `u64` verse bound, the trimmed-line rule that makes
+CRLF state its LF twin's structure, the leading-indent bound with its tab
+clause, and the byte-order-mark rule; the clause that a table row is the
+content of no unit whether or not a concordance section is in force;
+`max_bytes`; `overlap`; and the split law with its cut, resume and snap
+clauses. Its digest is the **chunking id**.
+
+**The emission preimage** is the chunking preimage **verbatim, as a
+prefix**, followed by every further clause that decides a byte of the
+emitted graph: the vocabulary (as one base where every IRI derives from
+one, else one line per IRI); the canon base, written `canon base <value>`
+where one is declared and `canon base none` where none is — the absence
+MUST be stated and MUST NOT be left implied by a missing line; the
+section-level rule for movements; the rest of the concordance law — the
+trigger heading, the containment reading of *inside it*, the column
 order, the cell-escape law, the verse-range spellings, the backtick rule,
-the report-never-refuse rule, and the anchor lift with its
-containment test; the three identity formulas; the digest algorithm tag;
-and the emission law of §11, term list and reification shape included.
+the report-never-refuse rule, and the anchor lift with its containment
+test; the three identity formulas; the digest algorithm tag; and the
+emission law of §11, term list and reification shape included. Its digest
+is the **contract id**.
 
-The description states the whole law because the contract id is the
+The emission preimage states the whole law because the contract id is the
 handle a consumer keeps: two runs that agree on the id MUST agree on
-every byte they emit. A clause left out of the description would be a
-clause a producer could change while the id stood still, and a consumer
-holding that id would have no way to learn of it. An implementation MUST
-therefore re-mint the id when it changes any clause of this
-specification, the emission law among them.
+every byte they emit. A clause left out of it would be a clause a
+producer could change while the id stood still, and a consumer holding
+that id would have no way to learn of it. An implementation MUST
+therefore re-mint the contract id when it changes any clause of this
+specification, the emission law among them, and MUST re-mint it when the
+profile's canon base changes — a declared base turns every citation
+object from a typed literal into a minted IRI, so two profiles differing
+only there emit different bytes and MUST NOT share an id.
 
-Because the preimage is line-oriented and unframed, a profile's name MUST
-NOT carry a control character: a newline inside a name would state
+Because the chunking preimage is a prefix of the emission preimage, no
+clause that can move a unit boundary is outside either id: the contract
+id can never stand still while a boundary moves.
+
+The two ids are two because they are held for two different lengths of
+time. The contract id answers for the graph and moves whenever a byte of
+it would; the chunking id answers for the *cut*, and a consumer that
+embedded a document's units holds vectors that are stale exactly when a
+unit's bytes move and at no other time. An implementation MUST NOT
+address chunk parameters by the contract id, and MUST NOT invalidate a
+chunking identity for a change — a renamed term, a declared canon base —
+that moves no boundary.
+
+Because both preimages are line-oriented and unframed, a profile's name
+MUST NOT carry a control character: a newline inside a name would state
 further facts of the law rather than name it, and two profiles could then
 describe themselves the same way. The refusal is a bound of the identity
-format, not a taste in names.
-
-The canon base is **outside** the contract id. It is an option of the
-consumer — where the anchors of a canon live — and not a parameter of the
-law, so declaring one MUST NOT re-mint a document's nodes.
+format, not a taste in names. A canon base needs no such refusal: an
+admitted base is an absolute IRI (§4.3) and the IRI grammar admits no
+control character.
 
 A **unit's IRI** is `<node base>unit:<alg>:<hex>`, where `<alg>` is the
 digest algorithm tag (`sha256` in this version) and `<hex>` is the digest
@@ -449,11 +479,24 @@ of a length-prefixed preimage of, in order:
 
 1. the kind (`unit`),
 2. the source id,
-3. the profile's contract id,
+3. the profile's **chunking id**,
 4. the byte span's start, as eight bytes little-endian,
 5. the byte span's end, likewise,
 6. the digest algorithm tag,
 7. the digest of the span's own bytes.
+
+Field 3 is the chunking id and MUST NOT be the contract id. A node's
+identity answers *what this is* — this span of these bytes of this
+document, cut by this law — and a vocabulary or a canon base changes what
+is **said** about a unit, never what the unit is. Were the contract id
+the field, a consumer that merely declared a canon base, or renamed one
+predicate, would re-mint every unit and section of its corpus and orphan
+every reference it had stored, and two graphs describing the same text
+under two vocabularies could never be merged. With the chunking id there
+they describe the same nodes and merge, and the `sliceProfile` literal on
+the document node (§11) still tells the two laws apart. The one node
+whose identity must notice the canon base is the citation, and it
+notices it in its own content digest, below.
 
 Every field is prefixed with its length as eight bytes little-endian, so
 no two field sequences share a preimage. A **section's IRI** is the same
@@ -462,16 +505,33 @@ that span's bytes.
 
 A **citation's IRI** is the same formula with the kind `citation`, over
 the concordance row's own line span, and with the content digest taken
-over a length-prefixed preimage of two fields: the row's line bytes, and
-the IRI of the unit the row lifted onto. A citation names a **pair**, so
-both halves of it MUST be inside the identity: one row lifting onto two
-verses is two citations, and two rows lifting onto one verse are two
-more. Because the unit's IRI is a field of the preimage, a unit that
-re-mints re-mints every citation of it, and a row copied verbatim into a
-second document mints different citations there.
+over a length-prefixed preimage of: the row's line bytes, the IRI of the
+unit the row lifted onto, and then the **triple terms the node reifies**,
+each rendered exactly as §11.2 writes it, in the order the row wrote its
+anchors. A citation names a **pair**, so both halves of it MUST be inside
+the identity: one row lifting onto two verses is two citations, and two
+rows lifting onto one verse are two more. Because the unit's IRI is a
+field of the preimage, a unit that re-mints re-mints every citation of
+it, and a row copied verbatim into a second document mints different
+citations there.
 
-Four consequences are load-bearing, and an implementation MUST
-reproduce all four:
+The reified terms MUST be inside it, and the row's line bytes are not a
+substitute for them. A citation node is a **reifier**: it identifies one
+occurrence of one triple and states that triple as an `rdf:reifies`
+object (§11.1). What the graph states is not what the row wrote — under a
+declared canon base the object is the IRI `base ++ anchor` and under none
+it is the anchor as a literal typed with the anchor datatype, and the
+predicate is whatever the vocabulary's `cites` term names — so one row
+read under two profiles can state two different triples while every byte
+of the row stands still. Were the reified terms outside the preimage,
+both readings would mint the **same** node IRI, and a consumer merging
+two stores would hold one reifier reifying two mutually exclusive
+triples. The whole term is the field, subject, predicate and object
+together, because the whole term is what is reified. A row that lifted no
+anchor contributes no such field and reifies nothing.
+
+Five consequences are load-bearing, and an implementation MUST
+reproduce all five:
 
 * Two byte-identical paragraphs in one document are two distinct nodes,
   because the span is inside the identity.
@@ -486,23 +546,40 @@ reproduce all four:
   hex the unit's IRI carries, so a consumer holding the source proves the
   binding between a node and its bytes by comparison and never by
   re-encoding.
+* Declaring a canon base, or changing a vocabulary term other than the
+  node base, re-mints every **citation** of a document and leaves every
+  unit and section where it was. The two signatures are opposite and both
+  are observable, and they are the shape of the two ids: what a unit *is*
+  did not change, and what a citation *reifies* did.
 
-### 5.1 The two identities, and the verification law
+### 5.1 The three identities, and the verification law
 
-A profile states **two** identities and they are never equal. The
-contract id above is the **law id**: a digest over the unframed,
-line-oriented stage description, and the id this specification writes
-into node identities and into the `sliceProfile` literal of §11. The
-second is the **chunking-stage id** of an embedding family, derived over
-that family's canonical stage encoding, which is tag-and-length framed
-rather than line-oriented. Because the two preimages are framed
-differently, no family can reproduce the law id, and an implementation
-MUST NOT write the law id where a chunking-stage id is expected. An
-implementation that offers a document to an embedding pipeline MUST offer
-the law as a stage in that pipeline's own encoding — carrying the same
-stage description as its parameters, so that neither id can move while
-the other stands still — and use the id derived from *that* wherever a
-chunk names its chunking contract.
+A profile states **three** identities and no two of them are ever equal.
+
+The **contract id** is the law id: a digest over the unframed,
+line-oriented emission preimage, and the id this specification writes
+into the `sliceProfile` literal of §11. The **chunking id** is a digest
+over the unframed chunking preimage, and the id this specification writes
+into node identities. The third is the **chunking-stage id** of an
+embedding family, derived over that family's canonical stage encoding,
+which is tag-and-length framed rather than line-oriented.
+
+Because the framings differ, no family can reproduce either of the first
+two, and because the emission preimage is strictly longer than the
+chunking preimage, those two are never each other. An implementation MUST
+NOT write the contract id or the chunking id where a chunking-stage id is
+expected.
+
+An implementation that offers a document to an embedding pipeline MUST
+offer the law as a stage in that pipeline's own encoding, carrying **the
+chunking preimage** as its parameters, and use the id derived from *that*
+wherever a chunk names its chunking contract. The parameters are the
+chunking preimage and not the emission preimage because a chunking stage
+that carried the wider law would be mislabelled: it would announce a new
+chunking contract for a renamed predicate, and every chunk of an
+unchanged cut would be declared stale. Since the chunking preimage is a
+prefix of the emission preimage, the stage still cannot stand still while
+a boundary moves.
 
 A unit offered as a chunk carries its byte span, its scalar span and its
 content digest unchanged. The **verification law** for such a chunk is
@@ -556,9 +633,11 @@ a row's paths beside that row's own anchors. `Citation` and `unit` are
 about that node too: the class it is stated with, and the back-edge to
 the unit it is an edge of, both of which it carries whatever its row
 lifted (§11.1). Extending the term set
-therefore changes the stage description, and so re-mints every contract
-id and every node under it (§5); that is the mechanism working, and an
-implementation MUST NOT hold a term set constant to preserve an id.
+therefore changes the emission preimage, and so re-mints every contract
+id and every citation node under it (§5) — and leaves every unit and
+section where it was, because a term set moves no boundary. That is the
+mechanism working, and an implementation MUST NOT hold a term set
+constant to preserve an id.
 
 Two local names are deliberately **dual-role**: `heading` is both the
 predicate carrying a section's heading text and the datatype of that
@@ -743,8 +822,8 @@ it came to run.
 This section states the graph as it is emitted at **this version of this
 specification**. Sections 1 through 9 are the law; this is the current
 projection of it, and it is stated separately for that reason. It is
-nonetheless inside the profile's identity (§5): changing it re-mints
-every contract id and every node under one.
+nonetheless inside the profile's contract id (§5): changing it re-mints
+every contract id, and every citation node under one.
 
 Output is one **claim** per node, in document order — the document node
 first, then sections and units interleaved as they occur, whichever

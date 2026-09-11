@@ -475,7 +475,9 @@ impl<'a> Unit<'a> {
     /// over the same bytes), and `chunking_id` is the family's chunking
     /// id — the one derived from
     /// [`Profile::purremb_chunking_stage`](crate::Profile::purremb_chunking_stage),
-    /// never the profile's law id. Both are the caller's to supply
+    /// never the profile's law id and never its unframed
+    /// [`Profile::chunking_id`](crate::Profile::chunking_id) either.
+    /// Both are the caller's to supply
     /// because both are facts about the pack, not about the document.
     ///
     /// # The verification law
@@ -778,9 +780,10 @@ impl<'a> Document<'a> {
     /// [`render`](crate::render) applies.
     ///
     /// It is offered because a consumer that keeps the model regularly
-    /// needs it — the contract id inside every node identity
-    /// ([`Profile::contract_id`]), the `sliceProfile` literal
-    /// ([`Profile::label`]), the chunking stage a `.purremb` family
+    /// needs it — the chunking id inside every node identity
+    /// ([`Profile::chunking_id`]), the law id the `sliceProfile` literal
+    /// states ([`Profile::contract_id`], through
+    /// [`Profile::label`]), the chunking stage a `.purremb` family
     /// carries ([`Profile::purremb_chunking_stage`]), the vocabulary an
     /// index reads the emitted triples back through — and reaching for
     /// the caller's own copy risks reaching for a *different* one.

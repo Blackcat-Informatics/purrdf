@@ -54,6 +54,29 @@ fn small() -> Profile {
     profile
 }
 
+/// The triple terms a row's lift onto one unit reifies, written as the
+/// graph writes them: `<<( <unit> <cites> <anchor> )>>`, the anchor
+/// being the IRI `base ++ anchor` under a declared canon base and a
+/// typed literal under none.
+///
+/// It is spelled out here rather than borrowed from the crate, because
+/// it is the field a consumer re-deriving a citation node has to build
+/// for itself out of the row, the unit and the profile it holds. The
+/// guide's anchors need no escaping, so the plain format is the
+/// canonical one.
+fn reified_terms(row: &purrdf_markdown::Citation, profile: &Profile, unit: &str) -> Vec<String> {
+    row.anchors()
+        .iter()
+        .map(|anchor| {
+            let object = match &profile.canon_base {
+                Some(base) => format!("<{base}{anchor}>"),
+                None => format!("\"{anchor}\"^^<{}>", profile.vocabulary.dt_anchor),
+            };
+            format!("<<( <{unit}> <{}> {object} )>>", profile.vocabulary.cites)
+        })
+        .collect()
+}
+
 fn slice(text: &str, profile: &Profile) -> Vec<Claim> {
     slice_markdown(
         &SourceDocument {
@@ -485,7 +508,7 @@ fn every_unit_literal_is_the_verbatim_span_and_the_only_plain_literal() {
                 unit_iri(
                     &v(),
                     GUIDE_ID,
-                    &profile.contract_id(),
+                    &profile.chunking_id(),
                     start,
                     end,
                     text.as_bytes()
@@ -998,7 +1021,7 @@ fn a_verse_two_rows_cover_keeps_each_rows_sources_paired_with_that_rows_anchors(
 fn a_citation_node_is_content_addressed_over_the_row_and_the_unit_it_lifted_onto() {
     let document = model(GUIDE, &v1());
     let claims = slice(GUIDE, &v1());
-    let contract = v1().contract_id();
+    let contract = v1().chunking_id();
     let line_of = |row: &purrdf_markdown::Citation| {
         let span = row.span();
         &GUIDE.as_bytes()[span.start as usize..span.end as usize]
@@ -1024,6 +1047,7 @@ fn a_citation_node_is_content_addressed_over_the_row_and_the_unit_it_lifted_onto
                 span.end,
                 line_of(row),
                 &claim.subject,
+                &reified_terms(row, &v1(), &claim.subject),
             );
             assert!(
                 citation_nodes(claim).contains(&minted),
@@ -1052,6 +1076,7 @@ fn a_citation_node_is_content_addressed_over_the_row_and_the_unit_it_lifted_onto
             span.end,
             line_of(row),
             &unit_claim(verse).subject,
+            &reified_terms(row, &v1(), &unit_claim(verse).subject),
         )
     };
     assert_ne!(mint(first, 1), mint(first, 2), "one row, two verses");
@@ -1115,11 +1140,12 @@ fn a_row_with_sources_and_no_anchors_states_a_typed_citation_node_bound_to_its_u
     let minted = purrdf_markdown::citation_iri(
         &v(),
         GUIDE_ID,
-        &v1().contract_id(),
+        &v1().chunking_id(),
         span.start,
         span.end,
         &GUIDE.as_bytes()[span.start as usize..span.end as usize],
         &two.subject,
+        &reified_terms(row, &v1(), &two.subject),
     );
     let stated = citation_lines(two, &minted);
     assert_eq!(
@@ -1460,7 +1486,7 @@ fn a_units_scalar_offsets_and_content_digest_are_stated_as_data() {
         unit_iri(
             &v(),
             GUIDE_ID,
-            &v1().contract_id(),
+            &v1().chunking_id(),
             28,
             72,
             &text.as_bytes()[28..72]
@@ -1547,8 +1573,40 @@ fn every_claim_parses_as_turtle_and_canonicalizes_under_purrdf() {
     }
 }
 
+/// The declared profile's two ids, pinned as the goldens pin the
+/// claims. The contract id is the one the document node states as its
+/// `sliceProfile`, so `field-guide.nt` carries it too; the chunking id
+/// is the one inside every node IRI, and nothing in the graph spells it
+/// out, which is why it is spelled out here.
+///
+/// A change to the law moves one or both, and editing these two lines
+/// is the deliberate step that records which. They are the real values
+/// a report about a law change should quote.
+const DECLARED_CONTRACT_ID: &str =
+    "259253766e9f192e8a9e6b3c9e5796791ca125bf935c44b1daed93d1fe6a612a";
+const DECLARED_CHUNKING_ID: &str =
+    "40c979545ccb6e9a3007d38c93adb72c9735f39080a519e6d399bd6e0ed1e872";
+
+/// The same profile with the byte bound widened to 4096 and nothing
+/// else touched: a split constant, so **both** ids move, and these are
+/// the values they move to.
+const WIDER_CONTRACT_ID: &str = "be23e622b0771150a7f8429065da6a06e80e1f13d4e4c0ceae11fbd98cc0f7d7";
+const WIDER_CHUNKING_ID: &str = "2a832603cbd4458673dc826e8b9018d0b489530fa46b31bc95a243927af9bc49";
+
+/// A second canon base, under another authority: the third profile of
+/// the split's central vector.
+const OTHER_CANON_BASE: &str = "https://other.example/atlas/";
+
+/// The declared profile with its byte bound widened and nothing else
+/// changed.
+fn wider() -> Profile {
+    let mut profile = v1();
+    profile.max_bytes = 4096;
+    profile
+}
+
 #[test]
-fn the_profile_id_states_itself_moves_with_every_constant_and_ignores_the_canon_base() {
+fn the_profile_id_states_itself_and_moves_with_every_constant_the_canon_base_among_them() {
     let id = |profile: &Profile| profile.contract_id().to_hex();
     let declared = id(&v1());
     assert_eq!(
@@ -1556,6 +1614,10 @@ fn the_profile_id_states_itself_moves_with_every_constant_and_ignores_the_canon_
         id(&v1()),
         "the same constants state the same identity"
     );
+    // The before value, pinned: a law change that moved it silently
+    // would pass every other vector in this file.
+    assert_eq!(declared, DECLARED_CONTRACT_ID);
+    assert_eq!(v1().chunking_id().to_hex(), DECLARED_CHUNKING_ID);
 
     let mut renamed = v1();
     renamed.name = format!("{PROFILE_NAME}-other");
@@ -1563,29 +1625,42 @@ fn the_profile_id_states_itself_moves_with_every_constant_and_ignores_the_canon_
     reversioned.version = 2;
     let mut revocabularied = v1();
     revocabularied.vocabulary.text = "https://example.org/other/body".to_owned();
-    let mut wider = v1();
-    wider.max_bytes = 4096;
     let mut looser = v1();
     looser.overlap = 64;
-    let moved = [&renamed, &reversioned, &revocabularied, &wider, &looser];
+    let based = under_canon(CANON_BASE);
+    let otherwise_based = under_canon(OTHER_CANON_BASE);
+    let widened = wider();
+    let moved = [
+        &renamed,
+        &reversioned,
+        &revocabularied,
+        &widened,
+        &looser,
+        // The clause that used to be outside the id, and the one the
+        // whole split was drawn for: a declared canon base flips every
+        // citation object from a typed literal to a minted IRI, so a
+        // profile that declares one emits different bytes and MUST NOT
+        // answer to the same id.
+        &based,
+        &otherwise_based,
+    ];
     for profile in moved {
         assert_ne!(
             id(profile),
             declared,
-            "a constant of the law is inside the identity: {}",
-            String::from_utf8(profile.stage_bytes()).expect("utf8")
+            "a clause of the law is inside the identity: {}",
+            String::from_utf8(profile.emission_bytes()).expect("utf8")
         );
     }
     let ids: BTreeSet<String> = moved.iter().map(|p| id(p)).collect();
     assert_eq!(ids.len(), moved.len(), "each change mints its own identity");
 
-    let mut based = v1();
-    based.canon_base = Some(CANON_BASE.to_owned());
-    assert_eq!(
-        id(&based),
-        declared,
-        "the canon base is the consumer's option, not a parameter of the law"
-    );
+    // And the after value of the one deliberate constant change, pinned
+    // beside the before value.
+    assert_eq!(id(&widened), WIDER_CONTRACT_ID);
+    assert_eq!(widened.chunking_id().to_hex(), WIDER_CHUNKING_ID);
+    assert_ne!(WIDER_CONTRACT_ID, DECLARED_CONTRACT_ID);
+    assert_ne!(WIDER_CHUNKING_ID, DECLARED_CHUNKING_ID);
 
     let claims = slice(GUIDE, &v1());
     assert_eq!(
@@ -1596,6 +1671,279 @@ fn the_profile_id_states_itself_moves_with_every_constant_and_ignores_the_canon_
         )),
         "the document states the profile it was sliced under"
     );
+}
+
+#[test]
+fn three_profiles_that_differ_only_in_their_canon_base_are_three_contracts_under_one_chunking_law()
+{
+    // The whole of the split, in one vector. These three profiles are
+    // the same law word for word but for where a canon lives, and they
+    // emit three different graphs — so their contract ids must be three
+    // values, and their chunking ids one, because not a byte of any
+    // unit moved.
+    let three = [v1(), under_canon(CANON_BASE), under_canon(OTHER_CANON_BASE)];
+
+    let contracts: BTreeSet<String> = three.iter().map(|p| p.contract_id().to_hex()).collect();
+    assert_eq!(
+        contracts.len(),
+        3,
+        "a graph that differs is a contract that differs"
+    );
+    let chunkings: BTreeSet<String> = three.iter().map(|p| p.chunking_id().to_hex()).collect();
+    assert_eq!(
+        chunkings.len(),
+        1,
+        "not one boundary moved, so a consumer's embeddings are not stale"
+    );
+    assert_eq!(
+        chunkings.iter().next().map(String::as_str),
+        Some(DECLARED_CHUNKING_ID)
+    );
+
+    // The three graphs really are three graphs, and they differ where
+    // the canon base is read: the object of every citation.
+    let graphs: Vec<String> = three.iter().map(rendered).collect();
+    assert_ne!(graphs[0], graphs[1]);
+    assert_ne!(graphs[0], graphs[2]);
+    assert_ne!(graphs[1], graphs[2]);
+    for (profile, graph) in three.iter().zip(&graphs) {
+        let claims = slice(GUIDE, profile);
+        let one = *units(&claims)
+            .iter()
+            .find(|u| integer(u, &v().verse) == Some(1))
+            .expect("verse 1");
+        let expected = match &profile.canon_base {
+            Some(base) => vec![format!("<{base}reef-shelf>"), format!("<{base}tide-line>")],
+            None => vec![
+                format!("\"reef-shelf\"^^<{}>", v().dt_anchor),
+                format!("\"tide-line\"^^<{}>", v().dt_anchor),
+            ],
+        };
+        assert_eq!(objects(one, &v().cites), expected);
+        assert!(graph.contains(&format!(
+            "\"{PROFILE_NAME}:{}\"",
+            profile.contract_id().to_hex()
+        )));
+    }
+
+    // The units are the same units under all three, because a canon
+    // base says more about a verse and never changes what the verse is.
+    let subjects = |profile: &Profile| -> Vec<String> {
+        slice(GUIDE, profile)
+            .iter()
+            .filter(|c| c.kind != ClaimKind::Document)
+            .map(|c| c.subject.clone())
+            .collect()
+    };
+    assert_eq!(subjects(&three[0]), subjects(&three[1]));
+    assert_eq!(subjects(&three[0]), subjects(&three[2]));
+
+    // And the citation nodes are not — precisely the ones that reify
+    // something. What a reifier reifies is inside its identity, so a
+    // node that states a triple term is re-minted by the base, and a
+    // node that states none is not, because nothing about it changed.
+    let reifying = |profile: &Profile| -> BTreeSet<String> {
+        slice(GUIDE, profile)
+            .iter()
+            .flat_map(citation_triples)
+            .filter(|(_, predicate, _)| predicate == purrdf_markdown::RDF_REIFIES)
+            .map(|(subject, _, _)| subject)
+            .collect()
+    };
+    let silent = |profile: &Profile| -> BTreeSet<String> {
+        let reifies = reifying(profile);
+        slice(GUIDE, profile)
+            .iter()
+            .flat_map(citation_triples)
+            .map(|(subject, _, _)| subject)
+            .filter(|subject| !reifies.contains(subject))
+            .collect()
+    };
+    let (none, first, second) = (
+        reifying(&three[0]),
+        reifying(&three[1]),
+        reifying(&three[2]),
+    );
+    assert_eq!(none.len(), 11, "every lift of the guide but the silent one");
+    assert!(none.is_disjoint(&first));
+    assert!(none.is_disjoint(&second));
+    assert!(first.is_disjoint(&second));
+    // The neighbouring case, which must NOT move: the guide's one row
+    // that names a source and no anchor mints a node that reifies
+    // nothing, and a canon base it never reads cannot re-mint it.
+    let quiet = silent(&three[0]);
+    assert_eq!(quiet.len(), 1, "the guide's anchor-less row");
+    assert_eq!(quiet, silent(&three[1]));
+    assert_eq!(quiet, silent(&three[2]));
+}
+
+#[test]
+fn every_pair_of_profiles_that_agrees_on_the_contract_id_agrees_on_every_byte_it_emits() {
+    // The MUST of the identity law, asked as a property over a spread
+    // of profile shapes rather than of one pair: some of them the same
+    // law reached by two routes, the rest differing in exactly one
+    // clause apiece.
+    let mut renamed = v1();
+    renamed.name = format!("{PROFILE_NAME}-other");
+    let mut reversioned = v1();
+    reversioned.version = 2;
+    let mut retermed = v1();
+    retermed.vocabulary.text = "https://example.org/other/body".to_owned();
+    let mut rebased = v1();
+    rebased.vocabulary = Vocabulary::under("https://example.org/other/").expect("a vocabulary");
+    let mut looser = v1();
+    looser.overlap = 64;
+    // The declared law, reached by declaring a canon base and taking it
+    // back again: the same value, and the id has to say so.
+    let mut restored = under_canon(CANON_BASE);
+    restored.canon_base = None;
+    // And the declared law written out a second time from its parts.
+    let again = Profile::new(PROFILE_NAME, 1, v());
+
+    let profiles = [
+        v1(),
+        small(),
+        under_canon(CANON_BASE),
+        under_canon(CANON_PATH_BASE),
+        renamed,
+        reversioned,
+        retermed,
+        rebased,
+        wider(),
+        looser,
+        restored,
+        again,
+    ];
+    let (mut agreed, mut differed) = (0usize, 0usize);
+    for (i, left) in profiles.iter().enumerate() {
+        for right in &profiles[i + 1..] {
+            if left.contract_id() == right.contract_id() {
+                assert_eq!(
+                    rendered(left),
+                    rendered(right),
+                    "two runs that agree on the contract id agree on every byte they emit"
+                );
+                agreed += 1;
+            } else if rendered(left) != rendered(right) {
+                differed += 1;
+            }
+        }
+    }
+    // Neither half of the property is vacuous: three pairs really do
+    // share an id, and the rest really do emit different graphs.
+    assert_eq!(agreed, 3, "the declared law is in the spread three times");
+    assert!(
+        differed >= 40,
+        "the spread emits a wide field of different graphs: {differed}"
+    );
+}
+
+#[test]
+fn a_split_constant_moves_both_ids_and_a_term_or_a_canon_base_moves_only_the_contract_id() {
+    let declared = v1();
+    // A split constant re-cuts the text, so it is inside both.
+    for moved in [wider(), small()] {
+        assert_ne!(moved.contract_id(), declared.contract_id());
+        assert_ne!(
+            moved.chunking_id(),
+            declared.chunking_id(),
+            "a bound that re-cuts a unit is a chunking law that changed"
+        );
+    }
+    // A vocabulary IRI and a canon base move neither boundary, so they
+    // are inside the contract id and outside the chunking id: a
+    // consumer's embeddings survive both.
+    let mut retermed = declared.clone();
+    retermed.vocabulary.cites = "https://example.org/other/cites".to_owned();
+    for standing in [retermed, under_canon(CANON_BASE)] {
+        assert_ne!(
+            standing.contract_id(),
+            declared.contract_id(),
+            "the graph changed, so the contract changed"
+        );
+        assert_eq!(
+            standing.chunking_id(),
+            declared.chunking_id(),
+            "not one chunk boundary moved, so no embedding is stale"
+        );
+    }
+    // The name and the version are declarations about the cut as much
+    // as about the graph, so they are inside both.
+    let mut renamed = declared.clone();
+    renamed.name = format!("{PROFILE_NAME}-other");
+    assert_ne!(renamed.chunking_id(), declared.chunking_id());
+    assert_ne!(renamed.contract_id(), declared.contract_id());
+}
+
+#[test]
+fn the_chunking_preimage_is_a_prefix_of_the_emission_one_and_both_state_the_canon_base_or_its_absence()
+ {
+    for profile in [v1(), under_canon(CANON_BASE), small()] {
+        let chunking = profile.chunking_bytes();
+        let emission = profile.emission_bytes();
+        assert!(
+            emission.starts_with(&chunking),
+            "no clause that moves a boundary can be outside the wider id"
+        );
+        assert!(emission.len() > chunking.len());
+        let chunking = String::from_utf8(chunking).expect("utf8");
+        let emission = String::from_utf8(emission).expect("utf8");
+        // What the narrow preimage holds, and what it deliberately does
+        // not.
+        assert!(chunking.starts_with(&format!("{}\nversion {}\n", profile.name, profile.version)));
+        assert!(chunking.contains(&format!("max_bytes {}\n", profile.max_bytes)));
+        assert!(chunking.contains(&format!("overlap {}\n", profile.overlap)));
+        assert!(!chunking.contains("vocabulary "));
+        assert!(!chunking.contains("canon base"));
+        assert!(!chunking.contains("emit "));
+        // The canon base is stated either way, so its absence is a fact
+        // of the preimage and never an omission from it.
+        let stated = match &profile.canon_base {
+            Some(base) => format!("canon base {base}\n"),
+            None => "canon base none\n".to_owned(),
+        };
+        assert!(emission.contains(&stated), "{emission}");
+        assert!(emission.contains(&format!("vocabulary {SLICE_BASE}\n")));
+    }
+}
+
+#[test]
+fn two_liftings_of_one_row_that_reify_different_terms_are_two_citation_nodes() {
+    // The row, the span and the unit held fixed, so the only thing that
+    // can tell these apart is the triple term each node reifies. Before
+    // that term entered the preimage every one of these was the same
+    // IRI, and a consumer merging two stores held one reifier reifying
+    // several mutually exclusive triples.
+    let contract = v1().chunking_id();
+    let row = b"| 1 | `atlas/x.logic.ttl` | `a-one` |";
+    let unit = units(&slice(GUIDE, &v1()))[0].subject.clone();
+    let mint = |reified: &[String]| {
+        purrdf_markdown::citation_iri(&v(), GUIDE_ID, &contract, 40, 76, row, &unit, reified)
+    };
+    let term =
+        |predicate: &str, object: String| vec![format!("<<( <{unit}> <{predicate}> {object} )>>")];
+    let literal = |anchor: &str| format!("\"{anchor}\"^^<{}>", v().dt_anchor);
+    let minted = [
+        // Two anchors under one row.
+        mint(&term(&v().cites, literal("a-one"))),
+        mint(&term(&v().cites, literal("a-two"))),
+        // One anchor under two canon bases.
+        mint(&term(&v().cites, format!("<{CANON_BASE}a-one>"))),
+        mint(&term(&v().cites, format!("<{OTHER_CANON_BASE}a-one>"))),
+        // One anchor cited through two spellings of the predicate: the
+        // reifier states the whole triple, so the whole triple is in it.
+        mint(&term("https://example.org/other/cites", literal("a-one"))),
+        // And a row that reified nothing at all.
+        mint(&[]),
+    ];
+    let distinct: BTreeSet<&String> = minted.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        minted.len(),
+        "a different term is a different reifier"
+    );
+    // And it is still a function of what it is handed.
+    assert_eq!(mint(&term(&v().cites, literal("a-one"))), minted[0]);
 }
 
 const THREE: &str = "# B\n\n1. One.\n\n2. Two two.\n\n3. Three.\n";
@@ -2420,7 +2768,7 @@ fn a_vocabulary_that_is_not_under_one_base_is_its_own_profile() {
     let mut explicit = v1();
     explicit.vocabulary.text = "https://example.org/other/body".to_owned();
     assert_ne!(explicit.contract_id().to_hex(), v1().contract_id().to_hex());
-    let stage = String::from_utf8(explicit.stage_bytes()).expect("utf8");
+    let stage = String::from_utf8(explicit.emission_bytes()).expect("utf8");
     assert!(stage.contains("vocabulary explicit\n"));
     assert!(stage.contains("  text https://example.org/other/body\n"));
     let claims = slice(GUIDE, &explicit);
@@ -3282,7 +3630,7 @@ fn analyzing_then_rendering_is_slicing_and_the_model_counts_what_the_claims_stat
                 unit_iri(
                     &v(),
                     GUIDE_ID,
-                    &profile.contract_id(),
+                    &profile.chunking_id(),
                     unit.span().start,
                     unit.span().end,
                     unit.quote().as_bytes()
@@ -4108,7 +4456,7 @@ fn the_standard_vocabulary_is_the_designated_namespace_term_for_term_and_slices_
     // And it is its own profile: a vocabulary is inside the identity.
     assert_ne!(profile.contract_id().to_hex(), v1().contract_id().to_hex());
     assert!(
-        String::from_utf8(profile.stage_bytes())
+        String::from_utf8(profile.emission_bytes())
             .expect("utf8")
             .contains(&format!("vocabulary {STANDARD_NAMESPACE}\n"))
     );
@@ -4148,7 +4496,7 @@ fn purremb_ids(profile: &Profile) -> (TargetId, ChunkingContractId) {
 }
 
 #[test]
-fn the_profiles_two_identities_are_stable_and_are_never_each_other() {
+fn the_profiles_three_identities_are_stable_and_no_two_of_them_are_ever_each_other() {
     let profile = v1();
     let stage = profile.purremb_chunking_stage();
     assert_eq!(
@@ -4164,14 +4512,16 @@ fn the_profiles_two_identities_are_stable_and_are_never_each_other() {
         implementation.parameter_encoding,
         PURREMB_PARAMETER_ENCODING
     );
+    // A chunking stage carries the chunking law, and only it: that is
+    // what makes the label honest rather than merely present.
     assert_eq!(
         implementation.parameters,
-        profile.stage_bytes(),
-        "the whole law is the stage's parameters"
+        profile.chunking_bytes(),
+        "the chunking law is the stage's parameters"
     );
     assert_eq!(
         implementation.digest,
-        ContentDigest::of(&profile.stage_bytes())
+        ContentDigest::of(&profile.chunking_bytes())
     );
 
     // The id a family derives from that stage is stable across calls.
@@ -4185,17 +4535,38 @@ fn the_profiles_two_identities_are_stable_and_are_never_each_other() {
     };
     assert_eq!(id(&profile), id(&profile));
 
-    // And it is not the law id: the two preimages are framed
-    // differently, so no family can ever reproduce the law id.
-    assert_ne!(
+    // Three ids, and no two of them are one. The family's is TLV-framed
+    // where this crate's two are line-oriented, and this crate's two are
+    // taken over preimages of different lengths.
+    let three: BTreeSet<String> = [
         id(&profile).to_hex(),
+        profile.chunking_id().to_hex(),
         profile.contract_id().to_hex(),
-        "the stage id and the law id are two identities, never one"
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        three.len(),
+        3,
+        "a stage id, a chunking id and a law id are three identities, never fewer"
     );
 
-    // Both still answer for the whole law: a changed clause moves each.
+    // A changed bound is a changed cut, so it moves all three.
     assert_ne!(id(&profile), id(&small()));
+    assert_ne!(profile.chunking_id(), small().chunking_id());
     assert_ne!(profile.contract_id(), small().contract_id());
+
+    // A changed term is not a changed cut, so it moves the law id and
+    // leaves a consumer's chunk addressing exactly where it was.
+    let mut retermed = profile.clone();
+    retermed.vocabulary.cites = "https://example.org/other/cites".to_owned();
+    assert_eq!(
+        id(&retermed),
+        id(&profile),
+        "a renamed predicate costs no consumer a re-embedding"
+    );
+    assert_eq!(retermed.chunking_id(), profile.chunking_id());
+    assert_ne!(retermed.contract_id(), profile.contract_id());
 }
 
 #[test]
@@ -4439,12 +4810,22 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         "`contentDigest`",
         "`xsd:hexBinary`",
         "`rdf:reifies`",
-        // Identity, now stating the whole law.
+        // Identity: the two preimages, and which id addresses a node.
         "A **citation's IRI**",
-        "states **the whole law**",
-        // The two identities, and the law that verifies a chunk.
-        "the **law id**",
-        "MUST NOT write the law id where a chunking-stage id is expected",
+        "**The chunking preimage** states only what decides where a unit starts",
+        "**The emission preimage** is the chunking preimage **verbatim, as a",
+        "two runs that agree on the id MUST agree on",
+        // The canon base, inside the contract id and stated either way.
+        "`canon base none`",
+        "MUST NOT be left implied by a missing line",
+        // Which id is field 3, and what a citation's identity carries.
+        "Field 3 is the chunking id and MUST NOT be the contract id.",
+        "triple terms the node reifies",
+        "A citation node is a **reifier**",
+        // The three identities, and the law that verifies a chunk.
+        "### 5.1 The three identities, and the verification law",
+        "NOT write the contract id or the chunking id where a chunking-stage id is",
+        "carrying **the\nchunking preimage** as its parameters",
         "The **verification law** for such a chunk is",
         // Ordering, provenance, conformance, determinism.
         "rdf:Seq",

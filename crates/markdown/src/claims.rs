@@ -64,7 +64,13 @@ use crate::{Claim, ClaimKind};
 #[must_use]
 pub fn render(document: &Document<'_>) -> Vec<Claim> {
     let profile = document.profile();
-    let contract = profile.contract_id();
+    // The **chunking** id, which is the third field of every node
+    // preimage: a node is addressed by the law that cut it, not by the
+    // law that words it, so a new vocabulary or a newly declared canon
+    // base describes the same nodes rather than minting new ones. The
+    // wider law still reaches the graph — as the `sliceProfile` literal
+    // of the document node, through [`Profile::label`].
+    let contract = profile.chunking_id();
     let source = document.source();
     let section_iris: Vec<String> = document
         .sections()
@@ -97,7 +103,7 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
             )
         })
         .collect();
-    let citations = citation_edges(document, &profile.vocabulary, &contract, &unit_iris);
+    let citations = citation_edges(document, profile, &contract, &unit_iris);
 
     let mut claims = Vec::with_capacity(1 + section_iris.len() + unit_iris.len());
     claims.push(document_claim(document));
@@ -145,8 +151,19 @@ struct CitationEdge<'d> {
     iri: String,
     /// The row's canon source paths, in the order the row wrote them.
     sources: &'d [String],
-    /// The row's anchors, in the order the row wrote them.
-    anchors: &'d [String],
+    /// The row's anchors as the **objects the graph carries**, written
+    /// in the order the row wrote them: the IRI `base ++ anchor` under a
+    /// declared canon base, the anchor as a typed literal under none.
+    /// These are the objects of the unit's asserted `cites` edges.
+    anchors: Vec<String>,
+    /// The triple terms this node reifies, one per anchor and in the
+    /// same order: `<<( <unit> <cites> <anchor> )>>`, rendered.
+    ///
+    /// Rendered once, here, and then stated twice — as the object of
+    /// this node's `rdf:reifies` line, and as a field of this node's own
+    /// identity. Rendering it once is what keeps what the node *is* and
+    /// what the node *says* from parting company.
+    reified: Vec<String>,
 }
 
 /// One citation edge per (row, unit) the row lifted onto, indexed by
@@ -160,16 +177,41 @@ struct CitationEdge<'d> {
 /// row together again.
 fn citation_edges<'d>(
     document: &'d Document<'_>,
-    vocabulary: &Vocabulary,
+    profile: &Profile,
     contract: &ChunkingContractId,
     unit_iris: &[String],
 ) -> BTreeMap<usize, Vec<CitationEdge<'d>>> {
     let source = document.source().as_bytes();
+    let vocabulary = &profile.vocabulary;
     let mut out: BTreeMap<usize, Vec<CitationEdge<'d>>> = BTreeMap::new();
     for row in document.citations() {
         let span = row.span();
         let line = &source[span.start as usize..span.end as usize];
+        // Minted before the node is addressed, because the node is
+        // addressed *by* them: what a reifier reifies is part of what it
+        // is, so one row read under two canon bases — or under two
+        // spellings of the citing predicate — is two nodes.
+        let objects: Vec<RdfTerm> = row
+            .anchors()
+            .iter()
+            .map(|anchor| match &profile.canon_base {
+                Some(base) => RdfTerm::Iri(format!("{base}{anchor}")),
+                None => typed_term(anchor, &vocabulary.dt_anchor),
+            })
+            .collect();
+        let anchors: Vec<String> = objects.iter().map(emit_term).collect();
         for &(_, unit) in row.lifted() {
+            let me = &unit_iris[unit];
+            let reified: Vec<String> = objects
+                .iter()
+                .map(|object| {
+                    emit_term(&RdfTerm::triple(RdfTriple::new(
+                        RdfTerm::Iri(me.clone()),
+                        vocabulary.cites.as_str(),
+                        object.clone(),
+                    )))
+                })
+                .collect();
             out.entry(unit).or_default().push(CitationEdge {
                 iri: citation_iri(
                     vocabulary,
@@ -178,10 +220,12 @@ fn citation_edges<'d>(
                     span.start,
                     span.end,
                     line,
-                    &unit_iris[unit],
+                    me,
+                    &reified,
                 ),
                 sources: row.sources(),
-                anchors: row.anchors(),
+                anchors: anchors.clone(),
+                reified,
             });
         }
     }
@@ -306,22 +350,14 @@ fn unit_claim(
         // the row's sources would be in the graph and out of reach.
         lines.push(triple(&edge.iri, crate::RDF_TYPE, &iri(&v.citation_class)));
         lines.push(triple(&edge.iri, &v.in_unit, &iri(me)));
-        for anchor in edge.anchors {
-            // The one term, written once and stated twice: the asserted
-            // edge, and the triple term the row's node reifies. Building
-            // both from the same value is what keeps them byte-identical
-            // however the anchor is spelled.
-            let object = match &profile.canon_base {
-                Some(base) => RdfTerm::Iri(format!("{base}{anchor}")),
-                None => typed_term(anchor, &v.dt_anchor),
-            };
-            lines.push(triple(me, &v.cites, &emit_term(&object)));
-            let reified = RdfTerm::triple(RdfTriple::new(
-                RdfTerm::Iri(me.clone()),
-                v.cites.as_str(),
-                object,
-            ));
-            lines.push(triple(&edge.iri, crate::RDF_REIFIES, &emit_term(&reified)));
+        // The asserted edge and the triple term the row's node reifies,
+        // both read off values rendered once in `citation_edges` — and
+        // the triple term is the very value the node's own identity was
+        // taken over, so what it is and what it says cannot part
+        // company however an anchor is spelled.
+        for (object, reified) in edge.anchors.iter().zip(&edge.reified) {
+            lines.push(triple(me, &v.cites, object));
+            lines.push(triple(&edge.iri, crate::RDF_REIFIES, reified));
         }
         for path in edge.sources {
             lines.push(triple(&edge.iri, &v.canon_source, &typed(path, &v.dt_path)));

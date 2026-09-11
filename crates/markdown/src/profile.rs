@@ -29,8 +29,8 @@ pub const STANDARD_NAMESPACE: &str = "https://w3id.org/purrdf/markdown#";
 
 /// The parameter encoding [`Profile::purremb_chunking_stage`] declares:
 /// the stage's parameters are exactly the bytes of
-/// [`Profile::stage_bytes`], which are UTF-8 plain text, one fact of the
-/// law per line.
+/// [`Profile::chunking_bytes`], which are UTF-8 plain text, one fact of
+/// the law per line.
 ///
 /// It is stated as a constant because a producer in another language
 /// reproducing that stage has to write this same string: the encoding
@@ -388,14 +388,21 @@ impl Vocabulary {
 
 /// The slicing profile: its name and version, its vocabulary, the byte
 /// bound and overlap that act only on an oversize unit, and the
-/// optional canon IRI base for concordance anchors. The name, the
-/// version, the vocabulary, the bound, and the overlap are inside the
-/// contract id; the canon base is an option of the consumer, not a
-/// parameter of the law, and stays outside it.
+/// optional canon IRI base for concordance anchors.
+///
+/// **Every** one of them is inside [`Profile::contract_id`], the canon
+/// base included: a declared base flips every citation object from a
+/// typed literal to a minted IRI, so a profile that declared one and a
+/// profile that did not emit different bytes, and an id they shared
+/// would be a claim neither could keep. Only the clauses that decide
+/// where a unit *starts and ends* are inside
+/// [`Profile::chunking_id`] — see [`Profile::chunking_bytes`] and
+/// [`Profile::emission_bytes`] for the two preimages and why they are
+/// two.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
     /// The profile's declared name, the first line of its identity. It
-    /// is a line of [`Self::stage_bytes`], so it carries no control
+    /// is a line of [`Self::chunking_bytes`], so it carries no control
     /// character: see that method for why the format binds the name.
     pub name: String,
     /// The profile's declared version.
@@ -442,19 +449,29 @@ impl Profile {
         }
     }
 
-    /// The canonical stage description the contract id is derived over:
-    /// **the whole law**, one fact per line — the name, the version, the
-    /// vocabulary, the dialect grammar, the split law and its constants,
-    /// the concordance law, the identity formulas, and the emission law.
+    /// The **chunking preimage**: the clauses that decide where a unit
+    /// starts and ends and what bytes are in it, and nothing else, one
+    /// fact per line — the profile's name and version, the dialect
+    /// grammar that opens and closes a unit, and the split law with its
+    /// two constants.
     ///
-    /// It states the whole law because the contract id is the handle a
-    /// consumer keeps: two runs that agree on it must agree on every
-    /// byte they emit. A clause left out of this description is a clause
-    /// a producer could change while the id stood still, and a consumer
-    /// holding that id would have no way to learn it. So the emission
-    /// law is in here beside the split law: extending the vocabulary or
-    /// moving the reification shape re-mints the id, which is the
-    /// design, not a cost.
+    /// This is the preimage of [`Self::chunking_id`] and the parameters
+    /// of [`Self::purremb_chunking_stage`], and it is deliberately
+    /// *narrower* than the law. A consumer that embedded this document's
+    /// units holds vectors addressed by the chunking id; those vectors
+    /// are stale exactly when a unit's bytes move, and at no other time.
+    /// Renaming a predicate, swapping a whole vocabulary or declaring a
+    /// canon base moves not one boundary, so none of them belongs here
+    /// and none of them costs a consumer a re-embedding. What is here is
+    /// what re-cuts the text.
+    ///
+    /// The concordance law is outside it for the same reason, with one
+    /// clause excepted: a `|` line closes the open unit and is the
+    /// content of no unit *whether or not a concordance is in force*, so
+    /// adding or removing the trigger heading cannot move a boundary.
+    /// That clause is stated here; the rest of §4 — what a row lifts,
+    /// how its cells are read, how an anchor is minted — decides only
+    /// what is emitted, and is stated in [`Self::emission_bytes`].
     ///
     /// The preimage is line-oriented and unframed: a newline ends one
     /// fact and begins the next, and no field is length-prefixed or
@@ -464,16 +481,15 @@ impl Profile {
     /// describe themselves the same way. The refusal is a bound of the
     /// identity format, not a taste in names.
     #[must_use]
-    pub fn stage_bytes(&self) -> Vec<u8> {
+    pub fn chunking_bytes(&self) -> Vec<u8> {
         format!(
             "{name}\n\
              version {version}\n\
-             {vocabulary}\
              section ATX ^#{{1,6}}[ \\t] ; title trimmed, trailing # trimmed ; seven hashes are prose\n\
              movement ^\u{2042}[ \\t] ; name trimmed, one surrounding * or _ pair removed\n\
-             a movement's level is one under the nearest heading ; movements are siblings\n\
              unit verse ^\\d+\\.[ \\t] ; the number is a u64 or the line is prose\n\
              unit paragraph blank-line ; rule ^(-{{3,}}|\\*{{3,}})$ and table row ^\\| close a unit\n\
+             a table row is the content of no unit, a concordance in force or not\n\
              structure is read on a line's trimmed text ; CRLF states its LF twin's structure\n\
              a heading, a movement or a verse is read behind up to 3 leading spaces\n\
              4 or more leading spaces, or a tab in that run, is no marker but ordinary content\n\
@@ -484,41 +500,130 @@ impl Profile {
              the cut lands on that newline and no piece carries it\n\
              with no newline the cut is the last scalar boundary at or before the bound\n\
              a continuation snaps backward to a line start, else to a scalar boundary, never before the unit's start\n\
-             never inside a scalar ; never across a heading\n\
-             concordance section heading Concordance, ASCII case-insensitive\n\
-             a table row lifts when a concordance section is in force at any depth, by containment\n\
-             concordance row | verses | canon sources | anchors |\n\
-             cells are delimited by unescaped | only ; \\| is a pipe, \\\\ is a backslash, any other \\ is content\n\
-             verse range n, n-n, or n\u{2013}n ; both endpoints u64, the first at or under the last\n\
-             a cell lifts its backticked names only, in the order written\n\
-             a row that lifts nothing here and a row too malformed to read are data, never a refusal\n\
-             anchor lift is base ++ anchor ; absolute, and under the base by relativization\n\
-             unit id H(source id, profile id, byte start, byte end, alg, alg(span))\n\
-             section id H(kind, source id, profile id, heading span, alg(heading line))\n\
-             citation id H(kind, source id, profile id, row span, alg(row line, unit id))\n\
-             alg {DIGEST_ALGORITHM}\n\
-             emit document type, sourceDigest, mediaType, byteLength, sliceProfile, title\n\
-             emit section type, document, parent, level, ordinal, heading, byteStart, byteEnd\n\
-             emit unit type, text, document, section, ordinal, verse, lineage, continues\n\
-             emit unit byteStart, byteEnd, scalarStart, scalarEnd, contentDigest\n\
-             emit unit cites anchor, once per anchor of every row that lifted onto it\n\
-             emit citation type and citation unit for every citation node, whatever its row lifted\n\
-             emit citation rdf:reifies <<( unit cites anchor )>> and citation canonSource path\n\
-             emit an offset as xsd:integer and a content digest as lowercase hex xsd:hexBinary\n\
-             emit one claim per node as N-Triples lines, sorted bytewise and de-duplicated\n\
-             escaping is purrdf-core's canonical writer ; C0 and DEL as \\uXXXX\n",
+             never inside a scalar ; never across a heading\n",
             name = self.name,
             version = self.version,
-            vocabulary = self.vocabulary.stage_lines(),
             max_bytes = self.max_bytes,
             overlap = self.overlap,
         )
         .into_bytes()
     }
 
+    /// The **emission preimage**: [`Self::chunking_bytes`] verbatim,
+    /// then every further clause that decides a byte of the emitted
+    /// graph — the vocabulary, the canon base, the section-level rule,
+    /// the concordance lift, the identity formulas and the emission law.
+    ///
+    /// This is the preimage of [`Self::contract_id`], and it states the
+    /// whole law because that id is the handle a consumer keeps: **two
+    /// runs that agree on it must agree on every byte they emit**. A
+    /// clause left out of this description is a clause a producer could
+    /// change while the id stood still, and a consumer holding that id
+    /// would have no way to learn of it. So the emission law is in here
+    /// beside the split law: extending the vocabulary or moving the
+    /// reification shape re-mints the id, which is the design, not a
+    /// cost.
+    ///
+    /// The canon base is in here by name, and its **absence** is stated
+    /// rather than implied: a profile that declares none writes `canon
+    /// base none`, so the line is present either way and no reader has
+    /// to infer a missing fact from a missing line. It has to be here
+    /// because it is not a garnish on the graph — under a declared base
+    /// every citation object is a minted IRI and under none it is a
+    /// typed literal, and two profiles that differed only there emitted
+    /// different bytes while sharing an id, which is the one thing this
+    /// id promises not to do.
+    ///
+    /// The whole of [`Self::chunking_bytes`] is a **prefix** of these
+    /// bytes, which is the relation the two ids rest on: the emission
+    /// preimage cannot drop a chunking clause, so an emission id can
+    /// never stand still while a boundary moves.
+    ///
+    /// It is line-oriented and unframed for the same reasons, and under
+    /// the same bound on the name. The canon base needs no such bound:
+    /// an admitted profile's base is an absolute IRI, and the IRI
+    /// grammar admits no control character, so no base can state a
+    /// further fact of the law.
+    #[must_use]
+    pub fn emission_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.chunking_bytes();
+        bytes.extend_from_slice(
+            format!(
+                "{vocabulary}\
+                 {canon_base}\
+                 a movement's level is one under the nearest heading ; movements are siblings\n\
+                 concordance section heading Concordance, ASCII case-insensitive\n\
+                 a table row lifts when a concordance section is in force at any depth, by containment\n\
+                 concordance row | verses | canon sources | anchors |\n\
+                 cells are delimited by unescaped | only ; \\| is a pipe, \\\\ is a backslash, any other \\ is content\n\
+                 verse range n, n-n, or n\u{2013}n ; both endpoints u64, the first at or under the last\n\
+                 a cell lifts its backticked names only, in the order written\n\
+                 a row that lifts nothing here and a row too malformed to read are data, never a refusal\n\
+                 anchor lift is base ++ anchor ; absolute, and under the base by relativization\n\
+                 unit id H(kind, source id, chunking id, byte start, byte end, alg, alg(span))\n\
+                 section id H(kind, source id, chunking id, heading span, alg(heading line))\n\
+                 citation id H(kind, source id, chunking id, row span, alg(row line, unit id, reified terms))\n\
+                 alg {DIGEST_ALGORITHM}\n\
+                 emit document type, sourceDigest, mediaType, byteLength, sliceProfile, title\n\
+                 emit section type, document, parent, level, ordinal, heading, byteStart, byteEnd\n\
+                 emit unit type, text, document, section, ordinal, verse, lineage, continues\n\
+                 emit unit byteStart, byteEnd, scalarStart, scalarEnd, contentDigest\n\
+                 emit unit cites anchor, once per anchor of every row that lifted onto it\n\
+                 emit citation type and citation unit for every citation node, whatever its row lifted\n\
+                 emit citation rdf:reifies <<( unit cites anchor )>> and citation canonSource path\n\
+                 emit an offset as xsd:integer and a content digest as lowercase hex xsd:hexBinary\n\
+                 emit one claim per node as N-Triples lines, sorted bytewise and de-duplicated\n\
+                 escaping is purrdf-core's canonical writer ; C0 and DEL as \\uXXXX\n",
+                vocabulary = self.vocabulary.stage_lines(),
+                canon_base = self.canon_base.as_ref().map_or_else(
+                    || "canon base none\n".to_owned(),
+                    |base| format!("canon base {base}\n"),
+                ),
+            )
+            .as_bytes(),
+        );
+        bytes
+    }
+
+    /// The identity of the **chunking law alone**, derived over
+    /// [`Self::chunking_bytes`]: the id that enters every node preimage
+    /// ([`unit_iri`](crate::unit_iri) and its siblings) and the id a
+    /// `.purremb` consumer's embeddings are addressed under.
+    ///
+    /// It is the node preimage's third field rather than
+    /// [`Self::contract_id`] on purpose. A node's identity answers *what
+    /// this is*: this span of these bytes of this document, cut by this
+    /// law. Declaring a canon base, or renaming a predicate, says
+    /// nothing about what the unit is — it says more about it, in more
+    /// terms — and if the emission id were the field, adding one
+    /// citation vocabulary would re-mint every unit and section in the
+    /// corpus and orphan every reference a consumer had already stored.
+    /// With the chunking id there, the two graphs describe the *same*
+    /// nodes and merge, which is what RDF is for; the `sliceProfile`
+    /// literal on the document node still tells the two laws apart.
+    ///
+    /// A citation node is the one node whose identity has to notice the
+    /// canon base, because what it reifies changes with it — and it
+    /// notices it where it belongs, in the minted anchors inside its own
+    /// content digest ([`citation_iri`](crate::citation_iri)), not in a
+    /// profile id shared with nodes that did not change.
+    #[must_use]
+    pub fn chunking_id(&self) -> ChunkingContractId {
+        derive_chunking_contract_id(&self.chunking_bytes())
+    }
+
     /// The profile's identity under the chunking-contract domain of
     /// `purrdf-core`: **this crate's own law id**, derived over the
-    /// line-oriented preimage of [`Self::stage_bytes`].
+    /// line-oriented preimage of [`Self::emission_bytes`], and so over
+    /// the whole law — the canon base among it.
+    ///
+    /// # What it promises
+    ///
+    /// Two runs that agree on this id agree on every byte they emit.
+    /// That is the whole of its use, and it is why the preimage is the
+    /// emission preimage and not the chunking one: a producer could
+    /// otherwise rename a term or declare a canon base, emit a different
+    /// graph, and still hand a consumer the id it was handed before.
     ///
     /// # It is not a PURREMB family chunking id
     ///
@@ -527,28 +632,28 @@ impl Profile {
     /// derives its `chunking_id` over
     /// [`AppliedStage::canonical_bytes`], which is TLV-framed: tagged,
     /// length-delimited, eight-byte aligned. This id is derived over an
-    /// unframed run of newline-separated lines. The two preimages cannot
-    /// coincide, so **no family contract can ever reproduce this id**,
-    /// and the two ids of one profile are always different — which
+    /// unframed run of newline-separated lines, and over a *longer* law
+    /// than the stage carries besides. The preimages cannot coincide, so
+    /// **no family contract can ever reproduce this id**, and the ids of
+    /// one profile are always three different values — which
     /// [`Self::purremb_chunking_stage`] exists to make usable rather
     /// than merely true.
     ///
     /// Wire this id where the *law* is meant: the `sliceProfile`
-    /// literal on the document node, the third field of every node
-    /// identity ([`unit_iri`](crate::unit_iri) and its siblings), a
-    /// cache key over which law sliced which bytes. Wire
-    /// [`Self::purremb_chunking_stage`] into a family's `chunking`
+    /// literal on the document node, a cache key over which law emitted
+    /// which graph. Wire [`Self::chunking_id`] where a *node* is meant,
+    /// and [`Self::purremb_chunking_stage`] into a family's `chunking`
     /// stage. A `.purremb` consumer that writes this id into a family
     /// expecting a stage id has named an id that family's own contract
     /// cannot derive, and every chunk target checked against the family
     /// will disagree with it.
     #[must_use]
     pub fn contract_id(&self) -> ChunkingContractId {
-        derive_chunking_contract_id(&self.stage_bytes())
+        derive_chunking_contract_id(&self.emission_bytes())
     }
 
-    /// The profile as a PURREMB chunking stage: the second identity,
-    /// and the one an
+    /// The profile's **chunking law** as a PURREMB chunking stage: the
+    /// identity an
     /// [`EmbeddingFamilyContract`](purrdf_core::embedding::EmbeddingFamilyContract)
     /// **can** reproduce.
     ///
@@ -559,13 +664,24 @@ impl Profile {
     /// * `identifier`: [`STANDARD_NAMESPACE`], naming whose chunking law
     ///   this is. It mints nothing new: it is the one namespace the
     ///   specification already designates.
-    /// * `digest`: the SHA-256 of [`Self::stage_bytes`], a manifest
-    ///   digest of the exact law applied, which is the whole of what
-    ///   this stage *is*.
+    /// * `digest`: the SHA-256 of [`Self::chunking_bytes`], a manifest
+    ///   digest of the exact chunking law applied, which is the whole of
+    ///   what this stage *is*.
     /// * `parameter_encoding`: [`PURREMB_PARAMETER_ENCODING`].
-    /// * `parameters`: [`Self::stage_bytes`], verbatim — so every clause
-    ///   inside the law id of [`Self::contract_id`] is inside this stage
-    ///   too, and neither id can move while the other stands still.
+    /// * `parameters`: [`Self::chunking_bytes`], verbatim — the clauses
+    ///   that decide where a unit starts and ends, and only those.
+    ///
+    /// A chunking stage carries the chunking law and nothing else, which
+    /// is what makes it honest labelling rather than a label. The
+    /// parameters are the exact bytes of [`Self::chunking_bytes`], so a
+    /// family's derived id moves when a boundary could move and stands
+    /// still when it could not: a consumer's vectors survive a renamed
+    /// predicate and a newly declared canon base, and are invalidated by
+    /// a changed bound, which is the truth about them. The wider law is
+    /// not lost — it is in [`Self::contract_id`], the id the graph
+    /// itself states — and because [`Self::chunking_bytes`] is a prefix
+    /// of [`Self::emission_bytes`], this stage can never stand still
+    /// while a chunk boundary moves.
     ///
     /// # Which id a consumer uses where
     ///
@@ -576,11 +692,14 @@ impl Profile {
     /// [`TextChunkTarget`](purrdf_core::embedding::TextChunkTarget)
     /// minted from this document carries — the id
     /// [`Unit::text_chunk_target`](crate::Unit::text_chunk_target) is
-    /// handed. [`Self::contract_id`] stays where the graph states it and
-    /// never enters a family.
+    /// handed. It is still not [`Self::chunking_id`], which is derived
+    /// over the same bytes unframed: the framing differs, so the values
+    /// differ, and the node preimage's id is never a family's id either.
+    /// [`Self::contract_id`] stays where the graph states it and never
+    /// enters a family.
     #[must_use]
     pub fn purremb_chunking_stage(&self) -> AppliedStage {
-        let parameters = self.stage_bytes();
+        let parameters = self.chunking_bytes();
         let digest = ContentDigest::of(&parameters);
         AppliedStage::Applied(
             StageImplementation::new(
@@ -593,7 +712,9 @@ impl Profile {
         )
     }
 
-    /// The literal recorded on the document node: `<name>:<hex>`.
+    /// The literal recorded on the document node: `<name>:<hex>`, the
+    /// hex of [`Self::contract_id`] — the id that answers for every byte
+    /// of the graph the literal sits in, canon base included.
     #[must_use]
     pub fn label(&self) -> String {
         format!("{}:{}", self.name, self.contract_id().to_hex())

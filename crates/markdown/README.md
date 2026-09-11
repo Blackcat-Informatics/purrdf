@@ -137,18 +137,18 @@ Sliced under `Vocabulary::under("urn:example:doc:")` with the profile
 shortened to its first eight characters):
 
 ```text
-<urn:example:doc:unit:sha256:b1bbee04…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:document> <urn:example:book> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:section> <urn:example:doc:section:sha256:d52712e3…> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:document> <urn:example:book> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:section> <urn:example:doc:section:sha256:a1b06eb0…> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 ```
 
 The byte span and the scalar span differ by two because the document's
@@ -173,11 +173,11 @@ carries the row's source, and names the unit it is an edge of — and then
 the asserted edge itself.
 
 ```text
-<urn:example:doc:citation:sha256:03141136…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
-<urn:example:doc:citation:sha256:03141136…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Citation> .
-<urn:example:doc:citation:sha256:03141136…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
-<urn:example:doc:citation:sha256:03141136…> <urn:example:doc:unit> <urn:example:doc:unit:sha256:b1bbee04…> .
-<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
+<urn:example:doc:citation:sha256:35c6474e…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
+<urn:example:doc:citation:sha256:35c6474e…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Citation> .
+<urn:example:doc:citation:sha256:35c6474e…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
+<urn:example:doc:citation:sha256:35c6474e…> <urn:example:doc:unit> <urn:example:doc:unit:sha256:3f052451…> .
+<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
 ```
 
 `<<( … )>>` is the RDF 1.2 **triple term** — the non-asserting form, the
@@ -272,20 +272,32 @@ every target: the slicer opens no file, reads no clock, and uses no float.
 Every emitted node's triples are sorted bytewise, one triple per line.
 
 A `Profile` names the law it applies: a name, a version, the vocabulary, the
-byte bound, and the overlap. Its identity is the SHA-256-derived
-chunking-contract id of `purrdf-core` over a canonical, human-readable stage
-description that states the **whole** law, one fact per line — those five, and
-the dialect grammar, the split law, the concordance law, the identity
-formulas, and the emission law with its term list and its reification shape.
-That is deliberate: the contract id is the handle a consumer keeps, so a
-clause outside the description would be a clause a producer could change while
-the id stood still. A change to any of it mints a new profile rather than
-drifting under the old name. The optional canon base for concordance anchors
-is a consumer's option, not a parameter of the law, and stays outside the
-identity. The document node records the profile as `<name>:<hex>`.
+byte bound, the overlap, and an optional canon base for concordance anchors.
+It states that law as **two** canonical, human-readable preimages, one fact
+per line, and each has an id of its own — the SHA-256-derived
+chunking-contract id of `purrdf-core` over those bytes.
+
+`chunking_bytes()` states only what decides where a unit starts and ends: the
+name, the version, the dialect grammar, and the split law with its two
+constants. `emission_bytes()` is those bytes verbatim, then everything else
+that decides a byte of the graph — the vocabulary, the canon base (written
+`canon base none` when there is none, so its absence is stated rather than
+implied), the concordance lift, the identity formulas, and the emission law
+with its term list and its reification shape.
+
+`contract_id()`, over the emission preimage, is the handle a consumer keeps:
+**two runs that agree on it agree on every byte they emit**, which is why the
+canon base is inside it — a declared base turns every citation object from a
+typed literal into a minted IRI. `chunking_id()`, over the chunking preimage,
+is what a node is addressed by and what a `.purremb` chunking stage carries,
+so a renamed predicate or a newly declared canon base costs a consumer no
+re-embedding: its vectors go stale exactly when a unit's bytes move. The
+chunking preimage is a prefix of the emission one, so neither id can stand
+still while a boundary moves. The document node records the profile as
+`<name>:<hex>` over the contract id.
 
 A unit's IRI is `<node base>unit:sha256:<hex>`: the hex is the SHA-256 of a
-length-prefixed preimage of the kind, the source id, the profile's contract
+length-prefixed preimage of the kind, the source id, the profile's **chunking**
 id, the byte span, the digest algorithm tag, and the SHA-256 of the span's
 bytes. That has three consequences worth knowing:
 
@@ -301,9 +313,13 @@ bytes. That has three consequences worth knowing:
 
 A citation node is minted the same way over the pair it names — the
 concordance row's own line span, and a digest of that line together with the
-unit's IRI — so one row lifting onto two verses is two nodes, two rows lifting
-onto one verse are two more, and a unit that re-mints re-mints every citation
-of it.
+unit's IRI and the anchor terms the row mints — so one row lifting onto two
+verses is two nodes, two rows lifting onto one verse are two more, and a unit
+that re-mints re-mints every citation of it. The minted terms are in there
+because a citation node is a reifier: the term it reifies is the IRI
+`base ++ anchor` under a declared canon base and a typed literal under none,
+so one row read under two bases states two different triples and must be two
+nodes rather than one node reifying both.
 
 A consumer that holds the source bytes can re-derive any unit's IRI from its
 recorded span with `unit_iri` (and any citation's with `citation_iri`) and
