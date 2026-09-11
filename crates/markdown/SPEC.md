@@ -1215,7 +1215,13 @@ container indexes collided.
 The cover, not the codec, is the general law. Nothing in this section
 is Markdown: the two extraction rules, the overlap law and the refusals
 read spans and literals, and the next structured format that plugs in
-at the dialect seam (§2) decodes under this same section unchanged.
+at the dialect seam (§2) decodes under this same section unchanged. The
+reference implementation keeps that seam honest the way §5.1 keeps
+verification honest: the cover law lives in the kernel and every codec
+reaches it there, so an implementation that also states this law in its
+own vocabulary MUST state it by applying that one law rather than by
+restating it, and two codecs refuse the same covers for the same
+reasons.
 
 ## 12. Related work
 
