@@ -301,9 +301,16 @@ impl Reasoner {
     ///
     /// # Errors
     ///
-    /// The same three [`Reasoner::new`] returns.
+    /// The same three [`Reasoner::new`] returns, plus [`EntailError::Canonicalization`] if
+    /// computing `ds`'s producer-independent identity is refused (a reserved-vocabulary
+    /// term, or an exhausted n-degree search budget) — `ds` is wholly caller-supplied here,
+    /// so this comes back as a value rather than the panic
+    /// [`purrdf_core::canonicalize`](purrdf_core::canonicalize) would raise for the same
+    /// input.
     pub fn with_proofs(ds: &RdfDataset) -> Result<Self, EntailError> {
-        Self::build(ds, Some(crate::owl_dl::proof::ontology_identity(ds)))
+        let input = crate::owl_dl::proof::try_ontology_identity(ds)
+            .map_err(EntailError::Canonicalization)?;
+        Self::build(ds, Some(input))
     }
 
     /// Whether this reasoner records a proof term for each answer.
@@ -1109,5 +1116,42 @@ mod tests {
             hierarchy.certificate().completeness(),
             DlCompleteness::BudgetExhausted
         );
+    }
+
+    /// The dataset [`Reasoner::with_proofs`] is built from is wholly caller-supplied — a
+    /// document parsed at a wasm/Python/C-ABI boundary — so a reserved-vocabulary IRI
+    /// ([`purrdf_core::RESERVED_NAMESPACE`]) must refuse computing its producer-independent
+    /// identity as an [`EntailError::Canonicalization`] VALUE, rather than aborting the
+    /// process through the panicking `purrdf_core::canonicalize`
+    /// [`crate::owl_dl::proof::ontology_identity`] used to reach.
+    #[test]
+    fn with_proofs_refuses_a_reserved_vocabulary_dataset_as_a_value() {
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri("https://example.org/Cat");
+        let reserved = b.intern_iri(&format!("{}bad", purrdf_core::RESERVED_NAMESPACE));
+        let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+        b.push_quad(cat, sub, reserved, None);
+        let ds = b.freeze().expect("freeze");
+        let error = Reasoner::with_proofs(&ds)
+            .expect_err("a reserved-vocabulary dataset must refuse canonicalization, not panic");
+        assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
+        assert!(
+            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
+            "{error}"
+        );
+    }
+
+    /// The valid neighbour of the refusal above: the same shape with an ORDINARY object
+    /// IRI (no reserved prefix) still builds a recording reasoner.
+    #[test]
+    fn with_proofs_still_admits_an_ordinary_dataset() {
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri("https://example.org/Cat");
+        let animal = b.intern_iri("https://example.org/Animal");
+        let sub = b.intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf");
+        b.push_quad(cat, sub, animal, None);
+        let ds = b.freeze().expect("freeze");
+        let reasoner = Reasoner::with_proofs(&ds).expect("an ordinary dataset must still build");
+        assert!(reasoner.records_proofs());
     }
 }

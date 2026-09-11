@@ -789,6 +789,43 @@ def test_a_session_records_only_when_asked() -> None:
     entail.check_proof(TAXONOMY, "classify", "", answer, certificate, proof)
 
 
+# `<urn:purrdf:rdfc:Animal>` in place of `Animal`: the RDFC-1.0 overlay's own
+# reserved namespace (see `crates/rdf-core/src/ir/canon.rs`). `Cat ⊑ Animal` still
+# holds, so the `Cat`-seeded ⊥-module carries the reserved IRI through.
+_RESERVED_TAXONOMY = (
+    f"<https://example.org/Cat> <{RDFS_SUB_CLASS_OF}> <urn:purrdf:rdfc:Animal> .\n"
+    f"<https://example.org/tom> <{RDF_TYPE}> <https://example.org/Cat> .\n"
+)
+
+
+def test_extract_module_with_proofs_raises_value_error_naming_the_reserved_iri() -> None:
+    """`Reasoner(data, proofs=True).extract_module(...)` used to ABORT THE PROCESS
+    on a reserved-vocabulary document instead of raising.
+
+    `extract_module_with_proofs` (`purrdf_entail::reasoner::module`) binds the
+    ontology's and the extracted module's own producer-independent identity into the
+    recorded proof term, and both of those canonicalizations used to go through the
+    panicking `purrdf_entail::ontology_identity` ahead of the guarded, typed
+    `extract_module` (`proofs=False`) path. It now goes through the fallible
+    `try_ontology_identity` and raises `ValueError` instead, exactly like the
+    `proofs=False` refusal `test_a_malformed_document_is_an_error_not_an_empty_answer`
+    covers for a different input shape.
+    """
+    session = entail.Reasoner(_RESERVED_TAXONOMY, proofs=True)
+    with pytest.raises(ValueError, match="urn:purrdf:rdfc:Animal"):
+        session.extract_module("<https://example.org/Cat>", "bot")
+
+
+def test_extract_module_with_proofs_still_admits_the_ordinary_taxonomy() -> None:
+    """The valid neighbour of the refusal above: the same seed/method WITH proofs,
+    over the ORDINARY `TAXONOMY` (no reserved IRI), still extracts and still
+    records a proof — the migration changed no admitted-input behavior."""
+    session = entail.Reasoner(TAXONOMY, proofs=True)
+    answer, certificate = session.extract_module("<https://example.org/Cat>", "bot")
+    assert "<https://example.org/Cat>" in answer
+    assert certificate.endswith("conservative false\n")
+
+
 def test_a_proof_is_bound_to_its_ontology_its_question_and_its_answer() -> None:
     """Three separate refusals: a genuine proof is still not a proof of a different
     document, a different axiom, or a different answer."""

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use pyo3::prelude::*;
 
-use purrdf_core::{Canonicalized, TermRef, canonicalize as core_canonicalize};
+use purrdf_core::{CanonError, Canonicalized, TermRef, try_canonicalize};
 
 use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
 
@@ -38,17 +38,27 @@ pub(super) enum PyCanonicalizationAlgorithm {
 /// caller's literal/IRI term forms are preserved exactly (only blanks are relabeled).
 /// The `algorithm` selector is retained for API compatibility; both variants map to
 /// the one native engine.
+///
+/// `quads` is wholly caller-supplied (`Dataset.canonicalize()`'s own content), so this
+/// goes through the fallible, non-panicking [`try_canonicalize`] rather than
+/// `canonicalize`: a reserved-vocabulary or budget-exhausting quad set must come back
+/// as an `Err` value across the Python boundary, never abort the process.
+///
+/// # Errors
+/// [`CanonError::ReservedVocabulary`] if any term is an IRI in PurRDF's RDFC-1.0
+/// reserved namespace; [`CanonError::BudgetExceeded`] if the n-degree search's
+/// call/permutation budget is exhausted first.
 pub(super) fn canonicalize_quads(
     quads: &[RdfQuad],
     _algorithm: PyCanonicalizationAlgorithm,
-) -> Vec<RdfQuad> {
+) -> Result<Vec<RdfQuad>, CanonError> {
     let ds = flat_dataset_from_quads(quads).expect("native RDFC-1.0: flat freeze of valid quads");
-    let canon = core_canonicalize(&ds);
+    let canon = try_canonicalize(&ds)?;
     let map = label_map(&ds, &canon);
     let mut out: Vec<RdfQuad> = quads.iter().map(|q| relabel_quad(q, &map)).collect();
     out.sort_by_key(quad_sort_key);
     out.dedup();
-    out
+    Ok(out)
 }
 
 /// Map each original blank-node label to its canonical `c14nN` label.
@@ -143,11 +153,13 @@ mod tests {
         let c1 = canonicalize_quads(
             &parse_quads(g1.as_bytes(), NativeRdfFormat::NTriples, None).unwrap(),
             PyCanonicalizationAlgorithm::RDFC_1_0,
-        );
+        )
+        .expect("no reserved vocabulary");
         let c2 = canonicalize_quads(
             &parse_quads(g2.as_bytes(), NativeRdfFormat::NTriples, None).unwrap(),
             PyCanonicalizationAlgorithm::RDFC_1_0,
-        );
+        )
+        .expect("no reserved vocabulary");
         let s1: Vec<String> = c1.iter().map(quad_sort_key).collect();
         let s2: Vec<String> = c2.iter().map(quad_sort_key).collect();
         assert_eq!(s1, s2, "isomorphic graphs must canonicalize identically");
@@ -163,11 +175,13 @@ mod tests {
         let c1 = canonicalize_quads(
             &parse_quads(g.as_bytes(), NativeRdfFormat::NTriples, None).unwrap(),
             PyCanonicalizationAlgorithm::UNSTABLE,
-        );
+        )
+        .expect("no reserved vocabulary");
         let c2 = canonicalize_quads(
             &parse_quads(g.as_bytes(), NativeRdfFormat::NTriples, None).unwrap(),
             PyCanonicalizationAlgorithm::UNSTABLE,
-        );
+        )
+        .expect("no reserved vocabulary");
         let s1: Vec<String> = c1.iter().map(quad_sort_key).collect();
         let s2: Vec<String> = c2.iter().map(quad_sort_key).collect();
         assert_eq!(s1, s2);

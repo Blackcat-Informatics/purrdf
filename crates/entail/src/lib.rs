@@ -158,7 +158,7 @@ pub use owl_dl::proof::{
     MergeLicence, MergeReplay, MergeStep, NodeRef, PartialReplay, ProofAlternative, ProofAnswer,
     ProofFact, ProofGround, ProofRole, RefutationReplay, ReservedRef,
     TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, ontology_identity,
-    prove_consistency,
+    prove_consistency, try_ontology_identity,
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
@@ -447,6 +447,17 @@ pub enum EntailError {
     /// Reachable only from the `*_until` entry points ([`materialize_until`]); an ungoverned
     /// call names no signal and so can never see it.
     Stopped,
+    /// The ontology's RDFC-1.0 canonicalization — computing the producer-independent
+    /// identity a recording reasoner binds every proof to — was refused: a
+    /// reserved-vocabulary term, or an n-degree search that exhausted its budget.
+    ///
+    /// Reachable only from [`Reasoner::with_proofs`](reasoner::Reasoner::with_proofs) and
+    /// the OWL-DL proof producers, which canonicalize the caller's dataset to bind every
+    /// proof to it; [`Reasoner::new`](reasoner::Reasoner::new) never canonicalizes anything
+    /// and so never returns this. The caller's data is wholly untrusted here — a document
+    /// parsed at a wasm/Python/C-ABI boundary — so this comes back as a value rather than
+    /// the panic [`purrdf_core::canonicalize`] would raise for the same refusal.
+    Canonicalization(purrdf_core::CanonError),
 }
 
 impl std::fmt::Display for EntailError {
@@ -494,6 +505,9 @@ impl std::fmt::Display for EntailError {
                 "the caller's stop signal ended the run before the closure was computed: no \
                  closure was produced and none is claimed"
             ),
+            Self::Canonicalization(error) => {
+                write!(f, "the ontology was refused canonicalization: {error}")
+            }
         }
     }
 }
@@ -515,11 +529,13 @@ impl std::error::Error for EntailError {
     /// `UnsupportedRegime` and `ProofsNotRecorded` are complete statements in themselves. `Inconsistent` carries
     /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
     /// that the premise has no model, and the run it describes succeeded at producing
-    /// it, so calling it the cause of this error would misdescribe both.
+    /// it, so calling it the cause of this error would misdescribe both. `Canonicalization`
+    /// carries [`purrdf_core::CanonError`], which DOES have a cause to name.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Evaluate(inner) => Some(inner),
             Self::Chase(inner) => Some(inner),
+            Self::Canonicalization(inner) => Some(inner),
             Self::Build(_)
             | Self::Parse(_)
             | Self::MalformedList(_)

@@ -1892,6 +1892,15 @@ pub enum DlProofError {
         /// Which half of the signature disagrees.
         detail: String,
     },
+    /// The caller's ontology was refused RDFC-1.0 canonicalization while the checker was
+    /// computing its producer-independent identity — a reserved-vocabulary term, or an
+    /// n-degree search that exhausted its budget.
+    ///
+    /// This is the untrusted-input refusal [`purrdf_core::try_canonicalize`] returns as a
+    /// value rather than the panic [`purrdf_core::canonicalize`] would raise for the same
+    /// input: a checking context is built from the CALLER's own dataset (a document parsed
+    /// at a wasm/Python/C-ABI boundary), so it can never be assumed benign.
+    Canonicalization(purrdf_core::CanonError),
 }
 
 impl std::fmt::Display for DlProofError {
@@ -2092,11 +2101,23 @@ impl std::fmt::Display for DlProofError {
                 "{blocked:?} is recorded as blocked by {blocker:?}, but the two do not have the \
                  same blocking signature: {detail}"
             ),
+            Self::Canonicalization(error) => {
+                write!(f, "the ontology was refused canonicalization: {error}")
+            }
         }
     }
 }
 
-impl std::error::Error for DlProofError {}
+impl std::error::Error for DlProofError {
+    /// [`Self::Canonicalization`] wraps a real cause ([`purrdf_core::CanonError`]); every
+    /// other variant is a rejection this checker computed itself and has none to name.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Canonicalization(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 // ── What a replay establishes ───────────────────────────────────────────────────
 
@@ -2549,7 +2570,11 @@ impl DlProofContext {
     ///
     /// # Errors
     ///
-    /// [`DlProofError::Ontology`] if the dataset is not a well-formed OWL graph.
+    /// [`DlProofError::Ontology`] if the dataset is not a well-formed OWL graph;
+    /// [`DlProofError::Canonicalization`] if computing its producer-independent identity
+    /// is refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
+    /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
+    /// [`purrdf_core::canonicalize`] would raise for the same input.
     pub fn of_ontology(ontology: &RdfDataset) -> Result<Self, DlProofError> {
         let mut kb =
             Kb::from_dataset(ontology).map_err(|error: EntailError| DlProofError::Ontology {
@@ -2558,10 +2583,11 @@ impl DlProofContext {
         kb.finalize();
         let clauses = derive(&kb);
         let contract = contract_digest(&clauses);
+        let input = try_input_digest(ontology).map_err(DlProofError::Canonicalization)?;
         Ok(Self {
             kb,
             clauses,
-            input: input_digest(ontology),
+            input,
             contract,
         })
     }
@@ -3791,8 +3817,13 @@ impl DlProof {
 ///
 /// # Errors
 ///
-/// [`EntailError::Parse`] if the dataset is not a well-formed OWL graph.
+/// [`EntailError::Parse`] if the dataset is not a well-formed OWL graph;
+/// [`EntailError::Canonicalization`] if computing its producer-independent identity is
+/// refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
+/// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
+/// [`purrdf_core::canonicalize`] would raise for the same input.
 pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof), EntailError> {
+    let input = try_input_digest(ontology).map_err(EntailError::Canonicalization)?;
     let mut kb = Kb::from_dataset(ontology)?;
     kb.finalize();
     let contract = contract_of(&kb);
@@ -3805,7 +3836,7 @@ pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof)
     } else {
         ProofAnswer::Inconsistent
     };
-    let proof = recorder.into_proof(&kb, input_digest(ontology), contract, answer);
+    let proof = recorder.into_proof(&kb, input, contract, answer);
     Ok((answer, proof))
 }
 
@@ -4749,14 +4780,45 @@ fn input_digest(ontology: &RdfDataset) -> [u8; 32] {
     *blake3::hash(purrdf_core::canonicalize(ontology).nquads.as_bytes()).as_bytes()
 }
 
+/// The fallible sibling of [`input_digest`] — the untrusted-input entry point, exactly as
+/// [`purrdf_core::try_canonicalize`] is [`purrdf_core::canonicalize`]'s. See
+/// [`try_ontology_identity`].
+fn try_input_digest(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_core::CanonError> {
+    Ok(*blake3::hash(purrdf_core::try_canonicalize(ontology)?.nquads.as_bytes()).as_bytes())
+}
+
 /// The PRODUCER-INDEPENDENT identity of an ontology, for a consumer to recompute.
 ///
 /// The same 32 bytes [`DlProof::input`] carries, exposed so a service proof term can bind the
 /// caller's dataset by exactly the identity a tableau proof term does. Two engines that read
 /// the same graph, in any order and with any blank-node labelling, compute the same value.
+///
+/// # Panics
+/// **Trusted callers only** — hard-`panic!`s on the same two refusals
+/// [`purrdf_core::canonicalize`] does (a reserved-vocabulary term, or an n-degree search that
+/// exhausts [`purrdf_core::RDFC_CALL_LIMIT`]). A caller who cannot vouch for `ontology`'s
+/// provenance wants [`try_ontology_identity`], which returns them as a value.
 #[must_use]
 pub fn ontology_identity(ontology: &RdfDataset) -> [u8; 32] {
     input_digest(ontology)
+}
+
+/// The PRODUCER-INDEPENDENT identity of an ontology, returning a typed
+/// [`purrdf_core::CanonError`] instead of panicking.
+///
+/// **This is the entry point for UNTRUSTED input** — every reasoning surface reachable
+/// from Python, WASM or the C ABI hands a caller-supplied document to a recording
+/// reasoner or an OWL-DL proof producer, and computing that ontology's identity is the
+/// FIRST canonicalization on that path. Byte-identical `Ok` output to [`ontology_identity`];
+/// only the refusal behavior differs — see [`ontology_identity`] for trusted callers, which
+/// panics instead.
+///
+/// # Errors
+/// [`purrdf_core::CanonError::ReservedVocabulary`] if any term of `ontology` is an IRI in
+/// PurRDF's RDFC-1.0 reserved namespace; [`purrdf_core::CanonError::BudgetExceeded`] if the
+/// n-degree search's call/permutation budget is exhausted first.
+pub fn try_ontology_identity(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_core::CanonError> {
+    try_input_digest(ontology)
 }
 
 /// The calculus/clausification contract: BLAKE3 over [`CALCULUS_VERSION`] and the canonical
@@ -5537,6 +5599,55 @@ mod tests {
         assert_eq!(answer, ProofAnswer::Inconsistent, "C ⊓ D ⊑ ⊥ with a : C, D");
         let ctx = DlProofContext::of_ontology(&ontology).expect("the fixture reverse-maps");
         (ontology, proof, ctx)
+    }
+
+    /// The ontology `DlProofContext::of_ontology` builds a checking context from is wholly
+    /// caller-supplied, so a reserved-vocabulary IRI ([`purrdf_core::RESERVED_NAMESPACE`])
+    /// must refuse computing its producer-independent identity as a
+    /// [`DlProofError::Canonicalization`] VALUE, rather than aborting the process through the
+    /// panicking `purrdf_core::canonicalize` `input_digest` used to call. [`refutation`]'s own
+    /// `of_ontology(&disjoint_classes())` call, exercised by every test above and below this
+    /// one, is this refusal's valid neighbour: the same constructor, an ORDINARY ontology,
+    /// still succeeds.
+    #[test]
+    fn of_ontology_refuses_a_reserved_vocabulary_ontology_as_a_value() {
+        let mut f = Fixture::new();
+        let a = f.iri(EX_A);
+        let reserved = f.iri(&format!("{}bad", purrdf_core::RESERVED_NAMESPACE));
+        let p = f.iri(EX_P);
+        f.quad(a, p, reserved);
+        let ontology = f.freeze();
+        let error = DlProofContext::of_ontology(&ontology)
+            .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        assert!(
+            matches!(error, DlProofError::Canonicalization(_)),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
+            "{error}"
+        );
+    }
+
+    /// [`prove_consistency`] binds the SAME producer-independent identity [`of_ontology`]
+    /// does, computed before the tableau ever runs — so a reserved-vocabulary ontology must
+    /// refuse there too, as an [`EntailError::Canonicalization`] VALUE. [`refutation`]'s own
+    /// `prove_consistency(&disjoint_classes())` call is this refusal's valid neighbour.
+    #[test]
+    fn prove_consistency_refuses_a_reserved_vocabulary_ontology_as_a_value() {
+        let mut f = Fixture::new();
+        let a = f.iri(EX_A);
+        let reserved = f.iri(&format!("{}bad", purrdf_core::RESERVED_NAMESPACE));
+        let p = f.iri(EX_P);
+        f.quad(a, p, reserved);
+        let ontology = f.freeze();
+        let error = prove_consistency(&ontology)
+            .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
+        assert!(
+            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
+            "{error}"
+        );
     }
 
     // ── The positive direction ──────────────────────────────────────────────────

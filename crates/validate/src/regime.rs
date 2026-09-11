@@ -4046,12 +4046,18 @@ fn answer_claims(
         Service::ModuleExtraction => {
             // The answer IS the module, as canonical N-Quads, so its claim is that module's
             // own producer-independent identity — recomputed here from the bytes the consumer
-            // holds rather than read off anything the producer said about them.
+            // holds rather than read off anything the producer said about them. That module
+            // is wholly caller-supplied (parsed from `answer` above), so this goes through
+            // the fallible, non-panicking `try_ontology_identity` rather than
+            // `ontology_identity`: a reserved-vocabulary or budget-exhausting module must
+            // come back as an `Err` value across the wasm/Python/C-ABI boundary, not abort
+            // the process.
             let module = purrdf_rdf::parse_dataset(answer.as_bytes(), INPUT_MEDIA_TYPE, None)
                 .map_err(|diagnostic| format!("the module answer is not N-Quads: {diagnostic}"))?;
-            vec![ClaimSubject::Module {
-                digest: purrdf_entail::ontology_identity(&module),
-            }]
+            let digest = purrdf_entail::try_ontology_identity(&module).map_err(|error| {
+                format!("the module answer was refused canonicalization: {error}")
+            })?;
+            vec![ClaimSubject::Module { digest }]
         }
         other => {
             return Err(format!(
@@ -5893,6 +5899,46 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
         let extracted = extract_module_to_string(TAXONOMY, "<http://example.org/A>\n", "bot")
             .expect("an ordinary taxonomy must still extract");
         assert!(extracted.answer().contains("<http://example.org/A>"));
+    }
+
+    /// `proofs = true` pays for an EXTRA producer-independent identity beyond the one
+    /// [`extract_module_refuses_a_reserved_vocabulary_module_as_a_value`] exercises: the
+    /// ontology's own identity and the extracted module's, both bound into the recorded
+    /// proof term by `purrdf_entail::reasoner::module::extract_module_with_proofs`. Before
+    /// this migrated off the panicking `purrdf_entail::ontology_identity` onto
+    /// `try_ontology_identity`, a reserved-vocabulary ontology asked for WITH proofs aborted
+    /// the process instead of refusing as a value — reachable from
+    /// `Reasoner(data, proofs=True).extract_module(...)` at the Python/wasm/C-ABI
+    /// boundaries. This is that refusal, named.
+    #[test]
+    fn extract_module_with_proofs_refuses_a_reserved_vocabulary_ontology_as_a_value() {
+        let session = ReasonerSession::open_with_proofs(TAXONOMY_RESERVED, 0, 0)
+            .expect("a reserved-vocabulary document still PARSES");
+        let error = session
+            .extract_module("<http://example.org/A>\n", "bot")
+            .expect_err(
+                "a reserved-vocabulary ontology asked for WITH proofs must refuse \
+                 canonicalization as a value, not panic",
+            );
+        assert!(error.contains("refused canonicalization"), "{error}");
+        assert!(error.contains("urn:purrdf:rdfc:B"), "{error}");
+    }
+
+    /// The valid neighbour of the refusal above: the same seed/method WITH proofs, over
+    /// the ORDINARY [`TAXONOMY`] (no reserved IRI), still extracts successfully and still
+    /// records a proof — the migration changed no admitted-input behavior.
+    #[test]
+    fn extract_module_with_proofs_still_admits_the_ordinary_taxonomy() {
+        let session =
+            ReasonerSession::open_with_proofs(TAXONOMY, 0, 0).expect("an ordinary document parses");
+        let extracted = session
+            .extract_module("<http://example.org/A>\n", "bot")
+            .expect("an ordinary taxonomy asked for WITH proofs must still extract");
+        assert!(extracted.answer().contains("<http://example.org/A>"));
+        assert!(
+            extracted.proof().is_some(),
+            "proofs = true must still record a proof term"
+        );
     }
 
     /// A justification is minimal AND sufficient, and both halves are RE-DECIDED
