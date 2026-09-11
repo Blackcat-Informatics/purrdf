@@ -166,6 +166,37 @@ pub fn citation_iri(
     )
 }
 
+/// The identity of a structure node, over its own bytes, under the same
+/// chunking id and the same seven-field preimage [`unit_iri`] takes —
+/// only the kind differs.
+///
+/// A structure node is addressed exactly as a unit is because it is the
+/// same claim about a different span: these bytes, at this range, of
+/// this document, cut by this law. Its span is decided entirely by the
+/// chunking law — it is the complement of the unit spans and the
+/// heading lines — so the chunking id is the right third field for it
+/// too, and a renamed vocabulary or a newly declared canon base moves
+/// no structure node.
+#[must_use]
+pub fn structure_iri(
+    vocabulary: &Vocabulary,
+    source_id: &str,
+    contract: &ChunkingContractId,
+    byte_start: u64,
+    byte_end: u64,
+    span: &[u8],
+) -> String {
+    node_iri(
+        vocabulary,
+        "structure",
+        source_id,
+        contract,
+        byte_start,
+        byte_end,
+        span,
+    )
+}
+
 fn node_iri(
     vocabulary: &Vocabulary,
     kind: &str,

@@ -24,7 +24,10 @@ to the exact bytes it was minted over. Node identities are
 content-addressed and carry the whole law inside them, so the same bytes
 under the same profile yield byte-identical output on every
 implementation and on every target, and any change to the law re-mints
-rather than drifting. The law recognizes exactly what an author writes —
+rather than drifting. The projection is the encode half of a **codec**:
+the emitted spans cover every byte of the source, so a consumer holding
+only the graph rebuilds the document byte for byte and proves the
+rebuild against the source digest the graph itself states (§11.3). The law recognizes exactly what an author writes —
 ATX headings, movement markers, numbered verses, paragraphs, and one
 concordance table — and it refuses, by name, everything it cannot state.
 It is offered as a shared law for anyone who wants a document to be a
@@ -62,6 +65,12 @@ respect, the class it is stated with.
 **Unit** — a span of text that stands on its own: a numbered **verse**, a
 **paragraph**, or one **piece** of either after the split law (§3) has
 cut it.
+
+**Structure** — a maximal run of source bytes that no unit span and no
+heading line covers: a blank run, a horizontal rule, a table row, the
+newline a split cut lands on, a byte order mark. Structure spans are
+what close the cover: the unit spans, the heading lines and the
+structure spans together cover every byte of the source (§11.3).
 
 **Citation** — one row of a concordance table (§4): a verse range, canon
 source paths, and canon anchors.
@@ -440,9 +449,9 @@ section-level rule for movements; the rest of the concordance law — the
 trigger heading, the containment reading of *inside it*, the column
 order, the cell-escape law, the verse-range spellings, the backtick rule,
 the report-never-refuse rule, and the anchor lift with its containment
-test; the three identity formulas; the digest algorithm tag; and the
-emission law of §11, term list and reification shape included. Its digest
-is the **contract id**.
+test; the four identity formulas; the digest algorithm tag; and the
+emission law of §11, term list, reification shape and coverage clauses
+included. Its digest is the **contract id**.
 
 The emission preimage states the whole law because the contract id is the
 handle a consumer keeps: two runs that agree on the id MUST agree on
@@ -504,7 +513,12 @@ notices it in its own content digest, below.
 Every field is prefixed with its length as eight bytes little-endian, so
 no two field sequences share a preimage. A **section's IRI** is the same
 formula with the kind `section`, over the section's *heading span* and
-that span's bytes.
+that span's bytes. A **structure node's IRI** is the same formula with
+the kind `structure`, over the structure span and that span's bytes: a
+structure span is decided entirely by the chunking law — it is the
+complement of the unit spans and the heading lines — so the chunking id
+is the right third field for it too, and a renamed vocabulary or a newly
+declared canon base moves no structure node.
 
 A **citation's IRI** is the same formula with the kind `citation`, over
 the concordance row's own line span, and with the content digest taken
@@ -642,12 +656,15 @@ these local names to it, and takes the base itself as the node base:
 | section level | `level` | canon source path | `canonSource` |
 | unit ordinal, section ordinal | `ordinal` | citation class | `Citation` |
 | section heading text | `heading` | the unit a citation is of | `unit` |
+| structure class | `Structure` | verbatim bytes | `verbatim` |
+| verbatim span start | `verbatimStart` | verbatim span end | `verbatimEnd` |
 
 with the datatype IRIs `digest` (a source digest), `media` (a media
-type), `profile` (a slicing profile's label), `headingText` (a section's
-heading and the document's title), `lineagePath` (a heading lineage),
-`anchor` (a canon anchor under no canon base) and `path` (a canon source
-path).
+type), `profile` (a slicing profile's label), `headingText` (the
+document's title), `lineagePath` (a heading lineage), `anchor` (a canon
+anchor under no canon base), `path` (a canon source path) and
+`verbatimText` (a verbatim literal — a heading line's or a structure
+span's exact bytes, §11.3).
 
 `canonSource` is a term **about a citation**, not about a unit: it
 annotates the citation node a row's lift mints (§11), which is what keeps
@@ -795,6 +812,13 @@ architecture and on every target. An implementation MUST NOT read a
 clock, consult ambient state, iterate an unordered collection whose order
 it then emits, or otherwise admit a source of variation into its output.
 
+**The round trip is normative.** For every input it admits, an
+implementation's emitted graph MUST decode, under §11.3, to the very
+bytes it was sliced from. Encoding and decoding are two halves of one
+conformance: a graph that indexes a document without covering it, and a
+decoder that accepts a cover this law refuses, are each non-conforming
+alone.
+
 An implementation MUST refuse, by name and before producing any output:
 a source that is not UTF-8; an empty source id; a source id that cannot
 be written as an IRI reference; a source id that is no IRI reference at
@@ -896,8 +920,8 @@ nonetheless inside the profile's contract id (§5): changing it re-mints
 every contract id, and every citation node under one.
 
 Output is one **claim** per node, in document order — the document node
-first, then sections and units interleaved as they occur, whichever
-starts first. A claim is the node's triples written as N-Triples lines,
+first, then sections, units and structure nodes interleaved as they
+occur, whichever starts first. A claim is the node's triples written as N-Triples lines,
 each line terminated by `\n`, the lines **sorted bytewise** and
 de-duplicated. N-Triples is a subset of Turtle, so a claim is served as
 `text/turtle`.
@@ -917,9 +941,35 @@ document has one, the title typed with the heading datatype.
 **A section node.** Subject: the section's IRI (§5). `rdf:type` the
 heading class, or the movement class for a movement; the in-document
 predicate to the source id; the level and the ordinal as `xsd:integer`;
-the heading text typed with the heading datatype; the section span's
-start and end as `xsd:integer`; and, where there is one, the parent
-predicate to the parent section's IRI.
+the heading's **words** — the trimmed text §2.1 reads, markers and
+whitespace removed — as the section's **one plain literal**, an
+`xsd:string` with no datatype IRI, and **no span of its own**: the words
+are derived from the heading line by the dialect's trim rule and a
+consumer verifies them by re-deriving that trim from the verbatim line
+below, never by a second span; the section span's start and end as
+`xsd:integer`; the heading **line itself** — every byte of the heading
+span, the marks, the leading spaces and the `\r` of a CRLF document
+among them — as a `verbatim` literal typed with the verbatim datatype,
+with that span's start and end as `verbatimStart` and `verbatimEnd`;
+and, where there is one, the parent predicate to the parent section's
+IRI.
+
+The words are plain and the line is typed because they answer two
+different consumers. A chapter title is the densest content a document
+carries, and a plain-literal index that never saw it would report
+absence for text the graph holds; the line's bytes are what the decode
+law rebuilds the document from, and no index wants a `##` in it.
+
+**A structure node.** Subject: the structure node's IRI (§5).
+`rdf:type` the structure class; the in-document predicate to the source
+id; the span's start and end as `xsd:integer`; the span's exact bytes as
+a `verbatim` literal typed with the verbatim datatype; and the same two
+offsets again as `verbatimStart` and `verbatimEnd`, so a decoder reads
+every verbatim literal by one rule whatever node carries it and never
+dispatches on a class. One structure node per **maximal** run: no two
+structure nodes may be adjacent — one's end equal to the next's start —
+because a maximal run would have absorbed its neighbour, and an
+implementation MUST NOT emit two where the law states one.
 
 **A unit node.** Subject: the unit's IRI (§5). `rdf:type` the unit class;
 the unit's verbatim text as **exactly one plain literal** — an
@@ -935,12 +985,17 @@ is non-empty, the lineage as its headings joined with ` > ` and typed
 with the lineage datatype; and where the unit continues another piece,
 the continues predicate to that piece's IRI.
 
-Every one of those but the text is **typed**, which is the point: the
-scalar offsets and the digest are data a consumer needs — a UTF-16 host
-that counts characters, a reader proving a hit is bound to its bytes —
-and putting them in the graph MUST NOT cost the unit its single plain
-literal. An implementation MUST NOT emit a second plain `xsd:string` on a
-unit.
+**Plain means content, typed means bytes.** That sentence is the whole
+of the content/structure split, and it is normative: the only plain
+`xsd:string` literals a conforming graph carries are a unit's text and
+a section's heading words — exactly one per unit and one per section —
+and every other literal, the verbatim bytes above all, is typed. An
+index or an embedder that selects plain strings therefore sees every
+word of the document's content, each word once, and not a byte of its
+structure; a decoder reads only typed verbatim literals and unit texts
+and rebuilds every byte. An implementation MUST NOT emit a second plain
+`xsd:string` on a unit or a section, and MUST NOT emit a plain literal
+on any other node.
 
 ### 11.1 Citations, and the pairing they keep
 
@@ -1058,6 +1113,109 @@ document carries the one character the two disagree about.
 
 An implementation SHOULD therefore reach every one of these forms through
 one canonical writer rather than maintain its own escaper beside it.
+
+### 11.3 The decode law
+
+The emission of §11 covers **every byte** of the source: a unit's plain
+text over its byte span, a section's typed verbatim heading line over
+its own span, and a structure node's typed verbatim run over the bytes
+neither covers. This section states how a consumer holding only the
+graph rebuilds the document, and it is normative in both directions —
+an emitter MUST produce a graph this law decodes, and a decoder MUST
+refuse, by name, every graph it cannot.
+
+**Extraction.** A decoder reads the graph by two rules and no class
+dispatch:
+
+1. a node stating `verbatim` contributes the literal's exact bytes over
+   `[verbatimStart, verbatimEnd)`;
+2. a node stating a plain `text` literal — a unit — contributes it over
+   `[byteStart, byteEnd)`, with the `continues` edge, where the node
+   states one, resolved to the named piece's own byte span.
+
+A heading's plain words literal carries no span and contributes
+nothing; it is derived data, verified against the verbatim line by
+re-deriving the trim of §2.1, never by a second span.
+
+**Reconstruction.** Write each span's bytes at its offset into a buffer
+of the document node's `byteLength`; the spans carry their offsets, so
+no order of the graph and no order of the walk is load-bearing. Then
+prove the buffer: it MUST digest to the `sourceDigest` the document node
+states, and it MUST be UTF-8.
+
+**The overlap law.** The spans of a lawful graph are pairwise disjoint,
+with exactly one declared exception: a split's continuation reaches
+back into the piece its `continues` edge names (§3), and there the
+shared bytes MUST agree with **that piece's**. The declaration is the
+graph's own edge, and the piece it names is the one the shared bytes
+are held against — never whichever span a sorted walk last extended,
+because two pieces of one chain can end at one cut and the walk then
+credits the shared bytes to the earlier while the edge names the later.
+An overlap with no `continues` edge, with an edge naming a span the
+graph does not carry, or with an edge naming one that does not cover
+the shared bytes, MUST be refused **even when the shared bytes agree**:
+two spans sliced from one file agree wherever they overlap, so
+agreement is evidence they came from the same file and none at all that
+the structure is lawful.
+
+**The refusals.** A decoder MUST state, by name and with the offsets
+that locate it: a span that ends before it starts; a span past the
+declared byte length; a span whose text is not as many bytes as it
+claims; the first run of bytes no span covers — the declared byte
+length past the spans' total among them, found **before** any buffer is
+allocated, so a graph cannot buy an allocation with a number; the first
+undeclared overlap; the first declared overlap whose bytes disagree,
+at the first byte they disagree about; a rebuilt document that does not
+digest to the stated `sourceDigest`; and rebuilt bytes that are not
+UTF-8. A decoder's allocation MUST be bounded by its input, never by
+what the graph claims.
+
+**Verification is symmetric.** The graph proves the document — the
+digest — and the document proves the graph: a reader holding both
+re-derives any node's content digest from its span and refuses a
+disagreement (§5.1). An implementation SHOULD hold the emission against
+its own decode before handing a graph out, because an encoder defect on
+an input class its fixtures lack is caught by the thing that produced
+it or by nothing.
+
+**Order is a value, not a container.** Document order is carried by the
+offsets themselves, so the blessed retrieval is one clause —
+
+```sparql
+SELECT ?node ?start WHERE { ?node <…byteStart> ?start } ORDER BY ?start
+```
+
+— and never a chain walk. This is deliberate lineage: every prior
+attempt to carry order in RDF structure stalled on it — `rdf:Seq`'s
+membership properties are unordered in the formal semantics and were
+resolved archaic by the 2011 RDF Working Group; `rdf:first`/`rdf:rest`
+chains cannot be retrieved in order by standard SPARQL and were the
+worst-performing ordering model in the one published head-to-head
+benchmark (Daga, Meroño-Peñuela &amp; Motta, CEUR-2496); and the
+offset-anchor rot the annotation literature measured — 54% of
+offset-based URIs invalid under document edits in NIF's own study,
+against 99.98% stability for content-hash addressing — was measured
+against *mutable* targets, and is the very finding this law's
+content-addressed identities are built on. The offsets MUST be typed
+`xsd:integer` end to end: a path that ever compares them as strings
+orders `"10"` before `"9"`.
+
+Two consequences of that lineage are stated rather than implied. This
+is a **snapshot codec, never an editing model**: one changed byte is a
+different document — a different digest, different node IRIs — so a
+stale graph fails loudly at the digest and can never point quietly at
+the wrong bytes; the price, accepted with eyes open, is that no span
+migrates across an edit. And the identities make decoding
+**merge-idempotent**: two independent slicings of one document under
+one profile mint the same IRIs and the same triples, so their union is
+the graph itself — where every structure-carried ordering before this
+one corrupts under merge, blank-node lists standardized apart and
+container indexes collided.
+
+The cover, not the codec, is the general law. Nothing in this section
+is Markdown: the two extraction rules, the overlap law and the refusals
+read spans and literals, and the next structured format that plugs in
+at the dialect seam (§2) decodes under this same section unchanged.
 
 ## 12. Related work
 

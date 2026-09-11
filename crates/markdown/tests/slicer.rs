@@ -254,6 +254,16 @@ fn typed_value(claim: &Claim, predicate: &str) -> Option<String> {
     })
 }
 
+/// The lexical form of a **plain** literal object — a heading's words —
+/// refusing a typed one: plainness is the assertion, not a formatting
+/// detail, because plain is what a text index selects on.
+fn plain_value(claim: &Claim, predicate: &str) -> Option<String> {
+    object(claim, predicate).map(|o| {
+        assert!(!o.contains("\"^^"), "a plain literal carries no datatype");
+        o.trim_start_matches('"').trim_end_matches('"').to_owned()
+    })
+}
+
 /// The continuation chains of a slice: the pieces of one unit in order,
 /// a new chain opening at every piece that continues nothing. A unit
 /// that never split is a chain of one.
@@ -297,6 +307,10 @@ fn split_chains_before_a_heading(claims: &[Claim]) -> Vec<(Vec<&Claim>, &Claim)>
                 chain.clear();
             }
             ClaimKind::Document => {}
+            // Structure claims are the bytes *between* things — the cut
+            // newline inside a chain, the blank run before the heading —
+            // and neither open nor close a chain of pieces.
+            ClaimKind::Structure => {}
         }
     }
     out
@@ -351,7 +365,8 @@ fn every_heading_and_movement_starts_a_section_with_its_level_ordinal_parent_and
     assert_eq!(title.span, Some((0, GUIDE.len() as u64)));
     assert_eq!(
         object(title, &v().heading).as_deref(),
-        Some(&*format!("\"{TITLE}\"^^<{}>", v().dt_heading))
+        Some(&*format!("\"{TITLE}\"")),
+        "the heading's words are the section's one plain literal"
     );
     // Two movement markers under one heading are siblings, not nested.
     for (i, movement) in sections[1..3].iter().enumerate() {
@@ -406,7 +421,7 @@ fn every_heading_and_movement_starts_a_section_with_its_level_ordinal_parent_and
     assert_eq!(integer(concordance, &v().level), Some(2));
     assert_eq!(
         object(concordance, &v().heading).as_deref(),
-        Some(&*format!("\"Concordance\"^^<{}>", v().dt_heading))
+        Some("\"Concordance\"")
     );
     assert_eq!(concordance.span.map(|s| s.1), Some(GUIDE.len() as u64));
     // The concordance's own subsections are deeper, so they nest under
@@ -596,7 +611,7 @@ fn an_oversize_unit_splits_at_the_bound_on_a_boundary_and_continues_from_the_sna
             );
         }
         before_a_heading.push((
-            typed_value(heading, &v().heading).expect("a heading"),
+            plain_value(heading, &v().heading).expect("a heading"),
             integer(heading, &v().ordinal).expect("an ordinal"),
             integer(heading, &v().level).expect("a level"),
             chain.len(),
@@ -700,12 +715,9 @@ fn multi_byte_text_keeps_its_boundaries_and_its_characters() {
     let s = sections(&claims);
     assert_eq!(
         object(s[0], &v().heading).as_deref(),
-        Some(&*format!("\"T\u{ed}tulo\"^^<{}>", v().dt_heading))
+        Some("\"T\u{ed}tulo\"")
     );
-    assert_eq!(
-        object(s[1], &v().heading).as_deref(),
-        Some(&*format!("\"el camino\"^^<{}>", v().dt_heading))
-    );
+    assert_eq!(object(s[1], &v().heading).as_deref(), Some("\"el camino\""));
     let u = units(&claims);
     assert_eq!(
         unescape(&object(u[0], &v().text).expect("text")),
@@ -1707,14 +1719,14 @@ fn every_claim_parses_as_turtle_and_canonicalizes_under_purrdf() {
 /// is the deliberate step that records which. They are the real values
 /// a report about a law change should quote.
 const DECLARED_CONTRACT_ID: &str =
-    "1eecf8d78eee96f4d3fd083479157d0b93b0dd97a36fa911d48d531060227974";
+    "d4053c9d35631e2da17f7219349cf653397a7d946195552868890392230b2a55";
 const DECLARED_CHUNKING_ID: &str =
     "40c979545ccb6e9a3007d38c93adb72c9735f39080a519e6d399bd6e0ed1e872";
 
 /// The same profile with the byte bound widened to 4096 and nothing
 /// else touched: a split constant, so **both** ids move, and these are
 /// the values they move to.
-const WIDER_CONTRACT_ID: &str = "0c285f009f9a8b7b893d7bbb48babe9ae60b8463298ffe05723b662142a477a5";
+const WIDER_CONTRACT_ID: &str = "61436f7b876f9dc7927fa82d5b9cf26a7eeed047fe8e939bba57386376584e86";
 const WIDER_CHUNKING_ID: &str = "2a832603cbd4458673dc826e8b9018d0b489530fa46b31bc95a243927af9bc49";
 
 /// A second canon base, under another authority: the third profile of
@@ -2431,7 +2443,19 @@ fn a_leading_byte_order_mark_shifts_every_span_and_changes_no_structure() {
     let marked = format!("\u{feff}{MARKED}");
     let plain = slice(MARKED, &v1());
     let with_mark = slice(&marked, &v1());
-    assert_eq!(with_mark.len(), plain.len());
+    // The mark's own bytes are covered like every other byte — as one
+    // structure claim the unmarked twin has no counterpart of, so the
+    // graph still decodes back to the marked bytes exactly.
+    assert_eq!(with_mark.len(), plain.len() + 1);
+    let (mark_claims, with_mark): (Vec<Claim>, Vec<Claim>) = with_mark
+        .into_iter()
+        .partition(|c| c.kind == ClaimKind::Structure && c.span == Some((0, 3)));
+    assert_eq!(mark_claims.len(), 1, "the mark is one structure node");
+    assert_eq!(
+        object(&mark_claims[0], &v().verbatim).as_deref(),
+        Some(&*format!("\"\u{feff}\"^^<{}>", v().dt_verbatim)),
+        "and that node carries the mark itself"
+    );
     assert_eq!(
         object(&with_mark[0], &v().title),
         object(&plain[0], &v().title),
@@ -2449,6 +2473,8 @@ fn a_leading_byte_order_mark_shifts_every_span_and_changes_no_structure() {
         v().byte_end,
         v().scalar_start,
         v().scalar_end,
+        v().verbatim_start,
+        v().verbatim_end,
     ];
     for (a, b) in plain.iter().zip(&with_mark).skip(1) {
         assert_eq!(a.kind, b.kind);
@@ -2579,7 +2605,7 @@ fn each_marker_the_law_names_is_read_behind_a_leading_run_of_spaces() {
     let claims = slice_of("   # Title", GUIDE_ID, &v1()).expect("slices");
     let s = sections(&claims);
     assert_eq!(s.len(), 1);
-    assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("Title"));
+    assert_eq!(plain_value(s[0], &v().heading).as_deref(), Some("Title"));
     assert_eq!(
         s[0].span,
         Some((0, 10)),
@@ -2602,7 +2628,7 @@ fn each_marker_the_law_names_is_read_behind_a_leading_run_of_spaces() {
     let s = sections(&claims);
     assert_eq!(s.len(), 1);
     assert!(is_movement(s[0]));
-    assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("m"));
+    assert_eq!(plain_value(s[0], &v().heading).as_deref(), Some("m"));
     assert!(
         units(&claims).is_empty(),
         "a movement marker line is a section, never a unit"
@@ -2617,9 +2643,9 @@ fn nought_to_three_leading_spaces_open_a_marker_and_four_leave_an_ordinary_unit(
         let claims = slice_of(&text, GUIDE_ID, &v1()).expect("slices");
         let s = sections(&claims);
         assert_eq!(s.len(), 2, "{indent} spaces open a heading and a movement");
-        assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("T"));
+        assert_eq!(plain_value(s[0], &v().heading).as_deref(), Some("T"));
         assert!(is_movement(s[1]), "{indent} spaces");
-        assert_eq!(typed_value(s[1], &v().heading).as_deref(), Some("m"));
+        assert_eq!(plain_value(s[1], &v().heading).as_deref(), Some("m"));
         assert_eq!(
             integer(s[1], &v().level),
             Some(2),
@@ -2693,7 +2719,7 @@ fn a_tab_in_the_leading_run_opens_no_marker_because_it_reaches_the_fourth_column
     // still the separator a heading and a verse are read by (§2.1).
     let claims = slice_of("   #\tT\n\n   1.\tone\n", GUIDE_ID, &v1()).expect("slices");
     assert_eq!(
-        typed_value(sections(&claims)[0], &v().heading).as_deref(),
+        plain_value(sections(&claims)[0], &v().heading).as_deref(),
         Some("T")
     );
     assert_eq!(integer(units(&claims)[0], &v().verse), Some(1));
@@ -2734,6 +2760,8 @@ fn an_indented_document_states_its_twins_structure_over_spans_shifted_by_the_lea
         v().byte_end,
         v().scalar_start,
         v().scalar_end,
+        v().verbatim_start,
+        v().verbatim_end,
     ];
     for (a, b) in plain.iter().zip(&with_run).skip(1) {
         assert_eq!(a.kind, b.kind);
@@ -2744,10 +2772,12 @@ fn an_indented_document_states_its_twins_structure_over_spans_shifted_by_the_lea
             (shifted(a_start), shifted(a_end)),
             "every span moved by the runs before it and by nothing else"
         );
-        assert!(
-            indented[b_start as usize..].starts_with(LEADING_RUN),
-            "a span opens at its line's first byte, the run among them"
-        );
+        if b.kind != ClaimKind::Structure {
+            assert!(
+                indented[b_start as usize..].starts_with(LEADING_RUN),
+                "a span opens at its line's first byte, the run among them"
+            );
+        }
         let (a_pairs, b_pairs) = (pairs(a), pairs(b));
         assert_eq!(a_pairs.len(), b_pairs.len());
         for ((a_p, a_o), (b_p, b_o)) in a_pairs.iter().zip(&b_pairs) {
@@ -2769,6 +2799,28 @@ fn an_indented_document_states_its_twins_structure_over_spans_shifted_by_the_lea
                     ))
                 );
                 assert_ne!(a_o, b_o, "a run inside the span is a run inside the digest");
+                continue;
+            }
+            if *a_p == v().verbatim {
+                // A section's verbatim line keeps the run its line was
+                // written with, and is its twin's line once it comes
+                // off; a structure run between the lines carries no
+                // run at all and is its twin's byte for byte.
+                let (a_lex, a_dt) = typed_parts(a_o);
+                let (b_lex, b_dt) = typed_parts(b_o);
+                assert_eq!(a_dt, b_dt);
+                if a.kind == ClaimKind::Section {
+                    assert_eq!(b_lex, format!("{LEADING_RUN}{a_lex}"));
+                } else {
+                    // A structure run keeps the run of every non-blank
+                    // line it carries — the table rows among them —
+                    // and is its twin's once each comes off.
+                    let stripped: String = b_lex
+                        .split_inclusive('\n')
+                        .map(|line| line.strip_prefix(LEADING_RUN).unwrap_or(line))
+                        .collect();
+                    assert_eq!(stripped, a_lex);
+                }
                 continue;
             }
             if *a_p == v().text {
@@ -2818,7 +2870,7 @@ fn a_heading_whose_title_is_empty_after_the_leading_run_states_that_empty_title(
     let s = sections(&claims);
     assert_eq!(s.len(), 1);
     assert_eq!(
-        typed_value(s[0], &v().heading).as_deref(),
+        plain_value(s[0], &v().heading).as_deref(),
         Some(""),
         "the run is no part of the title, and nothing else is left of it"
     );
@@ -2940,16 +2992,21 @@ fn the_term_set_is_inside_the_contract_id_and_the_dual_role_spelling_is_another_
     for local in [
         "Document",
         "Unit",
+        "Structure",
         "heading",
         "headingText",
         "lineage",
         "lineagePath",
         "canonSource",
         "path",
+        "verbatim",
+        "verbatimStart",
+        "verbatimEnd",
+        "verbatimText",
     ] {
         assert!(named.contains(local), "{local} is named in the law");
     }
-    assert_eq!(named.len(), 35, "every derived term is named once");
+    assert_eq!(named.len(), 40, "every derived term is named once");
 
     let mut dual = v1();
     dual.vocabulary.dt_heading.clone_from(&v().heading);
@@ -3607,9 +3664,9 @@ fn a_crlf_document_states_the_structure_its_lf_twin_states_and_keeps_the_return_
     let claims = slice(CRLF, &v1());
     let s = sections(&claims);
     assert_eq!(s.len(), 2, "the heading and the movement are both read");
-    assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("T"));
+    assert_eq!(plain_value(s[0], &v().heading).as_deref(), Some("T"));
     assert_eq!(
-        typed_value(s[1], &v().heading).as_deref(),
+        plain_value(s[1], &v().heading).as_deref(),
         Some("m"),
         "a movement name is trimmed, and the return trims away with it"
     );
@@ -3653,11 +3710,11 @@ fn a_crlf_document_states_the_structure_its_lf_twin_states_and_keeps_the_return_
     assert_eq!(
         sections(&plain)
             .iter()
-            .map(|x| typed_value(x, &v().heading))
+            .map(|x| plain_value(x, &v().heading))
             .collect::<Vec<_>>(),
         sections(&claims)
             .iter()
-            .map(|x| typed_value(x, &v().heading))
+            .map(|x| plain_value(x, &v().heading))
             .collect::<Vec<_>>()
     );
 }
@@ -3682,7 +3739,7 @@ fn a_heading_at_the_end_of_the_document_needs_no_trailing_newline_to_open_a_sect
     let claims = slice_of("# T", GUIDE_ID, &v1()).expect("slices");
     let s = sections(&claims);
     assert_eq!(s.len(), 1);
-    assert_eq!(typed_value(s[0], &v().heading).as_deref(), Some("T"));
+    assert_eq!(plain_value(s[0], &v().heading).as_deref(), Some("T"));
     assert_eq!(s[0].span, Some((0, 3)), "the section runs to the last byte");
     assert_eq!(typed_value(&claims[0], &v().title).as_deref(), Some("T"));
     assert!(
@@ -3697,7 +3754,7 @@ fn a_heading_of_nothing_but_hashes_states_an_empty_heading_and_still_opens_its_s
     let s = sections(&claims);
     assert_eq!(s.len(), 1);
     assert_eq!(
-        typed_value(s[0], &v().heading).as_deref(),
+        plain_value(s[0], &v().heading).as_deref(),
         Some(""),
         "the closing hashes are trimmed and nothing is left of the title"
     );
@@ -3720,7 +3777,7 @@ fn a_heading_of_nothing_but_hashes_states_an_empty_heading_and_still_opens_its_s
 fn a_tab_after_the_hashes_and_after_the_verse_dot_opens_a_heading_and_a_verse() {
     let claims = slice_of("#\tTitle\n\n1.\tText\n", GUIDE_ID, &v1()).expect("slices");
     assert_eq!(
-        typed_value(sections(&claims)[0], &v().heading).as_deref(),
+        plain_value(sections(&claims)[0], &v().heading).as_deref(),
         Some("Title"),
         "the tab separates the hashes from the title and trims away with the rest"
     );
@@ -4802,8 +4859,14 @@ fn the_designated_heading_and_lineage_literals_carry_their_own_datatypes() {
     );
     let section = sections(&claims)[0];
     assert_eq!(
-        object(section, &standard.heading).map(|term| typed_parts(&term)),
-        Some((TITLE.to_owned(), format!("{STANDARD_NAMESPACE}headingText")))
+        object(section, &standard.heading).as_deref(),
+        Some(&*format!("\"{TITLE}\"")),
+        "a heading's words are the section's one plain literal"
+    );
+    assert_eq!(
+        object(section, &standard.verbatim).map(|term| typed_parts(&term).1),
+        Some(format!("{STANDARD_NAMESPACE}verbatimText")),
+        "and its line's bytes stay typed beside them"
     );
     let lineages: Vec<(String, String)> = units(&claims)
         .iter()
