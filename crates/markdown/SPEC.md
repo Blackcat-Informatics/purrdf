@@ -1204,10 +1204,12 @@ designed for this intersection.
 
 ### 12.4 The state of the three properties
 
-Of everything above, the nearest each hold exactly one: the Direct
-Mapping is total, `oa:DataPositionSelector` is byte-counted, and RFC
-5147's `md5=` content-addresses the text it addresses — though not the
-law that addressed it. None holds two, and none is about Markdown.
+Of everything above, four hold exactly one of the three. The Direct
+Mapping, CSVW and Façade-X are total from bytes; `oa:DataPositionSelector`
+is byte-counted. None holds *content-addressed law*: RFC 5147's `md5=`
+comes nearest, and it content-addresses the text being addressed rather
+than the law that addressed it, which is a different thing. None of the
+twenty-one holds two of the three, and none is about Markdown.
 
 If a standard does hold all three, then this section is the part of this
 document that is wrong, and its authors would rather be told which one
