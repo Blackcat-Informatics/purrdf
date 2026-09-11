@@ -392,6 +392,77 @@ terminal! {
 }
 
 terminal! {
+    /// The FIRST scalar of `BLANK_NODE_LABEL`: `( PN_CHARS_U | [0-9] )`.
+    ///
+    /// `BLANK_NODE_LABEL ::= '_:' ( PN_CHARS_U | [0-9] )`
+    /// `((PN_CHARS | '.')* PN_CHARS)?` (SPARQL 1.2 §19.8 / Turtle 1.2 §6.5).
+    ///
+    /// The production is position-dependent and its head is **narrower than its
+    /// tail**, which is the whole reason this predicate exists separately from
+    /// [`is_pn_chars`]: `'-'`, `'.'`, U+00B7 MIDDLE DOT, the combining marks
+    /// `[#x300-#x36F]` and the two ties `[#x203F-#x2040]` may CONTINUE a label
+    /// and may not BEGIN one, so `_:a-b` is one label and `_:-b` is not a label
+    /// at all. Scanning the head with the continue class silently admits a
+    /// label this workspace's own writer refuses to emit — see
+    /// `purrdf_rdf_core::blank_label::is_valid_blank_node_label`, the egress
+    /// side of the same production.
+    ///
+    /// It is also narrower than [`is_pn_local_start`]: a `':'` begins a
+    /// `PN_LOCAL` and never a blank node label, because the `':'` in `_:` has
+    /// already been consumed by the terminal's own literal prefix.
+    ///
+    /// This is the same SET of scalars as [`is_varname_start`], and deliberately
+    /// not the same predicate: two productions in two grammars that happen to
+    /// coincide today are not one production, and `VARNAME` is SPARQL-only while
+    /// `BLANK_NODE_LABEL` is shared. The coincidence is pinned by a test rather
+    /// than assumed by a call.
+    tables BLANK_NODE_LABEL_START_ASCII, BLANK_NODE_LABEL_START_NON_ASCII;
+    pub const fn is_blank_node_label_start(char) extends is_pn_chars_u;
+    ascii: [
+        (0x30, 0x39), // [0-9]
+    ];
+    non_ascii: [];
+}
+
+terminal! {
+    /// The single-scalar alternatives of `PN_LOCAL`'s FIRST position:
+    /// `( PN_CHARS_U | ':' | [0-9] )`.
+    ///
+    /// `PN_LOCAL ::= (PN_CHARS_U | ':' | [0-9] | PLX)`
+    /// `((PN_CHARS | '.' | ':' | PLX)* (PN_CHARS | ':' | PLX))?`
+    /// (SPARQL 1.2 §19.8 / Turtle 1.2 §6.5).
+    ///
+    /// **The head has a fourth alternative this predicate cannot answer.**
+    /// `PLX ::= PERCENT | PN_LOCAL_ESC` is not a character class: `PERCENT ::=`
+    /// `'%' HEX HEX` and `PN_LOCAL_ESC ::= '\' [_~.-!$&'()*+,;=/?#@%]` are both
+    /// multi-scalar shapes, so whether a `'%'` or a `'\'` opens a local name is
+    /// a decision about the scalars that FOLLOW it, which only the scanner
+    /// holding the cursor can make. This predicate answers the three
+    /// alternatives that ARE a character class, and every caller must decide
+    /// `PLX` itself — `ex:%20a` and `ex:\~a` are lawful prefixed names whose
+    /// local part begins at a scalar this predicate returns `false` for.
+    ///
+    /// What it refuses is the head that no alternative names: `'-'`, `'.'`,
+    /// U+00B7, `[#x300-#x36F]` and `[#x203F-#x2040]` are all `PN_CHARS`, so they
+    /// may continue a local name, and none of them may start one. `ex:a-b` is
+    /// one prefixed name; `ex:-b` is the empty local name `ex:` followed by the
+    /// `'-'` token.
+    ///
+    /// Wider than [`is_blank_node_label_start`] by exactly the `':'` — a local
+    /// name may begin, continue and end with one (`ex::a`, `ex:a:b` are single
+    /// prefixed names) — and wider than [`is_pn_chars_base`] by the `'_'` a
+    /// `PN_PREFIX` may not begin with. Three productions in one grammar, three
+    /// different head classes, no two of them equal.
+    tables PN_LOCAL_START_ASCII, PN_LOCAL_START_NON_ASCII;
+    pub const fn is_pn_local_start(char) extends is_pn_chars_u;
+    ascii: [
+        (0x30, 0x39), // [0-9]
+        (0x3A, 0x3A), // ':'
+    ];
+    non_ascii: [];
+}
+
+terminal! {
     /// The FIRST scalar of `VARNAME`: `( PN_CHARS_U | [0-9] )`.
     ///
     /// `VARNAME ::= ( PN_CHARS_U | [0-9] ) ( PN_CHARS_U | [0-9] | #xB7 |`
@@ -437,7 +508,8 @@ terminal! {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_pn_chars, is_pn_chars_base, is_pn_chars_u, is_varname_continue, is_varname_start, is_ws,
+        is_blank_node_label_start, is_pn_chars, is_pn_chars_base, is_pn_chars_u, is_pn_local_start,
+        is_varname_continue, is_varname_start, is_ws,
     };
     use pretty_assertions::assert_eq;
 
@@ -594,6 +666,75 @@ mod tests {
         // truncated table.
         for c in ['\u{D6}', '\u{D8}', '\u{F6}', '\u{F8}', '\u{37D}', '\u{37F}'] {
             assert!(is_pn_chars_base(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn no_two_head_classes_in_this_grammar_are_the_same_class() {
+        // `PN_PREFIX`, `PN_LOCAL` and `BLANK_NODE_LABEL` each open at a
+        // different set, and each opens at a set narrower than the one it
+        // continues with. Stated as a total function over the scalars so the
+        // three cannot drift into one another.
+        for c in all_scalars() {
+            // `PN_PREFIX` head ⊂ `BLANK_NODE_LABEL` head ⊂ `PN_LOCAL` head.
+            if is_pn_chars_base(c) {
+                assert!(is_blank_node_label_start(c), "{c:?}");
+            }
+            if is_blank_node_label_start(c) {
+                assert!(is_pn_local_start(c), "{c:?}");
+            }
+            // Every head is a subset of the tail class it continues into.
+            if is_pn_local_start(c) {
+                assert!(is_pn_chars(c) || c == ':', "{c:?}");
+            }
+            // The differences, exactly: `'_'` separates `PN_PREFIX`'s head from
+            // a blank node label's, `[0-9]` separates it further, and `':'` is
+            // the one scalar a local name's head has that a label's has not.
+            assert_eq!(
+                is_blank_node_label_start(c),
+                is_pn_chars_base(c) || c == '_' || c.is_ascii_digit(),
+                "{c:?}"
+            );
+            assert_eq!(
+                is_pn_local_start(c),
+                is_blank_node_label_start(c) || c == ':',
+                "{c:?}"
+            );
+            // `VARNAME`'s head is the same SET as a blank node label's; the two
+            // predicates exist apart because the two productions do.
+            assert_eq!(is_blank_node_label_start(c), is_varname_start(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn the_name_heads_refuse_what_only_their_tails_admit() {
+        // `PN_CHARS` members that no head class in this grammar names. Each is
+        // pinned in BOTH positions, so neither half can be read as blanket
+        // strictness: the scalar is refused at the head and admitted after it.
+        for c in ['-', '\u{B7}', '\u{300}', '\u{36F}', '\u{203F}', '\u{2040}'] {
+            assert!(is_pn_chars(c), "{c:?} must still continue a name");
+            assert!(!is_blank_node_label_start(c), "{c:?}");
+            assert!(!is_pn_local_start(c), "{c:?}");
+            assert!(!is_pn_chars_base(c), "{c:?}");
+        }
+        // `'.'` is not even a `PN_CHARS` member: it is admitted between name
+        // characters by the productions' own structure, never at either end.
+        assert!(!is_pn_chars('.'));
+        assert!(!is_blank_node_label_start('.'));
+        assert!(!is_pn_local_start('.'));
+        // The lawful neighbours, so the refusals above are exactness and not a
+        // narrowed alphabet: digits and `'_'` open both names, `':'` opens only
+        // a local one, and a non-ASCII letter opens all three.
+        for c in ['0', '9', '_'] {
+            assert!(is_blank_node_label_start(c), "{c:?}");
+            assert!(is_pn_local_start(c), "{c:?}");
+        }
+        assert!(is_pn_local_start(':'));
+        assert!(!is_blank_node_label_start(':'));
+        for c in ['\u{4E2D}', '\u{65E5}', '\u{E9}'] {
+            assert!(is_pn_chars_base(c), "{c:?}");
+            assert!(is_blank_node_label_start(c), "{c:?}");
+            assert!(is_pn_local_start(c), "{c:?}");
         }
     }
 

@@ -596,11 +596,39 @@ impl<'a> Scanner<'a> {
     /// the standing example — it is neither `WS` nor `PN_CHARS`, so it can only
     /// end the label and then fail, and any local table that admitted it would
     /// swallow the following term instead.
+    ///
+    /// # The head is a different class from the tail
+    ///
+    /// The first scalar after `_:` is `( PN_CHARS_U | [0-9] )` —
+    /// [`purrdf_iri::terminals::is_blank_node_label_start`] — which is strictly
+    /// narrower than the `PN_CHARS` the rest of the label is made of. `'-'`,
+    /// U+00B7 MIDDLE DOT, the combining marks `[#x300-#x36F]` and the ties
+    /// `[#x203F-#x2040]` may continue a label and may not open one, and `'.'`
+    /// may appear only between name characters. Answering the head with the tail
+    /// class admitted `_:-a`, `_:.a` and `_:\u{300}a`, none of which any
+    /// conforming parser reads and none of which
+    /// `purrdf_rdf_core::blank_label::is_valid_blank_node_label` — the same
+    /// production on egress — will emit.
+    ///
+    /// The lawful neighbours this must not touch: `_:0a` and `_:_a` (a digit and
+    /// an underscore ARE the head class), `_:a-b` and `_:a.b` (hyphen and
+    /// internal dot in the tail), and `_:café` in either normalization.
     fn parse_blank_node_label(&mut self) -> Result<String, CdtError> {
         let start = self.position;
         self.expect(b'_', "`_:` opening a blank node label")?;
         self.expect(b':', "`_:` opening a blank node label")?;
         let body_start = self.position;
+        match self.input[self.position..].chars().next() {
+            Some(ch) if purrdf_iri::terminals::is_blank_node_label_start(ch) => {
+                self.position += ch.len_utf8();
+            }
+            _ => {
+                return Err(CdtError::BadBlankNodeLabel {
+                    offset: start,
+                    reason: "the label must begin with PN_CHARS_U or [0-9]",
+                });
+            }
+        }
         while let Some(ch) = self.input[self.position..].chars().next() {
             if purrdf_iri::terminals::is_pn_chars(ch) || ch == '.' {
                 self.position += ch.len_utf8();
@@ -609,12 +637,6 @@ impl<'a> Scanner<'a> {
             }
         }
         let label = &self.input[body_start..self.position];
-        if label.is_empty() {
-            return Err(CdtError::BadBlankNodeLabel {
-                offset: start,
-                reason: "the label is empty",
-            });
-        }
         if label.ends_with('.') {
             return Err(CdtError::BadBlankNodeLabel {
                 offset: start,

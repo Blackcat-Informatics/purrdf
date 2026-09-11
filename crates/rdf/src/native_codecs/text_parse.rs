@@ -1107,7 +1107,49 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
 
     /// Takes `&mut self` rather than `self` so the caller keeps the parser afterwards and
     /// can read the [`base`](Self::base) the document's `@base` directives left in force.
+    ///
+    /// # A leading U+FEFF is refused BY NAME — the same verdict, a better diagnostic
+    ///
+    /// U+FEFF ZERO WIDTH NO-BREAK SPACE is a lawful `PN_CHARS_BASE` scalar (it sits in
+    /// `[#xFDF0-#xFFFD]`), so `ex:a<FEFF>b`, `_:a<FEFF>b`, `<urn:ex:a<FEFF>b>` and
+    /// `"x<FEFF>y"` all parse and MUST keep parsing. Being a name character is exactly
+    /// why the mark used to produce an unusable refusal at the head of a document: the
+    /// scanner dispatched it as a name before any arm could look at it, and the document
+    /// came back as `unexpected token Some(Word("\u{feff}"))` — a message naming a token
+    /// the author never typed.
+    ///
+    /// This arm changes no verdict. Such a document was already refused, because U+FEFF
+    /// is not one of the bare words the Turtle/TriG grammar has (`PREFIX`, `BASE`,
+    /// `VERSION`, `GRAPH`, `a`, `true`, `false`) and no other production opens there. It
+    /// is refused the same way here, with the mark named and the remedy stated — the same
+    /// treatment [`parse_one_line`] gives the N-Triples/N-Quads line paths, so all five
+    /// text codecs now answer a byte order mark alike.
+    ///
+    /// **Stripping the mark was rejected**, for the reason spelled out at
+    /// [`parse_one_line`]: no production of this family names a byte order mark, so
+    /// stripping would be this parser inventing a production the specification does not
+    /// have — and a mark is a claim about the ENCODING of a byte stream, already honoured
+    /// by the time these scalars were decoded.
+    ///
+    /// The position is byte 0 of the document and nothing else. A byte order mark is only
+    /// a byte order mark at the start of the stream; a U+FEFF anywhere else is either part
+    /// of the name, IRI or literal it sits in (lawful, untouched) or a stray `Word`
+    /// refused one layer down as the token it lawfully lexes into, which is not a byte
+    /// order mark and is not called one.
     fn parse(&mut self) -> Result<Vec<Statement>, RdfDiagnostic> {
+        if self.src.starts_with(BYTE_ORDER_MARK) {
+            return Err(err_at(
+                "document begins with U+FEFF ZERO WIDTH NO-BREAK SPACE (the UTF-8 byte \
+                 order mark, bytes EF BB BF). It is a lawful PN_CHARS_BASE scalar INSIDE \
+                 a token, but no production of the Turtle/TriG grammar names a byte order \
+                 mark: a statement begins at a directive (`@prefix`, `@base`, `PREFIX`, \
+                 `BASE`), at a subject term (`<`, a prefixed name, `_:`, `[`, `(`) or — in \
+                 TriG — at `GRAPH` or `{`, and WS is #x20 | #x9 | #xD | #xA. Remove the \
+                 mark",
+                1,
+                1,
+            ));
+        }
         // Turtle/TriG admit a bare `/` in a prefixed-name local part (e.g.
         // `purrdf:report/shacl/sarif`), matching oxigraph/purrdf-gts leniency.
         // Turtle has no `/` operator, so this is unambiguous in term position;
@@ -3681,6 +3723,111 @@ mod tests {
             "the diagnostic must name the offending scalar: {}",
             diagnostic.message
         );
+    }
+
+    /// The Turtle/TriG path answers a leading U+FEFF the same way the line paths
+    /// do — by name, at (1, 1), with the same verdict it always had.
+    ///
+    /// Before this, the mark reached [`DocParser::term`] as the `Word` it
+    /// lawfully lexes into and came back as `unexpected token
+    /// Some(Word("\u{feff}"))`, which names a token no author typed.
+    #[test]
+    fn a_turtle_document_opening_with_a_byte_order_mark_is_refused_by_name() {
+        for allow_named_graphs in [false, true] {
+            let text = "\u{feff}<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n";
+            let diagnostic =
+                DocParser::new(text, BaseScope::empty(), allow_named_graphs, &mut NoSpans)
+                    .parse()
+                    .expect_err("a byte order mark opens no Turtle/TriG production");
+            assert_eq!(located(&diagnostic), (1, 1));
+            assert!(
+                diagnostic
+                    .message
+                    .contains("U+FEFF ZERO WIDTH NO-BREAK SPACE"),
+                "the diagnostic must name the character: {}",
+                diagnostic.message
+            );
+            // The neighbour: the identical document without the mark parses, so
+            // the arm refuses the mark and not the statement after it.
+            let statements = DocParser::new(
+                &text[3..],
+                BaseScope::empty(),
+                allow_named_graphs,
+                &mut NoSpans,
+            )
+            .parse()
+            .expect("the same document without the mark is well formed");
+            assert_eq!(statements.len(), 1);
+        }
+    }
+
+    /// The over-refusal neighbour that decides the whole U+FEFF question on this
+    /// path too: `#xFEFF` is inside `PN_CHARS_BASE`'s `[#xFDF0-#xFFFD]`, so it is
+    /// a lawful scalar INSIDE a name, an IRI or a literal — and a `@prefix`
+    /// directive before a marked statement does not make the mark a mark either.
+    #[test]
+    fn a_byte_order_mark_inside_a_turtle_token_is_a_name_character_and_parses() {
+        for text in [
+            "@prefix ex: <urn:ex:> .\nex:a\u{feff}b ex:p ex:o .\n",
+            "_:a\u{feff}b <urn:ex:p> <urn:ex:o> .\n",
+            "_:\u{feff}b <urn:ex:p> <urn:ex:o> .\n",
+            "<urn:ex:a\u{feff}b> <urn:ex:p> <urn:ex:o> .\n",
+            "<urn:ex:s> <urn:ex:p> \"a\u{feff}b\" .\n",
+        ] {
+            let statements = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+                .parse()
+                .unwrap_or_else(|e| panic!("U+FEFF is a lawful name scalar: {}", e.message));
+            assert_eq!(statements.len(), 1, "{text:?}");
+        }
+    }
+
+    /// The Turtle/TriG codec reads its names through the shared scanner, so the
+    /// `BLANK_NODE_LABEL` and `PN_LOCAL` HEAD classes reach this path too.
+    ///
+    /// The blank-node half is the one that had teeth: this codec's own writer
+    /// validates labels with `purrdf_rdf_core::blank_label::is_valid_blank_node_label`,
+    /// which implements the same production, so a label accepted here and refused
+    /// there could be read in and never written back out.
+    #[test]
+    fn the_name_head_classes_reach_the_turtle_path() {
+        let parse =
+            |text: &str| DocParser::new(text, BaseScope::empty(), false, &mut NoSpans).parse();
+        for label in ["-a", ".a", "\u{300}a", "\u{b7}a"] {
+            let text = format!("_:{label} <urn:ex:p> <urn:ex:o> .\n");
+            assert!(
+                parse(&text).is_err(),
+                "_:{label} opens no BLANK_NODE_LABEL, and the writer would refuse it"
+            );
+            assert!(
+                !purrdf_core::blank_label::is_valid_blank_node_label(label),
+                "egress refuses _:{label}, so ingress must too"
+            );
+        }
+        for local in ["-a", ".a", "\u{300}a"] {
+            let text = format!("@prefix ex: <urn:ex:> .\n<urn:ex:s> ex:{local} <urn:ex:o> .\n");
+            assert!(parse(&text).is_err(), "ex:{local} opens no PN_LOCAL");
+        }
+        // The lawful neighbours, each of which the egress validator also accepts.
+        for label in ["0a", "_a", "a-b", "a.b", "cafe\u{301}", "a\u{feff}b"] {
+            let text = format!("_:{label} <urn:ex:p> <urn:ex:o> .\n");
+            assert_eq!(
+                parse(&text).expect("a lawful label").len(),
+                1,
+                "_:{label} is a lawful BLANK_NODE_LABEL"
+            );
+            assert!(
+                purrdf_core::blank_label::is_valid_blank_node_label(label),
+                "ingress accepts _:{label}, so egress must too"
+            );
+        }
+        for local in ["", "0a", "_a", ":a", "a-b", "a.b", "%20a", "report/x"] {
+            let text = format!("@prefix ex: <urn:ex:> .\n<urn:ex:s> ex:{local} <urn:ex:o> .\n");
+            assert_eq!(
+                parse(&text).expect("a lawful local name").len(),
+                1,
+                "ex:{local} is a lawful prefixed name here"
+            );
+        }
     }
 
     /// [`column_in_raw`] and [`parse_one_line`] measure the SAME leading run.

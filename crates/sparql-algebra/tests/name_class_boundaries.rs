@@ -250,3 +250,119 @@ fn non_ascii_whitespace_inside_an_iriref_still_parses() {
         );
     }
 }
+
+// ── The head classes: three productions, three different first-scalar sets ─────
+//
+// `PN_PREFIX`, `PN_LOCAL` and `BLANK_NODE_LABEL` each open at a class narrower
+// than the one they continue with, and no two of the three heads are equal:
+//
+// ```text
+// PN_PREFIX        ::= PN_CHARS_BASE ((PN_CHARS | '.')* PN_CHARS)?
+// PN_LOCAL         ::= (PN_CHARS_U | ':' | [0-9] | PLX) ((PN_CHARS | '.' | ':' | PLX)* (PN_CHARS | ':' | PLX))?
+// BLANK_NODE_LABEL ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?
+// PLX              ::= PERCENT | PN_LOCAL_ESC
+// ```
+//
+// The scanner answered all three with the CONTINUE class, so `ex:-a`, `ex:.a`,
+// `ex:\u{300}a`, `_:-a`, `_:.a` and `_:\u{300}a` all lexed as single names. The
+// blank-node half of that was the sharper edge: `purrdf-rdf-core`'s
+// `is_valid_blank_node_label` implements the same production on EGRESS and
+// refuses those labels, so this parser accepted identifiers the workspace's own
+// writers cannot emit.
+
+/// The over-refusal guard for the head classes, and the one that matters most:
+/// a head check is exactly the change that refuses `ex:` — whose local part is
+/// EMPTY, which `PNAME_NS ::= PN_PREFIX? ':'` makes a whole terminal.
+#[test]
+fn every_lawful_name_head_still_parses() {
+    let parser = SparqlParser::new();
+    for local in [
+        "",                 // `PNAME_NS` alone: the empty local name is lawful
+        "0abc",             // `[0-9]` opens a local name
+        "0",                //
+        "_a",               // `PN_CHARS_U` includes `'_'`
+        "_",                //
+        ":a",               // `':'` opens one, and may repeat inside one
+        "a:b",              //
+        "%20a",             // `PLX` → `PERCENT`
+        "\\~a",             // `PLX` → `PN_LOCAL_ESC`
+        "\\.a",             // an ESCAPED dot is a name character, not a terminator
+        "a.b",              // an internal dot is lawful
+        "a-b",              // the hyphen is lawful in the TAIL
+        "\u{4e2d}\u{6587}", // and the head reaches well past ASCII
+        "\u{65e5}\u{672c}\u{8a9e}",
+        "caf\u{e9}",   // NFC
+        "cafe\u{301}", // NFD — the same word, spelled with a combining mark
+        "a\u{feff}b",  // U+FEFF is `[#xFDF0-#xFFFD]`, so it is a name character
+    ] {
+        let text = format!("PREFIX ex: <urn:ex:> SELECT ?s WHERE {{ ?s ex:{local} ?o }}");
+        assert!(
+            parser.parse_query(&text).is_ok(),
+            "ex:{local} is a lawful prefixed name"
+        );
+    }
+    // The empty PREFIX half of the same terminal.
+    for name in [":a", ":"] {
+        let text = format!("PREFIX : <urn:ex:> SELECT ?s WHERE {{ ?s {name} ?o }}");
+        assert!(parser.parse_query(&text).is_ok(), "{name} is a lawful name");
+    }
+    // And the blank node labels whose head the production names.
+    for label in [
+        "0a",
+        "_a",
+        "a-b",
+        "a.b",
+        "caf\u{e9}",
+        "cafe\u{301}",
+        "a\u{feff}b",
+        "\u{feff}b",
+    ] {
+        let text = format!("SELECT ?o WHERE {{ _:{label} <urn:ex:p> ?o }}");
+        assert!(
+            parser.parse_query(&text).is_ok(),
+            "_:{label} is a lawful blank node label"
+        );
+    }
+}
+
+/// The refusals themselves. A scalar that no head class names does not become a
+/// shorter name — it is not part of a name at all — so each query below has no
+/// reading, and the assertion is that the PARSER refuses it rather than that any
+/// particular error arm fires.
+#[test]
+fn a_scalar_that_opens_no_name_is_not_absorbed_into_one() {
+    let parser = SparqlParser::new();
+    for local in ["-a", ".a", "\u{300}a", "\u{b7}a", "\u{203f}a"] {
+        let text = format!("PREFIX ex: <urn:ex:> SELECT ?s WHERE {{ ?s ex:{local} ?o }}");
+        assert!(
+            parser.parse_query(&text).is_err(),
+            "ex:{local} is not one prefixed name: `{}` opens no PN_LOCAL",
+            local.chars().next().expect("non-empty")
+        );
+    }
+    for label in ["-a", ".a", "\u{300}a", "\u{b7}a", ":a", ".", "%20"] {
+        let text = format!("SELECT ?o WHERE {{ _:{label} <urn:ex:p> ?o }}");
+        assert!(
+            parser.parse_query(&text).is_err(),
+            "_:{label} opens no BLANK_NODE_LABEL"
+        );
+    }
+    // `PN_PREFIX`'s own head, the third of the three: it is `PN_CHARS_BASE`,
+    // which does NOT include the `'_'` that `PN_CHARS_U` adds. So `_ex:a` is not
+    // a prefixed name — `'_'` opens a `BLANK_NODE_LABEL` and nothing else, and
+    // the `e` that follows is not the `':'` that terminal requires.
+    assert!(
+        parser
+            .parse_query("SELECT ?s WHERE { ?s _ex:a ?o }")
+            .is_err(),
+        "`_ex:` is not a PNAME_NS: PN_PREFIX opens at PN_CHARS_BASE"
+    );
+    // Its neighbour, so this is the head class and not a ban on the underscore:
+    // an underscore INSIDE a prefix, and a prefix that opens lawfully, both work.
+    assert!(
+        parser
+            .parse_query("PREFIX e_x: <urn:ex:> SELECT ?s WHERE { ?s e_x:a ?o }")
+            .is_ok(),
+        "`PN_CHARS` keeps the underscore a name character after the first scalar"
+    );
+}

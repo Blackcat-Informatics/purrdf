@@ -635,17 +635,49 @@ impl<'a> Lexer<'a> {
     /// the same exactness as a variable's: [`terminals::is_pn_chars`] and nothing
     /// wider. An approximation that swallowed U+00A0 would fuse `_:a<NBSP>b` into
     /// a single node and silently merge two subjects.
+    ///
+    /// # The production is position-dependent, so the scan is too
+    ///
+    /// The head is `( PN_CHARS_U | [0-9] )` —
+    /// [`terminals::is_blank_node_label_start`] — and it is strictly NARROWER
+    /// than the `PN_CHARS` tail. Five scalars may continue a label and may not
+    /// begin one (`'-'`, U+00B7, the combining marks `[#x300-#x36F]`, the ties
+    /// `[#x203F-#x2040]`), and `'.'` may appear only between name characters.
+    /// Scanning the head with the tail class accepted `_:-a`, `_:.a` and
+    /// `_:\u{300}a` as labels — and that asymmetry had a sharp edge, because
+    /// `purrdf_rdf_core::blank_label::is_valid_blank_node_label` implements the
+    /// same production on EGRESS and refuses all three: this parser was reading
+    /// labels its own writer would not write, so a round trip through the
+    /// workspace's own codecs could not be closed.
+    ///
+    /// The refusal is a refusal and not a re-split, because `'_'` opens a
+    /// `BLANK_NODE_LABEL` and no other terminal (see [`Self::lex_one`]): there is
+    /// no shorter token for the scanner to fall back to. The lawful neighbours
+    /// that must keep parsing are `_:0a` and `_:_a` (digit and underscore are the
+    /// head), `_:a-b` and `_:a.b` (hyphen and internal dot in the tail), and
+    /// `_:café` in either normalization (a combining mark is a lawful tail).
     fn lex_blank_label(&mut self, start: usize) -> Result<Token<'a>> {
         self.pos += 2; // `_:`
-        let raw = self.take_while(|c| terminals::is_pn_chars(c) || c == '.');
+        let begin = self.pos;
+        match self.cur() {
+            Some(c) if terminals::is_blank_node_label_start(c) => self.pos += c.len_utf8(),
+            _ => {
+                return Err(ParseError::lex(
+                    "a blank node label must begin with PN_CHARS_U or [0-9]: \
+                     BLANK_NODE_LABEL ::= '_:' ( PN_CHARS_U | [0-9] ) \
+                     ((PN_CHARS | '.')* PN_CHARS)?",
+                    start,
+                ));
+            }
+        }
+        self.take_while(|c| terminals::is_pn_chars(c) || c == '.');
+        let raw = &self.src[begin..self.pos];
         let label = raw.trim_end_matches('.');
         // Push `pos` back over the over-consumed trailing dots: a trailing `.` is
         // the statement terminator, not part of the label. `.` is ASCII (1 byte),
-        // so the trimmed byte-length delta equals the dot run.
+        // so the trimmed byte-length delta equals the dot run. The head is never
+        // a `'.'`, so this can never trim the label away to nothing.
         self.pos -= raw.len() - label.len();
-        if label.is_empty() {
-            return Err(ParseError::lex("empty blank node label after `_:`", start));
-        }
         Ok(Token::BlankNodeLabel(label))
     }
 
@@ -786,6 +818,35 @@ impl<'a> Lexer<'a> {
         trimmed
     }
 
+    /// Whether the scalar at the cursor opens a `PN_LOCAL`.
+    ///
+    /// `PN_LOCAL`'s head is `(PN_CHARS_U | ':' | [0-9] | PLX)`. The first three
+    /// alternatives are a character class and are answered by
+    /// [`terminals::is_pn_local_start`]; `PLX ::= PERCENT | PN_LOCAL_ESC` is not
+    /// one — `PERCENT ::= '%' HEX HEX` and `PN_LOCAL_ESC ::= '\' [_~.-!$&…]` are
+    /// decisions about the scalars that FOLLOW — so those two are decided here,
+    /// with the cursor, exactly as the body of the scan decides them.
+    ///
+    /// `'%'` is admitted on its lead scalar alone, which is how the tail already
+    /// treats it: this scanner does not check `HEX HEX`, and tightening that is a
+    /// separate decision about the same production, not part of the head class.
+    ///
+    /// The `'/'` arm is the [`LexerOptions::pn_local_allows_slash`] dialect and
+    /// not the W3C production. That option's contract is that a bare `/` is *a
+    /// `PN_LOCAL` character*, so it is one in both positions, and
+    /// `ex:/a` keeps the single-token reading it has always had under Turtle
+    /// while SPARQL keeps reading the `/` as the property-path operator.
+    fn at_pn_local_start(&self) -> bool {
+        match self.cur() {
+            // `PN_LOCAL_ESC` — a `\` that escapes nothing belongs to no name.
+            Some('\\') => self.peek(1).is_some_and(is_pn_local_esc),
+            Some('%') => true, // `PERCENT`
+            Some('/') => self.options.pn_local_allows_slash,
+            Some(c) => terminals::is_pn_local_start(c),
+            None => false,
+        }
+    }
+
     /// `PN_LOCAL`: like a prefix but may also start with a digit or `_`/`:`; must
     /// not end with `.`.
     ///
@@ -797,11 +858,44 @@ impl<'a> Lexer<'a> {
     /// expansion uses — and never terminates the scan even when it is a delimiter.
     /// A trailing UNescaped `.` is the statement terminator and is pushed back; an
     /// escaped `\.` is a literal dot in PN_LOCAL and is kept.
+    ///
+    /// # The head is its own class, and the EMPTY local name is lawful
+    ///
+    /// ```text
+    /// PN_LOCAL  ::= (PN_CHARS_U | ':' | [0-9] | PLX) ((PN_CHARS | '.' | ':' | PLX)* (PN_CHARS | ':' | PLX))?
+    /// PLX       ::= PERCENT | PN_LOCAL_ESC
+    /// PNAME_LN  ::= PNAME_NS PN_LOCAL
+    /// PNAME_NS  ::= PN_PREFIX? ':'
+    /// ```
+    ///
+    /// Two things follow, and they pull in opposite directions.
+    ///
+    /// First, the head is NARROWER than the tail: `'-'`, `'.'`, U+00B7, the
+    /// combining marks and the two ties are all `PN_CHARS`, so they continue a
+    /// local name and none of them starts one. `ex:a-b` is one prefixed name and
+    /// `ex:-b` is not; scanning the head with the tail class read both the same
+    /// way. [`terminals::is_pn_local_start`] answers the three single-scalar
+    /// alternatives; `PLX` is a shape rather than a class and is decided here —
+    /// a `'%'` opens `PERCENT` and a `'\'` opens `PN_LOCAL_ESC` when what follows
+    /// it is escapable — so `ex:%20a` and `ex:\~a` keep their leading `PLX`.
+    ///
+    /// Second, a head check may not become a *requirement* that a head exist.
+    /// `PNAME_NS` is a whole terminal — `ex:` and `:` are complete prefixed names
+    /// with an EMPTY local part, and `:a` has an empty PREFIX — so when the
+    /// scalar at the cursor cannot open a local name this returns the empty
+    /// string WITHOUT consuming it, and the scanner reads the next token from
+    /// there. `ex:.` is therefore the prefixed name `ex:` followed by `Dot`,
+    /// exactly as it already was, and `ex:-a` becomes `ex:`, `Minus`, `a`. The
+    /// tightening moves a token BOUNDARY; it refuses no document that has a
+    /// reading.
     fn take_local(&mut self) -> Cow<'a, str> {
         // Fast path: scan the local name assuming no `PN_LOCAL_ESC`. When no `\`
         // escape is present the local part is a contiguous source slice (borrowed);
         // hitting a valid escape rewinds and defers to the owned builder below.
         let begin = self.pos;
+        if !self.at_pn_local_start() {
+            return Cow::Borrowed(&self.src[begin..begin]);
+        }
         let mut trailing_dots = 0usize;
         while let Some(c) = self.cur() {
             if c == '\\' {
@@ -1630,6 +1724,208 @@ mod tests {
             toks("ex:a_b"),
             vec![Token::PrefixedName("ex", "a_b".into())]
         );
+    }
+
+    /// The three name productions in this grammar open at three DIFFERENT
+    /// classes, and each is narrower than the tail it continues into.
+    ///
+    /// ```text
+    /// PN_PREFIX        ::= PN_CHARS_BASE ((PN_CHARS | '.')* PN_CHARS)?
+    /// PN_LOCAL         ::= (PN_CHARS_U | ':' | [0-9] | PLX) ((PN_CHARS | '.' | ':' | PLX)* (PN_CHARS | ':' | PLX))?
+    /// BLANK_NODE_LABEL ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?
+    /// ```
+    ///
+    /// A prefix may not open at `'_'`; a label may not open at `':'`; neither
+    /// may open at a `'-'`, a `'.'`, a MIDDLE DOT, a combining mark or a tie,
+    /// though all five continue both. Read as a property over every ASCII scalar
+    /// — where every one of the separating scalars lives — rather than as a
+    /// hand-picked list, because a hand-picked list is how one of them is missed.
+    #[test]
+    fn each_name_production_opens_at_its_own_head_class() {
+        for c in (0..=0x7F_u8).map(char::from) {
+            let probe = format!("_:{c}z");
+            let label = tokenize(&probe).ok().and_then(|t| match t.as_slice() {
+                [one] => match one.token {
+                    Token::BlankNodeLabel(l) => Some(l.to_owned()),
+                    _ => None,
+                },
+                _ => None,
+            });
+            assert_eq!(
+                label.is_some(),
+                terminals::is_blank_node_label_start(c),
+                "{probe:?} reads as one BLANK_NODE_LABEL exactly when the \
+                 production's head admits U+{:04X}",
+                u32::from(c)
+            );
+            if let Some(label) = label {
+                assert_eq!(label, format!("{c}z"), "{probe:?}");
+            }
+        }
+    }
+
+    /// The same property for `PN_LOCAL`, whose head carries the one alternative
+    /// no character class can answer.
+    ///
+    /// `PLX ::= PERCENT | PN_LOCAL_ESC` is a SHAPE — `'%' HEX HEX` and `'\' [_~.…]`
+    /// — so `'%'` and an escaping `'\'` open a local name although
+    /// [`terminals::is_pn_local_start`] refuses both. Reading them out of the
+    /// head class is the over-refusal this sweep exists to catch: `ex:%20a` is a
+    /// lawful prefixed name.
+    ///
+    /// A head the production does not name does not fail — it ENDS the prefixed
+    /// name at the colon, because `PNAME_NS ::= PN_PREFIX? ':'` is itself a
+    /// complete terminal. So the assertion is about the token SPLIT, never about
+    /// an error arm.
+    #[test]
+    fn a_local_name_opens_at_its_head_class_plus_the_shapes_of_plx() {
+        for c in (0..=0x7F_u8).map(char::from) {
+            // `ex:\z` is not a `PN_LOCAL_ESC` (`z` is not escapable), so the
+            // backslash opens nothing; the escaping case is pinned below.
+            let opens = terminals::is_pn_local_start(c) || c == '%';
+            let probe = format!("ex:{c}z");
+            for (reading, name) in [
+                (tokenize(&probe), "SPARQL"),
+                (tokenize_turtle(&probe), "Turtle"),
+            ] {
+                // The dialect flag makes `/` a `PN_LOCAL` character in Turtle,
+                // in every position, which is the one difference between the
+                // two entry points.
+                let opens = opens || (c == '/' && name == "Turtle");
+                // A scalar that opens no local name leaves the `PNAME_NS` whole
+                // and is read as whatever token IT starts — which, for a scalar
+                // that starts none (a control character, a `"`), is no token at
+                // all. Both outcomes say the same thing: the name stopped at the
+                // colon.
+                let local = reading.ok().map(|spanned| match spanned.first() {
+                    Some(Spanned {
+                        token: Token::PrefixedName("ex", local),
+                        ..
+                    }) => local.clone().into_owned(),
+                    other => panic!("{name}: {probe:?} must open a prefixed name, got {other:?}"),
+                });
+                let at = u32::from(c);
+                match (opens, local) {
+                    (true, Some(local)) => assert_eq!(local, format!("{c}z"), "{name}: {probe:?}"),
+                    (true, None) => {
+                        panic!("{name}: U+{at:04X} opens a local name, so {probe:?} must lex")
+                    }
+                    (false, Some(local)) => assert_eq!(
+                        local, "",
+                        "{name}: U+{at:04X} opens no local name, so {probe:?} \
+                         must stop the name at the colon"
+                    ),
+                    // The scalar opens no local name AND no token of its own, so
+                    // the document has no reading. The name still stopped at the
+                    // colon, which is what this sweep is about.
+                    (false, None) => {}
+                }
+            }
+        }
+        // `PLX`'s two shapes, which the character class cannot see, both open a
+        // local name — and the escape decodes, exactly as it does mid-name.
+        assert_eq!(
+            toks("ex:%20a"),
+            vec![Token::PrefixedName("ex", "%20a".into())]
+        );
+        assert_eq!(
+            toks("ex:\\~a"),
+            vec![Token::PrefixedName("ex", "~a".into())]
+        );
+        assert_eq!(
+            toks("ex:\\.a"),
+            vec![Token::PrefixedName("ex", ".a".into())]
+        );
+    }
+
+    /// The empty local name and the empty prefix are LAWFUL, and a head-class
+    /// check is exactly the change that would refuse them.
+    ///
+    /// `PNAME_NS ::= PN_PREFIX? ':'` is a terminal in its own right, so `ex:`,
+    /// `:` and `:a` are complete prefixed names. `ex:.` is that terminal followed
+    /// by the statement-terminating `Dot` — the same reading it had before the
+    /// head class existed.
+    #[test]
+    fn an_empty_local_name_and_an_empty_prefix_are_both_whole_names() {
+        assert_eq!(toks("ex:"), vec![Token::PrefixedName("ex", "".into())]);
+        assert_eq!(toks(":"), vec![Token::PrefixedName("", "".into())]);
+        assert_eq!(toks(":a"), vec![Token::PrefixedName("", "a".into())]);
+        assert_eq!(
+            toks("ex:."),
+            vec![Token::PrefixedName("ex", "".into()), Token::Dot]
+        );
+        assert_eq!(
+            toks("ex: ex:"),
+            vec![
+                Token::PrefixedName("ex", "".into()),
+                Token::PrefixedName("ex", "".into()),
+            ]
+        );
+    }
+
+    /// The non-ASCII half of the head classes, where the interesting scalars are
+    /// the ones that continue a name without opening one.
+    ///
+    /// Each appears TWICE — once at the head, where it must not join, and once
+    /// in the tail, where it must — so neither half can be read as blanket
+    /// strictness or blanket leniency. `ex:cafe\u{301}` and `_:cafe\u{301}` are
+    /// the ones that matter in practice: an NFD-spelled name is exactly as
+    /// lawful as its NFC spelling.
+    #[test]
+    fn a_continue_only_scalar_joins_a_name_and_never_opens_one() {
+        for c in ['\u{b7}', '\u{300}', '\u{36f}', '\u{203f}', '\u{2040}'] {
+            assert!(terminals::is_pn_chars(c), "U+{:04X}", u32::from(c));
+            // Head: the local name is empty and the scalar opens no token of its
+            // own, so the document has no reading at all.
+            assert!(
+                tokenize(&format!("ex:{c}z")).is_err(),
+                "`ex:{c}z` opens no local name and `{c}` opens no token"
+            );
+            assert!(
+                tokenize(&format!("_:{c}z")).is_err(),
+                "`_:{c}z` opens no blank node label"
+            );
+            // Tail: the same scalar is part of the name.
+            assert_eq!(
+                toks(&format!("ex:a{c}z")),
+                vec![Token::PrefixedName("ex", format!("a{c}z").into())]
+            );
+            assert_eq!(
+                toks(&format!("_:a{c}z")),
+                vec![Token::BlankNodeLabel(&format!("_:a{c}z")[2..])]
+            );
+        }
+        // The lawful non-ASCII heads, so none of the above is an alphabet
+        // narrowed to ASCII: a CJK ideograph, an accented Latin letter in NFC,
+        // and U+FEFF — which is `[#xFDF0-#xFFFD]`, hence a lawful name start
+        // however much it looks like the byte order mark it also spells.
+        for c in ['\u{4e2d}', '\u{e9}', '\u{feff}', '\u{1f600}'] {
+            assert_eq!(
+                toks(&format!("ex:{c}z")),
+                vec![Token::PrefixedName("ex", format!("{c}z").into())]
+            );
+            assert_eq!(
+                toks(&format!("_:{c}z")),
+                vec![Token::BlankNodeLabel(&format!("_:{c}z")[2..])]
+            );
+        }
+    }
+
+    /// A blank node label's trailing-dot pushback survives the head check, and
+    /// an INTERNAL dot is still part of the label.
+    ///
+    /// The head is never a `'.'` now, so the pushback can no longer trim a label
+    /// away to nothing — `_:.` is refused at the head rather than after the trim,
+    /// and the trim itself only ever hands back a terminator.
+    #[test]
+    fn the_label_dot_pushback_still_keeps_internal_dots() {
+        assert_eq!(
+            toks("_:a.b."),
+            vec![Token::BlankNodeLabel("a.b"), Token::Dot]
+        );
+        assert_eq!(toks("_:a."), vec![Token::BlankNodeLabel("a"), Token::Dot]);
+        assert!(tokenize("_:.").is_err(), "`_:.` opens no label");
+        assert!(tokenize("_:.a").is_err(), "`_:.a` opens no label");
     }
 
     /// Tightening the name classes must not have re-broken the `IRIREF` body,

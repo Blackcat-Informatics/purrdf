@@ -388,6 +388,43 @@ fn blank_node_label_still_admits_every_non_ascii_scalar_pn_chars_names() {
     );
 }
 
+/// The production is position-dependent: its HEAD is `(PN_CHARS_U | [0-9])`,
+/// which is strictly narrower than the `PN_CHARS` its tail is made of.
+///
+/// Five scalars continue a label and open none — `'-'`, U+00B7 MIDDLE DOT, the
+/// combining marks `[#x300-#x36F]` and the two ties `[#x203F-#x2040]` — and `'.'`
+/// is admitted only between name characters. Scanning the head with the tail
+/// class read `_:-a` and `_:.a` as labels, which no conforming parser does and
+/// which `purrdf-rdf-core`'s `is_valid_blank_node_label` — the same production on
+/// egress — refuses to emit.
+#[test]
+fn a_blank_node_label_opens_at_a_narrower_class_than_it_continues_with() {
+    for label in ["-a", ".a", "\u{300}a", "\u{b7}a", "\u{203f}a", "-", "."] {
+        assert!(
+            parse_list(&format!("[_:{label}]")).is_err(),
+            "_:{label} opens at a scalar BLANK_NODE_LABEL's head does not name"
+        );
+    }
+    // Every one of those scalars is still lawful one position later, so this is
+    // the head class and not a narrowed alphabet.
+    for label in ["a-a", "a.a", "a\u{300}a", "a\u{b7}a", "a\u{203f}a"] {
+        assert_eq!(
+            list_items(&format!("[_:{label}]")),
+            vec![CdtTerm::Blank(label.into())],
+            "_:{label} is lawful: the scalar continues a label"
+        );
+    }
+    // And the heads the production DOES name — `PN_CHARS_U` (which is
+    // `PN_CHARS_BASE` plus `'_'`) and `[0-9]` — all still open a label.
+    for label in ["_a", "_", "0a", "9", "a", "\u{65e5}b", "cafe\u{301}"] {
+        assert_eq!(
+            list_items(&format!("[_:{label}]")),
+            vec![CdtTerm::Blank(label.into())],
+            "_:{label} opens at a scalar the head class names"
+        );
+    }
+}
+
 // ── Ill-formed shapes ─────────────────────────────────────────────────────────
 
 #[test]
