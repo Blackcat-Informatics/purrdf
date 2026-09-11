@@ -257,12 +257,25 @@ const OBSERVATION_FIELDS: [&str; 10] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Stage(usize);
 
+/// The build profile this run was taken under.
+///
+/// Derived, never asserted as a literal: a debug-profile figure is not comparable
+/// with a release one, and a hardcoded `release` would quietly claim it was. The
+/// line is a record, so it has to say which of the two it is.
+fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
+
 /// The four accounting families one measured variant reports, in the units the
 /// carrier itself keeps. `peak_accounted_bytes` is the ledger's deduplicated
 /// retention plus this view's own incremental charge — an ACCOUNTED figure, not
 /// an allocator or RSS measurement.
 #[derive(Debug, Clone, Copy, Default)]
-struct Account {
+struct Observation {
     peak_accounted_bytes: usize,
     retained_bytes: usize,
     incremental_bytes: usize,
@@ -271,7 +284,7 @@ struct Account {
     materializations: usize,
 }
 
-impl Account {
+impl Observation {
     /// The view carrier's own report, read verbatim.
     fn from_report(report: &ViewAccountingReport) -> Self {
         Self {
@@ -291,19 +304,20 @@ impl Account {
 /// Print one observation line, self-asserting that every named field survived
 /// the formatting. This is the acceptance mechanism: it runs in criterion's
 /// `--test` smoke mode too, so a shape that stopped reporting fails the bench.
-fn observe(shape: &str, variant: &str, elapsed: Duration, account: Account) {
+fn observe(shape: &str, variant: &str, elapsed: Duration, observed: Observation) {
     let line = format!(
-        "observation shape={shape} variant={variant} profile=release \
+        "observation shape={shape} variant={variant} profile={profile} \
          elapsed_ns={elapsed} peak_accounted_bytes={peak} retained_bytes={retained} \
          incremental_bytes={incremental} copies={copies} freezes={freezes} \
          materializations={materializations}",
+        profile = build_profile(),
         elapsed = elapsed.as_nanos(),
-        peak = account.peak_accounted_bytes,
-        retained = account.retained_bytes,
-        incremental = account.incremental_bytes,
-        copies = account.copies,
-        freezes = account.freezes,
-        materializations = account.materializations,
+        peak = observed.peak_accounted_bytes,
+        retained = observed.retained_bytes,
+        incremental = observed.incremental_bytes,
+        copies = observed.copies,
+        freezes = observed.freezes,
+        materializations = observed.materializations,
     );
     for field in OBSERVATION_FIELDS {
         assert!(
@@ -467,7 +481,7 @@ fn carrier_shapes() -> Vec<CarrierShape> {
 /// The flat carrier is deliberately ledger-free and keeps no `ViewWork`, so the
 /// union's cost is counted here in the same units the view carrier reports: one
 /// freeze per stage, and the rows the union replayed as copies.
-fn run_flat(shape: &CarrierShape) -> Account {
+fn run_flat(shape: &CarrierShape) -> Observation {
     let mut carrier = PipelineBundle::new(
         Arc::clone(&shape.base),
         RdfLookaside::default(),
@@ -496,7 +510,7 @@ fn run_flat(shape: &CarrierShape) -> Account {
         }
     }
     let retained = carrier.dataset().rdf_payload_bytes();
-    Account {
+    Observation {
         peak_accounted_bytes: retained,
         retained_bytes: retained,
         incremental_bytes: 0,
@@ -509,7 +523,7 @@ fn run_flat(shape: &CarrierShape) -> Account {
 /// The VIEW carrier: every stage is a `CompositeDatasetView::extend`, copying no
 /// row. Each variant gets its OWN ledger so the retention figures belong to this
 /// run and nothing else.
-fn run_view(shape: &CarrierShape, limits: ViewLimits) -> Account {
+fn run_view(shape: &CarrierShape, limits: ViewLimits) -> Observation {
     let ledger = RetentionLedger::new();
     let mut carrier = PipelineViewBundle::<Stage>::from_dataset(
         &shape.base,
@@ -548,13 +562,13 @@ fn run_view(shape: &CarrierShape, limits: ViewLimits) -> Account {
             );
         }
     }
-    Account::from_report(&carrier.accounting())
+    Observation::from_report(&carrier.accounting())
 }
 
 /// The DELTA carrier: the same stage plan, but the composed root is a delta
 /// snapshot over the base rather than the frozen base itself, so the delta read
 /// path is in every canonicalization.
-fn run_delta(shape: &CarrierShape, limits: ViewLimits) -> Account {
+fn run_delta(shape: &CarrierShape, limits: ViewLimits) -> Observation {
     let ledger = RetentionLedger::new();
     let mut carrier = PipelineViewBundle::<Stage>::from_delta(
         &shape.delta,
@@ -593,7 +607,7 @@ fn run_delta(shape: &CarrierShape, limits: ViewLimits) -> Account {
             );
         }
     }
-    Account::from_report(&carrier.accounting())
+    Observation::from_report(&carrier.accounting())
 }
 
 fn carrier_propagation(c: &mut Criterion) {
@@ -617,16 +631,16 @@ fn carrier_propagation(c: &mut Criterion) {
     // separate, plainly-measured record that always emits — `--test` included.
     for shape in &shapes {
         let start = Instant::now();
-        let account = run_flat(shape);
-        observe(shape.name, "flat", start.elapsed(), account);
+        let observed = run_flat(shape);
+        observe(shape.name, "flat", start.elapsed(), observed);
 
         let start = Instant::now();
-        let account = run_view(shape, limits);
-        observe(shape.name, "view", start.elapsed(), account);
+        let observed = run_view(shape, limits);
+        observe(shape.name, "view", start.elapsed(), observed);
 
         let start = Instant::now();
-        let account = run_delta(shape, limits);
-        observe(shape.name, "delta", start.elapsed(), account);
+        let observed = run_delta(shape, limits);
+        observe(shape.name, "delta", start.elapsed(), observed);
     }
 
     let mut group = c.benchmark_group("carrier_propagation");

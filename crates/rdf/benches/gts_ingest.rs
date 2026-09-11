@@ -18,10 +18,10 @@
 //! * `view` — `add_view_scoped` straight through the composite, freezing nothing.
 //! * `delta` — `add_view_scoped` through a carrier whose root is a delta snapshot.
 //!
-//! The fixture is the keystone shape, regenerated here (a bench cannot import a
-//! test file): a largish shared base carrying blanks in two scopes, triple terms,
-//! the RDF 1.2 statement layer, all three literal shapes and one declared-but-empty
-//! graph, grown by small contained contributions.
+//! The fixture is the keystone shape, taken from `purrdf_rdf::gts_fixtures` —
+//! the SAME definition `tests/gts_view_ingestion.rs` measures against, because a
+//! bench and a test are separate crates and a second copy of a trap-bearing
+//! fixture is a second answer to "what shape is this".
 //!
 //! Each measured variant prints one `observation` line carrying all four
 //! accounting families by name. The byte figures are ACCOUNTED bytes — the
@@ -34,22 +34,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use purrdf_rdf::gts_compose::{DEFAULT_RSYNCABLE_THRESHOLD, MediumPlan, SnapshotBuilder, emit_gts};
-use purrdf_rdf::{
-    BlankScope, ContentStore, DatasetMut, DatasetProvenance, DatasetView, DeltaDatasetView,
-    MutableDataset, PipelineViewBundle, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfLookaside, RdfTextDirection, RetentionLedger, TermValue, ViewAccountingReport, ViewLimits,
+use purrdf_rdf::gts_compose::SnapshotBuilder;
+use purrdf_rdf::gts_fixtures::{
+    SELECTED, emitted, keystone_base, keystone_contribution, keystone_delta, keystone_loadout,
 };
-
-/// The named graph every relocated default-graph row lands in.
-const SELECTED: &str = "https://example.org/selected";
-/// The base's first quad-bearing named graph.
-const KEY_G1: &str = "https://example.org/keystone/g1";
-/// The base's second quad-bearing named graph.
-const KEY_G2: &str = "https://example.org/keystone/g2";
-/// Declared by the base and left empty everywhere — the graph the ingest report
-/// must NAME rather than drop.
-const KEY_DECLARED: &str = "https://example.org/keystone/declared";
+use purrdf_rdf::{
+    DatasetView, DeltaDatasetView, PipelineViewBundle, RdfDataset, RetentionLedger,
+    ViewAccountingReport, ViewLimits,
+};
 
 /// Every field name an observation line must carry. The presence guard reads this
 /// list, so a renamed field fails the bench instead of silently narrowing the
@@ -71,9 +63,22 @@ const OBSERVATION_FIELDS: [&str; 10] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Stage(usize);
 
+/// The build profile this run was taken under.
+///
+/// Derived, never asserted as a literal: a debug-profile figure is not comparable
+/// with a release one, and a hardcoded `release` would quietly claim it was. The
+/// line is a record, so it has to say which of the two it is.
+fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
+
 /// The four accounting families one measured variant reports.
 #[derive(Debug, Clone, Copy, Default)]
-struct Account {
+struct Observation {
     peak_accounted_bytes: usize,
     retained_bytes: usize,
     incremental_bytes: usize,
@@ -82,7 +87,7 @@ struct Account {
     materializations: usize,
 }
 
-impl Account {
+impl Observation {
     /// The carrier's own accounting report, the ingestion's scratch peak, and any
     /// bytes a materialization froze outside the ledger.
     ///
@@ -114,19 +119,20 @@ impl Account {
 /// Print one observation line, self-asserting that every named field survived the
 /// formatting. This is the acceptance mechanism: it runs in criterion's `--test`
 /// smoke mode too, so a shape that stopped reporting fails the bench.
-fn observe(shape: &str, variant: &str, elapsed: Duration, account: Account) {
+fn observe(shape: &str, variant: &str, elapsed: Duration, observed: Observation) {
     let line = format!(
-        "observation shape={shape} variant={variant} profile=release \
+        "observation shape={shape} variant={variant} profile={profile} \
          elapsed_ns={elapsed} peak_accounted_bytes={peak} retained_bytes={retained} \
          incremental_bytes={incremental} copies={copies} freezes={freezes} \
          materializations={materializations}",
+        profile = build_profile(),
         elapsed = elapsed.as_nanos(),
-        peak = account.peak_accounted_bytes,
-        retained = account.retained_bytes,
-        incremental = account.incremental_bytes,
-        copies = account.copies,
-        freezes = account.freezes,
-        materializations = account.materializations,
+        peak = observed.peak_accounted_bytes,
+        retained = observed.retained_bytes,
+        incremental = observed.incremental_bytes,
+        copies = observed.copies,
+        freezes = observed.freezes,
+        materializations = observed.materializations,
     );
     for field in OBSERVATION_FIELDS {
         assert!(
@@ -135,122 +141,6 @@ fn observe(shape: &str, variant: &str, elapsed: Duration, account: Account) {
         );
     }
     println!("{line}");
-}
-
-// ---------------------------------------------------------------------------
-// The keystone fixture shape, regenerated (benches cannot import test files)
-// ---------------------------------------------------------------------------
-
-/// A largish shared base: quads across two named graphs and the default graph,
-/// one blank LABEL living in two scopes per group, triple terms, reifier
-/// declarations, statement annotations, all three literal shapes — and one named
-/// graph declared and never filled.
-fn keystone_base(groups: usize) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let q = b.intern_iri("https://example.org/q");
-    let g1 = b.intern_iri(KEY_G1);
-    let g2 = b.intern_iri(KEY_G2);
-    let declared = b.intern_iri(KEY_DECLARED);
-    let plain = b.intern_literal(RdfLiteral::simple("bare"));
-    let tagged = b.intern_literal(RdfLiteral::language_tagged("cat", "en"));
-    let directional = b.intern_literal(RdfLiteral {
-        direction: Some(RdfTextDirection::Rtl),
-        ..RdfLiteral::language_tagged("مرحبا", "ar")
-    });
-    for index in 0..groups {
-        let s = b.intern_iri(&format!("https://example.org/s{index}"));
-        let o = b.intern_iri(&format!("https://example.org/o{index}"));
-        // Default-graph rows, relocated to <selected> at ingest time.
-        b.push_quad(s, p, o, None);
-        b.push_quad(s, q, plain, None);
-        // Named-graph rows, one literal shape each.
-        b.push_quad(s, p, directional, Some(g1));
-        b.push_quad(s, q, tagged, Some(g2));
-        // One local label in two scopes, kept structurally distinguishable so
-        // canonicalization stays linear rather than exploring automorphisms.
-        let shared = b.intern_blank(&format!("n{index}"), BlankScope::DEFAULT);
-        let scoped = b.intern_blank(&format!("n{index}"), BlankScope(4));
-        b.push_quad(shared, p, o, Some(g1));
-        b.push_quad(scoped, q, o, Some(g1));
-        if index % 8 == 0 {
-            let triple = b.intern_triple(shared, p, directional);
-            let reifier = b.intern_blank(&format!("st{index}"), BlankScope(7));
-            b.push_reifier_in_graph(reifier, triple, Some(g1));
-            b.push_annotation_in_graph(reifier, q, tagged, Some(g1));
-        }
-    }
-    b.declare_named_graph(declared);
-    b.freeze().expect("the keystone base freezes")
-}
-
-/// A small contribution wholly contained in `graph`, whose blanks deliberately
-/// reuse the base's LABEL and scopes.
-///
-/// `space` selects the term space: two contributions built at the same `space`
-/// share every IRI they name, two built at distinct ones share none. Containment
-/// is checked before anything is folded, so each contribution names exactly one
-/// graph — which is why a shape varies term overlap rather than row overlap.
-fn keystone_contribution(graph: &str, space: usize, rows: usize) -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let p = b.intern_iri("https://example.org/p");
-    let q = b.intern_iri("https://example.org/q");
-    let g = b.intern_iri(graph);
-    let node = b.intern_blank("n0", BlankScope::DEFAULT);
-    let elsewhere = b.intern_blank("n0", BlankScope(4));
-    for index in 0..rows {
-        let o = b.intern_iri(&format!("https://example.org/space{space}/c{index}"));
-        b.push_quad(node, p, o, Some(g));
-        b.push_quad(elsewhere, q, o, Some(g));
-    }
-    b.push_quad(node, q, elsewhere, Some(g));
-    b.freeze().expect("the keystone contribution freezes")
-}
-
-/// A delta whose EFFECTIVE content is exactly `base`'s, reached through a real
-/// mutation round trip rather than an untouched passthrough — so the delta
-/// machinery (suppression rows, delta-only ids) is genuinely in the read path.
-fn keystone_delta(base: &Arc<RdfDataset>) -> Arc<DeltaDatasetView> {
-    let mut mutable = MutableDataset::new(Arc::clone(base));
-    let scratch = QuadValues::triple(
-        TermValue::iri("https://example.org/scratch"),
-        TermValue::iri("https://example.org/p"),
-        TermValue::iri("https://example.org/o"),
-    );
-    assert!(
-        mutable
-            .insert(scratch.clone())
-            .expect("the scratch row inserts")
-    );
-    assert!(mutable.remove(&scratch), "and is taken back out again");
-    Arc::new(mutable.snapshot_view().expect("the delta publishes"))
-}
-
-/// The sidecars every carrier travels with.
-fn loadout() -> (RdfLookaside, Arc<ContentStore>, DatasetProvenance) {
-    (
-        RdfLookaside::default(),
-        Arc::new(ContentStore::new()),
-        DatasetProvenance::new(),
-    )
-}
-
-/// The emitted container bytes — what actually ships. `identity` rather than
-/// `zstd` so compression is not inside the measurement.
-fn emitted(builder: &SnapshotBuilder) -> Vec<u8> {
-    emit_gts(
-        builder,
-        "dist",
-        Some(vec!["identity".to_owned()]),
-        Vec::new(),
-        Vec::new(),
-        None,
-        None,
-        None,
-        DEFAULT_RSYNCABLE_THRESHOLD,
-        &MediumPlan::undicted(None),
-    )
-    .expect("the carrier emits")
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +206,7 @@ fn ingest_shapes() -> Vec<IngestShape> {
 /// The composed carrier both the `view` and the `flat` variants read: identical
 /// construction, so nothing but the surface chosen can explain a difference.
 fn composite_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBundle<Stage> {
-    let (lookaside, blobs, provenance) = loadout();
+    let (lookaside, blobs, provenance) = keystone_loadout();
     let ledger = RetentionLedger::new();
     let mut carrier = PipelineViewBundle::<Stage>::from_dataset(
         &shape.base,
@@ -337,7 +227,7 @@ fn composite_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBun
 
 /// The same stage plan over a delta snapshot of the base.
 fn delta_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBundle<Stage> {
-    let (lookaside, blobs, provenance) = loadout();
+    let (lookaside, blobs, provenance) = keystone_loadout();
     let ledger = RetentionLedger::new();
     let mut carrier = PipelineViewBundle::<Stage>::from_delta(
         &shape.delta,
@@ -358,7 +248,7 @@ fn delta_carrier(shape: &IngestShape, limits: ViewLimits) -> PipelineViewBundle<
 
 /// `materialize()` then ingest the frozen result through the flat surface. The
 /// freeze is deliberately inside the measurement: it is the price of this choice.
-fn run_flat(shape: &IngestShape, limits: ViewLimits) -> (Account, Vec<u8>) {
+fn run_flat(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
     let carrier = composite_carrier(shape, limits);
     let frozen = carrier.materialize().expect("the carrier freezes");
     let mut builder = SnapshotBuilder::new();
@@ -366,16 +256,16 @@ fn run_flat(shape: &IngestShape, limits: ViewLimits) -> (Account, Vec<u8>) {
         .add_dataset_scoped(&frozen, Some(SELECTED), Some("base"))
         .expect("the materialized carrier ingests flat");
     let bytes = emitted(&builder);
-    let account = Account::new(
+    let observed = Observation::new(
         &carrier.accounting(),
         builder.ingest_totals().scratch_bytes,
         frozen.rdf_payload_bytes(),
     );
-    (account, bytes)
+    (observed, bytes)
 }
 
 /// Ingest straight through the composite, freezing nothing.
-fn run_view(shape: &IngestShape, limits: ViewLimits) -> (Account, Vec<u8>) {
+fn run_view(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
     let carrier = composite_carrier(shape, limits);
     let mut builder = SnapshotBuilder::new();
     let _ = builder
@@ -383,16 +273,16 @@ fn run_view(shape: &IngestShape, limits: ViewLimits) -> (Account, Vec<u8>) {
         .expect("the composed carrier ingests");
     let bytes = emitted(&builder);
     // Nothing was frozen to publish this, so no out-of-ledger copy is charged.
-    let account = Account::new(
+    let observed = Observation::new(
         &carrier.accounting(),
         builder.ingest_totals().scratch_bytes,
         0,
     );
-    (account, bytes)
+    (observed, bytes)
 }
 
 /// Ingest straight through the delta-rooted composite, compacting nothing.
-fn run_delta(shape: &IngestShape, limits: ViewLimits) -> (Account, Vec<u8>) {
+fn run_delta(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) {
     let carrier = delta_carrier(shape, limits);
     let mut builder = SnapshotBuilder::new();
     let _ = builder
@@ -400,12 +290,12 @@ fn run_delta(shape: &IngestShape, limits: ViewLimits) -> (Account, Vec<u8>) {
         .expect("the delta carrier ingests");
     let bytes = emitted(&builder);
     // Nothing was frozen to publish this, so no out-of-ledger copy is charged.
-    let account = Account::new(
+    let observed = Observation::new(
         &carrier.accounting(),
         builder.ingest_totals().scratch_bytes,
         0,
     );
-    (account, bytes)
+    (observed, bytes)
 }
 
 fn gts_ingest(c: &mut Criterion) {
@@ -436,22 +326,22 @@ fn gts_ingest(c: &mut Criterion) {
     // separate, plainly-measured record that always emits — `--test` included.
     for shape in &shapes {
         let start = Instant::now();
-        let (account, bytes) = run_flat(shape, limits);
+        let (observed, bytes) = run_flat(shape, limits);
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} flat emitted no bytes", shape.name);
-        observe(shape.name, "flat", elapsed, account);
+        observe(shape.name, "flat", elapsed, observed);
 
         let start = Instant::now();
-        let (account, bytes) = run_view(shape, limits);
+        let (observed, bytes) = run_view(shape, limits);
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} view emitted no bytes", shape.name);
-        observe(shape.name, "view", elapsed, account);
+        observe(shape.name, "view", elapsed, observed);
 
         let start = Instant::now();
-        let (account, bytes) = run_delta(shape, limits);
+        let (observed, bytes) = run_delta(shape, limits);
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} delta emitted no bytes", shape.name);
-        observe(shape.name, "delta", elapsed, account);
+        observe(shape.name, "delta", elapsed, observed);
     }
 
     let mut group = c.benchmark_group("gts_ingest");
