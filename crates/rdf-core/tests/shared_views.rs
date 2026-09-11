@@ -7,9 +7,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView, GraphMatch,
-    GraphPlacement, MutableDataset, QuadIds, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfTextDirection, TermRef, TermValue, ViewLimits, datasets_isomorphic,
+    BlankScope, CanonHash, CompositeDatasetView, CompositeSource, ContentDigest, DatasetMut,
+    DatasetView, DeltaDatasetView, GraphMatch, GraphPlacement, MutableDataset, QuadIds, QuadValues,
+    RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermRef,
+    TermValue, ViewLimits, blank_count_view, canonicalize, canonicalize_graph_view,
+    canonicalize_view, check_admissible_view, datasets_isomorphic, graph_digest_view,
+    try_canonicalize_view,
 };
 
 const P: &str = "http://example.org/p";
@@ -935,4 +938,278 @@ fn reusing_source_owners_does_not_carry_a_previous_views_literal_rebinding() {
     assert_eq!(shared.quads().count(), 1);
     assert_eq!(surface(&shared), surface(&source));
     assert_eq!(shared.stats().work.copied_text_bytes, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Canonical identity is a property of CONTENT, not of the carrier that holds it
+// ---------------------------------------------------------------------------
+
+const GRAPH: &str = "http://example.org/graph";
+const OTHER_GRAPH: &str = "http://example.org/other";
+
+/// One dataset touching every surface canonical identity has to see at once:
+/// default AND named graphs, a declaration-only graph, blanks in two scopes (one
+/// of them co-referent across rows), reifier and annotation rows in BOTH graphs,
+/// and the three literal shapes whose spelling canonicalization carries verbatim
+/// — bare `xsd:string`, `@en`, and a dir-lang `@ar--rtl`.
+///
+/// Split across two named graphs on purpose: a per-graph digest that quietly
+/// admitted a neighbour's statement layer would still pass a single-graph fixture.
+fn identity_fixture() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri(P);
+    let q = b.intern_iri("http://example.org/q");
+    let o = b.intern_iri("http://example.org/o");
+    let g = b.intern_iri(GRAPH);
+    let other = b.intern_iri(OTHER_GRAPH);
+    // One local label in two scopes: distinct nodes a label-keyed canonicalization
+    // would conflate, and a `shared` that is CO-REFERENT across several rows.
+    let shared = b.intern_blank("n", BlankScope::DEFAULT);
+    let scoped = b.intern_blank("n", BlankScope(4));
+    let plain = b.intern_literal(RdfLiteral::simple("plain"));
+    let tagged = b.intern_literal(RdfLiteral::language_tagged("hello", "en"));
+    let directional = b.intern_literal(RdfLiteral {
+        direction: Some(RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("مرحبا", "ar")
+    });
+    b.push_quad(shared, p, plain, None);
+    b.push_quad(shared, q, tagged, None);
+    b.push_quad(scoped, p, o, None);
+    b.push_quad(shared, p, directional, Some(g));
+    let triple = b.intern_triple(shared, p, directional);
+    b.push_quad(scoped, q, triple, Some(g));
+    let reifier = b.intern_blank("statement", BlankScope(7));
+    b.push_reifier_in_graph(reifier, triple, Some(g));
+    b.push_annotation_in_graph(reifier, q, tagged, Some(g));
+    // The SAME triple term reified in the default graph as well.
+    let default_reifier = b.intern_iri("http://example.org/r");
+    b.push_reifier_in_graph(default_reifier, triple, None);
+    b.push_annotation_in_graph(default_reifier, q, plain, None);
+    b.push_quad(o, p, o, Some(other));
+    // A named graph owning no row at all.
+    let empty = b.intern_blank("declared only", BlankScope(9));
+    b.declare_named_graph(empty);
+    b.freeze().unwrap()
+}
+
+/// A delta view whose EFFECTIVE content is exactly `source`'s, reached through a
+/// real mutation round trip rather than an untouched passthrough — so the delta
+/// machinery (suppression rows, delta-only ids) is genuinely in the read path.
+fn delta_of(source: &Arc<RdfDataset>) -> DeltaDatasetView {
+    let mut mutable = MutableDataset::new(source.clone());
+    let scratch = QuadValues::triple(iri("scratch"), iri("p"), iri("o"));
+    assert!(mutable.insert(scratch.clone()).unwrap());
+    assert!(mutable.remove(&scratch));
+    mutable.snapshot_view().unwrap()
+}
+
+#[test]
+fn canonical_identity_is_byte_equal_over_flat_composite_and_delta_views() {
+    let flat = identity_fixture();
+    let independent = CompositeDatasetView::new(vec![flat.clone()], ViewLimits::default()).unwrap();
+    let shared =
+        CompositeDatasetView::with_shared_scopes(vec![flat.clone()], ViewLimits::default())
+            .unwrap();
+    let delta = delta_of(&flat);
+
+    let expected = canonicalize_view(&*flat, CanonHash::Sha256).nquads;
+    // The fixture really does exercise what it claims; a parity assertion over
+    // bytes that happened to omit the overlay would prove nothing.
+    for fragment in [
+        "\"plain\" .",
+        "\"hello\"@en",
+        "\"مرحبا\"@ar--rtl",
+        "<<( ",
+        "_:c14n",
+        "<urn:purrdf:rdfc:reifies>",
+        "<urn:purrdf:rdfc:annotation>",
+        GRAPH,
+        OTHER_GRAPH,
+    ] {
+        assert!(
+            expected.contains(fragment),
+            "{fragment} missing: {expected}"
+        );
+    }
+
+    // The `&RdfDataset` entry point is the same core, not a second one.
+    assert_eq!(canonicalize(&flat).nquads, expected);
+
+    let digest = ContentDigest::of(expected.as_bytes());
+    for (name, actual) in [
+        (
+            "independent composite",
+            canonicalize_view(&independent, CanonHash::Sha256).nquads,
+        ),
+        (
+            "shared-scope composite",
+            canonicalize_view(&shared, CanonHash::Sha256).nquads,
+        ),
+        ("delta", canonicalize_view(&delta, CanonHash::Sha256).nquads),
+    ] {
+        assert_eq!(
+            actual, expected,
+            "{name} must canonicalize to the same bytes"
+        );
+        assert_eq!(
+            ContentDigest::of(actual.as_bytes()),
+            digest,
+            "{name} digest"
+        );
+    }
+
+    // The blank COUNT is a view-id property and must agree too — it is the
+    // pre-reject the isomorphism oracle leans on.
+    for count in [
+        blank_count_view(&independent),
+        blank_count_view(&shared),
+        blank_count_view(&delta),
+    ] {
+        assert_eq!(count, blank_count_view(&*flat));
+    }
+
+    // Admission answers on a view, and answers BOTH ways: the clean view is
+    // admitted, and only the one that actually carries the reserved namespace is
+    // refused.
+    assert!(check_admissible_view(&independent).is_ok());
+    assert!(check_admissible_view(&delta).is_ok());
+    assert!(try_canonicalize_view(&independent, CanonHash::Sha256).is_ok());
+
+    let mut inadmissible = RdfDatasetBuilder::new();
+    let s = inadmissible.intern_iri("http://example.org/s");
+    let o = inadmissible.intern_iri("http://example.org/o");
+    let reserved = inadmissible.intern_iri(&format!("{RESERVED_NAMESPACE}reifies"));
+    inadmissible.push_quad(s, reserved, o, None);
+    let inadmissible =
+        CompositeDatasetView::new(vec![inadmissible.freeze().unwrap()], ViewLimits::default())
+            .unwrap();
+    assert!(check_admissible_view(&inadmissible).is_err());
+    assert!(try_canonicalize_view(&inadmissible, CanonHash::Sha256).is_err());
+}
+
+#[test]
+fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
+    let flat = identity_fixture();
+    let independent = CompositeDatasetView::new(vec![flat.clone()], ViewLimits::default()).unwrap();
+    let delta = delta_of(&flat);
+
+    // Cross-type, both directions, with nothing materialized on either side.
+    assert!(datasets_isomorphic(&*flat, &independent));
+    assert!(datasets_isomorphic(&independent, &*flat));
+    assert!(datasets_isomorphic(&delta, &independent));
+
+    // Two independent occurrences of one source are TWO occurrences: the same
+    // local blank label in two sources stays two distinct nodes, so the doubled
+    // view is not isomorphic to the single one …
+    let doubled =
+        CompositeDatasetView::new(vec![flat.clone(), flat.clone()], ViewLimits::default()).unwrap();
+    assert!(!datasets_isomorphic(&*flat, &doubled));
+    assert_eq!(blank_count_view(&doubled), 2 * blank_count_view(&*flat));
+
+    // … and it IS isomorphic to the flat dataset built by appending the source
+    // twice — which is the same statement about co-reference from the other side:
+    // within one occurrence the shared blank stays one node, across occurrences it
+    // becomes two.
+    let mut native = RdfDatasetBuilder::new();
+    native.push_dataset(&flat);
+    native.push_dataset(&flat);
+    let native = native.freeze().unwrap();
+    assert!(datasets_isomorphic(&native, &doubled));
+
+    // Sharing scopes instead collapses the two occurrences back to one.
+    let shared = CompositeDatasetView::with_shared_scopes(
+        vec![flat.clone(), flat.clone()],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    assert!(datasets_isomorphic(&*flat, &shared));
+
+    // A negative that is not about counts: same shape, one different ground IRI.
+    let mut altered = RdfDatasetBuilder::new();
+    purrdf_core::ir::import::DatasetImporter::new(&mut altered, &flat).append();
+    let s = altered.intern_iri("http://example.org/s");
+    let p = altered.intern_iri(P);
+    altered.push_quad(s, p, s, None);
+    let altered = altered.freeze().unwrap();
+    assert!(!datasets_isomorphic(&altered, &independent));
+}
+
+#[test]
+fn per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection() {
+    let flat = identity_fixture();
+    let independent = CompositeDatasetView::new(vec![flat.clone()], ViewLimits::default()).unwrap();
+    let delta = delta_of(&flat);
+
+    for graph in [GRAPH, OTHER_GRAPH] {
+        // The reference: materialize the named-graph projection and canonicalize it,
+        // exactly as the flat per-graph digest does today.
+        let projected = canonicalize(&flat.project_named_graph(graph)).nquads;
+        assert!(
+            !projected.is_empty(),
+            "{graph} must actually hold content, or parity proves nothing"
+        );
+        let digest = ContentDigest::of(projected.as_bytes());
+
+        for (name, view_bytes, view_digest) in [
+            (
+                "flat",
+                canonicalize_graph_view(&*flat, graph, CanonHash::Sha256).nquads,
+                graph_digest_view(&*flat, graph),
+            ),
+            (
+                "composite",
+                canonicalize_graph_view(&independent, graph, CanonHash::Sha256).nquads,
+                graph_digest_view(&independent, graph),
+            ),
+            (
+                "delta",
+                canonicalize_graph_view(&delta, graph, CanonHash::Sha256).nquads,
+                graph_digest_view(&delta, graph),
+            ),
+        ] {
+            assert_eq!(
+                view_bytes, projected,
+                "{name} per-graph canonical bytes must equal the projection's"
+            );
+            assert_eq!(view_digest, digest, "{name} per-graph digest");
+        }
+
+        // The graph slot is ERASED, so no projected line carries a graph token for
+        // the graph it was selected by.
+        assert!(
+            !projected.contains(&format!("<{graph}> .")),
+            "the selecting graph must not survive into its own projection: {projected}"
+        );
+    }
+
+    // Isolation: each graph's digest is a function of its own content. `<graph>`
+    // carries the statement layer, `<other>` does not, and the default graph's
+    // reifier over the SAME triple term belongs to neither.
+    assert_ne!(
+        graph_digest_view(&*flat, GRAPH),
+        graph_digest_view(&*flat, OTHER_GRAPH)
+    );
+    assert!(
+        canonicalize_graph_view(&*flat, GRAPH, CanonHash::Sha256)
+            .nquads
+            .contains("<urn:purrdf:rdfc:reifies>")
+    );
+    assert!(
+        !canonicalize_graph_view(&*flat, OTHER_GRAPH, CanonHash::Sha256)
+            .nquads
+            .contains("<urn:purrdf:rdfc:reifies>"),
+        "one graph's statement layer must not leak into another's projection"
+    );
+
+    // A graph this view never names selects nothing — an empty subgraph, not an
+    // error, and byte-identical to projecting an absent graph flat.
+    let absent = "http://example.org/no-such-graph";
+    assert_eq!(canonicalize(&flat.project_named_graph(absent)).nquads, "");
+    for empty in [
+        canonicalize_graph_view(&*flat, absent, CanonHash::Sha256).nquads,
+        canonicalize_graph_view(&independent, absent, CanonHash::Sha256).nquads,
+        canonicalize_graph_view(&delta, absent, CanonHash::Sha256).nquads,
+    ] {
+        assert_eq!(empty, "");
+    }
 }

@@ -139,10 +139,12 @@ pub use ir::{
     PipelineBundle, PipelineBundleError, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
     QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
     RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError, SubsetPageProvider, TermId,
-    TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder, canonical_relabel,
-    canonical_relabel_with_mapping, canonicalize, canonicalize_with, check_admissible,
-    dataset_diff, datasets_isomorphic, deskolemize, skolemize, try_canonicalize,
-    try_canonicalize_with,
+    TermPosition, TermRef, TermValue, ValidatedRdfDatasetBuilder, blank_count_view,
+    canonical_relabel, canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view,
+    canonicalize_view, canonicalize_with, check_admissible, check_admissible_view, dataset_diff,
+    datasets_isomorphic, deskolemize, graph_digest_view, skolemize, try_canonicalize,
+    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
+    try_graph_digest_view,
 };
 pub use ir::{
     PackBuilder, PackDigest, PackError, PackId, PackView, dataset_from_view, pack_digest,
