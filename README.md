@@ -250,10 +250,13 @@ triple pattern.
   `Dataset.canonicalize()` run) rewrites reifiers and annotations to plain
   `rdf:reifies`/annotation triples and canonicalizes those under RDFC-1.0,
   while the native `purrdf::canonicalize` is the first-party
-  **`purrdf-rdfc12` v1** profile, which lowers them into a reserved
+  **`purrdf-rdfc12` v2** profile, which lowers them into a reserved
   `urn:purrdf:rdfc:` namespace instead and refuses any input already carrying
-  it. The profile agrees with RDFC-1.0 byte for byte only on the RDF 1.1
-  subset, and a digest over its output must not be labelled RDFC-1.0 — see
+  it — other than in the two shapes its own output is written in, which fold
+  back into the statement layer, so canonicalizing the canonical document
+  returns it unchanged. The profile agrees with RDFC-1.0 byte for byte only on
+  the RDF 1.1 subset, and a digest over its output must not be labelled
+  RDFC-1.0 — see
   [`docs/RDF12-CANON-PROFILE.md`](./docs/RDF12-CANON-PROFILE.md). Beside both,
   a **review-friendly canonical Turtle** rendering (`render_canonical_turtle`
   in `purrdf-core`, `canonical_turtle` in `purrdf-rdf`, Python
@@ -745,7 +748,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **258 / 262** agreeing, 4 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
-| RDF 1.2 canonicalization profile (`purrdf-rdfc12` v1) | first-party vectors (`vectors/rdf12-canon/`) | **5 / 5** |
+| RDF 1.2 canonicalization profile (`purrdf-rdfc12` v2) | first-party vectors (`vectors/rdf12-canon/`) | **5 / 5** |
 | GTS | frozen cross-language vectors (`vectors/`) | **38 / 39** fold byte-exactly into their committed expectation, 1 ledgered divergence |
 
 ## How capability grows

@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 
-# `purrdf-rdfc12` v1 — normative vector corpus
+# `purrdf-rdfc12` v2 — normative vector corpus
 
 The executable half of [`docs/RDF12-CANON-PROFILE.md`](../../docs/RDF12-CANON-PROFILE.md).
 Every clause a consumer pins has a case here, so running this corpus against a
@@ -41,11 +41,17 @@ regenerating a digest.
 A case's syntax is taken from its **extension**, not from the manifest, so a case
 cannot be listed under a syntax it is not written in.
 
+`manifest.tsv` and `pairs.tsv` are the AUTHORING source and are maintained by
+hand; `.canonical` and `.digest` are generated (see **Regenerating** below) and are
+never hand-written.
+
 Refusal cases have no `.canonical` — their expectation is the exact typed
 discriminant, recorded in `manifest.tsv` as either
 `reserved-vocabulary <position> <iri>` (profile §5) or `budget-exceeded` (§6).
 The position is part of the expectation because §5.3 requires the *diagnostic* to
-be deterministic, not merely the refusal.
+be deterministic, not merely the refusal. A golden carries no expectation column at
+all, and the harness holds each kind to its own shape: a golden with an expectation
+and a refusal without a discriminant are both malformed rows.
 
 The digest sidecar is recorded independently of the bytes rather than derived from
 them at read time. Deriving it would make the file decorative; it exists so a
@@ -102,20 +108,48 @@ Correctness evidence lives elsewhere and is deliberately not duplicated:
 | `directional-literals` | `@en--ltr` ≠ `@en--rtl` ≠ `@en` |
 | `unicode-lexical-forms` | NFC vs NFD are distinct; astral planes survive |
 
+### Goldens — the fold (profile §3.1)
+
+Two cases live in the reserved namespace and are **admitted**, because each is
+written in exactly one of the two shapes the overlay lowers *into*. A quad in that
+shape is not a forgery of a statement-layer row; it **is** that row written out, so
+it is folded back into the statement layer rather than refused — which is what
+makes canonicalization idempotent over its own output.
+
+| Case | Covers |
+|---|---|
+| `poison-forgery` | the lowered reifier row, written out as an ordinary quad — folds to the reifier binding it spells |
+| `poison-sentinel-graph` | the annotation sentinel as a lone graph slot — folds to the annotation row it spells |
+
+Both keep their `poison-` names deliberately. They were refusals under v1, and a
+reader tracing why the profile version moved should find them where the attack
+inventory is, not renamed out of sight.
+
+`poison-forgery` writes out, as an ordinary quad, exactly the reifier row that
+`reifier-simple` lowers to. Its test checks **both** halves — that the genuine
+structure still produces that row, and that writing the row out canonicalizes to
+it — so the case cannot keep passing by quietly ceasing to spell anything real. It
+is paired in `pairs.tsv` against `reifier-simple` as **differ**, because spelling
+the reifier row is not the same content as asserting the triple *and* reifying it:
+the fold reads the row it is given and never fabricates the assertion alongside it.
+`poison-sentinel-graph` is paired against `annotation-simple` for the same reason.
+
+The same test pins the two nearest misses, which must still refuse: the sentinel
+predicate over a **non-triple** object, and a folded row carrying a reserved IRI in
+a slot the fold does not consume (inside its triple term). The fold is exactly two
+shapes wide, and those two cases are what keeps it from widening.
+
 ### Refusals — reserved vocabulary (profile §5)
 
 | Case | Covers |
 |---|---|
-| `poison-forgery` | **the attack**: the lowered reifier row asserted literally |
-| `poison-sentinel-subject` / `-predicate` / `-object` / `-graph` | each quad position |
+| `poison-sentinel-subject` / `-predicate` / `-object` | each quad position outside a folded shape |
 | `poison-sentinel-nested` | reserved IRI inside a quoted triple |
 | `poison-sentinel-datatype` | reserved IRI as a literal's datatype |
 | `poison-sentinel-unminted` | a name in the namespace the overlay has never minted — the reservation is over the NAMESPACE, not the two sentinels |
 
-`poison-forgery` asserts, as an ordinary quad, exactly the row `reifier-simple`
-lowers to. Its test checks **both** halves — that the genuine structure still
-produces that row, and that the literal assertion of it is refused — so it cannot
-keep passing by quietly ceasing to be a forgery.
+Every use of the reserved namespace other than the two folded shapes above refuses
+exactly as it did under v1, with the same position-bearing discriminant.
 
 ### Refusals — complexity poisoning (profile §6)
 
@@ -132,5 +166,7 @@ python3 scripts/check-corpus-frozen.py --update
 ```
 
 Deliberately three steps, not one. Per profile §7 a change that moves canonical
-bytes also **requires** a `CANON_PROFILE_VERSION` increment — the friction is what
-keeps an accidental golden refresh from being mistaken for a no-op.
+bytes — or that changes WHICH inputs are admitted, as reclassifying a case between
+`golden` and `refusal` does — also **requires** a `CANON_PROFILE_VERSION`
+increment; the friction is what keeps an accidental golden refresh from being
+mistaken for a no-op.

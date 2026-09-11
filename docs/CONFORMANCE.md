@@ -41,7 +41,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | --- | --- | ---: | ---: | ---: | ---: | :---: |
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 | 0 | GREEN |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
-| RDF 1.2 canonicalization profile | purrdf-rdfc12 v1 (first-party) | 5 | 0 | 0 | 0 | GREEN |
+| RDF 1.2 canonicalization profile | purrdf-rdfc12 v2 (first-party) | 5 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.1/1.2 evaluation (full corpus) | W3C sparql11 + sparql12 + first-party | 862 | 5 | 5 | 0 | GREEN |
 | SPARQL CONSTRUCT (first-party corpus) | purrdf-construct (first-party) | 29 | 0 | 0 | 0 | GREEN |

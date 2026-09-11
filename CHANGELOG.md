@@ -90,6 +90,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Features
 
+- **core:** Canonicalization is idempotent over its own output, and the
+  `purrdf-rdfc12` profile version moves from 1 to 2 to say so. A quad written in
+  exactly one of the two shapes the RDF 1.2 overlay lowers into — a reifier row
+  under `urn:purrdf:rdfc:reifies` over a triple term, or an annotation row in the
+  lone `urn:purrdf:rdfc:annotation` graph slot — is folded back into the statement
+  layer instead of being refused, because such a quad is that row written out and
+  carries identical content. Re-parsing a canonical document and canonicalizing it
+  again now returns it byte for byte; the graph-scoped entry points are idempotent
+  without qualification, while a named-graph annotation still emits a five-token
+  line no quad can carry. Every other use of the reserved namespace refuses exactly
+  as before, including a reserved IRI in any slot of a folded row, and no input the
+  previous version admitted changes bytes. Consumers pinning
+  `(CANON_PROFILE_ID, CANON_PROFILE_VERSION, CANON_CORPUS_DIGEST)` must re-pin the
+  latter two; two normative corpus cases move from refusal to golden.
 - **sparql:** Prepared-query and join-order caches have deterministic entry and
   byte limits, configurable independently through additive policy APIs. Existing
   constructors use finite defaults. Cache counters expose retention and eviction;

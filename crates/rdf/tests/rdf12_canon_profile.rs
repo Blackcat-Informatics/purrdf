@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Normative vector corpus for canonicalization profile `purrdf-rdfc12` v1.
+//! Normative vector corpus for canonicalization profile `purrdf-rdfc12` v2.
 //!
 //! The corpus at `vectors/rdf12-canon/` is the executable half of
 //! `docs/RDF12-CANON-PROFILE.md`: every clause a consumer pins is a case here, so a
@@ -65,9 +65,16 @@ fn updating() -> bool {
     std::env::var_os("PURRDF_UPDATE_CANON_CORPUS").is_some()
 }
 
-/// Parse the manifest. Blank lines and `#` comments are skipped; every other line
-/// must have exactly three tab-separated fields, because a manifest that tolerates a
-/// malformed row is one that can silently drop a case.
+/// Parse the manifest. Blank lines and `#` comments are skipped; every other line is
+/// `path <TAB> kind` with a third field iff the kind carries an expectation, because a
+/// manifest that tolerates a malformed row is one that can silently drop a case.
+///
+/// The expectation column is required to be ABSENT (or empty) for a golden and
+/// NON-EMPTY for a refusal, rather than merely present in both. Keying strictness on
+/// the kind is what keeps the check from resting on a trailing tab — invisible in
+/// every editor, and stripped by half of them — while still refusing a refusal row
+/// whose discriminant went missing, which is the row that could otherwise pass by
+/// asserting nothing.
 fn load_manifest() -> Vec<Case> {
     let root = corpus_root();
     let text = std::fs::read_to_string(root.join("manifest.tsv")).expect("corpus manifest");
@@ -77,15 +84,30 @@ fn load_manifest() -> Vec<Case> {
             continue;
         }
         let fields: Vec<&str> = line.split('\t').collect();
-        assert_eq!(
-            fields.len(),
-            3,
+        assert!(
+            matches!(fields.len(), 2 | 3),
             "manifest.tsv line {} is malformed: {line:?}",
             n + 1
         );
+        let expectation = fields.get(2).copied().unwrap_or("");
         let expect = match fields[1] {
-            "golden" => Expectation::Golden,
-            "refusal" => Expectation::Refusal(fields[2].to_owned()),
+            "golden" => {
+                assert!(
+                    expectation.is_empty(),
+                    "manifest.tsv line {}: a golden carries no expectation column, but \
+                     this one says {expectation:?}",
+                    n + 1
+                );
+                Expectation::Golden
+            }
+            "refusal" => {
+                assert!(
+                    !expectation.is_empty(),
+                    "manifest.tsv line {}: a refusal must pin its exact discriminant",
+                    n + 1
+                );
+                Expectation::Refusal(expectation.to_owned())
+            }
             other => panic!("manifest.tsv line {}: unknown kind {other:?}", n + 1),
         };
         cases.push(Case {
@@ -225,46 +247,103 @@ fn the_corpus_pairs_hold_their_declared_relations() {
         checked += 1;
     }
     assert!(
-        checked >= 7,
+        checked >= 9,
         "the pair relations were not all read: {checked}"
     );
 }
 
-/// The forgery pair, asserted as the profile states it rather than only as a refusal.
+/// Canonicalize `turtle` and return the refusal it must have produced.
+fn refusal_of(turtle: &str) -> CanonError {
+    let dataset = parse_dataset(turtle.as_bytes(), "text/turtle", None).expect("parses");
+    match try_canonicalize_with(&dataset, CanonHash::Sha256) {
+        Err(err) => err,
+        Ok(canonicalized) => panic!(
+            "this shape MUST be refused — it canonicalized to:\n{}",
+            canonicalized.nquads
+        ),
+    }
+}
+
+/// The fold pair, asserted as the profile states it rather than only as bytes.
 ///
-/// `poison-forgery.ttl` asserts, as an ordinary quad, exactly the row that
-/// `reifier-simple.ttl`'s genuine reifier lowers to. This checks BOTH halves: that the
-/// genuine structure really does produce that row (so the fixture still reproduces the
-/// attack), and that the literal assertion of it is refused (so the attack fails). A
-/// test asserting only the refusal would keep passing if the lowering changed and the
-/// fixture quietly stopped being a forgery at all.
+/// `poison-forgery.ttl` writes, as an ordinary quad, exactly the reifier row that
+/// `reifier-simple.ttl`'s genuine reifier lowers to. Under profile §3.1 that quad is
+/// not a forgery of the row: written in the exact shape the lowering emits, it **is**
+/// that row spelled out, carries the same content, and is folded back into the
+/// statement layer rather than refused — which is what makes canonicalization
+/// idempotent over its own output.
+///
+/// This checks BOTH halves, because a test that asserted only the co-canonicalization
+/// would keep passing if the lowering changed and the fixture quietly stopped spelling
+/// anything real: that the genuine structure still produces that row, and that the
+/// spelled row canonicalizes to it. It then checks the two NEAREST misses — one shape
+/// over in each direction that the fold must NOT reach — so the fold cannot widen into
+/// the hole the refusal rule exists to close.
 #[test]
-fn the_forgery_pair_does_not_co_canonicalize() {
+fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
     let root = corpus_root();
     let genuine = std::fs::read(root.join("cases/reifier-simple.ttl")).expect("genuine case");
     let dataset = parse_dataset(&genuine, "text/turtle", None).expect("parses");
     let lowered = try_canonicalize_with(&dataset, CanonHash::Sha256)
         .expect("a genuine reifier canonicalizes")
         .nquads;
-    assert!(
-        lowered.contains("<urn:purrdf:rdfc:reifies>"),
-        "the genuine case must still lower through the sentinel, or the forgery \
-         fixture no longer reproduces the attack: {lowered}"
+    let row = lowered
+        .lines()
+        .find(|line| line.contains("<urn:purrdf:rdfc:reifies>"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the genuine case must still lower through the sentinel, or the fold \
+                 fixture no longer spells a real row: {lowered}"
+            )
+        });
+
+    let spelled = std::fs::read(root.join("cases/poison-forgery.ttl")).expect("fold case");
+    let dataset = parse_dataset(&spelled, "text/turtle", None).expect("parses");
+    let folded = try_canonicalize_with(&dataset, CanonHash::Sha256)
+        .expect("a quad in the exact emitted shape folds rather than refusing")
+        .nquads;
+    assert_eq!(
+        folded,
+        format!("{row}\n"),
+        "the spelled reifier row must canonicalize to the row it spells; the genuine \
+         structure produces:\n{lowered}"
     );
 
-    let forged = std::fs::read(root.join("cases/poison-forgery.ttl")).expect("forgery case");
-    let dataset = parse_dataset(&forged, "text/turtle", None).expect("parses");
-    match try_canonicalize_with(&dataset, CanonHash::Sha256) {
-        Err(CanonError::ReservedVocabulary(err)) => {
+    // Idempotence, taken over the canonical document rather than over one row: the
+    // bytes a consumer minted identity from must re-derive that identity, or the
+    // identity is not one the consumer can check.
+    let reparsed =
+        parse_dataset(lowered.as_bytes(), "text/turtle", None).expect("canonical bytes re-parse");
+    assert_eq!(
+        try_canonicalize_with(&reparsed, CanonHash::Sha256)
+            .expect("the canonical document canonicalizes")
+            .nquads,
+        lowered,
+        "canonicalizing the canonical document moved its bytes"
+    );
+
+    // Near miss one: the sentinel predicate over a NON-triple object. It resembles the
+    // emitted shape and is not it, so it is still reserved vocabulary.
+    match refusal_of("<http://example.org/r> <urn:purrdf:rdfc:reifies> <http://example.org/o> .\n")
+    {
+        CanonError::ReservedVocabulary(err) => {
             assert_eq!(&*err.iri, "urn:purrdf:rdfc:reifies");
             assert_eq!(err.position, TermPosition::Predicate);
         }
-        Ok(canonicalized) => panic!(
-            "the forgery canonicalized instead of being refused; it produced:\n{}\n\
-             the genuine structure produces:\n{lowered}",
-            canonicalized.nquads
-        ),
-        Err(other) => panic!("refused for the wrong reason: {other}"),
+        other => panic!("refused for the wrong reason: {other}"),
+    }
+
+    // Near miss two: the folded shape itself, carrying a reserved IRI in a slot the
+    // fold does not consume. The fold must not become a smuggling route — the triple
+    // term is swept like any other term.
+    match refusal_of(
+        "<http://example.org/r> <urn:purrdf:rdfc:reifies> <<( <http://example.org/s> \
+         <urn:purrdf:rdfc:annotation> <http://example.org/o> )>> .\n",
+    ) {
+        CanonError::ReservedVocabulary(err) => {
+            assert_eq!(&*err.iri, "urn:purrdf:rdfc:annotation");
+        }
+        other => panic!("refused for the wrong reason: {other}"),
     }
 }
 
@@ -292,5 +371,5 @@ fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
 #[test]
 fn the_profile_identity_is_readable_from_the_api() {
     assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
-    assert_eq!(CANON_PROFILE_VERSION, 1);
+    assert_eq!(CANON_PROFILE_VERSION, 2);
 }
