@@ -762,9 +762,9 @@ fn flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact() {
     assert!(
         !spelled_bytes.contains(RESERVED_NAMESPACE),
         "the flat presentation must never mint the overlay's reserved sentinel, \
-         EVEN when the input itself carries a sentinel-spelled base quad — this is \
-         the exact G1 regression (a sentinel-spelled row leaking the sentinel under \
-         the flat presentation): {spelled_bytes}"
+         EVEN when the input itself carries a sentinel-spelled base quad — the \
+         regression this guards is a sentinel-spelled row leaking the sentinel \
+         under the flat presentation: {spelled_bytes}"
     );
     assert!(
         spelled_bytes.contains(RDF_REIFIES),
