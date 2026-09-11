@@ -899,6 +899,17 @@ impl<H> PipelineBundle<H> {
     /// downstream handle already pinned. This is the single-assembly integrity invariant
     /// (there is only ever one copy of each graph, so no cross-copy check is needed).
     ///
+    /// ## Candidate, then commit
+    ///
+    /// Every check runs against a CANDIDATE dataset built in a local, and this carrier
+    /// is assigned only once all of them have passed. A REFUSED accumulate therefore
+    /// leaves the carrier byte-identically what it was: the same dataset, the same
+    /// handles, the same per-graph memo, the same [`digest`](Self::digest), the same
+    /// [`named_graph_iris`](Self::named_graph_iris). The one thing that moves is
+    /// [`digest_work`](Self::digest_work), which records canonicalizations ACTUALLY
+    /// PERFORMED and is never an identity input — a refusal cannot un-canonicalize
+    /// what it had to canonicalize to reach its verdict.
+    ///
     /// # Errors
     ///
     /// [`PipelineBundleError::GraphContainment`] if `graph_quads` reaches outside
@@ -916,23 +927,29 @@ impl<H> PipelineBundle<H> {
         check_containment(graph_quads, &graph)?;
         // Record every already-pinned graph's digest to enforce the additive invariant.
         let prior = self.core.pinned();
-        // Fold the new named graph into the single carrier dataset.
-        self.dataset = Arc::new(RdfDataset::union(&[&self.dataset, graph_quads]));
-        // The dataset changed: RESEAT the per-graph digest memo — install a fresh,
-        // EMPTY map on this carrier — so the additive invariant below (and every later
-        // `graph_digest`) recomputes against the NEW dataset. Seeding it empty keeps the
-        // long-standing fail-closed reading of this carrier: a stale entry would hide a
-        // disturbed pinned graph. Reseating rather than clearing is what keeps a clone
-        // taken BEFORE this call reading digests of its OWN content — the clone keeps
-        // the map it already had, and this carrier never writes into it again.
-        self.core.reseat_cache(BTreeMap::new());
+        // A CANDIDATE, not a commitment: the union lands in a local and every check
+        // below reads it there. `self` is not touched until all of them pass.
+        let candidate = Arc::new(RdfDataset::union(&[&self.dataset, graph_quads]));
+        // The per-graph memo this carrier WOULD install. It starts EMPTY rather than
+        // from the current one — the long-standing fail-closed reading of this
+        // carrier, since a stale entry would hide a disturbed pinned graph — and
+        // fills with digests computed against the CANDIDATE, which are exactly the
+        // values a committed carrier would answer with.
+        let mut seed = BTreeMap::new();
         // Additive invariant: no previously pinned graph may have shifted.
         for (k, pinned) in prior {
-            let actual = self.graph_digest(&k);
+            let actual = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &k);
             BundleCore::<H>::verify_pin(&k, pinned, actual)?;
         }
-        // Pin the new handle to its now-present backing graph.
-        let content_digest = self.graph_digest(&graph);
+        // The new handle's backing digest, from the same candidate.
+        let content_digest = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &graph);
+        // COMMIT. Every check has passed, so the candidate dataset, its memo and the
+        // new handle are installed together. RESEATING the memo rather than clearing
+        // it is what keeps a clone taken BEFORE this call reading digests of its OWN
+        // content — the clone keeps the map it already had, and this carrier never
+        // writes into it again.
+        self.dataset = candidate;
+        self.core.reseat_cache(seed);
         self.core
             .handles
             .insert(graph, HandleEntry::new(payload, content_digest));
@@ -967,9 +984,7 @@ impl<H> PipelineBundle<H> {
         if let Some(cached) = self.core.cached(graph) {
             return cached;
         }
-        let subgraph = self.dataset.project_named_graph(graph);
-        let digest = ContentDigest::of(canonicalize(&subgraph).nquads.as_bytes());
-        DigestWorkCounter::bump(&self.core.work.graph_canonicalizations);
+        let digest = flat_graph_digest(&self.dataset, &self.core.work, graph);
         self.core.remember(graph, digest);
         digest
     }
@@ -1399,24 +1414,7 @@ impl<H> PipelineViewBundle<H> {
         if let Some(cached) = self.core.cached(graph) {
             return Ok(cached);
         }
-        let digest = match self.sole.get(graph) {
-            // The memo is filed against the BASE's ledger key, so it is computed from
-            // that base — the thing the key names — not from this composite.
-            Some(sole) => sole.guard.try_memoized_graph_digest(graph, || {
-                let digest = try_graph_digest_view(&*sole.base, graph).map_err(|source| {
-                    canon_refusal(CanonScopeName::Graph(graph.to_owned()), source)
-                })?;
-                DigestWorkCounter::bump(&self.core.work.graph_canonicalizations);
-                Ok(digest)
-            })?,
-            None => {
-                let digest = try_graph_digest_view(&*self.view, graph).map_err(|source| {
-                    canon_refusal(CanonScopeName::Graph(graph.to_owned()), source)
-                })?;
-                DigestWorkCounter::bump(&self.core.work.graph_canonicalizations);
-                digest
-            }
-        };
+        let digest = composed_graph_digest(&self.view, &self.sole, &self.core.work, graph)?;
         self.core.remember(graph, digest);
         Ok(digest)
     }
@@ -1519,6 +1517,21 @@ impl<H> PipelineViewBundle<H> {
     /// never recomputed. Reseating rather than clearing is also what keeps a clone
     /// taken BEFORE this call reading digests of its OWN content.
     ///
+    /// ## Candidate, then commit
+    ///
+    /// [`CompositeDatasetView::extend`] publishes a NEW view and leaves this one
+    /// untouched, so the appended surface, the contribution's retention guard, the
+    /// sole-ownership map and the reseated memo are all built as locals and every
+    /// check runs against them. The carrier is assigned only once all of them have
+    /// passed. A REFUSED accumulate therefore leaves it byte-identically what it
+    /// was — the same surface, handles, memo, [`digest`](Self::digest) and
+    /// [`named_graph_iris`](Self::named_graph_iris) — and leaves the shared
+    /// [`RetentionLedger`] exactly as it found it: the candidate's registration
+    /// lives on a [`RetentionGuard`] that is dropped on the refusing path, and that
+    /// guard's RAII release takes the registration off the ledger with it. The one
+    /// thing that moves is [`digest_work`](Self::digest_work), which records
+    /// canonicalizations ACTUALLY PERFORMED and is never an identity input.
+    ///
     /// # Errors
     ///
     /// [`PipelineBundleError::GraphContainment`] if `graph_quads` reaches outside
@@ -1545,38 +1558,56 @@ impl<H> PipelineViewBundle<H> {
 
         let source = CompositeSource::new(Arc::clone(graph_quads))
             .with_graph_placement(GraphPlacement::Named(TermValue::iri(graph.clone())));
-        let next = self
-            .view
-            .extend(source, self.limits)
-            .map_err(PipelineBundleError::AdmissionBreach)?;
-        self.view = Arc::new(next);
-
+        // A CANDIDATE, not a commitment: `extend` publishes a new view and leaves
+        // this one untouched, so a refusal below simply drops what was built.
+        let candidate = Arc::new(
+            self.view
+                .extend(source, self.limits)
+                .map_err(PipelineBundleError::AdmissionBreach)?,
+        );
+        // The contribution's ledger registration lives on THIS guard and nowhere
+        // else until the commit below moves it onto the carrier. On the refusing
+        // path the guard — and the sole-ownership clone of it — drop here, and the
+        // RAII release takes the registration off the ledger with them.
         let guard = self.ledger.retain_dataset(graph_quads);
-        self.retained.push(guard.clone());
+        // The sole-ownership map this carrier WOULD install. Cloning it registers a
+        // second reader of each already-retained owner for the duration of the
+        // checks and releases them again when the old map is dropped at commit (or
+        // when this one is dropped on refusal); a ledger CHARGE is per owner, not
+        // per guard, so neither path moves a reported byte.
+        let mut sole = self.sole.clone();
         if already_addressed {
             // Two sources now answer for this graph, so no single base's memo can
             // stand for it.
-            self.sole.remove(&graph);
+            sole.remove(&graph);
         } else {
-            self.sole.insert(
+            sole.insert(
                 graph.clone(),
                 SoleGraph {
                     base: Arc::clone(graph_quads),
-                    guard,
+                    guard: guard.clone(),
                 },
             );
         }
 
-        // Exact invalidation: every entry except this graph's stays valid.
+        // Exact invalidation: every entry except this graph's stays valid. This is
+        // the memo the carrier would install, completed against the CANDIDATE.
         let mut seed = self.core.cache_snapshot();
         seed.remove(&graph);
-        self.core.reseat_cache(seed);
 
         for (k, pinned) in prior {
-            let actual = self.graph_digest(&k)?;
+            let actual = seeded_composed_digest(&candidate, &sole, &self.core.work, &mut seed, &k)?;
             BundleCore::<H>::verify_pin(&k, pinned, actual)?;
         }
-        let content_digest = self.graph_digest(&graph)?;
+        let content_digest =
+            seeded_composed_digest(&candidate, &sole, &self.core.work, &mut seed, &graph)?;
+        // COMMIT. Every check has passed, so the composed surface, the retention
+        // guard, the sole-ownership map, the memo and the new handle are installed
+        // together.
+        self.view = candidate;
+        self.retained.push(guard);
+        self.sole = sole;
+        self.core.reseat_cache(seed);
         self.core
             .handles
             .insert(graph, HandleEntry::new(payload, content_digest));
@@ -1648,6 +1679,99 @@ impl<H> PipelineViewBundle<H> {
 /// Wrap a canonicalization refusal with what was being canonicalized.
 fn canon_refusal(scope: CanonScopeName, source: CanonError) -> PipelineBundleError {
     PipelineBundleError::Canonicalization { scope, source }
+}
+
+/// The canonical digest of `graph` over one OWNED dataset, charging the
+/// canonicalization on `work`.
+///
+/// The single spelling behind [`PipelineBundle::graph_digest`] and the
+/// candidate check [`PipelineBundle::accumulate_named_graph`] runs before it
+/// commits, so the digest a refusal was decided on and the digest the committed
+/// carrier answers with are the same bytes by construction.
+fn flat_graph_digest(dataset: &RdfDataset, work: &DigestWorkCounter, graph: &str) -> ContentDigest {
+    let subgraph = dataset.project_named_graph(graph);
+    let digest = ContentDigest::of(canonicalize(&subgraph).nquads.as_bytes());
+    DigestWorkCounter::bump(&work.graph_canonicalizations);
+    digest
+}
+
+/// The canonical digest of `graph` over a COMPOSED surface and the sole-ownership
+/// map that says which graphs one frozen base can answer for on its own.
+///
+/// The single spelling behind [`PipelineViewBundle::graph_digest`] and the
+/// candidate check [`PipelineViewBundle::accumulate_named_graph`] runs before it
+/// commits.
+///
+/// # Errors
+///
+/// [`PipelineBundleError::Canonicalization`] if `<graph>`'s subgraph is refused.
+fn composed_graph_digest(
+    view: &CompositeDatasetView,
+    sole: &BTreeMap<HandleKey, SoleGraph>,
+    work: &DigestWorkCounter,
+    graph: &str,
+) -> Result<ContentDigest, PipelineBundleError> {
+    let digest = match sole.get(graph) {
+        // The memo is filed against the BASE's ledger key, so it is computed from
+        // that base — the thing the key names — not from this composite.
+        Some(owner) => owner.guard.try_memoized_graph_digest(graph, || {
+            let digest = try_graph_digest_view(&*owner.base, graph)
+                .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.to_owned()), source))?;
+            DigestWorkCounter::bump(&work.graph_canonicalizations);
+            Ok(digest)
+        })?,
+        None => {
+            let digest = try_graph_digest_view(view, graph)
+                .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.to_owned()), source))?;
+            DigestWorkCounter::bump(&work.graph_canonicalizations);
+            digest
+        }
+    };
+    Ok(digest)
+}
+
+/// [`flat_graph_digest`] memoized into a CANDIDATE seed map — the memo a carrier
+/// would install if, and only if, every check below passes.
+///
+/// Filling the seed here rather than writing through the carrier's live memo is
+/// what lets a refused accumulate leave the carrier untouched while still costing
+/// exactly the canonicalizations a successful one would: the hit accounting is the
+/// same discipline [`BundleCore::cached`] performs.
+fn seeded_flat_digest(
+    dataset: &RdfDataset,
+    work: &DigestWorkCounter,
+    seed: &mut BTreeMap<HandleKey, ContentDigest>,
+    graph: &str,
+) -> ContentDigest {
+    if let Some(hit) = seed.get(graph) {
+        DigestWorkCounter::bump(&work.graph_cache_hits);
+        return *hit;
+    }
+    let digest = flat_graph_digest(dataset, work, graph);
+    seed.insert(graph.to_owned(), digest);
+    digest
+}
+
+/// [`composed_graph_digest`] memoized into a CANDIDATE seed map. See
+/// [`seeded_flat_digest`].
+///
+/// # Errors
+///
+/// [`PipelineBundleError::Canonicalization`] if `<graph>`'s subgraph is refused.
+fn seeded_composed_digest(
+    view: &CompositeDatasetView,
+    sole: &BTreeMap<HandleKey, SoleGraph>,
+    work: &DigestWorkCounter,
+    seed: &mut BTreeMap<HandleKey, ContentDigest>,
+    graph: &str,
+) -> Result<ContentDigest, PipelineBundleError> {
+    if let Some(hit) = seed.get(graph) {
+        DigestWorkCounter::bump(&work.graph_cache_hits);
+        return Ok(*hit);
+    }
+    let digest = composed_graph_digest(view, sole, work, graph)?;
+    seed.insert(graph.to_owned(), digest);
+    Ok(digest)
 }
 
 #[cfg(test)]
@@ -1796,6 +1920,12 @@ mod tests {
                 d1,
             )
             .expect("first pin");
+        // Everything the refusal must leave exactly where it found it.
+        let before_digest = bundle.digest();
+        let before_root = bundle.pipeline_root();
+        let before_graphs = bundle.named_graph_iris();
+        let before_quads = bundle.dataset().quad_count();
+
         // Folding more quads INTO the already-pinned graph shifts its digest → HARD fail.
         let extra = named_graph_dataset(g1, "extra");
         let err = bundle
@@ -1811,6 +1941,36 @@ mod tests {
             err,
             PipelineBundleError::HandleDigestMismatch { .. }
         ));
+        // Candidate-then-commit: the refusal folded NOTHING. An error that left the
+        // contribution in the dataset would be a silent corruption wearing a
+        // refusal's clothes.
+        assert_eq!(
+            bundle.digest(),
+            before_digest,
+            "the carrier digest is intact"
+        );
+        assert_eq!(bundle.pipeline_root(), before_root);
+        assert_eq!(bundle.named_graph_iris(), before_graphs);
+        assert_eq!(bundle.dataset().quad_count(), before_quads);
+        assert_eq!(bundle.graph_digest(g1), d1, "the pinned graph never moved");
+        assert_eq!(bundle.handle(g1).map(|h| h.content_digest), Some(d1));
+        assert_eq!(bundle.handles().len(), 1, "no handle was attached");
+
+        // THE NEIGHBOURING CASE: the same carrier still accepts a contribution that
+        // leaves the pin alone, so the refusal above was about THIS contribution and
+        // not about a carrier that had been poisoned by trying.
+        let elsewhere = named_graph_dataset("http://example.org/graph2", "extra");
+        bundle
+            .accumulate_named_graph(
+                "http://example.org/graph2",
+                &elsewhere,
+                SyntheticHandle {
+                    note: "ok".to_owned(),
+                },
+            )
+            .expect("an undisturbing contribution must still be admitted");
+        assert_eq!(bundle.graph_digest(g1), d1);
+        assert!(bundle.handle("http://example.org/graph2").is_some());
     }
 
     #[test]

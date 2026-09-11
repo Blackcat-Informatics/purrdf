@@ -12,9 +12,9 @@ use purrdf_core::{
     GraphPlacement, MutableDataset, OwnerMutability, QuadIds, QuadValues, RESERVED_NAMESPACE,
     RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, RetainedCharge, RetentionLedger,
     RetentionSnapshot, ScopeBinding, TermRef, TermValue, ViewAccountingReport, ViewLimits,
-    ViewOperationStatus, blank_count_view, canonicalize, canonicalize_graph_view,
-    canonicalize_view, check_admissible_view, datasets_isomorphic, graph_digest_view,
-    try_canonicalize_view, try_graph_digest_view,
+    ViewOperationStatus, ViewStats, ViewWork, blank_count_view, canonicalize,
+    canonicalize_graph_view, canonicalize_view, check_admissible_view, datasets_isomorphic,
+    graph_digest_view, try_canonicalize_view, try_graph_digest_view,
 };
 
 const P: &str = "http://example.org/p";
@@ -1299,7 +1299,11 @@ fn value_probe<D: DatasetView>(
 /// Two views observed through everything a consumer can ask them: canonical
 /// identity, per-graph identity, the whole three-table surface, the named graph
 /// set, the term dictionary, every bound-axis pattern probe over every row, and
-/// the retention/work accounting.
+/// the retention accounting.
+///
+/// `left` is always the from-scratch composition and `right` the view under test,
+/// which may have been reached by appending. Everything a consumer can OBSERVE of
+/// the two must be identical; only the work counters are one-sided (see below).
 fn assert_same_view(left: &CompositeDatasetView, right: &CompositeDatasetView) {
     let bytes = canonicalize_view(left, CanonHash::Sha256).nquads;
     assert!(!bytes.is_empty(), "an empty canonical form proves nothing");
@@ -1341,7 +1345,62 @@ fn assert_same_view(left: &CompositeDatasetView, right: &CompositeDatasetView) {
             .collect::<BTreeSet<_>>(),
         "term dictionary"
     );
-    assert_eq!(left.stats(), right.stats(), "retention and work accounting");
+    // RETENTION is a statement about what a view HOLDS, and equal views hold
+    // equal things: this clause stays exact.
+    let (left_stats, right_stats) = (left.stats(), right.stats());
+    assert_eq!(
+        ViewStats {
+            work: ViewWork::default(),
+            ..left_stats
+        },
+        ViewStats {
+            work: ViewWork::default(),
+            ..right_stats
+        },
+        "retention accounting"
+    );
+    // WORK is a statement about what was PERFORMED, and two views that observe
+    // identically need not have cost identically. `right` may have been reached by
+    // appending, and every IRI- or blank-named append freezes its own derived graph
+    // dictionary where one from-scratch build freezes exactly one — so an append
+    // chain honestly reports MORE work. Asserting equality here would force the
+    // counters to forget the freezes the chain actually paid for, which is the very
+    // under-reporting this clause was relaxed to expose. The bound is therefore
+    // one-sided: the view under test never reports LESS work than the rebuild.
+    for (name, under_test, rebuilt) in [
+        (
+            "copied_terms",
+            right_stats.work.copied_terms,
+            left_stats.work.copied_terms,
+        ),
+        (
+            "copied_rows",
+            right_stats.work.copied_rows,
+            left_stats.work.copied_rows,
+        ),
+        (
+            "copied_text_bytes",
+            right_stats.work.copied_text_bytes,
+            left_stats.work.copied_text_bytes,
+        ),
+        (
+            "copied_index_bytes",
+            right_stats.work.copied_index_bytes,
+            left_stats.work.copied_index_bytes,
+        ),
+        ("freezes", right_stats.work.freezes, left_stats.work.freezes),
+        (
+            "materializations",
+            right_stats.work.materializations,
+            left_stats.work.materializations,
+        ),
+    ] {
+        assert!(
+            under_test >= rebuilt,
+            "work.{name}: the view under test reports {under_test}, less than the rebuild's \
+             {rebuilt} — work performed cannot go backwards"
+        );
+    }
 
     let rows: Vec<Row> = left.quads().map(|q| row(left, q)).collect();
     assert!(!rows.is_empty(), "pattern probes need rows to probe with");
@@ -1441,6 +1500,73 @@ fn appending_sources_one_at_a_time_composes_what_the_whole_list_composes() {
         CompositeDatasetView::from_bound_sources(sources, ViewLimits::default()).is_ok(),
         "the neighbouring admissible composition must still succeed"
     );
+}
+
+/// Freeze and copied-term accounting SURVIVES an append chain.
+///
+/// Each IRI-named append freezes its own derived graph dictionary, and `extend`
+/// carries the whole composition's work — that freeze and its copied terms
+/// included — forward into the prefix it retains. Before that carry existed the
+/// prefix was snapshotted BEFORE the dictionary block ran, so a chain of N appends
+/// reported `freezes == 1` and only the LAST dictionary's copied terms, however
+/// long it ran: the counters forgot the work precisely where the accumulation they
+/// were added to describe was happening.
+#[test]
+fn appending_named_sources_accumulates_every_freeze_and_copied_term() {
+    let source = complete_source();
+    let named = |n: usize| {
+        CompositeSource::new(source.clone())
+            .with_graph_placement(GraphPlacement::Named(iri(&format!("chain/{n}"))))
+    };
+
+    let mut view =
+        CompositeDatasetView::from_bound_sources(vec![named(0)], ViewLimits::default()).unwrap();
+    let mut work = view.stats().work;
+    assert_eq!(work.freezes, 1, "the first dictionary is one freeze");
+    assert!(
+        work.copied_terms > 0,
+        "and it copies the graph name it interned"
+    );
+
+    for n in 1..4 {
+        let next = view.extend(named(n), ViewLimits::default()).unwrap();
+        let after = next.stats().work;
+        assert_eq!(
+            after.freezes,
+            work.freezes + 1,
+            "append {n} freezes exactly one more derived dictionary"
+        );
+        assert!(
+            after.copied_terms > work.copied_terms,
+            "append {n} adds its dictionary's copied terms to the chain's running total"
+        );
+        assert!(
+            after.copied_text_bytes > work.copied_text_bytes,
+            "append {n} copies its dictionary's graph-name text too"
+        );
+        assert!(after.copied_index_bytes >= work.copied_index_bytes);
+        assert_eq!(after.materializations, 0, "nothing was materialized");
+        work = after;
+        view = next;
+    }
+    assert_eq!(work.freezes, 4, "four IRI-named appends, four freezes");
+
+    // Non-vacuity, and the boundary the carry must NOT cross: a single from-scratch
+    // build of the same list still freezes exactly one dictionary. The chain reports
+    // more because it performed more, not because the charge was double-counted.
+    let rebuilt = CompositeDatasetView::from_bound_sources(
+        (0..4).map(named).collect(),
+        ViewLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        rebuilt.stats().work.freezes,
+        1,
+        "one from-scratch build still reports exactly one dictionary freeze"
+    );
+    // And every SURFACE observable — identity, rows, graphs, terms, retention — is
+    // the rebuild's, byte for byte.
+    assert_same_view(&rebuilt, &view);
 }
 
 #[test]
@@ -2912,4 +3038,115 @@ fn an_undersized_budget_refuses_the_view_carrier_and_admits_its_adequate_twin() 
         "and it publishes the flat carrier's identity"
     );
     assert_eq!(ledger.snapshot().distinct_owners, 1);
+}
+
+/// A REFUSED accumulation is a NO-OP, on both carriers.
+///
+/// The additive pin check runs against a CANDIDATE surface and the carrier is
+/// assigned only after every check has passed, so a contribution that would disturb
+/// an already-pinned graph leaves the carrier bit-identical — same bundle digest,
+/// same pipeline root, same per-graph digests, same leaf set, same pinned handles —
+/// and leaves the shared ledger exactly as it found it: the candidate's registration
+/// rides a guard that is dropped on the refusing path.
+///
+/// A carrier that stayed mutated after saying "no" would be a silent rewrite wearing
+/// a refusal's clothes: the caller handled an error and went on holding a carrier
+/// whose content had already moved underneath its pins.
+#[test]
+fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
+    let base = carrier_fixture();
+    let ledger = RetentionLedger::new();
+    let mut flat = flat_carrier(&base);
+    let mut view = view_carrier(&base, &ledger);
+
+    // Pin <g1> on both carriers — the graph with the scoped blanks, the triple term
+    // and the statement layer.
+    let pinned = flat.graph_digest(CG1);
+    assert_eq!(pinned, view.graph_digest(CG1).unwrap());
+    flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
+    view.pin_handle(CG1, Note("g1"), pinned).unwrap();
+
+    // Everything the refusal must leave exactly where it found it.
+    let leaves = flat.named_graph_iris();
+    let leaf_digests: Vec<ContentDigest> = leaves.iter().map(|g| flat.graph_digest(g)).collect();
+    let flat_digest = flat.digest();
+    let flat_root = flat.pipeline_root();
+    let view_digest = view.digest().unwrap();
+    let view_root = view.pipeline_root().unwrap();
+    let ledger_before = ledger.snapshot();
+    assert_eq!(
+        view.named_graph_iris(),
+        leaves,
+        "the two carriers must start from the same leaf set"
+    );
+
+    // Folding MORE rows into the pinned graph shifts its digest → HARD fail on both.
+    let disturbing = contained_contribution(CG1);
+    for err in [
+        flat.accumulate_named_graph(CG1, &disturbing, Note("x"))
+            .expect_err("the flat carrier must refuse a pin-disturbing contribution"),
+        view.accumulate_named_graph(CG1, &disturbing, Note("x"))
+            .expect_err("the view carrier must refuse a pin-disturbing contribution"),
+    ] {
+        assert!(
+            matches!(
+                &err,
+                PipelineBundleError::HandleDigestMismatch { graph, .. } if graph.as_str() == CG1
+            ),
+            "{err}"
+        );
+    }
+
+    assert_eq!(flat.digest(), flat_digest, "flat bundle digest");
+    assert_eq!(flat.pipeline_root(), flat_root, "flat pipeline root");
+    assert_eq!(view.digest().unwrap(), view_digest, "view bundle digest");
+    assert_eq!(
+        view.pipeline_root().unwrap(),
+        view_root,
+        "view pipeline root"
+    );
+    assert_eq!(flat.named_graph_iris(), leaves, "flat leaf set");
+    assert_eq!(view.named_graph_iris(), leaves, "view leaf set");
+    for (graph, before) in leaves.iter().zip(&leaf_digests) {
+        assert_eq!(flat.graph_digest(graph), *before, "flat <{graph}>");
+        assert_eq!(view.graph_digest(graph).unwrap(), *before, "view <{graph}>");
+    }
+    assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
+    assert_eq!(view.handle(CG1).unwrap().content_digest, pinned);
+    assert_eq!(flat.handles().len(), 1, "the refusal attached no handle");
+    assert_eq!(view.handles().len(), 1, "the refusal attached no handle");
+    assert_eq!(
+        ledger.snapshot(),
+        ledger_before,
+        "the rejected source's retention went out with the candidate guard"
+    );
+
+    // THE NEIGHBOURING CASE: the SAME carrier instances still admit a contribution
+    // that leaves the pin alone. The refusal was about that contribution, not about
+    // a carrier poisoned by having tried.
+    let elsewhere = contained_contribution(CG3);
+    flat.accumulate_named_graph(CG3, &elsewhere, Note("g3"))
+        .expect("the undisturbing twin must still be admitted (flat)");
+    view.accumulate_named_graph(CG3, &elsewhere, Note("g3"))
+        .expect("the undisturbing twin must still be admitted (view)");
+    assert_eq!(
+        flat.graph_digest(CG1),
+        pinned,
+        "the pin still verifies (flat)"
+    );
+    assert_eq!(
+        view.graph_digest(CG1).unwrap(),
+        pinned,
+        "the pin still verifies (view)"
+    );
+    assert_eq!(flat.graph_digest(CG3), view.graph_digest(CG3).unwrap());
+    assert_ne!(flat.graph_digest(CG3), flat.graph_digest(CABSENT));
+    assert_eq!(flat.digest(), view.digest().unwrap());
+    assert_eq!(flat.pipeline_root(), view.pipeline_root().unwrap());
+    assert_eq!(
+        ledger.snapshot().distinct_owners,
+        2,
+        "the ADMITTED source is retained — the release above was not a leak the \
+         other way"
+    );
 }

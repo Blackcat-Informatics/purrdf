@@ -518,16 +518,25 @@ pub struct CompositeDatasetView {
 
 /// Everything an appended source needs of the sources already composed: which
 /// blank scopes are spoken for, how far the standardizing counter has walked, and
-/// the accounting owed by the user sources alone. The derived graph dictionary is
-/// deliberately absent — it is rebuilt from the full placement list every time, so
-/// its retention is never charged twice.
+/// the accounting owed by the user sources alone.
+///
+/// The derived graph dictionary is deliberately absent from [`stats`](Self::stats)
+/// and [`unique_terms`](Self::unique_terms) — it is rebuilt from the full placement
+/// list every time, so what it RETAINS is never charged twice. [`work`](Self::work)
+/// is the opposite case and carries it: the dictionary's freeze and copied terms
+/// are work that was genuinely performed, and dropping them at the prefix boundary
+/// is what once made an append chain report one freeze and one dictionary's copied
+/// terms however many appends it had run.
 #[derive(Debug, Clone)]
 struct PrefixState {
     reserved: Arc<BTreeSet<BlankScope>>,
     assigned: Arc<BTreeSet<BlankScope>>,
     next: u32,
+    /// Retention owed by the user sources alone — dictionary EXCLUDED.
     stats: ViewStats,
+    /// Every counter the whole composition, dictionary INCLUDED, has charged.
     work: ViewWork,
+    /// Canonical term count of the user sources alone — dictionary EXCLUDED.
     unique_terms: usize,
 }
 
@@ -608,10 +617,29 @@ impl CompositeDatasetView {
     /// The result is the view [`from_bound_sources`](Self::from_bound_sources)
     /// would have built from this view's sources followed by `source`: the same
     /// rows, the same canonical identity, the same named graphs and the same
-    /// retention accounting. What differs is the work: composing from scratch
-    /// aliases every source against every earlier one, while appending aliases
-    /// only `source`, so accumulating a bundle one contribution at a time costs
-    /// what the contributions cost rather than what the bundle costs squared.
+    /// retention.
+    ///
+    /// ## What appending actually saves
+    ///
+    /// Not asymptotically more than it can. Appending still aliases `source`
+    /// against EVERY retained source, so one append costs
+    /// O(retained sources × `source`'s terms) and a chain of N appends stays
+    /// quadratic in N — the same number of source pairs a single N-source
+    /// composition visits. What appending does not do is re-alias the pairs the
+    /// retained sources already settled: rebuilding a k-source view from scratch
+    /// costs O(k² × terms) every time, so accumulating BY REBUILD would pay that
+    /// again at every step. The saving is that cubic-in-N rebuild cost, not the
+    /// quadratic composition cost itself.
+    ///
+    /// ## What it costs on the counters
+    ///
+    /// [`ViewWork`] records work actually PERFORMED, so an append chain reports
+    /// more of it than one from-scratch build of the same source list: each
+    /// append that carries an IRI- or blank-named [`GraphPlacement`] freezes its
+    /// own derived graph dictionary, and every one of those freezes is charged.
+    /// The counters are monotone non-decreasing across a chain and are never an
+    /// RDF identity input; [`stats`](Self::stats)'s retention figures, which are,
+    /// match the from-scratch build exactly.
     ///
     /// Appending does not mutate this view; both remain usable and independent.
     ///
@@ -1040,6 +1068,15 @@ impl Prefix {
                 .saturating_add(graphs.term_count().saturating_mul(alias_term_bytes()))
                 .saturating_add(size_of::<CompositeSource>());
             limits.check(&stats)?;
+            // Charge the dictionary's own freeze and copied terms into the SAME
+            // running total the prefix carries forward, so an append chain reports
+            // the freeze each append actually paid for rather than the last one's
+            // alone. Charging it here rather than onto the finished view is the
+            // whole of that fix: the counters are identical for a single
+            // from-scratch construction, which adds this once either way.
+            work.copied_terms += graphs.term_count();
+            work.copied_text_bytes += graphs.rdf_text_bytes();
+            work.freezes += 1;
             // The derived dictionary owns the caller's own graph names, so its
             // scopes are the supplied ones verbatim — already reserved above.
             let dictionary = CompositeSource::new(graphs).with_scope_binding(ScopeBinding::Shared);
@@ -1071,7 +1108,8 @@ impl Prefix {
                 assigned: Arc::new(assigned),
                 next,
                 stats: base_stats,
-                work: base_work,
+                // The FULL accumulated work, dictionary included — see `PrefixState`.
+                work,
                 unique_terms: base_unique_terms,
             },
             user_sources,
@@ -1091,18 +1129,8 @@ impl Prefix {
             });
         }
         view.placement = placement.into();
+        // One charge, and it already includes the derived dictionary's freeze.
         view.work.add(work);
-        if graph_count > 0 {
-            view.work.add(ViewWork {
-                copied_terms: view.sources[user_sources].term_count(),
-                copied_text_bytes: view.sources[user_sources]
-                    .native()
-                    .expect("graph dictionary")
-                    .rdf_text_bytes(),
-                freezes: 1,
-                ..ViewWork::default()
-            });
-        }
         Ok(view)
     }
 }
