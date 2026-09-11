@@ -644,6 +644,16 @@ export class Dataset implements Iterable<Quad> {
     base?: string | null,
   ): string;
   query(sparql: string, base?: string | null): string;
+  /**
+   * Canonical N-Quads of the flat assertion projection (RDFC-1.0 over the
+   * RDF 1.2 abstract syntax).
+   *
+   * Throws when canonicalization refuses the dataset — a reserved
+   * `urn:purrdf:rdfc:` IRI in a non-foldable position, or the n-degree
+   * call budget exhausted by a pathologically symmetric blank graph. The
+   * refusal is a thrown `Error` naming the cause; it never aborts the
+   * module.
+   */
   canonicalize(): string;
   isomorphic(other: Dataset): boolean;
   toStream(): AsyncIterableIterator<Quad>;
