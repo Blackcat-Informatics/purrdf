@@ -221,14 +221,22 @@ statement about EVERY admitted input, including one that itself carries the
 sentinel spelling, rather than only about inputs that never exercise the fold.
 
 **The flat presentation is a second canonicalization-oracle spelling of the RDF 1.2
-statement layer, never an RDF 1.1 fallback mode.** Choosing it does not drop down to
-plain-triples semantics or discard anything §3 canonicalizes: reifier count and
-annotation presence stay exactly as observable as under the overlay (§3's
-lossless-identity property holds under either presentation), and the same §4/§5
+statement layer, never an RDF 1.1 fallback mode.** Choosing it does not drop to
+plain-triples semantics: every statement-layer row §3 canonicalizes is present in
+the flat document as the ordinary quad it asserts, and the same §4/§5
 admissibility, the same §6 bound, and the same blank-labelling rule of §3.2 all
-still apply. Selecting the flat presentation only changes which bytes an
-already-admitted RDF 1.2 statement layer produces, for a consumer that would rather
-read the statement layer back as ordinary quads than as sentinel-bearing ones.
+still apply. The two presentations do, however, make deliberately different
+distinguishability promises. The flat presentation identifies the **assertion
+projection**: its row-level dedup law (above) means a row asserted both as a
+declared reifier/annotation and as its own base quad, or spelled through the fold
+shape, produces the same bytes as the row asserted once — so a declared reifier
+and a plain `rdf:reifies` base quad, which the overlay keeps distinct (sentinel
+row vs. ordinary predicate), are indistinguishable in flat bytes. §3's
+unconditional lossless-identity property is an **overlay** guarantee: a consumer
+that must observe statement-layer structure unconditionally — reifier counts,
+which spelling asserted a row — pins the overlay presentation; a consumer that
+wants the RDF 1.2 assertion set an independent RDFC-1.0 implementation could
+reproduce pins the flat presentation.
 
 `Canonicalized::labels` carries the same caveat under either presentation: labels
 are isomorphism-invariant only **up to automorphism**. Where a graph carries a
