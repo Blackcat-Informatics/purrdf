@@ -107,6 +107,11 @@ pub mod turtle;
 // of the on-disk normalizer (the oxigraph-coupled text parser stays in `purrdf`).
 // The wasm-clean canonical-Turtle authority for the correspondence EDOAL lowering.
 pub mod turtle_render;
+// XSD/XPath regular-expression dialect translation shared by `sh:pattern`
+// (SHACL), SPARQL `REGEX`/`REPLACE`, and ShEx `PATTERN` (issue #295). No
+// public consumer yet — the Unicode block-escape table lands first so it has
+// its own generation/test story before the translator is built on top of it.
+mod xsd_regex;
 
 pub use backend::{
     RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,

@@ -1,0 +1,10 @@
+SPDX-FileCopyrightText: Unicode, Inc. <https://www.unicode.org>
+SPDX-License-Identifier: Unicode-3.0
+
+Vendored verbatim from https://www.unicode.org/Public/16.0.0/ucd/Blocks.txt
+Unicode Character Database, version 16.0.0 — pinned to match the UCD version
+embedded in this workspace's locked `regex-syntax` 0.8.11 (its
+`src/unicode_tables/*.rs` generator headers read "Unicode version: 16.0.0.",
+e.g. `general_category.rs`/`age.rs`), so the block table and the `regex`
+engine's own Unicode tables cannot disagree at a boundary codepoint.
+Fetched 2026-09-11.
