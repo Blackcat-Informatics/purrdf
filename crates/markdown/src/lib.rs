@@ -19,6 +19,30 @@
 //! is the two of them in a row, and remains the whole surface a caller
 //! who only wants triples needs.
 //!
+//! # A codec, not an index
+//!
+//! The projection is the encode half of a codec: the emitted spans
+//! cover **every byte** of the source. A unit carries its text over its
+//! byte span; a section carries its own heading or movement line as a
+//! typed verbatim literal over that line's span; and every maximal run
+//! of bytes neither covers — a blank run, a horizontal rule, a table
+//! row, the newline a split cut landed on — is a **structure node**
+//! carrying its bytes the same way. [`reconstruct`] is the decode half:
+//! it writes each span's bytes at its offset, requires the cover whole,
+//! admits an overlap only where a `continues` edge declares it and the
+//! shared bytes agree, and proves the result against the document
+//! node's own `sourceDigest`. A graph and its document are therefore
+//! two spellings of the same bytes, and either proves the other.
+//!
+//! Every verbatim literal is **typed**, never plain, so what a
+//! full-text or embedding index selecting plain strings sees stays
+//! exact: one text per unit, one heading's words per section, and not
+//! a byte of structure. The heading's words are plain because they are
+//! content — an index that never saw a chapter title would report
+//! absence for the densest text a document carries — while the marks,
+//! the whitespace and the newline of the heading line travel only in
+//! its typed verbatim literal.
+//!
 //! A [`Document`] carries the [`Profile`] it was admitted under
 //! ([`Document::profile`]), and [`render`] takes the document alone.
 //! That is not a convenience: the projection's infallibility rests on
@@ -232,6 +256,7 @@
 )]
 
 mod claims;
+mod decode;
 mod dialect;
 mod error;
 mod identity;
@@ -242,8 +267,11 @@ mod split;
 use purrdf_core::{BaseIri, parse_iri};
 
 pub use crate::claims::render;
+pub use crate::decode::{
+    DecodeError, ReconstructError, VerbatimSpan, decode_document, reconstruct,
+};
 pub use crate::error::MarkdownError;
-pub use crate::identity::{citation_iri, section_iri, unit_iri};
+pub use crate::identity::{citation_iri, section_iri, structure_iri, unit_iri};
 pub use crate::model::{
     CONTEXT_BYTES, Citation, ContentAnchor, Document, MalformedRow, RowDefect, Section, Span,
     SpanRelation, Unit, span_relation, verify_unit,
@@ -290,6 +318,10 @@ pub enum ClaimKind {
     Section,
     /// A verse, a paragraph, or one piece of an oversize unit.
     Unit,
+    /// A structure node: a maximal run of bytes no unit span and no
+    /// heading line covers, carried verbatim so the graph decodes back
+    /// to the source.
+    Structure,
 }
 
 /// One node's triples, rendered as sorted N-Triples lines (valid
@@ -383,6 +415,13 @@ pub struct Claim {
 /// [`MarkdownError::MalformedCanonBase`] when the base it declares —
 /// the empty one among them — is no IRI reference at all.
 ///
+/// Last, the codec holds itself to its own law:
+/// [`MarkdownError::CoverDefect`] when the spans the projection would
+/// emit do not decode back to these very bytes under the kernel's
+/// cover law. That refusal names a defect in this crate, never in the
+/// document, and it is checked in every build — a cover defect a
+/// consumer's decode discovers is a silent drop that already shipped.
+///
 /// Then the document. [`MarkdownError::EmptySourceId`] when the id is
 /// empty, which would be written `<>` and name no document;
 /// [`MarkdownError::InvalidSourceId`] when the id cannot be written
@@ -424,15 +463,23 @@ pub fn analyze<'a>(
     if let Some(base) = &canon {
         validate_anchors(&reading, base)?;
     }
-    Ok(Document::assemble(doc.id, text, &reading, profile))
+    let document = Document::assemble(doc.id, text, &reading, profile);
+    // The write side of the codec, held in every build: a document is
+    // admitted only if the spans its projection will emit decode back
+    // to these very bytes under the kernel's cover law. A defect here
+    // is this crate's, and it is refused loudly at the seam rather
+    // than shipped as a graph a consumer's decode discovers to be
+    // unlawful.
+    decode::verify_cover(&document)?;
+    Ok(document)
 }
 
 /// Slices a Markdown document into claims under a profile: [`analyze`]
 /// then [`render`].
 ///
 /// The result is deterministic in the bytes and the profile. Claims
-/// come in document order: the document node first, then sections and
-/// units interleaved as they occur.
+/// come in document order: the document node first, then sections,
+/// units and structure nodes interleaved as they occur.
 ///
 /// Every refusal is stated before a byte of the document is read, and
 /// nothing is ever dropped quietly: a document either slices whole or

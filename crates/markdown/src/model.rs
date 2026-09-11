@@ -757,6 +757,7 @@ pub struct Document<'a> {
     title: Option<String>,
     sections: Vec<Section>,
     units: Vec<Unit<'a>>,
+    structures: Vec<Span>,
     citations: Vec<Citation>,
     malformed_rows: Vec<MalformedRow<'a>>,
 }
@@ -881,6 +882,39 @@ impl<'a> Document<'a> {
         &self.units
     }
 
+    /// Every structure span, in document order: the maximal runs of
+    /// bytes that no unit span and no heading line covers — blank runs,
+    /// horizontal rules, table rows, the newline a split cut landed on.
+    ///
+    /// Together with the unit spans and the heading lines these cover
+    /// every byte of the document, which is what makes the projection a
+    /// codec rather than an index: writing each covered span's bytes at
+    /// its offset rebuilds the source exactly
+    /// ([`reconstruct`](crate::reconstruct)). The spans are non-empty,
+    /// pairwise disjoint, disjoint from every heading line, and disjoint
+    /// from every unit span; and each one starts and ends on a scalar
+    /// boundary, because its neighbours do.
+    #[must_use]
+    pub fn structures(&self) -> &[Span] {
+        &self.structures
+    }
+
+    /// The verbatim bytes of a structure span: `&source[span]`, exactly
+    /// as [`Unit::quote`] answers for a unit.
+    ///
+    /// # Panics
+    ///
+    /// `span` must be a span of **this** document on scalar boundaries
+    /// — one the model itself stated, as every span in
+    /// [`Self::structures`] is. A span from another document, one past
+    /// the source's end, a reversed one, or one cutting a scalar in
+    /// half names no text of this source, and the slice panics rather
+    /// than answer with bytes the span does not denote.
+    #[must_use]
+    pub fn structure_text(&self, span: Span) -> &'a str {
+        &self.source[span.start as usize..span.end as usize]
+    }
+
     /// Every concordance row that could be read, in document order,
     /// whether or not it lifted anything here.
     #[must_use]
@@ -986,6 +1020,7 @@ impl<'a> Document<'a> {
     ) -> Self {
         let sections = assemble_sections(reading, source.len());
         let units = assemble_units(source, reading, profile);
+        let structures = structure_spans(&sections, &units, source.len() as u64);
         let citations = assemble_citations(reading, &units);
         let malformed_rows = reading
             .defective_rows
@@ -1003,10 +1038,40 @@ impl<'a> Document<'a> {
             title: reading.title.clone(),
             sections,
             units,
+            structures,
             citations,
             malformed_rows,
         }
     }
+}
+
+/// The complement of the covered spans: every maximal run of bytes that
+/// no unit span and no heading line covers, in document order.
+///
+/// The union is taken over a sorted merge rather than a bitmap, so the
+/// cost is the number of spans and never the number of bytes. The
+/// overlap of a split's continuation and the nesting of nothing are
+/// both absorbed by the same rule: the cursor only ever moves forward,
+/// to the furthest end seen.
+fn structure_spans(sections: &[Section], units: &[Unit<'_>], len: u64) -> Vec<Span> {
+    let mut covered: Vec<Span> = units
+        .iter()
+        .map(Unit::span)
+        .chain(sections.iter().map(Section::heading_span))
+        .collect();
+    covered.sort_unstable_by_key(|s| (s.start, s.end));
+    let mut out = Vec::new();
+    let mut cursor = 0u64;
+    for span in covered {
+        if span.start > cursor {
+            out.push(Span::new(cursor, span.start));
+        }
+        cursor = cursor.max(span.end);
+    }
+    if cursor < len {
+        out.push(Span::new(cursor, len));
+    }
+    out
 }
 
 /// A section runs to the next section at its level or above, and its

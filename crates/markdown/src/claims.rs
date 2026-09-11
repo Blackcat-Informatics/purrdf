@@ -35,8 +35,8 @@ use std::collections::BTreeMap;
 use purrdf_core::embedding::ChunkingContractId;
 use purrdf_core::{ContentDigest, RdfLiteral, RdfTerm, RdfTriple, emit_term};
 
-use crate::identity::{citation_iri, node_iri_of_digest};
-use crate::model::{Document, Section, Unit};
+use crate::identity::{citation_iri, node_iri_of_digest, structure_iri};
+use crate::model::{Document, Section, Span, Unit};
 use crate::profile::{Profile, Vocabulary};
 use crate::{Claim, ClaimKind};
 
@@ -60,7 +60,7 @@ use crate::{Claim, ClaimKind};
 /// one was. The argument does not exist, so neither does that.
 ///
 /// Claims come in document order: the document node first, then
-/// sections and units interleaved as they occur.
+/// sections, units and structure nodes interleaved as they occur.
 #[must_use]
 pub fn render(document: &Document<'_>) -> Vec<Claim> {
     let profile = document.profile();
@@ -103,44 +103,97 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
             )
         })
         .collect();
+    let structure_iris: Vec<String> = document
+        .structures()
+        .iter()
+        .map(|span| {
+            // Minted through the same public formula a consumer holds
+            // (`structure_iri`), not a parallel spelling of it: the
+            // model keeps no digest for a structure span, so the
+            // public route costs exactly what the digest form would.
+            structure_iri(
+                &profile.vocabulary,
+                document.id(),
+                &contract,
+                span.start,
+                span.end,
+                document.structure_text(*span).as_bytes(),
+            )
+        })
+        .collect();
     let citations = citation_edges(document, profile, &contract, &unit_iris);
 
-    let mut claims = Vec::with_capacity(1 + section_iris.len() + unit_iris.len());
+    let mut claims =
+        Vec::with_capacity(1 + section_iris.len() + unit_iris.len() + structure_iris.len());
     claims.push(document_claim(document));
     let mut sections = document.sections().iter().enumerate().peekable();
     let mut units = document.units().iter().enumerate().peekable();
-    // Document order: whichever of the next section and the next unit
-    // starts first.
+    let mut structures = document.structures().iter().enumerate().peekable();
+    // Document order: whichever of the next section, the next unit and
+    // the next structure span starts first. The tie order is section
+    // before unit before structure, though only a section and a unit
+    // can actually tie: a structure span is the complement of the other
+    // two, so no covered offset opens one.
     loop {
-        let take_section = match (sections.peek(), units.peek()) {
-            (None, None) => break,
-            (Some((_, s)), Some((_, u))) => s.span().start <= u.span().start,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
+        let starts = [
+            sections.peek().map(|(_, s)| s.span().start),
+            units.peek().map(|(_, u)| u.span().start),
+            structures.peek().map(|(_, span)| span.start),
+        ];
+        let Some(which) = starts
+            .iter()
+            .enumerate()
+            .filter_map(|(kind, start)| start.map(|at| (at, kind)))
+            .min()
+            .map(|(_, kind)| kind)
+        else {
+            break;
         };
-        if take_section {
-            if let Some((i, section)) = sections.next() {
-                claims.push(section_claim(
-                    document.id(),
-                    &profile.vocabulary,
-                    section,
-                    &section_iris,
-                    i,
-                ));
+        match which {
+            0 => {
+                if let Some((i, section)) = sections.next() {
+                    claims.push(section_claim(
+                        document.id(),
+                        &profile.vocabulary,
+                        document.source(),
+                        section,
+                        &section_iris,
+                        i,
+                    ));
+                }
             }
-        } else if let Some((i, unit)) = units.next() {
-            let cites = citations.get(&i).map(Vec::as_slice).unwrap_or_default();
-            claims.push(unit_claim(
-                document.id(),
-                profile,
-                unit,
-                &unit_iris,
-                &section_iris,
-                i,
-                cites,
-            ));
+            1 => {
+                if let Some((i, unit)) = units.next() {
+                    let cites = citations.get(&i).map(Vec::as_slice).unwrap_or_default();
+                    claims.push(unit_claim(
+                        document.id(),
+                        profile,
+                        unit,
+                        &unit_iris,
+                        &section_iris,
+                        i,
+                        cites,
+                    ));
+                }
+            }
+            _ => {
+                if let Some((i, span)) = structures.next() {
+                    claims.push(structure_claim(
+                        document.id(),
+                        &profile.vocabulary,
+                        &structure_iris[i],
+                        *span,
+                        document.structure_text(*span),
+                    ));
+                }
+            }
         }
     }
+    // No verification here, and none needed: a `Document` cannot exist
+    // without having passed the write-side cover check in
+    // [`analyze`](crate::analyze) — in every build — so the spans this
+    // projection just rendered are ones the decode law already
+    // accepted against these very bytes.
     claims
 }
 
@@ -266,6 +319,7 @@ fn document_claim(document: &Document<'_>) -> Claim {
 fn section_claim(
     document_id: &str,
     v: &Vocabulary,
+    source: &str,
     s: &Section,
     iris: &[String],
     i: usize,
@@ -277,14 +331,31 @@ fn section_claim(
         &v.section_class
     };
     let span = s.span();
+    let heading_span = s.heading_span();
+    let heading_line = &source[heading_span.start as usize..heading_span.end as usize];
     let mut lines = vec![
         triple(me, crate::RDF_TYPE, &iri(class)),
         triple(me, &v.in_document, &iri(document_id)),
         triple(me, &v.level, &integer(u64::from(s.level()))),
         triple(me, &v.ordinal, &integer(s.ordinal())),
-        triple(me, &v.heading, &typed(s.heading(), &v.dt_heading)),
+        // The heading's words, as the one plain literal of the section:
+        // a chapter title is the densest content a document carries,
+        // and a plain-literal index that cannot answer for it would
+        // report absence for text the graph holds. The marks, the
+        // whitespace and the newline stay in the typed verbatim line
+        // below, so the index sees the words and not a byte of
+        // structure.
+        triple(me, &v.heading, &literal(s.heading())),
         triple(me, &v.byte_start, &integer(span.start)),
         triple(me, &v.byte_end, &integer(span.end)),
+        // The heading line itself, byte for byte — the marks, the
+        // leading spaces, the `\r` of a CRLF document — over its own
+        // span, which is the section's identity span. Typed, never
+        // plain: the words a search index sees stay exactly one plain
+        // literal per unit, and a heading line is not a unit.
+        triple(me, &v.verbatim, &typed(heading_line, &v.dt_verbatim)),
+        triple(me, &v.verbatim_start, &integer(heading_span.start)),
+        triple(me, &v.verbatim_end, &integer(heading_span.end)),
     ];
     if let Some(p) = s.parent() {
         lines.push(triple(me, &v.parent, &iri(&iris[p])));
@@ -293,6 +364,30 @@ fn section_claim(
         lines,
         me.clone(),
         ClaimKind::Section,
+        Some((span.start, span.end)),
+    )
+}
+
+/// One structure node: a maximal run of bytes no unit span and no
+/// heading line covers, carried verbatim so the graph decodes back to
+/// the source. It states its verbatim span twice over — as its own
+/// `byteStart`/`byteEnd` and as the `verbatimStart`/`verbatimEnd` the
+/// literal quotes — so a decoder reads every verbatim literal by one
+/// rule, whatever node carries it, and never dispatches on a class.
+fn structure_claim(document_id: &str, v: &Vocabulary, me: &str, span: Span, text: &str) -> Claim {
+    let lines = vec![
+        triple(me, crate::RDF_TYPE, &iri(&v.structure_class)),
+        triple(me, &v.in_document, &iri(document_id)),
+        triple(me, &v.byte_start, &integer(span.start)),
+        triple(me, &v.byte_end, &integer(span.end)),
+        triple(me, &v.verbatim, &typed(text, &v.dt_verbatim)),
+        triple(me, &v.verbatim_start, &integer(span.start)),
+        triple(me, &v.verbatim_end, &integer(span.end)),
+    ];
+    claim(
+        lines,
+        me.to_owned(),
+        ClaimKind::Structure,
         Some((span.start, span.end)),
     )
 }

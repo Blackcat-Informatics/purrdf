@@ -141,10 +141,35 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Beside the IRIs derived from the caller's own vocabulary base — its terms and
   the node identities minted under it — an emitted graph carries no IRI but
   these: five of the standard's — `rdf:type`, `rdf:reifies`, `xsd:integer`,
-  `xsd:hexBinary`, and the `xsd:string` that a unit's one plain literal has in
-  the abstract syntax and that no serializer writes — the caller's own source
-  id, and, where a concordance lifts under a declared canon base, the anchors
-  it mints.
+  `xsd:hexBinary`, and the `xsd:string` that the graph's plain literals — a
+  unit's text, a heading's words — have in the abstract syntax and that no
+  serializer writes — the caller's own source id, and, where a concordance
+  lifts under a declared canon base, the anchors it mints.
+- **markdown:** The slicer is a codec. The emission covers every byte of the
+  source: a section carries its own heading or movement line as a typed
+  `verbatim` literal over that line's span beside its heading's words as the
+  section's one plain literal, and every maximal run of bytes neither a unit
+  span nor a heading line covers — blank runs, rules, table rows, the newline
+  a split cut lands on — is a `Structure` node carrying its bytes the same
+  way. Plain means content and typed means bytes, normatively: the only plain
+  literals in a claim are a unit's text and a heading's words. The vocabulary
+  grows `Structure`, `verbatim`, `verbatimStart`, `verbatimEnd` and
+  `verbatimText`; every contract id re-mints and every chunking id — and so
+  every embedding addressed by one — stands still. `decode_document` is the
+  graph half of the new decode law (`SPEC.md` §11.3) and `analyze` holds every
+  admitted document against it in every build, refusing a defective cover as
+  `CoverDefect` rather than shipping a graph nothing can rebuild. `ClaimKind`
+  gains `Structure` and stays exhaustive on purpose: a consumer's match
+  breaking loudly on a new claim kind is the correct failure.
+- **core:** New module `purrdf_core::cover`: the cover law — verbatim byte
+  spans back into the document they cover, byte for byte — as the kernel's
+  own, format-neutral surface. `reconstruct` writes each span at its offset,
+  requires the cover whole, admits an overlap only where a `continues`
+  declaration names a strictly earlier piece whose shared bytes agree, and
+  proves the result against the stated source digest, with eight typed
+  refusals and allocation bounded by input. `purrdf-markdown` re-exports it as
+  the law's first emitter; the next ordered codec costs an emitter and
+  nothing else.
 - **purrdf:** The umbrella exposes the slicer as `purrdf::markdown`, so a
   consumer slices a document without naming `purrdf-markdown` as a separate
   dependency.

@@ -70,8 +70,13 @@ set of N-Triples lines (valid Turtle):
   length, the profile it was sliced under, and its title.
 - **One section node per heading**: every ATX heading (`#` through
   `######`) and every movement marker line (`⁂ *name*`), with its level,
-  ordinal, parent section, heading text, and byte span. A movement sits one
-  level under the nearest heading, so consecutive movements are siblings.
+  ordinal, parent section, and byte span. The heading's **words** are the
+  section's one plain `xsd:string` literal — a chapter title is content,
+  and a text index that never saw one would report absence for the densest
+  text a document carries — while the heading **line itself**, marks and
+  whitespace and all, travels as a typed `verbatim` literal over its own
+  span. A movement sits one level under the nearest heading, so
+  consecutive movements are siblings.
 - **One unit node per verse or paragraph**: a numbered line (`12. text`)
   runs to the next blank line and is a verse carrying its number; any other
   run of non-blank lines is a paragraph. Every unit carries **exactly one
@@ -115,9 +120,21 @@ set of N-Triples lines (valid Turtle):
   refused or dropped — a table's own header and `|---|---|---|` are frame,
   not defects.
 
+- **One structure node per run of bytes nothing else owns**: blank runs,
+  horizontal rules, table rows, the newline a split cut lands on — each
+  maximal run that no unit span and no heading line covers, carried as a
+  typed `verbatim` literal over its span. Structure nodes are what make
+  the emission a **codec** rather than an index: the emitted spans cover
+  every byte of the source, so `reconstruct` rebuilds the document from
+  the graph alone, byte for byte, and proves the rebuild against the
+  document node's own `sourceDigest`.
+
 Horizontal rules and table rows are structure, not units. Spans are
 verbatim: the literal's bytes are `source[start..end]`, with no trimming,
-no normalization, and nothing prepended.
+no normalization, and nothing prepended. Plain means content, typed means
+bytes: the only plain literals in the graph are a unit's text and a
+heading's words, so an index sees every word once and not a byte of
+structure.
 
 ## A small example
 
