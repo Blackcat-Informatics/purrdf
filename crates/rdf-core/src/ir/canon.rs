@@ -1114,56 +1114,58 @@ enum CanonScope<Id> {
     Graph(Id),
 }
 
-/// How the RDF 1.2 statement layer (reifiers, annotations) is EXPRESSED in
-/// [`collect_components`]'s output — a second axis, orthogonal to [`CanonScope`]'s
-/// SELECTION axis: scope picks which rows are admitted, presentation picks how an
-/// admitted statement-layer row is shaped.
+/// How the RDF 1.2 statement layer (reifiers, annotations) is EXPRESSED in the
+/// component collector's output — a second axis, orthogonal to the internal
+/// canonicalization scope's SELECTION axis: scope picks which rows are admitted,
+/// presentation picks how an admitted statement-layer row is shaped.
 ///
 /// Exhaustive, deliberately with NO [`Default`]: every caller states which one it
-/// means, so a presentation can never be reached by omission. The type itself stays
-/// crate-internal: no entry point accepts it as a parameter, so a caller never
-/// threads this enum across the crate boundary — a caller SELECTS a presentation by
-/// which entry point it calls instead. [`canonicalize`], [`try_canonicalize_view`],
-/// [`canonicalize_graph_view`] and their kin pin [`Overlay`](Self::Overlay);
-/// [`try_canonicalize_flat_view`], [`try_canonicalize_flat_graph_view`],
-/// [`check_admissible_flat_view`] and [`try_flat_digest_view`] pin
-/// [`FlatAssertion`](Self::FlatAssertion). See [`CANON_PRESENTATION_OVERLAY_ID`] /
-/// [`CANON_PRESENTATION_FLAT_ASSERTION_ID`] for the stable, versioned identifiers a
-/// consumer pins for each.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CanonPresentation {
+/// means, so a presentation can never be reached by omission. Public as an
+/// identity/documentation vocabulary ONLY: it names the two presentations and
+/// anchors their normative docs, but NO function — public or private — accepts it as
+/// a parameter, so a caller never threads this enum across an API boundary. A
+/// caller SELECTS a presentation by which entry point it calls instead: each
+/// presentation gets its own explicitly-named entry points. [`canonicalize`],
+/// [`try_canonicalize_view`], [`canonicalize_graph_view`] and their kin pin
+/// [`Overlay`](Self::Overlay); [`try_canonicalize_flat_view`],
+/// [`try_canonicalize_flat_graph_view`], [`check_admissible_flat_view`] and
+/// [`try_flat_digest_view`] pin [`FlatAssertion`](Self::FlatAssertion). See
+/// [`CANON_PRESENTATION_OVERLAY_ID`] / [`CANON_PRESENTATION_FLAT_ASSERTION_ID`] for
+/// the stable, versioned identifiers a consumer pins for each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanonPresentation {
     /// The RDFC-1.0 overlay this module has always emitted: a reifier row becomes a
-    /// [`Component::Reifier`] and an annotation row becomes a [`Component::Annotation`],
+    /// `Component::Reifier` and an annotation row becomes a `Component::Annotation`,
     /// each rendered through the profile's reserved sentinel IRIs
-    /// ([`SENTINEL_REIFIES`]/[`SENTINEL_ANNOTATION_GRAPH`]).
+    /// (`SENTINEL_REIFIES`/`SENTINEL_ANNOTATION_GRAPH`).
     Overlay,
     /// The flat assertion presentation: a reifier or annotation row lowers to an
     /// ORDINARY quad carrying its row's own real predicate id (`rdf:reifies`, or the
     /// annotation's own predicate) — no sentinel is ever minted. A lowered row whose
     /// `(s, p, o, g)` already exists as a genuine base quad is emitted exactly once
-    /// (see [`already_asserted`]'s flat dedup law). What is ADMITTED is unchanged
+    /// (see `already_asserted`'s flat dedup law). What is ADMITTED is unchanged
     /// from [`Overlay`](Self::Overlay) — only what is EMITTED differs.
     ///
     /// **The law holds for BOTH ways a row can reach this presentation.** A row held
-    /// NATIVELY (the side tables) lowers through [`emit_reifier_row`] /
-    /// [`emit_annotation_row`] to a [`Component::Quad`] carrying a real interned
+    /// NATIVELY (the side tables) lowers through `emit_reifier_row` /
+    /// `emit_annotation_row` to a `Component::Quad` carrying a real interned
     /// predicate id. A row a base quad merely SPELLS — the overlay's own sentinel
-    /// shape, recognized by [`fold_sentinel_row`] and read back as the same
+    /// shape, recognized by `fold_sentinel_row` and read back as the same
     /// statement-layer row (module documentation, "…except the canonicalizer's OWN
-    /// output") — lowers through [`lower_folded_row`] to the SAME ordinary shape: a
-    /// reifier spelling lowers to [`Component::FlatReifier`] (the predicate rendered
+    /// output") — lowers through `lower_folded_row` to the SAME ordinary shape: a
+    /// reifier spelling lowers to `Component::FlatReifier` (the predicate rendered
     /// as literal text, because the view holding only the spelled quad may never have
-    /// interned `rdf:reifies` at all — see [`RDF_REIFIES`]), and an annotation
-    /// spelling lowers directly to a [`Component::Quad`] (its predicate slot already
+    /// interned `rdf:reifies` at all — see `RDF_REIFIES`), and an annotation
+    /// spelling lowers directly to a `Component::Quad` (its predicate slot already
     /// held a real interned id, taken straight from the spelling quad). Either way the
     /// bytes rendered are identical to the row's natively-held twin, so the two
     /// spellings co-canonicalize under this presentation exactly as they already did
     /// under [`Overlay`](Self::Overlay) — never only one of the two. The dedup law
     /// above extends accordingly: a row present as a native side-table entry, as a
     /// sentinel-spelled base quad, and as a real-predicate base quad, in any
-    /// combination, is still emitted exactly once ([`lower_folded_row`] drops a
+    /// combination, is still emitted exactly once (`lower_folded_row` drops a
     /// spelled row already covered by a real-predicate base quad, and
-    /// [`already_native`] drops one already covered by a native row).
+    /// `already_native` drops one already covered by a native row).
     ///
     /// Its production consumers are [`try_canonicalize_flat_view`],
     /// [`try_canonicalize_flat_graph_view`], [`check_admissible_flat_view`] and

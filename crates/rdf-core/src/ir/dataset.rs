@@ -1417,7 +1417,7 @@ impl RdfDataset {
     ///
     /// # Panics
     /// If the reifier table is non-empty but `rdf:reifies` was never interned — a
-    /// broken invariant (see [`assert_reifier_table_invariant`](Self::assert_reifier_table_invariant)),
+    /// broken invariant (see the private `assert_reifier_table_invariant` check),
     /// unreachable through the public API. Silently yielding nothing in that case
     /// would drop every row the table holds instead of surfacing the corruption.
     pub fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {

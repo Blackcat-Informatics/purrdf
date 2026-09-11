@@ -659,13 +659,13 @@ pub enum DrainCheckpoint {
 /// failure: which checkpoint, and the view's own typed root cause and evidence at
 /// that boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DrainFailure<Error, Evidence> {
+pub struct DrainFailure<Error, Evidence> {
     /// Which checkpoint observed the failure.
-    pub(crate) checkpoint: DrainCheckpoint,
+    pub checkpoint: DrainCheckpoint,
     /// The view's own typed root cause.
-    pub(crate) error: Error,
+    pub error: Error,
     /// The view's own evidence at the failure boundary.
-    pub(crate) evidence: Evidence,
+    pub evidence: Evidence,
 }
 
 /// Sample twice; neither sample Ready ⇒ nothing partial is published.
@@ -683,8 +683,13 @@ pub(crate) struct DrainFailure<Error, Evidence> {
 /// This is the completeness law every checkpointing consumer of a
 /// [`FallibleDatasetView`] needs (first written as the pack encoder's own private
 /// two-sample helper); hoisted here so a second consumer states it once rather than
-/// restating — and risking drifting from — the same rule.
-pub(crate) fn checkpointed_drain<D, F, T>(
+/// restating — and risking drifting from — the same rule. Public: it is the reusable
+/// completeness law for any fallible-view drain boundary — sample before, run the
+/// drain, sample after; publish only when both samples are
+/// [`Ready`](ViewOperationStatus::Ready) — so a caller outside this crate wiring up
+/// its own drain boundary over a [`FallibleDatasetView`] can reuse the law rather
+/// than re-deriving it.
+pub fn checkpointed_drain<D, F, T>(
     view: &D,
     drain: F,
 ) -> Result<T, DrainFailure<D::Error, D::Evidence>>

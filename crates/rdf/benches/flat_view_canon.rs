@@ -17,8 +17,9 @@
 //!   into an owned `Vec<RdfQuad>`, [`flat_dataset_from_quads`] re-freezes that
 //!   vector into a SECOND `RdfDataset`, and [`canonicalize_with`] runs over the
 //!   frozen result.
-//! * `borrowed` — [`try_canonicalize_flat_view`] over the SAME view directly.
-//!   [`checkpointed_drain`](purrdf_core::checkpointed_drain)'s n-degree search
+//! * `borrowed` — [`try_canonicalize_flat_view`] over the SAME view directly. Its
+//!   own RDFC-1.0 n-degree search runs as usual, and the
+//!   [`checkpointed_drain`](purrdf_core::checkpointed_drain) completeness law
 //!   drains a [`FallibleDatasetView`] more than once internally, but no second
 //!   dataset is ever frozen.
 //!
