@@ -19,6 +19,14 @@
 //! is the two of them in a row, and remains the whole surface a caller
 //! who only wants triples needs.
 //!
+//! A [`Document`] carries the [`Profile`] it was admitted under
+//! ([`Document::profile`]), and [`render`] takes the document alone.
+//! That is not a convenience: the projection's infallibility rests on
+//! every law it applies having been answered for on these bytes, and a
+//! profile passed in separately would be a law nothing checked — an
+//! anchor admitted as a literal because no canon base was declared
+//! would mint an unchecked IRI under a base handed in later.
+//!
 //! The order is the point. The model is the finding; the graph is one
 //! view of it. A consumer that wants to ask which unit covers byte
 //! 4,821 ([`Document::unit_at`]), which units a byte range touches
@@ -258,11 +266,14 @@ pub struct Claim {
 /// source id, the encoding, and every concordance anchor the document
 /// names under a declared canon base — so that everything downstream of
 /// it is total. [`render`] cannot fail because a [`Document`] cannot
-/// exist without having passed here.
+/// exist without having passed here **and** carries the very profile it
+/// passed under: the projection reads its law off the document
+/// ([`Document::profile`]) and is offered no way to be handed another.
 ///
 /// The result is deterministic in the bytes and the profile, and it
 /// holds no copy of the text: it borrows the bytes it was analyzed
-/// over, and every span indexes them.
+/// over, and every span indexes them. The profile it does keep is a
+/// clone, so the model outlives the caller's binding of it.
 ///
 /// # The anchor lift is checked, not trusted
 ///
@@ -386,7 +397,7 @@ pub fn slice_markdown(
     profile: &Profile,
 ) -> Result<Vec<Claim>, MarkdownError> {
     let document = analyze(doc, profile)?;
-    Ok(render(&document, profile))
+    Ok(render(&document))
 }
 
 /// Every anchor the concordance names, checked against the IRI it

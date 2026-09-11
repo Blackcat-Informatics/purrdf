@@ -297,7 +297,7 @@ fn benches(c: &mut Criterion) {
             b.iter(|| black_box(analyze(black_box(&doc), &profile).expect("slices")));
         });
         group.bench_function(BenchmarkId::new("render", units), |b| {
-            b.iter(|| black_box(render(black_box(&model), &profile)));
+            b.iter(|| black_box(render(black_box(&model))));
         });
         group.bench_function(BenchmarkId::new("slice_markdown", units), |b| {
             b.iter(|| black_box(slice_markdown(black_box(&doc), &profile).expect("slices")));

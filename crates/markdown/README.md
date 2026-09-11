@@ -36,6 +36,14 @@ citations, and the concordance rows that lifted nothing — and `render`
 projects it into claims. `slice_markdown` is the two in a row, and stays
 the whole surface a caller who only wants triples needs.
 
+A `Document` carries the `Profile` it was admitted under (`profile()`),
+and `render` takes the document alone. That is what makes the projection
+infallible rather than merely hopeful: every law it applies was answered
+for on these exact bytes, and there is no second argument through which
+another law could arrive. A document admitted with no canon base — whose
+anchors mint nothing, and are therefore checked against nothing — cannot
+be projected under a base that would mint them.
+
 The model answers in types what the graph answers in triples, and it
 answers questions the graph does not carry at all: which unit covers byte
 4,821 (`unit_at`), which units a byte range touches (`covering`), which

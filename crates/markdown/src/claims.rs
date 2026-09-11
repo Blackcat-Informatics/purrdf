@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The claim projection: a [`Document`] to one claim per node, each
-//! claim the node's triples as sorted N-Triples lines.
+//! claim the node's triples as sorted N-Triples lines, under the
+//! profile that document carries.
+//!
+//! The profile is read off the document rather than passed in, which is
+//! what makes this module total: every law it applies is a law
+//! [`analyze`](crate::analyze) already answered for on these very bytes.
 //!
 //! Dialect-independent, and still a *projection*: the model is the
 //! finding and this is one view of it. What the view no longer drops is
@@ -27,23 +32,30 @@ use crate::model::{Document, Section, Unit};
 use crate::profile::{Profile, Vocabulary};
 use crate::{Claim, ClaimKind};
 
-/// Projects an analyzed document into claims under a profile.
+/// Projects an analyzed document into claims under the law it was
+/// admitted under: [`Document::profile`], and no other.
 ///
-/// Infallible, and it is the seam that makes it so: a [`Document`] can
-/// only be obtained from [`analyze`](crate::analyze), which has already
-/// answered for the profile's vocabulary, its constants, the source id,
-/// the encoding, and every concordance anchor the document names under
-/// the profile's canon base. There is nothing left here to refuse.
+/// Infallible, and the document's own shape is what makes it so. A
+/// [`Document`] can only be obtained from [`analyze`](crate::analyze),
+/// which has already answered for the profile's vocabulary, its
+/// constants, the source id, the encoding, and every concordance anchor
+/// the document names under that profile's canon base — and it *keeps*
+/// that profile, so the law answered for and the law applied here are
+/// the same value. There is nothing left to refuse and nothing left to
+/// pass in.
 ///
-/// Render under the profile the document was analyzed with. A different
-/// profile is a different law — a different vocabulary, a different
-/// bound, a different canon base — and it was never asked of this
-/// document.
+/// That the projection takes no profile is the whole of the guarantee.
+/// A second profile would be a second law — a different vocabulary, a
+/// different bound, a different canon base — asked of a document that
+/// was never checked against it, and an anchor admitted as a literal
+/// because no base was declared would mint an unchecked IRI the moment
+/// one was. The argument does not exist, so neither does that.
 ///
 /// Claims come in document order: the document node first, then
 /// sections and units interleaved as they occur.
 #[must_use]
-pub fn render(document: &Document<'_>, profile: &Profile) -> Vec<Claim> {
+pub fn render(document: &Document<'_>) -> Vec<Claim> {
+    let profile = document.profile();
     let contract = profile.contract_id();
     let source = document.source();
     let section_iris: Vec<String> = document
@@ -80,7 +92,7 @@ pub fn render(document: &Document<'_>, profile: &Profile) -> Vec<Claim> {
     let citations = citation_edges(document, &profile.vocabulary, &contract, &unit_iris);
 
     let mut claims = Vec::with_capacity(1 + section_iris.len() + unit_iris.len());
-    claims.push(document_claim(document, profile));
+    claims.push(document_claim(document));
     let mut sections = document.sections().iter().enumerate().peekable();
     let mut units = document.units().iter().enumerate().peekable();
     // Document order: whichever of the next section and the next unit
@@ -168,7 +180,8 @@ fn citation_edges<'d>(
     out
 }
 
-fn document_claim(document: &Document<'_>, profile: &Profile) -> Claim {
+fn document_claim(document: &Document<'_>) -> Claim {
+    let profile = document.profile();
     let v = &profile.vocabulary;
     let id = document.id();
     let mut lines = vec![

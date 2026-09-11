@@ -1780,6 +1780,96 @@ fn the_same_refused_anchors_are_lawful_typed_literals_when_no_canon_base_is_decl
     }
 }
 
+/// The law a projection applies is the law the document was admitted
+/// under, and a document admitted with no canon base mints nothing —
+/// however hostile the anchor, and whatever base some other profile
+/// declares. Nothing is minted under the profile that admitted this
+/// document, so nothing was refused of it, and nothing may appear as an
+/// IRI now.
+#[test]
+fn a_document_admitted_with_no_canon_base_renders_its_anchors_as_literals_and_mints_no_iri() {
+    let traversal = "../../etc/passwd";
+    let text = cited(traversal);
+    // The base-declaring profile refuses this document outright: the
+    // anchor climbs out of the base it would be minted under, which is
+    // the containment law of the anchor lift.
+    assert_eq!(
+        slice_of(&text, GUIDE_ID, &under_canon(CANON_PATH_BASE)),
+        Err(MarkdownError::InvalidAnchor {
+            anchor: traversal.to_owned(),
+            verses: (1, 1),
+        }),
+        "a base is declared, so the anchor is walked, and this one is outside it"
+    );
+
+    // Admitted under the profile that mints nothing, the document
+    // projects exactly the anchors it was admitted with.
+    let document = model(&text, &v1());
+    let claims = render(&document);
+    assert_eq!(
+        verse_one_cites(&claims),
+        vec![format!("\"{traversal}\"^^<{}>", v().dt_anchor)],
+        "no canon base, no minting: the anchor stays the literal it was admitted as"
+    );
+    for base in [CANON_BASE, CANON_PATH_BASE] {
+        let minted = format!("{base}{traversal}");
+        assert!(
+            claims.iter().all(|claim| !claim.turtle.contains(&minted)),
+            "an IRI no profile admitted this document under is written nowhere, \
+             asserted or reified"
+        );
+    }
+    assert_eq!(claims, slice(&text, &v1()), "one law, two doors");
+    parses_whole(&claims);
+}
+
+/// `render` takes the document alone. Its signature carries no second
+/// profile, so the law of a projection is the law the document carries
+/// and there is no argument through which another could be handed in.
+#[test]
+fn render_takes_the_document_alone_and_applies_the_law_the_document_carries() {
+    let text = cited("a-one");
+    let plain = model(&text, &v1());
+    let based = model(&text, &under_canon(CANON_BASE));
+    assert_eq!(
+        plain.profile(),
+        &v1(),
+        "the document keeps what admitted it"
+    );
+    assert_eq!(based.profile(), &under_canon(CANON_BASE));
+    // One call shape, two documents, two laws: the projection follows
+    // the document it is handed, and it is handed nothing else.
+    assert_eq!(
+        verse_one_cites(&render(&plain)),
+        vec![format!("\"a-one\"^^<{}>", v().dt_anchor)]
+    );
+    assert_eq!(
+        verse_one_cites(&render(&based)),
+        vec![format!("<{CANON_BASE}a-one>")]
+    );
+}
+
+/// The neighbouring case the law must keep admitting: a document
+/// analyzed *with* a canon base lifts every lawful anchor into the IRI
+/// it was checked as, and analyze-then-render is slice-whole.
+#[test]
+fn a_document_admitted_under_a_canon_base_lifts_its_lawful_anchors_identically() {
+    for anchor in ["a-one", "\u{4e2d}\u{6587}"] {
+        let text = cited(anchor);
+        let claims = render(&model(&text, &under_canon(CANON_BASE)));
+        assert_eq!(
+            verse_one_cites(&claims),
+            vec![format!("<{CANON_BASE}{anchor}>")]
+        );
+        assert_eq!(
+            claims,
+            slice_of(&text, GUIDE_ID, &under_canon(CANON_BASE)).expect("slices"),
+            "one law, two doors"
+        );
+        parses_whole(&claims);
+    }
+}
+
 #[test]
 fn a_cjk_anchor_lifts_under_a_canon_base_because_the_law_is_iri_lawfulness_not_ascii() {
     // RFC-3987 `ucschar` is inside an IRI, so `中文` needs no escaping
@@ -2426,7 +2516,7 @@ fn analyzing_then_rendering_is_slicing_and_the_model_counts_what_the_claims_stat
     for profile in [&v1(), &small()] {
         let document = model(GUIDE, profile);
         let claims = slice(GUIDE, profile);
-        assert_eq!(render(&document, profile), claims, "one law, two doors");
+        assert_eq!(render(&document), claims, "one law, two doors");
         assert_eq!(document.id(), GUIDE_ID);
         assert_eq!(document.source(), GUIDE);
         assert_eq!(document.byte_length(), GUIDE.len() as u64);

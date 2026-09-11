@@ -584,6 +584,20 @@ implementation MUST NOT refuse anything else, and in particular MUST NOT
 refuse a concordance row that lifts nothing here (§4.1) or one that is
 malformed (§4).
 
+**Every refusal is stated before output, and the projection is
+therefore total.** An implementation that exposes the two phases
+separately — a stand-off model, and a projection of it into the graph —
+MUST bind the profile to the model at the moment the model is admitted,
+and its projection MUST apply that profile and MUST NOT accept another.
+The projection is total only because every law it applies has already
+been answered for on these exact bytes, and a profile supplied at
+projection time is a law nothing answered for: a document admitted with
+no canon base had its anchors walked against nothing, because none are
+minted (§4.2), so projecting it under a base would mint the very IRIs
+the anchor lift exists to check. That is a containment bypass spelled
+entirely in admitted calls, and the projection's signature is what
+closes it.
+
 ### 9.1 Not absolute, and not an IRI
 
 Three of those refusals — the source id, a vocabulary field, and the

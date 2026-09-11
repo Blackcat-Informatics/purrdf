@@ -7,7 +7,13 @@
 //! one of them is answered for at the seam — [`analyze`](crate::analyze)
 //! — before a claim exists. That is what lets the projection
 //! ([`render`](crate::render)) be infallible: a [`Document`](crate::Document)
-//! can only be obtained by passing every check this enum names.
+//! can only be obtained by passing every check this enum names, and it
+//! keeps the profile it passed them under
+//! ([`Document::profile`](crate::Document::profile)), which is the only
+//! law the projection applies. The checks here are therefore checks of
+//! the law that will actually be emitted under, and not of a law some
+//! later call might substitute — `render` takes the document alone and
+//! has no second argument to substitute one with.
 //!
 //! One refusal is stated after a document exists rather than before:
 //! [`MarkdownError::TamperedUnit`], which

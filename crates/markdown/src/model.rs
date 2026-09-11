@@ -733,10 +733,22 @@ pub enum RowDefect {
 /// section, unit, and citation names a byte span of that source, and
 /// the strings it does own are the ones the dialect *read* (a heading's
 /// text, an anchor's name) rather than the ones it could quote.
+///
+/// It also holds **the profile it was admitted under**, which is the
+/// one thing here that is not read off the source. That is what makes
+/// [`render`](crate::render) infallible rather than merely documented
+/// as such: the law the projection applies is the law
+/// [`analyze`](crate::analyze) answered for — the same vocabulary, the
+/// same constants, the same canon base every anchor of this document
+/// was walked against — and there is no seam at which a second law
+/// could be handed in. A document admitted with no canon base, whose
+/// anchors were therefore never asked to mint an IRI, cannot later be
+/// projected under a base that would mint them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Document<'a> {
     id: &'a str,
     source: &'a str,
+    profile: Profile,
     title: Option<String>,
     sections: Vec<Section>,
     units: Vec<Unit<'a>>,
@@ -756,6 +768,27 @@ impl<'a> Document<'a> {
     #[must_use]
     pub const fn source(&self) -> &'a str {
         self.source
+    }
+
+    /// The profile this document was admitted under: the law
+    /// [`analyze`](crate::analyze) answered for and the law
+    /// [`render`](crate::render) applies.
+    ///
+    /// It is offered because a consumer that keeps the model regularly
+    /// needs it — the contract id inside every node identity
+    /// ([`Profile::contract_id`]), the `sliceProfile` literal
+    /// ([`Profile::label`]), the chunking stage a `.purremb` family
+    /// carries ([`Profile::purremb_chunking_stage`]), the vocabulary an
+    /// index reads the emitted triples back through — and reaching for
+    /// the caller's own copy risks reaching for a *different* one.
+    /// There is one law per document, and this is it.
+    ///
+    /// The document owns its profile rather than borrowing one, so
+    /// analysis outlives the caller's binding and no consumer is put to
+    /// lifetime work to keep a model around.
+    #[must_use]
+    pub const fn profile(&self) -> &Profile {
+        &self.profile
     }
 
     /// How many bytes the document is.
@@ -933,6 +966,12 @@ impl<'a> Document<'a> {
     /// containment closure over the sections, the split law over the
     /// units, the scalar count over the whole text, and the match of
     /// every concordance row against the verses this document carries.
+    ///
+    /// The profile is kept, not merely consulted. This constructor is
+    /// `pub(crate)` and reached only from [`analyze`](crate::analyze),
+    /// which has already validated the profile handed here, so the
+    /// profile a document carries is always one the crate has answered
+    /// for.
     pub(crate) fn assemble(
         id: &'a str,
         source: &'a str,
@@ -954,6 +993,7 @@ impl<'a> Document<'a> {
         Self {
             id,
             source,
+            profile: profile.clone(),
             title: reading.title.clone(),
             sections,
             units,
