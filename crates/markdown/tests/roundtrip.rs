@@ -330,6 +330,72 @@ fn a_continues_edge_naming_a_spanless_piece_is_refused_by_the_piece_it_names() {
     assert_eq!(decode_document(&whole, &v(), DOC_ID).as_deref(), Ok(text));
 }
 
+/// The two halves of the decode law compose: a cover the graph half
+/// extracts and the span half refuses arrives as
+/// [`DecodeError::Reconstruct`], carrying the kernel's own finding
+/// with the offsets that locate it. Executed both ways a real graph
+/// gets there: a node removed whole, and — the silent-drop seam — a
+/// literal in a shape the emission law never writes, which the
+/// extraction rules ignore and the coverage gate then names as the
+/// uncovered range it leaves.
+#[test]
+fn a_cover_the_graph_half_extracts_and_the_span_half_refuses_names_the_missing_bytes() {
+    use purrdf_markdown::ReconstructError;
+    let text = "# T\n\nbody\n";
+    let claims = slice(text, &profile());
+    let (turtle, _) = graph_of(&claims);
+    let structure = claims
+        .iter()
+        .find(|c| c.kind == ClaimKind::Structure)
+        .expect("the document has structure between heading and body");
+    let (gap_start, gap_end) = structure.span.expect("a structure span");
+    // (a) The structure node removed whole: extraction succeeds, the
+    // cover has a hole, and the hole arrives named with its offsets.
+    let sheared: String = turtle
+        .lines()
+        .filter(|line| !line.starts_with(&format!("<{}>", structure.subject)))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let dataset = parse_dataset(sheared.as_bytes(), "text/turtle", None).expect("still a graph");
+    assert_eq!(
+        decode_document(&dataset, &v(), DOC_ID),
+        Err(DecodeError::Reconstruct(ReconstructError::UncoveredRange {
+            byte_start: gap_start,
+            byte_end: gap_end,
+        }))
+    );
+    // (b) The unit's text re-shaped into a literal the emission law
+    // never writes — language-tagged — contributes nothing under the
+    // extraction rules, and the drop is loud: the coverage gate names
+    // the very bytes the mis-shaped literal was leaning on.
+    let unit = claims
+        .iter()
+        .find(|c| c.kind == ClaimKind::Unit)
+        .expect("the document has a unit");
+    let (unit_start, unit_end) = unit.span.expect("a unit span");
+    let tagged: String = turtle
+        .lines()
+        .map(|line| {
+            if line.contains(&format!("<{}>", v().text)) {
+                format!("{}@en .\n", line.trim_end_matches(" ."))
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    let dataset = parse_dataset(tagged.as_bytes(), "text/turtle", None).expect("still a graph");
+    assert_eq!(
+        decode_document(&dataset, &v(), DOC_ID),
+        Err(DecodeError::Reconstruct(ReconstructError::UncoveredRange {
+            byte_start: unit_start,
+            byte_end: unit_end,
+        }))
+    );
+    // The neighbour: the unmutated graph decodes whole.
+    let (_, whole) = graph_of(&claims);
+    assert_eq!(decode_document(&whole, &v(), DOC_ID).as_deref(), Ok(text));
+}
+
 /// "Maximal run" in its checkable form, held over the graph: no two
 /// structure runs touch — a maximal run absorbed its neighbour — and
 /// none is empty, the last included.
