@@ -18,6 +18,14 @@
 //! no node at all: the rows that lifted nothing, the rows too malformed
 //! to read, and a unit's surrounding context.
 //!
+//! Every citation node states its class and the unit it is an edge of,
+//! and states them *unconditionally*. A row that named source paths and
+//! no anchors mints a node that reifies nothing, and without those two
+//! lines nothing in the graph would point at it: its sources would be
+//! emitted and unreachable, which is the silent drop in its quietest
+//! spelling. Two lines per citation node on every document is the price,
+//! and it is stated plainly here because it is paid on every document.
+//!
 //! Every term this module writes goes through `purrdf-core`'s canonical
 //! writers ([`emit_term`]), so the crate's escaping is the kernel's
 //! escaping by construction rather than by resemblance.
@@ -290,6 +298,14 @@ fn unit_claim(
         lines.push(triple(me, &v.continues, &iri(&unit_iris[p])));
     }
     for edge in cites {
+        // What the node is, and what it belongs to — stated for every
+        // citation node, whatever its row lifted. A row that named
+        // sources and no anchors reifies nothing, so these two lines are
+        // the only thing between its node and an orphan: a consumer
+        // walking out from the unit would otherwise never reach it, and
+        // the row's sources would be in the graph and out of reach.
+        lines.push(triple(&edge.iri, crate::RDF_TYPE, &iri(&v.citation_class)));
+        lines.push(triple(&edge.iri, &v.in_unit, &iri(me)));
         for anchor in edge.anchors {
             // The one term, written once and stated twice: the asserted
             // edge, and the triple term the row's node reifies. Building

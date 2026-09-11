@@ -40,11 +40,12 @@ pub const PURREMB_PARAMETER_ENCODING: &str = "text/plain;charset=utf-8";
 
 /// The local names [`Vocabulary::under`] appends to a base, in the
 /// order the profile's stage description lists them.
-const LOCAL_NAMES: [&str; 34] = [
+const LOCAL_NAMES: [&str; 36] = [
     "Document",
     "Section",
     "Movement",
     "Unit",
+    "Citation",
     "sourceDigest",
     "mediaType",
     "byteLength",
@@ -67,6 +68,7 @@ const LOCAL_NAMES: [&str; 34] = [
     "continues",
     "cites",
     "canonSource",
+    "unit",
     "digest",
     "media",
     "profile",
@@ -96,6 +98,10 @@ pub struct Vocabulary {
     pub movement_class: String,
     /// The class of a unit (a verse or a paragraph).
     pub unit_class: String,
+    /// The class of a citation node: one concordance row's lift onto one
+    /// unit. Every citation node states it, whatever the row lifted, so
+    /// a node that reifies nothing still says what it is.
+    pub citation_class: String,
     /// The document's source digest, typed [`Self::dt_digest`].
     pub source_digest: String,
     /// The document's media type, typed [`Self::dt_media`].
@@ -145,6 +151,12 @@ pub struct Vocabulary {
     /// edge — and never the unit, so a verse two rows cover keeps each
     /// row's paths beside that row's anchors.
     pub canon_source: String,
+    /// The unit a citation node is an edge of: the back-edge every
+    /// citation node states, whatever its row lifted. It is what makes a
+    /// row that named sources and no anchors reachable from the unit it
+    /// lifted onto — such a node reifies nothing, so without it nothing
+    /// in the graph would point at it at all.
+    pub in_unit: String,
     /// Datatype of a digest literal (`sha256:<hex>`).
     pub dt_digest: String,
     /// Datatype of a media type literal.
@@ -183,6 +195,7 @@ impl Vocabulary {
             section_class: iri("Section"),
             movement_class: iri("Movement"),
             unit_class: iri("Unit"),
+            citation_class: iri("Citation"),
             source_digest: iri("sourceDigest"),
             media_type: iri("mediaType"),
             byte_length: iri("byteLength"),
@@ -205,6 +218,7 @@ impl Vocabulary {
             continues: iri("continues"),
             cites: iri("cites"),
             canon_source: iri("canonSource"),
+            in_unit: iri("unit"),
             dt_digest: iri("digest"),
             dt_media: iri("media"),
             dt_profile: iri("profile"),
@@ -249,12 +263,13 @@ impl Vocabulary {
 
     /// Every field, in the order the stage description lists them, with
     /// the node base last.
-    fn fields(&self) -> [(&'static str, &str); 34] {
+    fn fields(&self) -> [(&'static str, &str); 36] {
         [
             ("Document", &self.document_class),
             ("Section", &self.section_class),
             ("Movement", &self.movement_class),
             ("Unit", &self.unit_class),
+            ("Citation", &self.citation_class),
             ("sourceDigest", &self.source_digest),
             ("mediaType", &self.media_type),
             ("byteLength", &self.byte_length),
@@ -277,6 +292,7 @@ impl Vocabulary {
             ("continues", &self.continues),
             ("cites", &self.cites),
             ("canonSource", &self.canon_source),
+            ("unit", &self.in_unit),
             ("digest", &self.dt_digest),
             ("media", &self.dt_media),
             ("profile", &self.dt_profile),
@@ -486,6 +502,7 @@ impl Profile {
              emit unit type, text, document, section, ordinal, verse, lineage, continues\n\
              emit unit byteStart, byteEnd, scalarStart, scalarEnd, contentDigest\n\
              emit unit cites anchor, once per anchor of every row that lifted onto it\n\
+             emit citation type and citation unit for every citation node, whatever its row lifted\n\
              emit citation rdf:reifies <<( unit cites anchor )>> and citation canonSource path\n\
              emit an offset as xsd:integer and a content digest as lowercase hex xsd:hexBinary\n\
              emit one claim per node as N-Triples lines, sorted bytewise and de-duplicated\n\

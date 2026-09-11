@@ -288,6 +288,14 @@ each **unescaped** and then trimmed (§4.1).
   backticked names. Only backticked text is read: prose beside an anchor
   lifts nothing, which is what lets a row carry a note.
 
+**Zero is one of those numbers.** A row whose anchor cell names nothing —
+because it is empty, or because it carries prose alone — is a readable
+row and MUST NOT be refused: it states a verse range and canon sources
+for a place the canon has no anchor for yet. It lifts onto every verse of
+its range this document carries exactly as any other row does, and the
+node that lift mints is stated in full (§11.1), so what such a row says
+is in the graph and reachable there.
+
 The first row of a table, and any row whose every cell is a run of `-`
 with optional `:` alignment markers, are the table's **frame** — its
 header line and its delimiter line — and are read as nothing. The frame
@@ -536,15 +544,18 @@ these local names to it, and takes the base itself as the node base:
 | in-document | `document` | previous piece | `continues` |
 | parent section | `parent` | citation of an anchor | `cites` |
 | section level | `level` | canon source path | `canonSource` |
-| unit ordinal, section ordinal | `ordinal` | | |
-| section heading text | `heading` | | |
+| unit ordinal, section ordinal | `ordinal` | citation class | `Citation` |
+| section heading text | `heading` | the unit a citation is of | `unit` |
 
 with the datatype IRIs `digest`, `media`, `profile`, `heading`,
 `lineage`, `anchor` and `path`.
 
 `canonSource` is a term **about a citation**, not about a unit: it
 annotates the citation node a row's lift mints (§11), which is what keeps
-a row's paths beside that row's own anchors. Extending the term set
+a row's paths beside that row's own anchors. `Citation` and `unit` are
+about that node too: the class it is stated with, and the back-edge to
+the unit it is an edge of, both of which it carries whatever its row
+lifted (§11.1). Extending the term set
 therefore changes the stage description, and so re-mints every contract
 id and every node under it (§5); that is the mechanism working, and an
 implementation MUST NOT hold a term set constant to preserve an id.
@@ -794,7 +805,15 @@ A concordance row that lifted onto a unit states, in that unit's claim:
    de-duplicated.
 
 2. **The citation node.** One node per (row, unit), its IRI minted by
-   §5's citation formula. For each anchor of the row it states
+   §5's citation formula. It states, for **every** such node and
+   whatever its row lifted,
+
+   ```
+   <citation> rdf:type <citation class> .
+   <citation> <unit> <the unit> .
+   ```
+
+   and then, for each anchor of the row,
 
    ```
    <citation> rdf:reifies <<( <unit> <cites> <anchor> )>> .
@@ -822,6 +841,33 @@ stated twice, once per row, because it is two facts and not one.
 
 An implementation MUST NOT emit `canonSource` on a unit, and MUST NOT
 substitute another serialization for the triple term.
+
+**A citation node is never an orphan.** The class and the back-edge of
+clause 2 are unconditional: an implementation MUST emit both for every
+citation node it mints, and MUST NOT make either one conditional on the
+row having named an anchor, or a source, or anything else. The case this
+answers for is a row that names canon sources and **no** anchors. Such a
+row is lawful (§4), it lifts onto every verse of its range this document
+carries, and so it mints a node — a node that reifies nothing, because
+there is no anchor to reify. Were the class and the back-edge conditional
+on an anchor, that node would carry its row's `canonSource` lines and
+nothing else: no `rdf:type`, and no triple anywhere naming it as the
+object of anything. Traversal from a unit is the only traversal this
+section defines, and it would never reach that node, so the row's source
+paths would be formally present in the graph and practically lost —
+emitted, and unreachable.
+
+With clause 2 stated unconditionally, **every citation node of a document
+is reachable from the unit it is an edge of, in one step**, and
+everything a row states about a unit is therefore reachable from that
+unit: the anchors through the reified triple terms, the paths through
+`canonSource`, and the node itself through `unit`. A conforming
+implementation's emitted graph contains no citation node that no unit
+reaches. The cost is two triples per citation node on **every** document,
+including every document whose rows all name anchors, and it is stated
+here rather than elided because it is paid on all of them: the invariant
+is worth more than the lines, because a conditional invariant is one a
+later row shape breaks in silence.
 
 ### 11.2 Writing terms
 

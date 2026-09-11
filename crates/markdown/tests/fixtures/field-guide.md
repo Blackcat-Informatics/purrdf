@@ -77,3 +77,13 @@ each walk. Where a row names both, the pipe that divides them is written
 |---|---|---|
 | 4–5 | `atlas/inner-lagoon.logic.ttl` \| `atlas/salt-pans.logic.ttl` | `pan-crust` |
 | 6 | `atlas/tide-tables.logic.ttl` | `marker-stone` |
+
+### Heads the chart leaves unnamed
+
+The four heads west of the Long Tooth carry no name on any chart, and the
+atlas keeps a sheet for them with nothing yet on it to point at. The row
+below names that sheet and leaves its anchor column empty.
+
+| Verses | Canon source | Anchors |
+|---|---|---|
+| 2 | `atlas/unnamed-heads.logic.ttl` | |

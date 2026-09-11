@@ -102,7 +102,12 @@
 //! content-addressed **citation node**, which `rdf:reifies` the RDF 1.2
 //! triple term `<<( <unit> <cites> <anchor> )>>` and carries that row's
 //! source paths — so a verse two rows cover keeps each row's paths
-//! beside that row's anchors, which a flat projection could not say. A
+//! beside that row's anchors, which a flat projection could not say.
+//! Every citation node also states its class and a back-edge to the unit
+//! it is an edge of, and states them whatever its row lifted: a row that
+//! names sources and **no** anchors reifies nothing, and those two lines
+//! are what keep its node — and so its sources — reachable from the unit
+//! rather than emitted into a corner of the graph nothing points at. A
 //! concordance may cover a canon wider than the document that carries
 //! it: a row whose verses are all elsewhere lifts nothing here and is
 //! **not** an error — it is reported as data, along with any row too

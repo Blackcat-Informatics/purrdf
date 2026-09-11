@@ -314,8 +314,8 @@ fn every_heading_and_movement_starts_a_section_with_its_level_ordinal_parent_and
     let sections = sections(&claims);
     assert_eq!(
         sections.len(),
-        7,
-        "title, two movements, field notes, tide tables, concordance, and the concordance's own subsection"
+        8,
+        "title, two movements, field notes, tide tables, concordance, and the concordance's two subsections"
     );
     let title = sections[0];
     assert_eq!(
@@ -386,16 +386,24 @@ fn every_heading_and_movement_starts_a_section_with_its_level_ordinal_parent_and
         Some(&*format!("\"Concordance\"^^<{}>", v().dt_heading))
     );
     assert_eq!(concordance.span.map(|s| s.1), Some(GUIDE.len() as u64));
-    // The concordance's own subsection is deeper, so it nests under the
-    // concordance rather than closing it — and the concordance's span
-    // still holds every row of it.
+    // The concordance's own subsections are deeper, so they nest under
+    // the concordance rather than closing it — and the concordance's
+    // span still holds every row of both.
     let beds = sections[6];
-    assert_eq!(integer(beds, &v().level), Some(3));
+    let unnamed = sections[7];
+    for subsection in [beds, unnamed] {
+        assert_eq!(integer(subsection, &v().level), Some(3));
+        assert_eq!(
+            object(subsection, &v().parent).as_deref(),
+            Some(&*format!("<{}>", concordance.subject))
+        );
+    }
     assert_eq!(
-        object(beds, &v().parent).as_deref(),
-        Some(&*format!("<{}>", concordance.subject))
+        beds.span.map(|s| s.1),
+        unnamed.span.map(|s| s.0),
+        "a subsection ends where its sibling at the same level begins"
     );
-    assert_eq!(beds.span.map(|s| s.1), Some(GUIDE.len() as u64));
+    assert_eq!(unnamed.span.map(|s| s.1), Some(GUIDE.len() as u64));
 }
 
 #[test]
@@ -581,6 +589,10 @@ fn an_oversize_unit_splits_at_the_bound_on_a_boundary_and_continues_from_the_sna
             // unit the split then cuts.
             ("Tide tables".to_owned(), 4, 3, 4),
             ("Concordance".to_owned(), 5, 2, 5),
+            // The prose of the beds subsection runs just past the small
+            // bound, so it is two pieces where the heading of the next
+            // subsection closes it.
+            ("Heads the chart leaves unnamed".to_owned(), 7, 3, 2),
         ],
         "a split leaves the sections of the document at the ordinals and levels they already held"
     );
@@ -710,13 +722,30 @@ fn a_concordance_table_lifts_into_citations_with_and_without_a_canon_base() {
             object(verse(n), &v().canon_source).is_none(),
             "a source path annotates the row's citation node, never the unit"
         );
-        let rows = citation_nodes(verse(n));
-        assert_eq!(rows.len(), 1, "one row lifted onto this verse");
-        assert_eq!(
-            citation_objects(verse(n), &rows[0], &v().canon_source),
-            vec![path("atlas/outer-reefs.logic.ttl")]
-        );
     }
+    let one = citation_nodes(verse(1));
+    assert_eq!(one.len(), 1, "one row lifted onto verse 1");
+    assert_eq!(
+        citation_objects(verse(1), &one[0], &v().canon_source),
+        vec![path("atlas/outer-reefs.logic.ttl")]
+    );
+    // Verse 2 is covered by `1–3` and by the row that names a sheet and
+    // no anchor: two rows, so two nodes, and only one of them reifies.
+    let two = citation_nodes(verse(2));
+    assert_eq!(two.len(), 2, "two rows lifted onto verse 2");
+    let mut paths_of_two: Vec<String> = two
+        .iter()
+        .flat_map(|node| citation_objects(verse(2), node, &v().canon_source))
+        .collect();
+    paths_of_two.sort();
+    assert_eq!(
+        paths_of_two,
+        vec![
+            path("atlas/outer-reefs.logic.ttl"),
+            path("atlas/unnamed-heads.logic.ttl")
+        ],
+        "the anchor-less row's source is in the graph beside the anchored row's"
+    );
     // Verse 3 is covered by `1–3` and by `3–5`: it carries both rows.
     assert_eq!(
         objects(verse(3), &v().cites),
@@ -914,6 +943,14 @@ fn a_verse_two_rows_cover_keeps_each_rows_sources_paired_with_that_rows_anchors(
             );
             assert_eq!(cites, v().cites);
             assert!(row.0.insert(anchor), "one reification per (row, anchor)");
+        } else if predicate == purrdf_markdown::RDF_TYPE {
+            assert_eq!(object, format!("<{}>", v().citation_class));
+        } else if predicate == v().in_unit {
+            assert_eq!(
+                object,
+                format!("<{}>", three.subject),
+                "the node names the unit it is an edge of"
+            );
         } else {
             assert_eq!(predicate, v().canon_source);
             assert!(row.1.insert(object), "one path per (row, source)");
@@ -997,8 +1034,8 @@ fn a_citation_node_is_content_addressed_over_the_row_and_the_unit_it_lifted_onto
     }
     assert_eq!(
         seen.len(),
-        11,
-        "3 + 3 + 2 lifts, then 2 + 1 in the subsection"
+        12,
+        "3 + 3 + 2 lifts, then 2 + 1 in the second table and 1 in the third"
     );
 
     // The pair is what is addressed, and both halves of it are load
@@ -1019,6 +1056,343 @@ fn a_citation_node_is_content_addressed_over_the_row_and_the_unit_it_lifted_onto
     };
     assert_ne!(mint(first, 1), mint(first, 2), "one row, two verses");
     assert_ne!(mint(first, 3), mint(second, 3), "two rows, one verse");
+}
+
+// --- a row that names sources and no anchors ------------------------------
+
+/// The sheet the guide's anchor-less row names: an atlas file for the
+/// heads the chart leaves unnamed, with nothing inside it yet to point
+/// at.
+const UNNAMED_SHEET: &str = "atlas/unnamed-heads.logic.ttl";
+
+/// A whole small document whose only concordance row names a canon
+/// source and no anchor at all. It is the shape whose citation node
+/// reifies nothing, and therefore the shape that has nothing but §11.1's
+/// class and back-edge holding it into the graph.
+const ANCHORLESS: &str = "# T\n\n1. One.\n\n## Concordance\n\n\
+                          | Verses | Canon source | Anchors |\n| --- | --- | --- |\n\
+                          | 1 | `atlas/a.ttl` | |\n";
+
+/// The `(predicate, object)` lines one citation node of a claim states,
+/// in the claim's own bytewise order.
+fn citation_lines(claim: &Claim, citation: &str) -> Vec<(String, String)> {
+    citation_triples(claim)
+        .into_iter()
+        .filter(|(subject, _, _)| subject == citation)
+        .map(|(_, predicate, object)| (predicate, object))
+        .collect()
+}
+
+#[test]
+fn a_row_with_sources_and_no_anchors_states_a_typed_citation_node_bound_to_its_unit() {
+    // The model reports the row: its range, its source, and no anchors
+    // at all.
+    let document = model(GUIDE, &v1());
+    let row = document
+        .citations()
+        .iter()
+        .find(|row| row.sources() == [UNNAMED_SHEET])
+        .expect("the guide names a sheet no anchor has been cut in yet");
+    assert_eq!(row.verses(), (2, 2));
+    assert!(row.anchors().is_empty(), "its anchor cell names nothing");
+    assert_eq!(
+        row.lifted().len(),
+        1,
+        "and it lifts onto verse 2 all the same"
+    );
+    assert!(!row.is_unmatched());
+
+    // And so does the graph. The node the lift mints reifies nothing,
+    // and it still states what it is and what it belongs to — which is
+    // what keeps the sheet the row names reachable from the verse
+    // instead of stranded beside it.
+    let claims = slice(GUIDE, &v1());
+    let two = *units(&claims)
+        .iter()
+        .find(|u| integer(u, &v().verse) == Some(2))
+        .expect("verse 2");
+    let span = row.span();
+    let minted = purrdf_markdown::citation_iri(
+        &v(),
+        GUIDE_ID,
+        &v1().contract_id(),
+        span.start,
+        span.end,
+        &GUIDE.as_bytes()[span.start as usize..span.end as usize],
+        &two.subject,
+    );
+    let stated = citation_lines(two, &minted);
+    assert_eq!(
+        stated,
+        vec![
+            (
+                purrdf_markdown::RDF_TYPE.to_owned(),
+                format!("<{}>", v().citation_class)
+            ),
+            (
+                v().canon_source,
+                format!("\"{UNNAMED_SHEET}\"^^<{}>", v().dt_path)
+            ),
+            (v().in_unit, format!("<{}>", two.subject)),
+        ],
+        "the whole node: its class, its row's source, and the unit it is an edge of"
+    );
+    assert!(
+        !stated
+            .iter()
+            .any(|(predicate, _)| predicate == purrdf_markdown::RDF_REIFIES),
+        "there is no anchor to reify, which is the whole of the case"
+    );
+    // The row lifted no anchor, so the verse cites what the other row
+    // covering it named, and nothing more.
+    assert_eq!(
+        objects(two, &v().cites),
+        vec![
+            format!("\"reef-shelf\"^^<{}>", v().dt_anchor),
+            format!("\"tide-line\"^^<{}>", v().dt_anchor)
+        ]
+    );
+    parses_whole(&claims);
+
+    // The same shape alone in a document, where nothing else covers the
+    // verse: three lines, and the node is still named by its unit.
+    let claims = slice_of(ANCHORLESS, GUIDE_ID, &v1()).expect("slices");
+    let one = units(&claims)[0];
+    let nodes = citation_nodes(one);
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(
+        citation_lines(one, &nodes[0]),
+        vec![
+            (
+                purrdf_markdown::RDF_TYPE.to_owned(),
+                format!("<{}>", v().citation_class)
+            ),
+            (
+                v().canon_source,
+                format!("\"atlas/a.ttl\"^^<{}>", v().dt_path)
+            ),
+            (v().in_unit, format!("<{}>", one.subject)),
+        ]
+    );
+    assert!(
+        objects(one, &v().cites).is_empty(),
+        "no anchor, so no asserted edge on the unit"
+    );
+    parses_whole(&claims);
+}
+
+#[test]
+fn a_row_with_both_sources_and_anchors_lifts_exactly_what_it_always_lifted() {
+    // The neighbouring case the law must keep admitting. A row that
+    // names both states every line it always stated — the asserted edge
+    // on the unit, one reification per anchor, one path per source —
+    // with the class and the back-edge added beside them and nothing
+    // taken away.
+    let claims = slice(GUIDE, &v1());
+    let one = *units(&claims)
+        .iter()
+        .find(|u| integer(u, &v().verse) == Some(1))
+        .expect("verse 1");
+    let nodes = citation_nodes(one);
+    assert_eq!(
+        nodes.len(),
+        1,
+        "row 1\u{2013}3 is the only row covering verse 1"
+    );
+    let reifies = |anchor: &str| {
+        format!(
+            "<<( <{}> <{}> \"{anchor}\"^^<{}> )>>",
+            one.subject,
+            v().cites,
+            v().dt_anchor
+        )
+    };
+    assert_eq!(
+        citation_lines(one, &nodes[0]),
+        vec![
+            (
+                purrdf_markdown::RDF_REIFIES.to_owned(),
+                reifies("reef-shelf")
+            ),
+            (
+                purrdf_markdown::RDF_REIFIES.to_owned(),
+                reifies("tide-line")
+            ),
+            (
+                purrdf_markdown::RDF_TYPE.to_owned(),
+                format!("<{}>", v().citation_class)
+            ),
+            (
+                v().canon_source,
+                format!("\"atlas/outer-reefs.logic.ttl\"^^<{}>", v().dt_path)
+            ),
+            (v().in_unit, format!("<{}>", one.subject)),
+        ]
+    );
+    assert_eq!(
+        objects(one, &v().cites),
+        vec![
+            format!("\"reef-shelf\"^^<{}>", v().dt_anchor),
+            format!("\"tide-line\"^^<{}>", v().dt_anchor)
+        ],
+        "the asserted edges are the row's anchors, unchanged"
+    );
+    parses_whole(&claims);
+}
+
+/// Every `(subject, predicate, object)` of every claim of a slice, read
+/// off the emitted lines the way a consumer reads them.
+fn emitted_triples(claims: &[Claim]) -> Vec<(String, String, String)> {
+    claims
+        .iter()
+        .flat_map(|claim| claim.turtle.lines())
+        .map(|line| {
+            let rest = line.strip_suffix(" .").expect("terminator");
+            let (subject, rest) = rest.split_once("> ").expect("a subject, then the rest");
+            let (predicate, object) = rest.split_once(' ').expect("predicate then object");
+            (
+                subject.trim_start_matches('<').to_owned(),
+                predicate
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .to_owned(),
+                object.to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// Every node an object position **names**: a plain IRI object, and the
+/// IRIs inside a triple term, which an N-Triples consumer reads as the
+/// triple they are.
+///
+/// A literal's datatype IRI is not one. It types a value rather than
+/// pointing at a node, and walking through it would wire every unit of
+/// a document to every other through the datatypes they share — which
+/// would make a reachability walk say yes to anything.
+fn object_iris(object: &str) -> Vec<String> {
+    if object.starts_with("<<( ") {
+        let (subject, predicate, inner) = reified(object);
+        let mut out = vec![subject, predicate];
+        out.extend(object_iris(&inner));
+        return out;
+    }
+    if object.starts_with('<') {
+        return vec![
+            object
+                .trim_start_matches('<')
+                .trim_end_matches('>')
+                .to_owned(),
+        ];
+    }
+    Vec::new()
+}
+
+/// How many steps each node of the emitted graph lies from the nearest
+/// **unit** node, walking the triples as edges in either direction.
+///
+/// A breadth-first walk, not a count: it starts at the units, and a node
+/// it never reaches is a node a consumer that starts where the law says
+/// to start — a unit — cannot get to at all.
+fn steps_from_a_unit(claims: &[Claim]) -> BTreeMap<String, usize> {
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (subject, _, object) in emitted_triples(claims) {
+        for named in object_iris(&object) {
+            edges
+                .entry(subject.clone())
+                .or_default()
+                .insert(named.clone());
+            edges.entry(named).or_default().insert(subject.clone());
+        }
+    }
+    let mut depth: BTreeMap<String, usize> = units(claims)
+        .iter()
+        .map(|unit| (unit.subject.clone(), 0))
+        .collect();
+    let mut frontier: Vec<String> = depth.keys().cloned().collect();
+    let mut step = 0;
+    while !frontier.is_empty() {
+        step += 1;
+        let mut next = Vec::new();
+        for node in frontier {
+            for neighbour in edges.get(&node).into_iter().flatten() {
+                if !depth.contains_key(neighbour) {
+                    depth.insert(neighbour.clone(), step);
+                    next.push(neighbour.clone());
+                }
+            }
+        }
+        frontier = next;
+    }
+    depth
+}
+
+/// Every subject of an emitted line that is no claim's own node: the
+/// citation nodes, found without asking what they are called.
+fn nodes_no_claim_is_about(claims: &[Claim]) -> BTreeSet<String> {
+    let own: BTreeSet<&str> = claims.iter().map(|c| c.subject.as_str()).collect();
+    emitted_triples(claims)
+        .into_iter()
+        .map(|(subject, _, _)| subject)
+        .filter(|subject| !own.contains(subject.as_str()))
+        .collect()
+}
+
+/// The property that makes the orphan shape impossible to write again:
+/// **every** citation node of an emitted graph is reachable from a unit,
+/// and reachable in one step, whatever its row lifted.
+///
+/// It is a walk of the emitted triples rather than a count of them
+/// because a count is exactly what missed this: a row naming sources and
+/// no anchors emitted its `canonSource` line, so every line was present
+/// and every total was right, and nothing in the graph named the subject
+/// that line hung on.
+#[test]
+fn every_citation_node_of_a_slice_is_reachable_from_a_unit_by_a_walk_of_the_graph() {
+    for profile in [&v1(), &small(), &under_canon(CANON_BASE)] {
+        let claims = slice(GUIDE, profile);
+        let document = model(GUIDE, profile);
+        let lifts: usize = document
+            .citations()
+            .iter()
+            .map(|row| row.lifted().len())
+            .sum();
+        let depth = steps_from_a_unit(&claims);
+        let citations = nodes_no_claim_is_about(&claims);
+        assert_eq!(
+            citations.len(),
+            lifts,
+            "one node per (row, unit) the model states a lift for"
+        );
+        for citation in &citations {
+            assert_eq!(
+                depth.get(citation).copied(),
+                Some(1),
+                "a unit names it directly: {citation}"
+            );
+        }
+        // And nothing else of the graph is stranded either: every node
+        // the emitted lines name is reached from some unit.
+        for (subject, _, object) in emitted_triples(&claims) {
+            for named in std::iter::once(subject).chain(object_iris(&object)) {
+                assert!(
+                    depth.contains_key(&named),
+                    "the walk reaches every node the graph names: {named}"
+                );
+            }
+        }
+    }
+
+    // The shape the law is written for, alone in a document: the row
+    // that names a source and no anchor is reachable exactly as an
+    // anchored row is.
+    let claims = slice_of(ANCHORLESS, GUIDE_ID, &v1()).expect("slices");
+    let depth = steps_from_a_unit(&claims);
+    let citations = nodes_no_claim_is_about(&claims);
+    assert_eq!(citations.len(), 1);
+    for citation in &citations {
+        assert_eq!(depth.get(citation).copied(), Some(1));
+    }
 }
 
 #[test]
@@ -1364,8 +1738,8 @@ fn the_whole_guide_slices_to_its_recorded_counts() {
     assert_eq!(verses, 8);
     assert_eq!(
         all.len(),
-        8 + 5,
-        "the headnote, two notes, the concordance prose, and its subsection's prose are paragraphs"
+        8 + 6,
+        "the headnote, two notes, the concordance prose, and each subsection's prose are paragraphs"
     );
     let count = |predicate: &str| -> usize {
         all.iter()
@@ -1380,28 +1754,39 @@ fn the_whole_guide_slices_to_its_recorded_counts() {
             .count()
     };
     // Two anchors per row in the first table and one in each row of the
-    // subsection's; every verse but 2 is lifted onto, verse 3 by two
-    // rows, and verses 4 and 5 by two.
+    // second's; every verse is lifted onto, verse 3 by two rows, verses
+    // 4 and 5 by two, and verse 2 by two of which one names no anchor.
     assert_eq!(count(&v().cites), 19);
-    assert_eq!(count(&v().scalar_start), 13);
-    assert_eq!(count(&v().scalar_end), 13);
-    assert_eq!(count(&v().content_digest), 13);
+    assert_eq!(count(&v().scalar_start), 14);
+    assert_eq!(count(&v().scalar_end), 14);
+    assert_eq!(count(&v().content_digest), 14);
     assert_eq!(
         count(&v().canon_source),
         0,
         "no source path hangs on a unit any more"
     );
-    // Eleven (row, unit) lifts: 3 + 3 + 2 from the first table, and
-    // 2 + 1 from the subsection's, which the innermost reading lost
-    // whole. Each states one reification per anchor, and one path per
-    // source of its own row.
+    // Twelve (row, unit) lifts: 3 + 3 + 2 from the first table, 2 + 1
+    // from the second's, which the innermost reading lost whole, and 1
+    // from the third's anchor-less row. Each states one reification per
+    // anchor, one path per source of its own row, and — whatever it
+    // lifted — its class and the unit it is an edge of.
     let rows: BTreeSet<String> = all.iter().flat_map(|u| citation_nodes(u)).collect();
-    assert_eq!(rows.len(), 11);
+    assert_eq!(rows.len(), 12);
     assert_eq!(on_citations(purrdf_markdown::RDF_REIFIES), 19);
     assert_eq!(
         on_citations(&v().canon_source),
-        16,
-        "3\u{d7}1 + 3\u{d7}2 + 2\u{d7}1 + 2\u{d7}2 + 1\u{d7}1: the escaped pipe keeps both paths of the row that names two"
+        17,
+        "3\u{d7}1 + 3\u{d7}2 + 2\u{d7}1 + 2\u{d7}2 + 1\u{d7}1 + 1\u{d7}1: the escaped pipe keeps both paths of the row that names two, and the anchor-less row keeps its one"
+    );
+    assert_eq!(
+        on_citations(purrdf_markdown::RDF_TYPE),
+        12,
+        "one class per citation node, unconditionally"
+    );
+    assert_eq!(
+        on_citations(&v().in_unit),
+        12,
+        "and one back-edge to the unit it is an edge of, likewise"
     );
     assert_eq!(
         integer(&claims[0], &v().byte_length),
@@ -2986,14 +3371,18 @@ fn the_lattice_answers_which_unit_holds_a_byte_which_units_a_range_touches_and_w
     assert_eq!(document.units_under(tables).count(), 4);
     assert_eq!(
         document.units_under(&document.sections()[5]).count(),
-        2,
-        "the concordance prose and its subsection's prose; no table row is a unit"
+        3,
+        "the concordance prose and each subsection's prose; no table row is a unit"
     );
-    assert_eq!(
-        document.units_under(&document.sections()[6]).count(),
-        1,
-        "the subsection's own prose"
-    );
+    for subsection in 6..=7 {
+        assert_eq!(
+            document
+                .units_under(&document.sections()[subsection])
+                .count(),
+            1,
+            "the subsection's own prose"
+        );
+    }
 
     // The section tree, read off the levels.
     assert_eq!(title.children(), &[1, 2, 3, 5]);
@@ -3001,8 +3390,8 @@ fn the_lattice_answers_which_unit_holds_a_byte_which_units_a_range_touches_and_w
     assert_eq!(tables.children(), [0_usize; 0]);
     assert_eq!(
         document.sections()[5].children(),
-        &[6],
-        "the concordance holds its subsection"
+        &[6, 7],
+        "the concordance holds both of its subsections"
     );
     assert_eq!(
         document
@@ -3177,8 +3566,8 @@ fn a_row_states_its_own_anchors_beside_its_own_sources_which_the_flat_projection
     let rows = document.citations();
     assert_eq!(
         rows.len(),
-        5,
-        "three data rows, then the subsection's two; neither table's frame is one"
+        6,
+        "three data rows, the second table's two, and the anchor-less row of the third; no table's frame is one"
     );
     assert_eq!(rows[0].verses(), (1, 3));
     assert_eq!(rows[0].anchors(), ["reef-shelf", "tide-line"]);
@@ -4039,6 +4428,12 @@ fn the_specification_states_the_law_this_suite_executes_and_carries_no_process()
         "the RDF 1.2 **triple term**",
         "only in **object** position",
         "MUST NOT emit `canonSource` on a unit",
+        // The law that keeps a citation node attached to its unit, and
+        // the row shape that has nothing else holding it there.
+        "**A citation node is never an orphan.**",
+        "MUST NOT make either one conditional",
+        "**Zero is one of those numbers.**",
+        "is reachable from the unit it is an edge of, in one step",
         "the DEL (U+007F)",
         "`scalarStart`",
         "`contentDigest`",
@@ -4140,7 +4535,7 @@ fn the_readmes_emission_examples_are_the_claims_the_law_emits() {
     let (plain, plain_subject) = verse_two(README_BOOK);
     assert_eq!(plain, readme_block("text", 0));
 
-    // And with the concordance appended: the same node, three lines more.
+    // And with the concordance appended: the same node, five lines more.
     assert_eq!(
         readme_block("markdown", 1).trim(),
         README_CONCORDANCE.trim()
@@ -4151,7 +4546,7 @@ fn the_readmes_emission_examples_are_the_claims_the_law_emits() {
         cited_subject, plain_subject,
         "the verse's bytes and span did not move, so its IRI did not either"
     );
-    assert_eq!(cited.lines().count(), plain.lines().count() + 3);
+    assert_eq!(cited.lines().count(), plain.lines().count() + 5);
     let added: Vec<&str> = cited
         .lines()
         .filter(|line| !plain.lines().any(|kept| kept == *line))

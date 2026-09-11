@@ -57,8 +57,10 @@
 //! * **A concordance with many rows**, one per eight units, some of them
 //!   naming verses this document does not carry (a paragraph carries no verse
 //!   number, and the last rows reach past the end), one naming every verse a
-//!   `u64` can spell, and one too malformed to read. All three are data the
-//!   model carries out, not refusals.
+//!   `u64` can spell, one naming a canon source and **no** anchor, and one too
+//!   malformed to read. All four are data the model carries out, not refusals,
+//!   and the anchor-less one mints a citation node that reifies nothing — so
+//!   the class and the back-edge every such node states are measured too.
 //! * **A concordance subsection, and an escaped pipe.** The last rows sit
 //!   under a heading of their own inside the concordance, so they are citation
 //!   rows by containment rather than by the innermost heading, and each
@@ -225,6 +227,13 @@ fn concordance(text: &mut String, units: usize) {
         ),
     );
     text.push_str("| overview | `canon/index.md` | `anchor-overview` |\n");
+    // A row that names a canon source and no anchor at all. It is
+    // lawful, it lifts onto verse 2, and the node that lift mints
+    // reifies nothing — the one shape whose citation node hangs on its
+    // class and its back-edge to the unit alone, so the projection's
+    // unconditional lines are on the measured path and not only in the
+    // vectors.
+    text.push_str("| 2 | `canon/unanchored.md` | |\n");
     nested_rows(text);
 }
 
@@ -312,6 +321,15 @@ fn check(units: usize, model: &Document<'_>) {
         model.malformed_rows().len(),
         1,
         "the unreadable row is carried out, not dropped"
+    );
+    assert_eq!(
+        model
+            .citations()
+            .iter()
+            .filter(|c| c.anchors().is_empty() && !c.lifted().is_empty())
+            .count(),
+        1,
+        "one row names a source and no anchor, and lifts all the same"
     );
     assert_eq!(
         model

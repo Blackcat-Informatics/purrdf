@@ -98,7 +98,11 @@ set of N-Triples lines (valid Turtle):
   triple term `<<( <unit> <cites> <anchor> )>>` and carries that row's
   backticked paths as `canonSource` — so a verse two rows cover keeps each
   row's paths beside that row's anchors, which a flat `canonSource` on the
-  unit could not say.
+  unit could not say. Every such node also states its class and a `unit`
+  back-edge to the verse it is an edge of, whatever its row lifted, so a
+  row that names sources and no anchors — which reifies nothing — is
+  reachable from that verse rather than emitted into a corner of the
+  graph nothing points at.
   With a canon IRI base declared, an anchor becomes the IRI `base ++
   anchor` — pure concatenation, and every anchor is checked against the
   IRI it would mint before anything is rendered (see [The anchor lift is
@@ -133,18 +137,18 @@ Sliced under `Vocabulary::under("urn:example:doc:")` with the profile
 shortened to its first eight characters):
 
 ```text
-<urn:example:doc:unit:sha256:6904ec84…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:document> <urn:example:book> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:section> <urn:example:doc:section:sha256:86591774…> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:b1bbee04…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:document> <urn:example:book> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineage> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:section> <urn:example:doc:section:sha256:d52712e3…> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 ```
 
 The byte span and the scalar span differ by two because the document's
@@ -163,20 +167,33 @@ Append a concordance to that same document —
 ```
 
 — and the same node (the verse's bytes and span did not move, so its IRI
-does not either) gains three lines, in the claim's bytewise order: the
-row's own **citation node**, which reifies the edge and carries the row's
-source, and then the asserted edge itself.
+does not either) gains five lines, in the claim's bytewise order: the
+row's own **citation node** — which reifies the edge, says what it is,
+carries the row's source, and names the unit it is an edge of — and then
+the asserted edge itself.
 
 ```text
-<urn:example:doc:citation:sha256:fb919753…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
-<urn:example:doc:citation:sha256:fb919753…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
-<urn:example:doc:unit:sha256:6904ec84…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
+<urn:example:doc:citation:sha256:03141136…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
+<urn:example:doc:citation:sha256:03141136…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Citation> .
+<urn:example:doc:citation:sha256:03141136…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
+<urn:example:doc:citation:sha256:03141136…> <urn:example:doc:unit> <urn:example:doc:unit:sha256:b1bbee04…> .
+<urn:example:doc:unit:sha256:b1bbee04…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
 ```
 
 `<<( … )>>` is the RDF 1.2 **triple term** — the non-asserting form, the
 one an `rdf:reifies` object takes and the only one N-Triples admits. So a
 verse two rows cover keeps each row's sources beside that row's anchors,
 which a flat `canonSource` on the unit could not say.
+
+The class and the `unit` back-edge are on **every** citation node,
+whatever its row lifted, and that costs two triples per node on every
+document. It buys an invariant worth more than the lines: a row may name
+canon sources and **no** anchors — a sheet the canon has nothing to point
+at inside yet — and the node its lift mints then reifies nothing. Without
+those two lines nothing in the graph would name that node at all, so its
+source would be emitted and unreachable from the verse it is about. With
+them, every citation node of a document is one step from the unit it is
+an edge of, and everything a row says is reachable from that unit.
 
 ```rust
 use purrdf_markdown::{Profile, SourceDocument, Vocabulary, slice_markdown};
