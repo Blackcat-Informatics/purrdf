@@ -65,6 +65,7 @@ _GTS_EXPORTS = (
     "gts_from_quads",
     "gts_from_rdf12_bytes",
     "compile_gts_native",
+    "compile_gts_with_report",
     "gts_ingest_report",
     "snapshot_content_id_native",
     "feedback_bundle_native",

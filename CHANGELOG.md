@@ -87,6 +87,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   reports name their declaring shape, and reifier-constraint results use the
   enclosing property's severity. First-party report goldens deliberately correct
   34 source-shape references and one severity; conformance outcomes are unchanged.
+- **core:** `PipelineBundle::accumulate_named_graph` refuses a contribution that
+  carries a quad, a reifier row, an annotation row or a graph declaration outside
+  the named graph it is being folded into. Such a contribution was previously
+  admitted in silence and its stray rows joined the carrier under graphs the caller
+  never named, so the carrier's per-graph digests then answered for content those
+  graphs did not hold. This changes the behaviour of an existing entry point: a
+  call that used to succeed now fails with `PipelineBundleError::GraphContainment`.
+  A refused accumulation leaves the carrier exactly as it was, on the flat carrier
+  and the view carrier alike — the union, the per-graph digest memo and the new
+  handle are installed together, only after every check has passed, so there is no
+  partially folded state for a reader to observe.
+- **gts:** The snapshot builder refuses two distinct blank-node intern keys that
+  encode onto one wire value. The frozen `"{scope}-{label}"` encoding is not
+  injective over `(scope, label)` — `(Some("a"), "b-c")` and `(Some("a-b"), "c")`
+  both spell `a-b-c` — and both keys previously interned onto the SAME term row, so
+  two distinguishable blank nodes were published as one and every row naming either
+  was repointed at the survivor. This changes the behaviour of an existing entry
+  point: `add_dataset_scoped`, and the Python producers that call it, now refuse
+  such a pair instead of merging it. The encoding itself is unchanged, so no input
+  that did not collide moves a byte.
+- **gts:** A failed ingestion can no longer be published. `emit_gts` refuses a
+  builder that an earlier ingestion poisoned, and the ingestion that failed is
+  rolled back: every row it had already interned is taken back out, so the
+  infallible `snapshot_content_id` and `snapshot_payload` accessors describe the
+  last fully accepted state rather than a truncated interior. Previously a caller
+  that carried on past an ingestion error could emit a container holding whatever
+  subset happened to intern before the refusal, which answers a question nobody
+  asked.
 
 ### Features
 
@@ -167,6 +195,67 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   refuse up front exactly what the kernel would refuse at intern time, asking
   the same question of the same law rather than reimplementing it or taking its
   own dependency on `purrdf-iri`.
+- **core:** `PipelineViewBundle<H>`, the view-backed pipeline carrier: the same
+  out-of-band material, typed-handle lane and content answers `PipelineBundle`
+  carries, over a composed `CompositeDatasetView` instead of an owned dataset.
+  Folding a named graph in appends a retained source rather than copying rows, and
+  freezing happens exactly once, at an ownership boundary the caller asks for. The
+  two carriers are interchangeable by content: equal content yields equal
+  per-carrier and per-graph digests and an equal `pipeline_root`, the
+  domain-separated fold over a carrier's whole surface that both carriers now
+  answer. A view carrier holds caller-supplied sources, so its digests run through
+  the fallible canonicalization entry points and report a refusal rather than
+  panicking; the bytes agree with the flat carrier's on success.
+- **core:** `CompositeDatasetView::extend` composes one more source onto an
+  existing view, aliasing only the new contribution against the identity space the
+  retained sources already settled. The result is the view a from-scratch
+  composition of the same source list would have built — the same rows, canonical
+  identity, named graphs and retention — without paying that whole composition
+  again at each step. Each retained source also carries its own `ScopeBinding`, so
+  one composition can standardize some sources' blank scopes apart while retaining
+  others' established identities, decided per source rather than per view.
+- **core:** `RetentionLedger`, with `RetentionGuard`, `RetentionSnapshot`,
+  `RetainedCharge`, `OwnerKey`, `OwnerMutability` and `ViewAccountingReport`,
+  reports what several carriers jointly hold resident: a base is charged once
+  however many carriers share it, and released when its last reader drops. The
+  ledger admits, refuses and resizes nothing — `ViewLimits` remains the sole
+  admission gate and remains per view — and `ViewAccountingReport` pairs the
+  deduplicated ledger figure with one view's own incremental charge so that no byte
+  is counted in both.
+- **core:** Canonicalization has view-generic entry points: `canonicalize_view`,
+  `try_canonicalize_view`, `canonicalize_graph_view`, `try_canonicalize_graph_view`,
+  `graph_digest_view`, `try_graph_digest_view`, `check_admissible_view` and
+  `blank_count_view` all take any `DatasetView` — the frozen dataset, composite
+  views and delta views alike — so a composed surface is canonicalized without
+  being materialized first. The existing dataset-shaped entry points delegate to
+  them and are unchanged in behaviour and in bytes.
+- **core:** `datasets_isomorphic` and `dataset_diff` are view-generic with the two
+  sides INDEPENDENTLY typed, so a composite view, a delta view and a frozen dataset
+  compare against each other in any combination without either side being
+  materialized; identity is still decided from the canonical bytes, which carry no
+  view-local ids. Ordinary `&RdfDataset` call sites are the dataset instantiation
+  and keep compiling unchanged. Compatibility caveat: a generic function has no
+  single function type, so a caller that stored either of these in a function
+  pointer or passed it where a concrete `fn` was expected must now name the
+  instantiation it means.
+- **gts:** `SnapshotBuilder::add_view` and `add_view_scoped` ingest any
+  `FallibleDatasetView` into a snapshot directly — no temporary dataset, no text
+  round trip, no per-row owned term reconstruction — with the same
+  graph-assignment and blank-scope hooks the flat surface exposes. They return an
+  `IngestReport`: rows consumed, terms minted, peak scratch bytes, and the
+  declaration-only graph names the ingestion deliberately did NOT intern, so that
+  omission is stated rather than silently taken. `ingest_totals` reads the
+  cumulative figures off a builder, and every ingestion refusal is the typed
+  `GtsIngestError`. The frozen `add_dataset` / `add_dataset_scoped` surface now
+  delegates to the same ingestion core, unchanged in signature and in bytes.
+- **python:** `compile_gts_with_report` returns a GTS container together with the
+  ingestion receipt for the very build that minted it, from ONE compile — a dict
+  with `snapshot_bytes` and `ingest_report`, where the bytes are identical to
+  `compile_gts_native`'s for the same sources. `gts_ingest_report` remains the
+  accessor for a caller who wants the receipt and no bytes: it takes the compiler's
+  ingest-half arguments and returns `rows_consumed`, `terms_interned`,
+  `declarations_omitted` and `scratch_bytes`. Both are additive; every existing
+  producer entry point keeps its signature and its bytes.
 
 ## [1.1.0] - 2026-09-04
 
