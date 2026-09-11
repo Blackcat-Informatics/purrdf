@@ -118,11 +118,13 @@ The ruling is that ingestion **omits** such a graph and **states** the omission.
 - `SnapshotBuilder::ingest_totals` accumulates the receipt across every `add_*`
   call on one builder, so the flat surfaces — whose frozen signatures cannot
   return a report — remain interrogable.
-- The Python producer surface returns bare snapshot bytes, and bytes cannot carry
-  a field, so the receipt rides a companion accessor there: `gts_ingest_report`
-  takes the same source arguments a producer call takes and returns the totals as
-  a dict, `declarations_omitted` included. The omission is therefore stated on
-  that host too, rather than being a fact only a Rust caller can reach.
+- The Python surface delivers the receipt in the same pass that mints the bytes:
+  `compile_gts_with_report` returns the snapshot bytes and the totals dict —
+  `declarations_omitted` included — from one ingestion. The frozen bare-bytes
+  producers keep their signatures, and `gts_ingest_report` remains as the
+  sources-addressed accessor for a caller that holds no bytes yet. The omission
+  is therefore stated on that host too, rather than being a fact only a Rust
+  caller can reach.
 
 Two alternatives were rejected.
 
