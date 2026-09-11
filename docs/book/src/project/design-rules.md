@@ -100,8 +100,8 @@ on their expected-failure ledgers. See
 - **Nightly-free source, stable MSRV** — there are no `#![feature(...)]`
   attributes anywhere in the workspace and the MSRV floor (currently 1.96, on
   the stable channel) is enforced by a dedicated CI job that builds on exactly
-  that compiler. Contributors and the CI gates run a *dated* nightly pinned in
-  `rust-toolchain.toml` for its sharper clippy and rustdoc lints; release
-  artifacts are built on stable.
+  that compiler. Contributors and the CI gates run a *floating* nightly named in
+  `rust-toolchain.toml` for its sharper clippy and rustdoc lints and its stronger
+  default borrow checker; release artifacts are built on stable.
 - **Brand** — the project is **PurRDF** in prose and `purrdf` in identifiers
   ([`docs/BRAND.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/BRAND.md)).

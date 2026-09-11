@@ -185,7 +185,7 @@ fn cost_and_structural_planner_produce_identical_results() {
                             remote.as_ref(),
                         ) {
                             Ok(_) => mismatches.push((
-                                case.iri.clone(),
+                                case.iri,
                                 format!("cost planner errored while structural succeeded: {msg}"),
                             )),
                             Err(_) => skipped += 1,
@@ -203,7 +203,7 @@ fn cost_and_structural_planner_produce_identical_results() {
                 Ok(r) => r,
                 Err(msg) => {
                     mismatches.push((
-                        case.iri.clone(),
+                        case.iri,
                         format!("structural planner errored while cost succeeded: {msg}"),
                     ));
                     continue;
@@ -215,7 +215,7 @@ fn cost_and_structural_planner_produce_identical_results() {
                 &structural_result,
                 ordered,
             ) {
-                mismatches.push((case.iri.clone(), format!("result mismatch: {msg}")));
+                mismatches.push((case.iri, format!("result mismatch: {msg}")));
             }
         }
     }

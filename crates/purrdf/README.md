@@ -193,6 +193,8 @@ let schema = purrdf::shex::parse_shexc(
 | `geo` | [`purrdf-geo`](https://crates.io/crates/purrdf-geo) (GeoSPARQL 1.1: exact WKT/GeoJSON geometry, the `geof:` family, query rewrite) |
 | `text` | [`purrdf-text`](https://crates.io/crates/purrdf-text) (inverted index, exact fixed-point BM25 ranking) |
 | `validate` | [`purrdf-validate`](https://crates.io/crates/purrdf-validate) (SARIF 2.1.0 boundary) |
+| `markdown` | [`purrdf-markdown`](https://crates.io/crates/purrdf-markdown) (structural Markdown slicer under the shipped specification) |
+| `datalog` | [`purrdf-datalog`](https://crates.io/crates/purrdf-datalog) (the semi-naive engine `entail`'s public types carry) |
 | `slice` | [`purrdf-slice`](https://crates.io/crates/purrdf-slice) (slice catalog) |
 | `viz` | RDF 1.2 semantic projection, deterministic layout, and SVG export |
 | `iri` / `xsd` / `events` | the zero-dependency foundation leaves |

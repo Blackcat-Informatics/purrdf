@@ -26,6 +26,17 @@ does not have to remember. It scans every first-party ``.rs`` source outside
 ``ALLOWLIST`` is an explicit, reasoned exemption table — never a silent skip.
 An entry that stops matching is reported as STALE so the table cannot rot, the
 same discipline the conformance harnesses apply to their xfail ledgers.
+
+Delegation is recognised by the names of the shared layer, not by the name of
+the crate that houses it. ``purrdf-core`` re-exports ``BaseIri``, ``Iri``
+and ``parse_iri`` (which is ``purrdf_iri::parse``) precisely so a producer that
+mints IRIs for the kernel can refuse up front exactly what the kernel would
+refuse at intern time. Crates whose only runtime dependency is the kernel —
+``purrdf-markdown`` among them — therefore reach the one law without ever
+writing the token ``purrdf_iri``, and that is a legitimate path, not an evasion:
+the arithmetic still runs once, in ``crates/iri/src``. Refusing those bodies
+would be the mirror bug of the one this gate exists to catch — a gate that
+rejects the correct fix teaches authors to hand-roll instead.
 """
 
 from __future__ import annotations
@@ -88,8 +99,29 @@ FUNCTION_RULES: dict[str, tuple[re.Pattern[str], str]] = {
     ),
 }
 
-# What "reaches the shared layer" looks like inside a function body.
-DELEGATES = re.compile(r"\bpurrdf_iri\b|\bBaseScope\b")
+# What "reaches the shared layer" looks like inside a function body: the crate
+# named directly, or one of the types only that crate defines. `BaseScope`,
+# `BaseIri` and `Iri::resolve` have exactly one definition in this workspace
+# (`crates/iri/src/base.rs`), so naming one is proof the body asks the shared
+# law rather than answering for itself — whether it reached the type through
+# `purrdf_iri` or through the kernel's re-export. Widening this pattern cannot
+# launder a hand-rolled resolver: the shapes that ARE the arithmetic —
+# `remove_dot_segments` by name, the §3.1 scheme character class, the `".."`
+# popping loop — are unconditional rules that no delegation clears.
+DELEGATES = re.compile(
+    r"\bpurrdf_iri\b|\bBaseScope\b|\bBaseIri\b|\bIri::resolve\b",
+)
+
+# `parse_iri` is the kernel's name for `purrdf_iri::parse`, but it is also a
+# perfectly ordinary name for a local tokenizer step — `shex` and `cdt` each
+# have their own `parse_iri` method that lexes an IRIREF out of a byte stream.
+# So it counts as delegation only when the file imported the shared one, and
+# only as a free call: `self.parse_iri()` is the local lexer, never the law.
+SHARED_PARSE_IMPORT = re.compile(
+    r"\buse\s+(?:purrdf_iri|purrdf_core)::[^;]*"
+    r"(?:\bparse_iri\b|\bparse\s+as\s+parse_iri\b)",
+)
+SHARED_PARSE_CALL = re.compile(r"(?<![.\w])parse_iri\s*\(")
 
 # The `".."` segment-popping loop, which is `remove_dot_segments` without the
 # name. Matched as a shape, not a line: a `..` segment arm or comparison whose
@@ -184,6 +216,13 @@ def function_body(source: str, start: int) -> str:
     return source[opening:]
 
 
+def delegates(body: str, shared_parse_in_scope: bool) -> bool:
+    """Whether *body* asks the shared layer instead of answering for itself."""
+    if DELEGATES.search(body):
+        return True
+    return shared_parse_in_scope and bool(SHARED_PARSE_CALL.search(body))
+
+
 def dot_segment_hits(lines: list[str], source: str) -> list[int]:
     """Line numbers (1-based) where the segment-popping loop appears."""
     if not PATH_SPLIT.search(source):
@@ -208,6 +247,7 @@ def scan() -> tuple[list[str], set[tuple[str, str]]]:
         source = strip_comment_lines(path.read_text(encoding="utf-8"))
         rel = path.relative_to(REPO_ROOT).as_posix()
         lines = source.splitlines()
+        shared_parse_in_scope = bool(SHARED_PARSE_IMPORT.search(source))
 
         found: list[tuple[str, int, str]] = []
         for rule, (pattern, meaning) in SINGLE_LINE_RULES.items():
@@ -216,7 +256,8 @@ def scan() -> tuple[list[str], set[tuple[str, str]]]:
                     found.append((rule, index + 1, meaning))
         for rule, (pattern, meaning) in FUNCTION_RULES.items():
             for match in pattern.finditer(source):
-                if DELEGATES.search(function_body(source, match.start())):
+                body = function_body(source, match.start())
+                if delegates(body, shared_parse_in_scope):
                     continue
                 found.append((rule, source.count("\n", 0, match.start()) + 1, meaning))
         for line_no in dot_segment_hits(lines, source):
@@ -247,8 +288,10 @@ def main() -> int:
         print(
             f"\nDelete the local arithmetic and route through `{HOME_IMPORT}` "
             "(the §5.1 base-precedence chain) or `purrdf_iri::Iri::resolve` "
-            "(the §5.2 reference arithmetic). If an occurrence genuinely is "
-            "not a resolver, add it to ALLOWLIST in "
+            "(the §5.2 reference arithmetic). A crate that depends only on the "
+            "kernel reaches the same law through its re-export — "
+            "`purrdf_core::{BaseIri, Iri, parse_iri}` — and that counts. If an "
+            "occurrence genuinely is not a resolver, add it to ALLOWLIST in "
             "scripts/check-iri-resolver-singleton.py with the reason.",
             file=sys.stderr,
         )

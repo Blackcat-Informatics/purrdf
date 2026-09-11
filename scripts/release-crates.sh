@@ -50,6 +50,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-sparql-eval
   purrdf-text
   purrdf-rdf
+  purrdf-markdown
   purrdf-slice
   purrdf-shapes
   purrdf-geo
@@ -81,4 +82,5 @@ PURRDF_RELEASE_CRATES=(
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_UNBOOTSTRAPPED_CRATES=(
+  purrdf-markdown
 )

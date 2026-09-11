@@ -90,6 +90,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-sparql-eval`
 - `purrdf-text`
 - `purrdf-rdf`
+- `purrdf-markdown`
 - `purrdf-slice`
 - `purrdf-shapes`
 - `purrdf-geo`
@@ -110,7 +111,27 @@ new crates. Publish the crate manually, first`. Creating a record is therefore
 the **only** thing an API token does in this release process, and the next
 section is exact about how little that is.
 
-### Bootstrap: complete (ledger empty)
+### Outstanding bootstrap: `purrdf-markdown`
+
+One crate is in the release set above with no crates.io record yet:
+`purrdf-markdown` is the **fifteenth** in publish order, after
+`purrdf-rdf` (its one dev-dependency) and before `purrdf-slice`. `PURRDF_UNBOOTSTRAPPED_CRATES` in
+[`scripts/release-crates.sh`](../scripts/release-crates.sh) names it; the
+ledger is held to the registry in both directions by the preflight, so the
+entry leaves the moment the record exists. The release lane publishes the
+fourteen crates ahead of it, skips it visibly, carries on through every later
+crate that does not depend on it, and stops cleanly at the first one that
+does, for the one-time token step described below.
+
+That first dependent is the flagship umbrella, `purrdf`, twenty-first in
+publish order: `crates/purrdf/Cargo.toml` takes `purrdf-markdown` as a normal
+dependency, and it is the only crate in the workspace that does — so
+`purrdf-slice` through `purrdf-validate` publish normally and the stop lands
+on the umbrella. The stop is therefore **not** at the end of the set. It is
+two crates short of it, and `purrdf-wasm` — twenty-second, and a dependent of
+`purrdf` — is never attempted behind it. Both the umbrella and the wasm
+binding stay unpublished until the token step has created the
+`purrdf-markdown` record and the run is resumed.
 
 The three crates that once had no crates.io record — `purrdf-cdt`,
 `purrdf-text`, `purrdf-geo` — were bootstrapped during the 0.13.0 release:
@@ -118,11 +139,7 @@ The three crates that once had no crates.io record — `purrdf-cdt`,
 `purrdf-text`/`purrdf-geo` as `0.0.0-bootstrap` placeholder records (their
 first real version is 1.0.0, published through Trusted Publishing like every
 sibling). All three carry a Trusted Publisher entry and the
-*Require trusted publishing* lock. `PURRDF_UNBOOTSTRAPPED_CRATES` in
-[`scripts/release-crates.sh`](../scripts/release-crates.sh) is therefore
-**empty**; it is a ledger the preflight holds to the registry in both
-directions, and it gains an entry again only when a future release adds a
-brand-new crate.
+*Require trusted publishing* lock.
 
 #### The `0.0.0-bootstrap` placeholders — yanked
 
@@ -203,7 +220,7 @@ git push origin rust-v0.1.5
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
 not locked to Trusted Publishing (see [Outstanding
-bootstrap](#outstanding-bootstrap-purrdf-cdt-purrdf-text-purrdf-geo)); that
+bootstrap](#outstanding-bootstrap-purrdf-markdown)); that
 check runs before packaging. It then publishes crates in dependency order,
 skips any crate/version that already exists on crates.io (which keeps re-runs
 safe after a partial publish), skips ledgered crates, and stops cleanly at the

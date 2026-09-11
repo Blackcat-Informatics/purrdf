@@ -22,6 +22,7 @@
 //! | [`geo`] | [`purrdf_geo`] (GeoSPARQL 1.1 geometry, `geof:` functions, query rewrite) |
 //! | [`text`] | [`purrdf_text`] (deterministic full-text search over RDF 1.2 literals) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
+//! | [`markdown`] | [`purrdf_markdown`] (structural Markdown slicer under the shipped specification) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
 //! | [`viz`] | [`purrdf_rdf::viz`] |
 //! | [`xsd`] | [`purrdf_xsd`] |
@@ -253,6 +254,13 @@ pub mod validate {
     pub use purrdf_validate::*;
 }
 
+/// The structural Markdown slicer ([`purrdf_markdown`]): a document becomes an
+/// RDF 1.2 graph of its own headings, verses, and paragraphs, over verbatim
+/// byte spans of the source, under the specification that ships with the crate.
+pub mod markdown {
+    pub use purrdf_markdown::*;
+}
+
 /// The common umbrella surface, for `use purrdf::prelude::*;`.
 pub mod prelude {
     pub use purrdf_rdf::prelude::*;
@@ -275,13 +283,38 @@ mod tests {
             .expect("shex facade parses");
     }
 
-    /// The `text` module is reachable from the facade and answers, so the
+    /// The `markdown` module is reachable from the facade and answers, so the
     /// module map's completeness claim ("anything a consumer legitimately
-    /// imports is reachable from `purrdf` alone") covers it.
+    /// imports is reachable from `purrdf` alone") covers the slicer.
+    ///
+    /// A document is sliced through the facade alone, and the model it returns
+    /// is asked a containment question — which unit holds a given byte — rather
+    /// than merely named, because a re-export that compiles while exposing
+    /// nothing usable is the failure this catches.
+    #[test]
+    fn facade_exposes_markdown_slicer() {
+        let vocabulary =
+            markdown::Vocabulary::standard().expect("the designated namespace validates");
+        let profile = markdown::Profile::new("facade-fixture", 1, vocabulary);
+        let doc = markdown::SourceDocument {
+            id: "https://example.org/guide",
+            bytes: b"# Title\n\n1. A verse the facade can reach.\n",
+        };
+        let claims = markdown::slice_markdown(&doc, &profile).expect("the facade slices");
+        assert!(!claims.is_empty(), "a sliced document states claims");
+        let model = markdown::analyze(&doc, &profile).expect("the facade analyzes");
+        let unit = model
+            .unit_at(u64::from(b"# Title\n\n".len() as u32))
+            .expect("the verse holds its first byte");
+        assert_eq!(unit.verse(), Some(1));
+    }
+
+    /// The `text` module is reachable from the facade and answers, so the
+    /// module map's completeness claim covers full-text search too.
     ///
     /// A re-export that compiles but exposes nothing usable is the failure this
-    /// catches, so the test builds a real index and retrieves from it rather
-    /// than merely naming a type.
+    /// catches, so the test builds a real index over a real dataset and ranks a
+    /// retrieval out of it rather than merely naming a type.
     #[test]
     fn facade_exposes_full_text_search() {
         let mut builder = RdfDatasetBuilder::new();

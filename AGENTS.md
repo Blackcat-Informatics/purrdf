@@ -52,6 +52,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-geo` (`crates/geo`) | GeoSPARQL 1.1: exact float-free WKT/GeoJSON geometry and the `geof:` family over both extension seams |
 | `purrdf-text` (`crates/text`) | Deterministic full-text search over literals: exact fixed-point BM25, ranked rows through the property-function seam |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
+| `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
@@ -68,7 +69,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
   `purrdf-iri`, `purrdf-xsd`, and `purrdf-events` must keep **zero runtime
   dependencies**.
-* **Everything is wasm-able.** Every release crate (all 21 published crates,
+* **Everything is wasm-able.** Every release crate (all 22 published crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -116,14 +117,18 @@ make metadata   # regenerate + verify generated artifacts
 make bench      # criterion benchmarks (report-only; not a gate)
 ```
 
-Toolchain: `rust-toolchain.toml` pins a **dated nightly** for development and
-for every CI gate. That is a lint decision, not a licence: nightly clippy and
-rustdoc carry lints stable lacks, so a finding is a real finding rather than a
-channel artifact. The date is mandatory — a floating `nightly` would re-resolve
-to a different compiler daily, which no workspace with byte-deterministic
-serializers, a byte-deterministic GTS writer, frozen corpora, and
-content-addressed goldens can accept. Bump it deliberately, in its own commit,
-with the gates re-run.
+Toolchain: `rust-toolchain.toml` names a **floating nightly** for development and
+for every CI gate. That is an analysis decision, not a licence: nightly clippy
+and rustdoc carry lints stable lacks, and its default borrow checker is the
+stronger one, so a finding is a real finding rather than a channel artifact.
+Floating is the point — a dated channel freezes that surface as of one day, and
+every check sharpened afterwards stops being a finding and becomes invisible debt
+while the gates still report green. Byte-determinism is no argument for freezing:
+it is a property of the code — sorted, deduplicated, explicitly ordered output,
+identities content-addressed over this workspace's own declared law — and the
+goldens and vectors prove it on whatever compiler runs them. A golden that moved
+under a compiler bump would be a serializer defect to fix, not a reason to stop
+bumping.
 
 **The source stays nightly-free.** There are zero `#![feature(...)]` attributes
 in `crates/` and `bindings/`, and adding one is forbidden. What consumers need

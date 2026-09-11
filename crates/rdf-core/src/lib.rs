@@ -175,13 +175,22 @@ pub use provenance::{
     DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner, ProvenanceError, UnitId,
     UnitInterner, check_provenance,
 };
-/// The typed IRI failure this kernel's mutation surfaces return.
+/// The IRI law this kernel interns under, and the typed failure its mutation
+/// surfaces return.
 ///
-/// Re-exported because [`DatasetMut::insert`] is fallible with it: a public trait
-/// whose error type callers cannot name without taking their own dependency on
-/// `purrdf-iri` would be unusable. `IriError::diagnostic_code` is the workspace's
-/// single owner of the stable IRI diagnostic strings.
-pub use purrdf_iri::IriError;
+/// [`IriError`] is re-exported because [`DatasetMut::insert`] is fallible with it: a
+/// public trait whose error type callers cannot name without taking their own
+/// dependency on `purrdf-iri` would be unusable. `IriError::diagnostic_code` is the
+/// workspace's single owner of the stable IRI diagnostic strings.
+///
+/// [`parse_iri`], [`Iri`] and [`BaseIri`] ride along for the mirror reason: a
+/// producer that mints IRIs for this kernel has to be able to refuse, up front,
+/// exactly what the kernel would refuse at intern time, and it can only do that by
+/// asking the same question of the same law. Reaching that law through the kernel
+/// keeps it one law rather than one per producer — `parse_iri` is
+/// [`purrdf_iri::parse`] under a name that stays unambiguous in this crate's flat
+/// root.
+pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
 pub use small::{IdVec, SmallVec, smallvec};
 pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,

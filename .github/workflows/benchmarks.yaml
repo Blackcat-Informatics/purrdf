@@ -47,7 +47,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       # SHA-pinned action rather than `curl https://astral.sh/uv/install.sh | sh`,
       # which is what the job ran on the per-push path: an unversioned installer

@@ -58,6 +58,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-brand-casing.py
 	python3 scripts/check-spec-attribution.py --self-test
+	python3 scripts/check-doc-claims.py
 	python3 scripts/check-i18n-glossary.py
 	python3 scripts/check-versions.py
 	python3 scripts/check-publish-order.py
@@ -171,7 +172,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 21 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 22 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -276,7 +277,7 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
-			-p purrdf-rdf -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
+			-p purrdf-rdf -p purrdf-markdown -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
 			-p purrdf-geo -p purrdf-text \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
@@ -307,7 +308,7 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 	else \
 		echo "ABSENT — rust-toolchain.toml is NOT enforced on this machine."; \
 		echo '                                     `cargo`/`rustc` resolve to whatever is on PATH, so the'; \
-		echo "                                     dated-nightly pin is honoured only in CI, and \`make wasm\`"; \
+		echo "                                     nightly channel is honoured only in CI, and \`make wasm\`"; \
 		echo "                                     cannot detect or install the wasm32 target (it SKIPs)."; \
 	fi
 	@printf 'active rustc:                        '

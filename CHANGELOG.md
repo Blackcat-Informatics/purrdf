@@ -123,6 +123,36 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and explicit copy counters. Shared-governor and fallible-view variants withhold
   publication after errors, cancellation or exhausted budgets. UPDATE WHERE
   evaluation reads mutation snapshots without compacting the whole base.
+- **markdown:** New crate `purrdf-markdown`, a structural Markdown-to-RDF 1.2
+  slicer. A document becomes a graph of its own headings, verses and paragraphs
+  over verbatim byte spans of the source, and the resulting nodes carry
+  content-addressed identities that two independent runs of the same law agree
+  on. The law is published, not implied: `SPEC.md` ships inside the crate and
+  states the dialect grammar, the split law, the concordance law, the three
+  identities and their verification law, ordering, conformance and the emission
+  law, and the crate's vectors are read against that document. The vocabulary is
+  caller-supplied: `Vocabulary::under(base)` derives the whole term set from one
+  base, the term set and not merely the base is inside the contract identity,
+  and no term is written in two roles. `Vocabulary::standard()` offers one
+  designated namespace, `https://w3id.org/purrdf/markdown#`, by name rather than
+  on a caller's behalf, for deployments that want a shared one; it is a stable
+  identifier that does not dereference today, a redirect for it is being
+  registered, and nothing rests on that because RDF asks no IRI to resolve.
+  Beside the IRIs derived from the caller's own vocabulary base — its terms and
+  the node identities minted under it — an emitted graph carries no IRI but
+  these: five of the standard's — `rdf:type`, `rdf:reifies`, `xsd:integer`,
+  `xsd:hexBinary`, and the `xsd:string` that a unit's one plain literal has in
+  the abstract syntax and that no serializer writes — the caller's own source
+  id, and, where a concordance lifts under a declared canon base, the anchors
+  it mints.
+- **purrdf:** The umbrella exposes the slicer as `purrdf::markdown`, so a
+  consumer slices a document without naming `purrdf-markdown` as a separate
+  dependency.
+- **core:** The IRI re-export widens from `IriError` alone to `BaseIri`, `Iri`
+  and `parse_iri` beside it. A producer that mints IRIs for the kernel can now
+  refuse up front exactly what the kernel would refuse at intern time, asking
+  the same question of the same law rather than reimplementing it or taking its
+  own dependency on `purrdf-iri`.
 
 ## [1.1.0] - 2026-09-04
 

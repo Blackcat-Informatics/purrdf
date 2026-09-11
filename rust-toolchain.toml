@@ -1,24 +1,39 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-# The DEVELOPMENT/CI toolchain, deliberately a *dated* nightly. This is not a
+# The DEVELOPMENT/CI toolchain, deliberately a *floating* nightly. This is not a
 # licence to use nightly-only language features: the workspace contains zero
 # `#![feature(...)]` attributes and must keep it that way. What nightly buys is
-# a single, sharper lint surface — nightly clippy and rustdoc carry lints stable
-# does not — so a finding here is a real finding and never a channel artifact.
+# a sharper analysis surface — nightly clippy and rustdoc carry lints stable does
+# not, and the current default borrow checker is markedly stronger than an older
+# one — so a finding here is a real finding and never a channel artifact.
 #
-# The date is mandatory. A floating `nightly` would re-resolve to a different
-# compiler every day, which is incompatible with a workspace whose serializers,
-# GTS writer, frozen corpora, and content-addressed goldens are all
-# byte-deterministic contracts. Bump the date deliberately, in its own commit,
-# with the gates re-run.
+# Floating, not dated, because the whole point is to catch more. A date freezes
+# the lint and borrow-checker surface as of that day: every lint sharpened after
+# it stops being a finding and becomes invisible debt, accumulating silently
+# while the gates report green. A pin that suppresses findings is not rigor, it
+# is preservation.
+#
+# Byte-determinism is not an argument for freezing the compiler. It is a
+# property of the *code*: output is sorted, deduplicated and explicitly ordered,
+# and identities are content-addressed over this workspace's own declared law,
+# never over anything the compiler chooses. Sorted output is sorted regardless
+# of who compiled it, and determinism that survives only under one compiler
+# build is not determinism. The goldens and vectors are what prove this, and
+# they run on every compiler CI sees. A golden that moved under a compiler bump
+# would be a defect in the serializer to fix, not a reason to stop bumping.
 #
 # What consumers actually need is `rust-version` in the root `Cargo.toml` (the
 # MSRV), which is a *lower* floor on the stable channel and is enforced by the
 # dedicated `msrv` CI job. That job — not this file — is the guard proving no
 # nightly-only feature has crept in; it pins its own toolchain via
 # `RUSTUP_TOOLCHAIN` precisely so this file cannot override it.
+#
+# Every CI job that runs a workspace gate must name the same channel this file
+# names. A job left on another channel while developers run this one makes a
+# failure impossible to attribute; `scripts/check-toolchain-pin.py` enforces the
+# agreement.
 [toolchain]
-channel = "nightly-2026-09-02"
+channel = "nightly"
 components = ["clippy", "rustfmt"]
 targets = ["wasm32-unknown-unknown"]

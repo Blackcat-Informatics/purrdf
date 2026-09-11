@@ -24,7 +24,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Format
         run: cargo fmt --all --check
@@ -44,6 +44,9 @@ jobs:
       - name: Check the toolchain-pin gate can still fail
         run: python3 scripts/check-toolchain-pin.py --self-test
 
+      - name: Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+        run: python3 scripts/check-iri-resolver-singleton.py
+
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 
@@ -62,11 +65,17 @@ jobs:
       - name: Check no first-party extension is attributed to a SPARQL specification
         run: python3 scripts/check-spec-attribution.py --self-test
 
+      - name: Check hand-written numbers still agree with the artifacts they restate
+        run: python3 scripts/check-doc-claims.py
+
       - name: Check the zh-Hans translation against its glossary
         run: python3 scripts/check-i18n-glossary.py
 
       - name: Check cross-registry release coherence
         run: python3 scripts/check-versions.py
+
+      - name: Check the crates.io release order is publishable and verifiable (offline)
+        run: python3 scripts/check-publish-order.py
 
       - name: Check the crates.io record preflight refuses every wrong registry state (offline)
         run: bash scripts/check-crates-io-records.sh --self-test
@@ -86,6 +95,9 @@ jobs:
       - name: Check every scraped conformance row is RED without its scoreboard line
         run: python3 scripts/conformance-matrix.py --self-test
 
+      - name: Check the kernel ring-fence (no oxigraph/PyO3 in purrdf-core, zero-dep leaves)
+        run: make rdf-core-hygiene
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -102,7 +114,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Run workspace tests (includes doc tests)
         run: cargo test --workspace --locked
@@ -119,7 +131,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |
@@ -147,7 +159,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install cargo-c (the pinned header-contract generator)
         # Pinned to the exact cargo-c whose bundled cbindgen the committed
@@ -170,9 +182,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 21 publishable crates with rustdoc lints promoted
+      # Document exactly the 22 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -232,7 +244,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
           targets: wasm32-unknown-unknown
 
       - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
@@ -253,6 +265,7 @@ jobs:
             -p purrdf-sparql-results \
             -p purrdf-sparql-eval \
             -p purrdf-rdf \
+            -p purrdf-markdown \
             -p purrdf-slice \
             -p purrdf-shapes \
             -p purrdf-shex \
@@ -316,7 +329,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |
@@ -354,7 +367,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly-2026-09-02" # keep in sync with rust-toolchain.toml
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Install uv
         run: |

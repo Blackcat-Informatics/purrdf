@@ -371,10 +371,15 @@ impl<'a> Lexer<'a> {
             let end = body_start + rel;
             let body = &self.src[body_start..end];
             if !body.as_bytes().contains(&b'\\') {
-                // No escapes: an IRIREF iff no disallowed char appears in the body.
-                if body.chars().all(|c| {
-                    !c.is_whitespace() && !matches!(c, '<' | '"' | '{' | '}' | '|' | '^' | '`')
-                }) {
+                // No escapes: an IRIREF iff no forbidden char appears in the body. Every
+                // character the production forbids raw is ASCII, so a BYTE scan is exact —
+                // a UTF-8 lead/continuation byte is always `>= 0x80` and can never alias one.
+                if !body
+                    .as_bytes()
+                    .iter()
+                    .copied()
+                    .any(is_iriref_forbidden_byte)
+                {
                     self.pos = end + 1; // consume through '>'
                     return Ok(Token::Iri(Cow::Borrowed(body)));
                 }
@@ -407,8 +412,8 @@ impl<'a> Lexer<'a> {
                 }
                 break; // a non-UCHAR backslash is not valid in an IRIREF
             }
-            if c.is_whitespace() || matches!(c, '<' | '"' | '{' | '}' | '|' | '^' | '`') {
-                break; // disallowed in IRIREF → not an IRIREF
+            if is_iriref_forbidden(c) {
+                break; // forbidden raw in IRIREF → not an IRIREF
             }
             content.push(c);
             i += c.len_utf8();
@@ -856,6 +861,40 @@ fn is_pn_local_esc(c: char) -> bool {
     )
 }
 
+/// Whether `b` may NOT appear raw in an `IRIREF` body.
+///
+/// The Turtle/TriG/SPARQL `IRIREF` production is
+/// ``'<' ([^#x00-#x20<>"{}|^`\] | UCHAR)* '>'``. Exactly two things are excluded: the
+/// range `#x00-#x20` (every C0 control plus the SPACE) and the nine reserved delimiters
+/// ``< > " { } | ^ ` \``. **Nothing else.** Every excluded code point is ASCII, so a byte
+/// test is exact over UTF-8: a multi-byte sequence's lead and continuation bytes are all
+/// `>= 0x80` and can never alias one of them.
+///
+/// In particular this is NOT `char::is_whitespace`. U+00A0 NO-BREAK SPACE, U+2000-U+200A,
+/// U+2028/U+2029, U+3000 and the rest of the non-ASCII Unicode whitespace are **lawful**
+/// inside an `IRIREF`, and they are `ucschar` under RFC-3987 §2.2 so they also survive IRI
+/// validation. [`crate::lexer::tokenize`] is the front end for the workspace's
+/// N-Triples/N-Quads/Turtle/TriG readers, whose writers emit those code points VERBATIM
+/// (only `#x00-#x20`, the delimiters and the control blocks ride as `\uXXXX`); terminating
+/// the body at them would make serialize-then-parse stop being a round trip.
+#[inline]
+const fn is_iriref_forbidden_byte(b: u8) -> bool {
+    b <= 0x20
+        || matches!(
+            b,
+            b'<' | b'>' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`' | b'\\'
+        )
+}
+
+/// The `char` form of [`is_iriref_forbidden_byte`], for the escape-decoding scan that
+/// already holds a decoded `char`. Non-ASCII is never forbidden raw, so a `char` that
+/// does not fit in a `u8` is trivially permitted; the Latin-1 supplement that *does* fit
+/// (U+0080-U+00FF, which includes U+00A0) is above `0x20` and is permitted as well.
+#[inline]
+fn is_iriref_forbidden(c: char) -> bool {
+    u8::try_from(c).is_ok_and(is_iriref_forbidden_byte)
+}
+
 fn is_pn_chars_base(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_' || (c as u32) > 0x7F
 }
@@ -891,6 +930,98 @@ mod tests {
         assert_eq!(toks("?a < ?b"), vec![var("a"), Token::Lt, var("b")]);
         assert_eq!(toks("?a <= ?b"), vec![var("a"), Token::LtEq, var("b")]);
         assert_eq!(toks("?a >= ?b"), vec![var("a"), Token::GtEq, var("b")]);
+    }
+
+    // ── IRIREF body membership: `[^#x00-#x20<>"{}|^`\]`, and nothing else ──────────
+    //
+    // The defect these pin: the body scan terminated at any `char::is_whitespace`, which
+    // is a strictly LARGER set than the production excludes. U+00A0 and the other
+    // non-ASCII Unicode whitespace are lawful `IRIREF` characters — and RFC-3987
+    // `ucschar`, so they are lawful IRIs too — but the lexer refused them. The
+    // workspace's own writers emit those code points raw, so an IRI carrying a U+00A0
+    // NO-BREAK SPACE serialized fine and then failed to re-parse: the `<` fell back to the
+    // comparison operator and the parser reported an unexpected `Lt`. (The code points are
+    // written here as escapes on purpose — spelling them literally would put an invisible
+    // character in a comment about invisible characters.)
+    //
+    // This is an over-refusal fix, so the neighbouring refusals are executed alongside
+    // it: ASCII SPACE and the C0 controls are `#x00-#x20` and must STILL terminate the
+    // body, as must each of the nine reserved delimiters.
+
+    /// Non-ASCII Unicode whitespace is lawful raw inside an `IRIREF` (fast path — the
+    /// body carries no escape, so it is borrowed verbatim).
+    #[test]
+    fn non_ascii_whitespace_is_lawful_raw_inside_an_iriref() {
+        for c in ['\u{a0}', '\u{2000}', '\u{2028}', '\u{3000}'] {
+            let src = format!("<urn:ex:a{c}b>");
+            assert_eq!(
+                toks(&src),
+                vec![Token::Iri(format!("urn:ex:a{c}b").into())],
+                "U+{:04X} is above #x20 and is not a reserved delimiter",
+                c as u32
+            );
+        }
+    }
+
+    /// The same holds on the escape-decoding slow path: one `UCHAR` in the body must not
+    /// change the verdict on a raw `ucschar` elsewhere in it.
+    #[test]
+    fn non_ascii_whitespace_survives_the_uchar_decoding_path() {
+        assert_eq!(
+            toks("<urn:ex:a\u{a0}b\\u221E>"),
+            vec![Token::Iri("urn:ex:a\u{a0}b\u{221e}".into())]
+        );
+    }
+
+    /// Whether the LEADING `<` of `src` failed to open an `IRIREF` — the stream either
+    /// refused outright or backed that `<` out to the comparison operator. Both are "this
+    /// is not an `IRIREF`"; which one occurs depends on how the tail happens to lex. Only
+    /// the first token is inspected, because backing out re-lexes the tail, where a later
+    /// `<` may legitimately open an IRIREF of its own (`<urn:ex:a<b>` ends in `<b>`).
+    fn no_leading_iriref(src: &str) -> bool {
+        match tokenize(src) {
+            Ok(spanned) => !matches!(spanned.first().map(|s| &s.token), Some(Token::Iri(_))),
+            Err(_) => true,
+        }
+    }
+
+    /// The valid neighbour's mirror: `#x00-#x20` — ASCII SPACE and the C0 controls —
+    /// still ends the body, so an unescaped space inside `<...>` is still not an IRIREF.
+    #[test]
+    fn ascii_space_and_c0_controls_still_end_an_iriref_body() {
+        // The headline case lexes cleanly all the way through, so it is pinned exactly:
+        // `<` backs out to the comparison operator.
+        assert_eq!(
+            toks("<urn:ex:a b>").first().cloned(),
+            Some(Token::Lt),
+            "an unescaped SPACE inside <...> is not an IRIREF"
+        );
+        for c in [' ', '\t', '\n', '\r', '\u{0}', '\u{1f}'] {
+            let src = format!("<urn:ex:a{c}b>");
+            assert!(
+                no_leading_iriref(&src),
+                "U+{:04X} is inside #x00-#x20 and must not be admitted raw",
+                c as u32
+            );
+        }
+    }
+
+    /// Each reserved delimiter still ends the body, on both the verbatim and the
+    /// escape-decoding path.
+    #[test]
+    fn reserved_delimiters_still_end_an_iriref_body() {
+        for c in ['<', '"', '{', '}', '|', '^', '`', '\\'] {
+            let src = format!("<urn:ex:a{c}b>");
+            assert!(
+                no_leading_iriref(&src),
+                "{c:?} is a reserved IRIREF delimiter"
+            );
+            let escaped = format!("<urn:ex:\\u0041a{c}b>");
+            assert!(
+                no_leading_iriref(&escaped),
+                "{c:?} is a reserved IRIREF delimiter on the UCHAR path too"
+            );
+        }
     }
 
     #[test]

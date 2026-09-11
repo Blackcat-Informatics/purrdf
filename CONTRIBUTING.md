@@ -54,7 +54,7 @@ while `make conformance` goes red. Run both before claiming a change is done.
 Several gates degrade to `SKIP` when a tool is missing locally and hard-fail in
 CI instead. `make doctor` prints which ones are inert on your machine and why.
 The distinction that matters most: if `rustup` is not on `PATH`, then
-`rust-toolchain.toml`'s dated-nightly pin is **not enforced locally at all** —
+`rust-toolchain.toml`'s nightly channel is **not enforced locally at all** —
 `cargo` resolves to whatever is on `PATH` — and `make wasm` can neither detect
 nor install the wasm32 target, so it skips silently. That is a different
 situation from "the target is not installed", and `make doctor` says which one
@@ -115,9 +115,12 @@ is what you build against as a consumer; it is unaffected by the toolchain
 contributors run. Raising the MSRV is a notable, changelog-recorded change that,
 pre-1.0, rides a minor bump.
 
-**Development toolchain.** `rust-toolchain.toml` pins a **dated nightly** for local
-work and CI gates, because nightly clippy and rustdoc carry lints stable lacks —
-so a gate finding is a real finding, not a channel artifact. The *source* stays
+**Development toolchain.** `rust-toolchain.toml` names a **floating nightly** for
+local work and CI gates, because nightly clippy and rustdoc carry lints stable
+lacks and its default borrow checker is the stronger one — so a gate finding is a
+real finding, not a channel artifact. It floats rather than naming a date because
+a date would freeze that surface and turn every later sharpening into debt nobody
+sees. The *source* stays
 nightly-free: there are no `#![feature(...)]` attributes anywhere in the workspace
 and adding one is rejected, which is exactly what the MSRV job proves on every PR.
 Release artifacts are built on stable. If you have `rustup` installed, the pin

@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-markdown"
+description = "PurRDF structural Markdown-to-RDF 1.2 slicer: a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans, under a caller-supplied vocabulary and a declared, content-addressed profile."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-markdown"
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["markdown", "rdf", "linked-data", "knowledge-graph", "chunking"]
+categories = ["text-processing", "parser-implementations"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only, wasm32-clean: the slicer is a pure function of bytes and a
+# profile, opens no file, and reads no clock.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_markdown"
+
+[dependencies]
+# The content digest of every span and identity preimage, and the
+# chunking-contract domain the profile's identity is derived under.
+purrdf-core.workspace = true
+
+[dev-dependencies]
+# The report-only profiling harness in `benches/`. Never a gate: nothing there
+# asserts a timing or a speedup, and behaviour is fixed by the test suite and
+# the byte-for-byte goldens instead. `make bench` lane only.
+criterion = { workspace = true }
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions.workspace = true
+# The Turtle parser: every emitted claim must parse and canonicalize.
+purrdf-rdf.workspace = true
+
+[[bench]]
+# Slicer profiling harness over a generated document: `analyze` alone, the
+# `render` projection over an already-analyzed model, and `slice_markdown`
+# end to end, each at two document sizes. Report-only — no timing or speedup
+# assertion. `make bench` lane only — excluded from `make check`.
+name = "slicer"
+harness = false
