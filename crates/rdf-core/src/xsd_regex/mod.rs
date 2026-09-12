@@ -35,15 +35,16 @@
 //! syntax at compile time: character-class subtraction, the `\i \I \c \C`
 //! XML-name multi-character escapes, the `\s \S \w \W` classes (XSD defines
 //! these more narrowly than Rust's Unicode defaults), `\p{IsX}`/`\P{IsX}`
-//! Unicode block escapes (resolved against the generated [`blocks`] table,
-//! never left to `regex-syntax`'s own — silently different — resolution),
+//! Unicode block escapes (resolved against the generated block table in
+//! this module's private `blocks` submodule, never left to `regex-syntax`'s
+//! own — silently different — resolution),
 //! the `.` wildcard's `#xA`/`#xD` exclusion, and the `i s m x q` flags.
 //!
 //! One documented, tested, permanent MINOR divergence remains: under the
 //! `m` flag, XPath's `^` excludes the position immediately after a newline
 //! that is the last character in the string, and Rust's `multi_line` has no
-//! way to express that one exception (see
-//! [`translate::tests::known_divergence_m_flag_trailing_newline`] — this
+//! way to express that one exception (pinned by the
+//! `known_divergence_m_flag_trailing_newline` test in `translate` — this
 //! plan intentionally pins the ACTUAL divergent behavior with a test rather
 //! than relying on it silently, so a future `regex` upgrade that happens to
 //! change this is caught, not silently trusted).

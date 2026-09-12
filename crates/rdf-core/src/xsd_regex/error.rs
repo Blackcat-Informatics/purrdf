@@ -31,7 +31,7 @@ pub enum XsdRegexError {
     /// the exact backreference spelling that was rejected (e.g. `"\\12"`).
     Backreference(String),
     /// A `\p{Is…}`/`\P{Is…}` block-escape name that does not appear in the
-    /// generated [`super::blocks::UNICODE_BLOCKS`] table (i.e. is not a
+    /// generated `super::blocks::UNICODE_BLOCKS` table (i.e. is not a
     /// recognized Unicode block name, per XML Schema Part 2 §G.4.2.3's
     /// "normalized block name" transform). Carries the exact name that was
     /// looked up (e.g. `"IsNotARealBlock"`, including the `Is` prefix).
