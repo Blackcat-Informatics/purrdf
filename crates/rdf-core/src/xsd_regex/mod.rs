@@ -59,6 +59,7 @@ mod xflag;
 
 pub use error::XsdRegexError;
 
+use std::fmt;
 use std::ops::Deref;
 
 /// Maximum size, in bytes, of a pattern source string accepted by [`compile`].
@@ -168,6 +169,95 @@ impl Deref for CompiledPattern {
     }
 }
 
+/// One way a construct in a `sh:pattern`/`REGEX`/`PATTERN` source **changes
+/// meaning** when its text is copied verbatim into bare ECMA-262 — the dialect
+/// JSON Schema's `pattern` keyword, JavaScript, and most other `pattern`
+/// consumers are specified in.
+///
+/// This is data, not prose: a consumer can branch on the variant (and read the
+/// carried property name or flag letters) instead of string-matching the
+/// English sentence. [`Display`](std::fmt::Display) renders the exact wording
+/// the loss ledger has always carried, so existing notes do not move.
+///
+/// [`ecma_262_divergences`] returns these in first-appearance order, with
+/// duplicates collapsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ecma262Divergence {
+    /// `\i`/`\I`/`\c`/`\C`: XSD's XML-name multi-character escapes. ECMA-262
+    /// has no such escape, and in its non-Unicode mode reads each as an
+    /// *identity* escape (a literal letter).
+    NameEscape,
+    /// `\s`/`\S`: XSD's four code points versus ECMA-262's wider set (which
+    /// adds vertical tab, form feed, NBSP, BOM and the Unicode space
+    /// separators).
+    SpaceEscape,
+    /// `\w`/`\W`: XSD's `[^\p{P}\p{Z}\p{C}]` versus ECMA-262's
+    /// `[A-Za-z0-9_]`.
+    WordEscape,
+    /// `\d`/`\D`: XSD's `\p{Nd}` (every Unicode decimal digit) versus
+    /// ECMA-262's `[0-9]`. Reported even though [`compile`] passes the escape
+    /// through verbatim.
+    DigitEscape,
+    /// A `\p{…}`/`\P{…}` Appendix G general category (e.g. `Nd`), which
+    /// ECMA-262 only accepts as a Unicode property escape under the `u` flag;
+    /// JSON Schema's bare `pattern` string has no flag surface to set it, so
+    /// it reads `\p` as an IdentityEscape instead. `name` is the property name
+    /// without the `\p{…}` wrapper.
+    UnicodeCategory {
+        /// The Appendix G general-category name (`L`, `Nd`, `Zs`, …).
+        name: String,
+    },
+    /// A `\p{IsX}`/`\P{IsX}` Unicode **block** escape. ECMA-262 has no
+    /// block-name concept at all (its `\p{…}` names are properties and
+    /// scripts), so the construct is not merely flag-dependent. `name` is the
+    /// block name without the `\p{…}` wrapper.
+    UnicodeBlock {
+        /// The `Is`-prefixed block name (`IsBasicLatin`, …).
+        name: String,
+    },
+    /// The `.` wildcard: XSD excludes `#xA`/`#xD`; ECMA-262 additionally
+    /// excludes U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR.
+    DotWildcard,
+    /// XSD character-class subtraction `[…-[…]]`. ECMA-262 has no class
+    /// subtraction, so it re-parses the text as a different class.
+    ClassSubtraction,
+    /// One non-empty XSD `sh:flags` string. ECMA-262 regular-expression
+    /// *literals* carry flags, but JSON Schema's `pattern` is a bare string
+    /// with no flag surface at all, so every flag is lost — and `x`/`q` have
+    /// no ECMA-262 spelling even where flags can be expressed.
+    Flags {
+        /// The exact flag letters from `sh:flags`.
+        flags: String,
+    },
+}
+
+impl fmt::Display for Ecma262Divergence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NameEscape => f.write_str("\\i/\\I/\\c/\\C"),
+            Self::SpaceEscape => f.write_str("\\s/\\S"),
+            Self::WordEscape => f.write_str("\\w/\\W"),
+            Self::DigitEscape => f.write_str("\\d/\\D"),
+            // The block wording is exactly what this reporter has always
+            // emitted; `name` is carried for consumers that branch on the
+            // variant, not to widen the ledger text.
+            Self::UnicodeBlock { .. } => f.write_str("\\p{Is…} block escape"),
+            Self::UnicodeCategory { name } => write!(
+                f,
+                "\\p{{{name}}} category escape (ECMA-262 needs the `u` flag, which JSON \
+                 Schema's flagless `pattern` cannot set)"
+            ),
+            Self::DotWildcard => f.write_str(". wildcard"),
+            Self::ClassSubtraction => f.write_str("[…-[…]] class subtraction"),
+            Self::Flags { flags } => write!(
+                f,
+                "the {flags:?} flag(s) (JSON Schema's `pattern` is a bare ECMA-262 \
+                 source string with no flag surface)"
+            ),
+        }
+    }
+}
+
 /// Compile an XSD/XPath `regExp` pattern (`sh:pattern`/`REGEX`/`PATTERN`
 /// source text) plus its XPath F&O 3.1 §5.6.2 flag string into a
 /// [`CompiledPattern`].
@@ -262,9 +352,10 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
     })
 }
 
-/// Everything in `(pattern, flags)` that does **not** mean the same thing in
-/// ECMA-262 — the dialect JSON Schema's `pattern` keyword, JavaScript, and
-/// most other `pattern` consumers are specified in.
+/// Everything in `(pattern, flags)` whose **meaning differs between the
+/// XSD/XPath `regExp` dialect and bare ECMA-262** — the dialect JSON Schema's
+/// `pattern` keyword, JavaScript, and most other `pattern` consumers are
+/// specified in.
 ///
 /// An emitter that copies a `sh:pattern`'s source text into an ECMA-262 slot
 /// is performing a dialect change, and this is how it finds out whether that
@@ -272,13 +363,28 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
 /// pattern and its flags mean the same thing in both dialects (the common
 /// case — `^[A-Z]+$` and friends).
 ///
-/// Two kinds of divergence are reported:
+/// The question is **meaning**, which is deliberately a different question
+/// from whether [`compile`] had to rewrite the source. Neither direction
+/// implies the other:
 ///
-/// * **Constructs**, in first-appearance order, duplicates collapsed, and
-///   class-aware — a `.` or a `-[` inside a character class is a literal, not
-///   a metacharacter, and is not reported. The list mirrors the translation
-///   table exactly: a construct appears here if and only if
-///   [`compile`] actually rewrote it.
+/// * `\d`/`\D` is reported even though [`compile`] passes it through
+///   verbatim, because XSD's `\d` is `\p{Nd}` (every Unicode decimal digit)
+///   while ECMA-262's is `[0-9]`.
+/// * `\p{L}` is reported even though [`compile`] passes that general-category
+///   escape through verbatim, because ECMA-262 reads `\p` as an IdentityEscape
+///   (the literal characters `p{L}`) unless the `u` flag is set — and JSON
+///   Schema's bare `pattern` string has no flag surface with which to set it.
+///
+/// Divergences are returned as [`Ecma262Divergence`] values so a consumer can
+/// branch on the kind instead of string-matching English prose; the
+/// [`Display`](std::fmt::Display) rendering of each one is the exact note text
+/// this reporter has always produced. They are in first-appearance order with
+/// duplicates collapsed.
+///
+/// Two kinds are reported:
+///
+/// * **Constructs**, class-aware — a `.` or a `-[` inside a character class is
+///   a literal, not a metacharacter, and is not reported.
 /// * **Flags**, because ECMA-262 regular-expression *literals* have flags but
 ///   JSON Schema's `pattern` is a bare string with **no flag surface at all**,
 ///   so every flag is lost — and `x` and `q` have no ECMA-262 spelling even
@@ -288,16 +394,12 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
 /// well-formed `sh:pattern`; the question is only whether its meaning
 /// survives the copy.
 #[must_use]
-pub fn ecma_262_divergences(pattern: &str, flags: &str) -> Vec<String> {
-    let mut out: Vec<String> = ecma::ecma_262_divergences(pattern)
-        .into_iter()
-        .map(ToOwned::to_owned)
-        .collect();
+pub fn ecma_262_divergences(pattern: &str, flags: &str) -> Vec<Ecma262Divergence> {
+    let mut out = ecma::ecma_262_divergences(pattern);
     if !flags.is_empty() {
-        out.push(format!(
-            "the {flags:?} flag(s) (JSON Schema's `pattern` is a bare ECMA-262 \
-             source string with no flag surface)"
-        ));
+        out.push(Ecma262Divergence::Flags {
+            flags: flags.to_owned(),
+        });
     }
     out
 }
@@ -614,6 +716,131 @@ mod tests {
                 count: MAX_FOLDED_CLASS_ESCAPES + 1,
                 limit: MAX_FOLDED_CLASS_ESCAPES,
             }
+        );
+    }
+
+    /// Every [`Ecma262Divergence`] variant must be reachable from some
+    /// scanner-produced construct, and every such construct must map to the
+    /// variant the corrected invariant says it does: a construct is reported
+    /// when its **meaning** differs between the dialects, not when (or only
+    /// when) translation rewrote it.
+    ///
+    /// This is the structural replacement for the deleted "the list mirrors
+    /// the translator" claim. [`variant_name`] is an exhaustive
+    /// match over [`Ecma262Divergence`], so adding a variant is a compile
+    /// error until it appears in the table below with a scanner construct it
+    /// comes from; [`super::ecma`]'s `Token` match is likewise exhaustive, so
+    /// a new scanner token cannot be silently classified as no-divergence.
+    #[test]
+    fn every_divergence_variant_is_pinned_to_a_scanner_construct() {
+        // (pattern, flags, expected) — one row per variant, plus the two
+        // shapes the old "if and only if translation rewrote it" rule got
+        // wrong.
+        let table: &[(&str, &str, Vec<Ecma262Divergence>)] = &[
+            (r"\i", "", vec![Ecma262Divergence::NameEscape]),
+            (r"\s", "", vec![Ecma262Divergence::SpaceEscape]),
+            (r"\w", "", vec![Ecma262Divergence::WordEscape]),
+            (r"\d", "", vec![Ecma262Divergence::DigitEscape]),
+            (
+                r"\p{Nd}",
+                "",
+                vec![Ecma262Divergence::UnicodeCategory {
+                    name: "Nd".to_owned(),
+                }],
+            ),
+            (
+                r"\p{IsBasicLatin}",
+                "",
+                vec![Ecma262Divergence::UnicodeBlock {
+                    name: "IsBasicLatin".to_owned(),
+                }],
+            ),
+            (".", "", vec![Ecma262Divergence::DotWildcard]),
+            (
+                r"[a-z-[aeiou]]",
+                "",
+                vec![Ecma262Divergence::ClassSubtraction],
+            ),
+            (
+                "a",
+                "i",
+                vec![Ecma262Divergence::Flags {
+                    flags: "i".to_owned(),
+                }],
+            ),
+        ];
+
+        for (pattern, flags, expected) in table {
+            assert_eq!(
+                &ecma_262_divergences(pattern, flags),
+                expected,
+                "the reporter must map {pattern:?} / {flags:?} to {expected:?}"
+            );
+            for divergence in expected {
+                let _ = variant_name(divergence);
+            }
+        }
+
+        // `\d` IS reported though translation leaves the text verbatim (the
+        // meaning still differs), and `\p{L}`/`\P{Nd}` are reported for the
+        // same reason — the unflagged `u`-flag dependency is the category's,
+        // not the reporter's, to state.
+        assert_eq!(
+            ecma_262_divergences(r"\d", ""),
+            vec![Ecma262Divergence::DigitEscape]
+        );
+        assert_eq!(
+            ecma_262_divergences(r"\p{L}", ""),
+            vec![Ecma262Divergence::UnicodeCategory {
+                name: "L".to_owned(),
+            }]
+        );
+        assert_eq!(
+            ecma_262_divergences(r"\P{Nd}", ""),
+            vec![Ecma262Divergence::UnicodeCategory {
+                name: "Nd".to_owned(),
+            }]
+        );
+
+        // Class-awareness still holds: a `.` inside a class is a literal, and
+        // there is no `-[` subtraction in `.`-only text.
+        assert_eq!(
+            ecma_262_divergences(r"[.]", ""),
+            Vec::<Ecma262Divergence>::new()
+        );
+    }
+
+    /// The exhaustive variant-name match exists only so adding an
+    /// [`Ecma262Divergence`] variant is a compile error until
+    /// [`every_divergence_variant_is_pinned_to_a_scanner_construct`] (and
+    /// therefore the scanner construct it comes from) is updated.
+    fn variant_name(divergence: &Ecma262Divergence) -> &'static str {
+        match divergence {
+            Ecma262Divergence::NameEscape => "NameEscape",
+            Ecma262Divergence::SpaceEscape => "SpaceEscape",
+            Ecma262Divergence::WordEscape => "WordEscape",
+            Ecma262Divergence::DigitEscape => "DigitEscape",
+            Ecma262Divergence::UnicodeCategory { .. } => "UnicodeCategory",
+            Ecma262Divergence::UnicodeBlock { .. } => "UnicodeBlock",
+            Ecma262Divergence::DotWildcard => "DotWildcard",
+            Ecma262Divergence::ClassSubtraction => "ClassSubtraction",
+            Ecma262Divergence::Flags { .. } => "Flags",
+        }
+    }
+
+    /// [`Ecma262Divergence`]'s [`Display`](std::fmt::Display) is the loss
+    /// ledger's note text. The existing cases must not move, so the two
+    /// wordings the committed golden ledger carries are pinned verbatim.
+    #[test]
+    fn divergence_display_is_the_original_ledger_wording() {
+        assert_eq!(Ecma262Divergence::NameEscape.to_string(), "\\i/\\I/\\c/\\C");
+        assert_eq!(
+            Ecma262Divergence::Flags {
+                flags: "i".to_owned(),
+            }
+            .to_string(),
+            "the \"i\" flag(s) (JSON Schema's `pattern` is a bare ECMA-262 source string with \
+             no flag surface)"
         );
     }
 }

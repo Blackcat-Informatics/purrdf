@@ -2590,6 +2590,13 @@
     "note": "A sh:pattern is written in the XSD/XPath regular-expression dialect (SHACL 4.5.3 defines sh:pattern by SPARQL REGEX, which SPARQL 17.4.3.14 defines by XPath fn:matches), while JSON Schema's pattern keyword is ECMA-262. The source text is emitted verbatim because it is the only faithful record of what the shape author wrote, but it uses at least one construct or flag whose meaning does not survive the dialect change, so a consumer validating against the emitted schema may accept or reject values the SHACL validator does not. The note names the specific constructs found."
   },
   {
+    "code": "sh:pattern rejected",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:pattern is written in the XSD/XPath regular-expression dialect, and xsd_regex::compile rejects it as malformed in that dialect (an unknown Unicode block or category name, a back-reference, a bare word-boundary escape, an inline-flag or lookaround construct, or other syntax Appendix G does not define). The SHACL validator therefore treats every value node of that property as a violation, while the emitter still copies the source text verbatim into JSON Schema's ECMA-262 pattern slot — where it may compile and accept values. The emitted pattern is known-unusable and the disagreement is recorded rather than left for a consumer to discover."
+  },
+  {
     "code": "sh:sparql",
     "from": "shacl",
     "to": "json-schema",

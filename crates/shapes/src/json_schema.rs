@@ -2631,12 +2631,37 @@ fn compile_property(
                 // down is exactly the silent divergence the loss ledger exists
                 // to make visible.
                 value.insert("pattern".to_owned(), json!(regex));
-                let divergences = purrdf_core::xsd_regex::ecma_262_divergences(
-                    regex,
-                    flags.as_deref().unwrap_or(""),
-                );
+                let flags = flags.as_deref().unwrap_or("");
+                // The emitted `pattern` is only usable if the shape's own
+                // XSD/XPath source compiles, because the validator
+                // (`constraints.rs::build_regex`) routes every `sh:pattern`
+                // through the same `xsd_regex::compile`; a pattern it rejects
+                // makes every value node a violation. Recording that as a
+                // DISTINCT loss keeps the emitter and the validator from
+                // disagreeing silently about the same shape.
+                if let Err(error) = purrdf_core::xsd_regex::compile(regex, flags) {
+                    ctx.record(
+                        "sh:pattern rejected",
+                        shape_iri,
+                        &format!(
+                            "sh:pattern on property {key} is not a valid XSD/XPath regular \
+                             expression: {error}; the emitted JSON Schema pattern is \
+                             ECMA-262 and is known-unusable"
+                        ),
+                    );
+                    comments.push(format!(
+                        "the sh:pattern on property {key} is not a valid XSD/XPath regular \
+                         expression ({error}), so the emitted ECMA-262 pattern cannot be \
+                         trusted"
+                    ));
+                }
+                let divergences = purrdf_core::xsd_regex::ecma_262_divergences(regex, flags);
                 if !divergences.is_empty() {
-                    let found = divergences.join(", ");
+                    let found = divergences
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     ctx.record(
                         "sh:pattern dialect",
                         shape_iri,

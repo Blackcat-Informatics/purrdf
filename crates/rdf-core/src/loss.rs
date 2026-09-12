@@ -1053,6 +1053,17 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          does not. The note names the specific constructs found.",
     ),
     (
+        "sh:pattern rejected",
+        "A sh:pattern is written in the XSD/XPath regular-expression dialect, and \
+         xsd_regex::compile rejects it as malformed in that dialect (an unknown Unicode block or \
+         category name, a back-reference, a bare word-boundary escape, an inline-flag or \
+         lookaround construct, or other syntax Appendix G does not define). The SHACL validator \
+         therefore treats every value node of that property as a violation, while the emitter \
+         still copies the source text verbatim into JSON Schema's ECMA-262 pattern slot — where \
+         it may compile and accept values. The emitted pattern is known-unusable and the \
+         disagreement is recorded rather than left for a consumer to discover.",
+    ),
+    (
         "sh:sparql",
         "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is \
          dropped.",

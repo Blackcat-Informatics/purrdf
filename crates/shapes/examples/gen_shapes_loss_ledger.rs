@@ -29,8 +29,11 @@ const PREFIXES: &str = r"
 /// node- and property-level `sh:sparql`, a node-level `sh:not` over a
 /// non-expressible inner, a property-level (value-position) `sh:not`, a
 /// node-level `sh:expression`, a shape targeted only via SHACL-AF
-/// `sh:SPARQLTarget` (`sh:SPARQLTarget`), and a `sh:pattern` whose XSD/XPath
-/// dialect does not survive the copy into JSON Schema's ECMA-262 `pattern`.
+/// `sh:SPARQLTarget` (`sh:SPARQLTarget`), a `sh:pattern` whose XSD/XPath
+/// `\i`/`\c` names and `i` flag do not survive the copy into JSON Schema's
+/// ECMA-262 `pattern`, a flagless `\p{L}` general-category pattern (ECMA-262
+/// needs the `u` flag, which a bare `pattern` cannot set), and a `(a)\1`
+/// back-reference that the XSD-dialect compiler rejects outright.
 const GOLDEN_SHAPES: &str = r#"
     ex:GuardedShape a sh:NodeShape ;
         sh:targetClass ex:Guarded ;
@@ -53,6 +56,14 @@ const GOLDEN_SHAPES: &str = r#"
             sh:path ex:code ;
             sh:pattern "^\\i\\c*$" ;
             sh:flags "i" ;
+        ] ;
+        sh:property [
+            sh:path ex:category ;
+            sh:pattern "^\\p{L}+$" ;
+        ] ;
+        sh:property [
+            sh:path ex:broken ;
+            sh:pattern "(a)\\1" ;
         ] .
 
     ex:SparqlTargetedShape a sh:NodeShape ;
