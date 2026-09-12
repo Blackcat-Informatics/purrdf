@@ -400,7 +400,7 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
         folded,
         format!("{row}\n"),
         "under the flat presentation, the spelled reifier row must canonicalize to \
-         the SAME row the genuine structure lowers to — G1: the sentinel must not \
+         the SAME row the genuine structure lowers to — the sentinel must not \
          leak and the two spellings must not split identity. Genuine structure's \
          flat form:\n{lowered}"
     );
