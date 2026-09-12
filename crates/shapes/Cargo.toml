@@ -39,6 +39,12 @@ purrdf-sparql-algebra = { workspace = true }
 purrdf-sparql-eval = { workspace = true }
 # sh:pattern regex constraint.
 regex = { workspace = true }
+# The one shared XSD/XPath `regExp` → `regex`-crate translation
+# (`purrdf_core::xsd_regex::compile`): `sh:pattern`/`sh:flags` delegate to it
+# rather than reimplementing the `i s m x q` flag mapping and construct
+# translation a second time (ETHOS §O). Previously reached only transitively
+# via `purrdf-sparql-eval`/`purrdf`; now a direct dependency of this crate.
+purrdf-core = { workspace = true }
 # XSD value-space machinery: temporal (xsd:dateTime/date/time) value comparison
 # for the sh:minInclusive / sh:maxInclusive / sh:minExclusive / sh:maxExclusive
 # facets (W3C core/node/minInclusive-002/-003 — timezone-aware partial order;

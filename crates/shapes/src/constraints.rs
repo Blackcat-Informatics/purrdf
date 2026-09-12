@@ -2400,156 +2400,36 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
     None
 }
 
-/// Apply the XPath `x` flag to a `sh:pattern` source, textually, before the
-/// pattern is parsed.
+/// Build a compiled `Regex` from a `sh:pattern` string and optional `sh:flags`
+/// string.
 ///
-/// SHACL §4.5.3 defines `sh:pattern` by the SPARQL `REGEX` function, and SPARQL
-/// 1.1 §17.4.3.14 defines `REGEX` as an invocation of XPath `fn:matches`, so the
-/// `x` flag is XPath's. *XPath and XQuery Functions and Operators 3.1* §5.6.2
-/// defines it in one sentence:
+/// SHACL §4.5.3 defines `sh:pattern` by the SPARQL `REGEX` function, which SPARQL
+/// 1.1 §17.4.3.14 in turn defines as an invocation of XPath F&O 3.1 `fn:matches` —
+/// so this delegates to [`purrdf_core::xsd_regex::compile`], the one shared
+/// translation from that XSD/XPath `regExp` dialect onto the `regex` crate, rather
+/// than reimplementing flag mapping or construct translation a second time
+/// (ETHOS §O). `sh:pattern`, SPARQL `REGEX`/`REPLACE`, and ShEx `PATTERN` all
+/// carry the same accept set and the same semantics as a result.
 ///
-/// > `x`: If present, whitespace characters (`#x9`, `#xA`, `#xD` and `#x20`) in
-/// > the regular expression are removed prior to matching with one exception:
-/// > whitespace characters within character class expressions (`charClassExpr`)
-/// > are not removed. This flag can be used, for example, to break up long
-/// > regular expressions into readable lines.
+/// Supported flags: `i` (case-insensitive), `s` (dot-all), `m` (multi-line), `x`
+/// (remove `#x9`/`#xA`/`#xD`/`#x20` outside character class expressions), and `q`
+/// (literal match — the pattern is matched verbatim, with no metacharacters).
+/// Any other flag character is a hard error.
 ///
-/// and pins it with four examples, every one of which this function is tested
-/// against in [`tests::xpath_x_flag_matches_the_specifications_examples`]:
-///
-/// > `fn:matches("helloworld", "hello world", "x")` returns `true()`
-/// >
-/// > `fn:matches("helloworld", "hello[ ]world", "x")` returns `false()`
-/// >
-/// > `fn:matches("hello world", "hello\ sworld", "x")` returns `true()`
-/// >
-/// > `fn:matches("hello world", "hello world", "x")` returns `false()`
-///
-/// # Why the removal is done here and not by `RegexBuilder::ignore_whitespace`
-///
-/// Rust's verbose mode is a different production wearing the same letter, and it
-/// is wrong in three ways at once:
-///
-/// * it removes every code point with the Unicode `White_Space` property —
-///   twenty-six, including U+00A0 NO-BREAK SPACE and U+3000 — where XPath names
-///   exactly four, so a pattern matching a literal IDEOGRAPHIC SPACE silently
-///   stops matching it;
-/// * it treats `#` as a comment introducer running to end of line, so
-///   `"a#b c"` compiles to `a` where XPath compiles it to `a#bc`. XPath regex
-///   has no comment syntax at all;
-/// * it removes whitespace **inside** character classes, which is the one case
-///   XPath explicitly exempts — the specification's second example exists for
-///   exactly this, and `ignore_whitespace` gets it backwards.
-///
-/// # The backslash does not protect whitespace, and the third example is why
-///
-/// Removal is textual and happens *prior to parsing*, so a backslash does not
-/// escape a following space out of it: the source `hello\ sworld` has its space
-/// removed, yielding `hello\sworld`, and the specification's third example
-/// requires that to match `"hello world"`. The backslash is still tracked here,
-/// because it decides whether a `[` or `]` **delimits** a character class —
-/// `\[` opens nothing and `\]` closes nothing — and getting that wrong would
-/// move the exempt region. Note that a removed whitespace character does not
-/// consume the pending escape: it re-binds to whatever follows, which is what
-/// turns `\ s` into `\s`.
-///
-/// `charClassExpr` nests, through `charClassSub` (`[a-z-[aeiou]]`), so the
-/// exempt region is tracked by depth rather than by a single flag. An
-/// unterminated `[` leaves the rest of the pattern exempt and then fails to
-/// compile, which is a named error rather than a silently different pattern.
-fn strip_x_flag_whitespace(pattern: &str) -> String {
-    let mut out = String::with_capacity(pattern.len());
-    let mut class_depth = 0_usize;
-    let mut escaped = false;
-    for c in pattern.chars() {
-        if escaped {
-            // Inside a character class nothing is removed; outside one, even an
-            // escaped whitespace character goes, and the escape carries over to
-            // the next character (`\ s` becomes `\s`).
-            if class_depth == 0 && purrdf_iri::terminals::is_ws_char(c) {
-                continue;
-            }
-            out.push(c);
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' => {
-                out.push(c);
-                escaped = true;
-            }
-            '[' => {
-                class_depth += 1;
-                out.push(c);
-            }
-            ']' if class_depth > 0 => {
-                class_depth -= 1;
-                out.push(c);
-            }
-            _ if class_depth == 0 && purrdf_iri::terminals::is_ws_char(c) => {}
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Build a compiled `Regex` from a pattern string and optional `sh:flags` string.
-///
-/// Supported flags:
-/// - `i` — case-insensitive
-/// - `s` — dot-all (`.` matches newlines)
-/// - `m` — multi-line (`^`/`$` match line boundaries)
-/// - `x` — remove `#x9`, `#xA`, `#xD` and `#x20` outside character class
-///   expressions, per XPath F&O 3.1 §5.6.2; see [`strip_x_flag_whitespace`],
-///   which performs the removal instead of `RegexBuilder::ignore_whitespace`
-///   because that option implements a different, wider class and adds a comment
-///   syntax XPath does not have.
-///
-/// **Hard-fail discipline**: any flag character outside `{i, s, m, x}` — including
-/// `q` (the XPath literal-match flag) — is a hard error. Silently ignoring `q`
-/// would change matching semantics in ways the caller cannot detect. Consistent
-/// with this crate's policy of hard-failing on any unmodelled SHACL feature, an
-/// unsupported flag returns `Err` immediately.
-///
-/// **Deviation from XPath**: once the flags are applied, the pattern BODY is
-/// parsed with Rust `regex` crate semantics, not XPath regex semantics.
-/// Behaviour still diverges on character-class subtraction (`[a-z-[aeiou]]`),
-/// the multi-character escapes `\i`, `\I`, `\c`, `\C`, block escapes
-/// (`\p{IsBasicLatin}`), and back-references. That is a separate and much larger
-/// gap than the flag mapping, and it is not addressed here.
+/// There is no remaining deviation from XPath `fn:matches` semantics for
+/// anything this function supports: character-class subtraction
+/// (`[a-z-[aeiou]]`), the multi-character escapes `\i \I \c \C`, the narrowed
+/// `\s \S \w \W` classes, and `\p{IsX}`/`\P{IsX}` Unicode block escapes are all
+/// translated, not left to `regex`-crate defaults. The one permanent, by-design
+/// exception is backreferences (`\1`..`\9`): `purrdf_core::xsd_regex` translates
+/// onto the `regex` crate's DFA-based engine, which cannot backtrack and
+/// therefore cannot ever execute one, no matter how the source text is
+/// rewritten. That gap is recorded in `docs/CONFORMANCE.md` and pinned by the
+/// first-party corpus under `crates/rdf-core/corpus/xsd-regex/`.
 fn build_regex(pattern: &str, flags: Option<&str>) -> Result<regex::Regex, String> {
-    let (mut case_insensitive, mut dot_all, mut multi_line, mut strip_whitespace) =
-        (false, false, false, false);
-    if let Some(f) = flags {
-        for c in f.chars() {
-            match c {
-                'i' => case_insensitive = true,
-                's' => dot_all = true,
-                'm' => multi_line = true,
-                'x' => strip_whitespace = true,
-                _ => {
-                    return Err(format!(
-                        "unsupported sh:flags character {c:?} in sh:pattern \
-                         (supported: i, s, m, x)"
-                    ));
-                }
-            }
-        }
-    }
-    // The `x` removal is a rewrite of the pattern SOURCE, so it has to happen
-    // before the builder ever sees it — and `ignore_whitespace` stays off, or
-    // Rust would apply its own wider rule on top of XPath's.
-    let source = if strip_whitespace {
-        strip_x_flag_whitespace(pattern)
-    } else {
-        pattern.to_owned()
-    };
-    let mut builder = regex::RegexBuilder::new(&source);
-    builder
-        .case_insensitive(case_insensitive)
-        .dot_matches_new_line(dot_all)
-        .multi_line(multi_line);
-    builder.build().map_err(|e| e.to_string())
+    purrdf_core::xsd_regex::compile(pattern, flags.unwrap_or(""))
+        .map(|compiled| compiled.as_regex().clone())
+        .map_err(|e| e.to_string())
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -3330,26 +3210,94 @@ mod tests {
         assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
     }
 
+    /// `sh:flags "q"` compiles and matches its pattern literally, through the
+    /// real `Constraint::Pattern` validation path. It used to hard-fail as an
+    /// "unsupported flag", so this pins the behaviour change end to end rather
+    /// than only at `build_regex`.
+    #[test]
+    fn pattern_q_flag_literal_match_end_to_end() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"a.c\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: "a.c".to_owned(),
+                flags: Some("q".to_owned()),
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        // Under "q", "." is a literal dot, so the exact literal value matches.
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+
+        // A value where "." would only match under wildcard semantics must
+        // still be rejected: literal-match discipline, not accidental laxity.
+        let store2 = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"abc\" ."));
+        let results = validate_shape(&store2, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Pattern"));
+    }
+
+    /// `\i`/`\c` (XSD's XML-name multi-character escapes) used to fail to
+    /// compile at all under the raw `regex`-crate pass-through — `\i` is not one
+    /// of that crate's escapes — and now validate correctly through the real
+    /// `Constraint::Pattern` path.
+    #[test]
+    fn pattern_xml_name_escapes_end_to_end() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"abc123\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: r"^\i\c*$".to_owned(),
+                flags: None,
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        // "abc123": 'a' is a valid XML NameStartChar, and 'b','c','1','2','3'
+        // are all valid XML NameChars.
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+
+        // "1abc" starts with a digit, which is a NameChar but not a
+        // NameStartChar, so it must fail \i at the first position.
+        let store2 = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"1abc\" ."));
+        let results = validate_shape(&store2, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Pattern"));
+    }
+
     // ── build_regex ────────────────────────────────────────────────────────────
 
     #[test]
-    fn build_regex_rejects_unknown_flag() {
-        // 'q' (XPath literal-match flag) is unsupported — must hard-fail.
+    fn build_regex_q_flag_is_supported_and_literal() {
+        // 'q' (XPath literal-match flag) is a valid, supported flag: the
+        // pattern is matched verbatim rather than rejected.
+        let re = build_regex("a.c", Some("q")).expect("'q' flag should be accepted");
+        assert!(re.is_match("xa.cx"), "under 'q', '.' is a literal dot");
         assert!(
-            build_regex("foo", Some("q")).is_err(),
-            "build_regex should reject unknown flag 'q'"
+            !re.is_match("abc"),
+            "under 'q', '.' must not act as a wildcard"
+        );
+    }
+
+    #[test]
+    fn build_regex_rejects_genuinely_unknown_flag() {
+        // 'z' is not part of the XPath F&O 3.1 §5.6.2 flag alphabet (i s m x q)
+        // and must still hard-fail.
+        assert!(
+            build_regex("foo", Some("z")).is_err(),
+            "build_regex should reject unknown flag 'z'"
         );
         // Verify the error message identifies the offending character.
-        let err = build_regex("foo", Some("q")).unwrap_err();
+        let err = build_regex("foo", Some("z")).unwrap_err();
         assert!(
-            err.contains('q'),
+            err.contains('z'),
             "error message should mention the rejected flag character"
         );
     }
 
     #[test]
     fn build_regex_accepts_supported_flags() {
-        // All four supported flags must compile without error.
+        // All five supported flags must compile without error.
         assert!(
             build_regex("foo", Some("i")).is_ok(),
             "flag 'i' should be accepted"
@@ -3365,6 +3313,10 @@ mod tests {
         assert!(
             build_regex("foo", Some("x")).is_ok(),
             "flag 'x' should be accepted"
+        );
+        assert!(
+            build_regex("foo", Some("q")).is_ok(),
+            "flag 'q' should be accepted"
         );
         assert!(
             build_regex("foo", Some("ismx")).is_ok(),
