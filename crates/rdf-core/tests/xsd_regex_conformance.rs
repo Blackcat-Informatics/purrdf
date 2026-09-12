@@ -35,7 +35,7 @@ const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/xsd-regex"
 /// Asserted, not merely printed: a renamed or deleted corpus file would
 /// otherwise silently shrink the suite while the harness still reported green.
 /// Bump this when adding or removing a case.
-const EXPECTED_CASES: usize = 257;
+const EXPECTED_CASES: usize = 285;
 
 /// What a case says must happen.
 #[derive(Debug, PartialEq, Eq)]
@@ -316,7 +316,7 @@ fn xsd_regex_corpus_case_count_is_exact() {
     let files = corpus_files();
     assert_eq!(
         files.len(),
-        6,
+        7,
         "unexpected .cases file count — update this when adding or removing a corpus file"
     );
     let total: usize = files

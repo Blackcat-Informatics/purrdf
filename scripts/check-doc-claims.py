@@ -5202,7 +5202,7 @@ def build_claims(
             _CONFORMANCE,
             _flow(
                 r"`crates/rdf-core/corpus/xsd-regex/` — PurRDF's own XSD/XPath "
-                r"`regExp` corpus: (?P<total>\d+) cases across six `\.cases` files"
+                r"`regExp` corpus: (?P<total>\d+) cases across seven `\.cases` files"
             ),
             {"total": regex_pass},
             mat,

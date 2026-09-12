@@ -40,3 +40,12 @@ bc	-	match	abcd
 ^b$	m	match	a\nb\nc
 ^b$	-	nomatch	a\nb\nc
 ^a$	m	match	a\nb
+
+# Without `m`, `$` anchors at the end of the string and NOT before a trailing
+# newline -- a real dialect difference from Perl and ECMA-262, where `$` also
+# matches immediately before a final \n.
+^a$	-	nomatch	a\n
+
+# The empty pattern compiles and matches every subject: fn:matches' partial
+# match is satisfied by the empty match at position 0.
+	-	match	anything

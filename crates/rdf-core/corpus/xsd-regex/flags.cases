@@ -64,3 +64,11 @@ foo	z	error	'z'
 foo	g	error	'g'
 foo	iz	error	'z'
 foo	qz	error	'z'
+
+# `x`'s removal is textual and precedes block-name resolution, so whitespace
+# INSIDE a \p{…} name is stripped under `x` and survives without it. `Is Basic
+# Latin` is therefore a resolvable block under `x` and an unknown block without
+# it -- the asymmetry is a deliberate consequence of the textual rule, not an
+# accident to be "fixed".
+^\p{Is Basic Latin}$	x	match	A
+^\p{Is Basic Latin}$	-	error	Is Basic Latin

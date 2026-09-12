@@ -5082,6 +5082,36 @@ mod tests {
         assert_eq!(m("a\nb", "^a.b$", "s"), Some(true));
     }
 
+    /// The **two-argument** `REGEX(text, pattern)` arity — no flags argument
+    /// at all. Every other dialect test supplies a PRESENT final `lit("")`, so
+    /// only this shape exercises `eval_regex_expr`'s `args.get(2)`-absent
+    /// `unwrap_or_default()` path. The subject/pattern pair returns the XSD
+    /// answer `false` because XSD's `.` excludes #x0D where Rust's excludes
+    /// only #x0A — a Rust `regex` would answer `true` — so this pins that the
+    /// dialect is in force on the arity-2 dispatch specifically, not merely
+    /// that a missing flags argument does not break it.
+    #[test]
+    fn regex_two_argument_call_defaults_flags_and_keeps_the_xsd_dialect() {
+        let ds = empty_ds();
+        let expr = Expression::FunctionCall(Function::Regex, vec![lit("a\rb"), lit("^a.b$")]);
+        assert_eq!(ebv(&ds, &expr), Some(false));
+    }
+
+    /// The **three-argument** `REPLACE(text, pattern, replacement)` arity — no
+    /// flags argument at all. Every other REPLACE test supplies a PRESENT final
+    /// `lit("")`, so only this shape exercises `eval_replace`'s
+    /// `string_arg(vals, 3)`-absent `unwrap_or_default()` path, and the XPath
+    /// replacement syntax (`$2` here) must still resolve there.
+    #[test]
+    fn replace_three_argument_call_defaults_flags_to_empty() {
+        let ds = empty_ds();
+        let expr = Expression::FunctionCall(
+            Function::Replace,
+            vec![lit("axb"), lit("(a)(.)(b)"), lit("$2")],
+        );
+        assert_eq!(lex(&ds, &expr), Some("x".to_owned()));
+    }
+
     /// Constructs the `fn:matches` grammar does not define must not be
     /// evaluated as if it did. `\b`/`\B` are Perl word boundaries that `regex`
     /// accepts and XSD/XPath never defined; a backreference IS in the grammar

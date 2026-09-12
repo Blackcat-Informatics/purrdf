@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# XSD Appendix G `quantifier` (`?`, `*`, `+`, `{n,m}`, `{n,}`, `{n}`) and the
+# reluctant (`?`-suffixed) forms XPath F&O 3.1 5.6.1 adds to that grammar.
+
+# {n,m}: between n and m occurrences, inclusive.
+^a{2,3}$	-	match	aa
+^a{2,3}$	-	match	aaa
+^a{2,3}$	-	nomatch	a
+^a{2,3}$	-	nomatch	aaaa
+
+# {n,}: n or more occurrences.
+^a{2,}$	-	match	aa
+^a{2,}$	-	match	aaaa
+^a{2,}$	-	nomatch	a
+
+# {n}: exactly n occurrences.
+^a{2}$	-	match	aa
+^a{2}$	-	nomatch	a
+^a{2}$	-	nomatch	aaa
+
+# Reluctant quantifiers: `?` after `+`, `?` or `{n,m}` changes where the engine
+# prefers to stop, not which strings are in the language, so the same subjects
+# must still match. Regexes without the `?` suffix are pinned above.
+^a+?b$	-	match	ab
+^a+?b$	-	match	aab
+^a+?b$	-	nomatch	b
+^a??$	-	match	a
+^a??$	-	nomatch	b
+^a{2,3}?$	-	match	aa
+^a{2,3}?$	-	match	aaa
+^a{2,3}?$	-	nomatch	a
+^a{2,3}?$	-	nomatch	aaaa
+
+# A quantified group: the quantifier applies to the whole group.
+^(ab)*$	-	match	ab
+^(ab)*$	-	match	abab
+^(ab)*$	-	nomatch	aba
+
+# `\{` is a SingleCharEsc spelling a literal brace, so this is the four
+# characters `a{2}` and not the quantifier `a{2}`.
+^a\{2\}$	-	match	a{2}
+^a\{2\}$	-	nomatch	aa

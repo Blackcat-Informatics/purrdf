@@ -589,6 +589,56 @@ mod tests {
         );
     }
 
+    /// The generated block table's size is pinned from this NON-generated
+    /// file. `blocks.rs` is `@generated`, and its own structural tests only
+    /// check the rows that survived a regeneration, so a table truncated
+    /// wholesale would pass them; the exact row count catches that. The
+    /// compile-level cases pin the inclusive `[lo, hi]` endpoints of the last
+    /// (highest-codepoint) block and of one astral block, which the spliced
+    /// class ranges must preserve at both edges.
+    #[test]
+    fn unicode_block_table_size_and_astral_boundaries_are_pinned() {
+        assert_eq!(
+            blocks::UNICODE_BLOCKS.len(),
+            338,
+            "a truncated regeneration of the block table must fail here"
+        );
+        assert_eq!(
+            blocks::UNICODE_BLOCKS
+                .last()
+                .map(|(name, lo, hi)| (*name, *lo, *hi)),
+            Some(("IsSupplementaryPrivateUseArea-B", 0x0010_0000, 0x0010_FFFF)),
+        );
+
+        let last = compile(r"^\p{IsSupplementaryPrivateUseArea-B}$", "").expect("last block");
+        assert!(
+            last.as_regex().is_match("\u{100000}"),
+            "lo endpoint is inclusive"
+        );
+        assert!(
+            last.as_regex().is_match("\u{10FFFF}"),
+            "hi endpoint is inclusive"
+        );
+        assert!(
+            !last.as_regex().is_match("\u{FFFFF}"),
+            "one below lo is outside the block"
+        );
+
+        let astral = compile(r"^\p{IsTags}$", "").expect("astral block");
+        assert!(
+            astral.as_regex().is_match("\u{E0000}"),
+            "lo endpoint is inclusive"
+        );
+        assert!(
+            astral.as_regex().is_match("\u{E007F}"),
+            "hi endpoint is inclusive"
+        );
+        assert!(
+            !astral.as_regex().is_match("\u{E0080}"),
+            "one above hi is outside the block"
+        );
+    }
+
     #[test]
     fn compiled_pattern_exposes_the_regex_through_one_accessor() {
         let compiled = compile("^ab$", "").expect("compile");

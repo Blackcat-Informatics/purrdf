@@ -3289,6 +3289,94 @@ mod tests {
         assert!(component_iri(&results)[0].contains("Pattern"));
     }
 
+    /// The dialect the SHACL seam actually validates in, end to end through
+    /// `Constraint::Pattern` rather than through `build_regex` alone.
+    ///
+    /// The SPARQL seam has an equivalent test
+    /// (`regex_evaluates_the_xsd_dialect_not_the_regex_crates`); this is the
+    /// SHACL twin, because `sh:pattern` is a separate call site of the same
+    /// shared translator and nothing pinned its dialect behaviour end to end.
+    /// Each row is `(value, pattern, flags, expected violations)`; a row with
+    /// violations must name the `PatternConstraintComponent`.
+    #[test]
+    fn pattern_dialect_is_in_force_end_to_end() {
+        let cases: &[(&str, &str, Option<&str>, usize)] = &[
+            // `x`: `#` is an ordinary character and only #x9/#xA/#xD/#x20 are
+            // removed. `RegexBuilder::ignore_whitespace` would read `#` as a
+            // comment and compile `a#b c` to `a`, matching `az`.
+            ("a#bc", "a#b c", Some("x"), 0),
+            ("az", "a#b c", Some("x"), 1),
+            // U+3000 carries the Unicode `White_Space` property and is not one
+            // of the four code points `x` names, so it survives as a literal.
+            ("a\u{3000}b", "a\u{3000}b", Some("x"), 0),
+            ("ab", "a\u{3000}b", Some("x"), 1),
+            // `\s` is XSD's four code points, not Unicode `White_Space`:
+            // U+00A0 carries the property but is not one of the four.
+            ("\u{A0}", r"^\s$", None, 1),
+            (" ", r"^\s$", None, 0),
+            // `.` excludes BOTH #x0A and #x0D; the `regex` crate excludes only
+            // #x0A.
+            ("a\rb", "^a.b$", None, 1),
+            ("a\nb", "^a.b$", None, 1),
+            ("axb", "^a.b$", None, 0),
+            // XSD character-class subtraction is not `regex`-crate syntax.
+            ("bcd", r"^[a-z-[aeiou]]+$", None, 0),
+            ("abc", r"^[a-z-[aeiou]]+$", None, 1),
+            // `\p{Is…}` is a Unicode BLOCK: U+1F00 is in the Greek Extended
+            // block and in the Greek SCRIPT, but not in Greek and Coptic.
+            ("\u{0391}", r"^\p{IsGreekandCoptic}$", None, 0),
+            ("\u{1F00}", r"^\p{IsGreekandCoptic}$", None, 1),
+        ];
+        for (value, regex, flags, expected) in cases {
+            let results = pattern_results(value, regex, *flags);
+            assert_eq!(
+                results.len(),
+                *expected,
+                "{value:?} / {regex:?} / {flags:?} expected {expected} violation(s)"
+            );
+            if *expected > 0 {
+                assert!(
+                    component_iri(&results)[0].contains("Pattern"),
+                    "{regex:?} must report the Pattern constraint component"
+                );
+            }
+        }
+    }
+
+    /// Run one `sh:pattern`/`sh:flags` pair through the real
+    /// `Constraint::Pattern` validation path against a single literal value.
+    ///
+    /// The value is written into a Turtle string literal, so the five
+    /// characters that would break it are escaped; every other scalar (NBSP,
+    /// U+3000, the Greek letters the block cases use) is legal raw and stays
+    /// verbatim.
+    fn pattern_results(value: &str, regex: &str, flags: Option<&str>) -> Vec<ValidationResult> {
+        let mut escaped = String::with_capacity(value.len());
+        for c in value.chars() {
+            match c {
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                _ => escaped.push(c),
+            }
+        }
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:code \"{escaped}\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: regex.to_owned(),
+                flags: flags.map(str::to_owned),
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        validate_shape(&store, &ex("a"), &shape)
+    }
+
     /// A `sh:pattern` that does not compile is still a violation on every
     /// value node — SHACL's Core path has no shape-error channel, and the W3C
     /// suite depends on that behaviour. But the compiler's precise
