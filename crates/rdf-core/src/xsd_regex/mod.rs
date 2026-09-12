@@ -44,17 +44,17 @@
 //! `m` flag, XPath's `^` excludes the position immediately after a newline
 //! that is the last character in the string, and Rust's `multi_line` has no
 //! way to express that one exception (pinned by the
-//! `known_divergence_m_flag_trailing_newline` test in `translate` — this
+//! `known_divergence_m_flag_trailing_newline` test in this module — this
 //! plan intentionally pins the ACTUAL divergent behavior with a test rather
 //! than relying on it silently, so a future `regex` upgrade that happens to
 //! change this is caught, not silently trusted).
 
 mod blocks;
 mod classes;
+mod ecma;
 mod emit;
 mod error;
 mod scan;
-mod translate;
 mod xflag;
 
 pub use error::XsdRegexError;
@@ -201,7 +201,7 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
 /// survives the copy.
 #[must_use]
 pub fn ecma_262_divergences(pattern: &str, flags: &str) -> Vec<String> {
-    let mut out: Vec<String> = translate::ecma_262_divergences(pattern)
+    let mut out: Vec<String> = ecma::ecma_262_divergences(pattern)
         .into_iter()
         .map(ToOwned::to_owned)
         .collect();
@@ -296,7 +296,7 @@ mod tests {
         assert!(!re.is_match("a\nb"));
     }
 
-    /// The exact bug this module must not repeat (see `translate.rs`'s
+    /// The exact bug this module must not repeat (see `xflag.rs`'s
     /// `xpath_x_flag_matches_the_specifications_examples` for the `x`-only
     /// case): `regex::escape` does not escape a literal space, so applying
     /// `x`'s whitespace stripping AFTER escaping a `q`-literal pattern would
