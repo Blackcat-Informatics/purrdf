@@ -79,3 +79,11 @@ abc\	-	error	dangling
 ^(?:ab)+$	-	match	abab
 ^(ab)+$	-	match	abab
 ^(a|b)c$	-	match	bc
+
+# A `]` is a class terminator and nothing else: outside a character class it
+# is not a `Char` of the grammar (`Char ::= [^.\?*+()|#x5B#x5D]` excludes
+# it), so the second `]` of `[a]]` -- which regex-syntax reads as a literal --
+# is malformed XSD. A literal `]` is written `\]`.
+[a]]	-	error	unescaped ']' outside
+a]b	-	error	unescaped ']' outside
+a\]b	-	match	a]b

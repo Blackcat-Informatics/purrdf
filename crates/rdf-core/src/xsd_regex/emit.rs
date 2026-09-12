@@ -90,6 +90,15 @@ pub(super) fn translate(
     while let Some(token) = scanner.next() {
         match token? {
             Token::Literal(c) => out.push(c),
+            // `&` and `~` are ordinary members of an XSD character class
+            // (`XmlCharIncDash ::= [^\#x5B#x5D]`), but `regex-syntax` reads an
+            // unescaped `&&` as set INTERSECTION and `~~` as SYMMETRIC
+            // DIFFERENCE. Escaping each one preserves the XSD language
+            // exactly: `[a&&b]` stays the three members a, &, b.
+            Token::ClassMember(c) => {
+                out.push('\\');
+                out.push(c);
+            }
             Token::Escape(c) => {
                 // `\d`/`\D` already default to `\p{Nd}`/its complement in
                 // `regex-syntax`, exactly XSD's definition — confirmed by
@@ -387,6 +396,39 @@ mod tests {
         // A real back-reference still reports as one.
         let back = translate("(a)\\1", false, false).expect_err("no backreferences");
         assert!(back.to_string().contains("backreference"));
+    }
+
+    /// `&` and `~` are ordinary XSD class members, so the emitter escapes
+    /// them away from `regex-syntax`'s set operators. Without this,
+    /// `[^&&<>]` -- the "no ampersand or angle brackets" anti-injection
+    /// shape -- emitted `[[^&&<>]]`, whose inner `&&` was an INTERSECTION,
+    /// and matched `<script>&` at exit zero with no diagnostic.
+    #[test]
+    fn class_members_are_escaped_away_from_regex_set_operators() {
+        assert_eq!(
+            translate("[a&&b]", false, false).expect("translate"),
+            r"[a\&\&b]"
+        );
+        assert_eq!(
+            translate("[a~~b]", false, false).expect("translate"),
+            r"[a\~\~b]"
+        );
+
+        let members = translated_regex("^[a&&b]$", false);
+        for subject in ["a", "&", "b"] {
+            assert!(members.is_match(subject), "[a&&b] must match {subject:?}");
+        }
+        assert!(!members.is_match("c"), "[a&&b] must not match c");
+        // Intersection would have matched only "" (empty intersection of a
+        // and b), so this is the regression the escape closes.
+        assert!(!members.is_match("ab"));
+
+        let anti = translated_regex("^[^&&<>]*$", false);
+        assert!(
+            !anti.is_match("<script>&"),
+            "[^&&<>] is 'no ampersand or angle brackets', not match-everything"
+        );
+        assert!(anti.is_match("safe"));
     }
 
     #[test]

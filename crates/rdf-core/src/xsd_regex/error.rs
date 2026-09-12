@@ -38,9 +38,11 @@ pub enum XsdRegexError {
     UnknownBlock(String),
     /// The pattern source is malformed independently of any specific
     /// construct above -- a dangling trailing backslash, an unterminated
-    /// character class (`[` with no matching `]`), or an unterminated
-    /// `\p{`/`\P{` block-escape name (no matching `}`). Carries a message
-    /// naming the exact defect.
+    /// character class (`[` with no matching `]`), an unterminated
+    /// `\p{`/`\P{` block-escape name (no matching `}`), or a character-class
+    /// interior that only the Rust dialect accepts (an unescaped `[` that is
+    /// not a `-[` subtraction operand, a `]` at the class head, or a bare `]`
+    /// outside any class). Carries a message naming the exact defect.
     Malformed(String),
     /// The pattern source, or its translated `regex`-crate form, exceeds a
     /// hard resource bound. Carries the measured size in bytes and the named

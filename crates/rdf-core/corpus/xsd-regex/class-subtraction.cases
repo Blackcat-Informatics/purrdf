@@ -39,3 +39,36 @@
 # pattern.
 ^[a-z-[aeiou]$	-	error	unterminated
 ^[a-z$	-	error	unterminated
+
+# `&` and `~` are ordinary class members (XmlCharIncDash ::= [^\#x5B#x5D]).
+# regex-syntax would read an adjacent `&&` as set INTERSECTION and `~~` as
+# SYMMETRIC DIFFERENCE, so each is emitted escaped and `[a&&b]` keeps its XSD
+# meaning: the three members a, & and b. A class of a INTERSECT b would match
+# nothing but the empty string.
+^[a&&b]$	-	match	a
+^[a&&b]$	-	match	&
+^[a&&b]$	-	match	b
+^[a&&b]$	-	nomatch	c
+^[a~~b]$	-	match	~
+^[a\&b]$	-	match	&
+^[\~]$	-	match	~
+
+# The anti-injection shape from the issue: `[^&&<>]` is "no ampersand and
+# no angle brackets", NOT match-everything. The old pass-through emitted
+# `[[^&&<>]]`, whose nested `&&` was an intersection, and matched
+# `<script>&` at exit zero with no diagnostic.
+^[^&&<>]*$	-	nomatch	<script>&
+^[^&&<>]*$	-	match	safe
+
+# The class interior is a recognizer, not a pass-through. A `[` appears
+# inside a class only as the `-[` of a charClassSub; anywhere else it is the
+# Rust nested-class union (or a POSIX class), which XSD has no production
+# for. A literal member is written `\[`.
+[a[b]]	-	error	unescaped '['
+[[:alpha:]]	-	error	unescaped '['
+^[a\[b]$	-	match	[
+
+# A `]` only ever CLOSES a class; at the class head there is no member for it
+# to close, so it is the Rust literal-first-member form and must be `\]`.
+[]a]	-	error	literal ']'
+[^]a]	-	error	literal ']'

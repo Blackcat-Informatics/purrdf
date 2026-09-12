@@ -28,6 +28,13 @@ pub(super) enum Token {
     /// An ordinary character, literal in this context (`.`, `-`, `(`, `)`,
     /// `]` inside a class are [`Token::Literal`]s, not metacharacters).
     Literal(char),
+    /// An ordinary character-class member that `regex-syntax` would read as
+    /// part of a set operator: an unescaped `&&` is set INTERSECTION and `~~`
+    /// is SYMMETRIC DIFFERENCE there, but XML Schema Part 2 Appendix G's
+    /// `XmlCharIncDash ::= [^\#x5B#x5D]` makes both `&` and `~` ordinary
+    /// members. The emitter escapes it (`\&`, `\~`) so the XSD language is
+    /// preserved exactly.
+    ClassMember(char),
     /// Any escape with no grammar-specific rewrite (`\d`, `\D`, `\n`, `\\`,
     /// …, and a `\p`/`\P` that is not the `{…}` form), passed through.
     Escape(char),
@@ -55,6 +62,27 @@ pub(super) enum Token {
     Backreference(u32),
 }
 
+impl Token {
+    /// Whether this token is an ordinary member of the character class it was
+    /// scanned inside. A `]` seen while the innermost open frame has recorded
+    /// no member is the Rust-ism of a literal `]` at the class head (`[]a]`),
+    /// which XSD's `charGroup` forbids; this predicate lets the accumulator in
+    /// [`Scanner::scan_next`] recognize the members that make a later `]` a
+    /// legitimate close.
+    fn is_class_member(&self) -> bool {
+        matches!(
+            self,
+            Self::Literal(_)
+                | Self::Escape(_)
+                | Self::NameEscape { .. }
+                | Self::SpaceEscape { .. }
+                | Self::WordEscape { .. }
+                | Self::UnicodeProperty { .. }
+                | Self::ClassMember(_)
+        )
+    }
+}
+
 /// One open character-class level, tracked because XSD's `charClassSub`
 /// subtracts from a `negCharGroup` as readily as from a `posCharGroup`
 /// (`charClassSub ::= ( posCharGroup | negCharGroup ) '-' charClassExpr`)
@@ -66,6 +94,10 @@ struct ClassFrame {
     /// Whether a `-[` subtraction has already been emitted at this level
     /// (which also closed the inner negated group, if there was one).
     subtracted: bool,
+    /// Whether any member of this level has been consumed yet. XSD's
+    /// `posCharGroup ::= ( charRange | charClassEsc )+` is non-empty, so a `]`
+    /// while this is clear is the literal-first-member Rust-ism, not a close.
+    member_seen: bool,
 }
 
 /// Capturing-group bookkeeping, kept solely so a back-reference can be
@@ -159,6 +191,13 @@ pub(super) struct Scanner<'a> {
     /// negated inner class is still open and must be closed before the token's
     /// own bracket work. See [`Scanner::closes_negated_wrap`].
     negated_wrap_close: bool,
+    /// Whether the `-` of a `-[` was just consumed, so the `[` the cursor now
+    /// points at is that subtraction's `charClassExpr` rather than the
+    /// malformed nested class the Rust dialect would accept. Set by the `-`
+    /// arm and consumed by the very next `[`; the two are adjacent by
+    /// construction, since the `-` only becomes [`Token::Subtract`] when its
+    /// lookahead is already `[`.
+    subtraction_operand: bool,
 }
 
 impl<'a> Scanner<'a> {
@@ -184,6 +223,7 @@ impl<'a> Scanner<'a> {
             x_inside: Vec::with_capacity(pattern.len()),
             span_chars: 0..0,
             negated_wrap_close: false,
+            subtraction_operand: false,
         }
     }
 
@@ -279,6 +319,16 @@ impl<'a> Scanner<'a> {
         }
         let start = self.pos;
         let result = self.scan_one();
+        // Record class content for the frame the token was scanned into. A
+        // `]` reads this to tell a legitimate close from the literal-first-
+        // member Rust-ism; a `ClassOpen` is not content and pushes its own
+        // frame in `scan_one`, so the already-open frame is unaffected.
+        if let Ok(token) = &result
+            && token.is_class_member()
+            && let Some(frame) = self.classes.last_mut()
+        {
+            frame.member_seen = true;
+        }
         self.span = self.offsets[start]..self.offsets[self.pos];
         self.span_chars = start..self.pos;
         for i in start..self.pos {
@@ -292,6 +342,25 @@ impl<'a> Scanner<'a> {
         match self.chars[self.pos] {
             '\\' => self.scan_escape(),
             '[' => {
+                // A `[` legitimately appears inside an open class in exactly
+                // one place: as the operand `charClassExpr` of a `-[`
+                // subtraction. The `-` arm below records that with
+                // `subtraction_operand`, and this arm consumes the record.
+                // Any other `[` inside a class is the Rust nested-class
+                // union (`[a[b]]`, `[[:alpha:]]`), which XSD's
+                // `charGroup` has no production for; a literal `[` there is
+                // the `SingleCharEsc` spelling `\[`.
+                let subtraction_operand = std::mem::take(&mut self.subtraction_operand);
+                if !self.classes.is_empty() && !subtraction_operand {
+                    self.pos += 1;
+                    return Err(XsdRegexError::Malformed(
+                        "unescaped '[' inside a character class -- XML Schema Part 2 \
+                         Appendix G's charGroup defines no nested character class there, \
+                         so regex-syntax's nested-class union is a different language; a \
+                         literal '[' must be escaped as '\\['"
+                            .to_owned(),
+                    ));
+                }
                 // XSD `[^g-e]` is (complement of `g`) minus `e`, but
                 // Rust's `[^g--e]` applies `^` to the WHOLE class
                 // expression — i.e. the complement of (`g` minus `e`),
@@ -308,11 +377,44 @@ impl<'a> Scanner<'a> {
                 self.classes.push(ClassFrame {
                     negated,
                     subtracted: false,
+                    member_seen: false,
                 });
                 Ok(Token::ClassOpen { negated })
             }
-            ']' if !self.classes.is_empty() => {
-                let frame = self.classes.pop().expect("non-empty checked by the guard");
+            // A `]` only ever CLOSES a character class. Outside one it is not
+            // a `Char` of the grammar at all (`Char ::= [^.\?*+()|#x5B#x5D]`
+            // excludes it), so the bare `]` of `[a]]` is malformed, not a
+            // literal.
+            ']' if self.classes.is_empty() => {
+                self.pos += 1;
+                Err(XsdRegexError::Malformed(
+                    "unescaped ']' outside a character class -- it only ever closes a \
+                     character class in the XSD/XPath grammar, and a literal one must be \
+                     escaped as '\\]'"
+                        .to_owned(),
+                ))
+            }
+            ']' => {
+                if !self
+                    .classes
+                    .last()
+                    .expect("non-empty checked by the previous arm")
+                    .member_seen
+                {
+                    // XSD's `charGroup` is non-empty, so `]` cannot close a
+                    // class before any member. Rust reads `[]a]` as a class
+                    // holding `]` and `a`; XSD reads an (illegal) empty class
+                    // then a bare `]`, so the correct spelling is `\]a]`.
+                    self.pos += 1;
+                    self.classes.pop();
+                    return Err(XsdRegexError::Malformed(
+                        "literal ']' at the head of a character class -- XSD's charGroup \
+                         requires at least one member, and a literal ']' must be escaped as \
+                         '\\]'"
+                            .to_owned(),
+                    ));
+                }
+                let frame = self.classes.pop().expect("non-empty checked above");
                 self.negated_wrap_close = frame.negated && !frame.subtracted;
                 self.pos += 1;
                 Ok(Token::ClassClose)
@@ -337,8 +439,19 @@ impl<'a> Scanner<'a> {
                     .expect("non-empty checked by the guard");
                 self.negated_wrap_close = frame.negated && !frame.subtracted;
                 frame.subtracted = true;
+                self.subtraction_operand = true;
                 self.pos += 1;
                 Ok(Token::Subtract)
+            }
+            // Inside a class `&` and `~` are ordinary members per
+            // `XmlCharIncDash ::= [^\#x5B#x5D]`, but `regex-syntax` reads an
+            // adjacent `&&` as set intersection and `~~` as symmetric
+            // difference. Yield them as [`Token::ClassMember`] so the emitter
+            // escapes each one; outside a class they are plain literals.
+            '&' | '~' if !self.classes.is_empty() => {
+                let member = self.chars[self.pos];
+                self.pos += 1;
+                Ok(Token::ClassMember(member))
             }
             // Capturing-parenthesis bookkeeping. XML Schema Part 2 Appendix G
             // (as amended by XPath F&O 3.1 §5.6.1.3): "a left parenthesis is
@@ -498,8 +611,8 @@ impl Iterator for Scanner<'_> {
 mod tests {
     use super::*;
     use Token::{
-        Backreference, ClassClose, Dot, Escape, GroupClose, Literal, SpaceEscape, Subtract,
-        WordEscape,
+        Backreference, ClassClose, ClassMember, Dot, Escape, GroupClose, Literal, SpaceEscape,
+        Subtract, WordEscape,
     };
 
     fn tokens(pattern: &str) -> Vec<Token> {
@@ -596,6 +709,101 @@ mod tests {
                 ClassClose,
             ]
         );
+    }
+
+    /// The class interior is a recognizer of the XSD grammar, not a pass
+    /// through to `regex-syntax`: `&`/`~` are ordinary members, a `[` that is
+    /// not a subtraction operand and a `]` in a member position are malformed,
+    /// and only the escaped spellings are literal brackets.
+    #[test]
+    fn class_interior_follows_the_xsd_grammar() {
+        assert_eq!(
+            tokens("[a&&b]"),
+            vec![
+                class(false),
+                Literal('a'),
+                ClassMember('&'),
+                ClassMember('&'),
+                Literal('b'),
+                ClassClose,
+            ]
+        );
+        assert_eq!(
+            tokens("[a~~b]"),
+            vec![
+                class(false),
+                Literal('a'),
+                ClassMember('~'),
+                ClassMember('~'),
+                Literal('b'),
+                ClassClose,
+            ]
+        );
+        // Outside a class neither is special: both stay ordinary literals.
+        assert_eq!(
+            tokens("a&b"),
+            vec![Literal('a'), Literal('&'), Literal('b')]
+        );
+        assert_eq!(
+            tokens("a~b"),
+            vec![Literal('a'), Literal('~'), Literal('b')]
+        );
+
+        // The subtraction operand `[a-z-[aeiou]]` is the one legitimate `[`
+        // inside a class, and it still opens one.
+        assert!(tokens("[a-z-[aeiou]]").contains(&Subtract));
+        // ...but any other nested `[` is malformed XSD, not a class union.
+        for pattern in ["[a[b]]", "[[:alpha:]]"] {
+            assert!(
+                matches!(
+                    first_error(pattern),
+                    XsdRegexError::Malformed(ref m) if m.contains("unescaped '['")
+                ),
+                "{pattern:?} must be rejected naming the '['"
+            );
+        }
+        // A `]` cannot open a class's member list...
+        for pattern in ["[]a]", "[^]a]"] {
+            assert!(
+                matches!(
+                    first_error(pattern),
+                    XsdRegexError::Malformed(ref m) if m.contains("literal ']'")
+                ),
+                "{pattern:?} must be rejected naming the ']'"
+            );
+        }
+        // ...and a bare `]` outside any class is not a `Char` either.
+        assert!(matches!(
+            first_error("[a]]"),
+            XsdRegexError::Malformed(ref m) if m.contains("unescaped ']' outside")
+        ));
+
+        // The correctly escaped forms stay literal members.
+        assert_eq!(
+            tokens(r"[a\[b]"),
+            vec![
+                class(false),
+                Literal('a'),
+                Escape('['),
+                Literal('b'),
+                ClassClose,
+            ]
+        );
+        assert_eq!(
+            tokens(r"a\]b"),
+            vec![Literal('a'), Escape(']'), Literal('b')]
+        );
+        assert_eq!(
+            tokens(r"[a\&b]"),
+            vec![
+                class(false),
+                Literal('a'),
+                Escape('&'),
+                Literal('b'),
+                ClassClose,
+            ]
+        );
+        assert_eq!(tokens(r"[\~]"), vec![class(false), Escape('~'), ClassClose]);
     }
 
     #[test]
