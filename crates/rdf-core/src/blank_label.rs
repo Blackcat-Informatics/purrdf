@@ -589,7 +589,7 @@ const _: () = {
 /// [`is_pn_chars_u`]). Ranges are sorted and non-overlapping — the precondition
 /// [`in_ranges`]'s binary search rests on, proved by the const assertion above
 /// rather than assumed.
-pub(crate) const PN_CHARS_BASE_RANGES: &[CharRange] = &[
+const PN_CHARS_BASE_RANGES: &[CharRange] = &[
     (0x0041, 0x005A),   // [A-Z]
     (0x0061, 0x007A),   // [a-z]
     (0x00C0, 0x00D6),   // [#xC0-#xD6]
@@ -610,7 +610,7 @@ pub(crate) const PN_CHARS_BASE_RANGES: &[CharRange] = &[
 /// (beyond `'-'` and `[0-9]`, which are cheap ASCII checks handled inline).
 /// Sorted and non-overlapping for [`in_ranges`], proved by the const assertion
 /// above.
-pub(crate) const PN_CHARS_EXTRA_RANGES: &[CharRange] = &[
+const PN_CHARS_EXTRA_RANGES: &[CharRange] = &[
     (0x00B7, 0x00B7), // #xB7
     (0x0300, 0x036F), // [#x300-#x36F]
     (0x203F, 0x2040), // [#x203F-#x2040]

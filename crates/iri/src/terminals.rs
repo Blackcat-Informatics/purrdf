@@ -81,7 +81,11 @@
 
 /// An inclusive Unicode scalar-value range `[lo, hi]`, the unit every
 /// production below is transcribed into.
-type ScalarRange = (u32, u32);
+///
+/// Public because a scanner that needs the production's *set* rather than a
+/// membership test reaches it through the accessor the `terminal!` macro emits
+/// beside each predicate (e.g. [`xml_name_start_char_ranges`]).
+pub type ScalarRange = (u32, u32);
 
 /// One past the last ASCII scalar. The split point every predicate branches on:
 /// below it the answer comes from the production's (tiny) ASCII table, at or
@@ -185,6 +189,84 @@ const fn range_cardinality(ranges: &[ScalarRange]) -> u32 {
     count
 }
 
+/// How many ranges a composed terminal table holds before it is sorted: the
+/// base terminal's full set, the terminal's own ASCII additions, and its own
+/// non-ASCII additions, counted together.
+///
+/// This is the array length the `terminal!` macro needs for the composed table,
+/// and it is exact because [`merge`] sorts but never drops or duplicates an
+/// entry: the composed table is a permutation of the concatenation.
+#[inline]
+const fn concat_len(
+    base: &[ScalarRange],
+    ascii: &[ScalarRange],
+    non_ascii: &[ScalarRange],
+) -> usize {
+    base.len() + ascii.len() + non_ascii.len()
+}
+
+/// Compose a terminal's full range set — its inherited base, its ASCII
+/// additions and its non-ASCII additions — into one sorted, disjoint table.
+///
+/// This is what a caller that needs a production's *set* rather than a
+/// membership test consumes. The three inputs are each already sorted and
+/// disjoint (the macro proved that for the two it owns, and the base accessor
+/// returns the same property for its own composed table), but they interleave:
+/// `NameStartChar`'s `':'` sits below `PN_CHARS_BASE`'s `[A-Z]`, and `NameChar`'s
+/// U+00B7 sits below `PN_CHARS_BASE`'s `[#xC0-#xD6]`. The concatenation is
+/// therefore sorted here rather than assumed ordered, and the result is proved
+/// sorted and disjoint at compile time — the exact precondition
+/// [`in_ranges`]'s binary search relies on. Because the three inputs already
+/// partition their members (no scalar is admitted twice), the sorted
+/// concatenation is its own deduplication.
+///
+/// The sort is an insertion sort: the largest table in the module is ~30
+/// entries, so it is both shorter to read and cheaper to evaluate in `const`
+/// than anything asymptotically better would be.
+#[inline]
+const fn merge<const N: usize>(
+    base: &[ScalarRange],
+    ascii: &[ScalarRange],
+    non_ascii: &[ScalarRange],
+) -> [ScalarRange; N] {
+    let mut out = [(0_u32, 0_u32); N];
+    let mut n = 0;
+    let mut i = 0;
+    while i < base.len() {
+        out[n] = base[i];
+        n += 1;
+        i += 1;
+    }
+    i = 0;
+    while i < ascii.len() {
+        out[n] = ascii[i];
+        n += 1;
+        i += 1;
+    }
+    i = 0;
+    while i < non_ascii.len() {
+        out[n] = non_ascii[i];
+        n += 1;
+        i += 1;
+    }
+    let mut i = 1;
+    while i < N {
+        let key = out[i];
+        let mut j = i;
+        while j > 0 && (out[j - 1].0 > key.0 || (out[j - 1].0 == key.0 && out[j - 1].1 > key.1)) {
+            out[j] = out[j - 1];
+            j -= 1;
+        }
+        out[j] = key;
+        i += 1;
+    }
+    assert!(
+        ranges_sorted_disjoint(&out),
+        "a composed terminal table must be sorted, non-empty and disjoint",
+    );
+    out
+}
+
 /// Define one grammar terminal: its range table, its compile-time proofs, and
 /// its `const fn` predicate.
 ///
@@ -221,11 +303,24 @@ const fn range_cardinality(ranges: &[ScalarRange]) -> u32 {
 /// Every invocation additionally proves its tables sorted and disjoint, and a
 /// `cardinality:` clause proves a small enumerated production admits exactly as
 /// many scalars as it names.
+///
+/// Every invocation also emits a `ranges_fn:` accessor — a `const fn` returning
+/// the production's full set as a sorted, disjoint `&'static [ScalarRange]`.
+/// This is for the caller that needs a *set* rather than a membership test: an
+/// emitter that must splice a character class into a regex source, a lookup
+/// table, a diagnostic. A scalar-shaped invocation names the accessor of the
+/// table it `extends` in the `base_ranges:` clause, so the accessor is the
+/// composed set — inherited members included — not just the two local tables.
+/// The two spellings are kept apart deliberately: the predicate `extends` a
+/// base *predicate* (whose members it includes wholesale and tests through the
+/// `||`), and the accessor `base_ranges` names the base *accessor* whose set it
+/// composes. A byte-shaped invocation's single table is already its whole set.
 macro_rules! terminal {
     (
         $(#[$meta:meta])*
         table $table:ident;
         $vis:vis const fn $name:ident(u8);
+        ranges_fn: $ranges_name:ident;
         ranges: [ $( ($lo:literal, $hi:literal) ),* $(,)? ];
         $( cardinality: $cardinality:literal; )?
         $(
@@ -261,6 +356,17 @@ macro_rules! terminal {
             in_ranges(widen(b), $table)
         }
 
+        /// The production's full range set, sorted and disjoint.
+        ///
+        /// A byte-shaped production's table is already its whole set: it is
+        /// proved wholly ASCII, so no scalar at or above [`ASCII_LIMIT`] is a
+        /// member and the same table is the set over the scalar space.
+        #[inline]
+        #[must_use]
+        $vis const fn $ranges_name() -> &'static [ScalarRange] {
+            $table
+        }
+
         $(
             $(#[$char_meta])*
             #[inline]
@@ -275,6 +381,8 @@ macro_rules! terminal {
         $(#[$meta:meta])*
         tables $ascii_table:ident, $non_ascii_table:ident;
         $vis:vis const fn $name:ident(char) $( extends $base:ident )?;
+        base_ranges: $base_expr:expr;
+        ranges_fn: $ranges_name:ident;
         ascii: [ $( ($alo:literal, $ahi:literal) ),* $(,)? ];
         non_ascii: [ $( ($nlo:literal, $nhi:literal) ),* $(,)? ];
         $( cardinality: $cardinality:literal; )?
@@ -320,6 +428,24 @@ macro_rules! terminal {
             }
             in_ranges(cp, $non_ascii_table) $( || $base(c) )?
         }
+
+        /// The production's full range set: the inherited base, this
+        /// production's ASCII additions, and its non-ASCII additions,
+        /// composed into one sorted, disjoint table.
+        ///
+        /// [`merge`] proves the composed table sorted and disjoint at compile
+        /// time, exactly as the macro proves each written table, so the binary
+        /// search [`in_ranges`] performs is valid over it too.
+        #[inline]
+        #[must_use]
+        $vis const fn $ranges_name() -> &'static [ScalarRange] {
+            const RANGES: [ScalarRange; concat_len(
+                $base_expr,
+                $ascii_table,
+                $non_ascii_table,
+            )] = merge($base_expr, $ascii_table, $non_ascii_table);
+            &RANGES
+        }
     };
 }
 
@@ -351,6 +477,7 @@ terminal! {
     /// they share.
     table WS_RANGES;
     pub const fn is_ws(u8);
+    ranges_fn: ws_ranges;
     ranges: [
         (0x09, 0x0A), // #x9 CHARACTER TABULATION, #xA LINE FEED
         (0x0D, 0x0D), // #xD CARRIAGE RETURN
@@ -393,6 +520,8 @@ terminal! {
     /// approximation of the form "anything above `0x7F`" admits all of them.
     tables PN_CHARS_BASE_ASCII, PN_CHARS_BASE_NON_ASCII;
     pub const fn is_pn_chars_base(char);
+    base_ranges: &[];
+    ranges_fn: pn_chars_base_ranges;
     ascii: [
         (0x41, 0x5A), // [A-Z]
         (0x61, 0x7A), // [a-z]
@@ -421,6 +550,8 @@ terminal! {
     /// is paid on the fast path.
     tables PN_CHARS_U_ASCII, PN_CHARS_U_NON_ASCII;
     pub const fn is_pn_chars_u(char) extends is_pn_chars_base;
+    base_ranges: pn_chars_base_ranges();
+    ranges_fn: pn_chars_u_ranges;
     ascii: [
         (0x5F, 0x5F), // '_'
     ];
@@ -440,6 +571,8 @@ terminal! {
     /// whole point of the [module docs](self).
     tables PN_CHARS_ASCII, PN_CHARS_NON_ASCII;
     pub const fn is_pn_chars(char) extends is_pn_chars_u;
+    base_ranges: pn_chars_u_ranges();
+    ranges_fn: pn_chars_ranges;
     ascii: [
         (0x2D, 0x2D), // '-'
         (0x30, 0x39), // [0-9]
@@ -478,6 +611,8 @@ terminal! {
     /// than assumed by a call.
     tables BLANK_NODE_LABEL_START_ASCII, BLANK_NODE_LABEL_START_NON_ASCII;
     pub const fn is_blank_node_label_start(char) extends is_pn_chars_u;
+    base_ranges: pn_chars_u_ranges();
+    ranges_fn: blank_node_label_start_ranges;
     ascii: [
         (0x30, 0x39), // [0-9]
     ];
@@ -515,6 +650,8 @@ terminal! {
     /// different head classes, no two of them equal.
     tables PN_LOCAL_START_ASCII, PN_LOCAL_START_NON_ASCII;
     pub const fn is_pn_local_start(char) extends is_pn_chars_u;
+    base_ranges: pn_chars_u_ranges();
+    ranges_fn: pn_local_start_ranges;
     ascii: [
         (0x30, 0x39), // [0-9]
         (0x3A, 0x3A), // ':'
@@ -541,6 +678,8 @@ terminal! {
     /// boundary-moving bug this module exists to prevent.
     tables VARNAME_START_ASCII, VARNAME_START_NON_ASCII;
     pub const fn is_varname_start(char) extends is_pn_chars_u;
+    base_ranges: pn_chars_u_ranges();
+    ranges_fn: varname_start_ranges;
     ascii: [
         (0x30, 0x39), // [0-9]
     ];
@@ -557,6 +696,8 @@ terminal! {
     /// [`is_pn_chars`].
     tables VARNAME_CONTINUE_ASCII, VARNAME_CONTINUE_NON_ASCII;
     pub const fn is_varname_continue(char) extends is_varname_start;
+    base_ranges: varname_start_ranges();
+    ranges_fn: varname_continue_ranges;
     ascii: [];
     non_ascii: [
         (0x00B7, 0x00B7), // #xB7
@@ -601,6 +742,8 @@ terminal! {
     /// would accept `ex:a\"b` and mint a local name containing a quote.
     tables PN_LOCAL_ESC_ASCII, PN_LOCAL_ESC_NON_ASCII;
     pub const fn is_pn_local_esc(char);
+    base_ranges: &[];
+    ranges_fn: pn_local_esc_ranges;
     ascii: [
         (0x21, 0x21), // '!'
         (0x23, 0x2F), // '#' '$' '%' '&' '\'' '(' ')' '*' '+' ',' '-' '.' '/'
@@ -662,6 +805,7 @@ terminal! {
     /// property, not wider.
     table IRIREF_FORBIDDEN_RANGES;
     pub const fn is_iriref_forbidden_byte(u8);
+    ranges_fn: iriref_forbidden_ranges;
     ranges: [
         (0x00, 0x20), // [#x00-#x20]: the C0 controls and SPACE
         (0x22, 0x22), // '"'
@@ -729,6 +873,8 @@ terminal! {
     /// blocks and the supplementary planes up to `#xEFFFF`.
     tables XML_NAME_START_CHAR_ASCII, XML_NAME_START_CHAR_NON_ASCII;
     pub const fn is_xml_name_start_char(char) extends is_pn_chars_base;
+    base_ranges: pn_chars_base_ranges();
+    ranges_fn: xml_name_start_char_ranges;
     ascii: [
         (0x3A, 0x3A), // ':' — present here, ABSENT from PN_CHARS_BASE
         (0x5F, 0x5F), // '_' — present here, ABSENT from PN_CHARS_BASE
@@ -770,6 +916,8 @@ terminal! {
     /// without subtracting it.
     tables XML_NAME_CHAR_ASCII, XML_NAME_CHAR_NON_ASCII;
     pub const fn is_xml_name_char(char) extends is_xml_name_start_char;
+    base_ranges: xml_name_start_char_ranges();
+    ranges_fn: xml_name_char_ranges;
     ascii: [
         (0x2D, 0x2D), // '-'
         (0x2E, 0x2E), // '.' — the scalar PN_CHARS does NOT admit
@@ -785,9 +933,13 @@ terminal! {
 #[cfg(test)]
 mod tests {
     use super::{
+        ScalarRange, blank_node_label_start_ranges, in_ranges, iriref_forbidden_ranges,
         is_blank_node_label_start, is_iriref_forbidden, is_iriref_forbidden_byte, is_pn_chars,
         is_pn_chars_base, is_pn_chars_u, is_pn_local_esc, is_pn_local_start, is_varname_continue,
         is_varname_start, is_ws, is_ws_char, is_xml_name_char, is_xml_name_start_char,
+        pn_chars_base_ranges, pn_chars_ranges, pn_chars_u_ranges, pn_local_esc_ranges,
+        pn_local_start_ranges, ranges_sorted_disjoint, varname_continue_ranges,
+        varname_start_ranges, ws_ranges, xml_name_char_ranges, xml_name_start_char_ranges,
     };
     use pretty_assertions::assert_eq;
 
@@ -795,6 +947,10 @@ mod tests {
     fn all_scalars() -> impl Iterator<Item = char> {
         (0..=0x0010_FFFF_u32).filter_map(char::from_u32)
     }
+
+    /// One range accessor under test: its name, its composed table, and the
+    /// predicate it must agree with.
+    type RangeCase = (&'static str, &'static [ScalarRange], fn(char) -> bool);
 
     /// An independent transcription of `PN_CHARS_BASE` as a `matches!` pattern
     /// rather than a range table, to check the table against.
@@ -933,6 +1089,68 @@ mod tests {
                 "{c:?}"
             );
             assert_eq!(is_xml_name_char(c), xml_name_char_oracle(c), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn every_range_accessor_agrees_with_its_predicate_over_all_scalars() {
+        // The macro emits, beside each predicate, an accessor returning the
+        // production's full SET as a sorted, disjoint table. Two independent
+        // claims are proved here for every one of them, over the whole scalar
+        // space rather than sampled:
+        //
+        // 1. the composed table is sorted and disjoint (the precondition the
+        //    accessor's consumers and `in_ranges` rely on); and
+        // 2. membership in that table is EXACTLY the predicate's answer —
+        //    including the `extends` inheritance, which is why `NameStartChar`
+        //    and `NameChar` are checked through their composed accessors and
+        //    not through the two tables the macro writes down.
+        //
+        // A drift between a table and the predicate that reads it is silent
+        // everywhere else (the emitter would splice a class the predicate no
+        // longer means), so this is the one place it is caught.
+        let cases: &[RangeCase] = &[
+            ("ws", ws_ranges(), is_ws_char),
+            (
+                "iriref_forbidden",
+                iriref_forbidden_ranges(),
+                is_iriref_forbidden,
+            ),
+            ("pn_chars_base", pn_chars_base_ranges(), is_pn_chars_base),
+            ("pn_chars_u", pn_chars_u_ranges(), is_pn_chars_u),
+            ("pn_chars", pn_chars_ranges(), is_pn_chars),
+            (
+                "blank_node_label_start",
+                blank_node_label_start_ranges(),
+                is_blank_node_label_start,
+            ),
+            ("pn_local_start", pn_local_start_ranges(), is_pn_local_start),
+            ("varname_start", varname_start_ranges(), is_varname_start),
+            (
+                "varname_continue",
+                varname_continue_ranges(),
+                is_varname_continue,
+            ),
+            ("pn_local_esc", pn_local_esc_ranges(), is_pn_local_esc),
+            (
+                "xml_name_start_char",
+                xml_name_start_char_ranges(),
+                is_xml_name_start_char,
+            ),
+            ("xml_name_char", xml_name_char_ranges(), is_xml_name_char),
+        ];
+        for (name, ranges, predicate) in cases {
+            assert!(
+                ranges_sorted_disjoint(ranges),
+                "{name}: composed ranges must be sorted, non-empty and disjoint",
+            );
+            for c in all_scalars() {
+                assert_eq!(
+                    in_ranges(c as u32, ranges),
+                    predicate(c),
+                    "{name} membership at {c:?}",
+                );
+            }
         }
     }
 

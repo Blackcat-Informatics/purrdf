@@ -9,7 +9,7 @@
 
 use std::fmt::Write as _;
 
-use crate::blank_label::{PN_CHARS_BASE_RANGES, PN_CHARS_EXTRA_RANGES};
+use purrdf_iri::terminals::{xml_name_char_ranges, xml_name_start_char_ranges};
 
 /// Push a single inclusive codepoint range as a `regex`-crate bracket-class
 /// member: `\u{lo}` for a one-codepoint range, `\u{lo}-\u{hi}` otherwise.
@@ -29,27 +29,34 @@ fn push_ranges(out: &mut String, ranges: &[(u32, u32)]) {
     }
 }
 
-/// The body (without enclosing `[`/`]`) of the `\i`/`\I` bracket expression:
-/// XML 1.0 `NameStartChar`, minus `':'` and `'_'` per
-/// [`PN_CHARS_BASE_RANGES`]'s own definition, with both of those two
-/// characters added back explicitly (XSD's `\i` is `NameStartChar` in full,
-/// unlike Turtle's `PN_CHARS_BASE`).
+/// The body (without enclosing `[`/`]`) of the `\i`/`\I` bracket expression.
+///
+/// XSD's `\i` is XML 1.0 `NameStartChar` in full — `':'`, `'_'` and the twelve
+/// non-ASCII ranges included. The set is taken from
+/// [`purrdf_iri::terminals::xml_name_start_char_ranges`], the ONE transcription
+/// of the production in the workspace, rather than re-derived here from
+/// Turtle's narrower `PN_CHARS_BASE` plus a hand-patched `":_"` suffix. The
+/// suffix abbreviated away the fact that it was reconstructing a different
+/// specification's terminal, and that reconstruction could drift from the
+/// shared table silently; the accessor is that table, so it cannot.
 pub(super) fn name_start_class_body() -> String {
     let mut body = String::new();
-    push_ranges(&mut body, PN_CHARS_BASE_RANGES);
-    body.push_str(":_");
+    push_ranges(&mut body, xml_name_start_char_ranges());
     body
 }
 
-/// The body (without enclosing `[`/`]`) of the `\c`/`\C` bracket expression:
-/// [`name_start_class_body`]'s set plus XML 1.0 `NameChar`'s extra ranges
-/// (`PN_CHARS_EXTRA_RANGES`) plus `'-'`, `'.'`, and `[0-9]`.
+/// The body (without enclosing `[`/`]`) of the `\c`/`\C` bracket expression.
+///
+/// XSD's `\c` is XML 1.0 `NameChar` in full; the composed set — `NameStartChar`
+/// plus `'-'`, `'.'`, `[0-9]`, U+00B7 MIDDLE DOT, the combining marks
+/// `[#x300-#x36F]` and the two ties `[#x203F-#x2040]` — comes from
+/// [`purrdf_iri::terminals::xml_name_char_ranges`], the shared production.
+/// Nothing is added here: the `.` that Turtle expresses by the *shape* of its
+/// `PN_LOCAL` production is an ordinary member of XML's `NameChar` class, and
+/// the accessor already carries it.
 pub(super) fn name_char_class_body() -> String {
-    let mut body = name_start_class_body();
-    push_ranges(&mut body, PN_CHARS_EXTRA_RANGES);
-    // `-` must be escaped inside a class (it would otherwise open a range
-    // with whatever precedes it); `.` is always literal inside a class.
-    body.push_str("\\-.0-9");
+    let mut body = String::new();
+    push_ranges(&mut body, xml_name_char_ranges());
     body
 }
 
@@ -84,7 +91,7 @@ pub(super) fn is_surrogate_range(lo: u32, hi: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::emit::translate;
-    use crate::blank_label::{is_pn_chars, is_pn_chars_u};
+    use purrdf_iri::terminals::{is_xml_name_char, is_xml_name_start_char};
 
     fn translated_regex(pattern: &str, dot_all: bool) -> regex::Regex {
         let source = translate(pattern, dot_all).expect("translate");
@@ -180,22 +187,22 @@ mod tests {
         assert!(!latin.is_match("\u{e9}"));
     }
 
-    /// `\i` must match EXACTLY the set [`is_pn_chars_u`] accepts, plus `':'`
-    /// (XSD's `\i` is XML 1.0 `NameStartChar` in full; `PN_CHARS_U` is
-    /// `NameStartChar` minus `':'`, which this test folds back in) and `\c`
-    /// must match exactly the set [`is_pn_chars`] accepts, plus `':'` and
-    /// `'.'` (XSD's `\c` is XML 1.0 `NameChar` in full; `PN_CHARS` omits
-    /// both `':'` -- for the same reason as `PN_CHARS_U` -- and `'.'`,
-    /// which Turtle handles separately in `PN_LOCAL` because an unescaped
-    /// `.` cannot end a Turtle name but XML's `NameChar` places no such
-    /// restriction, see [`crate::blank_label::is_valid_ncname`]'s own
-    /// `ch == '.'` fold-in), for every scalar value in the Unicode
-    /// codespace. A full sweep over all ~1.1M scalar values is cheap for a
-    /// compiled DFA; boundary codepoints of every range in
-    /// `PN_CHARS_BASE_RANGES`/`PN_CHARS_EXTRA_RANGES` are exercised by
-    /// construction since the sweep is exhaustive, not sampled.
+    /// `\i` must match EXACTLY XML 1.0 `NameStartChar` and `\c` exactly XML 1.0
+    /// `NameChar`, as those productions are spelled once in
+    /// [`purrdf_iri::terminals`] and reached here through the composed range
+    /// accessors — `is_xml_name_start_char` and `is_xml_name_char` are the
+    /// predicates over the same tables, so this pins the emitted class to the
+    /// shared terminal rather than to a second transcription that merely
+    /// agrees today.
+    ///
+    /// A full sweep over all ~1.1M scalar values is cheap for a compiled DFA,
+    /// and it is the only shape that proves the class is exact in BOTH
+    /// directions: a hand-patched suffix could drop a range's boundary scalar
+    /// without any sampled vector noticing. Boundary codepoints of every range
+    /// are exercised by construction since the sweep is exhaustive, not
+    /// sampled.
     #[test]
-    fn i_and_c_escapes_match_blank_label_tables_exactly() {
+    fn i_and_c_escapes_match_the_shared_xml_name_terminals_exactly() {
         let i_re = translated_regex(r"^\i$", false);
         let c_re = translated_regex(r"^\c$", false);
         for cp in 0_u32..=0x0010_FFFF {
@@ -204,16 +211,14 @@ mod tests {
             }
             let c = char::from_u32(cp).expect("valid scalar value");
             let s = c.to_string();
-            let expected_i = is_pn_chars_u(c) || c == ':';
             assert_eq!(
                 i_re.is_match(&s),
-                expected_i,
+                is_xml_name_start_char(c),
                 "\\i mismatch at U+{cp:04X} {c:?}"
             );
-            let expected_c = is_pn_chars(c) || c == ':' || c == '.';
             assert_eq!(
                 c_re.is_match(&s),
-                expected_c,
+                is_xml_name_char(c),
                 "\\c mismatch at U+{cp:04X} {c:?}"
             );
         }

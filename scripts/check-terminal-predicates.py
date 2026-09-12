@@ -173,6 +173,38 @@ SCANNERS: dict[str, str] = {
         "manifest moves a scoreboard, and the scoreboard is this repository's "
         "conformance claim"
     ),
+    # The `xsd_regex` module keeps its one character cursor in `scan.rs`, which
+    # the structure test DOES see (it holds both `fn peek` and `self.pos`), so
+    # `scan.rs` is deliberately absent from this ledger. The files below are the
+    # other lexical-decision sites in that module: each folds over the one
+    # cursor, or builds the character classes the translator splices, without
+    # holding a cursor itself. `classes.rs` is the shipped case -- its `\i`/`\c`
+    # bodies were retyped from Turtle's tables with a hand-patched suffix, and
+    # the structure test saw nothing because the retyping was a table, not a
+    # Unicode-property test. Listing them makes the scanner rules reach the
+    # module so a property-substitution in any of them is a finding rather than
+    # a silent pass.
+    "crates/rdf-core/src/xsd_regex/classes.rs": (
+        "builds the `\\i`/`\\I`/`\\c`/`\\C` bracket-class bodies the translator "
+        "splices; holds no cursor, so the structure test misses it, but a "
+        "Unicode-property approximation here would silently re-tokenize "
+        "`sh:pattern`, SPARQL `REGEX` and ShEx `PATTERN` at once"
+    ),
+    "crates/rdf-core/src/xsd_regex/emit.rs": (
+        "folds the token stream from the cursor in scan.rs into the emitted "
+        "`regex` source, including the name/space/word class rewrites; a "
+        "boundary decision lives here while the cursor lives next door"
+    ),
+    "crates/rdf-core/src/xsd_regex/ecma.rs": (
+        "folds the same token stream to decide which constructs change meaning "
+        "when copied into an ECMA-262 slot; no cursor of its own, so the "
+        "structure test cannot see it"
+    ),
+    "crates/rdf-core/src/xsd_regex/xflag.rs": (
+        "strips the XPath `x`-flag whitespace ahead of translation and must "
+        "exempt character classes exactly; folds over the scanner's token "
+        "stream rather than holding a cursor"
+    ),
 }
 
 # Inside a scanner, these substitute a Unicode property for an enumerated
