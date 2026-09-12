@@ -42,6 +42,25 @@ pub enum XsdRegexError {
     /// `\p{`/`\P{` block-escape name (no matching `}`). Carries a message
     /// naming the exact defect.
     Malformed(String),
+    /// The pattern source, or its translated `regex`-crate form, exceeds a
+    /// hard resource bound. Carries the measured size in bytes and the named
+    /// limit that was exceeded, so an operator can see both numbers and know
+    /// exactly how far over the input was.
+    ///
+    /// This is a refusal at the [`super::compile`] boundary, not a
+    /// silent truncation or a degraded fallback: `sh:pattern`, SPARQL
+    /// `REGEX`/`REPLACE`, and ShEx `PATTERN` all admit untrusted text, and on
+    /// `wasm32-unknown-unknown` a multi-megabyte pattern is an unrecoverable
+    /// `memory.grow` trap rather than a `Result`. The limits are deliberately
+    /// far above any real-world pattern (see the constants on
+    /// [`super::compile`]).
+    TooLarge {
+        /// The measured size of the offending string, in bytes.
+        bytes: usize,
+        /// The named limit (`MAX_SOURCE_BYTES` or `MAX_TRANSLATED_BYTES`) it
+        /// exceeded, in bytes.
+        limit: usize,
+    },
     /// Translation succeeded, but the resulting `regex`-crate source still
     /// failed to compile. This should not happen for any pattern this
     /// module's translation rules produce, but is retained as defense in
@@ -75,6 +94,10 @@ impl fmt::Display for XsdRegexError {
                  block escape"
             ),
             Self::Malformed(message) => write!(f, "malformed pattern: {message}"),
+            Self::TooLarge { bytes, limit } => write!(
+                f,
+                "pattern is {bytes} bytes, which exceeds the {limit}-byte limit"
+            ),
             Self::Compile(err) => write!(f, "pattern failed to compile after translation: {err}"),
         }
     }
@@ -88,7 +111,8 @@ impl std::error::Error for XsdRegexError {
             | Self::UnsupportedConstruct(_)
             | Self::Backreference(_)
             | Self::UnknownBlock(_)
-            | Self::Malformed(_) => None,
+            | Self::Malformed(_)
+            | Self::TooLarge { .. } => None,
         }
     }
 }

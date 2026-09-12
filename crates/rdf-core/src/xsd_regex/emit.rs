@@ -26,8 +26,9 @@
 
 use super::blocks;
 use super::classes::{
-    NOT_SPACE_CLASS, NOT_WORD_CLASS, SPACE_CLASS, WORD_CLASS, is_surrogate_range,
-    name_char_class_body, name_start_class_body, push_hex_range,
+    NOT_SPACE_CLASS, NOT_WORD_CLASS, SPACE_CLASS, WORD_CLASS, folded_name_char_class_body,
+    folded_name_start_class_body, is_surrogate_range, name_char_class_body, name_start_class_body,
+    push_hex_range,
 };
 use super::error::XsdRegexError;
 use super::scan::{Scanner, Token};
@@ -40,13 +41,34 @@ use super::scan::{Scanner, Token};
 /// rewritten per XPath F&O 3.1 §5.6.2 (excludes both `#xA` and `#xD`, not
 /// only `#xA` as Rust's own default does).
 ///
+/// `case_insensitive` is the caller's `i` flag. The caller still sets
+/// `RegexBuilder::case_insensitive(true)`; the flag is threaded here only so
+/// the `\i`/`\I`/`\c`/`\C` escapes can be emitted PRE-FOLDED inside a
+/// `(?-i:…)` scope. That scope is what stops `regex-syntax` from re-walking
+/// the ~917k-codepoint astral name range once per occurrence at
+/// Hir-translation time (see [`folded_name_start_class_body`]); the matched
+/// language is unchanged because the emitted set is the exact simple-case-fold
+/// closure `regex-syntax` would have produced.
+///
 /// Must be called AFTER [`super::xflag::strip_x_flag_whitespace`] when the
 /// `x` flag is set — the two operate on the same raw pattern text, and `x`'s
 /// removal has to happen first (its whitespace-exemption tracking is
 /// textual, not aware of any of the rewrites below).
-pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegexError> {
+pub(super) fn translate(
+    pattern: &str,
+    dot_all: bool,
+    case_insensitive: bool,
+) -> Result<String, XsdRegexError> {
     let mut out = String::with_capacity(pattern.len() + 16);
     let mut scanner = Scanner::new(pattern);
+    // XSD's `\i`/`\c` (and their negations) are the only constructs whose `i`
+    // rewrite differs by context: a standalone atom can carry a `(?-i:…)`
+    // scope, but a character-class member cannot (a group is not a class
+    // member), so inside a class the pre-folded body is spliced as a nested
+    // class and the surrounding `i` re-folds the already-closed set
+    // idempotently. Tracking the depth here — rather than in the scanner —
+    // keeps the rewrite to one comparison.
+    let mut class_depth: usize = 0;
     // Every `\`-escaped construct is handled by the `Escape`/`NameEscape`/
     // `SpaceEscape`/`WordEscape`/`UnicodeProperty`/`Backreference` arms below
     // in ANY context (in or out of a character class): `\b`/`\B` and
@@ -69,17 +91,44 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
                 out.push(c);
             }
             Token::NameEscape { negated, chars } => {
-                let body = if chars {
-                    name_char_class_body()
+                // Under `i` the canonical, pre-folded set is a process-wide
+                // constant; without it the raw body is (re)built per
+                // occurrence, exactly as before this change.
+                let raw_body;
+                let body: &str = if case_insensitive {
+                    if chars {
+                        folded_name_char_class_body()
+                    } else {
+                        folded_name_start_class_body()
+                    }
                 } else {
-                    name_start_class_body()
+                    raw_body = if chars {
+                        name_char_class_body()
+                    } else {
+                        name_start_class_body()
+                    };
+                    &raw_body
                 };
-                out.push('[');
-                if negated {
-                    out.push('^');
+                // Standalone (depth 0): scope `i` off so the pre-folded set is
+                // not walked again by `regex-syntax`; the set is already the
+                // exact closure, so the language is identical to today's.
+                // Inside a class: splices as a nested class, where the outer
+                // `i` re-folds the closed set to itself.
+                if case_insensitive && class_depth == 0 {
+                    out.push_str("(?-i:[");
+                    if negated {
+                        out.push('^');
+                    }
+                    out.push_str(body);
+                    out.push_str("])");
+                } else {
+                    out.push('[');
+                    if negated {
+                        out.push('^');
+                    }
+                    out.push_str(body);
+                    out.push(']');
                 }
-                out.push_str(&body);
-                out.push(']');
             }
             Token::SpaceEscape { negated } => {
                 out.push_str(if negated {
@@ -98,6 +147,7 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
                 out.push_str(if dot_all { "." } else { "[^\\u{a}\\u{d}]" });
             }
             Token::ClassOpen { negated } => {
+                class_depth += 1;
                 if negated {
                     // XSD `[^g-e]` is (complement of `g`) minus `e`, but
                     // Rust's `[^g--e]` applies `^` to the WHOLE class
@@ -127,6 +177,7 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
                 out.push_str("--");
             }
             Token::ClassClose => {
+                class_depth -= 1;
                 // The inner negated group's own `]` was already emitted by
                 // the `Subtract` arm above; only an unsubtracted negated
                 // group still owes one here.
@@ -211,7 +262,7 @@ mod tests {
     use super::*;
 
     fn translated_regex(pattern: &str, dot_all: bool) -> regex::Regex {
-        let source = translate(pattern, dot_all).expect("translate");
+        let source = translate(pattern, dot_all, false).expect("translate");
         regex::Regex::new(&source).unwrap_or_else(|e| panic!("compile {source:?}: {e}"))
     }
 
@@ -231,7 +282,7 @@ mod tests {
     #[test]
     fn negated_class_subtraction_binds_to_the_negation() {
         assert_eq!(
-            translate("[^0-9-[a-z]]", false).expect("translate"),
+            translate("[^0-9-[a-z]]", false, false).expect("translate"),
             "[[^0-9]--[a-z]]"
         );
         let re = translated_regex("^[^0-9-[a-z]]+$", false);
@@ -241,7 +292,10 @@ mod tests {
 
         // The wrap is emitted for every negated group, subtraction or not,
         // and `[[^x]]` means exactly what `[^x]` means.
-        assert_eq!(translate("[^abc]", false).expect("translate"), "[[^abc]]");
+        assert_eq!(
+            translate("[^abc]", false, false).expect("translate"),
+            "[[^abc]]"
+        );
         let plain = translated_regex("^[^abc]$", false);
         assert!(plain.is_match("d"));
         assert!(!plain.is_match("a"));
@@ -259,7 +313,7 @@ mod tests {
     /// pattern.
     #[test]
     fn backreference_tokenization_follows_the_preceding_group_count() {
-        let named = |pattern: &str| match translate(pattern, false) {
+        let named = |pattern: &str| match translate(pattern, false, false) {
             Err(XsdRegexError::Backreference(reference)) => reference,
             other => panic!("expected a back-reference for {pattern:?}, got {other:?}"),
         };
@@ -279,7 +333,7 @@ mod tests {
         // been seen, is MALFORMED — no engine can run it — which is a
         // different answer from one this engine declines to execute.
         for pattern in [r"a\9b", r"(a\1)", r"(?:a)\1"] {
-            match translate(pattern, false) {
+            match translate(pattern, false, false) {
                 Err(XsdRegexError::Malformed(message)) => {
                     assert!(
                         message.contains("does not exist") || message.contains("closing"),
@@ -298,7 +352,7 @@ mod tests {
     /// pattern contains.
     #[test]
     fn nul_escape_is_refused_as_itself_not_as_a_backreference() {
-        let err = translate("^a\\0b$", false).expect_err("\\0 is not a construct");
+        let err = translate("^a\\0b$", false, false).expect_err("\\0 is not a construct");
         let message = err.to_string();
         assert!(
             message.contains("\\0"),
@@ -309,7 +363,7 @@ mod tests {
             "\\0 is not a back-reference, and the message must not say it is: {message}"
         );
         // A real back-reference still reports as one.
-        let back = translate("(a)\\1", false).expect_err("no backreferences");
+        let back = translate("(a)\\1", false, false).expect_err("no backreferences");
         assert!(back.to_string().contains("backreference"));
     }
 
@@ -342,7 +396,7 @@ mod tests {
     fn dot_all_flag_leaves_dot_untouched_for_builder() {
         // `dot_all = true` means the translator must NOT rewrite `.`; the
         // caller applies `dot_matches_new_line` at the builder instead.
-        let source = translate("^a.b$", true).expect("translate");
+        let source = translate("^a.b$", true, false).expect("translate");
         assert_eq!(source, "^a.b$");
     }
 
@@ -376,7 +430,7 @@ mod tests {
 
     #[test]
     fn unknown_block_name_is_rejected() {
-        let err = translate(r"\p{IsNotARealBlock}", false).unwrap_err();
+        let err = translate(r"\p{IsNotARealBlock}", false, false).unwrap_err();
         assert_eq!(
             err,
             XsdRegexError::UnknownBlock("IsNotARealBlock".to_owned())
@@ -394,7 +448,7 @@ mod tests {
         // the Greek Extended block, not Greek and Coptic). This translator
         // must reject that spelling outright rather than let it fall
         // through to Rust's resolution.
-        let err = translate(r"\p{IsGreek}", false).unwrap_err();
+        let err = translate(r"\p{IsGreek}", false, false).unwrap_err();
         assert_eq!(err, XsdRegexError::UnknownBlock("IsGreek".to_owned()));
 
         // The correctly-spelled block escape must resolve to the BLOCK
@@ -407,24 +461,24 @@ mod tests {
 
     #[test]
     fn backreference_is_rejected_single_digit() {
-        let err = translate(r"(a)\1", false).unwrap_err();
+        let err = translate(r"(a)\1", false, false).unwrap_err();
         assert_eq!(err, XsdRegexError::Backreference("\\1".to_owned()));
     }
 
     #[test]
     fn backreference_is_rejected_multi_digit() {
-        let err = translate(r"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10", false).unwrap_err();
+        let err = translate(r"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10", false, false).unwrap_err();
         assert_eq!(err, XsdRegexError::Backreference("\\10".to_owned()));
     }
 
     #[test]
     fn bare_b_and_bb_are_rejected_outside_a_class() {
         assert_eq!(
-            translate(r"a\bc", false).unwrap_err(),
+            translate(r"a\bc", false, false).unwrap_err(),
             XsdRegexError::UnsupportedConstruct("\\b")
         );
         assert_eq!(
-            translate(r"\B", false).unwrap_err(),
+            translate(r"\B", false, false).unwrap_err(),
             XsdRegexError::UnsupportedConstruct("\\B")
         );
     }
@@ -432,11 +486,11 @@ mod tests {
     #[test]
     fn bare_b_and_bb_are_rejected_inside_a_class() {
         assert_eq!(
-            translate(r"[\b]", false).unwrap_err(),
+            translate(r"[\b]", false, false).unwrap_err(),
             XsdRegexError::UnsupportedConstruct("\\b")
         );
         assert_eq!(
-            translate(r"[\B]", false).unwrap_err(),
+            translate(r"[\B]", false, false).unwrap_err(),
             XsdRegexError::UnsupportedConstruct("\\B")
         );
     }
@@ -444,7 +498,7 @@ mod tests {
     #[test]
     fn dangling_backslash_is_rejected() {
         assert!(matches!(
-            translate("a\\", false),
+            translate("a\\", false, false),
             Err(XsdRegexError::Malformed(_))
         ));
     }
@@ -452,7 +506,7 @@ mod tests {
     #[test]
     fn unterminated_class_is_rejected() {
         assert!(matches!(
-            translate("[abc", false),
+            translate("[abc", false, false),
             Err(XsdRegexError::Malformed(_))
         ));
     }
@@ -460,7 +514,7 @@ mod tests {
     #[test]
     fn unterminated_block_escape_name_is_rejected() {
         assert!(matches!(
-            translate(r"\p{IsBasicLatin", false),
+            translate(r"\p{IsBasicLatin", false, false),
             Err(XsdRegexError::Malformed(_))
         ));
     }
@@ -470,5 +524,29 @@ mod tests {
         let re = translated_regex(r"^(\i+)\s(\c*)\p{IsBasicLatin}$", false);
         // 2 explicit groups in the source + the implicit whole-match group.
         assert_eq!(re.captures_len(), 3);
+    }
+
+    /// The `i` flag switches the name escapes to the PRE-FOLDED body inside a
+    /// `(?-i:…)` scope; without `i` the raw body is emitted, exactly as before
+    /// this rewrite. This is the observable contract the CPU fix rests on:
+    /// the scope is what stops `regex-syntax` from re-walking the astral name
+    /// range once per occurrence.
+    #[test]
+    fn name_escapes_are_pre_folded_under_i_only() {
+        let with_i = translate(r"^\c$", false, true).expect("translate under i");
+        assert!(
+            with_i.contains("(?-i:["),
+            "under i the escape must carry a scoped, pre-folded class: {with_i}"
+        );
+        let without_i = translate(r"^\c$", false, false).expect("translate without i");
+        assert!(
+            !without_i.contains("(?-i:"),
+            "without i there is nothing to scope: {without_i}"
+        );
+        // ...and the scoped form survives the surrounding `(?i)` applied by the
+        // builder, because that is exactly what the caller does.
+        let scoped = regex::Regex::new(&format!("(?i){with_i}")).expect("compile scoped");
+        assert!(scoped.is_match("A"));
+        assert!(scoped.is_match("a"));
     }
 }

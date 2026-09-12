@@ -8,6 +8,7 @@
 //! emitted.
 
 use std::fmt::Write as _;
+use std::sync::OnceLock;
 
 use purrdf_iri::terminals::{xml_name_char_ranges, xml_name_start_char_ranges};
 
@@ -60,6 +61,78 @@ pub(super) fn name_char_class_body() -> String {
     body
 }
 
+/// The simple-case-fold closure of [`name_start_class_body`], as a
+/// `regex`-crate bracket-class body (no enclosing brackets).
+///
+/// See [`fold_class_body`] for how the closure is computed and why it is
+/// computed once rather than left to `regex-syntax`'s per-occurrence folding.
+pub(super) fn folded_name_start_class_body() -> &'static str {
+    static CELL: OnceLock<String> = OnceLock::new();
+    CELL.get_or_init(|| fold_class_body(&name_start_class_body()))
+}
+
+/// The simple-case-fold closure of [`name_char_class_body`]; see
+/// [`folded_name_start_class_body`].
+pub(super) fn folded_name_char_class_body() -> &'static str {
+    static CELL: OnceLock<String> = OnceLock::new();
+    CELL.get_or_init(|| fold_class_body(&name_char_class_body()))
+}
+
+/// Compute the simple-case-fold closure of a `regex`-crate bracket-class
+/// **body** and return it in the same form.
+///
+/// The `\i`/`\I`/`\c`/`\C` bodies are constants, so their case-fold closure is
+/// a constant too. Computing it once here lets [`super::emit`] emit the
+/// PRE-FOLDED set under `(?-i:…)`, which removes `regex-syntax`'s
+/// per-occurrence, per-codepoint case-folding walk over the ~917k-codepoint
+/// astral `NameChar` range — the quadratic blow-up this module exists to
+/// close. `regex-syntax` folds at Hir-translation time, before `size_limit`
+/// applies, so the fold cannot be bounded by the engine; making the fold a
+/// constant is the only way to remove the cost.
+///
+/// The closure is obtained from `regex` itself (the same engine, and therefore
+/// the same Unicode simple-case-fold table, that the old emission relied on):
+/// compile `(?i)[<body>]` once and walk every Unicode scalar value, collecting
+/// exactly the scalars it accepts. That is deterministic — the sweep is over
+/// `0..=0x10FFFF` in order and the ranges are emitted in ascending order — and
+/// needs no new dependency. It is exact by construction rather than by a
+/// hand-rolled case-folding table that could drift from the engine's.
+fn fold_class_body(body: &str) -> String {
+    let folded = regex::Regex::new(&format!("(?i)[{body}]"))
+        .expect("the canonical XML-name class body always compiles");
+    // Every Unicode scalar value, in one haystack, so one DFA pass yields the
+    // whole closure. Surrogate code points are not scalar values and are
+    // therefore absent (a Rust `&str` cannot contain them anyway).
+    let mut haystack = String::with_capacity(0x11_0000);
+    for cp in 0..=0x0010_FFFF_u32 {
+        if let Some(c) = char::from_u32(cp) {
+            haystack.push(c);
+        }
+    }
+
+    let mut out = String::with_capacity(body.len() + 16);
+    let mut run: Option<(u32, u32)> = None;
+    for matched in folded.find_iter(&haystack) {
+        let cp = matched
+            .as_str()
+            .chars()
+            .next()
+            .expect("a bracket class matches exactly one character") as u32;
+        match run {
+            Some((lo, hi)) if cp == hi + 1 => run = Some((lo, cp)),
+            Some((lo, hi)) => {
+                push_hex_range(&mut out, lo, hi);
+                run = Some((cp, cp));
+            }
+            None => run = Some((cp, cp)),
+        }
+    }
+    if let Some((lo, hi)) = run {
+        push_hex_range(&mut out, lo, hi);
+    }
+    out
+}
+
 /// XSD `\s ::= [#x20\t\n\r]`, exactly 4 codepoints — Rust's own `\s`
 /// is the full Unicode `White_Space` property (26 codepoints
 /// including U+00A0/U+3000), which is too wide (§3 of the governing
@@ -94,7 +167,7 @@ mod tests {
     use purrdf_iri::terminals::{is_xml_name_char, is_xml_name_start_char};
 
     fn translated_regex(pattern: &str, dot_all: bool) -> regex::Regex {
-        let source = translate(pattern, dot_all).expect("translate");
+        let source = translate(pattern, dot_all, false).expect("translate");
         regex::Regex::new(&source).unwrap_or_else(|e| panic!("compile {source:?}: {e}"))
     }
 
@@ -162,11 +235,11 @@ mod tests {
     #[test]
     fn surrogate_blocks_are_the_empty_set_not_a_parse_error() {
         assert_eq!(
-            translate(r"\p{IsHighSurrogates}", false).expect("translate"),
+            translate(r"\p{IsHighSurrogates}", false, false).expect("translate"),
             "[^\\s\\S]"
         );
         assert_eq!(
-            translate(r"\P{IsLowSurrogates}", false).expect("translate"),
+            translate(r"\P{IsLowSurrogates}", false, false).expect("translate"),
             "[\\s\\S]"
         );
         let empty = translated_regex(r"^\p{IsHighSurrogates}$", false);
@@ -221,6 +294,55 @@ mod tests {
                 is_xml_name_char(c),
                 "\\c mismatch at U+{cp:04X} {c:?}"
             );
+        }
+    }
+
+    /// Build the ORACLE: what `compile(pattern, "i")` matched before this
+    /// module stopped leaving name-escape folding to `regex-syntax`. The old
+    /// path is exactly `translate(pattern, _, case_insensitive = false)`
+    /// followed by the builder's global `(?i)`, so prepending `(?i)` to the
+    /// raw-body translation reproduces it byte-for-byte.
+    fn old_i_regex(pattern: &str, dot_all: bool) -> regex::Regex {
+        let source = translate(pattern, dot_all, false).expect("translate (old path)");
+        regex::Regex::new(&format!("(?i){source}")).expect("compile old-path regex")
+    }
+
+    /// Assert two single-character-class regexes accept exactly the same
+    /// scalars, over the whole Unicode scalar space (surrogates excluded).
+    fn assert_same_scalar_language(new: &regex::Regex, old: &regex::Regex, label: &str) {
+        for cp in 0_u32..=0x0010_FFFF {
+            if (0xD800..=0xDFFF).contains(&cp) {
+                continue; // surrogates: not representable as a `char`
+            }
+            let c = char::from_u32(cp).expect("valid scalar value");
+            let s = c.to_string();
+            assert_eq!(
+                new.is_match(&s),
+                old.is_match(&s),
+                "{label} mismatch at U+{cp:04X} {c:?}"
+            );
+        }
+    }
+
+    /// The pre-folded `(?-i:…)` rewrite must not change the matched language
+    /// for `\i`, `\I`, `\c`, `\C` — standalone, spliced inside a class, and as
+    /// a class-subtraction operand. Each new `compile(.., "i")` is compared
+    /// against the old translation over the whole scalar space, so a
+    /// case-fold closure that dropped or added a single scalar fails here.
+    #[test]
+    fn name_escapes_under_i_match_the_old_language_exactly() {
+        for pattern in [
+            r"^\i$",
+            r"^\I$",
+            r"^\c$",
+            r"^\C$",
+            r"^[\i0-9]+$",
+            r"^[a-z-[\c]]+$",
+            r"^[^\i x]+$",
+        ] {
+            let new = super::super::compile(pattern, "i").expect("compile under i");
+            let old = old_i_regex(pattern, false);
+            assert_same_scalar_language(&new, &old, pattern);
         }
     }
 }

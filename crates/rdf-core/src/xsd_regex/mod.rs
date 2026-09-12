@@ -61,6 +61,34 @@ pub use error::XsdRegexError;
 
 use std::ops::Deref;
 
+/// Maximum size, in bytes, of a pattern source string accepted by [`compile`].
+///
+/// 64 KiB is a generous ceiling: it is orders of magnitude beyond any
+/// real-world `sh:pattern`/`REGEX`/`PATTERN` (the longest pattern in this
+/// repository's own conformance corpus is a few dozen bytes), while still
+/// bounding the per-byte work `scan`/`emit` perform before the translated-size
+/// bound below applies. The source is materialized as a `Vec<char>` (four
+/// bytes per byte of input) and every `\i`/`\c` expands to a ~300-byte
+/// bracket class, so an unbounded source is an unbounded amplifier.
+pub const MAX_SOURCE_BYTES: usize = 64 * 1024;
+
+/// Maximum size, in bytes, of the translated `regex`-crate source accepted by
+/// [`compile`], checked after translation and before the string is handed to
+/// [`regex::RegexBuilder`].
+///
+/// The translation is where amplification actually happens: each `\i`/`\c`
+/// (2 source bytes) becomes a ~300-byte bracket class, so a 64 KiB source of
+/// nothing but those escapes would translate to megabytes. This bound is the
+/// backstop that makes the pathological case a named [`XsdRegexError::TooLarge`]
+/// instead of a multi-second Hir-translation walk. It sits well above ordinary
+/// expansion — a class-splice `\i` amplifies about 111×, and real patterns are
+/// tiny — but far below what a hostile repetition of name escapes produces.
+///
+/// `regex-syntax` folds case-insensitively at Hir-translation time, before its
+/// own `size_limit` is consulted, so this explicit bound is the only place the
+/// translated cost can be stopped before the engine is entered.
+pub const MAX_TRANSLATED_BYTES: usize = 1024 * 1024;
+
 /// A `sh:pattern`/`REGEX`/`PATTERN` pattern compiled by [`compile`].
 ///
 /// Dereferences to the underlying [`regex::Regex`], so existing call sites
@@ -113,9 +141,17 @@ impl Deref for CompiledPattern {
 ///
 /// Returns [`XsdRegexError`] naming the exact unsupported flag character,
 /// unsupported construct (`\b`/`\B`), backreference, unrecognized Unicode
-/// block name, or pattern malformation (see [`XsdRegexError`]'s variants)
-/// that caused translation or the underlying `regex` compile to fail.
+/// block name, pattern malformation (see [`XsdRegexError`]'s variants), or an
+/// over-limit source/translated size ([`XsdRegexError::TooLarge`]) that caused
+/// translation or the underlying `regex` compile to fail.
 pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexError> {
+    if pattern.len() > MAX_SOURCE_BYTES {
+        return Err(XsdRegexError::TooLarge {
+            bytes: pattern.len(),
+            limit: MAX_SOURCE_BYTES,
+        });
+    }
+
     let mut case_insensitive = false;
     let mut dot_all = false;
     let mut multi_line = false;
@@ -144,6 +180,12 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
         // `x` afterward would delete literal spaces from the pattern, which
         // is exactly the bug this module does not repeat.
         let escaped = regex::escape(pattern);
+        if escaped.len() > MAX_TRANSLATED_BYTES {
+            return Err(XsdRegexError::TooLarge {
+                bytes: escaped.len(),
+                limit: MAX_TRANSLATED_BYTES,
+            });
+        }
         let regex = regex::RegexBuilder::new(&escaped)
             .case_insensitive(case_insensitive)
             .build()?;
@@ -162,7 +204,13 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
     } else {
         pattern.to_owned()
     };
-    let translated = emit::translate(&source, dot_all)?;
+    let translated = emit::translate(&source, dot_all, case_insensitive)?;
+    if translated.len() > MAX_TRANSLATED_BYTES {
+        return Err(XsdRegexError::TooLarge {
+            bytes: translated.len(),
+            limit: MAX_TRANSLATED_BYTES,
+        });
+    }
     let regex = regex::RegexBuilder::new(&translated)
         .case_insensitive(case_insensitive)
         .dot_matches_new_line(dot_all)
@@ -370,5 +418,71 @@ mod tests {
         assert!(compiled.is_match("ab"));
         assert!(!compiled.is_literal());
         assert_eq!(compiled.as_regex().as_str(), compiled.as_str());
+    }
+
+    /// The source bound is a refusal at the boundary, naming both numbers so
+    /// an operator can see exactly how far over the input was.
+    #[test]
+    fn source_over_the_limit_is_refused_with_both_numbers() {
+        let oversized = "a".repeat(MAX_SOURCE_BYTES + 1);
+        let err = compile(&oversized, "").unwrap_err();
+        assert_eq!(
+            err,
+            XsdRegexError::TooLarge {
+                bytes: MAX_SOURCE_BYTES + 1,
+                limit: MAX_SOURCE_BYTES,
+            }
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(&(MAX_SOURCE_BYTES + 1).to_string())
+                && message.contains(&MAX_SOURCE_BYTES.to_string()),
+            "the message must name both numbers: {message}"
+        );
+    }
+
+    /// A source exactly at the limit is still accepted; the bound is `>`, not
+    /// `>=`, so the documented limit is usable rather than off-by-one.
+    #[test]
+    fn source_at_the_limit_compiles() {
+        let at_limit = "a".repeat(MAX_SOURCE_BYTES);
+        compile(&at_limit, "").expect("a source exactly at MAX_SOURCE_BYTES");
+    }
+
+    /// A pattern that translates just under the translated bound compiles.
+    /// `\c` (2 bytes) expands under `i` to a ~309-byte scoped, pre-folded
+    /// class, so 3000 of them stays below the 1 MiB bound.
+    #[test]
+    fn translated_length_just_under_the_limit_compiles() {
+        let pattern = r"\c".repeat(3000);
+        compile(&pattern, "i").expect("translated length just under MAX_TRANSLATED_BYTES");
+    }
+
+    /// The pathological amplification this module must stop: enough `\c`
+    /// escapes that the translated source exceeds the bound. It must be a
+    /// named `TooLarge` returned promptly — the pre-folded emission means the
+    /// translation is a linear string build, never a per-occurrence
+    /// `regex-syntax` fold walk, so the rejection cannot consume seconds of CPU
+    /// or gigabytes of RSS.
+    #[test]
+    fn translated_over_the_limit_is_refused_promptly() {
+        let pattern = r"\c".repeat(4000);
+        let started = std::time::Instant::now();
+        let err = compile(&pattern, "i").unwrap_err();
+        let elapsed = started.elapsed();
+        let XsdRegexError::TooLarge { bytes, limit } = err else {
+            panic!("expected TooLarge, got {err:?}");
+        };
+        assert!(bytes > limit, "{bytes} must exceed {limit}");
+        assert_eq!(limit, MAX_TRANSLATED_BYTES);
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "rejection took {elapsed:?}, which is not prompt"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(&bytes.to_string()) && message.contains(&limit.to_string()),
+            "the message must name both numbers: {message}"
+        );
     }
 }
