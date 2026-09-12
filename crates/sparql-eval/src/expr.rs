@@ -4229,15 +4229,28 @@ fn eval_replace<D: DatasetView + Sync>(
         return Ok(None);
     };
     let flags = string_arg(vals, 3).map(|(f, _)| f).unwrap_or_default();
-    let Some(re) = cached_regex(ctx, &pattern, &flags) else {
+    let Some(compiled) = cached_regex(ctx, &pattern, &flags) else {
         return Ok(None);
     };
-    // SPARQL uses $N for capture-group references — same as the regex crate.
-    let replaced = re.replace_all(&s, replacement.as_str()).into_owned();
+    let replaced = if compiled.is_literal() {
+        // XPath F&O 3.1 §5.6.2, the `q` flag: "the replacement string is used
+        // as is" — with `q`, `$` and `\` in the replacement lose their special
+        // meaning along with the metacharacters in the pattern. `NoExpand`
+        // is the regex crate's spelling of exactly that, and without it a
+        // `q`-flagged REPLACE would still expand `$1` against a pattern that,
+        // being `regex::escape`d, has no capture groups at all — silently
+        // substituting an empty string for text the caller wrote literally.
+        compiled
+            .replace_all(&s, regex::NoExpand(replacement.as_str()))
+            .into_owned()
+    } else {
+        // SPARQL uses $N for capture-group references — same as the regex crate.
+        compiled.replace_all(&s, replacement.as_str()).into_owned()
+    };
     Ok(Some(make_string(ctx, replaced, lang)))
 }
 
-/// The compiled regex for `(pattern, flags)`, from the per-query cache.
+/// The compiled pattern for `(pattern, flags)`, from the per-query cache.
 ///
 /// The hit path probes with the **borrowed** strings (the two-level map avoids
 /// allocating a `(String, String)` key per row) and returns an `Arc` clone — the
@@ -4248,7 +4261,7 @@ fn cached_regex<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     pattern: &str,
     flags: &str,
-) -> Option<Arc<regex::Regex>> {
+) -> Option<Arc<purrdf_core::xsd_regex::CompiledPattern>> {
     if let Some(cached) = ctx
         .regex_cache
         .get(pattern)
@@ -4264,19 +4277,37 @@ fn cached_regex<D: DatasetView + Sync>(
     compiled
 }
 
-/// Build a regex from a SPARQL pattern + flag string (`i`, `s`, `m`, `x`).
-fn build_regex(pattern: &str, flags: &str) -> Option<regex::Regex> {
-    let mut builder = regex::RegexBuilder::new(pattern);
-    for f in flags.chars() {
-        match f {
-            'i' => builder.case_insensitive(true),
-            's' => builder.dot_matches_new_line(true),
-            'm' => builder.multi_line(true),
-            'x' => builder.ignore_whitespace(true),
-            _ => return None,
-        };
-    }
-    builder.build().ok()
+/// Build a compiled pattern from a SPARQL `REGEX`/`REPLACE` pattern plus its
+/// flag string (`i`, `s`, `m`, `x`, `q`).
+///
+/// SPARQL 1.1 §17.4.3.14 defines `REGEX` as an invocation of XPath F&O 3.1
+/// `fn:matches`, and §17.4.3.15 defines `REPLACE` as `fn:replace`, so the
+/// governing dialect is XSD/XPath `regExp` — **not** the `regex` crate's. This
+/// delegates to [`purrdf_core::xsd_regex::compile`], the one shared translation
+/// from that dialect, so `REGEX`, `sh:pattern` and ShEx `PATTERN` carry the
+/// same accept set and the same semantics (ETHOS §O).
+///
+/// Two behaviours change as a result, both deliberate:
+///
+/// * `x` is XPath's flag — remove `#x9`, `#xA`, `#xD` and `#x20` outside
+///   character-class expressions — not `RegexBuilder::ignore_whitespace`, which
+///   removes the 26-member Unicode `White_Space` property, treats `#` as a
+///   comment introducer, and strips whitespace *inside* character classes that
+///   XPath explicitly exempts.
+/// * `q` (match the pattern literally) is accepted rather than rejected, and
+///   the returned [`CompiledPattern`](purrdf_core::xsd_regex::CompiledPattern)
+///   carries that bit so `REPLACE()` can honour it in the replacement string.
+///
+/// # Contract
+///
+/// `None` — never an `EvalError` — for any flag or pattern that does not
+/// compile, because SPARQL's evaluation rules make an ill-formed `REGEX`/
+/// `REPLACE` argument a type error that leaves the expression unbound rather
+/// than failing the query. The specific [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError)
+/// is therefore discarded here, exactly as the pre-existing `builder.build().ok()`
+/// discarded `regex::Error`.
+fn build_regex(pattern: &str, flags: &str) -> Option<purrdf_core::xsd_regex::CompiledPattern> {
+    purrdf_core::xsd_regex::compile(pattern, flags).ok()
 }
 
 /// `STRLANG(lexical, lang)`.
@@ -4973,6 +5004,202 @@ mod tests {
             None
         );
         assert_eq!(entries(&ctx), 2);
+    }
+
+    /// A `q`-flagged pattern compiles and is cached like any other, where it
+    /// used to be rejected as an unknown flag. Guards the half of the flag
+    /// alphabet that changed meaning rather than merely widening: `"z"` above
+    /// must still fail, and `"q"` here must still succeed, in the same cache.
+    #[test]
+    fn regex_q_flag_compiles_and_caches_like_any_other() {
+        let ds = empty_ds();
+        let schema = VarSchema::new();
+        let mut ctx = EvalCtx::new(&ds);
+        let re = Expression::FunctionCall(Function::Regex, vec![lit("a.c"), lit("a.c"), lit("q")]);
+        let no = Expression::FunctionCall(Function::Regex, vec![lit("abc"), lit("a.c"), lit("q")]);
+
+        assert_eq!(
+            eval_ebv(&re, &[], &schema, &mut ctx).expect("q regex"),
+            Some(true),
+            "under `q` the pattern's `.` is a literal dot and matches one"
+        );
+        assert_eq!(
+            eval_ebv(&no, &[], &schema, &mut ctx).expect("q regex"),
+            Some(false),
+            "under `q` the pattern's `.` must not act as a wildcard"
+        );
+    }
+
+    /// `REGEX()` is `fn:matches` (SPARQL 1.1 §17.4.3.14), so its pattern body is
+    /// XSD/XPath `regExp` — every construct below used to be evaluated with
+    /// `regex`-crate semantics instead, either failing to compile or (worse)
+    /// compiling with a silently different meaning.
+    #[test]
+    fn regex_evaluates_the_xsd_dialect_not_the_regex_crates() {
+        let ds = empty_ds();
+        let m = |text: &str, pattern: &str, flags: &str| {
+            ebv(
+                &ds,
+                &Expression::FunctionCall(
+                    Function::Regex,
+                    vec![lit(text), lit(pattern), lit(flags)],
+                ),
+            )
+        };
+
+        // `\i`/`\c` — XML NameStartChar/NameChar. `regex` has no such escape,
+        // so these did not compile at all before.
+        assert_eq!(m("abc123", r"^\i\c*$", ""), Some(true));
+        assert_eq!(m("1abc", r"^\i\c*$", ""), Some(false));
+
+        // Block escapes are BLOCKS. `\p{IsBasicLatin}` did not compile before;
+        // `\p{IsGreek}` DID, resolving through `regex-syntax`'s loose name
+        // matching as the *Script* `Greek` — which matches U+1F00 (Greek
+        // Extended), a codepoint outside the `Greek and Coptic` BLOCK. That
+        // silent wrong answer is the regression this pins. The block's
+        // current spelling is `IsGreekandCoptic` (Unicode 4.1 renamed it),
+        // and the pre-4.1 name is now refused rather than guessed at, so the
+        // expression is unbound instead of confidently wrong.
+        assert_eq!(m("A", r"^\p{IsBasicLatin}$", ""), Some(true));
+        assert_eq!(m("\u{0370}", r"^\p{IsGreekandCoptic}$", ""), Some(true));
+        assert_eq!(
+            m("\u{1F00}", r"^\p{IsGreekandCoptic}$", ""),
+            Some(false),
+            "U+1F00 is in the Greek Extended block, not Greek and Coptic"
+        );
+        assert_eq!(m("\u{0370}", r"^\p{IsGreek}$", ""), None);
+
+        // Character-class subtraction is XSD-only syntax.
+        assert_eq!(m("bcd", r"^[a-z-[aeiou]]+$", ""), Some(true));
+        assert_eq!(m("abc", r"^[a-z-[aeiou]]+$", ""), Some(false));
+
+        // `\s` is XSD's four code points, not the Unicode `White_Space`
+        // property: U+00A0 carries the property but is not one of the four.
+        assert_eq!(m(" \t\r\n", r"^\s+$", ""), Some(true));
+        assert_eq!(m("\u{A0}", r"^\s$", ""), Some(false));
+
+        // `.` excludes BOTH #x0A and #x0D; `regex` excludes only #x0A.
+        assert_eq!(m("a\rb", "^a.b$", ""), Some(false));
+        assert_eq!(m("a\nb", "^a.b$", ""), Some(false));
+        assert_eq!(m("axb", "^a.b$", ""), Some(true));
+        // …and `s` restores both.
+        assert_eq!(m("a\rb", "^a.b$", "s"), Some(true));
+        assert_eq!(m("a\nb", "^a.b$", "s"), Some(true));
+    }
+
+    /// Constructs the `fn:matches` grammar does not define must not be
+    /// evaluated as if it did. `\b`/`\B` are Perl word boundaries that `regex`
+    /// accepts and XSD/XPath never defined; a backreference IS in the grammar
+    /// (F&O §5.6.1.4) but cannot run on a DFA engine. Both leave the
+    /// expression unbound rather than answering with a different language.
+    #[test]
+    fn regex_rejects_constructs_outside_the_fn_matches_grammar() {
+        let ds = empty_ds();
+        let m = |text: &str, pattern: &str| {
+            ebv(
+                &ds,
+                &Expression::FunctionCall(Function::Regex, vec![lit(text), lit(pattern), lit("")]),
+            )
+        };
+        assert_eq!(m("ab cd", r"\bcd"), None, "\\b is not an XSD construct");
+        assert_eq!(m("abcd", r"\Bcd"), None, "\\B is not an XSD construct");
+        assert_eq!(m("abab", r"(ab)\1"), None, "backreferences cannot run");
+        // `\b` is refused inside a character class too, where the `regex`
+        // crate would otherwise read it as a backspace escape — a third
+        // meaning again for the same two characters.
+        assert_eq!(m("b", r"^[\b]$"), None);
+        // The refusal is of the ESCAPE, not the letter: an ordinary `b`, in
+        // a class or out of one, is untouched.
+        assert_eq!(m("b", "^[ab]$"), Some(true));
+        assert_eq!(m("b", "^b$"), Some(true));
+    }
+
+    /// XPath F&O 3.1 §5.6.2's four `x`-flag examples, through the live
+    /// `REGEX()` dispatch. `RegexBuilder::ignore_whitespace` — what this call
+    /// site used before — fails the second and third outright and adds a `#`
+    /// comment syntax XPath regex does not have.
+    #[test]
+    fn regex_x_flag_is_xpaths_not_rusts_verbose_mode() {
+        let ds = empty_ds();
+        let m = |text: &str, pattern: &str| {
+            ebv(
+                &ds,
+                &Expression::FunctionCall(Function::Regex, vec![lit(text), lit(pattern), lit("x")]),
+            )
+        };
+        assert_eq!(m("helloworld", "hello world"), Some(true));
+        assert_eq!(
+            m("helloworld", "hello[ ]world"),
+            Some(false),
+            "whitespace inside a character class expression is NOT removed"
+        );
+        assert_eq!(m("hello world", r"hello\ sworld"), Some(true));
+        assert_eq!(m("hello world", "hello world"), Some(false));
+        // `#` is an ordinary character: `ignore_whitespace` compiled this to
+        // `a`, which matched anything containing an "a".
+        assert_eq!(m("a#bc", "a#b c"), Some(true));
+        assert_eq!(m("az", "a#b c"), Some(false));
+        // U+3000 carries the Unicode `White_Space` property but is not one of
+        // the four code points XPath names, so it stays in the pattern.
+        assert_eq!(m("a\u{3000}b", "a\u{3000}b"), Some(true));
+        assert_eq!(m("ab", "a\u{3000}b"), Some(false));
+    }
+
+    /// `REPLACE()` is `fn:replace`, whose `q` flag makes the REPLACEMENT string
+    /// literal too (F&O §5.6.2). Without `NoExpand` a `q`-flagged replacement
+    /// containing `$1` would be expanded against a `regex::escape`d pattern
+    /// that has no capture groups at all, silently substituting an empty
+    /// string for text the caller wrote literally.
+    #[test]
+    fn replace_with_the_q_flag_keeps_the_replacement_literal() {
+        let ds = empty_ds();
+        let replace = |s: &str, pattern: &str, replacement: &str, flags: &str| {
+            lex(
+                &ds,
+                &Expression::FunctionCall(
+                    Function::Replace,
+                    vec![lit(s), lit(pattern), lit(replacement), lit(flags)],
+                ),
+            )
+        };
+
+        // Pattern side: `.` is a literal dot, so only the literal "a.c" goes.
+        assert_eq!(replace("xa.cx", "a.c", "Z", "q"), Some("xZx".to_owned()));
+        assert_eq!(replace("xabcx", "a.c", "Z", "q"), Some("xabcx".to_owned()));
+        // Replacement side: `$1` is two literal characters under `q`.
+        assert_eq!(
+            replace("a.c", "a.c", "[$1]", "q"),
+            Some("[$1]".to_owned()),
+            "under `q` the replacement is used as is"
+        );
+        // …and a backslash likewise.
+        assert_eq!(replace("a.c", "a.c", r"\$", "q"), Some(r"\$".to_owned()));
+    }
+
+    /// The translator introduces **zero** capturing groups (every group it
+    /// needs is `(?:...)`), so `$N` numbering in a non-`q` `REPLACE()` is
+    /// exactly the source pattern's own numbering — including when the pattern
+    /// contains a construct that gets rewritten.
+    #[test]
+    fn replace_capture_group_numbering_survives_translation() {
+        let ds = empty_ds();
+        let replace = |s: &str, pattern: &str, replacement: &str| {
+            lex(
+                &ds,
+                &Expression::FunctionCall(
+                    Function::Replace,
+                    vec![lit(s), lit(pattern), lit(replacement), lit("")],
+                ),
+            )
+        };
+        assert_eq!(
+            replace("abc", "(a)(b)(c)", "$3$2$1"),
+            Some("cba".to_owned())
+        );
+        // `\s` and `.` are both rewritten by the translator; the groups around
+        // them keep their numbers.
+        assert_eq!(replace("a b", r"(a)\s(b)", "$2-$1"), Some("b-a".to_owned()));
+        assert_eq!(replace("axb", "(a)(.)(b)", "$2"), Some("x".to_owned()));
     }
 
     #[test]

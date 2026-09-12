@@ -491,12 +491,22 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub(crate) exists_definition_memo: DetHashMap<ExistsDefinitionMemoKey<D::Id>, bool>,
     /// Per-query cache for SPARQL `REGEX`/`REPLACE` pattern+flag compilations,
     /// keyed pattern-then-flags so a hit probes with **borrowed** strings (no
-    /// per-row key allocation). The compiled regex is behind an `Arc`, so a hit
+    /// per-row key allocation). The compiled pattern is behind an `Arc`, so a hit
     /// hands out a cheap pointer clone that **shares** the regex's lazy-DFA cache
     /// pool instead of minting a fresh one per row. Dynamic pattern expressions
     /// still compile per distinct value, but a filter over many rows no longer
     /// rebuilds the same automata (or their DFA caches) for every row.
-    pub(crate) regex_cache: DetHashMap<String, DetHashMap<String, Option<Arc<regex::Regex>>>>,
+    ///
+    /// The value is a [`purrdf_core::xsd_regex::CompiledPattern`] rather than a
+    /// bare [`regex::Regex`] because `REPLACE()` needs one more bit than the
+    /// automaton carries: whether the pattern was compiled under the XPath `q`
+    /// (literal) flag, which decides whether `$`/`\` in the *replacement* string
+    /// keep their special meaning (XPath F&O 3.1 §5.6.2). Caching the regex
+    /// alone would strand that bit at the compile site.
+    pub(crate) regex_cache: DetHashMap<
+        String,
+        DetHashMap<String, Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
+    >,
     /// Lazily-resolved solution terms for the `xsd:boolean` literals `"false"` /
     /// `"true"` (indexed by `usize::from(bool)`), so per-row boolean expression
     /// results skip the value-hash intern probe. Interning is deterministic per
