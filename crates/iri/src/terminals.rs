@@ -359,7 +359,7 @@ macro_rules! terminal {
         /// The production's full range set, sorted and disjoint.
         ///
         /// A byte-shaped production's table is already its whole set: it is
-        /// proved wholly ASCII, so no scalar at or above [`ASCII_LIMIT`] is a
+        /// proved wholly ASCII, so no scalar at or above `ASCII_LIMIT` is a
         /// member and the same table is the set over the scalar space.
         #[inline]
         #[must_use]
@@ -433,9 +433,9 @@ macro_rules! terminal {
         /// production's ASCII additions, and its non-ASCII additions,
         /// composed into one sorted, disjoint table.
         ///
-        /// [`merge`] proves the composed table sorted and disjoint at compile
+        /// `merge` proves the composed table sorted and disjoint at compile
         /// time, exactly as the macro proves each written table, so the binary
-        /// search [`in_ranges`] performs is valid over it too.
+        /// search `in_ranges` performs is valid over it too.
         #[inline]
         #[must_use]
         $vis const fn $ranges_name() -> &'static [ScalarRange] {
