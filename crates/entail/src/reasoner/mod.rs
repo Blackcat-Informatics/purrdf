@@ -305,7 +305,7 @@ impl Reasoner {
     /// computing `ds`'s producer-independent identity is refused (a reserved-vocabulary
     /// term, or an exhausted n-degree search budget) — `ds` is wholly caller-supplied here,
     /// so this comes back as a value rather than the panic
-    /// [`purrdf_core::canonicalize`](purrdf_core::canonicalize) would raise for the same
+    /// [`purrdf_core::canonicalize`] would raise for the same
     /// input.
     pub fn with_proofs(ds: &RdfDataset) -> Result<Self, EntailError> {
         let input = crate::owl_dl::proof::try_ontology_identity(ds)
