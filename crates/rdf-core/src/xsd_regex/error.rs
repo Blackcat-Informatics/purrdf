@@ -46,18 +46,61 @@ pub enum XsdRegexError {
     /// remedy differs: a bad block name is usually a misspelling, while a
     /// script name is a whole construct this dialect does not have.
     UnknownCategory(String),
-    /// The pattern source is malformed independently of any specific
-    /// construct above -- a dangling trailing backslash, an unterminated
-    /// character class (`[` with no matching `]`), an unterminated
-    /// `\p{`/`\P{` block-escape name (no matching `}`), a character-class
-    /// interior that only the Rust dialect accepts (an unescaped `[` that is
-    /// not a `-[` subtraction operand, a `]` at the class head, or a bare `]`
-    /// outside any class), a `(?…` construct other than the non-capturing
-    /// group `(?:` (XML Schema Part 2 Appendix G defines no inline-flag,
-    /// lookaround, comment or named-group syntax), or an escape outside the
-    /// closed `SingleCharEsc` enumeration the grammar defines. Carries a
-    /// message naming the exact defect.
-    Malformed(String),
+    /// The pattern ends with a `\` that has no following character to escape.
+    DanglingBackslash,
+    /// An unterminated character class: a `[` with no matching `]` before the
+    /// end of the pattern.
+    UnterminatedCharacterClass,
+    /// An unescaped `[` inside an open character class that is not the operand
+    /// of a `-[` subtraction. XML Schema Part 2 Appendix G's `charGroup`
+    /// defines no nested character class, so `regex-syntax`'s nested-class
+    /// union is a different language; a literal `[` must be escaped as `\[`.
+    UnescapedClassOpen,
+    /// A bare `]` outside any character class. It only ever closes a class in
+    /// the XSD/XPath grammar, so a literal one must be escaped as `\]`.
+    UnescapedClassClose,
+    /// A `]` at the head of a character class, before any member. XSD's
+    /// `charGroup` requires at least one member, so a literal `]` must be
+    /// escaped as `\]`.
+    LiteralClassCloseAtHead,
+    /// A `(?…` construct other than the non-capturing group `(?:`. XML Schema
+    /// Part 2 Appendix G defines no inline-flag, lookaround, comment or
+    /// named-group syntax. Carries the exact spelling found (`"(?i"`,
+    /// `"(?<"`, …), or `"(?"` when the pattern ends immediately after `(?`.
+    UnsupportedGroupConstruct {
+        /// The rejected `(?…` spelling, one to three characters long.
+        found: String,
+    },
+    /// The escape `\0`. It is neither a back-reference (XPath F&O 3.1
+    /// §5.6.1.4's production starts at `\1`) nor a `SingleCharEsc` (XML
+    /// Schema Part 2 Appendix G enumerates those), so it is not a construct
+    /// this dialect has.
+    UnsupportedNulEscape,
+    /// An escape outside the closed `SingleCharEsc` enumeration the grammar
+    /// defines and outside the multi-character escapes this implementation
+    /// adds. Carries the escaped character (e.g. `'A'` for `\A`).
+    UnsupportedEscape {
+        /// The character that followed the backslash.
+        escape: char,
+    },
+    /// A `\p{`/`\P{` block-escape with no matching `}` before the end of the
+    /// pattern. Carries the escape letter (`'p'` or `'P'`).
+    UnterminatedBlockName {
+        /// The `p`/`P` of the unterminated block escape.
+        escape: char,
+    },
+    /// A back-reference to a capturing group that does not exist, or whose
+    /// closing `)` occurs after the back-reference -- invalid for any engine,
+    /// as distinct from a well-formed back-reference this implementation
+    /// declines to execute. Carries the exact reference spelling (e.g.
+    /// `"\\12"`) and the count of capturing groups opened before it.
+    BadBackreference {
+        /// The exact back-reference spelling, including the leading `\`.
+        reference: String,
+        /// The number of capturing groups opened before the reference -- the
+        /// count the `Display` text calls "complete at that point".
+        opened_groups: u32,
+    },
     /// The pattern source, or its translated `regex`-crate form, exceeds a
     /// hard resource bound. Carries the measured size in bytes and the named
     /// limit that was exceeded, so an operator can see both numbers and know
@@ -141,7 +184,65 @@ impl fmt::Display for XsdRegexError {
                  different set from a block, so for the Greek block write \
                  \\p{{IsGreekandCoptic}}"
             ),
-            Self::Malformed(message) => write!(f, "malformed pattern: {message}"),
+            Self::DanglingBackslash => {
+                f.write_str("malformed pattern: pattern ends with a dangling backslash")
+            }
+            Self::UnterminatedCharacterClass => {
+                f.write_str("malformed pattern: unterminated character class (missing closing ']')")
+            }
+            Self::UnescapedClassOpen => write!(
+                f,
+                "malformed pattern: unescaped '[' inside a character class -- XML Schema \
+                 Part 2 Appendix G's charGroup defines no nested character class there, so \
+                 regex-syntax's nested-class union is a different language; a literal '[' \
+                 must be escaped as '\\['"
+            ),
+            Self::UnescapedClassClose => write!(
+                f,
+                "malformed pattern: unescaped ']' outside a character class -- it only ever \
+                 closes a character class in the XSD/XPath grammar, and a literal one must \
+                 be escaped as '\\]'"
+            ),
+            Self::LiteralClassCloseAtHead => write!(
+                f,
+                "malformed pattern: literal ']' at the head of a character class -- XSD's \
+                 charGroup requires at least one member, and a literal ']' must be escaped \
+                 as '\\]'"
+            ),
+            Self::UnsupportedGroupConstruct { found } => write!(
+                f,
+                "malformed pattern: {found} is not a construct of the XSD/XPath \
+                 regular-expression grammar (XML Schema Part 2 Appendix G defines no \
+                 inline-flag, lookaround, comment, or named-group syntax); the only `(?` \
+                 group spelling the grammar has is the non-capturing group `(?:`"
+            ),
+            Self::UnsupportedNulEscape => write!(
+                f,
+                "malformed pattern: \\0 is not a construct of the XSD/XPath regular-expression \
+                 grammar (a back-reference starts at \\1, and \\0 is not a single-character \
+                 escape)"
+            ),
+            Self::UnsupportedEscape { escape } => write!(
+                f,
+                "malformed pattern: \\{escape} is not a construct of the XSD/XPath \
+                 regular-expression grammar -- XML Schema Part 2 Appendix G enumerates its \
+                 single-character escapes exactly (\\n \\r \\t \\\\ \\| \\. \\? \\* \\+ \\( \\) \
+                 \\{{ \\}} \\- \\[ \\] \\^), and \\{escape} is not among them"
+            ),
+            Self::UnterminatedBlockName { escape } => write!(
+                f,
+                "malformed pattern: unterminated \\{escape}{{ block-escape name (no matching \
+                 '}}')"
+            ),
+            Self::BadBackreference {
+                reference,
+                opened_groups,
+            } => write!(
+                f,
+                "malformed pattern: back-reference {reference} refers to a capturing group \
+                 that does not exist, or whose closing ')' comes after it ({opened_groups} \
+                 capturing group(s) are complete at that point)"
+            ),
             Self::TooLarge { bytes, limit } => write!(
                 f,
                 "pattern is {bytes} bytes, which exceeds the {limit}-byte limit"
@@ -169,7 +270,16 @@ impl std::error::Error for XsdRegexError {
             | Self::Backreference(_)
             | Self::UnknownBlock(_)
             | Self::UnknownCategory(_)
-            | Self::Malformed(_)
+            | Self::DanglingBackslash
+            | Self::UnterminatedCharacterClass
+            | Self::UnescapedClassOpen
+            | Self::UnescapedClassClose
+            | Self::LiteralClassCloseAtHead
+            | Self::UnsupportedGroupConstruct { .. }
+            | Self::UnsupportedNulEscape
+            | Self::UnsupportedEscape { .. }
+            | Self::UnterminatedBlockName { .. }
+            | Self::BadBackreference { .. }
             | Self::TooLarge { .. }
             | Self::TooManyFoldedClassEscapes { .. } => None,
         }

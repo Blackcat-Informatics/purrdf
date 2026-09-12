@@ -202,7 +202,9 @@ fn check_string_facets(
         ));
     }
     if let Some(pattern) = &nc.pattern {
-        let re = patterns.compiled(pattern, nc.flags.as_deref())?;
+        let re = patterns
+            .compiled(pattern, nc.flags.as_deref())
+            .map_err(|e| e.to_string())?;
         if !re.is_match(facts.lexical) {
             return Err(format!(
                 "pattern /{pattern}/{} does not match {}",

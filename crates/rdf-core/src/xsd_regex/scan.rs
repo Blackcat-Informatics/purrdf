@@ -313,9 +313,7 @@ impl<'a> Scanner<'a> {
             self.span_chars = 0..0;
             if !self.classes.is_empty() {
                 self.classes.clear();
-                return Some(Err(XsdRegexError::Malformed(
-                    "unterminated character class (missing closing ']')".to_owned(),
-                )));
+                return Some(Err(XsdRegexError::UnterminatedCharacterClass));
             }
             return None;
         }
@@ -355,13 +353,7 @@ impl<'a> Scanner<'a> {
                 let subtraction_operand = std::mem::take(&mut self.subtraction_operand);
                 if !self.classes.is_empty() && !subtraction_operand {
                     self.pos += 1;
-                    return Err(XsdRegexError::Malformed(
-                        "unescaped '[' inside a character class -- XML Schema Part 2 \
-                         Appendix G's charGroup defines no nested character class there, \
-                         so regex-syntax's nested-class union is a different language; a \
-                         literal '[' must be escaped as '\\['"
-                            .to_owned(),
-                    ));
+                    return Err(XsdRegexError::UnescapedClassOpen);
                 }
                 // XSD `[^g-e]` is (complement of `g`) minus `e`, but
                 // Rust's `[^g--e]` applies `^` to the WHOLE class
@@ -389,12 +381,7 @@ impl<'a> Scanner<'a> {
             // literal.
             ']' if self.classes.is_empty() => {
                 self.pos += 1;
-                Err(XsdRegexError::Malformed(
-                    "unescaped ']' outside a character class -- it only ever closes a \
-                     character class in the XSD/XPath grammar, and a literal one must be \
-                     escaped as '\\]'"
-                        .to_owned(),
-                ))
+                Err(XsdRegexError::UnescapedClassClose)
             }
             ']' => {
                 if !self
@@ -409,12 +396,7 @@ impl<'a> Scanner<'a> {
                     // then a bare `]`, so the correct spelling is `\]a]`.
                     self.pos += 1;
                     self.classes.pop();
-                    return Err(XsdRegexError::Malformed(
-                        "literal ']' at the head of a character class -- XSD's charGroup \
-                         requires at least one member, and a literal ']' must be escaped as \
-                         '\\]'"
-                            .to_owned(),
-                    ));
+                    return Err(XsdRegexError::LiteralClassCloseAtHead);
                 }
                 let frame = self.classes.pop().expect("non-empty checked above");
                 self.negated_wrap_close = frame.negated && !frame.subtracted;
@@ -480,12 +462,7 @@ impl<'a> Scanner<'a> {
                             None => "(?".to_owned(),
                         };
                         self.pos += if self.peek(2).is_some() { 3 } else { 2 };
-                        Err(XsdRegexError::Malformed(format!(
-                            "{found} is not a construct of the XSD/XPath regular-expression \
-                             grammar (XML Schema Part 2 Appendix G defines no inline-flag, \
-                             lookaround, comment, or named-group syntax); the only `(?` group \
-                             spelling the grammar has is the non-capturing group `(?:`"
-                        )))
+                        Err(XsdRegexError::UnsupportedGroupConstruct { found })
                     }
                 } else {
                     self.groups.open();
@@ -508,9 +485,7 @@ impl<'a> Scanner<'a> {
     fn scan_escape(&mut self) -> Result<Token, XsdRegexError> {
         let Some(esc) = self.peek(1) else {
             self.pos += 1;
-            return Err(XsdRegexError::Malformed(
-                "pattern ends with a dangling backslash".to_owned(),
-            ));
+            return Err(XsdRegexError::DanglingBackslash);
         };
         let token = match esc {
             'b' => Err(XsdRegexError::UnsupportedConstruct("\\b")),
@@ -550,11 +525,7 @@ impl<'a> Scanner<'a> {
             // supported" — a message that is wrong about what the pattern
             // contains, and would send a reader looking for a capture group
             // that was never there.
-            '0' => Err(XsdRegexError::Malformed(
-                "\\0 is not a construct of the XSD/XPath regular-expression grammar (a \
-                 back-reference starts at \\1, and \\0 is not a single-character escape)"
-                    .to_owned(),
-            )),
+            '0' => Err(XsdRegexError::UnsupportedNulEscape),
             // XML Schema Part 2 Appendix G's `SingleCharEsc` is a CLOSED
             // enumeration -- `n r t \ | . ? * + ( ) { } - [ ] ^` -- and
             // `regex-syntax`'s escape table is not the governing grammar.
@@ -579,12 +550,7 @@ impl<'a> Scanner<'a> {
             // opaque engine error or a silently different language.
             _ => {
                 self.pos += 2;
-                return Err(XsdRegexError::Malformed(format!(
-                    "\\{esc} is not a construct of the XSD/XPath regular-expression grammar \
-                     -- XML Schema Part 2 Appendix G enumerates its single-character escapes \
-                     exactly (\\n \\r \\t \\\\ \\| \\. \\? \\* \\+ \\( \\) \\{{ \\}} \\- \\[ \\] \\^), \
-                     and \\{esc} is not among them"
-                )));
+                return Err(XsdRegexError::UnsupportedEscape { escape: esc });
             }
         };
         self.pos += 2;
@@ -602,9 +568,7 @@ impl<'a> Scanner<'a> {
         }
         if self.chars.get(j) != Some(&'}') {
             self.pos = self.chars.len();
-            return Err(XsdRegexError::Malformed(format!(
-                "unterminated \\{esc}{{ block-escape name (no matching '}}')"
-            )));
+            return Err(XsdRegexError::UnterminatedBlockName { escape: esc });
         }
         let name: String = self.chars[name_start..j].iter().collect();
         self.pos = j + 1;
@@ -643,12 +607,10 @@ impl<'a> Scanner<'a> {
             // been seen yet. Reported as malformed rather than as an
             // unsupported construct, because "this implementation cannot run
             // it" would be a misleading excuse for a pattern nothing can run.
-            return Err(XsdRegexError::Malformed(format!(
-                "back-reference {reference} refers to a capturing group that does not \
-                 exist, or whose closing ')' comes after it ({} capturing group(s) are \
-                 complete at that point)",
-                self.groups.opened
-            )));
+            return Err(XsdRegexError::BadBackreference {
+                reference,
+                opened_groups: self.groups.opened,
+            });
         }
         Ok(Token::Backreference(number))
     }
@@ -809,29 +771,26 @@ mod tests {
         assert!(tokens("[a-z-[aeiou]]").contains(&Subtract));
         // ...but any other nested `[` is malformed XSD, not a class union.
         for pattern in ["[a[b]]", "[[:alpha:]]"] {
+            let message = first_error(pattern).to_string();
             assert!(
-                matches!(
-                    first_error(pattern),
-                    XsdRegexError::Malformed(ref m) if m.contains("unescaped '['")
-                ),
-                "{pattern:?} must be rejected naming the '['"
+                message.contains("unescaped '['"),
+                "{pattern:?} must be rejected naming the '[': {message}"
             );
         }
         // A `]` cannot open a class's member list...
         for pattern in ["[]a]", "[^]a]"] {
+            let message = first_error(pattern).to_string();
             assert!(
-                matches!(
-                    first_error(pattern),
-                    XsdRegexError::Malformed(ref m) if m.contains("literal ']'")
-                ),
-                "{pattern:?} must be rejected naming the ']'"
+                message.contains("literal ']'"),
+                "{pattern:?} must be rejected naming the ']': {message}"
             );
         }
         // ...and a bare `]` outside any class is not a `Char` either.
-        assert!(matches!(
-            first_error("[a]]"),
-            XsdRegexError::Malformed(ref m) if m.contains("unescaped ']' outside")
-        ));
+        let message = first_error("[a]]").to_string();
+        assert!(
+            message.contains("unescaped ']' outside"),
+            "a bare ']' outside a class must be rejected naming it: {message}"
+        );
 
         // The correctly escaped forms stay literal members.
         assert_eq!(
@@ -938,12 +897,10 @@ mod tests {
             (r"(?P<n>a)", "(?P"),
             (r"(?#c)a", "(?#"),
         ] {
+            let message = first_error(pattern).to_string();
             assert!(
-                matches!(
-                    first_error(pattern),
-                    XsdRegexError::Malformed(ref m) if m.contains(needle)
-                ),
-                "{pattern:?} must be refused naming {needle:?}"
+                message.contains(needle),
+                "{pattern:?} must be refused naming {needle:?}: {message}"
             );
         }
         // The only `(?` spelling the grammar has still tokenizes as a group.
@@ -978,15 +935,13 @@ mod tests {
             "no well-formed back-reference may be reported: {errors:?}"
         );
         assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, XsdRegexError::Malformed(m) if m.contains("(?i"))),
+            errors.iter().any(|e| e.to_string().contains("(?i")),
             "the inline-flag construct must be refused by name: {errors:?}"
         );
         assert!(
             errors
                 .iter()
-                .any(|e| matches!(e, XsdRegexError::Malformed(m) if m.contains("back-reference"))),
+                .any(|e| e.to_string().contains("back-reference")),
             "the stray \\2 must be malformed, not a well-formed back-reference: {errors:?}"
         );
     }
@@ -1001,24 +956,20 @@ mod tests {
             r"\h", r"\N", r"\R", r"\X", r"\p", r"\P",
         ] {
             let pattern = format!("a{escape}b");
+            let message = first_error(&pattern).to_string();
             assert!(
-                matches!(
-                    first_error(&pattern),
-                    XsdRegexError::Malformed(ref m) if m.contains(escape)
-                ),
-                "{pattern:?} must be refused naming {escape:?}"
+                message.contains(escape),
+                "{pattern:?} must be refused naming {escape:?}: {message}"
             );
         }
         // The full spellings a reader actually writes are still named by
         // their prefix.
         for pattern in [r"\x41", r"\u{41}", r"\k<n>"] {
             let needle: String = pattern.chars().take(2).collect();
+            let message = first_error(pattern).to_string();
             assert!(
-                matches!(
-                    first_error(pattern),
-                    XsdRegexError::Malformed(ref m) if m.contains(&needle)
-                ),
-                "{pattern:?} must be refused naming {needle:?}"
+                message.contains(&needle),
+                "{pattern:?} must be refused naming {needle:?}: {message}"
             );
         }
         // ...but the whole `SingleCharEsc` enumeration still passes through,
@@ -1086,17 +1037,26 @@ mod tests {
             first_error(r"[\B]"),
             XsdRegexError::UnsupportedConstruct("\\B")
         );
-        assert!(matches!(first_error(r"a\0b"), XsdRegexError::Malformed(_)));
-        assert!(matches!(first_error(r"\1"), XsdRegexError::Malformed(_)));
-        assert!(matches!(first_error(r"(a\1)"), XsdRegexError::Malformed(_)));
-        assert_eq!(
-            first_error("a\\"),
-            XsdRegexError::Malformed("pattern ends with a dangling backslash".to_owned())
-        );
-        assert!(matches!(first_error("[abc"), XsdRegexError::Malformed(_)));
+        assert!(matches!(
+            first_error(r"a\0b"),
+            XsdRegexError::UnsupportedNulEscape
+        ));
+        assert!(matches!(
+            first_error(r"\1"),
+            XsdRegexError::BadBackreference { .. }
+        ));
+        assert!(matches!(
+            first_error(r"(a\1)"),
+            XsdRegexError::BadBackreference { .. }
+        ));
+        assert_eq!(first_error("a\\"), XsdRegexError::DanglingBackslash);
+        assert!(matches!(
+            first_error("[abc"),
+            XsdRegexError::UnterminatedCharacterClass
+        ));
         assert!(matches!(
             first_error(r"\p{IsBasicLatin"),
-            XsdRegexError::Malformed(_)
+            XsdRegexError::UnterminatedBlockName { .. }
         ));
     }
 

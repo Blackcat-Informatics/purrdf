@@ -416,7 +416,8 @@ mod tests {
         // different answer from one this engine declines to execute.
         for pattern in [r"a\9b", r"(a\1)", r"(?:a)\1"] {
             match translate(pattern, false, false) {
-                Err(XsdRegexError::Malformed(message)) => {
+                Err(err @ XsdRegexError::BadBackreference { .. }) => {
+                    let message = err.to_string();
                     assert!(
                         message.contains("does not exist") || message.contains("closing"),
                         "{pattern:?}: {message}"
@@ -504,7 +505,7 @@ mod tests {
         ] {
             let err = translate(pattern, false, false).unwrap_err();
             assert!(
-                matches!(&err, XsdRegexError::Malformed(m) if m.contains(needle)),
+                err.to_string().contains(needle),
                 "{pattern:?} must be refused naming {needle:?}: {err}"
             );
         }
@@ -528,7 +529,7 @@ mod tests {
             let err = translate(pattern, false, false).unwrap_err();
             let needle = &pattern[..2];
             assert!(
-                matches!(&err, XsdRegexError::Malformed(m) if m.contains(needle)),
+                err.to_string().contains(needle),
                 "{pattern:?} must be refused naming {needle:?}: {err}"
             );
         }
@@ -772,7 +773,7 @@ mod tests {
     fn dangling_backslash_is_rejected() {
         assert!(matches!(
             translate("a\\", false, false),
-            Err(XsdRegexError::Malformed(_))
+            Err(XsdRegexError::DanglingBackslash)
         ));
     }
 
@@ -780,7 +781,7 @@ mod tests {
     fn unterminated_class_is_rejected() {
         assert!(matches!(
             translate("[abc", false, false),
-            Err(XsdRegexError::Malformed(_))
+            Err(XsdRegexError::UnterminatedCharacterClass)
         ));
     }
 
@@ -788,7 +789,7 @@ mod tests {
     fn unterminated_block_escape_name_is_rejected() {
         assert!(matches!(
             translate(r"\p{IsBasicLatin", false, false),
-            Err(XsdRegexError::Malformed(_))
+            Err(XsdRegexError::UnterminatedBlockName { .. })
         ));
     }
 

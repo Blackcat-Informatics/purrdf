@@ -16,11 +16,12 @@
 //! "Latin-1 Supplement" normalizes to "Latin-1Supplement" (hyphen kept, space
 //! dropped, case preserved), giving the block-escape name `IsLatin-1Supplement`.
 //!
-//! The emitted file also carries a fixed (non-`Blocks.txt`-derived) binary-search-
-//! free `lookup` helper and a `#[cfg(test)]` suite, both written as literal
-//! output by this generator, so the committed file `cargo run -p purrdf-core
-//! --example gen_unicode_blocks --locked` produces is reproducible byte-for-
-//! byte by `scripts/check-generated.sh`.
+//! The emitted file also carries a fixed (non-`Blocks.txt`-derived) `lookup`
+//! helper — a binary search over a generated name-sorted index of the same
+//! rows — and a `#[cfg(test)]` suite, both written as literal output by this
+//! generator, so the committed file `cargo run -p purrdf-core --example
+//! gen_unicode_blocks --locked` produces is reproducible byte-for-byte by
+//! `scripts/check-generated.sh`.
 //!
 //! Run via `make metadata` (writes) or `make check` (verifies). Output goes
 //! to stdout; run with `--locked` per this workspace's convention.
@@ -119,6 +120,32 @@ fn main() {
         blocks_txt_path.display()
     );
 
+    // A second, name-sorted view of the same rows, so `lookup` is a binary
+    // search rather than a linear scan over `UNICODE_BLOCKS`. `blocks` is
+    // sorted by codepoint; names are not correlated with codepoints, so the
+    // order differs. The generator proves names are unique and sorted here
+    // (ETHOS §H) rather than emitting an index whose `binary_search_by` would
+    // silently miss a row.
+    let mut by_name: Vec<(&str, u16)> = blocks
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _, _))| {
+            (
+                name.as_str(),
+                u16::try_from(index).expect("block count fits in u16"),
+            )
+        })
+        .collect();
+    by_name.sort_by_key(|(name, _)| *name);
+    for window in by_name.windows(2) {
+        assert!(
+            window[0].0 < window[1].0,
+            "Blocks.txt yields duplicate block-escape names: {:?} then {:?}",
+            window[0].0,
+            window[1].0,
+        );
+    }
+
     let mut out = String::new();
     writeln!(
         out,
@@ -215,62 +242,107 @@ fn main() {
     }
     writeln!(out, "];").unwrap();
     writeln!(out).unwrap();
+    // The name-sorted index that makes `lookup` logarithmic. Emitted before
+    // the lookup so the lookup's doc can reference it.
     writeln!(
         out,
-        "/// Looks up the inclusive `[lo, hi]` codepoint range for an XSD/XPath"
+        "/// The names in [`UNICODE_BLOCKS`] sorted ascending, each paired with its"
     )
     .unwrap();
-    writeln!(
-        out,
-        "/// block-escape name (e.g. `\"IsBasicLatin\"`), by linear scan over"
-    )
-    .unwrap();
-    writeln!(out, "/// [`UNICODE_BLOCKS`].").unwrap();
+    writeln!(out, "/// row index in that table.").unwrap();
     writeln!(out, "///").unwrap();
     writeln!(
         out,
-        "/// [`UNICODE_BLOCKS`] is sorted by codepoint (`lo`), not by name -- that is the"
+        "/// [`UNICODE_BLOCKS`] is ordered by codepoint (`lo`), which is the order that"
     )
     .unwrap();
     writeln!(
         out,
-        "/// order that lets [`table_is_sorted_and_non_overlapping`] cheaply prove the"
+        "/// lets [`table_is_sorted_and_non_overlapping`] cheaply prove the table is"
     )
     .unwrap();
     writeln!(
         out,
-        "/// table is sorted ascending and non-overlapping (gaps between blocks are"
+        "/// ascending and non-overlapping. Name lookup cannot use that order, so this"
     )
     .unwrap();
     writeln!(
         out,
-        "/// legitimate and expected -- most of the Unicode codespace is unassigned --"
+        "/// second, name-sorted view of the same rows makes [`lookup`] a binary search"
     )
     .unwrap();
     writeln!(
         out,
-        "/// so the test proves non-overlap, not the absence of gaps). A name-keyed"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "/// binary search would need a second, name-sorted view of the same"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "/// {} rows; a linear scan is simpler (one array, ETHOS §S) and this runs at",
+        "/// (O(log n), at most nine comparisons for {} rows) rather than a linear scan.",
         blocks.len()
     )
     .unwrap();
     writeln!(
         out,
-        "/// most once per distinct `\\p{{IsX}}`/`\\P{{IsX}}` construct in a pattern being"
+        "/// Sortedness and uniqueness are enforced by the generator and re-checked by"
+    )
+    .unwrap();
+    writeln!(out, "/// `tests::name_index_is_sorted_and_complete`.").unwrap();
+    writeln!(
+        out,
+        "pub(crate) const UNICODE_BLOCKS_BY_NAME: &[(&str, u16)] = &["
+    )
+    .unwrap();
+    for (name, index) in &by_name {
+        writeln!(out, "    (\"{name}\", {index}),").unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "/// Looks up the inclusive `[lo, hi]` codepoint range for an XSD/XPath"
+    )
+    .unwrap();
+    writeln!(out, "/// block-escape name (e.g. `\"IsBasicLatin\"`).").unwrap();
+    writeln!(out, "///").unwrap();
+    writeln!(
+        out,
+        "/// [`UNICODE_BLOCKS`] is sorted by codepoint (`lo`), not by name, so the"
     )
     .unwrap();
     writeln!(
         out,
-        "/// *compiled*, never per matched character -- not a hot path."
+        "/// lookup binary-searches the name-sorted [`UNICODE_BLOCKS_BY_NAME`] index and"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// then reads the row it names. The comparison is exact `str` equality -- no"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// normalization, case folding, or closest-match fallback -- so a name that is"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// not spelled exactly as the table (in particular the pre-Unicode-4.1"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// `IsGreek`, renamed `IsGreekandCoptic`) is not found. This runs once per"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// `\\p{{IsX}}`/`\\P{{IsX}}` occurrence in a pattern being *compiled* (the"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// emitter does not memoize repeated names), never per matched character, so"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// even a pattern that repeats one escape stays logarithmic per occurrence."
     )
     .unwrap();
     writeln!(out, "///").unwrap();
@@ -294,18 +366,28 @@ fn main() {
         "pub(crate) fn lookup(name: &str) -> Option<(u32, u32)> {{"
     )
     .unwrap();
+    writeln!(out, "    let index = UNICODE_BLOCKS_BY_NAME").unwrap();
     writeln!(
         out,
-        "    UNICODE_BLOCKS.iter().find_map(|(candidate, lo, hi)| {{"
+        "        .binary_search_by(|(candidate, _)| (*candidate).cmp(name))"
     )
     .unwrap();
-    writeln!(out, "        (*candidate == name).then_some((*lo, *hi))").unwrap();
-    writeln!(out, "    }})").unwrap();
+    writeln!(out, "        .ok()?;").unwrap();
+    writeln!(
+        out,
+        "    let (_, lo, hi) = UNICODE_BLOCKS[UNICODE_BLOCKS_BY_NAME[index].1 as usize];"
+    )
+    .unwrap();
+    writeln!(out, "    Some((lo, hi))").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "#[cfg(test)]").unwrap();
     writeln!(out, "mod tests {{").unwrap();
-    writeln!(out, "    use super::{{UNICODE_BLOCKS, lookup}};").unwrap();
+    writeln!(
+        out,
+        "    use super::{{UNICODE_BLOCKS, UNICODE_BLOCKS_BY_NAME, lookup}};"
+    )
+    .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "    #[test]").unwrap();
     writeln!(out, "    fn table_is_sorted_and_non_overlapping() {{").unwrap();
@@ -366,6 +448,45 @@ fn main() {
         "        assert_eq!(lookup(\"IsNotARealUnicodeBlock\"), None);"
     )
     .unwrap();
+    writeln!(out, "    }}").unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "    #[test]").unwrap();
+    writeln!(out, "    fn name_index_is_sorted_and_complete() {{").unwrap();
+    writeln!(
+        out,
+        "        assert_eq!(UNICODE_BLOCKS_BY_NAME.len(), UNICODE_BLOCKS.len());"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "        for window in UNICODE_BLOCKS_BY_NAME.windows(2) {{"
+    )
+    .unwrap();
+    writeln!(out, "            assert!(").unwrap();
+    writeln!(out, "                window[0].0 < window[1].0,").unwrap();
+    writeln!(
+        out,
+        "                \"UNICODE_BLOCKS_BY_NAME is not sorted by name: \\"
+    )
+    .unwrap();
+    // Same fragment construction as the codepoint-sorted test above, so
+    // clippy's `literal_string_with_formatting_args` lint is not fooled.
+    out.push_str("                 ");
+    out.push('{');
+    out.push_str(":?} then ");
+    out.push('{');
+    out.push_str(":?}\",\n");
+    writeln!(out, "                window[0],").unwrap();
+    writeln!(out, "                window[1],").unwrap();
+    writeln!(out, "            );").unwrap();
+    writeln!(out, "        }}").unwrap();
+    writeln!(out, "        for (name, lo, hi) in UNICODE_BLOCKS {{").unwrap();
+    writeln!(
+        out,
+        "            assert_eq!(lookup(name), Some((*lo, *hi)));"
+    )
+    .unwrap();
+    writeln!(out, "        }}").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out, "}}").unwrap();
 

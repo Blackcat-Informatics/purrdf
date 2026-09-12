@@ -41,10 +41,21 @@
 //! `pattern` and `flags` unfiltered**, which is why these constructs are
 //! reachable at all and why the end-to-end tests for them are ShExJ-driven.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use purrdf_core::FastMap;
 use regex::Regex;
+
+/// One memoized `PATTERN` compile: the shared compiled regex, or the shared
+/// facet-violation message for a pattern or flag string that does not compile.
+///
+/// The error is an `Arc<str>` so a failed probe clones a refcount exactly as a
+/// successful probe clones the regex's `Arc`.
+type CachedPattern = Result<Arc<Regex>, Arc<str>>;
+
+/// The per-flags layer of a [`PatternCache`]: compile results keyed by the
+/// exact `flags` string (the empty string when no flags were given).
+type FlagsCache = FastMap<String, CachedPattern>;
 
 /// Per-validation-call cache of compiled `PATTERN` facets.
 ///
@@ -55,12 +66,22 @@ use regex::Regex;
 /// matching [`crate`]'s sibling convention in `purrdf-sparql-eval`'s
 /// `EvalCtx::regex_cache`.
 ///
+/// The tables use the workspace's fixed-key [`FastMap`] (AHASH with fixed
+/// keys, no `RandomState`), per AGENTS.md §4: this is a per-value-node hot
+/// path, and a randomly-seeded hasher has no business on it. The canonical
+/// spelling is `purrdf-core`'s own [`FastHasher`](purrdf_core::FastHasher)
+/// policy, whose aliases the crate already depends on — the same hasher the
+/// sibling `EvalCtx::regex_cache` uses.
+///
 /// Compile **failures** are cached too. A malformed pattern is a facet
 /// violation reported once per value node, and recompiling it per value to
 /// re-derive the same message is the same waste as recompiling a valid one.
+/// The cached error is an `Arc<str>`, so a failed probe clones a refcount
+/// exactly as a successful probe clones the compiled regex's `Arc` — neither
+/// probe allocates inside the cache.
 #[derive(Default)]
 pub(crate) struct PatternCache {
-    by_pattern: HashMap<String, HashMap<String, Result<Arc<Regex>, String>>>,
+    by_pattern: FastMap<String, FlagsCache>,
 }
 
 impl PatternCache {
@@ -69,13 +90,13 @@ impl PatternCache {
     /// # Errors
     ///
     /// The facet-violation message for a pattern or flag string that does not
-    /// compile — cloned from the cache on a repeat, so the message is
-    /// byte-identical however many value nodes provoke it.
+    /// compile — an `Arc<str>` shared with the cache, so a repeat hands out
+    /// the same message byte-for-byte without copying it.
     pub(crate) fn compiled(
         &mut self,
         pattern: &str,
         flags: Option<&str>,
-    ) -> Result<Arc<Regex>, String> {
+    ) -> Result<Arc<Regex>, Arc<str>> {
         let flags = flags.unwrap_or("");
         if let Some(cached) = self
             .by_pattern
@@ -84,7 +105,9 @@ impl PatternCache {
         {
             return cached.clone();
         }
-        let compiled = compile_pattern(pattern, Some(flags)).map(Arc::new);
+        let compiled = compile_pattern(pattern, Some(flags))
+            .map(Arc::new)
+            .map_err(Arc::<str>::from);
         self.by_pattern
             .entry(pattern.to_owned())
             .or_default()
