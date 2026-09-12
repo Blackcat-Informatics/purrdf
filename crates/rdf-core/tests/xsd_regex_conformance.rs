@@ -35,7 +35,7 @@ const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/xsd-regex"
 /// Asserted, not merely printed: a renamed or deleted corpus file would
 /// otherwise silently shrink the suite while the harness still reported green.
 /// Bump this when adding or removing a case.
-const EXPECTED_CASES: usize = 247;
+const EXPECTED_CASES: usize = 257;
 
 /// What a case says must happen.
 #[derive(Debug, PartialEq, Eq)]

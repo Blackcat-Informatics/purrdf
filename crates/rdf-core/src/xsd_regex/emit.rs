@@ -238,11 +238,51 @@ pub(super) fn translate(
     Ok(out)
 }
 
+/// The complete, closed `IsCategory` enumeration of XML Schema Part 2
+/// Appendix G — every non-`Is` name a `\p{…}`/`\P{…}` escape may carry.
+///
+/// The governing grammar is (`charProp ::= IsCategory | IsBlock`):
+///
+/// ```text
+/// IsCategory  ::= Letters | Marks | Numbers | Punctuation | Separators | Symbols | Others
+/// Letters     ::= 'L' | 'Lu' | 'Ll' | 'Lt' | 'Lm' | 'Lo'
+/// Marks       ::= 'M' | 'Mn' | 'Mc' | 'Me'
+/// Numbers     ::= 'N' | 'Nd' | 'Nl' | 'No'
+/// Punctuation ::= 'P' | 'Pc' | 'Pd' | 'Ps' | 'Pe' | 'Pi' | 'Pf' | 'Po'
+/// Separators  ::= 'Z' | 'Zs' | 'Zl' | 'Zp'
+/// Symbols     ::= 'S' | 'Sm' | 'Sc' | 'Sk' | 'So'
+/// Others      ::= 'C' | 'Cc' | 'Cf' | 'Co' | 'Cn'
+/// ```
+///
+/// This is ONE place by design: the alternative — letting `regex-syntax`
+/// resolve anything else — is what silently accepted the Unicode *script*
+/// `\p{Greek}` (a different set from the block `\p{IsGreekandCoptic}`),
+/// `\p{sc=Greek}`, `\p{Age:6.0}` and the regex-crate pseudo-property
+/// `\p{any}`. `regex-syntax` implements looser name matching than the
+/// grammar, so only an exact membership test expresses the dialect.
+///
+/// `Cs` (surrogate) is deliberately absent: the specification's own note on
+/// these productions says they "exclude the Cs property", because surrogates
+/// do not occur at the XML character-abstraction level.
+const IS_CATEGORY_NAMES: [&str; 36] = [
+    "L", "Lu", "Ll", "Lt", "Lm", "Lo", "M", "Mn", "Mc", "Me", "N", "Nd", "Nl", "No", "P", "Pc",
+    "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "Z", "Zs", "Zl", "Zp", "S", "Sm", "Sc", "Sk", "So", "C",
+    "Cc", "Cf", "Co", "Cn",
+];
+
 /// Append the translation of one `\p{…}`/`\P{…}` token; `negated` is the `P`
-/// spelling. The `Is`-prefixed block form is resolved against the generated
+/// spelling.
+///
+/// The `Is`-prefixed block form is resolved against the generated
 /// `super::blocks` table, never left to `regex-syntax`'s own (silently
-/// different) resolution; a general-category escape is shared syntax between
-/// the two dialects and is passed through.
+/// different) resolution. The non-`Is` form is admitted only when it is
+/// exactly one of [`IS_CATEGORY_NAMES`]; a general-category escape is shared
+/// syntax between the two dialects and is passed through, while every other
+/// non-`Is` name — a script, a keyed property, a pseudo-property, an arbitrary
+/// identifier — is [`XsdRegexError::UnknownCategory`]. Before that check the
+/// name was forwarded to `regex-syntax`, so `\p{Greek}` silently compiled as
+/// the SCRIPT while `\p{IsGreek}` hard-errored: the module refused an unknown
+/// block but accepted an arbitrary script.
 fn emit_unicode_property(out: &mut String, negated: bool, name: &str) -> Result<(), XsdRegexError> {
     if name.starts_with("Is") {
         let (lo, hi) =
@@ -277,14 +317,24 @@ fn emit_unicode_property(out: &mut String, negated: bool, name: &str) -> Result<
             push_hex_range(out, lo, hi);
             out.push(']');
         }
-    } else {
+    } else if IS_CATEGORY_NAMES.contains(&name) {
         // A general-category escape (`\p{L}`, `\p{Nd}`, ...) is legitimately
         // shared syntax between XSD and `regex-syntax` — never intercepted.
+        // It is emitted verbatim because the two resolve the exact Appendix G
+        // enumeration identically.
         out.push('\\');
         out.push(if negated { 'P' } else { 'p' });
         out.push('{');
         out.push_str(name);
         out.push('}');
+    } else {
+        // Neither an `Is`-prefixed block nor an Appendix G general category:
+        // a script name, a `key=value`/`key:value` property key, a
+        // regex-crate pseudo-property, or an arbitrary identifier. Refused by
+        // name rather than forwarded, because `regex-syntax` implements
+        // UAX44-LM3 loose matching and would resolve several of these to a
+        // silently different set.
+        return Err(XsdRegexError::UnknownCategory(name.to_owned()));
     }
     Ok(())
 }
@@ -537,6 +587,108 @@ mod tests {
         let re = translated_regex(r"^\p{L}+$", false);
         assert!(re.is_match("abc"));
         assert!(!re.is_match("123"));
+    }
+
+    /// [`IS_CATEGORY_NAMES`] is the closed Appendix G enumeration, and it is
+    /// complete: the cardinality is the sum of the seven group productions,
+    /// the group letters account for every entry, and no name is repeated.
+    /// Every name also translates and compiles in both spellings, so the
+    /// allowlist and `regex-syntax` agree on the whole set.
+    #[test]
+    fn category_allowlist_is_the_complete_appendix_g_set() {
+        // Letters 6 + Marks 4 + Numbers 4 + Punctuation 8 + Separators 4 +
+        // Symbols 5 + Others 5.
+        assert_eq!(IS_CATEGORY_NAMES.len(), 36, "the Appendix G IsCategory set");
+
+        let mut unique = IS_CATEGORY_NAMES.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            IS_CATEGORY_NAMES.len(),
+            "a name is listed twice in IS_CATEGORY_NAMES"
+        );
+
+        for (letter, count) in [
+            ('L', 6),
+            ('M', 4),
+            ('N', 4),
+            ('P', 8),
+            ('Z', 4),
+            ('S', 5),
+            ('C', 5),
+        ] {
+            let found = IS_CATEGORY_NAMES
+                .iter()
+                .filter(|name| name.starts_with(letter))
+                .count();
+            assert_eq!(
+                found, count,
+                "the {letter:?} group production must contribute exactly {count} names"
+            );
+        }
+
+        // Every allowlisted category is a name `regex-syntax` resolves to the
+        // same set, in both the positive and the negated spelling.
+        for name in IS_CATEGORY_NAMES {
+            translated_regex(&format!(r"^\p{{{name}}}$"), false);
+            translated_regex(&format!(r"^\P{{{name}}}$"), false);
+        }
+    }
+
+    /// A non-`Is` name that is not an Appendix G general category is refused
+    /// by name instead of being forwarded to `regex-syntax`, whose loose name
+    /// matching silently accepted scripts (`Greek`), keyed properties
+    /// (`sc=Greek`, `Age:6.0`) and pseudo-properties (`any`). The message must
+    /// name what was found AND tell the reader the grammar's block spelling is
+    /// `\p{Is…}`, because `\p{Greek}` is a mistake a user actually makes.
+    #[test]
+    fn non_category_property_names_are_refused_by_name() {
+        for (pattern, found) in [
+            (r"\p{Greek}", "Greek"),
+            (r"\P{Greek}", "Greek"),
+            (r"\p{sc=Greek}", "sc=Greek"),
+            // `concat!` so the literal source never contains the `{Age:6.0}`
+            // shape clippy reads as a formatting argument; the property key is
+            // `Age:6.0`, not a format spec.
+            (concat!(r"\p{Age", ":6.0}"), "Age:6.0"),
+            (r"\p{any}", "any"),
+            (r"\p{Foo}", "Foo"),
+        ] {
+            let err = translate(pattern, false, false).unwrap_err();
+            assert_eq!(
+                err,
+                XsdRegexError::UnknownCategory(found.to_owned()),
+                "{pattern:?} must be refused as UnknownCategory({found:?})"
+            );
+            let message = err.to_string();
+            assert!(
+                message.contains(found),
+                "{pattern:?}: the message must name the construct: {message}"
+            );
+            assert!(
+                message.contains("Is"),
+                "{pattern:?}: the message must point at the Is-prefixed block \
+                 spelling: {message}"
+            );
+            assert!(
+                message.contains("Greek") && message.contains("script"),
+                "{pattern:?}: the message must name a script and the block \
+                 remedy: {message}"
+            );
+        }
+
+        // The existing script-vs-block regression still holds: `IsGreek` is a
+        // BLOCK lookup, not a category, so it keeps its own variant.
+        assert_eq!(
+            translate(r"\p{IsGreek}", false, false).unwrap_err(),
+            XsdRegexError::UnknownBlock("IsGreek".to_owned())
+        );
+        // ...and an allowlisted category still compiles, including negation
+        // and inside a character class.
+        let re = translated_regex(r"^[\p{L}\p{Nd}]+$", false);
+        assert!(re.is_match("a1"));
+        assert!(!re.is_match("-"));
     }
 
     #[test]

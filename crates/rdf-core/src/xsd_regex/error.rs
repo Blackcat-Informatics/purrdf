@@ -36,6 +36,16 @@ pub enum XsdRegexError {
     /// "normalized block name" transform). Carries the exact name that was
     /// looked up (e.g. `"IsNotARealBlock"`, including the `Is` prefix).
     UnknownBlock(String),
+    /// A `\p{…}`/`\P{…}` name that is not an `Is`-prefixed block (so it did
+    /// not reach [`Self::UnknownBlock`]) and is also not one of the closed
+    /// `IsCategory` enumeration of XML Schema Part 2 Appendix G — e.g. a
+    /// Unicode *script* name (`Greek`), a `key=value`/`key:value` property key
+    /// (`sc=Greek`, `Age:6.0`), or a `regex`-crate pseudo-property (`any`).
+    /// Carries the exact name found. Kept a distinct variant beside
+    /// [`Self::UnknownBlock`] because the two namespaces are different and the
+    /// remedy differs: a bad block name is usually a misspelling, while a
+    /// script name is a whole construct this dialect does not have.
+    UnknownCategory(String),
     /// The pattern source is malformed independently of any specific
     /// construct above -- a dangling trailing backslash, an unterminated
     /// character class (`[` with no matching `]`), an unterminated
@@ -119,6 +129,18 @@ impl fmt::Display for XsdRegexError {
                 "unrecognized Unicode block name {name:?} in a \\p{{...}}/\\P{{...}} \
                  block escape"
             ),
+            Self::UnknownCategory(name) => write!(
+                f,
+                "unrecognized Unicode property name {name:?} in a \\p{{...}}/\\P{{...}} \
+                 escape: XML Schema Part 2 Appendix G's charProp admits only one of its \
+                 general-category names (L, Lu, Ll, Lt, Lm, Lo, M, Mn, Mc, Me, N, Nd, Nl, No, \
+                 P, Pc, Pd, Ps, Pe, Pi, Pf, Po, Z, Zs, Zl, Zp, S, Sm, Sc, Sk, So, C, Cc, Cf, \
+                 Co, Cn) or an 'Is'-prefixed Unicode block name; Unicode scripts such as \
+                 \"Greek\", 'key=value'/'key:value' property keys, and regex-crate \
+                 pseudo-properties are not part of the XSD/XPath dialect -- a script is a \
+                 different set from a block, so for the Greek block write \
+                 \\p{{IsGreekandCoptic}}"
+            ),
             Self::Malformed(message) => write!(f, "malformed pattern: {message}"),
             Self::TooLarge { bytes, limit } => write!(
                 f,
@@ -146,6 +168,7 @@ impl std::error::Error for XsdRegexError {
             | Self::UnsupportedConstruct(_)
             | Self::Backreference(_)
             | Self::UnknownBlock(_)
+            | Self::UnknownCategory(_)
             | Self::Malformed(_)
             | Self::TooLarge { .. }
             | Self::TooManyFoldedClassEscapes { .. } => None,

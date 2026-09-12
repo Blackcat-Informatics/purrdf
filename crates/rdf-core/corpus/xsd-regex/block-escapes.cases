@@ -65,6 +65,28 @@
 ^\p{L}+$	-	match	ab\u00e9
 ^\P{L}$	-	match	1
 
+# The complete Appendix G `IsCategory` enumeration is what a non-Is \p{...}
+# may name, and nothing else. A script (`Greek`), an explicit property key
+# (`sc=Greek`, `Age:6.0`), a regex-crate pseudo-property (`any`) and an
+# arbitrary identifier are none of them XSD: the grammar's block spelling is
+# `\p{Is...}`, and a script is a DIFFERENT set from the block of almost the
+# same name (`\p{Greek}` matched U+1F00, outside Greek and Coptic). Each is
+# refused by name, and the message says so, rather than being forwarded to
+# `regex-syntax`'s looser UAX44-LM3 resolution.
+^\p{Greek}$	-	error	Greek
+^\P{Greek}$	-	error	Greek
+^\p{sc=Greek}$	-	error	sc=Greek
+^\p{Age:6.0}$	-	error	Age:6.0
+^\p{any}$	-	error	any
+^\p{Foo}$	-	error	Foo
+
+# Every category SHAPE the grammar admits still works: one letter, two
+# letters, a negated form, and categories composed inside a character class.
+^\p{L}$	-	match	a
+^\p{Nd}$	-	match	\u0660
+^\P{Nd}$	-	match	a
+^[\p{L}\p{Nd}]+$	-	match	a1
+
 # The three surrogate blocks consist entirely of code points that are NOT
 # Unicode scalar values, so no subject string can contain one. "Matches
 # nothing" is the exact answer over the representable domain, not a degraded

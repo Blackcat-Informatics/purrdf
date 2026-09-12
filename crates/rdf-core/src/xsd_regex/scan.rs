@@ -895,6 +895,25 @@ mod tests {
         );
     }
 
+    /// The scanner recognizes the SYNTACTIC form of every `\p{…}`/`\P{…}` name
+    /// and leaves RESOLUTION to `emit`: whether a name is one of Appendix G's
+    /// `IsCategory` names or an `Is` block is decided where the block table
+    /// lives. So a script name still tokenizes here rather than failing, which
+    /// is what keeps `ecma_262_divergences` -- another fold over this scanner
+    /// -- able to report the construct instead of dying on it.
+    #[test]
+    fn non_category_property_names_are_tokenized_not_resolved() {
+        assert_eq!(tokens(r"\p{Greek}"), vec![unicode(false, "Greek")]);
+        assert_eq!(tokens(r"\P{sc=Greek}"), vec![unicode(true, "sc=Greek")]);
+        // `concat!` keeps the `{Age:6.0}` property key out of a literal clippy
+        // would read as a formatting argument.
+        assert_eq!(
+            tokens(concat!(r"\p{Age", ":6.0}")),
+            vec![unicode(false, "Age:6.0")]
+        );
+        assert_eq!(tokens(r"\p{any}"), vec![unicode(false, "any")]);
+    }
+
     /// The `(?` group arm accepts ONLY `(?:`; every other parenthesized
     /// construct is refused by name. XML Schema Part 2 Appendix G defines no
     /// inline-flag, lookaround, comment or named-group syntax, so before this
