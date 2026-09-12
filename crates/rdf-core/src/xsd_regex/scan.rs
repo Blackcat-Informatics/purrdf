@@ -36,7 +36,9 @@ pub(super) enum Token {
     /// preserved exactly.
     ClassMember(char),
     /// Any escape with no grammar-specific rewrite (`\d`, `\D`, `\n`, `\\`,
-    /// …, and a `\p`/`\P` that is not the `{…}` form), passed through.
+    /// …), passed through. Only escapes that are actually in the governing
+    /// grammar reach this variant: `scan_escape` refuses everything else by
+    /// name, so `regex-syntax`'s own escape table never decides acceptance.
     Escape(char),
     /// `\i`/`\I` (`chars == false`) or `\c`/`\C` (`chars == true`).
     NameEscape { negated: bool, chars: bool },
@@ -458,10 +460,33 @@ impl<'a> Scanner<'a> {
             // recognized as a capturing left parenthesis provided it is not
             // immediately followed by `?:`, is not within a character group
             // (square brackets), and is not escaped with a backslash".
+            //
+            // The grammar defines NO inline-flag, lookaround, comment, or
+            // named-group syntax at all, so `(?:` is the ONLY `(?` spelling it
+            // has. Anything else used to fall through to the literal path and
+            // be compiled by `regex-syntax` with ITS semantics -- `(?i)`
+            // applied Rust's `i` flag, `(?x)` smuggled `ignore_whitespace`
+            // back in through the pattern body, `(?P<name>…)` became a named
+            // capture -- and counted as a capturing group for the F&O
+            // §5.6.1.4 back-reference tokenizer. It is refused here by name.
             '(' if self.classes.is_empty() => {
-                if self.peek(1) == Some('?') && self.peek(2) == Some(':') {
-                    self.pos += 3;
-                    Ok(Token::GroupOpen { capturing: false })
+                if self.peek(1) == Some('?') {
+                    if self.peek(2) == Some(':') {
+                        self.pos += 3;
+                        Ok(Token::GroupOpen { capturing: false })
+                    } else {
+                        let found: String = match self.peek(2) {
+                            Some(c) => format!("(?{c}"),
+                            None => "(?".to_owned(),
+                        };
+                        self.pos += if self.peek(2).is_some() { 3 } else { 2 };
+                        Err(XsdRegexError::Malformed(format!(
+                            "{found} is not a construct of the XSD/XPath regular-expression \
+                             grammar (XML Schema Part 2 Appendix G defines no inline-flag, \
+                             lookaround, comment, or named-group syntax); the only `(?` group \
+                             spelling the grammar has is the non-capturing group `(?:`"
+                        )))
+                    }
                 } else {
                     self.groups.open();
                     self.pos += 1;
@@ -513,8 +538,8 @@ impl<'a> Scanner<'a> {
             'p' | 'P' if self.peek(2) == Some('{') => return self.scan_unicode_property(),
             // `\d`/`\D` already default to `\p{Nd}`/its complement in
             // `regex-syntax`, exactly XSD's definition, so no rewrite is
-            // needed; a `\p`/`\P` not followed by `{` is passed through too.
-            'p' | 'P' | 'd' | 'D' => Ok(Token::Escape(esc)),
+            // needed.
+            'd' | 'D' => Ok(Token::Escape(esc)),
             '1'..='9' => return self.scan_backreference(esc),
             // `\0` is NOT a back-reference: XPath F&O 3.1 §5.6.1.4's production
             // is `backReference ::= "\" [1-9][0-9]*`, which starts at 1. Nor is
@@ -530,7 +555,37 @@ impl<'a> Scanner<'a> {
                  back-reference starts at \\1, and \\0 is not a single-character escape)"
                     .to_owned(),
             )),
-            _ => Ok(Token::Escape(esc)),
+            // XML Schema Part 2 Appendix G's `SingleCharEsc` is a CLOSED
+            // enumeration -- `n r t \ | . ? * + ( ) { } - [ ] ^` -- and
+            // `regex-syntax`'s escape table is not the governing grammar.
+            // `\p`/`\P` with a `{…}` name is handled above; a bare `\p`/`\P`
+            // is not a construct and falls through to the named refusal.
+            //
+            // `\&`, `\~` and `\$` are NOT in `SingleCharEsc`, but they are
+            // kept accepted deliberately: the first-party corpus pins the
+            // escaped class members (`[a\&b]`, `[\~]`), and the vendored
+            // ShExTest corpus pins `\$` as its literal-dollar spelling in
+            // `1literalPattern_with_all_punctuation.shex` (the ShExC lexer
+            // preserves `\$` verbatim). Refusing them would be over-refusal
+            // hidden as grammar strictness.
+            'n' | 'r' | 't' | '\\' | '|' | '.' | '?' | '*' | '+' | '(' | ')' | '{' | '}' | '-'
+            | '[' | ']' | '^' | '&' | '~' | '$' => Ok(Token::Escape(esc)),
+            // Everything else is decided by the GOVERNING grammar, never by
+            // `regex-syntax`'s own escape table: `\A`/`\z`/`\Z`, `\x41`,
+            // `\u{41}`, `\a`/`\f`/`\v`/`\e`, `\Q`, `\k<name>`, `\G`, `\h`,
+            // `\N`, `\R`, `\X`, and a bare `\p`/`\P` are all constructs this
+            // dialect does not have. Each is refused by name so the
+            // diagnostic is the same kind as `\b`/`\B`/`\0`, rather than an
+            // opaque engine error or a silently different language.
+            _ => {
+                self.pos += 2;
+                return Err(XsdRegexError::Malformed(format!(
+                    "\\{esc} is not a construct of the XSD/XPath regular-expression grammar \
+                     -- XML Schema Part 2 Appendix G enumerates its single-character escapes \
+                     exactly (\\n \\r \\t \\\\ \\| \\. \\? \\* \\+ \\( \\) \\{{ \\}} \\- \\[ \\] \\^), \
+                     and \\{esc} is not among them"
+                )));
+            }
         };
         self.pos += 2;
         token
@@ -837,6 +892,142 @@ mod tests {
         assert_eq!(
             tokens(r"\d\D\.\n"),
             vec![Escape('d'), Escape('D'), Escape('.'), Escape('n')]
+        );
+    }
+
+    /// The `(?` group arm accepts ONLY `(?:`; every other parenthesized
+    /// construct is refused by name. XML Schema Part 2 Appendix G defines no
+    /// inline-flag, lookaround, comment or named-group syntax, so before this
+    /// `(?i)` applied Rust's `i`, `(?x)` smuggled `ignore_whitespace` in, and
+    /// `(?<name>…)` became a named capture -- each announced only by the
+    /// engine's own, different escape table.
+    #[test]
+    fn parenthesized_dialect_constructs_are_refused_by_name() {
+        for (pattern, needle) in [
+            (r"(?i)abc", "(?i"),
+            (r"(?i:abc)", "(?i"),
+            (r"(?x)a b", "(?x"),
+            (r"(?s)a.b", "(?s"),
+            (r"(?m)a", "(?m"),
+            (r"(?U)a+", "(?U"),
+            (r"(?u)a", "(?u"),
+            (r"(?-i:a)", "(?-"),
+            (r"(?=a)", "(?="),
+            (r"(?!a)", "(?!"),
+            (r"(?<=a)b", "(?<"),
+            (r"(?<n>a)", "(?<"),
+            (r"(?P<n>a)", "(?P"),
+            (r"(?#c)a", "(?#"),
+        ] {
+            assert!(
+                matches!(
+                    first_error(pattern),
+                    XsdRegexError::Malformed(ref m) if m.contains(needle)
+                ),
+                "{pattern:?} must be refused naming {needle:?}"
+            );
+        }
+        // The only `(?` spelling the grammar has still tokenizes as a group.
+        assert_eq!(
+            tokens("(?:ab)+"),
+            vec![
+                group(false),
+                Literal('a'),
+                Literal('b'),
+                GroupClose,
+                Literal('+'),
+            ]
+        );
+        assert_eq!(tokens("(a)"), vec![group(true), Literal('a'), GroupClose]);
+    }
+
+    /// The `(` arm used to count `(?i)`, `(?=` and `(?<name>` as capturing
+    /// groups, so the F&O §5.6.1.4 back-reference tokenizer saw two captures
+    /// in `(?i)(a)\2` and reported a WELL-FORMED back-reference to group 2,
+    /// when only one capturing group exists. Now the inline-flag construct is
+    /// refused by name and opens no capture, so the `\2` is exposed as
+    /// malformed. The scanner is resumable, so the late reference is reached
+    /// after the earlier refusal.
+    #[test]
+    fn refused_parenthesized_constructs_do_not_corrupt_the_group_count() {
+        let errors: Vec<XsdRegexError> =
+            Scanner::new(r"(?i)(a)\2").filter_map(Result::err).collect();
+        assert!(
+            errors
+                .iter()
+                .all(|e| !matches!(e, XsdRegexError::Backreference(_))),
+            "no well-formed back-reference may be reported: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, XsdRegexError::Malformed(m) if m.contains("(?i"))),
+            "the inline-flag construct must be refused by name: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, XsdRegexError::Malformed(m) if m.contains("back-reference"))),
+            "the stray \\2 must be malformed, not a well-formed back-reference: {errors:?}"
+        );
+    }
+
+    /// Every escape outside the closed `SingleCharEsc` enumeration (plus the
+    /// module's multi-character escapes) is refused by name instead of being
+    /// forwarded to `regex-syntax`'s own escape table.
+    #[test]
+    fn non_xsd_escapes_are_refused_by_name() {
+        for escape in [
+            r"\A", r"\z", r"\Z", r"\x", r"\u", r"\a", r"\f", r"\v", r"\e", r"\Q", r"\k", r"\G",
+            r"\h", r"\N", r"\R", r"\X", r"\p", r"\P",
+        ] {
+            let pattern = format!("a{escape}b");
+            assert!(
+                matches!(
+                    first_error(&pattern),
+                    XsdRegexError::Malformed(ref m) if m.contains(escape)
+                ),
+                "{pattern:?} must be refused naming {escape:?}"
+            );
+        }
+        // The full spellings a reader actually writes are still named by
+        // their prefix.
+        for pattern in [r"\x41", r"\u{41}", r"\k<n>"] {
+            let needle: String = pattern.chars().take(2).collect();
+            assert!(
+                matches!(
+                    first_error(pattern),
+                    XsdRegexError::Malformed(ref m) if m.contains(&needle)
+                ),
+                "{pattern:?} must be refused naming {needle:?}"
+            );
+        }
+        // ...but the whole `SingleCharEsc` enumeration still passes through,
+        // and so do the corpus-pinned `\&`/`\~`/`\$`.
+        assert_eq!(
+            tokens(r"\n\r\t\\\|\.\?\*\+\{\}\(\)\-\[\]\^\&\~\$"),
+            vec![
+                Escape('n'),
+                Escape('r'),
+                Escape('t'),
+                Escape('\\'),
+                Escape('|'),
+                Escape('.'),
+                Escape('?'),
+                Escape('*'),
+                Escape('+'),
+                Escape('{'),
+                Escape('}'),
+                Escape('('),
+                Escape(')'),
+                Escape('-'),
+                Escape('['),
+                Escape(']'),
+                Escape('^'),
+                Escape('&'),
+                Escape('~'),
+                Escape('$'),
+            ]
         );
     }
 

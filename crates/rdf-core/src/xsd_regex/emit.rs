@@ -104,8 +104,9 @@ pub(super) fn translate(
                 // `regex-syntax`, exactly XSD's definition — confirmed by
                 // direct testing (`Regex::new(r"^\d$").unwrap().is_match("\u{0660}")`,
                 // U+0660 ARABIC-INDIC DIGIT ZERO, is `true`). No rewrite is
-                // needed; a `\p`/`\P` not followed by `{` is passed through
-                // here unchanged for the same reason.
+                // needed; every other escape that reaches this arm is in the
+                // closed `SingleCharEsc` enumeration (or a corpus-pinned
+                // `\&`/`\~`/`\$`), because [`Scanner`] refuses the rest by name.
                 out.push('\\');
                 out.push(c);
             }
@@ -429,6 +430,62 @@ mod tests {
             "[^&&<>] is 'no ampersand or angle brackets', not match-everything"
         );
         assert!(anti.is_match("safe"));
+    }
+
+    /// XML Schema Part 2 Appendix G defines no `(?` construct other than the
+    /// non-capturing group `(?:`, so the translator refuses every inline-flag,
+    /// lookaround, comment and named-group spelling by name -- never by
+    /// letting `regex-syntax` apply ITS own meaning (`(?i)` its `i`, `(?x)` its
+    /// verbose mode, `(?<n>…)` a named capture).
+    #[test]
+    fn parenthesized_dialect_constructs_are_refused_by_name() {
+        for (pattern, needle) in [
+            ("(?i)abc", "(?i"),
+            ("(?i:abc)", "(?i"),
+            ("(?x)a b", "(?x"),
+            ("(?s)a.b", "(?s"),
+            ("(?U)a+", "(?U"),
+            ("(?=a)", "(?="),
+            ("(?!a)", "(?!"),
+            ("(?<=a)b", "(?<"),
+            ("(?<n>a)", "(?<"),
+            ("(?P<n>a)", "(?P"),
+            ("(?#c)a", "(?#"),
+        ] {
+            let err = translate(pattern, false, false).unwrap_err();
+            assert!(
+                matches!(&err, XsdRegexError::Malformed(m) if m.contains(needle)),
+                "{pattern:?} must be refused naming {needle:?}: {err}"
+            );
+        }
+        // The grammar's only `(?` spelling still compiles and matches.
+        let re = translated_regex("^(?:ab)+$", false);
+        assert!(re.is_match("abab"));
+        assert!(!re.is_match("aba"));
+    }
+
+    /// Every escape outside the closed `SingleCharEsc` enumeration is refused
+    /// for what it IS. Before this, `\a` was forwarded to `regex-syntax` (a
+    /// BEL that a reader would take for a letter) and `\x41`/`\u{41}` compiled
+    /// as Rust codepoint escapes, so acceptance was decided by the engine's
+    /// escape table rather than by the governing grammar.
+    #[test]
+    fn non_xsd_escapes_are_refused_by_name() {
+        for pattern in [
+            r"\A", r"\z", r"\Z", r"\x41", r"\u{41}", r"\a", r"\f", r"\v", r"\e", r"\Q", r"\k<n>",
+            r"\G", r"\h", r"\N", r"\R", r"\X",
+        ] {
+            let err = translate(pattern, false, false).unwrap_err();
+            let needle = &pattern[..2];
+            assert!(
+                matches!(&err, XsdRegexError::Malformed(m) if m.contains(needle)),
+                "{pattern:?} must be refused naming {needle:?}: {err}"
+            );
+        }
+        // The corpus-pinned literal escapes still work.
+        let dollar = translated_regex(r"^\$$", false);
+        assert!(dollar.is_match("$"));
+        assert!(!dollar.is_match("a"));
     }
 
     #[test]

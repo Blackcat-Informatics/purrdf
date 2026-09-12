@@ -87,3 +87,57 @@ abc\	-	error	dangling
 [a]]	-	error	unescaped ']' outside
 a]b	-	error	unescaped ']' outside
 a\]b	-	match	a]b
+
+# XML Schema Part 2 Appendix G defines NO inline-flag, lookaround, comment,
+# or named-group syntax. `(?:` is the only `(?` spelling the grammar has, so
+# every other parenthesized construct used to fall through the literal path
+# to `regex-syntax`, which applied ITS semantics: `(?i)` its own `i` flag,
+# `(?x)` its verbose mode (the same letter as XPath's `x` with a DIFFERENT
+# rule), `(?s)` a dot flag the translator had already handled itself, and
+# `(?P<name>…)` a named capture. Each is now refused by name, and none of
+# them counts as a capturing group any more (see the `(?i)(a)\2` unit test).
+(?i)abc	-	error	(?i
+(?i:abc)	-	error	(?i
+(?x)a b	-	error	(?x
+(?s)a.b	-	error	(?s
+(?m)a	-	error	(?m
+(?U)a+	-	error	(?U
+(?u)a	-	error	(?u
+(?-i:a)	-	error	(?-
+(?=a)	-	error	(?=
+(?!a)	-	error	(?!
+(?<=a)b	-	error	(?<
+(?<n>a)	-	error	(?<
+(?P<n>a)	-	error	(?P
+(?#c)a	-	error	(?#
+
+# The escape catch-all is gone as well. XSD's `SingleCharEsc` is a CLOSED
+# enumeration, so acceptance is now decided by the grammar rather than by
+# `regex-syntax`'s own escape table. `\a` was doubly wrong -- XSD has no
+# `\a`, and the engine reads it as BEL -- and `\x41`/`\u{41}` compiled as
+# Rust codepoint escapes. `\p` without a `{…}` name is not a construct
+# either. (`\u005cu` writes the pattern `\u`; see the corpus README's escape
+# table -- `\uXXXX` is the one way to spell a backslash before a `u`.)
+\A	-	error	\A
+\z	-	error	\z
+\Z	-	error	\Z
+\x41	-	error	\x
+\u005cu{41}	-	error	\u005cu
+\a	-	error	\a
+\f	-	error	\f
+\v	-	error	\v
+\e	-	error	\e
+\Q	-	error	\Q
+\k<n>	-	error	\k
+\G	-	error	\G
+\h	-	error	\h
+\N	-	error	\N
+\R	-	error	\R
+\X	-	error	\X
+a\pb	-	error	\p
+
+# The whole SingleCharEsc enumeration still works, and so do the literal
+# escapes the corpora pin (`\$`, `\&`, `\~`), which are not in that
+# enumeration but are preserved deliberately.
+^[\|\.\?\*\+\{\}\(\)\-\[\]\^]+$	-	match	|.?*+{}()-[]^
+^\$\&\~$	-	match	$&~

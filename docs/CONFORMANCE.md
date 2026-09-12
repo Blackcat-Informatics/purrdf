@@ -54,7 +54,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 70 | 0 | 0 | 0 | GREEN |
-| XSD/XPath regExp (first-party corpus) | first-party, XSD G + F&O 5.6 | 214 | 0 | 0 | 0 | GREEN |
+| XSD/XPath regExp (first-party corpus) | first-party, XSD G + F&O 5.6 | 247 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 19 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 10 | 0 | 0 | 0 | GREEN |
@@ -103,7 +103,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **70 / 70** frozen expected reports |
-| XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **214 / 214** cases · 0 ledgered. The dialect `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified in, graded once at the shared compiler (`purrdf_core::xsd_regex`) instead of three times at the call sites. Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Six construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the two the dialect defines and this implementation does not execute |
+| XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **247 / 247** cases · 0 ledgered. The dialect `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified in, graded once at the shared compiler (`purrdf_core::xsd_regex`) instead of three times at the call sites. Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Six construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the two the dialect defines and this implementation does not execute |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **264 / 264** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 67, turtle 110) · 0 gaps. The RDF 1.2 `syntax/` + `eval/` sub-suites, plus the `iri/` sub-suite: the `IRI-resolution-01/02/07/08`, `IRIREF_datatype` and `IRI_with_*_numeric_escape` cases, which exist only in the RDF 1.1 Turtle/TriG suites upstream because RDF 1.2 publishes no base-resolution eval tests — this is the end-to-end half of the base-IRI contract `crates/iri/tests/` pins unit-by-unit against RFC 3986 §5.4 |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC + first-party RDF 1.2 vectors | **73 / 73** applicable toRDF · **13 / 13** exact compaction · 0 gaps; frozen provenance and checksums |
@@ -158,7 +158,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
 - `crates/rdf-core/corpus/xsd-regex/` — PurRDF's own XSD/XPath `regExp` corpus:
-  214 cases across six `.cases` files, grading
+  247 cases across six `.cases` files, grading
   `purrdf_core::xsd_regex::compile` — the single shared dialect translation
   that `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` all route
   through, so a dialect regression surfaces once rather than three times or
