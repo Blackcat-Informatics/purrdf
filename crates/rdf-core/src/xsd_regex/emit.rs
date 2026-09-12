@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The construct-by-construct XSD/XPath `regExp` -> `regex`-crate translator
-//! (see [`super`]'s module doc for the full construct table this implements).
+//! (see [`super`]'s module doc for the full construct inventory this implements).
 //!
 //! [`translate`] is a single fold over [`Scanner`]'s token stream. It owns no
 //! cursor and no class bookkeeping of its own: every character index, every
@@ -20,7 +20,7 @@
 //! so a self-contained bracket expression composes correctly by ordinary set
 //! union whether it stands alone as its own atom or is nested inside an
 //! already-open class -- one rewrite rule for both contexts, rather than two
-//! (verified directly against `regex` 1.13: `Regex::new("[a[b-c]d]")`,
+//! (verified directly against the locked `regex` 1.12.4: `Regex::new("[a[b-c]d]")`,
 //! `Regex::new("[[^\\u{370}-\\u{3ff}]a]")` and similar nested-negation forms
 //! all compile and match as expected).
 

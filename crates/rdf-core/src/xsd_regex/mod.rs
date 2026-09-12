@@ -48,6 +48,69 @@
 //! plan intentionally pins the ACTUAL divergent behavior with a test rather
 //! than relying on it silently, so a future `regex` upgrade that happens to
 //! change this is caught, not silently trusted).
+//!
+//! # A recognizer, not a pass-through
+//!
+//! [`compile`] recognizes the grammar; it does not hand the source text to the
+//! `regex` crate and accept whatever that crate accepts. A construct outside
+//! the grammar is a named [`XsdRegexError`], never silently compiled with Rust
+//! `regex` semantics. The families refused by name:
+//!
+//! * **Group constructs** — every `(?…` spelling other than the non-capturing
+//!   group `(?:` ([`XsdRegexError::UnsupportedGroupConstruct`]): inline flags
+//!   `(?i)`, `(?x)`, `(?s)`, `(?m)` and their negations (`(?-…)`), lookaround
+//!   (`(?=…)`, `(?!…)`, `(?<=…)`, `(?<!…)`), named groups (`(?<name>…)`,
+//!   `(?P<name>…)`) and comments (`(?#…)`).
+//! * **Non-grammar escapes** ([`XsdRegexError::UnsupportedEscape`],
+//!   [`XsdRegexError::UnsupportedConstruct`],
+//!   [`XsdRegexError::UnsupportedNulEscape`]) — `\b`/`\B`, `\0`, and every
+//!   escape outside the closed `SingleCharEsc` enumeration and the
+//!   multi-character escapes: `\A`, `\z`, `\Z`, `\x41`, `\u{41}`, `\a`, `\f`,
+//!   `\v`, `\e`, `\Q`, `\k<…>`, `\G`, `\h`, `\N`, `\R`, `\X`, and a bare
+//!   `\p`/`\P`.
+//! * **Class-interior Rust-isms** ([`XsdRegexError::UnescapedClassOpen`],
+//!   [`XsdRegexError::UnescapedClassClose`],
+//!   [`XsdRegexError::LiteralClassCloseAtHead`]) — a nested `[` that is not the
+//!   operand of a `-[` subtraction, a `]` at the head of a class, and an
+//!   unescaped `[`/`]` where the grammar has no production. `&`/`~` are
+//!   ordinary class members here, not the `regex` crate's set operators.
+//! * **Unicode scripts and other property keys**
+//!   ([`XsdRegexError::UnknownCategory`]) — `\p{…}` admits only Appendix G's
+//!   closed general-category list and `Is`-prefixed Unicode block names
+//!   ([`XsdRegexError::UnknownBlock`]); a script name (`Greek`), a
+//!   `key=value`/`key:value` property key and a `regex`-crate pseudo-property
+//!   are refused by name.
+//!
+//! # Resource bounds
+//!
+//! Three named limits, each a hard error rather than a truncation or a
+//! fallback, keep a hostile pattern from becoming unbounded work:
+//! [`MAX_SOURCE_BYTES`] (64 KiB, bounding the source before the scan and the
+//! name-escape expansion), [`MAX_TRANSLATED_BYTES`] (1 MiB, checked after
+//! translation and before the engine), and [`MAX_FOLDED_CLASS_ESCAPES`] (32,
+//! the number of *in-class* `\i`/`\I`/`\c`/`\C` escapes under `i`, each of
+//! which makes `regex-syntax` case-fold a ~917k-codepoint set at
+//! Hir-translation time — before its own size limit applies). See those
+//! constants for each bound's derivation.
+//!
+//! # Liberal edges
+//!
+//! Two acceptances are deliberately wider than the bare Appendix G grammar,
+//! recorded here so they are decisions rather than accidents:
+//!
+//! * `\$` is accepted and is **correct**: XPath F&O 3.1 §5.6.1 extends the XSD
+//!   grammar, adding `^` and `$` as metacharacters and `\^`/`\$` to
+//!   `SingleCharEsc`, and F&O is the governing dialect (SHACL §4.5.3 → SPARQL
+//!   1.1 §17.4.3.14 → `fn:matches`).
+//! * `\&` and `\~` are accepted although they are neither `SingleCharEsc` nor
+//!   `charClassEsc`. Each reaches the engine as an escape for its own literal
+//!   character, so the acceptance is harmless and refusing it would reject a
+//!   defensively-escaped pattern; the first-party corpus pins `[a\&b]`/`[\~]`
+//!   and the vendored ShExTest corpus pins `\$` as its literal-dollar spelling.
+//!
+//! `fn:replace`'s `err:FORX0004` (a malformed replacement string) is
+//! implemented by [`CompiledPattern::replace_all`]; `err:FORX0003` (the
+//! pattern matches a zero-length string) is not.
 
 mod blocks;
 mod classes;
@@ -173,7 +236,7 @@ impl CompiledPattern {
     ///
     /// # Errors
     ///
-    /// [`ReplacementError`] — F&O §5.6.2 [err:FORX0004] — when a non-`q`
+    /// [`ReplacementError`] — F&O §5.6.2 `err:FORX0004` — when a non-`q`
     /// replacement contains a `$` not followed by a digit or a `\` that is
     /// neither `\\` nor `\$`. SPARQL's `REPLACE` maps this to an unbound
     /// expression, never a query abort.

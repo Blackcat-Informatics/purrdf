@@ -16,7 +16,7 @@
 //!   text and the rest of the number is re-resolved), where the `regex` crate
 //!   treats a too-large `$N` as a reference to a (non-existent) group and
 //!   substitutes nothing.
-//! * XPath makes a malformed replacement a dynamic error [err:FORX0004],
+//! * XPath makes a malformed replacement a dynamic error `err:FORX0004`,
 //!   where the `regex` crate substitutes the offending text literally.
 //!
 //! This module parses the replacement string **once per `replace_all` call**

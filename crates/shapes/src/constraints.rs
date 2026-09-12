@@ -2439,16 +2439,29 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
 /// (literal match — the pattern is matched verbatim, with no metacharacters).
 /// Any other flag character is a hard error.
 ///
-/// There is no remaining deviation from XPath `fn:matches` semantics for
-/// anything this function supports: character-class subtraction
-/// (`[a-z-[aeiou]]`), the multi-character escapes `\i \I \c \C`, the narrowed
-/// `\s \S \w \W` classes, and `\p{IsX}`/`\P{IsX}` Unicode block escapes are all
-/// translated, not left to `regex`-crate defaults. The one permanent, by-design
-/// exception is backreferences (`\1`..`\9`): `purrdf_core::xsd_regex` translates
-/// onto the `regex` crate's DFA-based engine, which cannot backtrack and
-/// therefore cannot ever execute one, no matter how the source text is
-/// rewritten. That gap is recorded in `docs/CONFORMANCE.md` and pinned by the
-/// first-party corpus under `crates/rdf-core/corpus/xsd-regex/`.
+/// The shared compiler is a **recognizer** of the XSD/XPath grammar, not a
+/// pass-through to `regex`: a construct outside that grammar is a named
+/// [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError), never silently
+/// compiled with Rust `regex` semantics. Constructs the grammar *does* define
+/// are translated rather than left to `regex`-crate defaults: character-class
+/// subtraction (`[a-z-[aeiou]]`), the multi-character escapes `\i \I \c \C`,
+/// the narrowed `\s \S \w \W` classes, and `\p{IsX}`/`\P{IsX}` Unicode block
+/// escapes.
+///
+/// The full enumerated accept/reject list lives in
+/// [`purrdf_core::xsd_regex`]'s module doc. Two divergences remain, both of
+/// which a caller must know: backreferences (`\1`..`\9`) are refused
+/// permanently by design, because the `regex` crate's DFA engine cannot
+/// backtrack and no rewrite of the source reaches that capability; and under
+/// the `m` flag `^` matches immediately after a trailing newline where XPath
+/// `fn:matches` does not (pinned by `known_divergence_m_flag_trailing_newline`).
+/// Compilation is additionally bounded by three named resource limits
+/// ([`MAX_SOURCE_BYTES`](purrdf_core::xsd_regex::MAX_SOURCE_BYTES),
+/// [`MAX_TRANSLATED_BYTES`](purrdf_core::xsd_regex::MAX_TRANSLATED_BYTES), and
+/// [`MAX_FOLDED_CLASS_ESCAPES`](purrdf_core::xsd_regex::MAX_FOLDED_CLASS_ESCAPES)),
+/// each a hard error rather than a truncation or a fallback. All of this is
+/// recorded in `docs/CONFORMANCE.md` and pinned by the first-party corpus under
+/// `crates/rdf-core/corpus/xsd-regex/`.
 fn build_regex(
     pattern: &str,
     flags: Option<&str>,

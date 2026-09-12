@@ -306,13 +306,13 @@ impl From<regex::Error> for XsdRegexError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplacementError {
     /// A `\` that is neither the first half of a `\\` pair nor followed by
-    /// `$`, in violation of F&O 3.1 §5.6.2 [err:FORX0004].
+    /// `$`, in violation of F&O 3.1 §5.6.2 `err:FORX0004`.
     UnescapedBackslash {
         /// Byte offset of the offending `\` within the replacement string.
         offset: usize,
     },
     /// A `$` that is not followed by an ASCII digit and is not the `$` of a
-    /// `\$` escape, in violation of F&O 3.1 §5.6.2 [err:FORX0004].
+    /// `\$` escape, in violation of F&O 3.1 §5.6.2 `err:FORX0004`.
     DollarWithoutGroup {
         /// Byte offset of the offending `$` within the replacement string.
         offset: usize,
