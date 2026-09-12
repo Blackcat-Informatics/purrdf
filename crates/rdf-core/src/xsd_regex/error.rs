@@ -61,6 +61,26 @@ pub enum XsdRegexError {
         /// exceeded, in bytes.
         limit: usize,
     },
+    /// The pattern contains more in-class `\i`/`\I`/`\c`/`\C` name escapes
+    /// under the `i` flag than [`super::MAX_FOLDED_CLASS_ESCAPES`] permits.
+    /// Carries the counted occurrences and the named limit, so an operator
+    /// sees both numbers.
+    ///
+    /// This is a **case-folding cost bound**, not a syntax restriction: each
+    /// of those four escapes expands to a bracket class containing the
+    /// ~917k-codepoint astral XML-name range, and `regex-syntax` case-folds
+    /// that set once **per occurrence** at Hir-translation time. A standalone
+    /// escape is emitted pre-folded inside a `(?-i:…)` scope and is therefore
+    /// unlimited, but a group is not a character-class member, so an escape
+    /// *inside* a class cannot be scoped and the enclosing `i` re-folds it.
+    /// The construct is bounded by count for that reason alone; a pattern
+    /// below the limit is emitted exactly as before.
+    TooManyFoldedClassEscapes {
+        /// The number of in-class name escapes counted in the pattern.
+        count: usize,
+        /// The named limit (`MAX_FOLDED_CLASS_ESCAPES`) that `count` exceeded.
+        limit: usize,
+    },
     /// Translation succeeded, but the resulting `regex`-crate source still
     /// failed to compile. This should not happen for any pattern this
     /// module's translation rules produce, but is retained as defense in
@@ -98,6 +118,15 @@ impl fmt::Display for XsdRegexError {
                 f,
                 "pattern is {bytes} bytes, which exceeds the {limit}-byte limit"
             ),
+            Self::TooManyFoldedClassEscapes { count, limit } => write!(
+                f,
+                "pattern contains {count} in-class \\i/\\I/\\c/\\C name escapes under the \
+                 `i` flag, which exceeds the {limit}-escape limit -- a standalone name \
+                 escape is emitted pre-folded and unlimited, but inside a character class \
+                 it cannot be scoped and the enclosing `i` case-folds its \
+                 ~917k-codepoint range once per occurrence, so the construct is bounded \
+                 to keep compile time finite"
+            ),
             Self::Compile(err) => write!(f, "pattern failed to compile after translation: {err}"),
         }
     }
@@ -112,7 +141,8 @@ impl std::error::Error for XsdRegexError {
             | Self::Backreference(_)
             | Self::UnknownBlock(_)
             | Self::Malformed(_)
-            | Self::TooLarge { .. } => None,
+            | Self::TooLarge { .. }
+            | Self::TooManyFoldedClassEscapes { .. } => None,
         }
     }
 }

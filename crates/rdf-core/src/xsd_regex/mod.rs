@@ -85,9 +85,48 @@ pub const MAX_SOURCE_BYTES: usize = 64 * 1024;
 /// tiny — but far below what a hostile repetition of name escapes produces.
 ///
 /// `regex-syntax` folds case-insensitively at Hir-translation time, before its
-/// own `size_limit` is consulted, so this explicit bound is the only place the
-/// translated cost can be stopped before the engine is entered.
+/// own `size_limit` is consulted, so this byte bound — together with the
+/// in-class name-escape count bound in [`MAX_FOLDED_CLASS_ESCAPES`] — is what
+/// stops the translated cost before the engine is entered.
 pub const MAX_TRANSLATED_BYTES: usize = 1024 * 1024;
+
+/// Maximum number of `\i`/`\I`/`\c`/`\C` name escapes permitted **inside a
+/// character class** while the `i` flag is in force, per [`compile`] call.
+///
+/// Each of those escapes expands to a bracket-class body containing
+/// `\u{10000}-\u{effff}` — 917,504 code points. Standalone, the escape is
+/// emitted pre-folded inside a `(?-i:…)` scope (see `emit::translate`), so the
+/// enclosing `(?i)` no longer re-walks the set. A group is not a
+/// character-class member, however, so an escape *inside* a class cannot carry
+/// that scope: it splices as a nested class and `regex-syntax` case-folds the
+/// ~917k-codepoint set once per occurrence at Hir-translation time, **before**
+/// its own `size_limit` is consulted. Repetition is therefore CPU
+/// amplification, and no engine-side bound can stop it, because the fold
+/// happens before the engine is entered.
+///
+/// The bound is a *count* of in-class name escapes, enforced only under `i`:
+/// without `i` there is no folding and no amplification, so a pattern far over
+/// the limit compiles unchanged, and standalone escapes stay unlimited.
+///
+/// # Derivation
+///
+/// The budget is ~250 ms of case-folding work for one `compile`. Measured on
+/// the development machine (2026 floating nightly, unoptimized `cargo test`
+/// build, constants already initialized): `[\c]` repeated 32 times compiled
+/// in 146 ms, 64 times in 250–305 ms across runs, and 128 or more times is
+/// refused at once — a marginal ~4.5 ms per in-class occurrence. The budget
+/// therefore admits roughly 55 occurrences; it is rounded DOWN to the clean
+/// power of two 32, whose measured worst-case compile (146 ms) sits
+/// comfortably inside it. Rounding up to 64 was rejected because it straddles
+/// the budget (measured 250 ms in one run and 305 ms in another), and a limit
+/// that only sometimes meets its own budget is not a bound.
+///
+/// A census of every pattern this repository ships — the
+/// `corpus/xsd-regex/*.cases` files, `sh:pattern`/ShEx `PATTERN`/SPARQL
+/// `REGEX` fixtures, and the built-in tests — found a maximum of **one**
+/// in-class name escape (in `class-subtraction.cases`), and none under `i`,
+/// so the limit is more than 32× above real usage.
+pub const MAX_FOLDED_CLASS_ESCAPES: usize = 32;
 
 /// A `sh:pattern`/`REGEX`/`PATTERN` pattern compiled by [`compile`].
 ///
@@ -142,7 +181,8 @@ impl Deref for CompiledPattern {
 /// Returns [`XsdRegexError`] naming the exact unsupported flag character,
 /// unsupported construct (`\b`/`\B`), backreference, unrecognized Unicode
 /// block name, pattern malformation (see [`XsdRegexError`]'s variants), or an
-/// over-limit source/translated size ([`XsdRegexError::TooLarge`]) that caused
+/// over-limit source/translated size ([`XsdRegexError::TooLarge`]) or in-class
+/// name-escape count ([`XsdRegexError::TooManyFoldedClassEscapes`]) that caused
 /// translation or the underlying `regex` compile to fail.
 pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexError> {
     if pattern.len() > MAX_SOURCE_BYTES {
@@ -483,6 +523,97 @@ mod tests {
         assert!(
             message.contains(&bytes.to_string()) && message.contains(&limit.to_string()),
             "the message must name both numbers: {message}"
+        );
+    }
+
+    /// The in-class case-folding bound: a pattern AT the limit compiles, and
+    /// is the worst case the ~250 ms budget covers. `[\c]` repeated
+    /// `MAX_FOLDED_CLASS_ESCAPES` times is exactly that worst case.
+    #[test]
+    fn folded_class_escapes_at_the_limit_compiles() {
+        let pattern = r"[\c]".repeat(MAX_FOLDED_CLASS_ESCAPES);
+        compile(&pattern, "i").expect("a pattern exactly at MAX_FOLDED_CLASS_ESCAPES");
+    }
+
+    /// One in-class name escape over the limit is refused with the new named
+    /// variant, and the message names both numbers and says the construct is
+    /// bounded because each occurrence is case-folded.
+    #[test]
+    fn folded_class_escapes_one_over_the_limit_is_refused_with_both_numbers() {
+        let pattern = r"[\c]".repeat(MAX_FOLDED_CLASS_ESCAPES + 1);
+        let err = compile(&pattern, "i").unwrap_err();
+        assert_eq!(
+            err,
+            XsdRegexError::TooManyFoldedClassEscapes {
+                count: MAX_FOLDED_CLASS_ESCAPES + 1,
+                limit: MAX_FOLDED_CLASS_ESCAPES,
+            }
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(&(MAX_FOLDED_CLASS_ESCAPES + 1).to_string())
+                && message.contains(&MAX_FOLDED_CLASS_ESCAPES.to_string()),
+            "the message must name both numbers: {message}"
+        );
+        assert!(
+            message.contains("case-fold"),
+            "the message must say WHY the construct is bounded: {message}"
+        );
+    }
+
+    /// Without the `i` flag there is no case folding and therefore no
+    /// amplification, so the in-class bound does not apply: a pattern far over
+    /// the limit compiles unchanged.
+    #[test]
+    fn folded_class_escape_bound_does_not_apply_without_i() {
+        let pattern = r"[\c]".repeat(MAX_FOLDED_CLASS_ESCAPES * 8);
+        compile(&pattern, "").expect("no `i` flag means no folding and no bound");
+    }
+
+    /// A STANDALONE name escape under `i` is emitted pre-folded inside
+    /// `(?-i:…)` and costs nothing per occurrence, so it stays unlimited.
+    #[test]
+    fn standalone_name_escapes_are_unlimited_under_i() {
+        let pattern = r"\c".repeat(MAX_FOLDED_CLASS_ESCAPES * 8);
+        compile(&pattern, "i").expect("standalone escapes are pre-folded, so unlimited");
+    }
+
+    /// The count is per-occurrence through class subtraction and a negation:
+    /// `[a-z-[\c]]` and `[^\c]` each contribute exactly ONE in-class escape,
+    /// so the limit-th compiles and the limit+1-th is refused. A count that
+    /// missed the nested operand (subtraction) or the negated open would let
+    /// one of these through one occurrence at a time.
+    #[test]
+    fn folded_class_escape_bound_counts_through_subtraction_and_negation() {
+        for one in [r"[a-z-[\c]]", r"[^\c]"] {
+            let at = one.repeat(MAX_FOLDED_CLASS_ESCAPES);
+            compile(&at, "i").unwrap_or_else(|e| panic!("at limit {one:?}: {e}"));
+            let over = one.repeat(MAX_FOLDED_CLASS_ESCAPES + 1);
+            assert_eq!(
+                compile(&over, "i").unwrap_err(),
+                XsdRegexError::TooManyFoldedClassEscapes {
+                    count: MAX_FOLDED_CLASS_ESCAPES + 1,
+                    limit: MAX_FOLDED_CLASS_ESCAPES,
+                },
+                "{one:?} must count each in-class escape exactly once"
+            );
+        }
+    }
+
+    /// A single class may hold many name escapes (`[\i0-9]`); the count is per
+    /// occurrence, not per class, so a class one entry over the limit is
+    /// refused exactly like one class too many.
+    #[test]
+    fn folded_class_escape_bound_counts_multiple_escapes_in_one_class() {
+        let at = format!("[{}]", r"\c".repeat(MAX_FOLDED_CLASS_ESCAPES));
+        compile(&at, "i").expect("a single class exactly at the limit");
+        let over = format!("[{}]", r"\c".repeat(MAX_FOLDED_CLASS_ESCAPES + 1));
+        assert_eq!(
+            compile(&over, "i").unwrap_err(),
+            XsdRegexError::TooManyFoldedClassEscapes {
+                count: MAX_FOLDED_CLASS_ESCAPES + 1,
+                limit: MAX_FOLDED_CLASS_ESCAPES,
+            }
         );
     }
 }

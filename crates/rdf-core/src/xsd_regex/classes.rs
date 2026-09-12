@@ -83,12 +83,17 @@ pub(super) fn folded_name_char_class_body() -> &'static str {
 ///
 /// The `\i`/`\I`/`\c`/`\C` bodies are constants, so their case-fold closure is
 /// a constant too. Computing it once here lets [`super::emit`] emit the
-/// PRE-FOLDED set under `(?-i:…)`, which removes `regex-syntax`'s
-/// per-occurrence, per-codepoint case-folding walk over the ~917k-codepoint
-/// astral `NameChar` range — the quadratic blow-up this module exists to
-/// close. `regex-syntax` folds at Hir-translation time, before `size_limit`
-/// applies, so the fold cannot be bounded by the engine; making the fold a
-/// constant is the only way to remove the cost.
+/// PRE-FOLDED set under `(?-i:…)` for a STANDALONE escape, which removes
+/// `regex-syntax`'s per-occurrence, per-codepoint case-folding walk over the
+/// ~917k-codepoint astral `NameChar` range — the quadratic blow-up this module
+/// exists to close. `regex-syntax` folds at Hir-translation time, before
+/// `size_limit` applies, so the fold cannot be bounded by the engine; making
+/// the standalone fold a constant removes its cost entirely.
+///
+/// This constant does NOT reach an escape that appears INSIDE a character
+/// class: a group is not a class member, so the `(?-i:…)` scope cannot wrap
+/// it. There the fold is instead bounded by count in
+/// `emit::translate` — see [`super::MAX_FOLDED_CLASS_ESCAPES`].
 ///
 /// The closure is obtained from `regex` itself (the same engine, and therefore
 /// the same Unicode simple-case-fold table, that the old emission relied on):

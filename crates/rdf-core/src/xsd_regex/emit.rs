@@ -24,6 +24,7 @@
 //! `Regex::new("[[^\\u{370}-\\u{3ff}]a]")` and similar nested-negation forms
 //! all compile and match as expected).
 
+use super::MAX_FOLDED_CLASS_ESCAPES;
 use super::blocks;
 use super::classes::{
     NOT_SPACE_CLASS, NOT_WORD_CLASS, SPACE_CLASS, WORD_CLASS, folded_name_char_class_body,
@@ -48,7 +49,10 @@ use super::scan::{Scanner, Token};
 /// the ~917k-codepoint astral name range once per occurrence at
 /// Hir-translation time (see [`folded_name_start_class_body`]); the matched
 /// language is unchanged because the emitted set is the exact simple-case-fold
-/// closure `regex-syntax` would have produced.
+/// closure `regex-syntax` would have produced. A name escape that appears
+/// INSIDE a character class cannot carry that scope (a group is not a class
+/// member), so in-class occurrences are counted and the pass refuses past
+/// [`super::MAX_FOLDED_CLASS_ESCAPES`] under `i` instead.
 ///
 /// Must be called AFTER [`super::xflag::strip_x_flag_whitespace`] when the
 /// `x` flag is set — the two operate on the same raw pattern text, and `x`'s
@@ -62,13 +66,19 @@ pub(super) fn translate(
     let mut out = String::with_capacity(pattern.len() + 16);
     let mut scanner = Scanner::new(pattern);
     // XSD's `\i`/`\c` (and their negations) are the only constructs whose `i`
-    // rewrite differs by context: a standalone atom can carry a `(?-i:…)`
-    // scope, but a character-class member cannot (a group is not a class
-    // member), so inside a class the pre-folded body is spliced as a nested
-    // class and the surrounding `i` re-folds the already-closed set
-    // idempotently. Tracking the depth here — rather than in the scanner —
-    // keeps the rewrite to one comparison.
+    // rewrite differs by context. A standalone atom can be emitted pre-folded
+    // inside a `(?-i:…)` scope; a character-class member cannot (a group is
+    // not a class member), so an in-class escape splices as a nested class and
+    // the enclosing `i` re-folds the closed set. That re-fold is semantically
+    // idempotent but costs a full ~917k-codepoint walk per occurrence, so
+    // `folded_class_escapes` counts them and the pass refuses past
+    // [`super::MAX_FOLDED_CLASS_ESCAPES`] under `i`. Tracking the depth here —
+    // rather than in the scanner — keeps the rewrite to one comparison.
     let mut class_depth: usize = 0;
+    // In-class name escapes seen while `i` is in force; the count the bound is
+    // applied to at the end of the pass. Counting here keeps the module's
+    // single-cursor rule: no second walk over the pattern is introduced.
+    let mut folded_class_escapes: usize = 0;
     // Every `\`-escaped construct is handled by the `Escape`/`NameEscape`/
     // `SpaceEscape`/`WordEscape`/`UnicodeProperty`/`Backreference` arms below
     // in ANY context (in or out of a character class): `\b`/`\B` and
@@ -91,6 +101,11 @@ pub(super) fn translate(
                 out.push(c);
             }
             Token::NameEscape { negated, chars } => {
+                // Count BEFORE emitting so the bound is enforced for exactly
+                // the construct that carries the re-fold cost.
+                if case_insensitive && class_depth > 0 {
+                    folded_class_escapes += 1;
+                }
                 // Under `i` the canonical, pre-folded set is a process-wide
                 // constant; without it the raw body is (re)built per
                 // occurrence, exactly as before this change.
@@ -113,7 +128,8 @@ pub(super) fn translate(
                 // not walked again by `regex-syntax`; the set is already the
                 // exact closure, so the language is identical to today's.
                 // Inside a class: splices as a nested class, where the outer
-                // `i` re-folds the closed set to itself.
+                // `i` re-folds the closed set to itself; those occurrences are
+                // bounded above by `MAX_FOLDED_CLASS_ESCAPES`.
                 if case_insensitive && class_depth == 0 {
                     out.push_str("(?-i:[");
                     if negated {
@@ -202,6 +218,12 @@ pub(super) fn translate(
                 return Err(XsdRegexError::Backreference(format!("\\{n}")));
             }
         }
+    }
+    if case_insensitive && folded_class_escapes > MAX_FOLDED_CLASS_ESCAPES {
+        return Err(XsdRegexError::TooManyFoldedClassEscapes {
+            count: folded_class_escapes,
+            limit: MAX_FOLDED_CLASS_ESCAPES,
+        });
     }
     Ok(out)
 }
