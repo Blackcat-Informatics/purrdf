@@ -1500,6 +1500,36 @@ fn is_temporal_format(object: &Map<String, Value>) -> bool {
     )
 }
 
+/// Whether `pattern` compiles in the engine that will actually enforce it at
+/// model-validation time — pydantic-core's, which is the Rust `regex` crate.
+///
+/// This is a **dialect** question, not a validity one, and it is asked about
+/// exactly one dialect. Three are in play along this pipeline and they are not
+/// interchangeable:
+///
+/// * the source `sh:pattern` is **XSD/XPath `regExp`** (SHACL §4.5.3 → SPARQL
+///   1.1 §17.4.3.14 → XPath F&O 3.1 §5.6);
+/// * the `pattern` keyword this function receives is **ECMA-262**, because
+///   that is what JSON Schema specifies;
+/// * `Field(pattern=…)` is enforced by **pydantic-core**, whose default
+///   `regex_engine` is `'rust-regex'` — the `regex` crate — with
+///   `'python-re'` available only by explicit opt-in. Hence
+///   `regex::Regex::new` and not, for instance, a Python `re` model.
+///
+/// So a `false` here means "pydantic-core could not compile this", and says
+/// nothing about whether the pattern is a valid `sh:pattern` (it may well be —
+/// a `\i` or a `\p{IsBasicLatin}` is perfectly well-formed XSD) or a valid
+/// ECMA-262 one. It is deliberately the narrow, concrete question, because the
+/// emitter's two call sites must be exact complements: `apply_constraints`
+/// installs the runtime constraint only when this is `true`, and
+/// `Ctx::audit_schema` records a `keyword-validation-dropped` loss exactly
+/// when it is `false`. A broader predicate here would silently break that
+/// complementarity in one direction or the other.
+///
+/// It does **not** detect a pattern that compiles with a *different meaning*
+/// in the target dialect (`\d`, `\s`, `\w`, `.` and `\p{Is…}` all do): that is
+/// the SHACL→JSON-Schema emitter's `sh:pattern dialect` loss to record, and
+/// per-keyword translation for these emitters is tracked separately.
 fn runtime_pattern_supported(pattern: &str) -> bool {
     regex::Regex::new(pattern).is_ok()
 }

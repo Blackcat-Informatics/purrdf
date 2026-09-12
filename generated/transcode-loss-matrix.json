@@ -2569,11 +2569,25 @@
     "note": "A SHACL-AF sh:expression node-expression constraint has no JSON Schema equivalent and is dropped."
   },
   {
+    "code": "sh:nodeByExpression",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A SHACL 1.2 sh:nodeByExpression constraint computes its node shape from a node expression evaluated against the data graph; a closed-world JSON Schema has no way to express a shape that is not known until validation time, so the constraint is dropped. (This code was recorded by the emitter without being declared here, which made check_ledger_sound reject any ledger containing it; declared now.)"
+  },
+  {
     "code": "sh:not",
     "from": "shacl",
     "to": "json-schema",
     "intentional": true,
     "note": "A sh:not negation whose inner shape is not losslessly expressible as a JSON Schema negation (or that appears at property/value position, where negating a base value schema would be vacuous) is dropped rather than emitted unsoundly."
+  },
+  {
+    "code": "sh:pattern dialect",
+    "from": "shacl",
+    "to": "json-schema",
+    "intentional": true,
+    "note": "A sh:pattern is written in the XSD/XPath regular-expression dialect (SHACL 4.5.3 defines sh:pattern by SPARQL REGEX, which SPARQL 17.4.3.14 defines by XPath fn:matches), while JSON Schema's pattern keyword is ECMA-262. The source text is emitted verbatim because it is the only faithful record of what the shape author wrote, but it uses at least one construct or flag whose meaning does not survive the dialect change, so a consumer validating against the emitted schema may accept or reject values the SHACL validator does not. The note names the specific constructs found."
   },
   {
     "code": "sh:sparql",

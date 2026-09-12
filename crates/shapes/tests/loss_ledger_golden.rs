@@ -38,8 +38,9 @@ const PREFIXES: &str = r"
 /// the `("shacl", "json-schema")` loss profile through the real emitter:
 /// node- and property-level `sh:sparql`, a node-level `sh:not` over a
 /// non-expressible inner, a property-level (value-position) `sh:not`, a
-/// node-level `sh:expression`, and a shape targeted only via SHACL-AF
-/// `sh:SPARQLTarget` (`sh:SPARQLTarget`).
+/// node-level `sh:expression`, a shape targeted only via SHACL-AF
+/// `sh:SPARQLTarget` (`sh:SPARQLTarget`), and a `sh:pattern` whose XSD/XPath
+/// dialect does not survive the copy into JSON Schema's ECMA-262 `pattern`.
 const GOLDEN_SHAPES: &str = r#"
     ex:GuardedShape a sh:NodeShape ;
         sh:targetClass ex:Guarded ;
@@ -57,6 +58,11 @@ const GOLDEN_SHAPES: &str = r#"
         sh:property [
             sh:path ex:label ;
             sh:not [ sh:datatype xsd:integer ] ;
+        ] ;
+        sh:property [
+            sh:path ex:code ;
+            sh:pattern "^\\i\\c*$" ;
+            sh:flags "i" ;
         ] .
 
     ex:SparqlTargetedShape a sh:NodeShape ;
