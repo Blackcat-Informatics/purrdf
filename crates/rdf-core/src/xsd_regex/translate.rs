@@ -183,6 +183,9 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
     // group has to be wrapped so a following subtraction binds to the
     // negation rather than around it (see `ClassFrame`).
     let mut classes: Vec<ClassFrame> = Vec::new();
+    // Capturing-group bookkeeping, needed only to TOKENIZE a back-reference
+    // correctly — see `Groups` and `translate_escape`'s digit arm.
+    let mut groups = Groups::default();
     let mut i = 0_usize;
     while i < chars.len() {
         let c = chars[i];
@@ -194,7 +197,7 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
                         "pattern ends with a dangling backslash".to_owned(),
                     ));
                 };
-                translate_escape(&chars, &mut i, &mut out, esc)?;
+                translate_escape(&chars, &mut i, &mut out, esc, &groups)?;
             }
             '[' => {
                 i += 1;
@@ -252,6 +255,27 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
                 out.push_str("[^\\u{a}\\u{d}]");
                 i += 1;
             }
+            // Capturing-parenthesis bookkeeping. XML Schema Part 2 Appendix G
+            // (as amended by XPath F&O 3.1 §5.6.1.3): "a left parenthesis is
+            // recognized as a capturing left parenthesis provided it is not
+            // immediately followed by `?:`, is not within a character group
+            // (square brackets), and is not escaped with a backslash" — the
+            // escaped case never reaches here, having been consumed above.
+            '(' if classes.is_empty() => {
+                if chars.get(i + 1) == Some(&'?') && chars.get(i + 2) == Some(&':') {
+                    out.push_str("(?:");
+                    i += 3;
+                } else {
+                    groups.open();
+                    out.push('(');
+                    i += 1;
+                }
+            }
+            ')' if classes.is_empty() => {
+                groups.close();
+                out.push(')');
+                i += 1;
+            }
             other => {
                 out.push(other);
                 i += 1;
@@ -264,6 +288,62 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
         ));
     }
     Ok(out)
+}
+
+/// Capturing-group bookkeeping, kept solely so a back-reference can be
+/// **tokenized** the way the specification says rather than greedily.
+///
+/// XPath F&O 3.1 §5.6.1.4 makes the scan context-dependent, which is unusual
+/// enough to quote:
+///
+/// > The construct `\N` where N is a single digit is always recognized as a
+/// > back-reference; if this is followed by further digits, these digits are
+/// > taken to be part of the back-reference **if and only if** the resulting
+/// > number NN is such that the back-reference is preceded by the opening
+/// > parenthesis of the NNth capturing left parenthesis.
+///
+/// So `(a)\12` is `\1` followed by a literal `2`, while the same text after
+/// twelve capturing groups is `\12`. A greedy longest-digit-run scan gets the
+/// first case wrong, and since this module's whole contract for a
+/// back-reference is an error message that names the construct it found, a
+/// wrong tokenization is a message that lies about the pattern.
+///
+/// The same clause supplies the validity rule: the expression is invalid if a
+/// back-reference "refers to a capturing sub-expression that does not exist or
+/// whose closing right parenthesis occurs after the back-reference" — which is
+/// a MALFORMED pattern, refused by any engine, as distinct from a well-formed
+/// back-reference this implementation declines to execute.
+#[derive(Default)]
+struct Groups {
+    /// Capturing `(` seen so far, in source order.
+    opened: u32,
+    /// The numbers of the capturing groups still open at this point; a group
+    /// not on this stack has had its `)` already, and may be referred to.
+    open_stack: Vec<u32>,
+}
+
+impl Groups {
+    fn open(&mut self) {
+        self.opened += 1;
+        self.open_stack.push(self.opened);
+    }
+
+    fn close(&mut self) {
+        self.open_stack.pop();
+    }
+
+    /// Whether the `n`th capturing group's `(` precedes this point — the test
+    /// that decides whether one more digit joins a back-reference.
+    fn opened_before(&self, n: u32) -> bool {
+        n >= 1 && n <= self.opened
+    }
+
+    /// Whether the `n`th capturing group's `)` also precedes this point, which
+    /// is what makes a reference to it well-formed rather than merely
+    /// well-tokenized.
+    fn closed_before(&self, n: u32) -> bool {
+        self.opened_before(n) && !self.open_stack.contains(&n)
+    }
 }
 
 /// One open character-class level, tracked because XSD's `charClassSub`
@@ -292,6 +372,7 @@ fn translate_escape(
     i: &mut usize,
     out: &mut String,
     esc: char,
+    groups: &Groups,
 ) -> Result<(), XsdRegexError> {
     match esc {
         'b' => return Err(XsdRegexError::UnsupportedConstruct("\\b")),
@@ -357,13 +438,42 @@ fn translate_escape(
             translate_unicode_property(chars, i, out, esc)?;
         }
         '1'..='9' => {
+            // Tokenize per F&O §5.6.1.4 (see `Groups`): the first digit is
+            // always part of the reference, and each further digit joins it
+            // only while the resulting number still names a capturing group
+            // whose `(` precedes this point. NOT a greedy digit run — after
+            // one group, `\12` is `\1` then a literal `2`.
             let start = *i;
+            let mut number = esc.to_digit(10).expect("matched 1..=9");
             let mut j = *i + 1;
-            while chars.get(j).is_some_and(char::is_ascii_digit) {
+            while let Some(digit) = chars.get(j).and_then(|c| c.to_digit(10)) {
+                let Some(extended) = number.checked_mul(10).and_then(|n| n.checked_add(digit))
+                else {
+                    break;
+                };
+                if !groups.opened_before(extended) {
+                    break;
+                }
+                number = extended;
                 j += 1;
             }
             let mut reference = String::from("\\");
             reference.extend(&chars[start..j]);
+            *i = j;
+            if !groups.closed_before(number) {
+                // Invalid for ANY engine, backtracking or not: the reference
+                // names a group that does not exist, or one whose `)` has not
+                // been seen yet. Reported as malformed rather than as an
+                // unsupported construct, because "this implementation cannot
+                // run it" would be a misleading excuse for a pattern nothing
+                // can run.
+                return Err(XsdRegexError::Malformed(format!(
+                    "back-reference {reference} refers to a capturing group that does not \
+                     exist, or whose closing ')' comes after it ({} capturing group(s) are \
+                     complete at that point)",
+                    groups.opened
+                )));
+            }
             return Err(XsdRegexError::Backreference(reference));
         }
         // `\0` is NOT a back-reference: XPath F&O 3.1 §5.6.1.4's production is
@@ -388,6 +498,17 @@ fn translate_escape(
         }
     }
     Ok(())
+}
+
+/// Whether `lo..=hi` lies wholly inside the UTF-16 surrogate range
+/// `U+D800..=U+DFFF`, whose code points are not Unicode scalar values.
+///
+/// Tested as a range rather than by block name so it stays correct if a future
+/// Unicode revision renames or re-partitions the three surrogate blocks: the
+/// property that matters is where the code points are, not what they are
+/// called.
+fn is_surrogate_range(lo: u32, hi: u32) -> bool {
+    lo >= 0xD800 && hi <= 0xDFFF
 }
 
 /// Handle `\p{...}`/`\P{...}` starting just past the `p`/`P`
@@ -423,12 +544,36 @@ fn translate_unicode_property(
     if name.starts_with("Is") {
         let (lo, hi) =
             blocks::lookup(&name).ok_or_else(|| XsdRegexError::UnknownBlock(name.clone()))?;
-        out.push('[');
-        if esc == 'P' {
-            out.push('^');
+        if is_surrogate_range(lo, hi) {
+            // Three of Unicode's blocks — High Surrogates, High Private Use
+            // Surrogates and Low Surrogates — consist entirely of code points
+            // that are NOT Unicode scalar values. A Rust `&str` is UTF-8 over
+            // scalar values, so no subject string this engine can be handed
+            // will ever contain one.
+            //
+            // "Matches nothing" is therefore the EXACT answer over the domain,
+            // not a degraded approximation of one, and `\P{Is…}` of such a
+            // block matches every representable character for the same reason.
+            // Emitting the range literally is what does not work: `regex`
+            // refuses `\u{d800}` outright, so the caller got an opaque
+            // "hexadecimal literal is not a Unicode scalar value" parse error
+            // naming neither the block nor the reason.
+            //
+            // Refusing the pattern instead would be over-refusal: the escape
+            // is well-formed XSD naming a block that genuinely exists, and
+            // over-refusal is the direction this dialect work is least willing
+            // to move in. Both forms are self-contained bracket expressions, so
+            // they compose by union inside an enclosing class exactly as every
+            // other block escape does.
+            out.push_str(if esc == 'P' { "[\\s\\S]" } else { "[^\\s\\S]" });
+        } else {
+            out.push('[');
+            if esc == 'P' {
+                out.push('^');
+            }
+            push_hex_range(out, lo, hi);
+            out.push(']');
         }
-        push_hex_range(out, lo, hi);
-        out.push(']');
     } else {
         // A general-category escape (`\p{L}`, `\p{Nd}`, ...) is legitimately
         // shared syntax between XSD and `regex-syntax` — never intercepted.
@@ -586,6 +731,77 @@ mod tests {
         let nested = translated_regex("^[a-z-[^aeiou]]+$", false);
         assert!(nested.is_match("aei"), "a-z intersected with the vowels");
         assert!(!nested.is_match("b"));
+    }
+
+    /// A back-reference's digits are tokenized against the capturing-group
+    /// count that precedes it (F&O §5.6.1.4), not by a greedy digit run. The
+    /// whole contract for a back-reference here is an error that names the
+    /// construct, so a wrong tokenization is a message that lies about the
+    /// pattern.
+    #[test]
+    fn backreference_tokenization_follows_the_preceding_group_count() {
+        let named = |pattern: &str| match translate(pattern, false) {
+            Err(XsdRegexError::Backreference(reference)) => reference,
+            other => panic!("expected a back-reference for {pattern:?}, got {other:?}"),
+        };
+        // One group: `\12` is `\1` followed by a literal `2`.
+        assert_eq!(named(r"(a)\12"), r"\1");
+        // Ten groups: the second digit joins.
+        assert_eq!(named(r"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10"), r"\10");
+        // Twelve groups: so does a `\12`.
+        assert_eq!(named(r"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)\12"), r"\12");
+        // A non-capturing group is not counted...
+        assert_eq!(named(r"(?:a)(b)\1"), r"\1");
+        // ...nor is a parenthesis inside a character class, or an escaped one.
+        assert_eq!(named(r"[()](a)\1"), r"\1");
+        assert_eq!(named(r"\((a)\1"), r"\1");
+
+        // A reference to a group that does not exist, or whose `)` has not
+        // been seen, is MALFORMED — no engine can run it — which is a
+        // different answer from one this engine declines to execute.
+        for pattern in [r"a\9b", r"(a\1)", r"(?:a)\1"] {
+            match translate(pattern, false) {
+                Err(XsdRegexError::Malformed(message)) => {
+                    assert!(
+                        message.contains("does not exist") || message.contains("closing"),
+                        "{pattern:?}: {message}"
+                    );
+                }
+                other => panic!("expected malformed for {pattern:?}, got {other:?}"),
+            }
+        }
+    }
+
+    /// The three surrogate blocks hold no Unicode scalar values, so no `&str`
+    /// subject can contain one. Emitting the range literally made the engine
+    /// refuse `\u{d800}` with a message naming neither the block nor the
+    /// reason; the exact answer is the empty set (and its complement).
+    #[test]
+    fn surrogate_blocks_are_the_empty_set_not_a_parse_error() {
+        assert_eq!(
+            translate(r"\p{IsHighSurrogates}", false).expect("translate"),
+            "[^\\s\\S]"
+        );
+        assert_eq!(
+            translate(r"\P{IsLowSurrogates}", false).expect("translate"),
+            "[\\s\\S]"
+        );
+        let empty = translated_regex(r"^\p{IsHighSurrogates}$", false);
+        assert!(!empty.is_match("a"));
+        assert!(!empty.is_match("\u{10000}"));
+        let all = translated_regex(r"^\P{IsHighSurrogates}$", false);
+        assert!(all.is_match("a"));
+        assert!(all.is_match("\n"), "the complement is every scalar value");
+
+        // Composes by union inside an enclosing class like any other block.
+        let union = translated_regex(r"^[\p{IsHighSurrogates}\p{IsBasicLatin}]+$", false);
+        assert!(union.is_match("abc"));
+        assert!(!union.is_match("\u{3b1}"));
+
+        // A neighbouring non-surrogate block is unaffected by the carve-out.
+        let latin = translated_regex(r"^\p{IsBasicLatin}$", false);
+        assert!(latin.is_match("A"));
+        assert!(!latin.is_match("\u{e9}"));
     }
 
     /// `\0` is neither a back-reference (XPath F&O §5.6.1.4's production

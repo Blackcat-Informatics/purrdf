@@ -35,7 +35,7 @@ const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/xsd-regex"
 /// Asserted, not merely printed: a renamed or deleted corpus file would
 /// otherwise silently shrink the suite while the harness still reported green.
 /// Bump this when adding or removing a case.
-const EXPECTED_CASES: usize = 184;
+const EXPECTED_CASES: usize = 197;
 
 /// What a case says must happen.
 #[derive(Debug, PartialEq, Eq)]
@@ -420,8 +420,15 @@ fn harness_detects_a_wrong_expectation() {
 /// A malformed corpus line is a harness failure, not a skipped case.
 #[test]
 fn parser_rejects_a_malformed_line() {
-    let dir = std::env::temp_dir().join("purrdf-xsd-regex-corpus-parse-test");
-    fs::create_dir_all(&dir).expect("create temp dir");
+    // `TempDir`, not a fixed path under `temp_dir()`: a fixed one is shared by
+    // concurrent runs of this binary and survives a panic between writing a
+    // fixture and removing it, so the NEXT run fails on a leftover file for a
+    // reason that has nothing to do with the parser. `TempDir` gives a unique
+    // directory and removes the whole tree on drop, panic included.
+    let dir = tempfile::Builder::new()
+        .prefix("purrdf-xsd-regex-corpus-parse-")
+        .tempdir()
+        .expect("create temp dir");
 
     let cases = [
         ("three-fields.cases", "^a$\t-\tmatch\n"),
@@ -430,24 +437,21 @@ fn parser_rejects_a_malformed_line() {
         ("bad-escape.cases", "^a$\t-\tmatch\t\\u00\n"),
     ];
     for (name, body) in cases {
-        let path = dir.join(name);
+        let path = dir.path().join(name);
         fs::write(&path, body).expect("write temp corpus");
         assert!(
             parse_file(&path).is_err(),
             "{name} must be rejected, not skipped"
         );
-        fs::remove_file(&path).expect("remove temp corpus");
     }
 
     // ...and a well-formed one is accepted, so the rejections above are not
     // the parser refusing everything.
-    let ok = dir.join("ok.cases");
+    let ok = dir.path().join("ok.cases");
     fs::write(&ok, "# a comment\n\n^a$\t-\tmatch\ta\n^a$\ti\tnomatch\tb\n")
         .expect("write temp corpus");
     let parsed = parse_file(&ok).expect("a well-formed file parses");
     assert_eq!(parsed.len(), 2);
     assert_eq!(parsed[0].flags, "");
     assert_eq!(parsed[1].flags, "i");
-    fs::remove_file(&ok).expect("remove temp corpus");
-    fs::remove_dir(&dir).expect("remove temp dir");
 }

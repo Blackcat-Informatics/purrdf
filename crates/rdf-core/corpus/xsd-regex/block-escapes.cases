@@ -65,6 +65,23 @@
 ^\p{L}+$	-	match	ab\u00e9
 ^\P{L}$	-	match	1
 
+# The three surrogate blocks consist entirely of code points that are NOT
+# Unicode scalar values, so no subject string can contain one. "Matches
+# nothing" is the exact answer over the representable domain, not a degraded
+# one, and the complement matches everything for the same reason. Emitting
+# the range literally is what fails: the engine refuses \u{d800} with a
+# message naming neither the block nor the reason.
+^\p{IsHighSurrogates}$	-	nomatch	a
+^\p{IsLowSurrogates}$	-	nomatch	a
+^\p{IsHighPrivateUseSurrogates}$	-	nomatch	a
+^\P{IsHighSurrogates}$	-	match	a
+^\P{IsLowSurrogates}$	-	match	\u1f00
+^\P{IsHighSurrogates}$	-	match	\n
+# ...and they compose inside a class like every other block escape: the
+# surrogate half contributes nothing to the union, the other half decides.
+^[\p{IsHighSurrogates}\p{IsBasicLatin}]+$	-	match	abc
+^[\p{IsHighSurrogates}\p{IsBasicLatin}]$	-	nomatch	\u03b1
+
 # An unrecognised block name is a hard error naming it, never a silent
 # no-op and never a closest-match guess.
 ^\p{IsNotABlock}$	-	error	IsNotABlock

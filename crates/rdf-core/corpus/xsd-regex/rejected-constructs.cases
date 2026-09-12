@@ -36,11 +36,34 @@ ab\b	-	error	\b
 # Back-references -- in the grammar, unexecutable on a DFA.
 (ab)\1	-	error	backreference
 (a)(b)\2	-	error	backreference
-a\9b	-	error	backreference
 
-# Multi-digit back-references are one reference, not a reference plus a
-# literal digit, so the message must name the whole spelling.
-(a)\12	-	error	\12
+# Multi-digit tokenization is CONTEXT-DEPENDENT, not greedy. F&O 5.6.1.4:
+# "The construct \N where N is a single digit is always recognized as a
+# back-reference; if this is followed by further digits, these digits are
+# taken to be part of the back-reference if and only if the resulting number
+# NN is such that the back-reference is preceded by the opening parenthesis
+# of the NNth capturing left parenthesis." So after ONE group, `\12` is
+# `\1` then a literal `2` -- and the message must say `\1`, because a
+# message naming `\12` would be describing a construct the pattern does not
+# contain.
+(a)\12	-	error	\1
+# ...and the very same text after twelve groups IS `\12`.
+(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)\12	-	error	\12
+# Ten groups, so `\10` joins but `\11` could not have.
+(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10	-	error	\10
+
+# The same clause supplies the validity rule: the expression is invalid if a
+# back-reference "refers to a capturing sub-expression that does not exist or
+# whose closing right parenthesis occurs after the back-reference". That is
+# MALFORMED -- no engine can run it, backtracking or not -- and so is a
+# different answer from a well-formed reference this engine declines to
+# execute.
+a\9b	-	error	does not exist
+(a\1)	-	error	closing
+# A non-capturing group does not count, so `\1` here names nothing.
+(?:a)\1	-	error	does not exist
+# ...while the capturing group beside it does.
+(?:a)(b)\1	-	error	backreference
 
 # \0 is not a back-reference -- the production starts at [1-9] -- and it is
 # not a SingleCharEsc either, so it is not a construct of this grammar at
