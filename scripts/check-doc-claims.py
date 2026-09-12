@@ -4417,6 +4417,7 @@ def build_claims(
     sparql_pass, sparql_xfail = matrix["SPARQL 1.1/1.2 evaluation (full corpus)"]
     shacl_pass, _ = matrix["SHACL Core + SHACL-SPARQL"]
     corpus_pass, _ = matrix["SHACL (first-party corpus)"]
+    regex_pass, _ = matrix["XSD/XPath regExp (first-party corpus)"]
     rules_pass, _ = matrix["SHACL Rules"]
     governor_pass, _ = matrix["SPARQL execution governors"]
     shex_pass, _ = matrix["ShEx 2.1 validation"]
@@ -5179,6 +5180,31 @@ def build_claims(
             _CONFORMANCE,
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* frozen expected reports",
             {"passed": corpus_pass, "total": corpus_pass},
+            mat,
+        ),
+        # The XSD/XPath regExp corpus states its size twice: once in the
+        # per-engine scoreboard row and once in "Where the suites live". Both
+        # are derived, because this corpus grades the ONE compiler three call
+        # sites share -- so a number here that drifts from the matrix would
+        # understate or overstate the coverage of `sh:pattern`, SPARQL `REGEX`
+        # and ShEx `PATTERN` all at once.
+        Claim(
+            "the first-party XSD/XPath regExp corpus scoreboard row",
+            _CONFORMANCE,
+            r"\| XSD/XPath regExp \(first-party corpus\) \| "
+            r"`crates/rdf-core/corpus/xsd-regex/` \| "
+            r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* cases",
+            {"passed": regex_pass, "total": regex_pass},
+            mat,
+        ),
+        Claim(
+            "the XSD/XPath regExp corpus size in CONFORMANCE's suite inventory",
+            _CONFORMANCE,
+            _flow(
+                r"`crates/rdf-core/corpus/xsd-regex/` — PurRDF's own XSD/XPath "
+                r"`regExp` corpus: (?P<total>\d+) cases across seven `\.cases` files"
+            ),
+            {"total": regex_pass},
             mat,
         ),
         # --- the SAME matrix numbers restated on the two FRONT PAGES ----------

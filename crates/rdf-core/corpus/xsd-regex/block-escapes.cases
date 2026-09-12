@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# XML Schema Part 2 Appendix G, "Block Escapes": \p{IsBlockName} names a
+# Unicode BLOCK from Blocks.txt, not a script and not a general category.
+#
+# This file carries the corpus's sharpest regression. regex-syntax applies
+# UAX44-LM3 loose matching, which strips the `Is` prefix and resolves the rest
+# as a SCRIPT where one exists -- so `\p{IsGreek}` compiled, and silently
+# matched the Greek SCRIPT -- while names with no script counterpart, like
+# `IsBasicLatin`, failed outright.
+#
+# `IsGreek` is also the clearest case for the strict-lookup rule: it is the
+# name Unicode gave U+0370-U+03FF up to version 4.0, renamed `Greek and
+# Coptic` in 4.1. The table is pinned to Unicode 16.0.0 to agree with
+# regex-syntax's own embedded UCD, so the current name is `IsGreekandCoptic`
+# and `IsGreek` is an unrecognised block. That is a hard error naming it --
+# never a silent no-op, and never a closest-match guess at which of the two
+# adjacent Greek blocks the author meant.
+
+# The block, resolved from the generated table.
+^\p{IsBasicLatin}+$	-	match	Az0~
+^\p{IsBasicLatin}$	-	nomatch	\u00e9
+^\p{IsBasicLatin}$	-	match	\u0000
+^\p{IsBasicLatin}$	-	match	\u007f
+^\p{IsBasicLatin}$	-	nomatch	\u0080
+
+# Latin-1 Supplement is the adjacent block; the boundary is exact.
+^\p{IsLatin-1Supplement}$	-	match	\u0080
+^\p{IsLatin-1Supplement}$	-	match	\u00ff
+^\p{IsLatin-1Supplement}$	-	nomatch	\u007f
+^\p{IsLatin-1Supplement}$	-	nomatch	\u0100
+
+# IsGreekandCoptic is U+0370-U+03FF. U+1F00 is in the Greek SCRIPT but in
+# the Greek Extended block -- the exact code point that used to match
+# `\p{IsGreek}` and must not match this block.
+^\p{IsGreekandCoptic}$	-	match	\u0370
+^\p{IsGreekandCoptic}$	-	match	\u03b1
+^\p{IsGreekandCoptic}$	-	match	\u03ff
+^\p{IsGreekandCoptic}$	-	nomatch	\u1f00
+^\p{IsGreekandCoptic}$	-	nomatch	\u0400
+^\p{IsGreekExtended}$	-	match	\u1f00
+^\p{IsGreekExtended}$	-	nomatch	\u03b1
+
+# The Unicode-4.0 name is refused by name rather than resolved as the
+# script it is not. regex-syntax would have compiled this and matched
+# U+1F00; the strict table refuses it instead.
+^\p{IsGreek}$	-	error	IsGreek
+^\P{IsGreek}$	-	error	IsGreek
+
+# \P{Is...} is the complement.
+^\P{IsBasicLatin}$	-	match	\u00e9
+^\P{IsBasicLatin}$	-	nomatch	A
+^\P{IsGreekandCoptic}$	-	match	\u1f00
+^\P{IsGreekandCoptic}$	-	nomatch	\u03b1
+
+# Blocks compose inside a character class.
+^[\p{IsBasicLatin}\p{IsGreekandCoptic}]+$	-	match	a\u03b1
+^[\p{IsBasicLatin}\p{IsGreekandCoptic}]+$	-	nomatch	a\u0400
+
+# A general-category escape is legitimately shared syntax and must NOT be
+# intercepted -- only the Is-prefixed form is a block escape.
+^\p{Nd}$	-	match	7
+^\p{Nd}$	-	nomatch	a
+^\p{L}+$	-	match	ab\u00e9
+^\P{L}$	-	match	1
+
+# The complete Appendix G `IsCategory` enumeration is what a non-Is \p{...}
+# may name, and nothing else. A script (`Greek`), an explicit property key
+# (`sc=Greek`, `Age:6.0`), a regex-crate pseudo-property (`any`) and an
+# arbitrary identifier are none of them XSD: the grammar's block spelling is
+# `\p{Is...}`, and a script is a DIFFERENT set from the block of almost the
+# same name (`\p{Greek}` matched U+1F00, outside Greek and Coptic). Each is
+# refused by name, and the message says so, rather than being forwarded to
+# `regex-syntax`'s looser UAX44-LM3 resolution.
+^\p{Greek}$	-	error	Greek
+^\P{Greek}$	-	error	Greek
+^\p{sc=Greek}$	-	error	sc=Greek
+^\p{Age:6.0}$	-	error	Age:6.0
+^\p{any}$	-	error	any
+^\p{Foo}$	-	error	Foo
+
+# Every category SHAPE the grammar admits still works: one letter, two
+# letters, a negated form, and categories composed inside a character class.
+^\p{L}$	-	match	a
+^\p{Nd}$	-	match	\u0660
+^\P{Nd}$	-	match	a
+^[\p{L}\p{Nd}]+$	-	match	a1
+
+# The three surrogate blocks consist entirely of code points that are NOT
+# Unicode scalar values, so no subject string can contain one. "Matches
+# nothing" is the exact answer over the representable domain, not a degraded
+# one, and the complement matches everything for the same reason. Emitting
+# the range literally is what fails: the engine refuses \u{d800} with a
+# message naming neither the block nor the reason.
+^\p{IsHighSurrogates}$	-	nomatch	a
+^\p{IsLowSurrogates}$	-	nomatch	a
+^\p{IsHighPrivateUseSurrogates}$	-	nomatch	a
+^\P{IsHighSurrogates}$	-	match	a
+^\P{IsLowSurrogates}$	-	match	\u1f00
+^\P{IsHighSurrogates}$	-	match	\n
+# ...and they compose inside a class like every other block escape: the
+# surrogate half contributes nothing to the union, the other half decides.
+^[\p{IsHighSurrogates}\p{IsBasicLatin}]+$	-	match	abc
+^[\p{IsHighSurrogates}\p{IsBasicLatin}]$	-	nomatch	\u03b1
+
+# An unrecognised block name is a hard error naming it, never a silent
+# no-op and never a closest-match guess.
+^\p{IsNotABlock}$	-	error	IsNotABlock
+^\p{IsBasicLatin	-	error	unterminated

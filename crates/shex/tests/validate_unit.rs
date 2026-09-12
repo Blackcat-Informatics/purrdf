@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_shex::{
-    ConformanceStatus, ShapeSelector, ValidationOptions, parse_shexc, validate, validate_with,
+    ConformanceStatus, ShapeSelector, ValidationOptions, parse_shexc, parse_shexj, validate,
+    validate_with,
 };
 
 /// A term spec for the tiny triple builder below.
@@ -192,6 +193,103 @@ fn pattern_facet_is_partial_match() {
         )
         .is_ok()
     );
+}
+
+/// The `PATTERN` facet's dialect is XSD/XPath `fn:matches`, checked through
+/// **ShExJ** because that is the only ingress for most of it: the ShExC lexer's
+/// escape whitelist rejects `\i \c \s \p` in a regex literal and its flag scan
+/// accepts only `s m i x`, so a ShExC-only test cannot reach these constructs
+/// at all. The shexTest corpus is likewise no help — its `pattern` schemas use
+/// no multi-character escape, no class subtraction, and only the `i` flag — so
+/// it guards against regression without covering the change.
+#[test]
+fn pattern_facet_xsd_dialect_through_shexj() {
+    // A ShExJ schema whose single shape applies one PATTERN (+ flags) facet.
+    let schema_json = |pattern: &str, flags: Option<&str>| {
+        let flags = match flags {
+            Some(f) => format!(r#", "flags": {}"#, serde_json::to_string(f).expect("json")),
+            None => String::new(),
+        };
+        format!(
+            r#"{{
+              "type": "Schema",
+              "shapes": [{{
+                "type": "Shape",
+                "id": "http://a.example/S1",
+                "expression": {{
+                  "type": "TripleConstraint",
+                  "predicate": "http://a.example/p1",
+                  "valueExpr": {{
+                    "type": "NodeConstraint",
+                    "pattern": {}{flags}
+                  }}
+                }}
+              }}]
+            }}"#,
+            serde_json::to_string(pattern).expect("json")
+        )
+    };
+    let matches = |pattern: &str, flags: Option<&str>, value: &str| {
+        let schema = parse_shexj(&schema_json(pattern, flags), Some("http://a.example/"))
+            .expect("ShExJ schema parses");
+        let data = dataset(&[(
+            T::I("http://a.example/s1"),
+            "http://a.example/p1",
+            T::L(RdfLiteral::simple(value)),
+        )]);
+        let result = validate(
+            &schema,
+            &data,
+            &[(
+                iri("http://a.example/s1"),
+                ShapeSelector::Label(S1.to_owned()),
+            )],
+        );
+        result.entries[0].status == ConformanceStatus::Conformant
+    };
+
+    // `\i`/`\c` — XML NameStartChar/NameChar. The retired local translator
+    // reported these as a facet error; they are part of the XSD grammar.
+    assert!(matches(r"^\i\c*$", None, "abc123"));
+    assert!(matches(r"^\i\c*$", None, "_x"));
+    assert!(!matches(r"^\i\c*$", None, "1abc"));
+
+    // `\s` is XSD's four code points, not the Unicode `White_Space` property.
+    assert!(matches(r"^\s+$", None, " \t\r\n"));
+    assert!(!matches(r"^\s$", None, "\u{A0}"));
+
+    // `\p{Is…}` names a BLOCK. `regex-syntax` resolved `IsGreek` as the
+    // *Script* Greek, which covers U+1F00 — outside the block. The block is
+    // `Greek and Coptic`, spelled `IsGreekandCoptic` since Unicode 4.1, and
+    // the pre-4.1 name is refused rather than guessed at.
+    assert!(matches(r"^\p{IsBasicLatin}+$", None, "Az0"));
+    assert!(!matches(r"^\p{IsBasicLatin}$", None, "é"));
+    assert!(matches(r"^\p{IsGreekandCoptic}$", None, "\u{0370}"));
+    assert!(!matches(r"^\p{IsGreekandCoptic}$", None, "\u{1F00}"));
+    assert!(!matches(r"^\p{IsGreek}$", None, "\u{0370}"));
+
+    // Class subtraction: XSD-only syntax.
+    assert!(matches("^[a-z-[aeiou]]+$", None, "bcd"));
+    assert!(!matches("^[a-z-[aeiou]]+$", None, "bad"));
+
+    // `.` excludes both #x0A and #x0D, where the `regex` crate excludes only
+    // #x0A; `s` restores both.
+    assert!(!matches("^a.b$", None, "a\rb"));
+    assert!(!matches("^a.b$", None, "a\nb"));
+    assert!(matches("^a.b$", Some("s"), "a\rb"));
+
+    // `q` is unreachable from ShExC but arrives unfiltered through ShExJ, and
+    // makes `x` inert — so the literal space survives.
+    assert!(matches("a.c", Some("q"), "xa.cx"));
+    assert!(!matches("a.c", Some("q"), "abc"));
+    assert!(matches("a b", Some("qx"), "xa bx"));
+    assert!(!matches("a b", Some("qx"), "ab"));
+
+    // A construct outside the grammar is a facet violation, not a silently
+    // different language: `\b` is a Perl word boundary the `regex` crate
+    // accepts and XSD/XPath never defined.
+    assert!(!matches(r"\bcd", None, "ab cd"));
+    assert!(!matches(r"(ab)\1", None, "abab"));
 }
 
 #[test]

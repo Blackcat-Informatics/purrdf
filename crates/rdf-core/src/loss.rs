@@ -1035,6 +1035,35 @@ const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
          schema would be vacuous) is dropped rather than emitted unsoundly.",
     ),
     (
+        "sh:nodeByExpression",
+        "A SHACL 1.2 sh:nodeByExpression constraint computes its node shape from a node \
+         expression evaluated against the data graph; a closed-world JSON Schema has no way to \
+         express a shape that is not known until validation time, so the constraint is dropped. \
+         (This code was recorded by the emitter without being declared here, which made \
+         check_ledger_sound reject any ledger containing it; declared now.)",
+    ),
+    (
+        "sh:pattern dialect",
+        "A sh:pattern is written in the XSD/XPath regular-expression dialect (SHACL 4.5.3 defines \
+         sh:pattern by SPARQL REGEX, which SPARQL 17.4.3.14 defines by XPath fn:matches), while \
+         JSON Schema's pattern keyword is ECMA-262. The source text is emitted verbatim because \
+         it is the only faithful record of what the shape author wrote, but it uses at least one \
+         construct or flag whose meaning does not survive the dialect change, so a consumer \
+         validating against the emitted schema may accept or reject values the SHACL validator \
+         does not. The note names the specific constructs found.",
+    ),
+    (
+        "sh:pattern rejected",
+        "A sh:pattern is written in the XSD/XPath regular-expression dialect, and \
+         xsd_regex::compile rejects it as malformed in that dialect (an unknown Unicode block or \
+         category name, a back-reference, a bare word-boundary escape, an inline-flag or \
+         lookaround construct, or other syntax Appendix G does not define). The SHACL validator \
+         therefore treats every value node of that property as a violation, while the emitter \
+         still copies the source text verbatim into JSON Schema's ECMA-262 pattern slot — where \
+         it may compile and accept values. The emitted pattern is known-unusable and the \
+         disagreement is recorded rather than left for a consumer to discover.",
+    ),
+    (
         "sh:sparql",
         "A SHACL-SPARQL constraint (sh:sparql) has no closed-world JSON Schema equivalent and is \
          dropped.",

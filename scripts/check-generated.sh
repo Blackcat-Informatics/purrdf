@@ -32,6 +32,15 @@ cargo run -p purrdf-rdf --example gen_loss_matrix --locked -- transcode \
 # book a build artifact instead of a sentence someone has to remember to update.
 cargo run -p purrdf-entail --example gen_rule_inventory --locked \
   > "$tmp/entailment-rules.md"
+# The XSD/XPath `\p{IsX}` Unicode block-escape lookup table, parsed out of the
+# vendored `Blocks.txt` rather than transcribed. Piped through `rustfmt` because
+# the generator's raw output is committed as real Rust source
+# (`crates/rdf-core/src/xsd_regex/blocks.rs`), which `cargo fmt --all --check`
+# also governs — comparing pre-rustfmt bytes here would make the file
+# permanently "stale" the moment anyone reformats the workspace.
+cargo run -p purrdf-core --example gen_unicode_blocks --locked \
+  | rustfmt --edition 2024 --emit stdout \
+  > "$tmp/blocks.rs"
 
 check_file() {
   local generated="$1"
@@ -55,6 +64,7 @@ sync_file() {
 sync_file "$tmp/rdf-loss-matrix.json" generated/rdf-loss-matrix.json
 sync_file "$tmp/transcode-loss-matrix.json" generated/transcode-loss-matrix.json
 sync_file "$tmp/entailment-rules.md" docs/book/src/entailment-rules.md
+sync_file "$tmp/blocks.rs" crates/rdf-core/src/xsd_regex/blocks.rs
 
 # The inventory above is now known-current. Prose elsewhere RESTATES its numbers
 # (and the conformance matrix's), and prose is not covered by any byte-diff — a

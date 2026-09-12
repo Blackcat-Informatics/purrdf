@@ -544,7 +544,7 @@ fn is_xml_text_char(c: char) -> bool {
 }
 
 /// Inclusive Unicode scalar-value range `[lo, hi]`.
-type CharRange = (u32, u32);
+pub(crate) type CharRange = (u32, u32);
 
 /// Whether a range table is non-empty per entry, within the Unicode scalar
 /// space, and strictly ascending with a gap between neighbours.

@@ -34,6 +34,30 @@
       "location": "<unknown> subject=<https://example.org/GuardedShape>"
     },
     {
+      "code": "sh:pattern dialect",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "sh:pattern on property ex:category is XSD/XPath but JSON Schema's pattern is ECMA-262; these do not carry the same meaning across the two dialects: \\p{L} category escape (ECMA-262 needs the `u` flag, which JSON Schema's flagless `pattern` cannot set)",
+      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+    },
+    {
+      "code": "sh:pattern dialect",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "sh:pattern on property ex:code is XSD/XPath but JSON Schema's pattern is ECMA-262; these do not carry the same meaning across the two dialects: \\i/\\I/\\c/\\C, the \"i\" flag(s) (JSON Schema's `pattern` is a bare ECMA-262 source string with no flag surface)",
+      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+    },
+    {
+      "code": "sh:pattern rejected",
+      "from": "shacl",
+      "to": "json-schema",
+      "intentional": true,
+      "note": "sh:pattern on property ex:broken is not a valid XSD/XPath regular expression: backreference \\1 is not supported -- this is a permanent limitation of this implementation, which translates patterns onto a DFA-based regex engine that cannot backtrack, and no rewriting of the source text can reach a capability the engine does not have; the emitted JSON Schema pattern is ECMA-262 and is known-unusable",
+      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+    },
+    {
       "code": "sh:sparql",
       "from": "shacl",
       "to": "json-schema",

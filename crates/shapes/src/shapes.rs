@@ -160,9 +160,19 @@ pub enum Constraint {
         /// Once-compiled regex cache: the pattern is compiled at most once per
         /// `Constraint` instance regardless of how many focus nodes are validated.
         /// `Arc` makes the field `Clone`; `OnceLock` makes it `Send + Sync`.
-        /// `Err(String)` stores the compilation error so per-value violation
-        /// semantics (bad regex → violation, not hard abort) are preserved.
-        compiled: Arc<OnceLock<Result<regex::Regex, String>>>,
+        /// `Err` carries the precise
+        /// [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError) — not a lossy
+        /// string — so per-value violation semantics (bad regex → violation, not
+        /// hard abort) survive *and* the report can name the exact offending
+        /// construct via the compiler's own message.
+        compiled: Arc<
+            OnceLock<
+                Result<
+                    purrdf_core::xsd_regex::CompiledPattern,
+                    purrdf_core::xsd_regex::XsdRegexError,
+                >,
+            >,
+        >,
     },
     /// `sh:minLength 3`
     MinLength(u64),

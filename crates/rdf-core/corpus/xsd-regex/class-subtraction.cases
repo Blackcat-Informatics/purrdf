@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# XML Schema Part 2 Appendix G: charClassSub ::= '[' charGroup charClassExpr
+# ']' -- character-class subtraction, XSD-only syntax with no ECMA-262 or
+# Perl counterpart. The regex crate spells the same operation `--`.
+
+^[a-z-[aeiou]]+$	-	match	bcd
+^[a-z-[aeiou]]+$	-	nomatch	bad
+^[a-z-[aeiou]]$	-	nomatch	a
+^[a-z-[aeiou]]$	-	match	z
+
+# Subtraction nests through the right-hand charClassExpr, so the tracker
+# must count depth rather than set a flag: [a-c-[b]] is {a, c}, and
+# a-z minus {a, c} excludes exactly those two.
+^[a-z-[a-c-[b]]]+$	-	match	bd
+^[a-z-[a-c-[b]]]$	-	nomatch	a
+^[a-z-[a-c-[b]]]$	-	nomatch	c
+^[a-z-[a-c-[b]]]$	-	match	b
+
+# A negated group may be subtracted from.
+^[^0-9-[a-z]]+$	-	match	ABC
+^[^0-9-[a-z]]$	-	nomatch	a
+^[^0-9-[a-z]]$	-	nomatch	5
+
+# A subtraction operand is the LAST element of its charGroup:
+#   charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?
+# so once its `]` closes, only the enclosing `]` may follow. A further
+# member, a second `-[`, or a range `-` there is malformed XSD that Rust's
+# left-to-right class-set syntax would silently accept as a different
+# language (a member union, or a second difference), so each is a named
+# error rather than a compiled pattern.
+[a-[b]c]	-	error	follows a character-class subtraction operand
+[a-[b]-[c]]	-	error	follows a character-class subtraction operand
+[a-[b]+]	-	error	follows a character-class subtraction operand
+[a-[b]-z]	-	error	follows a character-class subtraction operand
+[^a-[b]c]	-	error	follows a character-class subtraction operand
+
+# The single, group-final subtraction still works, with its operand at the
+# very end of the group.
+^[a-[b]]$	-	match	a
+^[a-[b]]$	-	nomatch	b
+
+# A `-` that does NOT open a subtraction keeps its ordinary meanings:
+# a range separator, or a literal at either end of a group.
+^[a-z]+$	-	match	abc
+^[-a]+$	-	match	-a
+^[a-]+$	-	match	a-
+^[a-]$	-	nomatch	b
+
+# Subtraction composes with the multi-character escapes on both sides.
+^[\c-[0-9]]+$	-	match	abc
+^[\c-[0-9]]+$	-	nomatch	ab1
+^[a-z-[\s]]+$	-	match	abc
+
+# An unterminated class is a named error, not a silently different
+# pattern. The first pattern also has a character after the subtraction
+# operand, so the earlier grammar violation -- content after the operand --
+# is the one named, before the missing outer `]` can be seen.
+^[a-z-[aeiou]$	-	error	follows a character-class subtraction operand
+^[a-z$	-	error	unterminated
+
+# `&` and `~` are ordinary class members (XmlCharIncDash ::= [^\#x5B#x5D]).
+# regex-syntax would read an adjacent `&&` as set INTERSECTION and `~~` as
+# SYMMETRIC DIFFERENCE, so each is emitted escaped and `[a&&b]` keeps its XSD
+# meaning: the three members a, & and b. A class of a INTERSECT b would match
+# nothing but the empty string.
+^[a&&b]$	-	match	a
+^[a&&b]$	-	match	&
+^[a&&b]$	-	match	b
+^[a&&b]$	-	nomatch	c
+^[a~~b]$	-	match	~
+^[a\&b]$	-	match	&
+^[\~]$	-	match	~
+
+# The anti-injection shape from the issue: `[^&&<>]` is "no ampersand and
+# no angle brackets", NOT match-everything. The old pass-through emitted
+# `[[^&&<>]]`, whose nested `&&` was an intersection, and matched
+# `<script>&` at exit zero with no diagnostic.
+^[^&&<>]*$	-	nomatch	<script>&
+^[^&&<>]*$	-	match	safe
+
+# The class interior is a recognizer, not a pass-through. A `[` appears
+# inside a class only as the `-[` of a charClassSub; anywhere else it is the
+# Rust nested-class union (or a POSIX class), which XSD has no production
+# for. A literal member is written `\[`.
+[a[b]]	-	error	unescaped '['
+[[:alpha:]]	-	error	unescaped '['
+^[a\[b]$	-	match	[
+
+# A `]` only ever CLOSES a class; at the class head there is no member for it
+# to close, so it is the Rust literal-first-member form and must be `\]`.
+[]a]	-	error	literal ']'
+[^]a]	-	error	literal ']'

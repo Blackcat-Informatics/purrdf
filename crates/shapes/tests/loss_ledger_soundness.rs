@@ -129,3 +129,59 @@ fn lossless_shape_compiles_with_empty_ledger() {
     // Soundness holds vacuously over an empty ledger too.
     assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
 }
+
+/// Every loss code a real compile records, as `&str`, for assertions.
+fn recorded_codes(compiled: &CompiledSchema) -> Vec<&str> {
+    compiled
+        .losses
+        .entries()
+        .iter()
+        .map(|entry| entry.code.as_ref())
+        .collect()
+}
+
+/// A flagless `\p{L}` general-category pattern diverges: without ECMA-262's
+/// `u` flag (which JSON Schema's bare `pattern` string cannot set) `\p` is an
+/// IdentityEscape. This is the case the old reporter dropped on the floor — it
+/// only fired for the flag path, and `sh:flags` is absent here.
+#[test]
+fn flagless_category_pattern_records_a_dialect_loss() {
+    let compiled = compile_ttl(
+        r#"
+        ex:CategoryPatternShape a sh:NodeShape ;
+            sh:targetClass ex:CategoryPattern ;
+            sh:property [ sh:path ex:code ; sh:pattern "^\\p{L}+$" ] .
+        "#,
+    );
+    let codes = recorded_codes(&compiled);
+    assert!(
+        codes.contains(&"sh:pattern dialect"),
+        "a flagless `\\p{{L}}` pattern must record `sh:pattern dialect`, got {codes:?}"
+    );
+    assert!(
+        !codes.contains(&"sh:pattern rejected"),
+        "`\\p{{L}}` compiles in the XSD dialect, so it must not be recorded as rejected: {codes:?}"
+    );
+    assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
+}
+
+/// A pattern `xsd_regex::compile` rejects makes the SHACL validator violate on
+/// every value node, while the emitter still copies it verbatim into JSON
+/// Schema's ECMA-262 slot. That disagreement must be a distinct loss, not a
+/// silent one: `(a)\1` is a back-reference the XSD-dialect compiler refuses.
+#[test]
+fn rejected_pattern_records_the_distinct_invalid_loss() {
+    let compiled = compile_ttl(
+        r#"
+        ex:RejectedPatternShape a sh:NodeShape ;
+            sh:targetClass ex:RejectedPattern ;
+            sh:property [ sh:path ex:code ; sh:pattern "(a)\\1" ] .
+        "#,
+    );
+    let codes = recorded_codes(&compiled);
+    assert!(
+        codes.contains(&"sh:pattern rejected"),
+        "a `(a)\\1` back-reference pattern must record `sh:pattern rejected`, got {codes:?}"
+    );
+    assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
+}

@@ -2621,8 +2621,62 @@ fn compile_property(
             Constraint::HasValue(v) => {
                 value.insert("const".to_owned(), term_const_value(v, ctx.ns));
             }
-            Constraint::Pattern { regex, .. } => {
+            Constraint::Pattern { regex, flags, .. } => {
+                // The source text is emitted verbatim: it is the only faithful
+                // record of what the shape author wrote, and rewriting it into
+                // ECMA-262 would be a translation this emitter does not own.
+                // But `sh:pattern` is XSD/XPath and JSON Schema's `pattern` is
+                // ECMA-262, so the copy is a dialect change — and a dialect
+                // change whose effect on the accepted language is not written
+                // down is exactly the silent divergence the loss ledger exists
+                // to make visible.
                 value.insert("pattern".to_owned(), json!(regex));
+                let flags = flags.as_deref().unwrap_or("");
+                // The emitted `pattern` is only usable if the shape's own
+                // XSD/XPath source compiles, because the validator
+                // (`constraints.rs::build_regex`) routes every `sh:pattern`
+                // through the same `xsd_regex::compile`; a pattern it rejects
+                // makes every value node a violation. Recording that as a
+                // DISTINCT loss keeps the emitter and the validator from
+                // disagreeing silently about the same shape.
+                if let Err(error) = purrdf_core::xsd_regex::compile(regex, flags) {
+                    ctx.record(
+                        "sh:pattern rejected",
+                        shape_iri,
+                        &format!(
+                            "sh:pattern on property {key} is not a valid XSD/XPath regular \
+                             expression: {error}; the emitted JSON Schema pattern is \
+                             ECMA-262 and is known-unusable"
+                        ),
+                    );
+                    comments.push(format!(
+                        "the sh:pattern on property {key} is not a valid XSD/XPath regular \
+                         expression ({error}), so the emitted ECMA-262 pattern cannot be \
+                         trusted"
+                    ));
+                }
+                let divergences = purrdf_core::xsd_regex::ecma_262_divergences(regex, flags);
+                if !divergences.is_empty() {
+                    let found = divergences
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    ctx.record(
+                        "sh:pattern dialect",
+                        shape_iri,
+                        &format!(
+                            "sh:pattern on property {key} is XSD/XPath but JSON Schema's pattern \
+                             is ECMA-262; these do not carry the same meaning across the two \
+                             dialects: {found}"
+                        ),
+                    );
+                    comments.push(format!(
+                        "the sh:pattern on property {key} is an XSD/XPath regular expression \
+                         emitted verbatim as an ECMA-262 one; {found} differ between the two \
+                         dialects"
+                    ));
+                }
             }
             Constraint::MinLength(n) => {
                 value.insert("minLength".to_owned(), json!(n));

@@ -1,0 +1,143 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Two different reasons a construct is refused, and they must not be
+# conflated:
+#
+#  * \b and \B are NOT IN THE GRAMMAR AT ALL. Neither XML Schema Appendix G
+#    nor XPath F&O 3.1 5.6 defines a word-boundary assertion. The regex crate
+#    compiles both as Perl word boundaries, so before the translation they
+#    were accepted and evaluated as a construct the dialect never had.
+#
+#  * Back-references ARE in the grammar -- XPath F&O 3.1 5.6.1.4 adds
+#    backReference ::= "\" [1-9][0-9]* to atom -- but cannot be executed by
+#    the regex crate's DFA engine, which does not backtrack. This is a
+#    permanent, by-design limitation of translating rather than subsuming an
+#    engine, recorded in docs/CONFORMANCE.md "Known gaps".
+#
+# Both are hard errors that name the construct. A clear refusal beats a wrong
+# answer (ETHOS H).
+
+# \b / \B -- outside the grammar.
+\bcd	-	error	\b
+ab\b	-	error	\b
+\Bcd	-	error	\B
+^a\bb$	-	error	\b
+
+# ...including inside a character class, where the regex crate would
+# otherwise read `\b` as a backspace escape -- a third meaning again.
+^[\b]$	-	error	\b
+
+# A literal `b`, and the ordinary escape of one, are of course fine: the
+# refusal is of the ESCAPE, not the letter.
+^b$	-	match	b
+^[ab]$	-	match	b
+
+# Back-references -- in the grammar, unexecutable on a DFA.
+(ab)\1	-	error	backreference
+(a)(b)\2	-	error	backreference
+
+# Multi-digit tokenization is CONTEXT-DEPENDENT, not greedy. F&O 5.6.1.4:
+# "The construct \N where N is a single digit is always recognized as a
+# back-reference; if this is followed by further digits, these digits are
+# taken to be part of the back-reference if and only if the resulting number
+# NN is such that the back-reference is preceded by the opening parenthesis
+# of the NNth capturing left parenthesis." So after ONE group, `\12` is
+# `\1` then a literal `2` -- and the message must say `\1`, because a
+# message naming `\12` would be describing a construct the pattern does not
+# contain.
+(a)\12	-	error	\1
+# ...and the very same text after twelve groups IS `\12`.
+(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)\12	-	error	\12
+# Ten groups, so `\10` joins but `\11` could not have.
+(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10	-	error	\10
+
+# The same clause supplies the validity rule: the expression is invalid if a
+# back-reference "refers to a capturing sub-expression that does not exist or
+# whose closing right parenthesis occurs after the back-reference". That is
+# MALFORMED -- no engine can run it, backtracking or not -- and so is a
+# different answer from a well-formed reference this engine declines to
+# execute.
+a\9b	-	error	does not exist
+(a\1)	-	error	closing
+# A non-capturing group does not count, so `\1` here names nothing.
+(?:a)\1	-	error	does not exist
+# ...while the capturing group beside it does.
+(?:a)(b)\1	-	error	backreference
+
+# \0 is not a back-reference -- the production starts at [1-9] -- and it is
+# not a SingleCharEsc either, so it is not a construct of this grammar at
+# all. Refused with a message that says so, rather than the engine's
+# "backreferences are not supported", which is wrong about what the pattern
+# contains.
+^a\0b$	-	error	\0 is not a construct
+
+# A dangling backslash is malformed, and says so.
+abc\	-	error	dangling
+
+# Non-capturing groups and ordinary groups are unaffected.
+^(?:ab)+$	-	match	abab
+^(ab)+$	-	match	abab
+^(a|b)c$	-	match	bc
+
+# A `]` is a class terminator and nothing else: outside a character class it
+# is not a `Char` of the grammar (`Char ::= [^.\?*+()|#x5B#x5D]` excludes
+# it), so the second `]` of `[a]]` -- which regex-syntax reads as a literal --
+# is malformed XSD. A literal `]` is written `\]`.
+[a]]	-	error	unescaped ']' outside
+a]b	-	error	unescaped ']' outside
+a\]b	-	match	a]b
+
+# XML Schema Part 2 Appendix G defines NO inline-flag, lookaround, comment,
+# or named-group syntax. `(?:` is the only `(?` spelling the grammar has, so
+# every other parenthesized construct used to fall through the literal path
+# to `regex-syntax`, which applied ITS semantics: `(?i)` its own `i` flag,
+# `(?x)` its verbose mode (the same letter as XPath's `x` with a DIFFERENT
+# rule), `(?s)` a dot flag the translator had already handled itself, and
+# `(?P<name>…)` a named capture. Each is now refused by name, and none of
+# them counts as a capturing group any more (see the `(?i)(a)\2` unit test).
+(?i)abc	-	error	(?i
+(?i:abc)	-	error	(?i
+(?x)a b	-	error	(?x
+(?s)a.b	-	error	(?s
+(?m)a	-	error	(?m
+(?U)a+	-	error	(?U
+(?u)a	-	error	(?u
+(?-i:a)	-	error	(?-
+(?=a)	-	error	(?=
+(?!a)	-	error	(?!
+(?<=a)b	-	error	(?<
+(?<n>a)	-	error	(?<
+(?P<n>a)	-	error	(?P
+(?#c)a	-	error	(?#
+
+# The escape catch-all is gone as well. XSD's `SingleCharEsc` is a CLOSED
+# enumeration, so acceptance is now decided by the grammar rather than by
+# `regex-syntax`'s own escape table. `\a` was doubly wrong -- XSD has no
+# `\a`, and the engine reads it as BEL -- and `\x41`/`\u{41}` compiled as
+# Rust codepoint escapes. `\p` without a `{…}` name is not a construct
+# either. (`\u005cu` writes the pattern `\u`; see the corpus README's escape
+# table -- `\uXXXX` is the one way to spell a backslash before a `u`.)
+\A	-	error	\A
+\z	-	error	\z
+\Z	-	error	\Z
+\x41	-	error	\x
+\u005cu{41}	-	error	\u005cu
+\a	-	error	\a
+\f	-	error	\f
+\v	-	error	\v
+\e	-	error	\e
+\Q	-	error	\Q
+\k<n>	-	error	\k
+\G	-	error	\G
+\h	-	error	\h
+\N	-	error	\N
+\R	-	error	\R
+\X	-	error	\X
+a\pb	-	error	\p
+
+# The whole SingleCharEsc enumeration still works, and so do the literal
+# escapes the corpora pin (`\$`, `\&`, `\~`), which are not in that
+# enumeration but are preserved deliberately.
+^[\|\.\?\*\+\{\}\(\)\-\[\]\^]+$	-	match	|.?*+{}()-[]^
+^\$\&\~$	-	match	$&~
