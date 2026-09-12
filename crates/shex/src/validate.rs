@@ -364,6 +364,10 @@ struct Engine<'a> {
     used_assumptions: HashSet<Pair>,
     /// Labels being proven for a detached focus (cycle guard).
     detached_in_progress: HashSet<u32>,
+    /// Compiled `PATTERN` facets for this validation call. The facet is
+    /// checked per value node, so without the memo a `PATTERN` over a large
+    /// neighbourhood recompiles the same regex once per value.
+    patterns: pattern::PatternCache,
 }
 
 struct PreparedShape<'a> {
@@ -500,6 +504,7 @@ impl<'a> Engine<'a> {
             in_progress: HashSet::new(),
             used_assumptions: HashSet::new(),
             detached_in_progress: HashSet::new(),
+            patterns: pattern::PatternCache::default(),
         }
     }
 
@@ -554,7 +559,7 @@ impl<'a> Engine<'a> {
                     Focus::Id(id) => facts_of_id(self.data, id),
                     Focus::Detached(value) => facts_of_value(value),
                 };
-                node::check_node_constraint(nc, &facts)
+                node::check_node_constraint(nc, &facts, &mut self.patterns)
             }
             ShapeExpr::Shape(shape) => self.match_shape(focus, shape),
             ShapeExpr::External => Err("EXTERNAL shape has no resolved definition".to_owned()),

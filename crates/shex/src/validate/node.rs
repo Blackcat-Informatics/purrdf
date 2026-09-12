@@ -7,7 +7,7 @@
 
 use purrdf_xsd::{XsdDatatype, XsdValue, value_cmp};
 
-use super::pattern::compile_pattern;
+use super::pattern::PatternCache;
 use crate::ast::{
     IriExclusion, LanguageExclusion, LiteralExclusion, NodeConstraint, NodeKind, NumericLiteral,
     ObjectLiteral, StemValue, ValueSetValue,
@@ -61,9 +61,15 @@ impl NodeFacts<'_> {
 
 /// Check every property of a [`NodeConstraint`] against a node (spec §5.4:
 /// a node constraint is satisfied when ALL of its parts are).
+///
+/// `patterns` is the caller's per-validation-call compiled-`PATTERN` cache:
+/// the facet is checked once per value node, so the compilation has to be
+/// memoized somewhere that outlives the node, and threading it explicitly
+/// keeps that lifetime visible instead of hiding it in a global.
 pub(crate) fn check_node_constraint(
     nc: &NodeConstraint,
     facts: &NodeFacts<'_>,
+    patterns: &mut PatternCache,
 ) -> Result<(), String> {
     if let Some(kind) = nc.node_kind {
         check_node_kind(kind, facts)?;
@@ -71,7 +77,7 @@ pub(crate) fn check_node_constraint(
     if let Some(datatype) = &nc.datatype {
         check_datatype(datatype, facts)?;
     }
-    check_string_facets(nc, facts)?;
+    check_string_facets(nc, facts, patterns)?;
     check_numeric_facets(nc, facts)?;
     if let Some(values) = &nc.values {
         check_value_set(values, facts)?;
@@ -154,7 +160,11 @@ fn check_datatype(datatype: &str, facts: &NodeFacts<'_>) -> Result<(), String> {
 
 // ── string facets ───────────────────────────────────────────────────────────
 
-fn check_string_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<(), String> {
+fn check_string_facets(
+    nc: &NodeConstraint,
+    facts: &NodeFacts<'_>,
+    patterns: &mut PatternCache,
+) -> Result<(), String> {
     let needs_lexical = nc.length.is_some()
         || nc.minlength.is_some()
         || nc.maxlength.is_some()
@@ -192,7 +202,7 @@ fn check_string_facets(nc: &NodeConstraint, facts: &NodeFacts<'_>) -> Result<(),
         ));
     }
     if let Some(pattern) = &nc.pattern {
-        let re = compile_pattern(pattern, nc.flags.as_deref())?;
+        let re = patterns.compiled(pattern, nc.flags.as_deref())?;
         if !re.is_match(facts.lexical) {
             return Err(format!(
                 "pattern /{pattern}/{} does not match {}",
