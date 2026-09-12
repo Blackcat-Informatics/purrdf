@@ -4,6 +4,8 @@
 //! The `x`-flag whitespace stripper that runs ahead of [`super::translate`]
 //! (see [`super`]'s module doc for where it sits in the pipeline).
 
+use super::scan::Scanner;
+
 /// Apply the XPath `x` flag to a `sh:pattern`/`REGEX`/`PATTERN` source,
 /// textually, before the pattern is translated or parsed.
 ///
@@ -64,35 +66,24 @@
 /// pattern.
 pub(super) fn strip_x_flag_whitespace(pattern: &str) -> String {
     let mut out = String::with_capacity(pattern.len());
-    let mut class_depth = 0_usize;
-    let mut escaped = false;
-    for c in pattern.chars() {
-        if escaped {
+    let mut scanner = Scanner::new(pattern);
+    loop {
+        // The `Result` is deliberately ignored: every rejected construct is
+        // still consumed and its spelling is still available through
+        // `source_text()`, because `x`'s removal is a textual rewrite that must
+        // preserve the exact source a later translation will reject.
+        if scanner.next().is_none() {
+            break;
+        }
+        for (c, inside_class) in scanner.source_chars() {
             // Inside a character class nothing is removed; outside one, even
             // an escaped whitespace character goes, and the escape carries
-            // over to the next character (`\ s` becomes `\s`).
-            if class_depth == 0 && purrdf_iri::terminals::is_ws_char(c) {
-                continue;
-            }
-            out.push(c);
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' => {
-                out.push(c);
-                escaped = true;
-            }
-            '[' => {
-                class_depth += 1;
+            // over to the next character (`\ s` becomes `\s`). The class bit is
+            // per character, not per token: a `\p{…}` name may contain an
+            // unprotected `[`, so one span can cross a depth change.
+            if inside_class || !purrdf_iri::terminals::is_ws_char(c) {
                 out.push(c);
             }
-            ']' if class_depth > 0 => {
-                class_depth -= 1;
-                out.push(c);
-            }
-            _ if class_depth == 0 && purrdf_iri::terminals::is_ws_char(c) => {}
-            _ => out.push(c),
         }
     }
     out
@@ -118,5 +109,18 @@ mod tests {
 
         let escaped_space = compiles(&strip_x_flag_whitespace("hello\\ sworld"));
         assert!(escaped_space.is_match("hello world"));
+    }
+
+    /// A removed whitespace character re-binds a pending `\` to whatever
+    /// follows, which moves the class-exemption boundary with it. In `\ [ ` the
+    /// `\` escapes the `[`, so no class opens and the trailing space goes; in
+    /// `\ \[ ` the first `\` escapes the second, so the `[` DOES open and its
+    /// space is exempt. The second case is where a naive per-token strip loses
+    /// the thread, so it is pinned here.
+    #[test]
+    fn a_removed_whitespace_rebinds_the_pending_escape() {
+        assert_eq!(strip_x_flag_whitespace("\\ [ "), "\\[");
+        assert_eq!(strip_x_flag_whitespace("\\ \\[ "), "\\\\[ ");
+        assert_eq!(strip_x_flag_whitespace("\\ s"), "\\s");
     }
 }

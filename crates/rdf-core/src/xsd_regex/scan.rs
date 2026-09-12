@@ -1,0 +1,697 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The one left-to-right tokenizer over the XSD/XPath `regExp` grammar.
+//!
+//! Every consumer in this module walks the same raw pattern text: the `x`-flag
+//! stripper, the translator, and the ECMA-262 divergence scan. Each used to
+//! carry its own character cursor and re-derive character-class nesting from
+//! scratch, which is one recognition decision written three times. [`Scanner`]
+//! is the single cursor: it owns every character index and lookahead, the
+//! class-frame stack, and the capturing-group bookkeeping, and yields
+//! [`Token`]s whose **source spans** let a consumer that must reproduce the raw
+//! text (the `x` stripper) do so without a second cursor.
+//!
+//! [`Scanner`] is a resumable, fallible iterator: a rejected construct yields
+//! `Some(Err(..))` **after** consuming its own spelling, so the next call
+//! continues with the rest of the pattern. Translation stops at the first
+//! error; the `x` stripper does not, because its output is a pure textual
+//! rewrite of characters it has already been given a span for.
+
+use std::ops::Range;
+
+use super::error::XsdRegexError;
+
+/// One lexical unit of the XSD/XPath `regExp` grammar.
+#[allow(
+    dead_code,
+    reason = "the payloads are read by the translate conversion scheduled as a follow-up to \
+              this task; the tokenizer must emit them now so both consumers share one cursor"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Token {
+    /// An ordinary character, literal in this context (`.`, `-`, `(`, `)`,
+    /// `]` inside a class are [`Token::Literal`]s, not metacharacters).
+    Literal(char),
+    /// Any escape with no grammar-specific rewrite (`\d`, `\D`, `\n`, `\\`,
+    /// …, and a `\p`/`\P` that is not the `{…}` form), passed through.
+    Escape(char),
+    /// `\i`/`\I` (`chars == false`) or `\c`/`\C` (`chars == true`).
+    NameEscape { negated: bool, chars: bool },
+    /// `\s`/`\S`.
+    SpaceEscape { negated: bool },
+    /// `\w`/`\W`.
+    WordEscape { negated: bool },
+    /// `\p{…}`/`\P{…}` with its name scanned from between the braces.
+    UnicodeProperty { negated: bool, name: String },
+    /// An unescaped `.` outside a class.
+    Dot,
+    /// An unescaped `[`, consuming a following `^` when negated.
+    ClassOpen { negated: bool },
+    /// An unescaped `]` closing the innermost open class.
+    ClassClose,
+    /// The `-` of `-[`; the following `[` is its own [`Token::ClassOpen`].
+    Subtract,
+    /// An unescaped `(` outside a class.
+    GroupOpen { capturing: bool },
+    /// An unescaped `)` outside a class.
+    GroupClose,
+    /// A well-formed back-reference to the `n`th capturing group.
+    Backreference(u32),
+}
+
+/// One open character-class level, tracked because XSD's `charClassSub`
+/// subtracts from a `negCharGroup` as readily as from a `posCharGroup`
+/// (`charClassSub ::= ( posCharGroup | negCharGroup ) '-' charClassExpr`)
+/// while the `regex` crate's `^` binds *outside* its set operators.
+#[allow(
+    dead_code,
+    reason = "the frame payload is read by the translate conversion scheduled as a follow-up \
+              to this task; the scanner must derive it once here"
+)]
+struct ClassFrame {
+    /// Whether this level opened as `[^…` and therefore had its negation
+    /// emitted on an inner, wrapped group.
+    negated: bool,
+    /// Whether a `-[` subtraction has already been emitted at this level
+    /// (which also closed the inner negated group, if there was one).
+    subtracted: bool,
+}
+
+/// Capturing-group bookkeeping, kept solely so a back-reference can be
+/// **tokenized** the way the specification says rather than greedily.
+///
+/// XPath F&O 3.1 §5.6.1.4 makes the scan context-dependent, which is unusual
+/// enough to quote:
+///
+/// > The construct `\N` where N is a single digit is always recognized as a
+/// > back-reference; if this is followed by further digits, these digits are
+/// > taken to be part of the back-reference **if and only if** the resulting
+/// > number NN is such that the back-reference is preceded by the opening
+/// > parenthesis of the NNth capturing left parenthesis.
+///
+/// So `(a)\12` is `\1` followed by a literal `2`, while the same text after
+/// twelve capturing groups is `\12`. A greedy longest-digit-run scan gets the
+/// first case wrong, and since this module's whole contract for a
+/// back-reference is an error message that names the construct it found, a
+/// wrong tokenization is a message that lies about the pattern.
+///
+/// The same clause supplies the validity rule: the expression is invalid if a
+/// back-reference "refers to a capturing sub-expression that does not exist or
+/// whose closing right parenthesis occurs after the back-reference" — which is
+/// a MALFORMED pattern, refused by any engine, as distinct from a well-formed
+/// back-reference this implementation declines to execute.
+#[derive(Default)]
+struct Groups {
+    /// Capturing `(` seen so far, in source order.
+    opened: u32,
+    /// The numbers of the capturing groups still open at this point; a group
+    /// not on this stack has had its `)` already, and may be referred to.
+    open_stack: Vec<u32>,
+}
+
+impl Groups {
+    fn open(&mut self) {
+        self.opened += 1;
+        self.open_stack.push(self.opened);
+    }
+
+    fn close(&mut self) {
+        self.open_stack.pop();
+    }
+
+    /// Whether the `n`th capturing group's `(` precedes this point — the test
+    /// that decides whether one more digit joins a back-reference.
+    fn opened_before(&self, n: u32) -> bool {
+        n >= 1 && n <= self.opened
+    }
+
+    /// Whether the `n`th capturing group's `)` also precedes this point, which
+    /// is what makes a reference to it well-formed rather than merely
+    /// well-tokenized.
+    fn closed_before(&self, n: u32) -> bool {
+        self.opened_before(n) && !self.open_stack.contains(&n)
+    }
+}
+
+/// The single cursor over an XSD/XPath `regExp` pattern.
+pub(super) struct Scanner<'a> {
+    pattern: &'a str,
+    chars: Vec<char>,
+    /// Byte offset of each character, with a trailing sentinel equal to
+    /// `pattern.len()`, so character index `i` spans `offsets[i]..offsets[i + 1]`.
+    offsets: Vec<usize>,
+    /// Character index of the next unscanned character.
+    pos: usize,
+    /// One frame per open `[`.
+    classes: Vec<ClassFrame>,
+    /// Capturing-group bookkeeping (see [`Groups`]).
+    groups: Groups,
+    /// Byte span of the most recently yielded token or error.
+    span: Range<usize>,
+    /// The `x`-flag stripper's own class depth, maintained from the raw
+    /// characters as they are consumed. It is NOT the grammar's class depth:
+    /// `x`'s removal is textual and a removed whitespace character re-binds a
+    /// pending `\` to whatever follows, so `\ [` delimits no class even though
+    /// the grammar reads `\ ` as an escape and `[` as an opener. See
+    /// [`Scanner::in_class`].
+    x_depth: usize,
+    /// The `x`-flag stripper's pending-escape flag (see [`Scanner::x_feed`]).
+    x_escaped: bool,
+    /// Per character, whether the `x`-flag state machine had it inside a class
+    /// at that character. A single token can span a depth change (a
+    /// `\p{…}` name may contain an unprotected `[`), so the stripper cannot
+    /// answer from one flag per token.
+    x_inside: Vec<bool>,
+    /// Character range of the most recently yielded token or error.
+    span_chars: Range<usize>,
+}
+
+impl<'a> Scanner<'a> {
+    /// Begin a scan of `pattern`.
+    pub(super) fn new(pattern: &'a str) -> Self {
+        let mut chars = Vec::with_capacity(pattern.len());
+        let mut offsets = Vec::with_capacity(pattern.len() + 1);
+        for (i, c) in pattern.char_indices() {
+            offsets.push(i);
+            chars.push(c);
+        }
+        offsets.push(pattern.len());
+        Self {
+            pattern,
+            chars,
+            offsets,
+            pos: 0,
+            classes: Vec::new(),
+            groups: Groups::default(),
+            span: 0..0,
+            x_depth: 0,
+            x_escaped: false,
+            x_inside: Vec::with_capacity(pattern.len()),
+            span_chars: 0..0,
+        }
+    }
+
+    /// The raw characters of the most recently yielded token or error, each
+    /// paired with whether the `x`-flag state machine was inside a character
+    /// class at that character (i.e. whether its whitespace is exempt from
+    /// removal). This is the token-span round-trip the `x` stripper folds over.
+    pub(super) fn source_chars(&self) -> impl Iterator<Item = (char, bool)> + '_ {
+        let span = self.span_chars.clone();
+        self.source_text()
+            .chars()
+            .zip(self.x_inside[span].iter().copied())
+    }
+
+    /// Whether the cursor is currently inside a character class according to
+    /// the `x`-flag stripper's textual state machine — the state that decides
+    /// whether a whitespace character is exempt from removal.
+    ///
+    /// This deliberately differs from the grammar's [`ClassFrame`] stack: it
+    /// folds a removed whitespace character back into a pending `\` (the doc
+    /// comment of [`super::xflag::strip_x_flag_whitespace`] explains why), so
+    /// the `[` of `\ [` opens nothing here while the grammar still reads it as
+    /// a [`Token::ClassOpen`]. Both states are owned by this one cursor.
+    #[allow(
+        dead_code,
+        reason = "exercised by the scanner's unit tests and kept for later consumers that \
+                  need only a token-boundary answer; the x stripper requires the per-character \
+                  `source_chars` because one token can span a depth change"
+    )]
+    pub(super) fn in_class(&self) -> bool {
+        self.x_depth > 0
+    }
+
+    /// Advance the `x`-flag textual state machine over one raw character. This
+    /// is the same left-to-right `escaped`/`class_depth` fold the stripper
+    /// used before there was a tokenizer: a whitespace character while
+    /// `x_escaped` and at depth 0 is REMOVED, so it does not clear the pending
+    /// escape (that re-binding is what turns `\ s` into `\s`).
+    fn x_feed(&mut self, c: char) {
+        self.x_inside.push(self.x_depth > 0);
+        if self.x_escaped {
+            if self.x_depth != 0 || !purrdf_iri::terminals::is_ws_char(c) {
+                self.x_escaped = false;
+            }
+            return;
+        }
+        match c {
+            '\\' => self.x_escaped = true,
+            '[' => self.x_depth += 1,
+            ']' if self.x_depth > 0 => self.x_depth -= 1,
+            _ => {}
+        }
+    }
+
+    /// The exact source text the most recently yielded token or error was
+    /// scanned from. Empty before the first item and once the iterator ends.
+    pub(super) fn source_text(&self) -> &'a str {
+        let pattern: &'a str = self.pattern;
+        &pattern[self.span.clone()]
+    }
+
+    fn peek(&self, ahead: usize) -> Option<char> {
+        self.chars.get(self.pos + ahead).copied()
+    }
+
+    fn scan_next(&mut self) -> Option<Result<Token, XsdRegexError>> {
+        if self.pos >= self.chars.len() {
+            self.span = 0..0;
+            self.span_chars = 0..0;
+            if !self.classes.is_empty() {
+                self.classes.clear();
+                return Some(Err(XsdRegexError::Malformed(
+                    "unterminated character class (missing closing ']')".to_owned(),
+                )));
+            }
+            return None;
+        }
+        let start = self.pos;
+        let result = self.scan_one();
+        self.span = self.offsets[start]..self.offsets[self.pos];
+        self.span_chars = start..self.pos;
+        for i in start..self.pos {
+            self.x_feed(self.chars[i]);
+        }
+        Some(result)
+    }
+
+    fn scan_one(&mut self) -> Result<Token, XsdRegexError> {
+        match self.chars[self.pos] {
+            '\\' => self.scan_escape(),
+            '[' => {
+                // XSD `[^g-e]` is (complement of `g`) minus `e`, but
+                // Rust's `[^g--e]` applies `^` to the WHOLE class
+                // expression — i.e. the complement of (`g` minus `e`),
+                // a different set. Opening an extra bracket and putting
+                // the negation on the inner one restores XSD's binding:
+                // `[[^g]--e]`. Emitted for every negated group, not only
+                // the ones a subtraction follows, because the wrap is
+                // semantically free when it does not (`[[^g]]` == `[^g]`)
+                // and deciding otherwise would need a lookahead over the
+                // whole group. The scanner records the `negated` bit on the
+                // frame; the translator emits the wrap.
+                let negated = self.peek(1) == Some('^');
+                self.pos += if negated { 2 } else { 1 };
+                self.classes.push(ClassFrame {
+                    negated,
+                    subtracted: false,
+                });
+                Ok(Token::ClassOpen { negated })
+            }
+            ']' if !self.classes.is_empty() => {
+                self.classes.pop();
+                self.pos += 1;
+                Ok(Token::ClassClose)
+            }
+            // A `.` is the XPath wildcard only outside a character class —
+            // inside one it is always a literal dot, never rewritten.
+            '.' if self.classes.is_empty() => {
+                self.pos += 1;
+                Ok(Token::Dot)
+            }
+            // XPath class subtraction `[...-[...]]` -> regex's own `--`
+            // difference operator. Frame-tracked (not a one-shot flag) so it
+            // fires correctly for a subtraction nested inside another
+            // subtraction's right-hand `charClassExpr`. The translator closes
+            // the inner negated group before the difference operator, so `--`
+            // subtracts from the complement; the scanner records that a
+            // subtraction happened on the frame.
+            '-' if !self.classes.is_empty() && self.peek(1) == Some('[') => {
+                if let Some(frame) = self.classes.last_mut() {
+                    frame.subtracted = true;
+                }
+                self.pos += 1;
+                Ok(Token::Subtract)
+            }
+            // Capturing-parenthesis bookkeeping. XML Schema Part 2 Appendix G
+            // (as amended by XPath F&O 3.1 §5.6.1.3): "a left parenthesis is
+            // recognized as a capturing left parenthesis provided it is not
+            // immediately followed by `?:`, is not within a character group
+            // (square brackets), and is not escaped with a backslash".
+            '(' if self.classes.is_empty() => {
+                if self.peek(1) == Some('?') && self.peek(2) == Some(':') {
+                    self.pos += 3;
+                    Ok(Token::GroupOpen { capturing: false })
+                } else {
+                    self.groups.open();
+                    self.pos += 1;
+                    Ok(Token::GroupOpen { capturing: true })
+                }
+            }
+            ')' if self.classes.is_empty() => {
+                self.groups.close();
+                self.pos += 1;
+                Ok(Token::GroupClose)
+            }
+            other => {
+                self.pos += 1;
+                Ok(Token::Literal(other))
+            }
+        }
+    }
+
+    fn scan_escape(&mut self) -> Result<Token, XsdRegexError> {
+        let Some(esc) = self.peek(1) else {
+            self.pos += 1;
+            return Err(XsdRegexError::Malformed(
+                "pattern ends with a dangling backslash".to_owned(),
+            ));
+        };
+        let token = match esc {
+            'b' => Err(XsdRegexError::UnsupportedConstruct("\\b")),
+            'B' => Err(XsdRegexError::UnsupportedConstruct("\\B")),
+            'i' => Ok(Token::NameEscape {
+                negated: false,
+                chars: false,
+            }),
+            'I' => Ok(Token::NameEscape {
+                negated: true,
+                chars: false,
+            }),
+            'c' => Ok(Token::NameEscape {
+                negated: false,
+                chars: true,
+            }),
+            'C' => Ok(Token::NameEscape {
+                negated: true,
+                chars: true,
+            }),
+            's' => Ok(Token::SpaceEscape { negated: false }),
+            'S' => Ok(Token::SpaceEscape { negated: true }),
+            'w' => Ok(Token::WordEscape { negated: false }),
+            'W' => Ok(Token::WordEscape { negated: true }),
+            'p' | 'P' if self.peek(2) == Some('{') => return self.scan_unicode_property(),
+            // `\d`/`\D` already default to `\p{Nd}`/its complement in
+            // `regex-syntax`, exactly XSD's definition, so no rewrite is
+            // needed; a `\p`/`\P` not followed by `{` is passed through too.
+            'p' | 'P' | 'd' | 'D' => Ok(Token::Escape(esc)),
+            '1'..='9' => return self.scan_backreference(esc),
+            // `\0` is NOT a back-reference: XPath F&O 3.1 §5.6.1.4's production
+            // is `backReference ::= "\" [1-9][0-9]*`, which starts at 1. Nor is
+            // it a `SingleCharEsc` — XML Schema Part 2 Appendix G enumerates
+            // those, and `\0` is not among them. So it is simply not a
+            // construct this dialect has. Rejected here by name, because letting
+            // it fall through to the engine produced "backreferences are not
+            // supported" — a message that is wrong about what the pattern
+            // contains, and would send a reader looking for a capture group
+            // that was never there.
+            '0' => Err(XsdRegexError::Malformed(
+                "\\0 is not a construct of the XSD/XPath regular-expression grammar (a \
+                 back-reference starts at \\1, and \\0 is not a single-character escape)"
+                    .to_owned(),
+            )),
+            _ => Ok(Token::Escape(esc)),
+        };
+        self.pos += 2;
+        token
+    }
+
+    /// Handle `\p{...}`/`\P{...}` with the cursor on the backslash and
+    /// `self.peek(2) == Some('{')`.
+    fn scan_unicode_property(&mut self) -> Result<Token, XsdRegexError> {
+        let esc = self.chars[self.pos + 1];
+        let name_start = self.pos + 3;
+        let mut j = name_start;
+        while self.chars.get(j).is_some_and(|&ch| ch != '}') {
+            j += 1;
+        }
+        if self.chars.get(j) != Some(&'}') {
+            self.pos = self.chars.len();
+            return Err(XsdRegexError::Malformed(format!(
+                "unterminated \\{esc}{{ block-escape name (no matching '}}')"
+            )));
+        }
+        let name: String = self.chars[name_start..j].iter().collect();
+        self.pos = j + 1;
+        Ok(Token::UnicodeProperty {
+            negated: esc == 'P',
+            name,
+        })
+    }
+
+    /// Tokenize a back-reference per F&O §5.6.1.4 (see [`Groups`]): the first
+    /// digit is always part of the reference, and each further digit joins it
+    /// only while the resulting number still names a capturing group whose `(`
+    /// precedes this point. NOT a greedy digit run — after one group, `\12` is
+    /// `\1` then a literal `2`.
+    fn scan_backreference(&mut self, first: char) -> Result<Token, XsdRegexError> {
+        let start_digit = self.pos + 1;
+        let mut number = first.to_digit(10).expect("matched 1..=9");
+        let mut j = start_digit + 1;
+        while let Some(digit) = self.chars.get(j).and_then(|c| c.to_digit(10)) {
+            let Some(extended) = number.checked_mul(10).and_then(|n| n.checked_add(digit)) else {
+                break;
+            };
+            if !self.groups.opened_before(extended) {
+                break;
+            }
+            number = extended;
+            j += 1;
+        }
+        let reference: String = std::iter::once('\\')
+            .chain(self.chars[start_digit..j].iter().copied())
+            .collect();
+        self.pos = j;
+        if !self.groups.closed_before(number) {
+            // Invalid for ANY engine, backtracking or not: the reference
+            // names a group that does not exist, or one whose `)` has not
+            // been seen yet. Reported as malformed rather than as an
+            // unsupported construct, because "this implementation cannot run
+            // it" would be a misleading excuse for a pattern nothing can run.
+            return Err(XsdRegexError::Malformed(format!(
+                "back-reference {reference} refers to a capturing group that does not \
+                 exist, or whose closing ')' comes after it ({} capturing group(s) are \
+                 complete at that point)",
+                self.groups.opened
+            )));
+        }
+        Ok(Token::Backreference(number))
+    }
+}
+
+impl Iterator for Scanner<'_> {
+    type Item = Result<Token, XsdRegexError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.scan_next()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use Token::{
+        Backreference, ClassClose, Dot, Escape, GroupClose, Literal, SpaceEscape, Subtract,
+        WordEscape,
+    };
+
+    fn tokens(pattern: &str) -> Vec<Token> {
+        Scanner::new(pattern)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap_or_else(|e| panic!("scan {pattern:?}: {e}"))
+    }
+
+    fn first_error(pattern: &str) -> XsdRegexError {
+        Scanner::new(pattern)
+            .find_map(Result::err)
+            .unwrap_or_else(|| panic!("expected an error for {pattern:?}"))
+    }
+
+    fn class(negated: bool) -> Token {
+        Token::ClassOpen { negated }
+    }
+
+    fn group(capturing: bool) -> Token {
+        Token::GroupOpen { capturing }
+    }
+
+    fn name(negated: bool, chars: bool) -> Token {
+        Token::NameEscape { negated, chars }
+    }
+
+    fn unicode(negated: bool, name: &str) -> Token {
+        Token::UnicodeProperty {
+            negated,
+            name: name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn literals_and_classes() {
+        assert_eq!(
+            tokens("abc"),
+            vec![Literal('a'), Literal('b'), Literal('c')]
+        );
+        assert_eq!(
+            tokens("[abc]"),
+            vec![
+                class(false),
+                Literal('a'),
+                Literal('b'),
+                Literal('c'),
+                ClassClose,
+            ]
+        );
+        assert_eq!(tokens("[^a]"), vec![class(true), Literal('a'), ClassClose]);
+        // `.` is the wildcard only outside a class; `-` is ordinary.
+        assert_eq!(tokens("[.]"), vec![class(false), Literal('.'), ClassClose]);
+        assert_eq!(tokens("."), vec![Dot]);
+        assert_eq!(
+            tokens("a-z"),
+            vec![Literal('a'), Literal('-'), Literal('z')]
+        );
+    }
+
+    #[test]
+    fn class_subtraction_is_tokenized_frame_by_frame() {
+        assert_eq!(
+            tokens("[a-z-[aeiou]]"),
+            vec![
+                class(false),
+                Literal('a'),
+                Literal('-'),
+                Literal('z'),
+                Subtract,
+                class(false),
+                Literal('a'),
+                Literal('e'),
+                Literal('i'),
+                Literal('o'),
+                Literal('u'),
+                ClassClose,
+                ClassClose,
+            ]
+        );
+        // A negated `posCharGroup` is a subtraction's left side just as readily.
+        assert_eq!(
+            tokens("[^0-9-[a-z]]"),
+            vec![
+                class(true),
+                Literal('0'),
+                Literal('-'),
+                Literal('9'),
+                Subtract,
+                class(false),
+                Literal('a'),
+                Literal('-'),
+                Literal('z'),
+                ClassClose,
+                ClassClose,
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_character_escapes() {
+        assert_eq!(
+            tokens(r"\p{IsBasicLatin}"),
+            vec![unicode(false, "IsBasicLatin")]
+        );
+        assert_eq!(
+            tokens(r"\P{IsBasicLatin}"),
+            vec![unicode(true, "IsBasicLatin")]
+        );
+        assert_eq!(
+            tokens(r"\i\I\c\C"),
+            vec![
+                name(false, false),
+                name(true, false),
+                name(false, true),
+                name(true, true),
+            ]
+        );
+        assert_eq!(
+            tokens(r"\s\S\w\W"),
+            vec![
+                SpaceEscape { negated: false },
+                SpaceEscape { negated: true },
+                WordEscape { negated: false },
+                WordEscape { negated: true },
+            ]
+        );
+        assert_eq!(
+            tokens(r"\d\D\.\n"),
+            vec![Escape('d'), Escape('D'), Escape('.'), Escape('n')]
+        );
+    }
+
+    #[test]
+    fn groups_and_backreferences() {
+        assert_eq!(
+            tokens("(?:a)"),
+            vec![group(false), Literal('a'), GroupClose]
+        );
+        assert_eq!(tokens("(a)"), vec![group(true), Literal('a'), GroupClose]);
+        // A parenthesis inside a class is a literal, never a group.
+        assert_eq!(tokens("[(]"), vec![class(false), Literal('('), ClassClose]);
+        assert_eq!(
+            tokens("(a)\\1"),
+            vec![group(true), Literal('a'), GroupClose, Backreference(1)]
+        );
+        // F&O §5.6.1.4: after one group `\12` is `\1` then a literal `2`.
+        assert_eq!(
+            tokens("(a)\\12"),
+            vec![
+                group(true),
+                Literal('a'),
+                GroupClose,
+                Backreference(1),
+                Literal('2'),
+            ]
+        );
+    }
+
+    #[test]
+    fn errors_match_todays_rejections() {
+        assert_eq!(
+            first_error(r"a\bc"),
+            XsdRegexError::UnsupportedConstruct("\\b")
+        );
+        assert_eq!(
+            first_error(r"[\B]"),
+            XsdRegexError::UnsupportedConstruct("\\B")
+        );
+        assert!(matches!(first_error(r"a\0b"), XsdRegexError::Malformed(_)));
+        assert!(matches!(first_error(r"\1"), XsdRegexError::Malformed(_)));
+        assert!(matches!(first_error(r"(a\1)"), XsdRegexError::Malformed(_)));
+        assert_eq!(
+            first_error("a\\"),
+            XsdRegexError::Malformed("pattern ends with a dangling backslash".to_owned())
+        );
+        assert!(matches!(first_error("[abc"), XsdRegexError::Malformed(_)));
+        assert!(matches!(
+            first_error(r"\p{IsBasicLatin"),
+            XsdRegexError::Malformed(_)
+        ));
+    }
+
+    #[test]
+    fn class_state_and_source_spans_survive_a_walk() {
+        let mut scanner = Scanner::new("[abc]");
+        assert!(!scanner.in_class());
+        assert_eq!(scanner.next(), Some(Ok(class(false))));
+        assert!(scanner.in_class());
+        assert_eq!(scanner.source_text(), "[");
+        assert_eq!(scanner.next(), Some(Ok(Literal('a'))));
+        assert_eq!(scanner.source_text(), "a");
+        for expected in [Literal('b'), Literal('c'), ClassClose] {
+            assert_eq!(scanner.next(), Some(Ok(expected)));
+        }
+        assert!(!scanner.in_class());
+        assert_eq!(scanner.next(), None);
+
+        let mut scanner = Scanner::new(r"[a-z]+\p{IsBasicLatin}");
+        let mut spans = Vec::new();
+        loop {
+            if scanner.next().is_none() {
+                break;
+            }
+            spans.push(scanner.source_text());
+        }
+        assert_eq!(
+            spans,
+            vec!["[", "a", "-", "z", "]", "+", r"\p{IsBasicLatin}"]
+        );
+    }
+}

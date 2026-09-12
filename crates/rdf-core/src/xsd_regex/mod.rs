@@ -52,6 +52,7 @@
 mod blocks;
 mod classes;
 mod error;
+mod scan;
 mod translate;
 mod xflag;
 
