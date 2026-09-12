@@ -230,7 +230,7 @@ fn run(case: &Case) -> Result<(), String> {
     let compiled = xsd_regex::compile(&case.pattern, &case.flags);
     match (&case.expectation, compiled) {
         (Expectation::Match, Ok(re)) => {
-            if re.is_match(&case.subject) {
+            if re.as_regex().is_match(&case.subject) {
                 Ok(())
             } else {
                 Err(format!(
@@ -241,7 +241,7 @@ fn run(case: &Case) -> Result<(), String> {
             }
         }
         (Expectation::NoMatch, Ok(re)) => {
-            if re.is_match(&case.subject) {
+            if re.as_regex().is_match(&case.subject) {
                 Err(format!(
                     "{} expected NOT to match {:?}, matched",
                     case.describe(),

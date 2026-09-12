@@ -3798,7 +3798,7 @@ fn eval_regex_expr<D: DatasetView + Sync>(
     };
     let flags = flags.map(|(f, _)| f).unwrap_or_default();
     match cached_regex(ctx, &pattern, &flags) {
-        Some(re) => Ok(Some(bool_term(ctx, re.is_match(&text)))),
+        Some(re) => Ok(Some(bool_term(ctx, re.as_regex().is_match(&text)))),
         None => Ok(None),
     }
 }
@@ -4232,20 +4232,13 @@ fn eval_replace<D: DatasetView + Sync>(
     let Some(compiled) = cached_regex(ctx, &pattern, &flags) else {
         return Ok(None);
     };
-    let replaced = if compiled.is_literal() {
-        // XPath F&O 3.1 §5.6.2, the `q` flag: "the replacement string is used
-        // as is" — with `q`, `$` and `\` in the replacement lose their special
-        // meaning along with the metacharacters in the pattern. `NoExpand`
-        // is the regex crate's spelling of exactly that, and without it a
-        // `q`-flagged REPLACE would still expand `$1` against a pattern that,
-        // being `regex::escape`d, has no capture groups at all — silently
-        // substituting an empty string for text the caller wrote literally.
-        compiled
-            .replace_all(&s, regex::NoExpand(replacement.as_str()))
-            .into_owned()
-    } else {
-        // SPARQL uses $N for capture-group references — same as the regex crate.
-        compiled.replace_all(&s, replacement.as_str()).into_owned()
+    // The `q` bit and XPath F&O 3.1 §5.6.2's replacement syntax both live
+    // inside `replace_all`, so this call site cannot drop either. A malformed
+    // replacement is F&O [err:FORX0004], which SPARQL 1.1 §17.4.3.15 makes a
+    // type error: the expression is left unbound, never aborts the query.
+    let replaced = match compiled.replace_all(&s, &replacement) {
+        Ok(replaced) => replaced.into_owned(),
+        Err(_) => return Ok(None),
     };
     Ok(Some(make_string(ctx, replaced, lang)))
 }
@@ -4296,7 +4289,9 @@ fn cached_regex<D: DatasetView + Sync>(
 ///   XPath explicitly exempts.
 /// * `q` (match the pattern literally) is accepted rather than rejected, and
 ///   the returned [`CompiledPattern`](purrdf_core::xsd_regex::CompiledPattern)
-///   carries that bit so `REPLACE()` can honour it in the replacement string.
+///   carries that bit so `REPLACE()` honours it in the replacement string —
+///   through `CompiledPattern::replace_all`, which owns both the `q` switch
+///   and XPath's `$N`/`\$`/`\\` replacement syntax.
 ///
 /// # Contract
 ///
@@ -5200,6 +5195,49 @@ mod tests {
         // them keep their numbers.
         assert_eq!(replace("a b", r"(a)\s(b)", "$2-$1"), Some("b-a".to_owned()));
         assert_eq!(replace("axb", "(a)(.)(b)", "$2"), Some("x".to_owned()));
+    }
+
+    /// XPath F&O 3.1 §5.6.2's replacement escapes: `\$` is a literal `$` and
+    /// `\\` is a literal `\`. The `regex` crate's own replacement language has
+    /// no such escapes — a backslash is an ordinary character there — so
+    /// before this the result carried the two characters `\$`/`\\` instead of
+    /// the one meant.
+    #[test]
+    fn replace_translates_xpath_replacement_escapes() {
+        let ds = empty_ds();
+        let replace = |s: &str, pattern: &str, replacement: &str| {
+            lex(
+                &ds,
+                &Expression::FunctionCall(
+                    Function::Replace,
+                    vec![lit(s), lit(pattern), lit(replacement), lit("")],
+                ),
+            )
+        };
+        assert_eq!(replace("abc", "b", r"\$"), Some("a$c".to_owned()));
+        assert_eq!(replace("abc", "b", r"\\"), Some(r"a\c".to_owned()));
+        // …and the escapes compose with a capture-group reference.
+        assert_eq!(replace("ab", "(a)(b)", r"$2\$1"), Some(r"b$1".to_owned()));
+    }
+
+    /// A malformed replacement is F&O §5.6.2 [err:FORX0004], and SPARQL 1.1
+    /// §17.4.3.15 makes a `REPLACE` type error unbound rather than a query
+    /// abort — so both of these evaluate to `None`, not to a literal
+    /// substitution.
+    #[test]
+    fn replace_malformed_replacement_is_unbound() {
+        let ds = empty_ds();
+        let replace = |s: &str, pattern: &str, replacement: &str| {
+            lex(
+                &ds,
+                &Expression::FunctionCall(
+                    Function::Replace,
+                    vec![lit(s), lit(pattern), lit(replacement), lit("")],
+                ),
+            )
+        };
+        assert_eq!(replace("abc", "b", "$x"), None, "`$` with no digit");
+        assert_eq!(replace("abc", "b", r"\n"), None, "bare backslash");
     }
 
     #[test]

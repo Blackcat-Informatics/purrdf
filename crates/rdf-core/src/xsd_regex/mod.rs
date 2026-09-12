@@ -54,13 +54,14 @@ mod classes;
 mod ecma;
 mod emit;
 mod error;
+mod replace;
 mod scan;
 mod xflag;
 
-pub use error::XsdRegexError;
+pub use error::{ReplacementError, XsdRegexError};
 
+use std::borrow::Cow;
 use std::fmt;
-use std::ops::Deref;
 
 /// Maximum size, in bytes, of a pattern source string accepted by [`compile`].
 ///
@@ -131,9 +132,13 @@ pub const MAX_FOLDED_CLASS_ESCAPES: usize = 32;
 
 /// A `sh:pattern`/`REGEX`/`PATTERN` pattern compiled by [`compile`].
 ///
-/// Dereferences to the underlying [`regex::Regex`], so existing call sites
-/// that only ever called `.is_match()`/`.replace_all()`/etc. on a
-/// `&regex::Regex` need no change beyond the type they store.
+/// This is the one type the three facets hold, and it exposes **one** accessor
+/// to the underlying [`regex::Regex`], [`as_regex`](Self::as_regex). It
+/// deliberately does not [`Deref`](std::ops::Deref) to `regex::Regex`: the two
+/// have different semantics for `fn:replace` (see
+/// [`replace_all`](Self::replace_all)), and a `Deref` would let
+/// `compiled.replace_all(…)` silently resolve to the `regex` crate's method
+/// with the `q` flag and XPath replacement syntax dropped.
 #[derive(Debug, Clone)]
 pub struct CompiledPattern {
     regex: regex::Regex,
@@ -141,31 +146,57 @@ pub struct CompiledPattern {
 }
 
 impl CompiledPattern {
-    /// Whether the source pattern was compiled under the `q` (literal) flag.
+    /// The compiled [`regex::Regex`], for the match-only callers
+    /// (`is_match`, `find`, …).
     ///
-    /// SPARQL's `REPLACE()` needs this bit: per XPath F&O 3.1 §5.6.2, `$`
-    /// and `\` in the *replacement* string lose their special meaning when
-    /// the pattern was `q`-flagged, so a `q`-literal match must be replaced
-    /// with [`regex::Regex::replace_all`] plus [`regex::NoExpand`] rather
-    /// than the default `$N`-expanding replacement string.
-    #[must_use]
-    pub fn is_literal(&self) -> bool {
-        self.is_literal
-    }
-
-    /// The compiled [`regex::Regex`], for callers that prefer an explicit
-    /// accessor over [`Deref`].
+    /// This is the *only* way to reach the underlying engine: a caller that
+    /// needs replacement uses [`replace_all`](Self::replace_all), which
+    /// carries the semantics the raw [`regex::Regex`] does not.
     #[must_use]
     pub fn as_regex(&self) -> &regex::Regex {
         &self.regex
     }
-}
 
-impl Deref for CompiledPattern {
-    type Target = regex::Regex;
-
-    fn deref(&self) -> &regex::Regex {
-        &self.regex
+    /// `fn:replace` semantics: replace every match of this pattern in
+    /// `haystack` with `replacement`, honouring the `q` flag and XPath F&O 3.1
+    /// §5.6.2's replacement syntax internally.
+    ///
+    /// The decision the caller used to have to make by hand lives here, so the
+    /// `q` bit cannot be forgotten at a call site:
+    ///
+    /// * Under `q`, the replacement is used as is — F&O §5.6.2 says so
+    ///   explicitly, and the `regex` crate's [`NoExpand`](regex::NoExpand) is
+    ///   exactly that. No error is possible.
+    /// * Otherwise the replacement is XPath's own language: `$N` references
+    ///   the Nth capture group (with F&O's full out-of-range rule), a literal
+    ///   `$` is written `\$`, and a literal `\` is written `\\`.
+    ///
+    /// # Errors
+    ///
+    /// [`ReplacementError`] — F&O §5.6.2 [err:FORX0004] — when a non-`q`
+    /// replacement contains a `$` not followed by a digit or a `\` that is
+    /// neither `\\` nor `\$`. SPARQL's `REPLACE` maps this to an unbound
+    /// expression, never a query abort.
+    pub fn replace_all<'h>(
+        &self,
+        haystack: &'h str,
+        replacement: &str,
+    ) -> Result<Cow<'h, str>, ReplacementError> {
+        if self.is_literal {
+            // `q`: "the replacement string is used as is" (F&O §5.6.2). With
+            // `q`, `$` and `\` in the replacement are ordinary characters,
+            // exactly `NoExpand`'s contract, and [err:FORX0004] cannot apply.
+            return Ok(self
+                .regex
+                .replace_all(haystack, regex::NoExpand(replacement)));
+        }
+        // `captures_len` counts group 0 (the whole match); F&O's `S` is the
+        // explicit capture-group count, so subtract it once, here.
+        let template =
+            replace::Template::parse(replacement, self.regex.captures_len().saturating_sub(1))?;
+        Ok(self
+            .regex
+            .replace_all(haystack, |caps: &regex::Captures<'_>| template.expand(caps)))
     }
 }
 
@@ -417,23 +448,23 @@ mod tests {
     #[test]
     fn anchors_without_m_flag_anchor_the_whole_string() {
         let re = compile("^ab$", "").expect("compile");
-        assert!(re.is_match("ab"));
-        assert!(!re.is_match("xab"));
-        assert!(!re.is_match("abx"));
+        assert!(re.as_regex().is_match("ab"));
+        assert!(!re.as_regex().is_match("xab"));
+        assert!(!re.as_regex().is_match("abx"));
     }
 
     #[test]
     fn unanchored_match_is_partial() {
         let re = compile("bc", "").expect("compile");
-        assert!(re.is_match("abcd"));
-        assert!(!re.is_match("abd"));
+        assert!(re.as_regex().is_match("abcd"));
+        assert!(!re.as_regex().is_match("abd"));
     }
 
     #[test]
     fn dollar_with_m_flag_is_line_end() {
         let re = compile("a$", "m").expect("compile");
-        assert!(re.is_match("a\nb"));
-        assert!(re.is_match("xa"));
+        assert!(re.as_regex().is_match("a\nb"));
+        assert!(re.as_regex().is_match("xa"));
     }
 
     /// XPath F&O 3.1 §5.6.2: under `m`, `^` matches "the position
@@ -448,7 +479,7 @@ mod tests {
     #[test]
     fn known_divergence_m_flag_trailing_newline() {
         let re = compile("^", "m").expect("compile");
-        let positions: Vec<usize> = re.find_iter("a\n").map(|m| m.start()).collect();
+        let positions: Vec<usize> = re.as_regex().find_iter("a\n").map(|m| m.start()).collect();
         // Spec-correct XPath behavior would be `[0]` only (position 2, right
         // after the trailing newline, should NOT match). Rust's actual,
         // divergent behavior matches at both position 0 and position 2.
@@ -463,15 +494,20 @@ mod tests {
     #[test]
     fn q_flag_treats_pattern_as_literal() {
         let re = compile("a.c", "q").expect("compile");
-        assert!(re.is_match("xa.cx"));
-        assert!(!re.is_match("abc"));
-        assert!(re.is_literal());
+        assert!(re.as_regex().is_match("xa.cx"));
+        assert!(!re.as_regex().is_match("abc"));
+        // The `q` bit lives inside `replace_all`: under `q` the replacement is
+        // used verbatim, so `$1` is two literal characters (F&O §5.6.2).
+        assert_eq!(
+            re.replace_all("xa.cx", "$1").expect("q replacement"),
+            "x$1x"
+        );
     }
 
     #[test]
     fn q_flag_composes_with_i() {
         let re = compile("ABC", "qi").expect("compile");
-        assert!(re.is_match("abc"));
+        assert!(re.as_regex().is_match("abc"));
     }
 
     #[test]
@@ -481,9 +517,9 @@ mod tests {
         // confirms `s`/`m` do not somehow cause an error or a non-literal
         // recompile.
         let re = compile("a.b", "qs").expect("compile");
-        assert!(re.is_match("xa.bx"));
-        assert!(!re.is_match("axb"));
-        assert!(!re.is_match("a\nb"));
+        assert!(re.as_regex().is_match("xa.bx"));
+        assert!(!re.as_regex().is_match("axb"));
+        assert!(!re.as_regex().is_match("a\nb"));
     }
 
     /// The exact bug this module must not repeat (see `xflag.rs`'s
@@ -494,36 +530,36 @@ mod tests {
     #[test]
     fn q_and_x_together_preserve_literal_spaces() {
         let re = compile("a b", "qx").expect("compile");
-        assert!(re.is_match("xa bx"));
-        assert!(!re.is_match("xabx"));
+        assert!(re.as_regex().is_match("xa bx"));
+        assert!(!re.as_regex().is_match("xabx"));
     }
 
     #[test]
     fn x_flag_strips_whitespace_outside_classes_only() {
         let re = compile("a b[c d]", "x").expect("compile");
-        assert!(re.is_match("ab d")); // outside-class space stripped
-        assert!(!re.is_match("a bd")); // ...so this no longer matches
+        assert!(re.as_regex().is_match("ab d")); // outside-class space stripped
+        assert!(!re.as_regex().is_match("a bd")); // ...so this no longer matches
     }
 
     #[test]
     fn s_flag_makes_dot_match_newlines() {
         let re = compile("^a.b$", "s").expect("compile");
-        assert!(re.is_match("a\nb"));
-        assert!(re.is_match("a\rb"));
+        assert!(re.as_regex().is_match("a\nb"));
+        assert!(re.as_regex().is_match("a\rb"));
     }
 
     #[test]
     fn i_flag_is_case_insensitive() {
         let re = compile("^abc$", "i").expect("compile");
-        assert!(re.is_match("ABC"));
+        assert!(re.as_regex().is_match("ABC"));
     }
 
     #[test]
     fn dot_excludes_lf_and_cr_by_default() {
         let re = compile("^a.b$", "").expect("compile");
-        assert!(re.is_match("axb"));
-        assert!(!re.is_match("a\nb"));
-        assert!(!re.is_match("a\rb"));
+        assert!(re.as_regex().is_match("axb"));
+        assert!(!re.as_regex().is_match("a\nb"));
+        assert!(!re.as_regex().is_match("a\rb"));
     }
 
     #[test]
@@ -554,12 +590,73 @@ mod tests {
     }
 
     #[test]
-    fn compiled_pattern_derefs_to_regex() {
+    fn compiled_pattern_exposes_the_regex_through_one_accessor() {
         let compiled = compile("^ab$", "").expect("compile");
-        // `.is_match` here resolves through `Deref<Target = regex::Regex>`.
-        assert!(compiled.is_match("ab"));
-        assert!(!compiled.is_literal());
-        assert_eq!(compiled.as_regex().as_str(), compiled.as_str());
+        // `.is_match` goes through the explicit `as_regex()` accessor: the
+        // type no longer `Deref`s, so a `regex`-crate method cannot be reached
+        // by accident with different replacement semantics.
+        assert!(compiled.as_regex().is_match("ab"));
+        assert_eq!(compiled.as_regex().as_str(), "^ab$");
+    }
+
+    // ── fn:replace replacement syntax (XPath F&O 3.1 §5.6.2) ─────────────────
+
+    /// XPath writes a literal `$` as `\$` and a literal `\` as `\\`; the
+    /// `regex` crate treats a backslash as an ordinary character, so copying
+    /// its replacement syntax through produced the two characters `\$`/`\\`
+    /// instead of the one meant.
+    #[test]
+    fn replace_resolves_xpath_dollar_and_backslash_escapes() {
+        let re = compile("b", "").expect("compile");
+        assert_eq!(re.replace_all("abc", r"\$").expect("valid"), "a$c");
+        assert_eq!(re.replace_all("abc", r"\\").expect("valid"), r"a\c");
+        // The two compose with surrounding literal text and group references.
+        let groups = compile("(a)(b)", "").expect("compile");
+        assert_eq!(groups.replace_all("ab", r"$2\$1").expect("valid"), r"b$1");
+    }
+
+    /// `$N` keeps the `regex` crate's in-range behaviour (`$1` still expands)
+    /// but gains F&O's out-of-range rule: `$0` is the whole match, `S < N <= 9`
+    /// is empty, and `N > S` with `N > 9` peels the last digit off as literal
+    /// text.
+    #[test]
+    fn replace_group_references_follow_fn_replace() {
+        let re = compile("(a)(b)(c)", "").expect("compile");
+        assert_eq!(re.replace_all("abc", "$3$2$1").expect("valid"), "cba");
+        assert_eq!(re.replace_all("abc", "$0").expect("valid"), "abc");
+        // S = 3, so `$5` is in (S, 9] and substitutes the empty string.
+        assert_eq!(re.replace_all("abc", "x$5y").expect("valid"), "xy");
+        // The spec's worked example, here with S = 3: `$23` peels "3" off,
+        // leaving `$2`, so the result is group 2 followed by a literal "3".
+        assert_eq!(re.replace_all("abc", "$23").expect("valid"), "b3");
+    }
+
+    /// A malformed replacement is F&O §5.6.2 [err:FORX0004], not a literal
+    /// substitution — a `$` with no digit and a `\` that is neither escape.
+    #[test]
+    fn replace_malformed_replacement_is_forx0004() {
+        let re = compile("b", "").expect("compile");
+        assert!(matches!(
+            re.replace_all("abc", "$x"),
+            Err(ReplacementError::DollarWithoutGroup { .. })
+        ));
+        assert!(matches!(
+            re.replace_all("abc", "$"),
+            Err(ReplacementError::DollarWithoutGroup { .. })
+        ));
+        assert!(matches!(
+            re.replace_all("abc", r"\n"),
+            Err(ReplacementError::UnescapedBackslash { .. })
+        ));
+    }
+
+    /// Under `q` the replacement is used as is (F&O §5.6.2), so the XPath
+    /// escapes are NOT interpreted and [err:FORX0004] does not apply.
+    #[test]
+    fn replace_under_q_is_verbatim_and_never_errors() {
+        let re = compile("a.c", "q").expect("compile");
+        assert_eq!(re.replace_all("xa.cx", r"\$1").expect("q"), r"x\$1x");
+        assert_eq!(re.replace_all("abc", "$x").expect("q"), "abc");
     }
 
     /// The source bound is a refusal at the boundary, naming both numbers so

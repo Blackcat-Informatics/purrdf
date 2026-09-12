@@ -181,3 +181,49 @@ impl From<regex::Error> for XsdRegexError {
         Self::Compile(err)
     }
 }
+
+/// Why [`super::CompiledPattern::replace_all`] rejected an XPath F&O 3.1
+/// §5.6.2 *replacement* string.
+///
+/// This is a distinct type from [`XsdRegexError`] because the two answer
+/// different questions: `XsdRegexError` is a **compile-time** verdict on the
+/// pattern/flags, while this is a **match-time** verdict on the replacement
+/// text that F&O defines as its own small language (`$N`, `\$`, `\\`). F&O
+/// §5.6.2 raises `err:FORX0004` for exactly the two shapes below, and under
+/// the `q` flag no replacement string is ever rejected (it is used as is),
+/// which is why [`CompiledPattern::replace_all`](super::CompiledPattern::replace_all)
+/// never constructs one of these for a `q`-compiled pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplacementError {
+    /// A `\` that is neither the first half of a `\\` pair nor followed by
+    /// `$`, in violation of F&O 3.1 §5.6.2 [err:FORX0004].
+    UnescapedBackslash {
+        /// Byte offset of the offending `\` within the replacement string.
+        offset: usize,
+    },
+    /// A `$` that is not followed by an ASCII digit and is not the `$` of a
+    /// `\$` escape, in violation of F&O 3.1 §5.6.2 [err:FORX0004].
+    DollarWithoutGroup {
+        /// Byte offset of the offending `$` within the replacement string.
+        offset: usize,
+    },
+}
+
+impl fmt::Display for ReplacementError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnescapedBackslash { offset } => write!(
+                f,
+                "invalid replacement string: the backslash at offset {offset} is neither \
+                 part of a `\\\\` pair nor followed by `$` (err:FORX0004)"
+            ),
+            Self::DollarWithoutGroup { offset } => write!(
+                f,
+                "invalid replacement string: the `$` at offset {offset} is not followed \
+                 by a digit and is not escaped as `\\$` (err:FORX0004)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ReplacementError {}

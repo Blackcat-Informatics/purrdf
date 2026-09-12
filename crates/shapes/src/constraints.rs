@@ -1026,15 +1026,33 @@ fn eval_constraint(
             // Compile at most once per Constraint instance (across all focus
             // nodes and value nodes) using the OnceLock cache.  Behaviour is
             // identical to the per-call path: Err ⇒ violation on every value.
-            let compiled: &Result<regex::Regex, String> =
-                compiled.get_or_init(|| build_regex(regex, flags.as_deref()));
+            let compiled = compiled.get_or_init(|| build_regex(regex, flags.as_deref()));
+            // SHACL has no shape-error channel on this path, so a pattern that
+            // does not compile stays a violation (the W3C suite depends on
+            // that). But discarding the compiler's typed error made a BROKEN
+            // SHAPE indistinguishable from bad data; carry its precise message
+            // into every result's `sh:resultMessage` instead.
+            let compile_error = compiled.as_ref().err().map(|error| {
+                format!(
+                    "invalid sh:pattern {regex:?}{}: {error}",
+                    flags
+                        .as_deref()
+                        .map(|f| format!(" with sh:flags {f:?}"))
+                        .unwrap_or_default()
+                )
+            });
+            let violation_message = match (&compile_error, message) {
+                (Some(error), Some(shape_message)) => Some(format!("{shape_message} ({error})")),
+                (Some(error), None) => Some(error.clone()),
+                (None, shape_message) => shape_message.clone(),
+            };
             let mut results = Vec::new();
             let focus = focus_node;
             for value in value_nodes {
                 let violates = match (compiled, value.lexical(ds)) {
                     (Err(_), _) => true,   // bad regex → violation on every value node
                     (Ok(_), None) => true, // blank node → violation
-                    (Ok(re), Some(lex)) => !re.is_match(lex),
+                    (Ok(pattern), Some(lex)) => !pattern.as_regex().is_match(lex),
                 };
                 if violates {
                     results.push(ValidationResult {
@@ -1047,7 +1065,7 @@ fn eval_constraint(
                         ),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
-                        message: message.clone(),
+                        message: violation_message.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
                         result_box_roles: vec![],
@@ -2400,8 +2418,13 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
     None
 }
 
-/// Build a compiled `Regex` from a `sh:pattern` string and optional `sh:flags`
-/// string.
+/// Build a compiled [`CompiledPattern`](purrdf_core::xsd_regex::CompiledPattern)
+/// from a `sh:pattern` string and optional `sh:flags` string.
+///
+/// The typed [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError) is
+/// returned rather than stringified: the caller records it in the validation
+/// report, so a broken shape names its exact defect instead of a bare
+/// `PatternConstraintComponent` violation.
 ///
 /// SHACL §4.5.3 defines `sh:pattern` by the SPARQL `REGEX` function, which SPARQL
 /// 1.1 §17.4.3.14 in turn defines as an invocation of XPath F&O 3.1 `fn:matches` —
@@ -2426,10 +2449,11 @@ fn compare_terms(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
 /// therefore cannot ever execute one, no matter how the source text is
 /// rewritten. That gap is recorded in `docs/CONFORMANCE.md` and pinned by the
 /// first-party corpus under `crates/rdf-core/corpus/xsd-regex/`.
-fn build_regex(pattern: &str, flags: Option<&str>) -> Result<regex::Regex, String> {
+fn build_regex(
+    pattern: &str,
+    flags: Option<&str>,
+) -> Result<purrdf_core::xsd_regex::CompiledPattern, purrdf_core::xsd_regex::XsdRegexError> {
     purrdf_core::xsd_regex::compile(pattern, flags.unwrap_or(""))
-        .map(|compiled| compiled.as_regex().clone())
-        .map_err(|e| e.to_string())
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -3265,6 +3289,69 @@ mod tests {
         assert!(component_iri(&results)[0].contains("Pattern"));
     }
 
+    /// A `sh:pattern` that does not compile is still a violation on every
+    /// value node — SHACL's Core path has no shape-error channel, and the W3C
+    /// suite depends on that behaviour. But the compiler's precise
+    /// [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError) must NOT be
+    /// discarded: it is carried into `sh:resultMessage` so a broken SHAPE is
+    /// distinguishable from bad DATA. Before this, every result said only
+    /// `PatternConstraintComponent` and the reason was lost.
+    #[test]
+    fn malformed_pattern_violates_but_names_the_construct_in_the_message() {
+        // Two value nodes, so both the per-value-node contract and the
+        // report message are exercised.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:code \"v1\", \"v2\" ."
+        ));
+        let cases: &[(&str, Option<&str>, &str)] = &[
+            // A backreference is a permanent, by-design limitation.
+            (r"(a)\1", None, "backreference"),
+            // An invalid flag character.
+            ("^[A-Z]+$", Some("z"), "'z'"),
+            // An unterminated character class.
+            ("[abc", None, "malformed"),
+            // An inline-flag group, which the XSD grammar does not define.
+            ("(?i)x", None, "malformed"),
+            // A Unicode script name, where the dialect admits only a block.
+            (r"\p{Greek}", None, "Greek"),
+        ];
+        for (regex, flags, expected) in cases {
+            let shape = prop_shape(
+                "S",
+                &format!("{EX}code"),
+                vec![Constraint::Pattern {
+                    regex: (*regex).to_owned(),
+                    flags: (*flags).map(str::to_owned),
+                    compiled: Arc::new(OnceLock::new()),
+                }],
+            );
+            let results = validate_shape(&store, &ex("a"), &shape);
+            assert_eq!(
+                results.len(),
+                2,
+                "{regex:?} / {flags:?} must violate on every value node"
+            );
+            assert!(
+                component_iri(&results)[0].contains("Pattern"),
+                "{regex:?} must still report the Pattern constraint component"
+            );
+            for result in &results {
+                let message = result
+                    .message
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{regex:?} / {flags:?} must carry a message"));
+                assert!(
+                    message.contains("invalid sh:pattern"),
+                    "{regex:?} / {flags:?}: message {message:?} must mark the SHAPE as invalid"
+                );
+                assert!(
+                    message.contains(expected),
+                    "{regex:?} / {flags:?}: message {message:?} must name {expected:?}"
+                );
+            }
+        }
+    }
+
     // ── build_regex ────────────────────────────────────────────────────────────
 
     #[test]
@@ -3272,9 +3359,12 @@ mod tests {
         // 'q' (XPath literal-match flag) is a valid, supported flag: the
         // pattern is matched verbatim rather than rejected.
         let re = build_regex("a.c", Some("q")).expect("'q' flag should be accepted");
-        assert!(re.is_match("xa.cx"), "under 'q', '.' is a literal dot");
         assert!(
-            !re.is_match("abc"),
+            re.as_regex().is_match("xa.cx"),
+            "under 'q', '.' is a literal dot"
+        );
+        assert!(
+            !re.as_regex().is_match("abc"),
             "under 'q', '.' must not act as a wildcard"
         );
     }
@@ -3290,7 +3380,7 @@ mod tests {
         // Verify the error message identifies the offending character.
         let err = build_regex("foo", Some("z")).unwrap_err();
         assert!(
-            err.contains('z'),
+            err.to_string().contains('z'),
             "error message should mention the rejected flag character"
         );
     }
@@ -3330,6 +3420,7 @@ mod tests {
         let matches = |input: &str, pattern: &str, flags: &str| {
             build_regex(pattern, Some(flags))
                 .expect("pattern compiles")
+                .as_regex()
                 .is_match(input)
         };
 
@@ -3359,6 +3450,7 @@ mod tests {
         let matches = |input: &str, pattern: &str, flags: &str| {
             build_regex(pattern, Some(flags))
                 .expect("pattern compiles")
+                .as_regex()
                 .is_match(input)
         };
 

@@ -347,7 +347,7 @@ mod tests {
         ] {
             let new = super::super::compile(pattern, "i").expect("compile under i");
             let old = old_i_regex(pattern, false);
-            assert_same_scalar_language(&new, &old, pattern);
+            assert_same_scalar_language(new.as_regex(), &old, pattern);
         }
     }
 }
