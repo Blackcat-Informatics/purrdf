@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The construct-by-construct XSD/XPath `regExp` -> `regex`-crate translator,
-//! plus the `x`-flag whitespace stripper that runs ahead of it (see
-//! [`super`]'s module doc for the full construct table this implements).
+//! The construct-by-construct XSD/XPath `regExp` -> `regex`-crate translator
+//! (see [`super`]'s module doc for the full construct table this implements).
 //!
 //! [`translate`] is a single left-to-right scan over the pattern's `char`s
 //! that tracks character-class nesting depth (`[`...`]`, which nests through
@@ -21,148 +20,12 @@
 //! 1.13: `Regex::new("[a[b-c]d]")`, `Regex::new("[[^\\u{370}-\\u{3ff}]a]")`
 //! and similar nested-negation forms all compile and match as expected).
 
-use std::fmt::Write as _;
-
-use crate::blank_label::{PN_CHARS_BASE_RANGES, PN_CHARS_EXTRA_RANGES};
-
 use super::blocks;
+use super::classes::{
+    NOT_SPACE_CLASS, NOT_WORD_CLASS, SPACE_CLASS, WORD_CLASS, is_surrogate_range,
+    name_char_class_body, name_start_class_body, push_hex_range,
+};
 use super::error::XsdRegexError;
-
-/// Apply the XPath `x` flag to a `sh:pattern`/`REGEX`/`PATTERN` source,
-/// textually, before the pattern is translated or parsed.
-///
-/// SHACL §4.5.3 defines `sh:pattern` by the SPARQL `REGEX` function, and
-/// SPARQL 1.1 §17.4.3.14 defines `REGEX` as an invocation of XPath
-/// `fn:matches`, so the `x` flag is XPath's. *XPath and XQuery Functions and
-/// Operators 3.1* §5.6.2 defines it in one sentence:
-///
-/// > `x`: If present, whitespace characters (`#x9`, `#xA`, `#xD` and `#x20`)
-/// > in the regular expression are removed prior to matching with one
-/// > exception: whitespace characters within character class expressions
-/// > (`charClassExpr`) are not removed. This flag can be used, for example,
-/// > to break up long regular expressions into readable lines.
-///
-/// and pins it with four examples, every one of which is tested against in
-/// [`tests::xpath_x_flag_matches_the_specifications_examples`]:
-///
-/// > `fn:matches("helloworld", "hello world", "x")` returns `true()`
-/// >
-/// > `fn:matches("helloworld", "hello[ ]world", "x")` returns `false()`
-/// >
-/// > `fn:matches("hello world", "hello\ sworld", "x")` returns `true()`
-/// >
-/// > `fn:matches("hello world", "hello world", "x")` returns `false()`
-///
-/// # Why the removal is done here and not by `RegexBuilder::ignore_whitespace`
-///
-/// Rust's verbose mode is a different production wearing the same letter,
-/// and it is wrong in three ways at once:
-///
-/// * it removes every code point with the Unicode `White_Space` property —
-///   twenty-six, including U+00A0 NO-BREAK SPACE and U+3000 — where XPath
-///   names exactly four, so a pattern matching a literal IDEOGRAPHIC SPACE
-///   silently stops matching it;
-/// * it treats `#` as a comment introducer running to end of line, so
-///   `"a#b c"` compiles to `a` where XPath compiles it to `a#bc`. XPath regex
-///   has no comment syntax at all;
-/// * it removes whitespace **inside** character classes, which is the one
-///   case XPath explicitly exempts — the specification's second example
-///   exists for exactly this, and `ignore_whitespace` gets it backwards.
-///
-/// # The backslash does not protect whitespace, and the third example is why
-///
-/// Removal is textual and happens *prior to parsing*, so a backslash does
-/// not escape a following space out of it: the source `hello\ sworld` has
-/// its space removed, yielding `hello\sworld`, and the specification's third
-/// example requires that to match `"hello world"`. The backslash is still
-/// tracked here, because it decides whether a `[` or `]` **delimits** a
-/// character class — `\[` opens nothing and `\]` closes nothing — and
-/// getting that wrong would move the exempt region. Note that a removed
-/// whitespace character does not consume the pending escape: it re-binds to
-/// whatever follows, which is what turns `\ s` into `\s`.
-///
-/// `charClassExpr` nests, through `charClassSub` (`[a-z-[aeiou]]`), so the
-/// exempt region is tracked by depth rather than by a single flag. An
-/// unterminated `[` leaves the rest of the pattern exempt and then fails to
-/// compile, which is a named error rather than a silently different
-/// pattern.
-pub(super) fn strip_x_flag_whitespace(pattern: &str) -> String {
-    let mut out = String::with_capacity(pattern.len());
-    let mut class_depth = 0_usize;
-    let mut escaped = false;
-    for c in pattern.chars() {
-        if escaped {
-            // Inside a character class nothing is removed; outside one, even
-            // an escaped whitespace character goes, and the escape carries
-            // over to the next character (`\ s` becomes `\s`).
-            if class_depth == 0 && purrdf_iri::terminals::is_ws_char(c) {
-                continue;
-            }
-            out.push(c);
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' => {
-                out.push(c);
-                escaped = true;
-            }
-            '[' => {
-                class_depth += 1;
-                out.push(c);
-            }
-            ']' if class_depth > 0 => {
-                class_depth -= 1;
-                out.push(c);
-            }
-            _ if class_depth == 0 && purrdf_iri::terminals::is_ws_char(c) => {}
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Push a single inclusive codepoint range as a `regex`-crate bracket-class
-/// member: `\u{lo}` for a one-codepoint range, `\u{lo}-\u{hi}` otherwise.
-fn push_hex_range(out: &mut String, lo: u32, hi: u32) {
-    if lo == hi {
-        write!(out, "\\u{{{lo:x}}}").expect("writing to a String cannot fail");
-    } else {
-        write!(out, "\\u{{{lo:x}}}-\\u{{{hi:x}}}").expect("writing to a String cannot fail");
-    }
-}
-
-/// Push every range in `ranges` as bracket-class members (see
-/// [`push_hex_range`]).
-fn push_ranges(out: &mut String, ranges: &[(u32, u32)]) {
-    for &(lo, hi) in ranges {
-        push_hex_range(out, lo, hi);
-    }
-}
-
-/// The body (without enclosing `[`/`]`) of the `\i`/`\I` bracket expression:
-/// XML 1.0 `NameStartChar`, minus `':'` and `'_'` per
-/// [`PN_CHARS_BASE_RANGES`]'s own definition, with both of those two
-/// characters added back explicitly (XSD's `\i` is `NameStartChar` in full,
-/// unlike Turtle's `PN_CHARS_BASE`).
-fn name_start_class_body() -> String {
-    let mut body = String::new();
-    push_ranges(&mut body, PN_CHARS_BASE_RANGES);
-    body.push_str(":_");
-    body
-}
-
-/// The body (without enclosing `[`/`]`) of the `\c`/`\C` bracket expression:
-/// [`name_start_class_body`]'s set plus XML 1.0 `NameChar`'s extra ranges
-/// (`PN_CHARS_EXTRA_RANGES`) plus `'-'`, `'.'`, and `[0-9]`.
-fn name_char_class_body() -> String {
-    let mut body = name_start_class_body();
-    push_ranges(&mut body, PN_CHARS_EXTRA_RANGES);
-    // `-` must be escaped inside a class (it would otherwise open a range
-    // with whatever precedes it); `.` is always literal inside a class.
-    body.push_str("\\-.0-9");
-    body
-}
 
 /// Translate an XSD/XPath `regExp` pattern body into `regex`-crate syntax.
 ///
@@ -172,10 +35,10 @@ fn name_char_class_body() -> String {
 /// rewritten per XPath F&O 3.1 §5.6.2 (excludes both `#xA` and `#xD`, not
 /// only `#xA` as Rust's own default does).
 ///
-/// Must be called AFTER [`strip_x_flag_whitespace`] when the `x` flag is
-/// set — the two operate on the same raw pattern text, and `x`'s removal
-/// has to happen first (its whitespace-exemption tracking is textual, not
-/// aware of any of the rewrites below).
+/// Must be called AFTER [`super::xflag::strip_x_flag_whitespace`] when the
+/// `x` flag is set — the two operate on the same raw pattern text, and `x`'s
+/// removal has to happen first (its whitespace-exemption tracking is
+/// textual, not aware of any of the rewrites below).
 pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegexError> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len() + 16);
@@ -401,27 +264,22 @@ fn translate_escape(
             out.push(']');
             *i += 1;
         }
-        // XSD `\s ::= [#x20\t\n\r]`, exactly 4 codepoints — Rust's own `\s`
-        // is the full Unicode `White_Space` property (26 codepoints
-        // including U+00A0/U+3000), which is too wide (§3 of the governing
-        // plan).
+        // XSD `\s ::= [#x20\t\n\r]`, exactly 4 codepoints — see [`SPACE_CLASS`].
         's' => {
-            out.push_str("[\\u{9}\\u{a}\\u{d}\\u{20}]");
+            out.push_str(SPACE_CLASS);
             *i += 1;
         }
         'S' => {
-            out.push_str("[^\\u{9}\\u{a}\\u{d}\\u{20}]");
+            out.push_str(NOT_SPACE_CLASS);
             *i += 1;
         }
-        // XSD `\w ::= [^\p{P}\p{Z}\p{C}]` — Rust's own `\w` is Perl's
-        // alphanumeric-plus-underscore-plus-combining-marks class, a
-        // different (and differently-shaped) set.
+        // XSD `\w ::= [^\p{P}\p{Z}\p{C}]` — see [`WORD_CLASS`].
         'w' => {
-            out.push_str("[^\\p{P}\\p{Z}\\p{C}]");
+            out.push_str(WORD_CLASS);
             *i += 1;
         }
         'W' => {
-            out.push_str("[\\p{P}\\p{Z}\\p{C}]");
+            out.push_str(NOT_WORD_CLASS);
             *i += 1;
         }
         // `\d`/`\D` already default to `\p{Nd}`/its complement in
@@ -498,17 +356,6 @@ fn translate_escape(
         }
     }
     Ok(())
-}
-
-/// Whether `lo..=hi` lies wholly inside the UTF-16 surrogate range
-/// `U+D800..=U+DFFF`, whose code points are not Unicode scalar values.
-///
-/// Tested as a range rather than by block name so it stays correct if a future
-/// Unicode revision renames or re-partitions the three surrogate blocks: the
-/// property that matters is where the code points are, not what they are
-/// called.
-fn is_surrogate_range(lo: u32, hi: u32) -> bool {
-    lo >= 0xD800 && hi <= 0xDFFF
 }
 
 /// Handle `\p{...}`/`\P{...}` starting just past the `p`/`P`
@@ -689,7 +536,6 @@ pub(super) fn ecma_262_divergences(pattern: &str) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blank_label::{is_pn_chars, is_pn_chars_u};
 
     fn translated_regex(pattern: &str, dot_all: bool) -> regex::Regex {
         let source = translate(pattern, dot_all).expect("translate");
@@ -772,38 +618,6 @@ mod tests {
         }
     }
 
-    /// The three surrogate blocks hold no Unicode scalar values, so no `&str`
-    /// subject can contain one. Emitting the range literally made the engine
-    /// refuse `\u{d800}` with a message naming neither the block nor the
-    /// reason; the exact answer is the empty set (and its complement).
-    #[test]
-    fn surrogate_blocks_are_the_empty_set_not_a_parse_error() {
-        assert_eq!(
-            translate(r"\p{IsHighSurrogates}", false).expect("translate"),
-            "[^\\s\\S]"
-        );
-        assert_eq!(
-            translate(r"\P{IsLowSurrogates}", false).expect("translate"),
-            "[\\s\\S]"
-        );
-        let empty = translated_regex(r"^\p{IsHighSurrogates}$", false);
-        assert!(!empty.is_match("a"));
-        assert!(!empty.is_match("\u{10000}"));
-        let all = translated_regex(r"^\P{IsHighSurrogates}$", false);
-        assert!(all.is_match("a"));
-        assert!(all.is_match("\n"), "the complement is every scalar value");
-
-        // Composes by union inside an enclosing class like any other block.
-        let union = translated_regex(r"^[\p{IsHighSurrogates}\p{IsBasicLatin}]+$", false);
-        assert!(union.is_match("abc"));
-        assert!(!union.is_match("\u{3b1}"));
-
-        // A neighbouring non-surrogate block is unaffected by the carve-out.
-        let latin = translated_regex(r"^\p{IsBasicLatin}$", false);
-        assert!(latin.is_match("A"));
-        assert!(!latin.is_match("\u{e9}"));
-    }
-
     /// `\0` is neither a back-reference (XPath F&O §5.6.1.4's production
     /// starts at `\1`) nor a `SingleCharEsc` (XML Schema Appendix G
     /// enumerates those). Letting it reach the engine produced
@@ -857,63 +671,6 @@ mod tests {
         // caller applies `dot_matches_new_line` at the builder instead.
         let source = translate("^a.b$", true).expect("translate");
         assert_eq!(source, "^a.b$");
-    }
-
-    #[test]
-    fn i_and_ii_escapes_standalone() {
-        let re = translated_regex(r"^\i+$", false);
-        assert!(re.is_match("abc"));
-        assert!(re.is_match(":a_b"));
-        assert!(!re.is_match("1abc"));
-        let re_neg = translated_regex(r"^\I$", false);
-        assert!(re_neg.is_match("1"));
-        assert!(!re_neg.is_match("a"));
-    }
-
-    #[test]
-    fn i_escape_splices_inside_an_open_class() {
-        let re = translated_regex(r"^[\i0-9]+$", false);
-        assert!(re.is_match("a1:_9"));
-        assert!(!re.is_match("a!b"));
-    }
-
-    #[test]
-    fn c_and_cc_escapes() {
-        let re = translated_regex(r"^\c+$", false);
-        assert!(re.is_match("a-1._:"));
-        let re_neg = translated_regex(r"^\C$", false);
-        assert!(re_neg.is_match("!"));
-        assert!(!re_neg.is_match("a"));
-    }
-
-    #[test]
-    fn s_escape_is_the_four_codepoint_class_not_unicode_whitespace() {
-        let re = translated_regex(r"^\s$", false);
-        assert!(re.is_match(" "));
-        assert!(re.is_match("\t"));
-        assert!(re.is_match("\n"));
-        assert!(re.is_match("\r"));
-        assert!(!re.is_match("\u{A0}")); // NBSP: Unicode whitespace, not XSD's
-        assert!(!re.is_match("\u{3000}")); // IDEOGRAPHIC SPACE, ditto
-        let re_neg = translated_regex(r"^\S$", false);
-        assert!(re_neg.is_match("a"));
-        assert!(!re_neg.is_match(" "));
-    }
-
-    #[test]
-    fn w_escape_excludes_punctuation_separator_other() {
-        let re = translated_regex(r"^\w$", false);
-        assert!(re.is_match("a"));
-        assert!(re.is_match("1"));
-        // `_` is Unicode category Pc (Connector Punctuation) -- XSD's
-        // `[^\p{P}\p{Z}\p{C}]` formula excludes it, unlike Perl's `\w`.
-        assert!(!re.is_match("_"));
-        assert!(!re.is_match(" "));
-        assert!(!re.is_match("."));
-        let re_neg = translated_regex(r"^\W$", false);
-        assert!(re_neg.is_match("_"));
-        assert!(re_neg.is_match("."));
-        assert!(!re_neg.is_match("a"));
     }
 
     #[test]
@@ -1040,62 +797,5 @@ mod tests {
         let re = translated_regex(r"^(\i+)\s(\c*)\p{IsBasicLatin}$", false);
         // 2 explicit groups in the source + the implicit whole-match group.
         assert_eq!(re.captures_len(), 3);
-    }
-
-    /// `x`'s exact four specification examples (XPath F&O 3.1 §5.6.2).
-    fn compiles(source: &str) -> regex::Regex {
-        regex::Regex::new(source).unwrap_or_else(|e| panic!("compile {source:?}: {e}"))
-    }
-
-    #[test]
-    fn xpath_x_flag_matches_the_specifications_examples() {
-        let no_space = compiles(&strip_x_flag_whitespace("hello world"));
-        assert!(no_space.is_match("helloworld"));
-        assert!(!no_space.is_match("hello world"));
-
-        let bracket_space = compiles(&strip_x_flag_whitespace("hello[ ]world"));
-        assert!(!bracket_space.is_match("helloworld"));
-
-        let escaped_space = compiles(&strip_x_flag_whitespace("hello\\ sworld"));
-        assert!(escaped_space.is_match("hello world"));
-    }
-
-    /// `\i` must match EXACTLY the set [`is_pn_chars_u`] accepts, plus `':'`
-    /// (XSD's `\i` is XML 1.0 `NameStartChar` in full; `PN_CHARS_U` is
-    /// `NameStartChar` minus `':'`, which this test folds back in) and `\c`
-    /// must match exactly the set [`is_pn_chars`] accepts, plus `':'` and
-    /// `'.'` (XSD's `\c` is XML 1.0 `NameChar` in full; `PN_CHARS` omits
-    /// both `':'` -- for the same reason as `PN_CHARS_U` -- and `'.'`,
-    /// which Turtle handles separately in `PN_LOCAL` because an unescaped
-    /// `.` cannot end a Turtle name but XML's `NameChar` places no such
-    /// restriction, see [`crate::blank_label::is_valid_ncname`]'s own
-    /// `ch == '.'` fold-in), for every scalar value in the Unicode
-    /// codespace. A full sweep over all ~1.1M scalar values is cheap for a
-    /// compiled DFA; boundary codepoints of every range in
-    /// `PN_CHARS_BASE_RANGES`/`PN_CHARS_EXTRA_RANGES` are exercised by
-    /// construction since the sweep is exhaustive, not sampled.
-    #[test]
-    fn i_and_c_escapes_match_blank_label_tables_exactly() {
-        let i_re = translated_regex(r"^\i$", false);
-        let c_re = translated_regex(r"^\c$", false);
-        for cp in 0_u32..=0x0010_FFFF {
-            if (0xD800..=0xDFFF).contains(&cp) {
-                continue; // surrogates: not representable as a `char`
-            }
-            let c = char::from_u32(cp).expect("valid scalar value");
-            let s = c.to_string();
-            let expected_i = is_pn_chars_u(c) || c == ':';
-            assert_eq!(
-                i_re.is_match(&s),
-                expected_i,
-                "\\i mismatch at U+{cp:04X} {c:?}"
-            );
-            let expected_c = is_pn_chars(c) || c == ':' || c == '.';
-            assert_eq!(
-                c_re.is_match(&s),
-                expected_c,
-                "\\c mismatch at U+{cp:04X} {c:?}"
-            );
-        }
     }
 }

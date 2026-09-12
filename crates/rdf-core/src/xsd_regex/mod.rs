@@ -50,8 +50,10 @@
 //! change this is caught, not silently trusted).
 
 mod blocks;
+mod classes;
 mod error;
 mod translate;
+mod xflag;
 
 pub use error::XsdRegexError;
 
@@ -152,9 +154,9 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
     // The `x` removal is a rewrite of the pattern SOURCE and must happen
     // before translation (and before the builder ever sees the pattern) —
     // `RegexBuilder::ignore_whitespace` is never used, it implements a
-    // wider, different rule (see `translate::strip_x_flag_whitespace`'s doc).
+    // wider, different rule (see `xflag::strip_x_flag_whitespace`'s doc).
     let source = if strip_whitespace {
-        translate::strip_x_flag_whitespace(pattern)
+        xflag::strip_x_flag_whitespace(pattern)
     } else {
         pattern.to_owned()
     };
