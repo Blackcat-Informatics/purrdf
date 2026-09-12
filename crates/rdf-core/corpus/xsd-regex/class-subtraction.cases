@@ -23,6 +23,24 @@
 ^[^0-9-[a-z]]$	-	nomatch	a
 ^[^0-9-[a-z]]$	-	nomatch	5
 
+# A subtraction operand is the LAST element of its charGroup:
+#   charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?
+# so once its `]` closes, only the enclosing `]` may follow. A further
+# member, a second `-[`, or a range `-` there is malformed XSD that Rust's
+# left-to-right class-set syntax would silently accept as a different
+# language (a member union, or a second difference), so each is a named
+# error rather than a compiled pattern.
+[a-[b]c]	-	error	follows a character-class subtraction operand
+[a-[b]-[c]]	-	error	follows a character-class subtraction operand
+[a-[b]+]	-	error	follows a character-class subtraction operand
+[a-[b]-z]	-	error	follows a character-class subtraction operand
+[^a-[b]c]	-	error	follows a character-class subtraction operand
+
+# The single, group-final subtraction still works, with its operand at the
+# very end of the group.
+^[a-[b]]$	-	match	a
+^[a-[b]]$	-	nomatch	b
+
 # A `-` that does NOT open a subtraction keeps its ordinary meanings:
 # a range separator, or a literal at either end of a group.
 ^[a-z]+$	-	match	abc
@@ -36,8 +54,10 @@
 ^[a-z-[\s]]+$	-	match	abc
 
 # An unterminated class is a named error, not a silently different
-# pattern.
-^[a-z-[aeiou]$	-	error	unterminated
+# pattern. The first pattern also has a character after the subtraction
+# operand, so the earlier grammar violation -- content after the operand --
+# is the one named, before the missing outer `]` can be seen.
+^[a-z-[aeiou]$	-	error	follows a character-class subtraction operand
 ^[a-z$	-	error	unterminated
 
 # `&` and `~` are ordinary class members (XmlCharIncDash ::= [^\#x5B#x5D]).

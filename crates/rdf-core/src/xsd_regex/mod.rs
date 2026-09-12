@@ -70,10 +70,13 @@
 //!   `\p`/`\P`.
 //! * **Class-interior Rust-isms** ([`XsdRegexError::UnescapedClassOpen`],
 //!   [`XsdRegexError::UnescapedClassClose`],
-//!   [`XsdRegexError::LiteralClassCloseAtHead`]) — a nested `[` that is not the
-//!   operand of a `-[` subtraction, a `]` at the head of a class, and an
-//!   unescaped `[`/`]` where the grammar has no production. `&`/`~` are
-//!   ordinary class members here, not the `regex` crate's set operators.
+//!   [`XsdRegexError::LiteralClassCloseAtHead`],
+//!   [`XsdRegexError::ContentAfterClassSubtraction`]) — a nested `[` that is
+//!   not the operand of a `-[` subtraction, a `]` at the head of a class, an
+//!   unescaped `[`/`]` where the grammar has no production, and any content
+//!   after a subtraction operand has closed (the operand is the group's last
+//!   element). `&`/`~` are ordinary class members here, not the `regex`
+//!   crate's set operators.
 //! * **Unicode scripts and other property keys**
 //!   ([`XsdRegexError::UnknownCategory`]) — `\p{…}` admits only Appendix G's
 //!   closed general-category list and `Is`-prefixed Unicode block names

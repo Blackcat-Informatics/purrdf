@@ -93,13 +93,35 @@ struct ClassFrame {
     /// Whether this level opened as `[^…` and therefore had its negation
     /// emitted on an inner, wrapped group.
     negated: bool,
-    /// Whether a `-[` subtraction has already been emitted at this level
-    /// (which also closed the inner negated group, if there was one).
-    subtracted: bool,
     /// Whether any member of this level has been consumed yet. XSD's
     /// `posCharGroup ::= ( charRange | charClassEsc )+` is non-empty, so a `]`
     /// while this is clear is the literal-first-member Rust-ism, not a close.
     member_seen: bool,
+    /// Whether this frame was opened as the right-hand `charClassExpr` operand
+    /// of a `-[` subtraction. When such a frame closes, the frame beneath it
+    /// advances [`Self::subtraction`] to [`SubtractionState::OperandClosed`].
+    is_subtraction_operand: bool,
+    /// How far this level has moved through XSD's
+    /// `charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?`.
+    subtraction: SubtractionState,
+}
+
+/// The subtraction half of a [`ClassFrame`]'s state, kept as one value rather
+/// than a fist of booleans because the three states are ordered and mutually
+/// exclusive: the operand of a `-[` is optional and, when present, is the
+/// group's **last** element.
+#[derive(PartialEq, Eq)]
+enum SubtractionState {
+    /// No `-[` subtraction at this level.
+    None,
+    /// A `-[` was seen and its operand `charClassExpr` is still open on its
+    /// own frame. The negation wrap (if any) was already closed by the `-[`
+    /// emitter, and no further member of this level can be scanned because
+    /// this frame is not the top of the stack.
+    OperandOpen,
+    /// The operand closed. Only the enclosing `]` may follow; every other
+    /// token is refused by name in [`Scanner::scan_one`].
+    OperandClosed,
 }
 
 /// Capturing-group bookkeeping, kept solely so a back-reference can be
@@ -339,6 +361,23 @@ impl<'a> Scanner<'a> {
 
     fn scan_one(&mut self) -> Result<Token, XsdRegexError> {
         self.negated_wrap_close = false;
+        // A `-[…]` subtraction operand is the LAST element of its charGroup
+        // (`charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?`),
+        // so once it has closed the only legal continuation is the enclosing
+        // `]`. Every other token here -- a further member, a range `-`, a
+        // second `-[` -- is content the grammar does not allow after the
+        // operand, and is refused by name rather than left to the left-to-right
+        // class-set syntax of the engine, which would read it as a member
+        // union or a second difference: a different language. This is the
+        // module's single cursor, so the decision lives with the frame stack.
+        if self.chars[self.pos] != ']'
+            && let Some(frame) = self.classes.last()
+            && frame.subtraction == SubtractionState::OperandClosed
+        {
+            let found = self.chars[self.pos];
+            self.pos += 1;
+            return Err(XsdRegexError::ContentAfterClassSubtraction { found });
+        }
         match self.chars[self.pos] {
             '\\' => self.scan_escape(),
             '[' => {
@@ -370,8 +409,9 @@ impl<'a> Scanner<'a> {
                 self.pos += if negated { 2 } else { 1 };
                 self.classes.push(ClassFrame {
                     negated,
-                    subtracted: false,
                     member_seen: false,
+                    is_subtraction_operand: subtraction_operand,
+                    subtraction: SubtractionState::None,
                 });
                 Ok(Token::ClassOpen { negated })
             }
@@ -399,7 +439,17 @@ impl<'a> Scanner<'a> {
                     return Err(XsdRegexError::LiteralClassCloseAtHead);
                 }
                 let frame = self.classes.pop().expect("non-empty checked above");
-                self.negated_wrap_close = frame.negated && !frame.subtracted;
+                self.negated_wrap_close =
+                    frame.negated && frame.subtraction == SubtractionState::None;
+                // A closed operand makes its parent's charGroup complete:
+                // `charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?`
+                // has the subtraction last, so the parent now admits only its
+                // own `]` (see the guard at the top of `scan_one`).
+                if frame.is_subtraction_operand
+                    && let Some(parent) = self.classes.last_mut()
+                {
+                    parent.subtraction = SubtractionState::OperandClosed;
+                }
                 self.pos += 1;
                 Ok(Token::ClassClose)
             }
@@ -421,8 +471,9 @@ impl<'a> Scanner<'a> {
                     .classes
                     .last_mut()
                     .expect("non-empty checked by the guard");
-                self.negated_wrap_close = frame.negated && !frame.subtracted;
-                frame.subtracted = true;
+                self.negated_wrap_close =
+                    frame.negated && frame.subtraction == SubtractionState::None;
+                frame.subtraction = SubtractionState::OperandOpen;
                 self.subtraction_operand = true;
                 self.pos += 1;
                 Ok(Token::Subtract)
@@ -726,6 +777,40 @@ mod tests {
                 ClassClose,
             ]
         );
+    }
+
+    /// A `-[…]` subtraction operand is the LAST element of its `charGroup`
+    /// (`charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?`),
+    /// so nothing may follow its closing `]` but the enclosing `]`. The
+    /// scanner used to pop only the operand's own frame and let the parent
+    /// accept a further member or a second `-[`, which `emit` then translated
+    /// into `regex`'s left-to-right class-set syntax -- a different language.
+    #[test]
+    fn content_after_a_subtraction_operand_is_refused() {
+        for pattern in [
+            "[a-[b]c]",
+            "[a-[b]-[c]]",
+            "[a-[b]+]",
+            "[a-[b]-z]",
+            "[^a-[b]c]",
+        ] {
+            let error = first_error(pattern);
+            assert!(
+                matches!(error, XsdRegexError::ContentAfterClassSubtraction { .. }),
+                "{pattern:?} must be refused as content after a subtraction operand, got {error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains("follows a character-class subtraction operand"),
+                "{pattern:?}: the message must name the construct: {message}"
+            );
+        }
+        // The legitimate forms still tokenize: a single subtraction whose
+        // operand is the group's last element, a subtraction nested inside the
+        // operand, and the negated group the emitter wraps.
+        for pattern in ["[a-[b]]", "[a-z-[a-c-[b]]]", "[^0-9-[a-z]]"] {
+            assert!(!tokens(pattern).is_empty(), "{pattern:?} must tokenize");
+        }
     }
 
     /// The class interior is a recognizer of the XSD grammar, not a pass

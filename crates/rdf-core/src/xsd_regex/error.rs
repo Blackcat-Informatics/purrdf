@@ -63,6 +63,18 @@ pub enum XsdRegexError {
     /// `charGroup` requires at least one member, so a literal `]` must be
     /// escaped as `\]`.
     LiteralClassCloseAtHead,
+    /// Content inside a character class after a `-[…]` subtraction operand has
+    /// already closed. XML Schema Part 2 Appendix G's
+    /// `charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?`
+    /// makes the subtraction the **last** element of the group, so only the
+    /// enclosing `]` may follow it: not a further member, not a range `-`, and
+    /// not a second `-[`. Carries the offending character, since the exact
+    /// token cannot be known without scanning it and the construct is named by
+    /// its position rather than its spelling.
+    ContentAfterClassSubtraction {
+        /// The character that followed the closed subtraction operand.
+        found: char,
+    },
     /// A `(?…` construct other than the non-capturing group `(?:`. XML Schema
     /// Part 2 Appendix G defines no inline-flag, lookaround, comment or
     /// named-group syntax. Carries the exact spelling found (`"(?i"`,
@@ -209,6 +221,14 @@ impl fmt::Display for XsdRegexError {
                  charGroup requires at least one member, and a literal ']' must be escaped \
                  as '\\]'"
             ),
+            Self::ContentAfterClassSubtraction { found } => write!(
+                f,
+                "malformed pattern: {found:?} follows a character-class subtraction operand -- \
+                 XML Schema Part 2 Appendix G's charGroup ::= (posCharGroup | negCharGroup) \
+                 ('-' charClassExpr)? makes the subtraction the LAST element of the group, so \
+                 only the enclosing ']' may follow it; there is at most one subtraction per \
+                 group and no trailing members"
+            ),
             Self::UnsupportedGroupConstruct { found } => write!(
                 f,
                 "malformed pattern: {found} is not a construct of the XSD/XPath \
@@ -275,6 +295,7 @@ impl std::error::Error for XsdRegexError {
             | Self::UnescapedClassOpen
             | Self::UnescapedClassClose
             | Self::LiteralClassCloseAtHead
+            | Self::ContentAfterClassSubtraction { .. }
             | Self::UnsupportedGroupConstruct { .. }
             | Self::UnsupportedNulEscape
             | Self::UnsupportedEscape { .. }
