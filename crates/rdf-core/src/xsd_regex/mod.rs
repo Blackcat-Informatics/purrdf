@@ -30,7 +30,7 @@
 //!
 //! # Everything else: translated, not subsumed
 //!
-//! Every other construct in the grammar (see `translate`'s module doc for
+//! Every other construct in the grammar (see `emit`'s module doc for
 //! the full construct-by-construct table) is translated into `regex`-crate
 //! syntax at compile time: character-class subtraction, the `\i \I \c \C`
 //! XML-name multi-character escapes, the `\s \S \w \W` classes (XSD defines
@@ -51,6 +51,7 @@
 
 mod blocks;
 mod classes;
+mod emit;
 mod error;
 mod scan;
 mod translate;
@@ -161,7 +162,7 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
     } else {
         pattern.to_owned()
     };
-    let translated = translate::translate(&source, dot_all)?;
+    let translated = emit::translate(&source, dot_all)?;
     let regex = regex::RegexBuilder::new(&translated)
         .case_insensitive(case_insensitive)
         .dot_matches_new_line(dot_all)

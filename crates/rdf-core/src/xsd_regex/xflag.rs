@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The `x`-flag whitespace stripper that runs ahead of [`super::translate`]
+//! The `x`-flag whitespace stripper that runs ahead of [`super::emit`]
 //! (see [`super`]'s module doc for where it sits in the pipeline).
 
 use super::scan::Scanner;

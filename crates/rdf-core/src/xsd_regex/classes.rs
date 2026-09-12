@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The character-class bodies that [`super::translate`] splices into emitted
+//! The character-class bodies that [`super::emit`] splices into emitted
 //! `regex`-crate source: the `\i`/`\I`/`\c`/`\C` XML-name classes, the
 //! `\s`/`\S`/`\w`/`\W` classes, and the surrogate-range test that decides how
 //! `\p{Is…}` block escapes naming the three non-scalar surrogate blocks are
@@ -83,7 +83,7 @@ pub(super) fn is_surrogate_range(lo: u32, hi: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::translate::translate;
+    use super::super::emit::translate;
     use crate::blank_label::{is_pn_chars, is_pn_chars_u};
 
     fn translated_regex(pattern: &str, dot_all: bool) -> regex::Regex {

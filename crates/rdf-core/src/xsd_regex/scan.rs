@@ -23,11 +23,6 @@ use std::ops::Range;
 use super::error::XsdRegexError;
 
 /// One lexical unit of the XSD/XPath `regExp` grammar.
-#[allow(
-    dead_code,
-    reason = "the payloads are read by the translate conversion scheduled as a follow-up to \
-              this task; the tokenizer must emit them now so both consumers share one cursor"
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Token {
     /// An ordinary character, literal in this context (`.`, `-`, `(`, `)`,
@@ -64,11 +59,6 @@ pub(super) enum Token {
 /// subtracts from a `negCharGroup` as readily as from a `posCharGroup`
 /// (`charClassSub ::= ( posCharGroup | negCharGroup ) '-' charClassExpr`)
 /// while the `regex` crate's `^` binds *outside* its set operators.
-#[allow(
-    dead_code,
-    reason = "the frame payload is read by the translate conversion scheduled as a follow-up \
-              to this task; the scanner must derive it once here"
-)]
 struct ClassFrame {
     /// Whether this level opened as `[^…` and therefore had its negation
     /// emitted on an inner, wrapped group.
@@ -165,6 +155,10 @@ pub(super) struct Scanner<'a> {
     x_inside: Vec<bool>,
     /// Character range of the most recently yielded token or error.
     span_chars: Range<usize>,
+    /// Emission hint for the class token just yielded: whether a wrapped
+    /// negated inner class is still open and must be closed before the token's
+    /// own bracket work. See [`Scanner::closes_negated_wrap`].
+    negated_wrap_close: bool,
 }
 
 impl<'a> Scanner<'a> {
@@ -189,6 +183,7 @@ impl<'a> Scanner<'a> {
             x_escaped: false,
             x_inside: Vec::with_capacity(pattern.len()),
             span_chars: 0..0,
+            negated_wrap_close: false,
         }
     }
 
@@ -220,6 +215,22 @@ impl<'a> Scanner<'a> {
     )]
     pub(super) fn in_class(&self) -> bool {
         self.x_depth > 0
+    }
+
+    /// Whether the class token just yielded must close a wrapped negated inner
+    /// group *before* its own bracket work.
+    ///
+    /// `regex` binds `^` outside its set operators, so XSD's `[^g-[e]]` (the
+    /// complement of `g`, minus `e`) is emitted as `[[^g]--e]` with the
+    /// negation pushed onto an inner group. That inner group closes early on
+    /// the first `-[` subtraction at a negated level, so `--` subtracts from
+    /// the complement rather than around it; a negated level that saw no
+    /// subtraction closes it at its own `]` instead. True for exactly those two
+    /// tokens — the `Subtract` and `ClassClose` arms of [`super::emit`] read
+    /// this, and the [`ClassFrame`] stack that decides it stays here, not in
+    /// the emitter.
+    pub(super) fn closes_negated_wrap(&self) -> bool {
+        self.negated_wrap_close
     }
 
     /// Advance the `x`-flag textual state machine over one raw character. This
@@ -277,6 +288,7 @@ impl<'a> Scanner<'a> {
     }
 
     fn scan_one(&mut self) -> Result<Token, XsdRegexError> {
+        self.negated_wrap_close = false;
         match self.chars[self.pos] {
             '\\' => self.scan_escape(),
             '[' => {
@@ -290,7 +302,7 @@ impl<'a> Scanner<'a> {
                 // semantically free when it does not (`[[^g]]` == `[^g]`)
                 // and deciding otherwise would need a lookahead over the
                 // whole group. The scanner records the `negated` bit on the
-                // frame; the translator emits the wrap.
+                // frame; the emitter emits the wrap.
                 let negated = self.peek(1) == Some('^');
                 self.pos += if negated { 2 } else { 1 };
                 self.classes.push(ClassFrame {
@@ -300,7 +312,8 @@ impl<'a> Scanner<'a> {
                 Ok(Token::ClassOpen { negated })
             }
             ']' if !self.classes.is_empty() => {
-                self.classes.pop();
+                let frame = self.classes.pop().expect("non-empty checked by the guard");
+                self.negated_wrap_close = frame.negated && !frame.subtracted;
                 self.pos += 1;
                 Ok(Token::ClassClose)
             }
@@ -313,14 +326,17 @@ impl<'a> Scanner<'a> {
             // XPath class subtraction `[...-[...]]` -> regex's own `--`
             // difference operator. Frame-tracked (not a one-shot flag) so it
             // fires correctly for a subtraction nested inside another
-            // subtraction's right-hand `charClassExpr`. The translator closes
+            // subtraction's right-hand `charClassExpr`. The emitter closes
             // the inner negated group before the difference operator, so `--`
             // subtracts from the complement; the scanner records that a
             // subtraction happened on the frame.
             '-' if !self.classes.is_empty() && self.peek(1) == Some('[') => {
-                if let Some(frame) = self.classes.last_mut() {
-                    frame.subtracted = true;
-                }
+                let frame = self
+                    .classes
+                    .last_mut()
+                    .expect("non-empty checked by the guard");
+                self.negated_wrap_close = frame.negated && !frame.subtracted;
+                frame.subtracted = true;
                 self.pos += 1;
                 Ok(Token::Subtract)
             }
