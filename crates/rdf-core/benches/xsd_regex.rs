@@ -9,9 +9,9 @@
 //! [`purrdf_core::xsd_regex::compile`] — translation **plus** the underlying
 //! `regex` build, with no cache in front of it.
 //!
-//! This branch inserted a translation step in front of every regex
-//! compilation used by SHACL `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx
-//! `PATTERN`. Those call sites each layer their own cache over `compile`, so
+//! A translation step sits in front of every regex compilation used by
+//! SHACL `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN`. Those
+//! call sites each layer their own cache over `compile`, so
 //! the question this target answers is the one those caches cannot: what does
 //! one cold translation cost, and does the ordinary ASCII pattern pay for the
 //! dialect machinery the exotic ones need?
@@ -25,7 +25,7 @@
 //! * `xml_name_escape` — `^\i\c*$`, the expansion-heavy construct: `\i`/`\c`
 //!   splice a large enumerated XML-name set in place of two characters.
 //! * `xml_name_escape_i` — the same pattern under the `i` flag, which takes
-//!   the pre-folded `(?-i:…)` path added on this branch (the process-wide
+//!   the pre-folded `(?-i:…)` path (the process-wide
 //!   folded set is built on first use; criterion's warm-up absorbs that
 //!   one-time construction).
 //! * `block_first` / `block_last` — `\p{IsBasicLatin}` and the LAST block in

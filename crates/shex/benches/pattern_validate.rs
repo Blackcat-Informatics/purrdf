@@ -9,8 +9,8 @@
 //! [`PatternCache`](crate) after it replaced a per-value-node recompile.
 //!
 //! `prepared_validate.rs` exercises the shape precompilation path, but its
-//! fixture carries **no** pattern facet, so the cache this branch added is
-//! otherwise unmeasured. This target drives MANY value nodes through ONE
+//! fixture carries **no** pattern facet, so the cache is otherwise
+//! unmeasured. This target drives MANY value nodes through ONE
 //! [`validate`] call (the cache is per-validation-call, so a fresh call per
 //! node would never hit it) and separates the three regimes:
 //!

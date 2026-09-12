@@ -7,11 +7,11 @@
 
 //! Per-constraint cost of the SHACL `sh:pattern` arm's `OnceLock` cache.
 //!
-//! This branch replaced the per-evaluation `purrdf_core::xsd_regex::compile`
-//! with a `OnceLock` held on the parsed [`Constraint`](purrdf_shapes::shapes),
-//! so a `sh:pattern` is translated and built at most once per constraint
-//! instance no matter how many focus nodes or value nodes the shape sees. This
-//! target pins that behaviour by measurement:
+//! A `OnceLock` held on the parsed [`Constraint`](purrdf_shapes::shapes)
+//! stands in for a per-evaluation `purrdf_core::xsd_regex::compile`, so a
+//! `sh:pattern` is translated and built at most once per constraint instance
+//! no matter how many focus nodes or value nodes the shape sees. This target
+//! pins that behaviour by measurement:
 //!
 //! * `cold_constraint` — the shapes are parsed fresh for every iteration (the
 //!   parse is untimed `iter_batched` setup), so the constraint's `OnceLock` is
