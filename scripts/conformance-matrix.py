@@ -277,6 +277,36 @@ def _suite_shapes_corpus() -> SuiteResult:
     )
 
 
+def _suite_xsd_regex_corpus() -> SuiteResult:
+    """First-party XSD/XPath `regExp` corpus: scrape the harness's per-case
+    scoreboard so the matrix reports the case count rather than the handful of
+    test functions that ``_suite_cargo`` would count.
+
+    The suite grades ``purrdf_core::xsd_regex::compile`` -- the one shared
+    dialect translation ``sh:pattern``, SPARQL ``REGEX``/``REPLACE`` and ShEx
+    ``PATTERN`` all route through -- so a dialect regression shows up here
+    once rather than three times, or not at all."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-core", "--locked",
+        "--test", "xsd_regex_conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(r"XSD-REGEX-CORPUS: passed (\d+) total (\d+)", out)
+    if m:
+        passed, total = int(m.group(1)), int(m.group(2))
+        detail = f"{passed}/{total} hand-derived XSD/XPath regExp cases"
+        return SuiteResult(
+            "XSD/XPath regExp (first-party corpus)", "first-party, XSD G + F&O 5.6",
+            passed=passed, xskip=0, failed=(total - passed),
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _no_scoreboard(
+        "XSD/XPath regExp (first-party corpus)", "first-party, XSD G + F&O 5.6",
+        "`XSD-REGEX-CORPUS: passed N total N`", cmd, out,
+    )
+
+
 def _suite_shacl_rules() -> SuiteResult:
     """SHACL Rules (`sh:rule` inference): scrape the harness's per-fixture
     scoreboard so the matrix reports the inferred-graph fixture count rather than
@@ -1020,6 +1050,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_entailment_rl(),
         _suite_shacl_w3c(),
         _suite_shapes_corpus(),
+        _suite_xsd_regex_corpus(),
         _suite_shacl_rules(),
         _suite_shex_validation(),
         _suite_cargo(
@@ -1301,6 +1332,15 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         (
             _noise("first-party SHACL corpus:"),
             _board("SHAPES-CORPUS: passed 9 total 9"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "XSD/XPath regExp (first-party corpus)",
+        _suite_xsd_regex_corpus,
+        (
+            _noise("first-party XSD/XPath regExp corpus:"),
+            _board("XSD-REGEX-CORPUS: passed 9 total 9"),
             _noise(_CARGO_OK),
         ),
     ),

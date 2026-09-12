@@ -61,6 +61,10 @@
       "ledgered": 0,
       "note": "no ledgered gaps"
     },
+    "XSD/XPath regExp (first-party corpus)": {
+      "ledgered": 0,
+      "note": "no ledgered gaps: every case in crates/rdf-core/corpus/xsd-regex/ is graded, and a first-party corpus that ledgers its own cases would be grading the engine against whatever the engine happens to do. The two constructs this implementation cannot execute are therefore corpus cases asserting a NAMED ERROR rather than ledger entries: back-references, which XPath F&O 3.1 5.6.1.4 puts in the fn:matches grammar but which the regex crate's DFA engine cannot backtrack to run, and the Unicode-4.0 block name IsGreek, which Unicode 4.1 renamed to Greek and Coptic and which must be refused rather than resolved as the Greek SCRIPT that regex-syntax's UAX44-LM3 loose name matching silently picked (the block table is pinned to Unicode 16.0.0 so it cannot disagree with regex-syntax's own embedded UCD at a boundary codepoint). The one genuine divergence that is neither implemented nor refused, the (?m)^ trailing-newline position XPath excludes and the regex crate matches, is a documented gap in docs/CONFORMANCE.md rather than a corpus case, because there is no pattern whose acceptance could assert it without asserting the wrong answer"
+    },
     "SHACL Rules": {
       "ledgered": 0,
       "note": "no ledgered gaps"

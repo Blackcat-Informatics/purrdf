@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Two different reasons a construct is refused, and they must not be
+# conflated:
+#
+#  * \b and \B are NOT IN THE GRAMMAR AT ALL. Neither XML Schema Appendix G
+#    nor XPath F&O 3.1 5.6 defines a word-boundary assertion. The regex crate
+#    compiles both as Perl word boundaries, so before the translation they
+#    were accepted and evaluated as a construct the dialect never had.
+#
+#  * Back-references ARE in the grammar -- XPath F&O 3.1 5.6.1.4 adds
+#    backReference ::= "\" [1-9][0-9]* to atom -- but cannot be executed by
+#    the regex crate's DFA engine, which does not backtrack. This is a
+#    permanent, by-design limitation of translating rather than subsuming an
+#    engine, recorded in docs/CONFORMANCE.md "Known gaps".
+#
+# Both are hard errors that name the construct. A clear refusal beats a wrong
+# answer (ETHOS H).
+
+# \b / \B -- outside the grammar.
+\bcd	-	error	\b
+ab\b	-	error	\b
+\Bcd	-	error	\B
+^a\bb$	-	error	\b
+
+# ...including inside a character class, where the regex crate would
+# otherwise read `\b` as a backspace escape -- a third meaning again.
+^[\b]$	-	error	\b
+
+# A literal `b`, and the ordinary escape of one, are of course fine: the
+# refusal is of the ESCAPE, not the letter.
+^b$	-	match	b
+^[ab]$	-	match	b
+
+# Back-references -- in the grammar, unexecutable on a DFA.
+(ab)\1	-	error	backreference
+(a)(b)\2	-	error	backreference
+a\9b	-	error	backreference
+
+# Multi-digit back-references are one reference, not a reference plus a
+# literal digit, so the message must name the whole spelling.
+(a)\12	-	error	\12
+
+# \0 is not a back-reference -- the production starts at [1-9] -- and it is
+# not a SingleCharEsc either, so it is not a construct of this grammar at
+# all. Refused with a message that says so, rather than the engine's
+# "backreferences are not supported", which is wrong about what the pattern
+# contains.
+^a\0b$	-	error	\0 is not a construct
+
+# A dangling backslash is malformed, and says so.
+abc\	-	error	dangling
+
+# Non-capturing groups and ordinary groups are unaffected.
+^(?:ab)+$	-	match	abab
+^(ab)+$	-	match	abab
+^(a|b)c$	-	match	bc

@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# XPath F&O 3.1 5.6.2, "Flags". The flag alphabet is exactly `i s m x q`; the
+# x-flag cases below are the specification's own four worked examples,
+# verbatim.
+
+# `i` -- case-insensitive.
+^abc$	i	match	ABC
+^abc$	-	nomatch	ABC
+^[a-z]+$	i	match	AbC
+
+# `x` -- remove #x9, #xA, #xD and #x20, EXCEPT inside a character class
+# expression. These four are the specification's own examples.
+hello world	x	match	helloworld
+hello[ ]world	x	nomatch	helloworld
+hello\ sworld	x	match	hello world
+hello world	x	nomatch	hello world
+
+# ...and each of the four named code points, removed.
+a\u0009b	x	match	ab
+a\u000ab	x	match	ab
+a\u000db	x	match	ab
+a\u0020b	x	match	ab
+
+# `x` names exactly those four. U+00A0 and U+3000 carry the Unicode
+# White_Space property -- which is what RegexBuilder::ignore_whitespace
+# removes -- and must SURVIVE as literals to match.
+a\u00a0b	x	match	a\u00a0b
+a\u00a0b	x	nomatch	ab
+a\u3000b	x	match	a\u3000b
+a\u3000b	x	nomatch	ab
+
+# XPath regex has no comment syntax: `#` is an ordinary character.
+# ignore_whitespace compiled `a#b c` to just `a`.
+a#b c	x	match	a#bc
+a#b c	x	nomatch	az
+
+# Whitespace inside a class expression survives, and subtraction nests,
+# so the exempt region is tracked by depth rather than a single flag.
+^[a-z-[ ]]+$	x	match	abc
+^[a-z-[ ]]+$	x	nomatch	a c
+
+# `q` -- the whole pattern is literal.
+a.c	q	match	xa.cx
+a.c	q	nomatch	abc
+[a-z]+	q	match	x[a-z]+x
+[a-z]+	q	nomatch	abc
+a\\b	q	match	a\\b
+
+# `q` composes with `i` and ONLY with `i`; m, s and x have no effect.
+A.C	qi	match	a.c
+A.C	q	nomatch	a.c
+a b	qx	match	xa bx
+a b	qx	nomatch	ab
+a.c	qs	nomatch	abc
+
+# Combined non-q flags.
+^a.c$	is	match	A\nC
+foo	ismx	match	xfoox
+
+# A letter outside the alphabet is a hard error naming the character.
+foo	z	error	'z'
+foo	g	error	'g'
+foo	iz	error	'z'
+foo	qz	error	'z'

@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# XPath F&O 3.1 5.6.2 (flags m, s) and 5.6.1 (the `.` metacharacter), plus
+# fn:matches's partial-match rule: "returns true if the string contains a
+# sequence of characters that matches the pattern" -- NOT an anchored match.
+
+# fn:matches is a PARTIAL match; ^ and $ are explicit metacharacters.
+bc	-	match	abcd
+^bc$	-	nomatch	abcd
+^abcd$	-	match	abcd
+^b	-	nomatch	abcd
+
+# `.` matches anything EXCEPT #x0A and #x0D. Rust's own `.` excludes only
+# #x0A, so the \r cases are the ones that used to answer wrongly.
+^a.b$	-	match	axb
+^a.b$	-	match	a b
+^a.b$	-	nomatch	a\nb
+^a.b$	-	nomatch	a\rb
+^a.b$	-	match	a\u2028b
+
+# The `s` flag makes `.` match everything, both excluded code points
+# included.
+^a.b$	s	match	a\nb
+^a.b$	s	match	a\rb
+^a.b$	s	match	axb
+
+# Inside a character class a `.` is a literal dot, never the wildcard --
+# so it must not be rewritten.
+^[.]$	-	match	.
+^[.]$	-	nomatch	x
+^[.x]+$	-	match	.x.
+^[.]$	-	nomatch	\n
+
+# An escaped `.` is likewise literal.
+^a\.b$	-	match	a.b
+^a\.b$	-	nomatch	axb
+
+# The `m` flag: ^ and $ match at line boundaries.
+^b$	m	match	a\nb\nc
+^b$	-	nomatch	a\nb\nc
+^a$	m	match	a\nb

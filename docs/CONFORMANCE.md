@@ -54,6 +54,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 70 | 0 | 0 | 0 | GREEN |
+| XSD/XPath regExp (first-party corpus) | first-party, XSD G + F&O 5.6 | 184 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 19 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 10 | 0 | 0 | 0 | GREEN |
@@ -102,6 +103,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** · 0 ledgered |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **70 / 70** frozen expected reports |
+| XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **184 / 184** cases · 0 ledgered. The dialect `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified in, graded once at the shared compiler (`purrdf_core::xsd_regex`) instead of three times at the call sites. Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Six construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the two the dialect defines and this implementation does not execute |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **264 / 264** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 67, turtle 110) · 0 gaps. The RDF 1.2 `syntax/` + `eval/` sub-suites, plus the `iri/` sub-suite: the `IRI-resolution-01/02/07/08`, `IRIREF_datatype` and `IRI_with_*_numeric_escape` cases, which exist only in the RDF 1.1 Turtle/TriG suites upstream because RDF 1.2 publishes no base-resolution eval tests — this is the end-to-end half of the base-IRI contract `crates/iri/tests/` pins unit-by-unit against RFC 3986 §5.4 |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC + first-party RDF 1.2 vectors | **73 / 73** applicable toRDF · **13 / 13** exact compaction · 0 gaps; frozen provenance and checksums |
@@ -155,6 +157,14 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
+- `crates/rdf-core/corpus/xsd-regex/` — PurRDF's own XSD/XPath `regExp` corpus:
+  184 cases across six `.cases` files, grading
+  `purrdf_core::xsd_regex::compile` — the single shared dialect translation
+  that `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` all route
+  through, so a dialect regression surfaces once rather than three times or
+  not at all. Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1
+  §5.6; its README specifies the line format and cites the clause behind each
+  group.
 - `crates/shapes/src/schema_import.rs`, `crates/shapes/src/linkml/importer.rs`,
   and the Pydantic/TypeScript/GraphQL module tests — the five schema → SHACL
   reverse contracts, including deterministic exact recompilation, complete
@@ -321,8 +331,13 @@ reason):
 
 ## Known gaps
 
-These are **tracked, never silent** — each is a ledgered xfail/skip or an open
-issue, so the matrix stays honest:
+These are **tracked, never silent** — each is a ledgered xfail/skip, an open
+issue, or a construct refused or pinned **by design**, with the corpus case
+that proves the refusal named alongside it. The third kind exists because not
+every gap can be a ledger entry: a construct the engine rejects outright never
+reaches a suite to be xfailed, and a divergence the engine answers *differently*
+has no pattern whose acceptance could assert it without asserting the wrong
+answer. Either way the matrix stays honest:
 
 - **SPARQL 1.1 / 1.2 eval** — the full W3C SPARQL 1.1 **query + update**
   evaluation suites plus the SPARQL 1.2 / RDF-1.2 suite are vendored verbatim
@@ -582,6 +597,38 @@ issue, so the matrix stays honest:
   cartesian-product function-call argument evaluation), expression constraints
   (`sh:ExpressionConstraintComponent`), and SHACL Rules (`sh:TripleRule` /
   `sh:SPARQLRule`, AND rule sets).
+
+- **XSD/XPath regex back-references — refused by design, permanently.**
+  `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` are all specified
+  in the XSD/XPath `regExp` dialect (SHACL §4.5.3 → SPARQL 1.1 §17.4.3.14 →
+  XPath F&O 3.1 §5.6), and F&O §5.6.1.4 adds `backReference ::= "\"
+  [1-9][0-9]*` to the `fn:matches` grammar. So a back-reference is a real,
+  spec-mandated construct — and one this implementation will never execute.
+  PurRDF **translates** that dialect onto the `regex` crate rather than
+  subsuming a second regex engine (`purrdf_core::xsd_regex`, one shared
+  compiler for all three call sites), and the `regex` crate's finite-automaton
+  engine cannot backtrack, which is precisely the capability a back-reference
+  needs. No rewriting of the source text reaches it. The refusal is therefore
+  architectural, not a missing feature: a pattern containing one is a hard
+  error naming the exact spelling it found, because a clear refusal beats a
+  wrong answer. Pinned by
+  `crates/rdf-core/corpus/xsd-regex/rejected-constructs.cases` (four cases,
+  including a multi-digit reference, which must be named whole rather than
+  read as a reference plus a literal digit).
+- **XSD/XPath regex `(?m)^` at a trailing newline — a one-position
+  divergence, pinned by test.** XPath F&O 3.1 §5.6.2 defines the `m` flag's
+  `^` as matching "the start of the entire string, and the position
+  immediately after a newline character **other than a newline that appears as
+  the last character in the string**". The `regex` crate's `multi_line` has no
+  such exception and matches at that final position too, and it offers no
+  look-around expressive enough to exclude it. So `REGEX("a\n", "^", "m")`
+  finds two match positions where XPath finds one. This is the **only**
+  divergence in the dialect that is neither implemented nor refused, which is
+  also why it is not a corpus case: there is no pattern whose acceptance could
+  assert it without asserting the wrong answer. It is pinned instead by a unit
+  test in `purrdf_core::xsd_regex` that records exactly *where* it diverges, so
+  a future `regex` release that happens to close the gap is caught rather than
+  silently relied upon.
 
 ### SEP-0009 lexical space: PurRDF reads two forms the spec does not
 

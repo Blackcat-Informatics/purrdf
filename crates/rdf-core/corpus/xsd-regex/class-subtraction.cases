@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics(R) Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# XML Schema Part 2 Appendix G: charClassSub ::= '[' charGroup charClassExpr
+# ']' -- character-class subtraction, XSD-only syntax with no ECMA-262 or
+# Perl counterpart. The regex crate spells the same operation `--`.
+
+^[a-z-[aeiou]]+$	-	match	bcd
+^[a-z-[aeiou]]+$	-	nomatch	bad
+^[a-z-[aeiou]]$	-	nomatch	a
+^[a-z-[aeiou]]$	-	match	z
+
+# Subtraction nests through the right-hand charClassExpr, so the tracker
+# must count depth rather than set a flag: [a-c-[b]] is {a, c}, and
+# a-z minus {a, c} excludes exactly those two.
+^[a-z-[a-c-[b]]]+$	-	match	bd
+^[a-z-[a-c-[b]]]$	-	nomatch	a
+^[a-z-[a-c-[b]]]$	-	nomatch	c
+^[a-z-[a-c-[b]]]$	-	match	b
+
+# A negated group may be subtracted from.
+^[^0-9-[a-z]]+$	-	match	ABC
+^[^0-9-[a-z]]$	-	nomatch	a
+^[^0-9-[a-z]]$	-	nomatch	5
+
+# A `-` that does NOT open a subtraction keeps its ordinary meanings:
+# a range separator, or a literal at either end of a group.
+^[a-z]+$	-	match	abc
+^[-a]+$	-	match	-a
+^[a-]+$	-	match	a-
+^[a-]$	-	nomatch	b
+
+# Subtraction composes with the multi-character escapes on both sides.
+^[\c-[0-9]]+$	-	match	abc
+^[\c-[0-9]]+$	-	nomatch	ab1
+^[a-z-[\s]]+$	-	match	abc
+
+# An unterminated class is a named error, not a silently different
+# pattern.
+^[a-z-[aeiou]$	-	error	unterminated
+^[a-z$	-	error	unterminated
