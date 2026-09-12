@@ -115,3 +115,11 @@ harness = false
 [[bench]]
 name = "shared_views"
 harness = false
+
+[[bench]]
+# Per-constraint cost of the SHACL `sh:pattern` arm's `OnceLock` compile cache:
+# a cold constraint (fresh parse, first `get_or_init` compiles) and a warm one
+# (matching only), across focus-node and values-per-focus scales. Report-only;
+# `make bench` lane only — excluded from `make check`.
+name = "pattern_validate"
+harness = false

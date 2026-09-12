@@ -55,3 +55,11 @@ insta = { workspace = true }
 [[bench]]
 name = "prepared_validate"
 harness = false
+
+[[bench]]
+# Per-value-node cost of the ShEx `PATTERN` facet's `PatternCache`: a shared
+# valid pattern, the memoized compile-failure path, and a distinct pattern per
+# shape (the cache-miss control), many nodes per validation call. Report-only;
+# `make bench` lane only — excluded from `make check`.
+name = "pattern_validate"
+harness = false

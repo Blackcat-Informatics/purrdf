@@ -181,3 +181,12 @@ harness = false
 [[bench]]
 name = "shared_views"
 harness = false
+
+[[bench]]
+# COLD cost of the shared XSD/XPath `regExp` translator (`xsd_regex::compile`):
+# translation + regex build across structurally distinct shapes (plain ASCII,
+# Unicode category, XML-name escapes with and without `i`, first/last Unicode
+# block, class subtraction, `x`/`q`). Report-only; `make bench` lane only —
+# excluded from `make check`.
+name = "xsd_regex"
+harness = false

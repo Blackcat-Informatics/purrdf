@@ -209,3 +209,13 @@ harness = false
 [[bench]]
 name = "construct_builder"
 harness = false
+
+[[bench]]
+# Per-row cost of SPARQL `REGEX`/`REPLACE` after the shared XSD/XPath
+# translation was inserted: a constant pattern (cache hit — matching, not
+# compiling), `REPLACE` through `CompiledPattern::replace_all`, and a
+# per-row-distinct pattern (the cache-miss control), at two row counts with the
+# rayon global pool pinned. Report-only; `make bench` lane only — excluded from
+# `make check`.
+name = "regex_eval"
+harness = false
