@@ -66,8 +66,8 @@ impl fmt::Display for XsdRegexError {
                 f,
                 "backreference {reference} is not supported -- this is a permanent \
                  limitation of this implementation, which translates patterns onto a \
-                 DFA-based regex engine that cannot backtrack (see \
-                 https://github.com/Blackcat-Informatics/purrdf/issues/295)"
+                 DFA-based regex engine that cannot backtrack, and no rewriting of \
+                 the source text can reach a capability the engine does not have"
             ),
             Self::UnknownBlock(name) => write!(
                 f,

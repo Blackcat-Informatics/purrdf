@@ -179,7 +179,10 @@ fn name_char_class_body() -> String {
 pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegexError> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len() + 16);
-    let mut class_depth: usize = 0;
+    // One frame per open `[`. A plain depth counter is not enough: a negated
+    // group has to be wrapped so a following subtraction binds to the
+    // negation rather than around it (see `ClassFrame`).
+    let mut classes: Vec<ClassFrame> = Vec::new();
     let mut i = 0_usize;
     while i < chars.len() {
         let c = chars[i];
@@ -194,30 +197,58 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
                 translate_escape(&chars, &mut i, &mut out, esc)?;
             }
             '[' => {
-                class_depth += 1;
-                out.push('[');
                 i += 1;
-                if chars.get(i) == Some(&'^') {
-                    out.push('^');
+                let negated = chars.get(i) == Some(&'^');
+                if negated {
+                    // XSD `[^g-e]` is (complement of `g`) minus `e`, but
+                    // Rust's `[^g--e]` applies `^` to the WHOLE class
+                    // expression — i.e. the complement of (`g` minus `e`),
+                    // a different set. Opening an extra bracket and putting
+                    // the negation on the inner one restores XSD's binding:
+                    // `[[^g]--e]`. Emitted for every negated group, not only
+                    // the ones a subtraction follows, because the wrap is
+                    // semantically free when it does not (`[[^g]]` == `[^g]`)
+                    // and deciding otherwise would need a lookahead over the
+                    // whole group.
+                    out.push_str("[[^");
                     i += 1;
+                } else {
+                    out.push('[');
                 }
+                classes.push(ClassFrame {
+                    negated,
+                    subtracted: false,
+                });
             }
-            ']' if class_depth > 0 => {
-                class_depth -= 1;
+            ']' if !classes.is_empty() => {
+                let frame = classes.pop().expect("non-empty checked by the guard");
+                // The inner negated group's own `]` was already emitted by
+                // the subtraction arm below; only an unsubtracted negated
+                // group still owes one here.
+                if frame.negated && !frame.subtracted {
+                    out.push(']');
+                }
                 out.push(']');
                 i += 1;
             }
             // XPath class subtraction `[...-[...]]` -> regex's own `--`
-            // difference operator. Depth-tracked (not a one-shot flag) so it
+            // difference operator. Frame-tracked (not a one-shot flag) so it
             // fires correctly for a subtraction nested inside another
             // subtraction's right-hand `charClassExpr`.
-            '-' if class_depth > 0 && chars.get(i + 1) == Some(&'[') => {
+            '-' if !classes.is_empty() && chars.get(i + 1) == Some(&'[') => {
+                let frame = classes.last_mut().expect("non-empty checked by the guard");
+                if frame.negated && !frame.subtracted {
+                    // Close the inner negated group before the difference
+                    // operator, so `--` subtracts from the complement.
+                    out.push(']');
+                }
+                frame.subtracted = true;
                 out.push_str("--");
                 i += 1;
             }
             // A `.` is the XPath wildcard only outside a character class —
             // inside one it is always a literal dot, never rewritten.
-            '.' if class_depth == 0 && !dot_all => {
+            '.' if classes.is_empty() && !dot_all => {
                 out.push_str("[^\\u{a}\\u{d}]");
                 i += 1;
             }
@@ -227,12 +258,25 @@ pub(super) fn translate(pattern: &str, dot_all: bool) -> Result<String, XsdRegex
             }
         }
     }
-    if class_depth != 0 {
+    if !classes.is_empty() {
         return Err(XsdRegexError::Malformed(
             "unterminated character class (missing closing ']')".to_owned(),
         ));
     }
     Ok(out)
+}
+
+/// One open character-class level, tracked because XSD's `charClassSub`
+/// subtracts from a `negCharGroup` as readily as from a `posCharGroup`
+/// (`charClassSub ::= ( posCharGroup | negCharGroup ) '-' charClassExpr`)
+/// while the `regex` crate's `^` binds *outside* its set operators.
+struct ClassFrame {
+    /// Whether this level opened as `[^…` and therefore had its negation
+    /// emitted on an inner, wrapped group.
+    negated: bool,
+    /// Whether a `-[` subtraction has already been emitted at this level
+    /// (which also closed the inner negated group, if there was one).
+    subtracted: bool,
 }
 
 /// Handle one `\`-escaped construct, starting at `chars[*i] == esc`.
@@ -322,6 +366,21 @@ fn translate_escape(
             reference.extend(&chars[start..j]);
             return Err(XsdRegexError::Backreference(reference));
         }
+        // `\0` is NOT a back-reference: XPath F&O 3.1 §5.6.1.4's production is
+        // `backReference ::= "\" [1-9][0-9]*`, which starts at 1. Nor is it a
+        // `SingleCharEsc` — XML Schema Part 2 Appendix G enumerates those, and
+        // `\0` is not among them. So it is simply not a construct this dialect
+        // has. Rejected here by name, because letting it fall through to the
+        // engine produced "backreferences are not supported" — a message that
+        // is wrong about what the pattern contains, and would send a reader
+        // looking for a capture group that was never there.
+        '0' => {
+            return Err(XsdRegexError::Malformed(
+                "\\0 is not a construct of the XSD/XPath regular-expression grammar (a \
+                 back-reference starts at \\1, and \\0 is not a single-character escape)"
+                    .to_owned(),
+            ));
+        }
         _ => {
             out.push('\\');
             out.push(esc);
@@ -382,6 +441,106 @@ fn translate_unicode_property(
     Ok(())
 }
 
+/// Scan a pattern for constructs that do **not** carry the same meaning in
+/// ECMA-262 — the dialect JSON Schema's `pattern`, JavaScript, and most
+/// `pattern` consumers use.
+///
+/// Class-awareness mirrors [`translate`]'s own decisions exactly (a `.` or a
+/// `-[` inside a character class is not the metacharacter), so a construct is
+/// reported here if and only if translation actually rewrote it. Names are
+/// returned in first-appearance order with duplicates collapsed, so the
+/// caller's message is deterministic.
+///
+/// This is emphatically **not** a validity check: every construct named here
+/// is a perfectly well-formed `sh:pattern`. It answers the narrower question
+/// an emitter has to ask before it copies the source text into a different
+/// dialect's slot.
+pub(super) fn ecma_262_divergences(pattern: &str) -> Vec<&'static str> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut found: Vec<&'static str> = Vec::new();
+    let mut note = |name: &'static str| {
+        if !found.contains(&name) {
+            found.push(name);
+        }
+    };
+    let mut class_depth: usize = 0;
+    let mut i = 0_usize;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => {
+                i += 1;
+                let Some(&esc) = chars.get(i) else { break };
+                match esc {
+                    // ECMA-262 has no such escape. In its non-Unicode mode
+                    // `\i` is even an *identity escape* — a literal `i` —
+                    // so copying the text across is silently wrong, not an
+                    // error the consumer would report.
+                    'i' | 'I' | 'c' | 'C' => note("\\i/\\I/\\c/\\C"),
+                    // XSD `\s` is four code points; ECMA-262's adds vertical
+                    // tab, form feed, NBSP, BOM and the Unicode space
+                    // separators.
+                    's' | 'S' => note("\\s/\\S"),
+                    // XSD `\w` is `[^\p{P}\p{Z}\p{C}]`; ECMA-262's is
+                    // `[A-Za-z0-9_]`.
+                    'w' | 'W' => note("\\w/\\W"),
+                    // XSD `\d` is `\p{Nd}` (every Unicode decimal digit);
+                    // ECMA-262's is `[0-9]`.
+                    'd' | 'D' => note("\\d/\\D"),
+                    'p' | 'P' => {
+                        // Only the `Is`-prefixed BLOCK form diverges; a
+                        // general-category escape is shared syntax (though
+                        // ECMA-262 needs its `u` flag for it, which JSON
+                        // Schema's flagless `pattern` cannot set — recorded
+                        // through the flag path, not here).
+                        let mut j = i + 1;
+                        if chars.get(j) == Some(&'{') {
+                            j += 1;
+                            let start = j;
+                            while chars.get(j).is_some_and(|&ch| ch != '}') {
+                                j += 1;
+                            }
+                            let name: String = chars[start..j].iter().collect();
+                            if name.starts_with("Is") {
+                                note("\\p{Is…} block escape");
+                            }
+                            i = j;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            '[' => {
+                class_depth += 1;
+                i += 1;
+                if chars.get(i) == Some(&'^') {
+                    i += 1;
+                }
+            }
+            ']' if class_depth > 0 => {
+                class_depth -= 1;
+                i += 1;
+            }
+            '-' if class_depth > 0 && chars.get(i + 1) == Some(&'[') => {
+                // ECMA-262 has no class subtraction: `[a-z-[aeiou]]` parses
+                // there as the class `a-z`, `-`, `[`, `aeiou` followed by a
+                // stray `]` — a different language, accepted without complaint.
+                note("[…-[…]] class subtraction");
+                i += 1;
+            }
+            '.' if class_depth == 0 => {
+                // XSD's `.` excludes #x0A and #x0D; ECMA-262's also excludes
+                // U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR. A
+                // narrow divergence, but a real one.
+                note(". wildcard");
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +556,58 @@ mod tests {
         let re = translated_regex("^[a-z-[aeiou]]+$", false);
         assert!(re.is_match("bcd"));
         assert!(!re.is_match("bad"));
+    }
+
+    /// XSD's `charClassSub` takes a `negCharGroup` on its left as readily as
+    /// a `posCharGroup`, and the two dialects bind the negation on opposite
+    /// sides of the difference: `[^0-9-[a-z]]` is XSD's (¬digits) ∖ (a–z),
+    /// while Rust's `[^0-9--[a-z]]` is ¬(digits ∖ a–z) — which is just
+    /// ¬digits, and therefore matches every letter. Asserted on the emitted
+    /// source as well as the behaviour, because the bug was one bracket.
+    #[test]
+    fn negated_class_subtraction_binds_to_the_negation() {
+        assert_eq!(
+            translate("[^0-9-[a-z]]", false).expect("translate"),
+            "[[^0-9]--[a-z]]"
+        );
+        let re = translated_regex("^[^0-9-[a-z]]+$", false);
+        assert!(re.is_match("ABC"), "upper case is in neither subtrahend");
+        assert!(!re.is_match("a"), "a-z is subtracted from the complement");
+        assert!(!re.is_match("5"), "digits are excluded by the negation");
+
+        // The wrap is emitted for every negated group, subtraction or not,
+        // and `[[^x]]` means exactly what `[^x]` means.
+        assert_eq!(translate("[^abc]", false).expect("translate"), "[[^abc]]");
+        let plain = translated_regex("^[^abc]$", false);
+        assert!(plain.is_match("d"));
+        assert!(!plain.is_match("a"));
+
+        // A negated subtrahend nests the same way.
+        let nested = translated_regex("^[a-z-[^aeiou]]+$", false);
+        assert!(nested.is_match("aei"), "a-z intersected with the vowels");
+        assert!(!nested.is_match("b"));
+    }
+
+    /// `\0` is neither a back-reference (XPath F&O §5.6.1.4's production
+    /// starts at `\1`) nor a `SingleCharEsc` (XML Schema Appendix G
+    /// enumerates those). Letting it reach the engine produced
+    /// "backreferences are not supported", which is wrong about what the
+    /// pattern contains.
+    #[test]
+    fn nul_escape_is_refused_as_itself_not_as_a_backreference() {
+        let err = translate("^a\\0b$", false).expect_err("\\0 is not a construct");
+        let message = err.to_string();
+        assert!(
+            message.contains("\\0"),
+            "the message must name the construct: {message}"
+        );
+        assert!(
+            !message.contains("backreference"),
+            "\\0 is not a back-reference, and the message must not say it is: {message}"
+        );
+        // A real back-reference still reports as one.
+        let back = translate("(a)\\1", false).expect_err("no backreferences");
+        assert!(back.to_string().contains("backreference"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! XSD/XPath regular-expression dialect support (issue #295).
+//! XSD/XPath regular-expression dialect support.
 //!
 //! `sh:pattern` (SHACL §4.5.3), SPARQL `REGEX`/`REPLACE` (§17.4.3.14), and
 //! ShEx `PATTERN` (§5.4.5) all specify their pattern facet via *XPath and
@@ -23,9 +23,10 @@
 //! so it structurally cannot execute a backreference no matter how the
 //! source text is rewritten. This is a permanent, by-design gap in this
 //! implementation, not a bug to be fixed later — supporting backreferences
-//! would require subsuming a second, backtracking engine, which the
-//! decision behind this module explicitly rejects (see
-//! <https://github.com/Blackcat-Informatics/purrdf/issues/295>).
+//! would require subsuming a second, backtracking engine, which is exactly
+//! the design this module exists instead of. It is recorded as a known gap
+//! in `docs/CONFORMANCE.md` and pinned by the first-party corpus under
+//! `crates/rdf-core/corpus/xsd-regex/`.
 //!
 //! # Everything else: translated, not subsumed
 //!
@@ -166,6 +167,46 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
         regex,
         is_literal: false,
     })
+}
+
+/// Everything in `(pattern, flags)` that does **not** mean the same thing in
+/// ECMA-262 — the dialect JSON Schema's `pattern` keyword, JavaScript, and
+/// most other `pattern` consumers are specified in.
+///
+/// An emitter that copies a `sh:pattern`'s source text into an ECMA-262 slot
+/// is performing a dialect change, and this is how it finds out whether that
+/// change altered the accepted language. Returns an empty vector when the
+/// pattern and its flags mean the same thing in both dialects (the common
+/// case — `^[A-Z]+$` and friends).
+///
+/// Two kinds of divergence are reported:
+///
+/// * **Constructs**, in first-appearance order, duplicates collapsed, and
+///   class-aware — a `.` or a `-[` inside a character class is a literal, not
+///   a metacharacter, and is not reported. The list mirrors the translation
+///   table exactly: a construct appears here if and only if
+///   [`compile`] actually rewrote it.
+/// * **Flags**, because ECMA-262 regular-expression *literals* have flags but
+///   JSON Schema's `pattern` is a bare string with **no flag surface at all**,
+///   so every flag is lost — and `x` and `q` have no ECMA-262 spelling even
+///   where flags can be expressed.
+///
+/// This is not a validity check. Every input it reports on is a perfectly
+/// well-formed `sh:pattern`; the question is only whether its meaning
+/// survives the copy.
+#[must_use]
+pub fn ecma_262_divergences(pattern: &str, flags: &str) -> Vec<String> {
+    let mut out: Vec<String> = translate::ecma_262_divergences(pattern)
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect();
+    if !flags.is_empty() {
+        out.push(format!(
+            "the {flags:?} flag(s) (JSON Schema's `pattern` is a bare ECMA-262 \
+             source string with no flag surface)"
+        ));
+    }
+    out
 }
 
 #[cfg(test)]

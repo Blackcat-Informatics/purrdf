@@ -73,8 +73,7 @@ smallvec = { workspace = true }
 # into: a DFA-based, backtracking-free, pure-Rust, wasm32-clean engine already
 # proven elsewhere in this workspace (`purrdf-rdf`, `purrdf-shapes`,
 # `purrdf-shex`, `purrdf-slice`, `purrdf-sparql-{algebra,eval}`). See
-# `crate::xsd_regex`'s module doc for the dialect-translation rationale
-# (issue #295).
+# `crate::xsd_regex`'s module doc for the dialect-translation rationale.
 regex = { workspace = true }
 
 [dev-dependencies]
