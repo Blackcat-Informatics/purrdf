@@ -157,6 +157,95 @@ only by a renaming of blank nodes canonicalize identically **even when the
 renamed blank appears only inside a quoted triple term**, and two datasets whose
 blank wiring genuinely differs canonicalize differently.
 
+### 3.3 The flat assertion presentation
+
+Every admitted RDF 1.2 statement layer has, in addition to the §3 rendering above, a
+second SPELLING: the **flat assertion presentation**, exported as
+`purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` /
+`purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` and reached through
+`purrdf_core::try_canonicalize_flat_view` and its `_flat_` siblings
+(`try_canonicalize_flat_graph_view`, `check_admissible_flat_view`,
+`try_flat_digest_view`). The rendering of §3 is itself a named presentation too,
+exported as `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` /
+`purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION`, and every entry point named
+WITHOUT a `flat` infix (`canonicalize`, `try_canonicalize_view`,
+`canonicalize_graph_view`, …) pins it.
+
+The two presentations answer the same question — "what canonical bytes does this
+ADMITTED RDF 1.2 statement layer produce" — with two different spellings of the
+SAME admitted content. Presentation is orthogonal to admissibility: §4's reserved
+vocabulary and §5's refusal rule are unchanged by which presentation a caller
+selects. Only what is EMITTED for an already-admitted reifier or annotation row
+differs.
+
+| Construct | Flat canonical row |
+|---|---|
+| Genuine quad | unchanged |
+| Reifier `(r, t)` in the default graph | `r rdf:reifies t .` |
+| Reifier `(r, t)` in named graph `g` | `r rdf:reifies t g .` |
+| Annotation `(r, p, o)` in the default graph | `r p o .` |
+| Annotation `(r, p, o)` in named graph `g` | `r p o g .` |
+| Base quad spelling a reifier (§3.1's fold shape) `r ⟨urn:purrdf:rdfc:reifies⟩ t [g] .` | `r rdf:reifies t [g] .` — the SAME row a native reifier `(r, t)` [in `g`] lowers to |
+| Base quad spelling an annotation (§3.1's fold shape, sentinel as the quad's own GRAPH) `r p o ⟨urn:purrdf:rdfc:annotation⟩ .` | `r p o .` — the SAME row a native annotation `(r, p, o)` lowers to |
+
+`rdf:reifies` here is the RDF 1.2 vocabulary's OWN reification predicate
+(`http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies`), not a PurRDF sentinel — the
+flat presentation never mints or reads a `urn:purrdf:rdfc:` IRI, and **no reserved
+namespace IRI ever participates in a flat canonical document**. A reifier row is
+written in the graph it was DECLARED in; an annotation row is written in its OWN
+graph slot, independently of the reifier it annotates (§3.2). A row whose exact
+`(s, p, o, g)` already exists as a genuine base quad is emitted **exactly once**:
+the flat presentation deduplicates at the row level, so a dataset asserting a
+reifier binding both as a declared reifier and as the literal `rdf:reifies` quad
+it denotes canonicalizes identically to one asserting it only one of those two
+ways — doubly-spelled rows are never counted twice.
+
+**The last two table rows are the same §3.1 fold, applied under this
+presentation.** The input class they cover is an overlay §3-presentation canonical
+document — or any other input — carrying a base quad in exactly §3.1's fold shape,
+most notably an **overlay canonical document re-ingested through a loader that does
+not itself recognize the overlay's sentinel spelling at parse time** (a plain
+N-Quads/Turtle parser, for instance, which has no reason to know about
+`urn:purrdf:rdfc:`): such a loader hands the quad straight through as an ordinary
+base quad bearing the sentinel, and it is THIS canonicalizer's own admission sweep —
+not the loader — that recognizes and folds it, under either presentation. §3.1
+already established that this quad denotes exactly the reifier or annotation row it
+spells rather than a different structure that happens to resemble one; the flat
+presentation lowers that same row exactly as it lowers a NATIVELY-held one, so the
+two spellings of one row are never assigned two different flat identities, and the
+row-level dedup above extends across all three ways a row can appear (a native
+side-table entry, a sentinel-spelled base quad, and a real-predicate base quad, in
+any combination): it is still emitted exactly once. This is what makes "no reserved
+namespace IRI ever participates in a flat canonical document" (above) a true
+statement about EVERY admitted input, including one that itself carries the
+sentinel spelling, rather than only about inputs that never exercise the fold.
+
+**The flat presentation is a second canonicalization-oracle spelling of the RDF 1.2
+statement layer, never an RDF 1.1 fallback mode.** Choosing it does not drop to
+plain-triples semantics: every statement-layer row §3 canonicalizes is present in
+the flat document as the ordinary quad it asserts, and the same §4/§5
+admissibility, the same §6 bound, and the same blank-labelling rule of §3.2 all
+still apply. The two presentations do, however, make deliberately different
+distinguishability promises. The flat presentation identifies the **assertion
+projection**: its row-level dedup law (above) means a row asserted both as a
+declared reifier/annotation and as its own base quad, or spelled through the fold
+shape, produces the same bytes as the row asserted once — so a declared reifier
+and a plain `rdf:reifies` base quad, which the overlay keeps distinct (sentinel
+row vs. ordinary predicate), are indistinguishable in flat bytes. §3's
+unconditional lossless-identity property is an **overlay** guarantee: a consumer
+that must observe statement-layer structure unconditionally — reifier counts,
+which spelling asserted a row — pins the overlay presentation; a consumer that
+wants the RDF 1.2 assertion set an independent RDFC-1.0 implementation could
+reproduce pins the flat presentation.
+
+`Canonicalized::labels` carries the same caveat under either presentation: labels
+are isomorphism-invariant only **up to automorphism**. Where a graph carries a
+nontrivial automorphism, the n-degree search's tie-break among otherwise-equivalent
+candidates is enumeration-order-dependent, so two isomorphic-but-not-identical
+inputs may assign automorphic blanks different — but structurally equivalent —
+labels. `Canonicalized::nquads` itself remains fully isomorphism-invariant under
+either presentation: two isomorphic views produce byte-equal canonical documents.
+
 ## 4. Reserved vocabulary
 
 The IRI namespace
@@ -369,12 +458,15 @@ the artifact it actually linked.
 
 ## 9. What a consumer pins
 
-A complete pin is:
+A complete pin is the four coordinates `(profile, version, presentation, hash)`
+plus the corpus digest and release that let a consumer verify all four against the
+artifact it actually linked:
 
 | Field | Source |
 |---|---|
 | profile id | `purrdf_core::CANON_PROFILE_ID` → `purrdf-rdfc12` |
 | profile version | `purrdf_core::CANON_PROFILE_VERSION` → `2` |
+| presentation | `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` (→ `overlay`, version `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` → `1`) or `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` (→ `flat-assertion`, version `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`) (§3.3) |
 | hash algorithm | `CanonHash::Sha256` or `CanonHash::Sha384` (§2) |
 | corpus digest | `purrdf_core::CANON_CORPUS_DIGEST` (§8) |
 | release | the tagged release the above were read from |
@@ -382,3 +474,10 @@ A complete pin is:
 Running the corpus of §8 against a linked build turns that pin into a receipt: it
 demonstrates that this build produces the bytes the profile specifies and refuses
 the inputs the profile forbids.
+
+The presentation coordinate is also readable back off a produced result, not only
+off the entry point a caller happened to call: every `purrdf_core::Canonicalized`
+carries a `presentation` field naming exactly which of the two presentations
+produced its `nquads`. A consumer holding a `Canonicalized` value can therefore
+verify its pin's presentation coordinate against that field directly, rather than
+having to remember or re-derive it from the call site.

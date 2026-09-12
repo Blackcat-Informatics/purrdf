@@ -13,10 +13,10 @@
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::MutableDataset;
 use purrdf::{
-    JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph, SerializeOptions,
-    StatementLayer, TermValue, canonical_flat_nquads, classify, datasets_isomorphic, parse_dataset,
-    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
-    serialize_dataset_with,
+    CanonHash, JsonLdSerializeOptions, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph,
+    SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify, datasets_isomorphic,
+    parse_dataset, serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    serialize_dataset_with, try_canonicalize_flat_view,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -372,10 +372,23 @@ impl Dataset {
     /// The deterministic identity string for the graph: two datasets denote the same
     /// RDF graph (under blank-node relabeling) iff their canonical forms are
     /// byte-identical. This is the same RDFC-1.0 output the conformance gate pins.
+    ///
+    /// This surface reads caller-supplied (untrusted) documents, so a refusal —
+    /// reserved vocabulary, or n-degree search budget exhaustion — comes back as a
+    /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
+    /// wasm trap/process abort.
     #[wasm_bindgen(js_name = canonicalize)]
     pub fn canonicalize(&self) -> Result<String, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        canonical_flat_nquads(&frozen).map_err(|e| JsError::new(&e))
+        match try_canonicalize_flat_view(&frozen, CanonHash::Sha256) {
+            Ok(canonicalized) => Ok(canonicalized.nquads),
+            Err(ViewCanonError::Refused(err)) => Err(JsError::new(&err.to_string())),
+            Err(ViewCanonError::NotReady { error, .. }) => match error {
+                // LAW: a freshly-frozen `Arc<RdfDataset>`'s `FallibleDatasetView::Error`
+                // is `Infallible` — the frozen dataset never faults, so this arm is
+                // unreachable by construction.
+            },
+        }
     }
 
     /// `isomorphic(other)` → whether this dataset and `other` are the same RDF graph

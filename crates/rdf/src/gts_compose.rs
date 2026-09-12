@@ -27,8 +27,10 @@ use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_di
 use purrdf_gts::wire::{blake3_256, canonical, hex};
 use purrdf_gts::writer::Writer;
 
-use crate::dataset_view::ViewOperationStatus;
-use crate::{BlankScope, DatasetView, FallibleDatasetView, FastHasher, RdfTextDirection, TermRef};
+use crate::{
+    BlankScope, DatasetView, DrainCheckpoint, FallibleDatasetView, FastHasher, RdfTextDirection,
+    TermRef, checkpointed_drain,
+};
 
 /// The `rdf:reifies` predicate IRI (RDF 1.2 statement layer).
 pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -569,15 +571,103 @@ impl SnapshotBuilder {
         // slot can represent, and a blank encoding collision. The snapshot is a
         // function of the rows a view enumerates and of nothing it merely claims.
 
-        // (1) CHECKPOINT BEFORE any row is consumed.
-        Self::checkpoint(view, IngestCheckpoint::BeforeRows)?;
-
+        // TWO CHECKPOINTS bracket row consumption — sampled BEFORE a single row is
+        // read and again AFTER every row (ordinary, reifier and annotation alike)
+        // has been consumed — via the shared completeness law
+        // [`checkpointed_drain`] rather than a private hand-rolled twin of it.
+        //
+        // `checkpointed_drain` samples its AFTER checkpoint unconditionally, once
+        // the drain closure returns, with no visibility into whatever the closure
+        // computed — see its own doc for why that is the right law for a closure
+        // that reports its outcome purely through `checkpointed_drain`'s
+        // `Ok`/`Err`. This ingestion's drain does not: a term-shape refusal from
+        // [`Self::consume_rows`] must take priority over the AFTER checkpoint
+        // exactly as it always did, because the pre-refactor body returned such a
+        // refusal immediately via `?`, without ever sampling the view's post-drain
+        // status. `row_error`, set from inside the closure, carries that refusal
+        // out so it can be checked FIRST — before the drain's own before/after
+        // verdict — preserving that priority under the shared helper.
         let terms_before = self.terms.len();
         let mut rows_consumed = 0_usize;
         // The graph terms that actually own a row. Everything `named_graphs()`
         // reports beyond this set is declaration-only: NOT interned (interning it
         // would add a term row and shift `snapshot_content_id`), but named in the
         // report so the omission is stated rather than silent.
+        let mut occupied_graphs: std::collections::BTreeSet<D::Id> =
+            std::collections::BTreeSet::new();
+        let mut row_error: Option<GtsIngestError> = None;
+        let drained = checkpointed_drain(view, |v| {
+            match self.consume_rows(v, default_graph_name, scope) {
+                Ok((rows, graphs)) => {
+                    rows_consumed = rows;
+                    occupied_graphs = graphs;
+                }
+                Err(err) => row_error = Some(err),
+            }
+        });
+        if let Some(err) = row_error {
+            return Err(err);
+        }
+        if let Err(failure) = drained {
+            return Err(GtsIngestError::ViewNotReady {
+                checkpoint: match failure.checkpoint {
+                    DrainCheckpoint::Before => IngestCheckpoint::BeforeRows,
+                    DrainCheckpoint::After => IngestCheckpoint::AfterRows,
+                },
+                cause: failure.error.to_string(),
+            });
+        }
+
+        let mut declarations_omitted: Vec<String> = view
+            .named_graphs()
+            .filter(|graph| !occupied_graphs.contains(graph))
+            .map(|graph| render_term(view, graph))
+            .collect();
+        declarations_omitted.sort_unstable();
+        declarations_omitted.dedup();
+
+        let report = IngestReport {
+            rows_consumed,
+            terms_interned: self.terms.len() - terms_before,
+            declarations_omitted,
+            scratch_bytes: self.scratch_bytes(),
+        };
+        self.totals.rows_consumed = self.totals.rows_consumed.saturating_add(rows_consumed);
+        self.totals.terms_interned = self
+            .totals
+            .terms_interned
+            .saturating_add(report.terms_interned);
+        self.totals
+            .declarations_omitted
+            .extend(report.declarations_omitted.iter().cloned());
+        self.totals.declarations_omitted.sort_unstable();
+        self.totals.declarations_omitted.dedup();
+        self.totals.scratch_bytes = self.totals.scratch_bytes.max(report.scratch_bytes);
+        Ok(report)
+    }
+
+    /// The row-consuming body of one ingestion pass: interns every ordinary
+    /// quad, reifier binding and annotation row, returning the row count and
+    /// the graph terms that actually own a row (everything `named_graphs()`
+    /// reports beyond that set is declaration-only — see the caller).
+    ///
+    /// Pulled out of [`Self::ingest_view_rows`] so the [`checkpointed_drain`]
+    /// closure that wraps it stays a single call rather than a restated loop
+    /// body, and its own early returns (`?`) stay ordinary function returns —
+    /// exactly as they were before this was factored out — rather than needing
+    /// to break out of a closure mid-loop.
+    ///
+    /// # Errors
+    /// [`GtsIngestError::UnrepresentableTerm`] or
+    /// [`GtsIngestError::BlankWireCollision`] — exactly the refusals
+    /// [`Self::intern_view_term`]/[`Self::intern_view_iri`] can raise.
+    fn consume_rows<D: DatasetView>(
+        &mut self,
+        view: &D,
+        default_graph_name: Option<&str>,
+        scope: Option<&str>,
+    ) -> Result<(usize, std::collections::BTreeSet<D::Id>), GtsIngestError> {
+        let mut rows_consumed = 0_usize;
         let mut occupied_graphs: std::collections::BTreeSet<D::Id> =
             std::collections::BTreeSet::new();
         let default_gid = default_graph_name.map(|name| self.intern_iri(name));
@@ -644,51 +734,7 @@ impl SnapshotBuilder {
             rows_consumed += 1;
         }
 
-        // (2) CHECKPOINT AFTER every row has been consumed. A view that faulted
-        // mid-iteration stops yielding rather than erroring, so without this the
-        // builder would mint a `snapshot_content_id` over a truncation.
-        Self::checkpoint(view, IngestCheckpoint::AfterRows)?;
-
-        let mut declarations_omitted: Vec<String> = view
-            .named_graphs()
-            .filter(|graph| !occupied_graphs.contains(graph))
-            .map(|graph| render_term(view, graph))
-            .collect();
-        declarations_omitted.sort_unstable();
-        declarations_omitted.dedup();
-
-        let report = IngestReport {
-            rows_consumed,
-            terms_interned: self.terms.len() - terms_before,
-            declarations_omitted,
-            scratch_bytes: self.scratch_bytes(),
-        };
-        self.totals.rows_consumed = self.totals.rows_consumed.saturating_add(rows_consumed);
-        self.totals.terms_interned = self
-            .totals
-            .terms_interned
-            .saturating_add(report.terms_interned);
-        self.totals
-            .declarations_omitted
-            .extend(report.declarations_omitted.iter().cloned());
-        self.totals.declarations_omitted.sort_unstable();
-        self.totals.declarations_omitted.dedup();
-        self.totals.scratch_bytes = self.totals.scratch_bytes.max(report.scratch_bytes);
-        Ok(report)
-    }
-
-    /// Sample a fallible view's operational status at one ingestion boundary.
-    fn checkpoint<D: FallibleDatasetView>(
-        view: &D,
-        checkpoint: IngestCheckpoint,
-    ) -> Result<(), GtsIngestError> {
-        match view.operation_status() {
-            ViewOperationStatus::Ready { .. } => Ok(()),
-            ViewOperationStatus::Failed { error, .. } => Err(GtsIngestError::ViewNotReady {
-                checkpoint,
-                cause: error.to_string(),
-            }),
-        }
+        Ok((rows_consumed, occupied_graphs))
     }
 
     /// Intern a view term in subject/object/graph position (triple terms are NOT
@@ -1872,6 +1918,9 @@ mod tests {
                 .unwrap();
         let expected =
             crate::RdfDataset::union(&sources.iter().map(AsRef::as_ref).collect::<Vec<_>>());
+        // LAW: `actual`/`expected` are round-tripped from the test's own self-built
+        // `sources` fixture — never caller-supplied and never reachable through a
+        // binding, so the panicking wrapper is sound here.
         assert_eq!(
             crate::canonical_flat_nquads(&actual).unwrap(),
             crate::canonical_flat_nquads(&expected).unwrap(),

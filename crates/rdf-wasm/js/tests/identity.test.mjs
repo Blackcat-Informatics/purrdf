@@ -51,3 +51,36 @@ test("canonicalize() is stable and identifies isomorphic graphs byte-for-byte", 
   // Isomorphic graphs canonicalize to the identical string — the identity guarantee.
   assert.equal(b.canonicalize(), canonA);
 });
+
+// ── canonicalize() throws a JsError on a refusal, rather than aborting ──────────
+//
+// `urn:purrdf:rdfc:` is the canonicalization overlay's OWN reserved namespace (see
+// crates/rdf-core/src/ir/canon.rs). Only the two exact sentinel shapes the overlay
+// itself lowers are admitted — in particular `<urn:purrdf:rdfc:reifies>` as a
+// predicate whose object is a TRIPLE TERM. Spelling the same reserved predicate with
+// a plain IRI object (no triple term) is not one of those shapes, so it is refused:
+// accepting it would let a structurally different graph canonicalize to the exact
+// bytes a genuine reifier binding would, which is an identity collision. Before this
+// surface threw a `JsError` for the refusal, it aborted the wasm process instead.
+const RESERVED_PREDICATE_PLAIN_OBJECT = `@prefix ex: <http://example.org/> .
+ex:r <urn:purrdf:rdfc:reifies> ex:o .
+`;
+
+// The valid neighbour: an IRI adjacent to the reserved namespace (a DIFFERENT
+// `urn:purrdf:` sub-namespace, not `urn:purrdf:rdfc:`) in the exact same shape.
+// Over-refusal is the mirror bug of silent acceptance, so this must still
+// canonicalize, and the IRI must survive into the output untouched.
+const NEIGHBOURING_ORDINARY_PREDICATE = `@prefix ex: <http://example.org/> .
+ex:r <urn:purrdf:other:annotation> ex:o .
+`;
+
+test("canonicalize() throws on a reserved-vocabulary IRI, naming it, rather than aborting", () => {
+  const refused = Dataset.parse(RESERVED_PREDICATE_PLAIN_OBJECT, "turtle");
+  assert.throws(() => refused.canonicalize(), /urn:purrdf:rdfc:reifies/);
+});
+
+test("an ordinary IRI neighbouring the reserved namespace still canonicalizes", () => {
+  const ok = Dataset.parse(NEIGHBOURING_ORDINARY_PREDICATE, "turtle");
+  const canon = ok.canonicalize();
+  assert.ok(canon.includes("urn:purrdf:other:annotation"), canon);
+});

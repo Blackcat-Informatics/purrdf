@@ -41,9 +41,11 @@
 
 use proptest::prelude::*;
 use purrdf_rdf::{
-    BlankScope, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside, RdfQuad,
-    RdfTerm, RdfTriple, SerializeGraph, canonical_flat_nquads, flat_rdf_quads_from_dataset,
-    parse_dataset, serialize_dataset,
+    BlankScope, CanonHash, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfLookaside, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, canonical_flat_nquads,
+    canonicalize_with, dataset_from_quad_sources, flat_dataset_from_quad_sources,
+    flat_dataset_from_quads, flat_rdf_quads_from_dataset, parse_dataset, serialize_dataset,
+    try_canonicalize_flat_view,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -282,6 +284,128 @@ fn arb_dataset_rdfxml() -> impl Strategy<Value = std::sync::Arc<RdfDataset>> {
     prop::collection::vec(quad, 0..16).prop_map(dataset_from_quads)
 }
 
+// ── Wrapper-agreement differential generators: scoped blanks, nested triples,
+// blank graph names, and both reifier spellings ─────────────────────────────
+
+const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+
+/// The overlay's OWN reserved sentinel for a reifier binding
+/// (`purrdf_rdf::RESERVED_NAMESPACE` joined with `"reifies"`). Not exported
+/// (`purrdf-rdf` mints no vocabulary); spelled locally exactly as [`RDF_REIFIES`]
+/// above already is.
+const SENTINEL_REIFIES: &str = "urn:purrdf:rdfc:reifies";
+
+/// A graph-position term: an IRI or a BLANK NODE — a named graph named by a
+/// blank node, which `arb_dataset`/`arb_dataset_star` above never generate
+/// (their graph slot is `prop::option::of(arb_iri())`, IRI-only).
+fn arb_graph_term() -> impl Strategy<Value = RdfTerm> {
+    prop_oneof![
+        arb_iri().prop_map(RdfTerm::iri),
+        arb_bnode_label().prop_map(RdfTerm::blank_node),
+    ]
+}
+
+/// A quoted triple nested up to TWO levels deep: [`arb_quoted_triple`]'s
+/// one-level triple, sometimes wrapped as the object of an outer triple.
+fn arb_nested_triple() -> impl Strategy<Value = RdfTriple> {
+    arb_quoted_triple().prop_flat_map(|inner| {
+        let wrap = inner.clone();
+        prop_oneof![
+            Just(inner),
+            (arb_iri(), arb_iri()).prop_map(move |(s, p)| {
+                RdfTriple::new(RdfTerm::iri(s), p, RdfTerm::triple(wrap.clone()))
+            }),
+        ]
+    })
+}
+
+/// Object terms for the differential generator: the basic surface, plus a
+/// (possibly two-level-nested) quoted triple.
+fn arb_diff_object() -> impl Strategy<Value = RdfTerm> {
+    prop_oneof![
+        3 => arb_object_basic(),
+        1 => arb_nested_triple().prop_map(RdfTerm::triple),
+    ]
+}
+
+/// Builds the actual [`RdfQuad`] from a generated `(subject, predicate, object,
+/// graph)` tuple — the mapping [`arb_diff_quad`] and [`arb_diff_quad_no_sentinel`]
+/// share, so the two differ ONLY in which predicates they can produce.
+fn diff_quad_from_parts((s, p, o, g): (RdfTerm, String, RdfTerm, Option<RdfTerm>)) -> RdfQuad {
+    let quad = RdfQuad::new(s, p, o);
+    match g {
+        Some(g) => quad.in_graph(g),
+        None => quad,
+    }
+}
+
+/// A quad for the differential generator: any subject, a predicate that is USUALLY
+/// an ordinary IRI but OCCASIONALLY the literal `rdf:reifies` (so the
+/// INGESTION-time fold — `fold_statement_layer`, the production parsing route —
+/// has something to fold), and OCCASIONALLY the overlay's OWN reserved sentinel
+/// `urn:purrdf:rdfc:reifies` (so the CANONICALIZATION-time fold in `canon.rs` has
+/// something to fold too — the two are different seams). A (possibly nested) object,
+/// and an optional graph that may itself be a blank node, complete the quad.
+///
+/// See [`arb_diff_quad_no_sentinel`] for the variant the pre-delegation ORACLE
+/// property below needs: that route shares the sentinel fold's defect (module
+/// documentation of `flat_canon_of_a_sentinel_spelled_reifier_matches_its_real_predicate_spelling`),
+/// so a generator that can produce the sentinel is not safe input for an
+/// oracle-agreement property.
+fn arb_diff_quad() -> impl Strategy<Value = RdfQuad> {
+    let predicate = prop_oneof![
+        4 => arb_iri(),
+        1 => Just(RDF_REIFIES.to_owned()),
+        1 => Just(SENTINEL_REIFIES.to_owned()),
+    ];
+    (
+        arb_subject(),
+        predicate,
+        arb_diff_object(),
+        prop::option::of(arb_graph_term()),
+    )
+        .prop_map(diff_quad_from_parts)
+}
+
+/// [`arb_diff_quad`], constrained to NEVER produce the overlay's reserved sentinel —
+/// the generator the pre-delegation oracle property uses, because that oracle route
+/// shares the sentinel fold's defect and an oracle comparison over sentinel-spelled
+/// input would only prove the two agree on being wrong.
+fn arb_diff_quad_no_sentinel() -> impl Strategy<Value = RdfQuad> {
+    let predicate = prop_oneof![
+        4 => arb_iri(),
+        1 => Just(RDF_REIFIES.to_owned()),
+    ];
+    (
+        arb_subject(),
+        predicate,
+        arb_diff_object(),
+        prop::option::of(arb_graph_term()),
+    )
+        .prop_map(diff_quad_from_parts)
+}
+
+/// Two independently-generated quad sources. [`dataset_from_quad_sources`] and
+/// [`flat_dataset_from_quad_sources`] standardize each source apart under its
+/// own fresh [`BlankScope`], so a blank label repeated across the two sources
+/// still names two DISTINCT nodes — the "scoped blanks" surface the
+/// wrapper-agreement differential requires.
+fn arb_diff_sources() -> impl Strategy<Value = (Vec<RdfQuad>, Vec<RdfQuad>)> {
+    (
+        prop::collection::vec(arb_diff_quad(), 0..6),
+        prop::collection::vec(arb_diff_quad(), 0..4),
+    )
+}
+
+/// [`arb_diff_sources`], built from [`arb_diff_quad_no_sentinel`] — the oracle
+/// property's own generator (see that function's documentation for why).
+fn arb_diff_sources_no_sentinel() -> impl Strategy<Value = (Vec<RdfQuad>, Vec<RdfQuad>)> {
+    (
+        prop::collection::vec(arb_diff_quad_no_sentinel(), 0..6),
+        prop::collection::vec(arb_diff_quad_no_sentinel(), 0..4),
+    )
+}
+
 // ── Config ──────────────────────────────────────────────────────────────────────
 
 fn config() -> ProptestConfig {
@@ -414,6 +538,150 @@ proptest! {
         let (decoded, scope) = BlankScope::unqualify_label(&label);
         let qualified = scope.qualify_label(&decoded);
         prop_assert!(text.contains(&format!("rdf:nodeID=\"{qualified}\"")), "{}", text);
+    }
+
+    /// Wrapper-agreement differential: `try_canonicalize_flat_view` agrees with the
+    /// PRE-DELEGATION flatten-and-canonicalize route —
+    /// `flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&d))` then
+    /// `canonicalize_with` — over generated datasets carrying scoped blanks (two
+    /// independently-scoped sources), nested triple terms, blank graph names,
+    /// and the `rdf:reifies` reifier "spelling": [`dataset_from_quad_sources`]
+    /// (folds an `rdf:reifies` triple-term quad into a reifier binding, the same
+    /// route production ingestion uses) and [`flat_dataset_from_quad_sources`]
+    /// (leaves it a plain quad), chosen per generated case by `fold`.
+    ///
+    /// Deliberately generated WITHOUT the overlay's reserved sentinel
+    /// (`arb_diff_sources_no_sentinel`, not `arb_diff_sources`): the reference route
+    /// this property compares against shares the sentinel fold's defect (it never
+    /// folds a base quad's sentinel spelling back into a statement-layer row
+    /// either), so a sentinel-spelled input would make this an agreement between two
+    /// wrong answers rather than a check. See
+    /// `flat_canon_of_a_sentinel_spelled_reifier_matches_its_real_predicate_spelling`
+    /// below for the property that covers the sentinel, as an IDENTITY law instead
+    /// of an oracle comparison.
+    #[test]
+    fn flat_view_canon_matches_the_pre_delegation_flatten_route(
+        (source0, source1) in arb_diff_sources_no_sentinel(),
+        fold in any::<bool>(),
+        sha384 in any::<bool>(),
+    ) {
+        let sources: [&[RdfQuad]; 2] = [&source0, &source1];
+        let built = if fold {
+            dataset_from_quad_sources(&sources)
+        } else {
+            flat_dataset_from_quad_sources(&sources)
+        };
+        let Ok(dataset) = built else {
+            // A generated stream that fails to freeze (e.g. an `rdf:reifies` quad
+            // whose object is not itself a triple term, under the folding route)
+            // is not this property's concern — it is about agreement on datasets
+            // that DO exist.
+            return Ok(());
+        };
+        let hash = if sha384 { CanonHash::Sha384 } else { CanonHash::Sha256 };
+        let reference = {
+            let flat = flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&dataset))
+                .expect("an already-valid dataset's own flat quad stream must re-freeze");
+            canonicalize_with(&flat, hash).nquads
+        };
+        match try_canonicalize_flat_view(&*dataset, hash) {
+            Ok(canonicalized) => prop_assert_eq!(canonicalized.nquads, reference),
+            Err(err) => prop_assert!(
+                false,
+                "generated non-reserved-vocabulary input was refused: {err}"
+            ),
+        }
+    }
+
+    /// The spelled-row identity law, generated: a base quad spelling a reifier row through the
+    /// overlay's OWN reserved sentinel (`urn:purrdf:rdfc:reifies`, generated by
+    /// [`arb_diff_quad`] via [`arb_diff_sources`]) must flat-canonicalize to the
+    /// SAME bytes as the identical dataset with every such quad's predicate swapped
+    /// for the row's real predicate (`rdf:reifies`) instead — the two spell the same
+    /// content, so they must not split identity.
+    ///
+    /// An IDENTITY assertion, deliberately NOT an oracle comparison: the
+    /// pre-delegation route `flat_view_canon_matches_the_pre_delegation_flatten_route`
+    /// compares against shares this exact defect (it never folds a base quad's
+    /// sentinel spelling back into a statement-layer row either), so comparing
+    /// against it here would only prove the two agree on being wrong — this property
+    /// instead compares the fixed implementation against ITSELF on the two
+    /// content-equivalent spellings.
+    ///
+    /// A sentinel-spelled quad whose object is NOT a triple term is not a fold
+    /// candidate at all (still reserved vocabulary, refused under both spellings'
+    /// generation — see `the_fold_is_shape_exact_and_its_near_misses_still_refuse`
+    /// in `purrdf-core`), so it is not this property's concern: the swapped dataset
+    /// is trivially always admissible (the swap removes every reserved-namespace
+    /// IRI), but the ORIGINAL is admissible only when every sentinel occurrence is
+    /// in the fold's exact shape — exactly the condition this property gates on.
+    #[test]
+    fn flat_canon_of_a_sentinel_spelled_reifier_matches_its_real_predicate_spelling(
+        (source0, source1) in arb_diff_sources(),
+        fold in any::<bool>(),
+        sha384 in any::<bool>(),
+    ) {
+        let sources: [&[RdfQuad]; 2] = [&source0, &source1];
+        let built = if fold {
+            dataset_from_quad_sources(&sources)
+        } else {
+            flat_dataset_from_quad_sources(&sources)
+        };
+        let Ok(dataset) = built else {
+            return Ok(());
+        };
+
+        let swap = |quads: &[RdfQuad]| -> Vec<RdfQuad> {
+            quads
+                .iter()
+                .cloned()
+                .map(|mut q| {
+                    if q.predicate == SENTINEL_REIFIES {
+                        q.predicate = RDF_REIFIES.to_owned();
+                    }
+                    q
+                })
+                .collect()
+        };
+        let swapped0 = swap(&source0);
+        let swapped1 = swap(&source1);
+        let swapped_sources: [&[RdfQuad]; 2] = [&swapped0, &swapped1];
+        let swapped_built = if fold {
+            dataset_from_quad_sources(&swapped_sources)
+        } else {
+            flat_dataset_from_quad_sources(&swapped_sources)
+        };
+        // The swap can turn a sentinel-spelled quad into an ordinary `rdf:reifies`
+        // quad the INGESTION-time fold (`fold == true`) then tries to fold too; if
+        // ITS object is not a triple term either, freezing fails for the same
+        // unrelated reason `built` above may have — not this property's concern.
+        let Ok(swapped_dataset) = swapped_built else {
+            return Ok(());
+        };
+
+        let hash = if sha384 { CanonHash::Sha384 } else { CanonHash::Sha256 };
+        // The swap removes every reserved-namespace IRI, so the only way this can
+        // still refuse is an unrelated poison-budget exhaustion — skip rather than
+        // fail on that, since it is not what this property is about either.
+        let Ok(swapped_canonicalized) = try_canonicalize_flat_view(&*swapped_dataset, hash) else {
+            return Ok(());
+        };
+
+        match try_canonicalize_flat_view(&*dataset, hash) {
+            Ok(canonicalized) => prop_assert_eq!(
+                canonicalized.nquads,
+                swapped_canonicalized.nquads,
+                "a sentinel-spelled reifier row must flat-canonicalize identically \
+                 to its real-predicate spelling"
+            ),
+            Err(_) => {
+                // A sentinel occurrence that is NOT the fold's exact shape (a
+                // non-triple-term object) is a genuine, unrelated refusal — the
+                // original and the swapped dataset are not equivalent content in
+                // that case, so there is nothing to compare.
+                return Ok(());
+            }
+        }
     }
 }
 

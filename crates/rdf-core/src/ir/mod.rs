@@ -61,13 +61,16 @@ pub mod validate;
 pub use builder::{RdfDatasetBuilder, ValidatedRdfDatasetBuilder};
 pub use bundle::{GtsBundle, RdfEnvelope};
 pub use canon::{
-    BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
-    CanonHash, CanonicalRelabeling, Canonicalized, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
-    ReservedVocabulary, TermPosition, blank_count_view, canonical_relabel,
-    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
-    canonicalize_with, check_admissible, check_admissible_view, graph_digest_view,
-    try_canonicalize, try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
-    try_graph_digest_view,
+    BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
+    CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
+    CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
+    CanonHash, CanonPresentation, CanonicalRelabeling, Canonicalized, RDFC_CALL_LIMIT,
+    RESERVED_NAMESPACE, ReservedVocabulary, TermPosition, ViewCanonError, blank_count_view,
+    canonical_relabel, canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view,
+    canonicalize_view, canonicalize_with, check_admissible, check_admissible_flat_view,
+    check_admissible_view, graph_digest_view, try_canonicalize, try_canonicalize_flat_graph_view,
+    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_view,
+    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{

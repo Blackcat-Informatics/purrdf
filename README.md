@@ -755,7 +755,7 @@ full scoreboard and how-to-run in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **258 / 262** agreeing, 4 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |
 | RDFC-1.0 | W3C canonicalization fixtures | green |
-| RDF 1.2 canonicalization profile (`purrdf-rdfc12` v2) | first-party vectors (`vectors/rdf12-canon/`) | **5 / 5** |
+| RDF 1.2 canonicalization profile (`purrdf-rdfc12` v2) | first-party vectors (`vectors/rdf12-canon/`) | **12 / 12** |
 | GTS | frozen cross-language vectors (`vectors/`) | **38 / 39** fold byte-exactly into their committed expectation, 1 ledgered divergence |
 
 ## How capability grows

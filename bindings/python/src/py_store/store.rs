@@ -957,10 +957,24 @@ impl PyDataset {
     }
 
     /// Canonicalize blank-node labels in place under `algorithm` (native RDFC-1.0).
-    fn canonicalize(&mut self, py: Python<'_>, algorithm: PyCanonicalizationAlgorithm) {
+    ///
+    /// Raises `ValueError` if this dataset's content is refused canonicalization (a
+    /// reserved-vocabulary IRI, or an n-degree search that exhausts its budget) — this
+    /// dataset's content is wholly caller-supplied, so the refusal comes back as an
+    /// ordinary Python exception via the typed [`purrdf_core::try_canonicalize`] path,
+    /// never a process abort. The dataset is left unchanged when it raises.
+    fn canonicalize(
+        &mut self,
+        py: Python<'_>,
+        algorithm: PyCanonicalizationAlgorithm,
+    ) -> PyResult<()> {
         // RDFC-1.0 hashing is the heavy path — run it detached (GIL released).
         let quads = &self.quads;
-        self.quads = py.detach(|| super::canon::canonicalize_quads(quads, algorithm));
+        let canonicalized = py
+            .detach(|| super::canon::canonicalize_quads(quads, algorithm))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        self.quads = canonicalized;
+        Ok(())
     }
 
     fn __len__(&self) -> usize {

@@ -22,7 +22,10 @@ use pyo3::types::{PyBytes, PyString};
 
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
 use crate::py_store::PyRdfFormat;
-use crate::{NativeRdfFormat, RdfDataset, RdfLookaside, canonical_flat_nquads, gts_write};
+use crate::{
+    CanonHash, NativeRdfFormat, RdfDataset, RdfLookaside, ViewCanonError, gts_write,
+    try_canonicalize_flat_view,
+};
 
 /// A Python handle to a frozen [`RdfDataset`].
 #[pyclass(name = "RdfDataset", frozen)]
@@ -103,11 +106,26 @@ impl PyRdfDataset {
     /// graph term rather than silently dropping it, which is exactly the case a
     /// `to_ntriples` spelling would misdescribe. There is deliberately no alias:
     /// one serializer, one name.
+    ///
+    /// This handle can wrap arbitrary caller-supplied bytes, so a refusal (reserved
+    /// vocabulary, or n-degree search budget exhaustion) is raised as an ordinary
+    /// `ValueError` via the typed [`try_canonicalize_flat_view`] path, never a process
+    /// abort.
     fn to_nquads(&self, py: Python<'_>) -> PyResult<String> {
         let dataset = Arc::clone(&self.inner);
         // Canonicalization + serialization run detached (GIL released).
-        py.detach(|| canonical_flat_nquads(dataset.as_ref()))
-            .map_err(PyValueError::new_err)
+        py.detach(
+            || match try_canonicalize_flat_view(dataset.as_ref(), CanonHash::Sha256) {
+                Ok(canonicalized) => Ok(canonicalized.nquads),
+                Err(ViewCanonError::Refused(err)) => Err(err.to_string()),
+                Err(ViewCanonError::NotReady { error, .. }) => match error {
+                // LAW: a frozen `&RdfDataset`'s `FallibleDatasetView::Error` is
+                // `Infallible` — the frozen dataset never faults, so this arm is
+                // unreachable by construction.
+            },
+            },
+        )
+        .map_err(PyValueError::new_err)
     }
 
     /// Serialize this immutable dataset as configured JSON-LD or YAML-LD.

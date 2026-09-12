@@ -529,6 +529,7 @@ fn resolved_imports_error(error: EntailError) -> EntailError {
         | EntailError::MatchBudget
         | EntailError::ProofsNotRecorded
         | EntailError::Stopped
+        | EntailError::Canonicalization(_)
         | EntailError::Unsatisfiable) => other,
     }
 }

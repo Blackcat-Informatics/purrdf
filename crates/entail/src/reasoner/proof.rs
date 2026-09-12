@@ -812,15 +812,18 @@ impl ServiceProof {
     /// Check that this proof is about `question`, over `ontology`.
     ///
     /// **The binding.** Both halves are recomputed by the CONSUMER: the input identity from
-    /// their own dataset with [`purrdf_core::canonicalize`], and the question from the question
-    /// they are holding. An `entails` proof for a different axiom, or a `classify` proof over a
-    /// different class list, fails here before a single run is replayed.
+    /// their own dataset with [`purrdf_core::try_canonicalize`], and the question from the
+    /// question they are holding. An `entails` proof for a different axiom, or a `classify`
+    /// proof over a different class list, fails here before a single run is replayed.
     ///
     /// # Errors
     ///
-    /// [`DlProofError::InputMismatch`] or [`DlProofError::WrongQuestion`].
+    /// [`DlProofError::Canonicalization`] if `ontology` — wholly caller-supplied — refuses
+    /// canonicalization; otherwise [`DlProofError::InputMismatch`] or
+    /// [`DlProofError::WrongQuestion`].
     pub fn binds(&self, ontology: &RdfDataset, question: &Question) -> Result<(), DlProofError> {
-        let expected = crate::owl_dl::proof::ontology_identity(ontology);
+        let expected = crate::owl_dl::proof::try_ontology_identity(ontology)
+            .map_err(DlProofError::Canonicalization)?;
         if expected != self.input {
             return Err(DlProofError::InputMismatch {
                 expected: hex(expected),
@@ -2159,6 +2162,7 @@ mod tests {
     use purrdf_core::{RdfDatasetBuilder, TermValue};
 
     use super::*;
+    use crate::EntailError;
     use crate::reasoner::{
         Certified, ModuleMethod, Reasoner, extract_module, extract_module_with_proofs,
     };
@@ -2578,6 +2582,45 @@ mod tests {
             ),
             Err(DlProofError::InputMismatch { .. })
         ));
+    }
+
+    /// `ServiceProof::verify`'s FIRST step, [`ServiceProof::binds`], recomputes the
+    /// checker's own ontology identity — and the checker's ontology is wholly
+    /// caller-supplied at the `check_dl_proof` boundary (a document parsed at a
+    /// wasm/Python/C-ABI boundary). A reserved-vocabulary checking ontology must refuse
+    /// that identity as a [`DlProofError::Canonicalization`] VALUE, rather than aborting
+    /// the process through the panicking `purrdf_core::canonicalize`
+    /// `crate::owl_dl::proof::ontology_identity` `binds` used to call — before this fix,
+    /// this fired ahead of even an `InputMismatch`, on every service, and every DL
+    /// certificate along with it.
+    #[test]
+    fn a_service_proof_refuses_a_reserved_vocabulary_checking_ontology_as_a_value() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let reserved = reserved_taxonomy();
+        let ctx = context(&ontology, &Question::Consistency);
+        let error = answer
+            .proof()
+            .expect(RECORDED)
+            .verify(
+                &reserved,
+                &Question::Consistency,
+                Some(answer.certificate()),
+                &ctx,
+            )
+            .expect_err(
+                "a reserved-vocabulary checking ontology must refuse canonicalization, not \
+                 panic",
+            );
+        assert!(
+            matches!(error, DlProofError::Canonicalization(_)),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
+            "{error}"
+        );
     }
 
     /// A claim naming a run that answered the OTHER way is rejected: a refutation basis must
@@ -3084,6 +3127,54 @@ mod tests {
 
     // ── Module extraction: syntactic, and it says so ────────────────────────────
 
+    /// [`taxonomy`], with `Animal` replaced by a reserved-vocabulary IRI
+    /// ([`purrdf_core::RESERVED_NAMESPACE`]). `Cat ⊑ Animal` still holds, so the
+    /// `Cat`-seeded ⊥-module carries the reserved IRI through to its own content.
+    fn reserved_taxonomy() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri(EX_CAT);
+        let animal = b.intern_iri(&format!("{}Animal", purrdf_core::RESERVED_NAMESPACE));
+        let tom = b.intern_iri(EX_TOM);
+        let sub = b.intern_iri(RDFS_SUBCLASS_OF);
+        let ty = b.intern_iri(RDF_TYPE);
+        b.push_quad(cat, sub, animal, None);
+        b.push_quad(tom, ty, cat, None);
+        b.freeze().expect("the fixture freezes")
+    }
+
+    /// The ontology `extract_module_with_proofs` reasons over is wholly caller-supplied — a
+    /// document parsed at a wasm/Python/C-ABI boundary — so a reserved-vocabulary IRI must
+    /// refuse the proof term's producer-independent identity as an
+    /// [`EntailError::Canonicalization`] VALUE, rather than aborting the process through the
+    /// panicking `purrdf_core::canonicalize` `ontology_identity` used to reach. This is
+    /// exactly the `Reasoner(data, proofs=True).extract_module(...)` panic reachable from
+    /// Python/wasm/the C ABI before this fix.
+    #[test]
+    fn extract_module_with_proofs_refuses_a_reserved_vocabulary_ontology_as_a_value() {
+        let ontology = reserved_taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let error = extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot)
+            .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
+        assert!(
+            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
+            "{error}"
+        );
+    }
+
+    /// The valid neighbour of the refusal above: the same seed and method over the
+    /// ORDINARY [`taxonomy`] (no reserved IRI) still extracts and still records a proof —
+    /// the migration off the panicking `ontology_identity` changed no admitted-input
+    /// behavior.
+    #[test]
+    fn extract_module_with_proofs_still_admits_the_ordinary_taxonomy() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let extracted = extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot)
+            .expect("an ordinary taxonomy must still extract");
+        assert!(extracted.proof().is_some(), "{RECORDED}");
+    }
+
     /// A module extraction's proof binds the signature, the notion AND the extracted module's
     /// own identity — and reports ZERO runs, because it makes none.
     #[test]
@@ -3422,7 +3513,7 @@ mod tests {
                 Reasoner::new(&ontology)
                     .expect("reverse-maps")
                     .proof_context(),
-                Err(crate::EntailError::ProofsNotRecorded)
+                Err(EntailError::ProofsNotRecorded)
             ),
             "a non-recording reasoner has no input identity, and says so rather than \
              substituting a placeholder"

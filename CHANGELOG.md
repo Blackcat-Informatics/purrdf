@@ -10,6 +10,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **BREAKING** **core:** `Canonicalized` now reports the presentation that
+  produced it in `presentation: CanonPresentation` — the fourth coordinate of
+  the canonicalization pin `(profile, version, presentation, hash)`, readable
+  directly off a result in hand. Rust callers constructing a `Canonicalized`
+  struct literal or destructuring it exhaustively must supply or bind that
+  field; callers receiving results from the canonicalization entry points are
+  unaffected. This requires a major release under the suite's versioning
+  policy.
 - **BREAKING** **shapes:** `PropertyShape` now carries its declaring RDF node
   in `id: Term`. Rust callers constructing a property-shape struct literal must
   supply that identity; callers using `from_dataset` or `parse_shapes` receive

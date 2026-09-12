@@ -93,7 +93,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::dataset_view::{DatasetView, FallibleDatasetView, ViewOperationStatus};
+use crate::dataset_view::{DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain};
 use crate::ir::canon::try_canonicalize_view;
 use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities};
 
@@ -223,6 +223,22 @@ impl std::fmt::Display for PackCheckpoint {
             Self::BeforeRows => "before rows",
             Self::AfterRows => "after rows",
         })
+    }
+}
+
+/// Map the shared, crate-internal [`DrainCheckpoint`] to pack's own public checkpoint
+/// vocabulary — pack keeps its historical `BeforeRows`/`AfterRows` spelling as its
+/// public surface while sharing the underlying two-sample law with every other
+/// [`crate::FallibleDatasetView`] consumer.
+impl From<DrainCheckpoint> for PackCheckpoint {
+    /// Preserve which checkpoint fired: `Before` and `After` carry the same
+    /// two-sample meaning as [`DrainCheckpoint`], only spelled in pack's own
+    /// public vocabulary.
+    fn from(checkpoint: DrainCheckpoint) -> Self {
+        match checkpoint {
+            DrainCheckpoint::Before => Self::BeforeRows,
+            DrainCheckpoint::After => Self::AfterRows,
+        }
     }
 }
 
@@ -505,12 +521,13 @@ impl PackBuilder {
     ///
     /// # Operational refusal
     ///
-    /// A fallible view's status is sampled TWICE: before a single row is drained,
-    /// and again after every row has been drained and the identity digest taken. A
-    /// view that faults mid-read stops yielding rather than erroring, so without
-    /// the second sample this would frame a pack over a truncation and stamp it
-    /// with a digest of the truncated content. Neither sample `Ready` ⇒ no bytes:
-    /// the error is returned and nothing partial is published.
+    /// A fallible view's status is sampled TWICE — before a single row is drained,
+    /// and again after every row has been drained and the identity digest taken —
+    /// through the shared [`checkpointed_drain`] helper (sample twice; neither
+    /// sample Ready ⇒ nothing partial is published). A view that faults mid-read
+    /// stops yielding rather than erroring, so without the second sample this would
+    /// frame a pack over a truncation and stamp it with a digest of the truncated
+    /// content.
     ///
     /// # Errors
     ///
@@ -522,10 +539,13 @@ impl PackBuilder {
     /// otherwise fails is if one of THIS module's own just-written sections fails
     /// to re-open — a broken-invariant bug, not a data-dependent error.
     pub fn build_view_bytes<D: FallibleDatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
-        checkpoint(view, PackCheckpoint::BeforeRows)?;
-        let bytes = encode_view(view)?;
-        checkpoint(view, PackCheckpoint::AfterRows)?;
-        Ok(bytes)
+        match checkpointed_drain(view, encode_view) {
+            Ok(result) => result,
+            Err(failure) => Err(PackError::ViewNotReady {
+                checkpoint: PackCheckpoint::from(failure.checkpoint),
+                cause: failure.error.to_string(),
+            }),
+        }
     }
 
     /// A public convenience alias for [`build_bytes`](Self::build_bytes) —
@@ -536,17 +556,6 @@ impl PackBuilder {
     /// Identical to [`build_bytes`](Self::build_bytes).
     pub fn from_dataset(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
         Self::build_bytes(dataset)
-    }
-}
-
-/// Sample a fallible view's operational status at one encode boundary.
-fn checkpoint<D: FallibleDatasetView>(view: &D, at: PackCheckpoint) -> Result<(), PackError> {
-    match view.operation_status() {
-        ViewOperationStatus::Ready { .. } => Ok(()),
-        ViewOperationStatus::Failed { error, .. } => Err(PackError::ViewNotReady {
-            checkpoint: at,
-            cause: error.to_string(),
-        }),
     }
 }
 

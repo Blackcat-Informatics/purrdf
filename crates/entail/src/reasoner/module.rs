@@ -67,7 +67,7 @@ use super::term_key;
 use crate::EntailError;
 use crate::interner::{Interner, intern_into};
 use crate::owl_dl::parser::Vocab;
-use crate::owl_dl::proof::ontology_identity;
+use crate::owl_dl::proof::try_ontology_identity;
 use crate::vocab::{
     OWL_ANNOTATIONPROPERTY, OWL_CLASS, OWL_DATATYPEPROPERTY, OWL_OBJECTPROPERTY, RDF_PROPERTY,
 };
@@ -410,18 +410,24 @@ fn extract(
     // this proof term against, and the reason a proof of one extraction cannot stand for
     // another over the same signature.
     //
-    // Both `ontology_identity` calls are RDFC-1.0 canonicalizations, and they happen only
-    // inside this `then`: the non-recording entry point does not compute a digest it would
-    // then drop.
-    let proof = proofs.then(|| {
+    // Both identity calls are RDFC-1.0 canonicalizations, and they happen only when
+    // `proofs` is set: the non-recording entry point does not compute a digest it would
+    // then drop. `ds` and `module` are both wholly caller-supplied (`module` is a subgraph
+    // of `ds`), so this goes through the fallible, non-panicking
+    // `try_ontology_identity` — the untrusted-input entry point — rather than
+    // `ontology_identity`, which panics on the same refusal.
+    let proof = if proofs {
+        let module_digest =
+            try_ontology_identity(&module).map_err(EntailError::Canonicalization)?;
+        let ds_digest = try_ontology_identity(ds).map_err(EntailError::Canonicalization)?;
         let claim = Claim::new(
             ClaimSubject::Module {
-                digest: ontology_identity(&module),
+                digest: module_digest,
             },
             ClaimBasis::Syntactic,
         );
-        ServiceProof::new(
-            ontology_identity(ds),
+        Some(ServiceProof::new(
+            ds_digest,
             Question::ModuleExtraction {
                 signature: signature.to_vec(),
                 method,
@@ -430,8 +436,10 @@ fn extract(
             vec![claim],
             None,
             false,
-        )
-    });
+        ))
+    } else {
+        None
+    };
     Ok(ModuleExtraction {
         module,
         method,

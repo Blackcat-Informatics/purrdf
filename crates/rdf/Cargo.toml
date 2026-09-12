@@ -193,3 +193,13 @@ harness = false
 # view-work families named. Report-only; asserts no magnitude and no speedup.
 name = "gts_ingest"
 harness = false
+
+[[bench]]
+# Owned (flatten -> re-freeze -> canonicalize) vs. borrowed
+# (`try_canonicalize_flat_view`) flat-assertion canonicalization, over a plain
+# dataset, one carrying the RDF 1.2 statement layer, and that statement-bearing
+# content read through a composite, a delta, and a paged view. Report-only;
+# observes the drain-multiple-times-vs-freeze-a-second-dataset trade, asserts no
+# magnitude and no speedup.
+name = "flat_view_canon"
+harness = false
