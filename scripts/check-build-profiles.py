@@ -237,7 +237,7 @@ def _unit(
 def self_test() -> None:
     """Prove the gate is capable of failing, per the repo's self-test convention.
 
-    One assertion per rule, in both directions: a gate that only demonstrates its
+    One check per rule, in both directions: a gate that only demonstrates its
     refusals has not shown that it accepts the configuration the workspace ships,
     and over-refusal is as much a bug as under-refusal.
     """
@@ -249,55 +249,62 @@ def self_test() -> None:
     def check(units: list[dict[str, Any]]) -> list[str]:
         return audit({"units": units}, members, "test")
 
+    def require(condition: Any, message: str) -> None:
+        if not condition:
+            raise AssertionError(message)
+
     conforming = [_unit(member), _unit(other), _unit(dep)]
-    assert not check(conforming), "the shipped configuration must pass"
+    require(not check(conforming), "the shipped configuration must pass")
 
     # Rule 1, opt-level, for BOTH origins. The member arm is the regression this
     # gate exists for: eleven members sat at opt-level 0 behind a tuned-looking
     # manifest, so a fixture that only proves a dependency can be caught would
     # have passed throughout that entire period.
-    assert check([_unit(member, opt="0"), _unit(other), _unit(dep)]), (
+    require(check([_unit(member, opt="0"), _unit(other), _unit(dep)]), (
         "an unoptimized workspace member must be caught"
-    )
-    assert check([_unit(member), _unit(other), _unit(dep, opt="2")]), (
+    ))
+    require(check([_unit(member), _unit(other), _unit(dep, opt="2")]), (
         "an unoptimized dependency must be caught"
-    )
+    ))
     # The umbrella crate's package id carries no name; it must still be recognised
     # as a member rather than reported as a dependency.
     findings = check([_unit(member), _unit(other, opt="0"), _unit(dep)])
-    assert findings and "workspace member" in findings[0], (
+    require(findings and "workspace member" in findings[0], (
         "the nameless umbrella package id must still read as a member"
-    )
+    ))
     # A build script's own COMPILE unit is a compilation like any other.
-    assert check([*conforming, _unit(dep, opt="0", target="build-script-build")]), (
+    require(check([*conforming, _unit(dep, opt="0", target="build-script-build")]), (
         "an unoptimized build-script compile unit must be caught"
-    )
+    ))
 
     # Rule 2 and 3, the runtime checks, on both origins.
-    assert check([_unit(member, debug_assertions=False), _unit(other), _unit(dep)]), (
+    require(check([_unit(member, debug_assertions=False), _unit(other), _unit(dep)]), (
         "a member with debug-assertions off must be caught"
-    )
-    assert check([_unit(member, overflow_checks=False), _unit(other), _unit(dep)]), (
+    ))
+    require(check([_unit(member, overflow_checks=False), _unit(other), _unit(dep)]), (
         "a member with overflow-checks off must be caught"
-    )
-    assert check([_unit(member), _unit(other), _unit(dep, debug_assertions=False)]), (
+    ))
+    require(check([_unit(member), _unit(other), _unit(dep, debug_assertions=False)]), (
         "a dependency with debug-assertions off must be caught"
-    )
-    assert check([_unit(member), _unit(other), _unit(dep, overflow_checks=False)]), (
+    ))
+    require(check([_unit(member), _unit(other), _unit(dep, overflow_checks=False)]), (
         "a dependency with overflow-checks off must be caught"
-    )
+    ))
 
     # A build-script EXECUTION unit is not a compilation. Cargo reports
     # `overflow_checks = false` on every one of them today, so a gate that failed
     # to skip them would refuse the shipped configuration outright.
-    assert not check(
-        [*conforming, _unit(dep, mode="run-custom-build", opt="0", overflow_checks=False)]
-    ), "a build-script execution unit must be skipped, not refused"
+    require(
+        not check(
+            [*conforming, _unit(dep, mode="run-custom-build", opt="0", overflow_checks=False)]
+        ),
+        "a build-script execution unit must be skipped, not refused",
+    )
 
     # A member that is not built at all is invisible to every per-unit rule.
-    assert check([_unit(member), _unit(dep)]), (
+    require(check([_unit(member), _unit(dep)]), (
         "a workspace member missing from the graph must be caught"
-    )
+    ))
 
     # The unstable schema moving must name the field, not raise KeyError.
     for broken, missing in (
@@ -324,7 +331,7 @@ def self_test() -> None:
         try:
             audit(broken, members, "test")
         except SchemaError as exc:
-            assert missing in str(exc), f"the failure must name `{missing}`: {exc}"
+            require(missing in str(exc), f"the failure must name `{missing}`: {exc}")
         else:  # pragma: no cover - guards the guard
             raise AssertionError(f"a graph missing `{missing}` must be a SchemaError")
 
