@@ -252,34 +252,93 @@ strip = "symbols"
 debug = true
 strip = "none"
 
-# Optimize third-party deps (crypto, compression, regex) even in dev builds so
-# the proptest/conformance test loop stays fast; workspace members are excluded.
+# === The GATE profile ===
+#
+# `make check` runs the whole test surface and `make conformance` runs every W3C
+# suite through it, so both gates are bounded by how well the engines under them
+# were compiled. `cargo test` builds with the `test` profile, which inherits
+# every value in this block — including the `package` table below. There is
+# deliberately no `[profile.test]` section: it would be a second place to change
+# one thing, and `scripts/check-build-profiles.py` reads the resolved `test`
+# graph, so the inheritance is proven rather than assumed.
+#
+# This block replaced four hand-written per-crate `opt-level = 2` tables. They
+# were right about the mechanism and wrong about its reach: the `"*"` glob below
+# matches DEPENDENCIES ONLY — Cargo excludes workspace members from it — so
+# every member that was not individually named sat at the dev default of
+# opt-level 0. That was twenty-one crates, among them the SHACL validator, the
+# ShEx validator, the SPARQL evaluator, the Datalog substrate and the GTS codec:
+# precisely the engines the conformance corpora exercise. The manifest looked
+# tuned and the gate was not, and nothing in the build said so.
+#
+# The deleted tables' measured rationale is why the base is opt-3, so it lives
+# on here. At the dev default the zero-copy SPARQL lexer and the id-native
+# string interners pay full un-inlined call overhead on every byte, making the
+# compute-bound parse/proptest suite roughly 300x slower than release (~3 s vs
+# ~10 ms for a ~4350-triple parse) and blowing test timeouts. The OWL-Direct
+# tableau is checked against a naive model-enumeration oracle
+# (`owl_dl::oracle`) that decides satisfiability by enumerating EVERY
+# interpretation over a bounded domain — exponential on purpose, because the
+# oracle's whole value is being too simple to be wrong — so its cost is a
+# bitmask inner loop run hundreds of millions of times, which un-inlined codegen
+# made roughly 15x slower.
+#
+# Optimizing the gate does not cost build time, which is the counter-intuitive
+# part. MEASURED on the SHACL crate, which sat at opt-level 0, two samples per
+# arm on a shared 32-core host (so the fastest sample of each is quoted — the
+# slow ones are contention, not codegen):
+#
+#   `cargo test -p purrdf-shapes` run time     9.9 s -> 2.0 s   (~5x faster)
+#   rebuild after one first-party edit         759 s -> 553 s   (faster, not slower)
+#   peak single-rustc RSS                      3.5 -> 6.3 GiB   (the real cost)
+#
+# Un-inlined code is BIGGER, and a crate whose test surface links dozens of
+# binaries pays that size back at every link, which is why opt-3 does not lose
+# the build-time trade it looks like it should. What it does cost is memory per
+# rustc process; that is the number to watch when sizing a CI runner, not wall
+# clock.
+#
+# What is deliberately NOT set here:
+#   * no `lto`, no `codegen-units = 1`. Both serialize codegen and inflate the
+#     link step's memory. Release wants them because it ships once; the gate
+#     wants the opposite, because it rebuilds constantly and CI runs it cold.
+#   * no `strip`. At opt-3 inlining already shreds stack frames; deleting the
+#     symbol names as well would leave a failing proptest or conformance case
+#     reporting bare addresses, on the one profile whose entire job is finding
+#     bugs.
+[profile.dev]
+opt-level = 3
+# Line tables rather than full DWARF: a backtrace keeps its function names and
+# file/line, without the multi-GB symbol trees nothing here consumes.
+debug = 1
+# Orthogonal to opt-level, and load-bearing. First-party code carries
+# `#[cfg(debug_assertions)]` bodies — the SPARQL parser and the BM25 scorer among
+# them — that vanish silently with the flag, and overflow checks are what keep an
+# arithmetic bug in a byte-deterministic codec from becoming a wrong-but-green
+# run. Release-grade codegen AND the safety net, never one in place of the other.
+debug-assertions = true
+overflow-checks = true
+
+# DEPENDENCIES ONLY — Cargo excludes workspace members from `"*"`. They inherit
+# opt-level 3 from the base above, so it is stated once and proven for every unit
+# by `scripts/check-build-profiles.py` rather than restated here.
+#
+# They keep the runtime checks too. Turning them off would buy build speed with
+# the internal sanity checks of the crypto, compression and columnar crates,
+# during exactly the runs whose job is finding bugs, in a library whose contract
+# is byte determinism. That is not a trade this workspace makes at any measured
+# price. The debug-info saving is taken here instead, where nearly every unit in
+# the graph is.
 [profile.dev.package."*"]
-opt-level = 2
+debug = false
 
-# The `"*"` glob above matches DEPENDENCIES ONLY — Cargo excludes workspace
-# member crates from it. Left at the dev default (opt-level = 0, no inlining),
-# the zero-copy SPARQL lexer and the id-native string interners pay full
-# un-inlined call overhead on every byte, making the compute-bound parse/proptest
-# test suite roughly 300x slower than release (~3 s vs ~10 ms for a ~4350-triple
-# parse) and blowing test timeouts. Raise just these parse-hot crates to
-# opt-level = 2 in dev/test. Overflow-checks and debug-assertions stay at their
-# dev defaults (ON) — these paths have no debug_assert!, so inlining is the
-# dominant lever and the safety checks still catch real bugs under test.
-[profile.dev.package.purrdf-sparql-algebra]
-opt-level = 2
-
-[profile.dev.package.purrdf-rdf]
-opt-level = 2
-
-[profile.dev.package.purrdf-core]
-opt-level = 2
-
-# Same argument, different hot loop: the OWL-Direct tableau is checked against a naive
-# model-enumeration oracle (`owl_dl::oracle`) that decides satisfiability by enumerating
-# EVERY interpretation over a bounded domain. That is exponential on purpose — the oracle's
-# whole value is being too simple to be wrong — so the suite's cost is a bitmask inner loop
-# run hundreds of millions of times, which un-inlined dev codegen makes roughly 15x slower
-# and pushes the module past a reasonable test budget.
-[profile.dev.package.purrdf-entail]
-opt-level = 2
+# Build scripts, proc-macros and THEIR dependencies do not inherit the base
+# profile — Cargo governs them with `build-override`, whose default is the
+# unoptimized one. The deleted `[profile.dev.package."*"] opt-level = 2` table
+# reached them only because `package."*"` outranks `build-override`, so raising
+# the base alone would have QUIETLY DE-OPTIMIZED sixty units that are pure build
+# time: `serde_derive`, `clap_derive`, `displaydoc` and the rest expand on every
+# compile of every crate that uses them. Named here, where the population is
+# named, instead of riding on a glob that means something else.
+[profile.dev.build-override]
+opt-level = 3

@@ -44,6 +44,12 @@ jobs:
       - name: Check the toolchain-pin gate can still fail
         run: python3 scripts/check-toolchain-pin.py --self-test
 
+      - name: Check the build-profile gate can still fail
+        run: python3 scripts/check-build-profiles.py --self-test
+
+      - name: Check the gate compiles at opt-level 3 with the runtime checks on
+        run: python3 scripts/check-build-profiles.py
+
       - name: Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
         run: python3 scripts/check-iri-resolver-singleton.py
 
@@ -101,10 +107,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      # Reduce workspace test artifact storage on the hosted runner.
-      # Debug symbols are omitted; optimization and runtime checks stay unchanged.
-      CARGO_PROFILE_TEST_DEBUG: "0"
+    # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
+    # owns it (line tables for our crates, none for dependencies), so this job
+    # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
+    # every other lane too -- and a second place to set one thing was exactly the
+    # kind of manifest shadow `scripts/check-build-profiles.py` now reports.
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
