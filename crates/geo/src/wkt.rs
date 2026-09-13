@@ -569,6 +569,10 @@ fn parse_geometry(
 /// slots in the frame that holds them whether or not the branch is ever taken, and
 /// this frame is multiplied by the nesting depth. See `parse_body` for the same
 /// argument applied to the geometry bodies themselves.
+///
+/// This workspace's own gate no longer builds at `opt-level = 0` — profiles do
+/// not cross the crate boundary, so the configuration this guards against is a
+/// *consumer's* dev build, which is exactly the one we cannot choose.
 #[cold]
 #[inline(never)]
 fn too_deep(at: usize) -> GeoError {
@@ -648,7 +652,10 @@ fn preview_word(cursor: &Cursor<'_>, at: usize, word: &str) -> String {
 /// slot reuse between match arms, so writing the arms inline with `?` would give
 /// this frame **seven** such temporaries — about eleven kilobytes per nesting
 /// level, which is what made a sixty-four-deep literal abort on a two-megabyte
-/// thread stack instead of parsing.
+/// thread stack instead of parsing. A profile does not cross the crate boundary,
+/// so that is a *consumer's* unoptimized build, not one this workspace's gate
+/// still runs — which is precisely why the property has to hold structurally
+/// rather than by our own choice of `opt-level`.
 ///
 /// Two properties fix that, and both are load-bearing rather than cosmetic:
 ///

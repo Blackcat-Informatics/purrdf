@@ -11,6 +11,15 @@ report-only, timing-sensitive, and vary by host, CPU, allocator, and build
 flags. Treat every figure as a host-dependent illustration you reproduce
 locally — not a promise of "Nx faster."
 
+One thing that is *not* a caveat any more: the profile under `cargo test`.
+`[profile.dev]` builds this workspace, its dependencies, and its build
+scripts/proc-macros at **opt-level 3** (with `debug-assertions` and
+`overflow-checks` on, which the benches below do not disable), so a timing taken
+from a test or an ad-hoc `cargo run` is measuring optimized code rather than the
+unoptimized default it used to. It is still not a bench: `make bench` runs under
+`bench`/`release`, which additionally carries fat LTO and `codegen-units = 1`.
+Quote a criterion number, not a test's wall clock.
+
 There are two benchmark layers:
 
 | Layer | What it measures | How to run |

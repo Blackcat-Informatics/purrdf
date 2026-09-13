@@ -135,6 +135,7 @@ make check      # the full local gate: fmt, clippy, build, tests, hygiene
 make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
 make bench      # criterion benchmarks (report-only; not a gate)
+make build-profile-hygiene  # prove the gate is compiled the way it claims
 ```
 
 Toolchain: `rust-toolchain.toml` names a **floating nightly** for development and
@@ -187,6 +188,32 @@ interner). When touching parse/serialize/eval paths:
 * Hot maps use fixed-key `ahash` (see `crates/rdf-core/src/ir/builder.rs` for
   the canonical store-once interner pattern) — never default SipHash in a hot
   path, and never a randomly-seeded hasher in an output path.
+
+**The gate is compute, so the gate is compiled like it.** `make check` runs the
+whole test surface and `make conformance` runs every W3C suite through it, so
+both are bounded by the codegen under them: `[profile.dev]` builds everything —
+our crates, dependencies, and (named separately, because they do not inherit the
+base profile) build scripts and proc-macros — at **opt-level 3**, with
+`debug-assertions` and `overflow-checks` **ON**. Those two are orthogonal to
+opt-level and are not negotiable: first-party code carries
+`#[cfg(debug_assertions)]` bodies that vanish silently with the flag, and
+overflow checks are what stop an arithmetic bug in a byte-deterministic codec
+becoming a wrong-but-green run. Optimizing the gate does not weaken it: the same
+assertions run over the same corpora, on better codegen.
+
+This is not self-enforcing, and it did fail once: four per-crate `opt-level = 2`
+tables made the manifest *read* as tuned while twenty-one members compiled at
+opt-level 0, because `package."*"` matches dependencies only. So the property is
+asserted against the graph Cargo actually resolves, not against the manifest:
+`make build-profile-hygiene` (in `make check`) reads the `--unit-graph` of
+`cargo test` and `cargo build` and checks every unit's **effective** profile.
+Reading effective values is deliberate — it catches a `[profile.*]` table in
+`$CARGO_HOME/config.toml` or anywhere on the walk up from the workspace (your
+home directory is on that walk), a `CARGO_PROFILE_*` variable, or a `--config`
+override, none of which the manifest can see. Do not add a `[profile.test]`
+block (`test` inherits `dev`), and do not set `lto` or `codegen-units = 1` there:
+both serialize codegen and inflate link memory, which is what a
+constantly-rebuilt, cold-in-CI gate wants least.
 
 ## 5. Brand & naming
 
