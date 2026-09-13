@@ -278,6 +278,25 @@ def self_test() -> None:
     require(check([*conforming, _unit(dep, opt="0", target="build-script-build")]), (
         "an unoptimized build-script compile unit must be caught"
     ))
+    # Build-script and proc-macro COMPILE units must keep runtime checks too;
+    # hold the other required profile values explicitly so each fixture isolates
+    # the overflow-check requirement.
+    for target in ("build-script-build", "proc-macro"):
+        require(
+            check(
+                [
+                    *conforming,
+                    _unit(
+                        dep,
+                        target=target,
+                        opt=REQUIRED_OPT_LEVEL,
+                        debug_assertions=True,
+                        overflow_checks=False,
+                    ),
+                ]
+            ),
+            f"a {target} compile unit with overflow-checks off must be caught",
+        )
 
     # Rule 2 and 3, the runtime checks, on both origins.
     require(check([_unit(member, debug_assertions=False), _unit(other), _unit(dep)]), (
