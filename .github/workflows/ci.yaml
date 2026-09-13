@@ -44,6 +44,12 @@ jobs:
       - name: Check the toolchain-pin gate can still fail
         run: python3 scripts/check-toolchain-pin.py --self-test
 
+      - name: Check the build-profile gate can still fail
+        run: python3 scripts/check-build-profiles.py --self-test
+
+      - name: Check the gate compiles at opt-level 3 with the runtime checks on
+        run: python3 scripts/check-build-profiles.py
+
       - name: Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
         run: python3 scripts/check-iri-resolver-singleton.py
 
