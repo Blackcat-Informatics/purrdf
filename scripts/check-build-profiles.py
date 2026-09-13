@@ -129,6 +129,7 @@ def unit_graph(subcommand: str, repo: Path) -> dict[str, Any]:
 
 
 def _cargo(args: list[str], repo: Path) -> str:
+    """Run Cargo in ``repo`` and return stdout, failing with actionable context."""
     proc = subprocess.run(
         ["cargo", *args],
         cwd=repo,
@@ -222,6 +223,7 @@ def _unit(
     overflow_checks: bool = True,
     target: str = "lib",
 ) -> dict[str, Any]:
+    """Build a unit-graph fixture with the supplied profile and target values."""
     return {
         "pkg_id": pkg,
         "mode": mode,
@@ -339,6 +341,7 @@ def self_test() -> None:
 
 
 def main(argv: list[str]) -> int:
+    """Run the self-test or audit Cargo's effective profiles for all gate invocations."""
     if "--self-test" in argv:
         self_test()
         return 0
