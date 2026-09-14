@@ -12,7 +12,7 @@ GhpRsq-Base-OID: e1520474f9aa2a4b9d9aa43664843ec1832ae837
 GhpRsq-Head-Ref: paudley/294-xml-writers-emit-literals-they-cannot
 GhpRsq-Head-OID: 02a7ae9c28c920986a49a75bab7be3dcffe39b04
 GhpRsq-Result-Tree: 59c10c3c61b22154810d157b5e1a4c420c4313db
-GhpRsq-Result-Commit: 8f68c78aff88c9d64c4390757e16e7f879f2f6da
+GhpRsq-Result-Commit: 9c2e39741cb56038861015e0a4f95ba2021c8bee
 GhpRsq-Parent-Hashes: 02a7ae9c28c920986a49a75bab7be3dcffe39b04
 GhpRsq-Squash-Notes-SHA256: 03bd3f22f189ecd53688e7b61b3cda8b22cb56d747e9149a6c27206fe3a5bb94
 GhpRsq-Stage-Tree: 1b62a14a897fc68f18b2398c2f29ae501d61b64b
