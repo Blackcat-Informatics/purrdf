@@ -324,3 +324,45 @@ fn reweight_and_remap_reuse_predicate_facts_but_change_ranking_identity() {
         .expect("profile");
     assert!(original.with_ranking_profile(incomplete).is_err());
 }
+
+#[test]
+fn zero_weight_matching_rows_keep_the_canonical_tie_order() {
+    let profile = RankingProfile::new(vec![field("muted", Fixed::ZERO, B)], Vec::new(), Some(0))
+        .expect("profile");
+    let index = fixture().with_ranking_profile(profile).expect("rerank");
+    let rows = rank_partition(
+        &index,
+        &PartitionKey::new(None, None),
+        &["cat".to_owned()],
+        None,
+    )
+    .expect("ranking");
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.document, row.score, row.matched))
+            .collect::<Vec<_>>(),
+        vec![(0, Fixed::ZERO, 1), (1, Fixed::ZERO, 1)]
+    );
+}
+
+#[test]
+fn canonical_ranking_identity_binds_the_index_corpus_construction_law() {
+    use purrdf_text::{INDEX_CORPUS_PROFILE_ID, RANKING_PROFILE_ID};
+    let bytes = RankingProfile::single_field().canonical_description();
+    let first_end = 8 + RANKING_PROFILE_ID.len();
+    let length_bytes: [u8; 8] = bytes[first_end..first_end + 8]
+        .try_into()
+        .expect("framed length");
+    assert_eq!(
+        u64::from_le_bytes(length_bytes),
+        INDEX_CORPUS_PROFILE_ID.len() as u64
+    );
+    assert_eq!(
+        &bytes[first_end + 8..first_end + 8 + INDEX_CORPUS_PROFILE_ID.len()],
+        INDEX_CORPUS_PROFILE_ID.as_bytes()
+    );
+    assert_eq!(
+        INDEX_CORPUS_PROFILE_ID,
+        "purrdf-text-corpus-graph-language-v1"
+    );
+}

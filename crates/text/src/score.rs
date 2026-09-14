@@ -551,9 +551,9 @@ struct CandidateOccurrence<'a> {
 
 /// Every document of `partition` that holds at least one of `terms`, scored.
 ///
-/// A document holding none of them is not a candidate. Its score would be a sum
-/// over nothing, which is zero, and a zero-scoring row is not a retrieval result
-/// — emitting one would make every document in the corpus a hit for every query.
+/// A document holding none of them is not a candidate. Candidate membership is
+/// independent of field weights: a matching document can legitimately score
+/// zero, and still participates in the canonical tie order.
 fn candidates(
     index: &TextIndex,
     partition: &PartitionKey,

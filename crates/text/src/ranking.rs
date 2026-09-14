@@ -16,6 +16,12 @@ use crate::{B, FINGERPRINT_BYTES, Fixed, K1, SCALE_DIGITS, TextError};
 pub const RANKING_PROFILE_ID: &str = "purrdf-bm25f-fixed-v1";
 /// Revision of the complete ranking law, including intermediate rounding.
 pub const RANKING_PROFILE_VERSION: u32 = 1;
+/// Corpus construction used by the in-memory index: documents are
+/// `(graph, subject, language)`, partitions are `(graph, language)`, direction
+/// is merged, and zero-token documents are excluded. External stores provide
+/// their own already-partitioned counts to the pure prepared scorer.
+pub const INDEX_CORPUS_PROFILE_ID: &str = "purrdf-text-corpus-graph-language-v1";
+
 /// Maximum number of fields in a ranking profile.
 pub const MAX_FIELDS: usize = 16;
 /// Maximum number of distinct analyzed query terms.
@@ -215,6 +221,7 @@ impl RankingProfile {
             bytes.extend_from_slice(value.as_bytes());
         };
         text(RANKING_PROFILE_ID);
+        text(INDEX_CORPUS_PROFILE_ID);
         text(
             "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*N/total;distinct-query-terms-sorted;field-sum-then-saturate",
         );
@@ -514,7 +521,8 @@ fn validate_field(
     Ok(())
 }
 
-/// Positive shifted IDF, checked before any zero-contribution shortcuts.
+/// Shifted IDF, checked before any zero-contribution shortcuts.
+/// At large corpus sizes a positive real value may round to exact zero.
 fn inverse_document_frequency(documents: u64, frequency: u64) -> Result<Fixed, TextError> {
     if frequency > documents {
         return Err(TextError::data(

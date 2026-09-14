@@ -4,7 +4,8 @@
 # BM25F ranking profile and vocabulary-search ownership
 
 `purrdf-bm25f-fixed-v1`, revision 1, is the complete scoring law. A concrete
-profile's BLAKE3 identity includes that name and revision, the integer logarithm
+profile's BLAKE3 identity includes that name and revision, the index corpus
+construction law `purrdf-text-corpus-graph-language-v1`, the integer logarithm
 algorithm, operation order and rounding, scale, `k1`, all bounds, field names
 and order, weights, length coefficients, sorted predicate mappings, and the
 explicit unclassified destination. A semantic change changes this identity.
@@ -114,7 +115,10 @@ throughout; these inequalities are asserted alongside the score bound.
 It uses unbounded integers and reproduces each specified truncation. The
 committed TSV corpus includes heterogeneous field weights, fractional
 coefficients, absent terms, unused fields, sparse and maximum-size corpora,
-the smallest normalization, and a maximum-size query. `python
+the smallest normalization, a maximum-size query, and an ubiquitous term whose
+IDF rounds to zero at the largest corpus size. Matching is independent of
+score: zero-weight fields and rounded zero IDFs preserve matching rows and
+their canonical tie order. `python
 tests/reference/bm25f.py --check` checks the committed values; Rust compares
 every raw unit against the same corpus with no tolerance. The corpus has a
 fixed nonzero count.
@@ -125,6 +129,13 @@ over those facts. Reweighting or remapping does not tokenize text, reorder
 postings or mutate source identity. It changes ranking identity and the full
 answer fingerprint. The analyzer fingerprint identifies the compatibility
 caseless UAX29 pipeline and all of its Unicode table versions independently.
+
+The corpus law names documents by `(graph, subject, language)`, partitions by
+`(graph, language)`, merges base direction, and excludes zero-token documents.
+This law is explicit in ranking identity, rather than merely implied by the
+index's statistics. The pure scorer does not construct or discover a corpus:
+external stores supply already-partitioned counts and bind their source and
+partition selection in their own host identity.
 
 The pure scorer admits `2^40` documents for external stores; the in-memory
 index still has a u32 document-address space. The scorer's wider corpus bound

@@ -80,7 +80,7 @@ pub(super) fn verify_reference_corpus() {
         vectors += 1;
     }
     assert_eq!(
-        vectors, 15,
+        vectors, 16,
         "the reference corpus must never pass vacuously"
     );
 }
