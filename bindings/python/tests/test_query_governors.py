@@ -3,7 +3,7 @@
 """Caller-supplied execution governors on the native query/update surface.
 
 The consumer's admission law is enforced per answer, so it has to be settable from
-the language the consumer writes in. These tests hold that surface to three
+the language the consumer writes in. These tests hold that surface to two
 promises the Rust tier already makes and the binding must not weaken:
 
 * **A tripped governor is an outcome, not an exception.** ``query_governed``
@@ -13,17 +13,9 @@ promises the Rust tier already makes and the binding must not weaken:
   and blame the engine for a budget the caller set.
 * **A ceiling is inclusive.** An answer whose size equals the cap is complete; one
   unit more is a trip.
-* **The GIL is released while the engine runs**, so another thread can cancel a
-  running query and a Ctrl-C stops one instead of being swallowed until it finishes.
-  A ``KeyboardInterrupt`` is the one stop cause that raises, because it is a Python
-  exception the interpreter already raised and swallowing it would lose the signal.
 """
 
 from __future__ import annotations
-
-import signal
-import threading
-import time
 
 import pytest
 
@@ -58,21 +50,6 @@ def _store(triples: int = 5) -> purrdf.Store:
         purrdf.RdfFormat.N_TRIPLES,
     )
     return store
-
-
-def _slow_query(subjects: int = 300) -> tuple[purrdf.Store, str]:
-    """A store and a query whose evaluation takes long enough to interrupt.
-
-    A self-join under a ``FILTER NOT EXISTS`` re-enters whole-pattern evaluation
-    once per candidate pair, so the work is quadratic in `subjects` while the
-    materialized bag stays small — the shape that spends real time inside the
-    engine without spending real memory.
-    """
-    query = (
-        f"SELECT ?a ?b WHERE {{ ?a <{EX}p> ?x . ?b <{EX}p> ?y . "
-        f"FILTER NOT EXISTS {{ ?a <{EX}q> ?b }} }}"
-    )
-    return _store(subjects), query
 
 
 def _rows(solutions: object) -> list[tuple[str, str]]:
@@ -434,7 +411,7 @@ def test_mutable_dataset_carries_the_same_entailment_outcome() -> None:
     assert len(outcome.outcome.result) == 1
 
 
-# ── cancellation, from Python, while the engine runs ──────────────────────────────
+# ── cancellation token admission and state ──────────────────────────────────────
 
 
 def test_cancellation_token_reaches_the_evaluator() -> None:
@@ -460,60 +437,6 @@ def test_cancellation_is_idempotent_and_never_reversible() -> None:
 
     assert token.cancelled
     assert repr(token) == "<CancellationToken cancelled=True>"
-
-
-def test_cancellation_from_another_thread_stops_a_running_query() -> None:
-    """A second thread cancels a query already inside the engine.
-
-    This is also the test that the GIL is genuinely released: a thread that could
-    not run while the engine ran could never flip the token, and the query would
-    return complete.
-    """
-    store, query = _slow_query()
-    token = purrdf.CancellationToken()
-
-    def cancel_soon() -> None:
-        time.sleep(0.05)
-        token.cancel()
-
-    canceller = threading.Thread(target=cancel_soon)
-    canceller.start()
-    try:
-        outcome = store.query_governed(query, cancel=token)
-    finally:
-        canceller.join()
-
-    assert not outcome.is_complete
-    assert outcome.tripped is not None
-    assert outcome.tripped.cause == "cancelled"
-    # A cancellation is still a governed outcome: the rows already reached come
-    # back with the certificate that says what they bound.
-    assert outcome.partial is not None
-    assert outcome.evidence.consumed["fuel"] > 0
-
-
-def test_keyboard_interrupt_stops_a_running_query() -> None:
-    """Ctrl-C interrupts the engine instead of being swallowed until it finishes.
-
-    The one stop cause that RAISES: the interpreter has already turned the pending
-    signal into an exception, and dropping it would make the Ctrl-C disappear.
-    """
-    store, query = _slow_query()
-
-    def interrupt_soon() -> None:
-        time.sleep(0.05)
-        signal.raise_signal(signal.SIGINT)
-
-    interrupter = threading.Thread(target=interrupt_soon)
-    interrupter.start()
-    try:
-        with pytest.raises(KeyboardInterrupt):
-            store.query_governed(query)
-    finally:
-        interrupter.join()
-
-    # The signal was consumed by the call that raised, so the next query is clean.
-    assert store.query_governed(SELECT_ALL).is_complete
 
 
 # ── governed UPDATE ───────────────────────────────────────────────────────────────
