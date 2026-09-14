@@ -40,7 +40,9 @@
 //! standard input.
 
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+
+mod support;
 
 /// A `Command` for the built `purrdf` binary.
 fn purrdf() -> Command {
@@ -1278,14 +1280,12 @@ fn base_is_refused_only_when_no_document_can_spend_it() {
 /// A PREMISE ON STDIN with `--from` is answered, and the verdict goes to stdout.
 #[test]
 fn a_stdin_premise_is_answered() {
-    use std::io::Write as _;
-
     let dir = tempfile::tempdir().expect("tempdir");
     let dir = dir.path();
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
 
-    let mut child = purrdf()
-        .args([
+    let o = support::run_with_stdin(
+        purrdf().args([
             "entails",
             "--regime",
             "owl-rl",
@@ -1295,19 +1295,9 @@ fn a_stdin_premise_is_answered() {
             "turtle",
             "--conclusion",
             &conclusion,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the built purrdf binary");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(SUBCLASS_PREMISE.as_bytes())
-        .expect("write the premise to stdin");
-    let o = child.wait_with_output().expect("wait for purrdf");
+        ]),
+        SUBCLASS_PREMISE.as_bytes(),
+    );
 
     assert!(o.status.success(), "stdin premise: {}", stderr(&o));
     assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");

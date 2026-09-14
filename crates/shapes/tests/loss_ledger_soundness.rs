@@ -23,7 +23,7 @@
 //!   unrepresentable construct compiles to an empty ledger.
 
 use purrdf::loss::{assert_ledger_complete, assert_ledger_sound, check_ledger_complete};
-use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, compile};
+use purrdf_shapes::json_schema::{CompiledSchema, Namespaces, SchemaCompileError, compile};
 use purrdf_shapes::shapes::from_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
@@ -51,7 +51,7 @@ fn compile_ttl(body: &str) -> CompiledSchema {
     let ttl = format!("{PREFIXES}{body}");
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
     let shapes = from_dataset(&dataset).expect("shape parse");
-    compile(&shapes, &fixture_ns())
+    compile(&shapes, &fixture_ns()).expect("schema compilation")
 }
 
 /// A shape carrying a `sh:sparql` constraint (no JSON Schema equivalent) and a
@@ -140,12 +140,9 @@ fn recorded_codes(compiled: &CompiledSchema) -> Vec<&str> {
         .collect()
 }
 
-/// A flagless `\p{L}` general-category pattern diverges: without ECMA-262's
-/// `u` flag (which JSON Schema's bare `pattern` string cannot set) `\p` is an
-/// IdentityEscape. This is the case the old reporter dropped on the floor — it
-/// only fired for the flag path, and `sh:flags` is absent here.
+/// Unicode categories are expanded faithfully and no longer create a loss.
 #[test]
-fn flagless_category_pattern_records_a_dialect_loss() {
+fn category_pattern_translates_without_a_dialect_loss() {
     let compiled = compile_ttl(
         r#"
         ex:CategoryPatternShape a sh:NodeShape ;
@@ -153,35 +150,30 @@ fn flagless_category_pattern_records_a_dialect_loss() {
             sh:property [ sh:path ex:code ; sh:pattern "^\\p{L}+$" ] .
         "#,
     );
-    let codes = recorded_codes(&compiled);
-    assert!(
-        codes.contains(&"sh:pattern dialect"),
-        "a flagless `\\p{{L}}` pattern must record `sh:pattern dialect`, got {codes:?}"
-    );
-    assert!(
-        !codes.contains(&"sh:pattern rejected"),
-        "`\\p{{L}}` compiles in the XSD dialect, so it must not be recorded as rejected: {codes:?}"
-    );
+    assert_eq!(recorded_codes(&compiled), [] as [&str; 0]);
+    assert!(!compiled.schema_json.contains("\\\\p{L}"));
     assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
 }
 
-/// A pattern `xsd_regex::compile` rejects makes the SHACL validator violate on
-/// every value node, while the emitter still copies it verbatim into JSON
-/// Schema's ECMA-262 slot. That disagreement must be a distinct loss, not a
-/// silent one: `(a)\1` is a back-reference the XSD-dialect compiler refuses.
+/// An unsupported source fails the complete emission, rather than installing
+/// a pattern which the validator cannot enforce.
 #[test]
-fn rejected_pattern_records_the_distinct_invalid_loss() {
-    let compiled = compile_ttl(
-        r#"
+fn rejected_pattern_is_a_typed_emission_failure() {
+    let dataset = parse_turtle_to_dataset(
+        &format!(
+            "{PREFIXES}{}",
+            r#"
         ex:RejectedPatternShape a sh:NodeShape ;
             sh:targetClass ex:RejectedPattern ;
             sh:property [ sh:path ex:code ; sh:pattern "(a)\\1" ] .
-        "#,
-    );
-    let codes = recorded_codes(&compiled);
-    assert!(
-        codes.contains(&"sh:pattern rejected"),
-        "a `(a)\\1` back-reference pattern must record `sh:pattern rejected`, got {codes:?}"
-    );
-    assert_ledger_sound(&compiled.losses, "shacl", "json-schema");
+    "#
+        ),
+        None,
+    )
+    .expect("fixture parse");
+    let shapes = from_dataset(&dataset).expect("shape parse");
+    assert!(matches!(
+        compile(&shapes, &fixture_ns()),
+        Err(SchemaCompileError::Pattern { .. })
+    ));
 }

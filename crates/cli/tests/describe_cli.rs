@@ -22,9 +22,10 @@
 //! * `--base`, `--from`/`--to`, stdin/stdout and the RDF-emitting global flags behave exactly
 //!   as they do for `convert`/`reason`.
 
-use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+
+mod support;
 
 /// A `Command` for the built `purrdf` binary.
 fn purrdf() -> Command {
@@ -50,24 +51,7 @@ fn run(args: &[&str]) -> Output {
 /// I/O error still fails, and a run whose input never arrived is still graded:
 /// the assertions below read the child's real output either way.
 fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
-    let mut child = purrdf()
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf");
-    match child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(stdin_bytes.as_bytes())
-    {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
-        Err(e) => panic!("write stdin: {e:?}"),
-    }
-    child.wait_with_output().expect("wait for purrdf")
+    support::run_with_stdin(purrdf().args(args), stdin_bytes.as_bytes())
 }
 
 /// stdout of an [`Output`] as a `String`.

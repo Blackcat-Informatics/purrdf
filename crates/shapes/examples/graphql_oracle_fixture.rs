@@ -121,8 +121,8 @@ fn reverse_evidence(
     if imported.losses.render_json() != repeated.losses.render_json() {
         return Err("GraphQL reverse ledger is not deterministic".into());
     }
-    let first = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces());
-    let second = purrdf_shapes::json_schema::compile(&repeated.shapes, config.namespaces());
+    let first = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces())?;
+    let second = purrdf_shapes::json_schema::compile(&repeated.shapes, config.namespaces())?;
     if first.schema_json != second.schema_json {
         return Err("GraphQL reverse shapes are not byte-deterministic".into());
     }

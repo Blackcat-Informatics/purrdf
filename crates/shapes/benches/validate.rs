@@ -1013,7 +1013,8 @@ fn allocation_snapshot() -> (u64, u64) {
 fn linkml_import_fixture(config: &SchemaImportConfig) -> LinkmlDocument {
     let imported = import_json_schema(&schema_import_fixture(), config)
         .expect("benchmark source schema imports");
-    let compiled = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces());
+    let compiled = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces())
+        .expect("schema compilation");
     let linkml_config = LinkmlConfig::new(
         "https://example.org/bench/schema",
         "BenchSchema",

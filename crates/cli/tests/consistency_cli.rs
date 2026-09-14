@@ -37,6 +37,8 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+mod support;
+
 /// A `Command` for the built `purrdf` binary.
 fn purrdf() -> Command {
     Command::new(env!("CARGO_BIN_EXE_purrdf"))
@@ -302,23 +304,10 @@ fn the_same_ontology_decides_true_without_narrowing() {
 /// extension needs no override, and `-` (stdin) requires one.
 #[test]
 fn stdin_requires_an_explicit_from_format() {
-    use std::io::Write as _;
-    use std::process::Stdio;
-
-    let mut child = purrdf()
-        .args(["consistency", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(INCONSISTENT_ONTOLOGY.as_bytes())
-        .expect("write stdin");
-    let out = child.wait_with_output().expect("wait for purrdf");
+    let out = support::run_with_stdin(
+        purrdf().args(["consistency", "-"]),
+        INCONSISTENT_ONTOLOGY.as_bytes(),
+    );
 
     assert_eq!(code(&out), 2, "a usage error: stdin has no extension");
     assert!(
@@ -331,23 +320,10 @@ fn stdin_requires_an_explicit_from_format() {
 /// `--from` alone resolves stdin: an ABSOLUTE-IRI document needs no `--base` to decide.
 #[test]
 fn from_resolves_stdin_turtle() {
-    use std::io::Write as _;
-    use std::process::Stdio;
-
-    let mut child = purrdf()
-        .args(["consistency", "--from", "turtle", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(ORDINARY_ONTOLOGY.as_bytes())
-        .expect("write stdin");
-    let out = child.wait_with_output().expect("wait for purrdf");
+    let out = support::run_with_stdin(
+        purrdf().args(["consistency", "--from", "turtle", "-"]),
+        ORDINARY_ONTOLOGY.as_bytes(),
+    );
 
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).starts_with("consistency true\n"));
@@ -361,24 +337,11 @@ fn from_resolves_stdin_turtle() {
 /// term for an unresolved relative reference.
 #[test]
 fn base_resolves_relative_iris_piped_via_stdin() {
-    use std::io::Write as _;
-    use std::process::Stdio;
-
     let pipe = |args: &[&str]| -> Output {
-        let mut child = purrdf()
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn purrdf");
-        child
-            .stdin
-            .take()
-            .expect("piped stdin")
-            .write_all(RELATIVE_INCONSISTENT_ONTOLOGY.as_bytes())
-            .expect("write stdin");
-        child.wait_with_output().expect("wait for purrdf")
+        support::run_with_stdin(
+            purrdf().args(args),
+            RELATIVE_INCONSISTENT_ONTOLOGY.as_bytes(),
+        )
     };
 
     // Without `--base`, a relative IRI has no base to resolve against — the negative

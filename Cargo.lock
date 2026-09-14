@@ -1411,6 +1411,7 @@ dependencies = [
  "purrdf-events",
  "purrdf-iri",
  "regex",
+ "regex-syntax",
  "sha2",
  "smallvec",
  "tempfile",
