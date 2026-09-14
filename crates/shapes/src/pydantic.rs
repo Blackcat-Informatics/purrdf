@@ -26,6 +26,8 @@
 //! `$defs`-key → Python-class map). JSON Schema assertions that have no exact
 //! Pydantic runtime-annotation equivalent remain on that schema surface and are
 //! also recorded, at their JSON-pointer location, on [`PydanticPackage::losses`].
+//! Patterns outside the proven common grammar instead return a typed error
+//! before a package is produced, including patterns nested in other assertions.
 //!
 //! Arbitrary Python source has no unique JSON Schema acceptance relation, so it
 //! is not treated as an inverse format. A [`PydanticPackage`] emitted by PurRDF
@@ -331,8 +333,8 @@ impl ArtifactAccumulator {
 ///
 /// Returns [`PydanticError`] when `schema_json` is malformed, `$defs` is absent
 /// or malformed, a reference is external/dangling, required/property declarations
-/// disagree, two source names collide after Python identifier normalization, a
-/// routed topology is not an exact total partition, or a fixed input/configuration/
+/// disagree, a pattern has no proven equivalent runtime semantics, two source
+/// names collide after Python identifier normalization, a routed topology is not an exact total partition, or a fixed input/configuration/
 /// output resource ceiling is exceeded. The function returns no partial package.
 pub fn emit_pydantic(
     compiled: &CompiledSchema,
@@ -356,7 +358,7 @@ pub fn emit_pydantic(
 
     let mut renderer = Renderer::new(&names, routed);
     for (key, definition) in defs {
-        renderer.audit_schema(definition, &definition_path(key));
+        renderer.audit_schema(definition, &definition_path(key))?;
     }
 
     let rewritten_defs = defs
@@ -1099,7 +1101,7 @@ impl<'a> Renderer<'a> {
         candidate
     }
 
-    fn audit_schema(&mut self, schema: &Value, path: &str) {
+    fn audit_schema(&mut self, schema: &Value, path: &str) -> Result<(), PydanticError> {
         let Value::Object(object) = schema else {
             if schema == &Value::Bool(false) {
                 self.record(
@@ -1109,7 +1111,7 @@ impl<'a> Renderer<'a> {
                      represents an uninhabited JSON carrier",
                 );
             }
-            return;
+            return Ok(());
         };
 
         if object.contains_key("oneOf") {
@@ -1191,16 +1193,15 @@ impl<'a> Renderer<'a> {
                 &note,
             );
         }
-        if let Some(pattern) = object.get("pattern").and_then(Value::as_str)
-            && !runtime_pattern_supported(pattern)
-        {
-            self.record(
-                "keyword-validation-dropped",
-                &format!("{path}/pattern"),
-                "The JSON Schema pattern uses syntax unsupported by Pydantic's Rust regex \
-                 engine; it remains exact on model_json_schema() and is not installed as a \
-                 runtime Field constraint",
-            );
+        if let Some(value) = object.get("pattern") {
+            let pattern = value
+                .as_str()
+                .ok_or_else(|| PydanticError::new(format!("{path}/pattern must be a string")))?;
+            if !runtime_pattern_supported(pattern) {
+                return Err(PydanticError::new(format!(
+                    "pattern at {path}/pattern has no proven equivalent semantics in Pydantic's Rust regex engine: {pattern:?}"
+                )));
+            }
         }
         if is_temporal_format(object) {
             for keyword in ["minLength", "maxLength", "pattern"] {
@@ -1248,13 +1249,8 @@ impl<'a> Renderer<'a> {
             }
         }
 
-        for key in [
-            "$defs",
-            "properties",
-            "patternProperties",
-            "dependentSchemas",
-        ] {
-            if let Some(children) = object.get(key).and_then(Value::as_object) {
+        for key in schema_map_keywords() {
+            if let Some(children) = object.get(*key).and_then(Value::as_object) {
                 for (child_key, child) in children {
                     self.audit_schema(
                         child,
@@ -1263,39 +1259,28 @@ impl<'a> Renderer<'a> {
                             pointer_escape(key),
                             pointer_escape(child_key)
                         ),
-                    );
+                    )?;
                 }
             }
         }
-        for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
-            if let Some(children) = object.get(key).and_then(Value::as_array) {
+        for key in schema_array_keywords() {
+            if let Some(children) = object.get(*key).and_then(Value::as_array) {
                 for (index, child) in children.iter().enumerate() {
-                    self.audit_schema(child, &format!("{path}/{key}/{index}"));
+                    self.audit_schema(child, &format!("{path}/{key}/{index}"))?;
                 }
             }
         }
-        for key in [
-            "items",
-            "not",
-            "if",
-            "then",
-            "else",
-            "contains",
-            "propertyNames",
-            "unevaluatedProperties",
-        ] {
-            if let Some(child) = object.get(key)
-                && matches!(child, Value::Object(_) | Value::Bool(_))
-            {
-                self.audit_schema(child, &format!("{path}/{key}"));
+        for key in schema_single_keywords() {
+            if let Some(child) = object.get(*key) {
+                // Boolean additionalProperties is enforced by the model
+                // extra policy; only its schema form needs a nested audit.
+                if *key == "additionalProperties" && child.is_boolean() {
+                    continue;
+                }
+                self.audit_schema(child, &format!("{path}/{key}"))?;
             }
         }
-        if let Some(Value::Object(child)) = object.get("additionalProperties") {
-            self.audit_schema(
-                &Value::Object(child.clone()),
-                &format!("{path}/additionalProperties"),
-            );
-        }
+        Ok(())
     }
 
     fn record(&mut self, code: &str, path: &str, note: &str) {
@@ -1500,38 +1485,10 @@ fn is_temporal_format(object: &Map<String, Value>) -> bool {
     )
 }
 
-/// Whether `pattern` compiles in the engine that will actually enforce it at
-/// model-validation time — pydantic-core's, which is the Rust `regex` crate.
-///
-/// This is a **dialect** question, not a validity one, and it is asked about
-/// exactly one dialect. Three are in play along this pipeline and they are not
-/// interchangeable:
-///
-/// * the source `sh:pattern` is **XSD/XPath `regExp`** (SHACL §4.5.3 → SPARQL
-///   1.1 §17.4.3.14 → XPath F&O 3.1 §5.6);
-/// * the `pattern` keyword this function receives is **ECMA-262**, because
-///   that is what JSON Schema specifies;
-/// * `Field(pattern=…)` is enforced by **pydantic-core**, whose default
-///   `regex_engine` is `'rust-regex'` — the `regex` crate — with
-///   `'python-re'` available only by explicit opt-in. Hence
-///   `regex::Regex::new` and not, for instance, a Python `re` model.
-///
-/// So a `false` here means "pydantic-core could not compile this", and says
-/// nothing about whether the pattern is a valid `sh:pattern` (it may well be —
-/// a `\i` or a `\p{IsBasicLatin}` is perfectly well-formed XSD) or a valid
-/// ECMA-262 one. It is deliberately the narrow, concrete question, because the
-/// emitter's two call sites must be exact complements: `apply_constraints`
-/// installs the runtime constraint only when this is `true`, and
-/// `Ctx::audit_schema` records a `keyword-validation-dropped` loss exactly
-/// when it is `false`. A broader predicate here would silently break that
-/// complementarity in one direction or the other.
-///
-/// It does **not** detect a pattern that compiles with a *different meaning*
-/// in the target dialect (`\d`, `\s`, `\w`, `.` and `\p{Is…}` all do): that is
-/// the SHACL→JSON-Schema emitter's `sh:pattern dialect` loss to record, and
-/// per-keyword translation for these emitters is tracked separately.
+/// The shared grammar check proves equal accepted languages under Unicode
+/// ECMA-262 and Rust regex semantics; compilation alone cannot establish that.
 fn runtime_pattern_supported(pattern: &str) -> bool {
-    regex::Regex::new(pattern).is_ok()
+    purrdf_core::xsd_regex::ecma_262_rust_compatible(pattern)
 }
 
 fn has_schema_type(object: &Map<String, Value>, expected: &str) -> bool {
@@ -2384,6 +2341,7 @@ mod tests {
         let dataset = crate::text_ingest::parse_turtle_to_dataset(&source, None).expect("parse");
         let shapes = crate::shapes::from_dataset(&dataset).expect("shapes");
         crate::json_schema::compile(&shapes, import_config().namespaces())
+            .expect("schema compilation")
     }
 
     fn lossless_schema() -> Value {
@@ -2724,11 +2682,13 @@ mod tests {
             imported.losses.render_json()
         );
         let recompiled =
-            crate::json_schema::compile(&imported.shapes, import_config().namespaces());
+            crate::json_schema::compile(&imported.shapes, import_config().namespaces())
+                .expect("schema compilation");
         assert_eq!(recompiled.schema_json, compiled.schema_json);
 
         let repeated = import_pydantic_package(&package, &import_config()).expect("repeat");
-        let repeated = crate::json_schema::compile(&repeated.shapes, import_config().namespaces());
+        let repeated = crate::json_schema::compile(&repeated.shapes, import_config().namespaces())
+            .expect("schema compilation");
         assert_eq!(repeated.schema_json, recompiled.schema_json);
 
         let mut bad = package.clone();
@@ -3040,7 +3000,8 @@ mod tests {
             &[("ex".to_owned(), "https://example.org/".to_owned())],
         )
         .expect("caller namespace");
-        let compiled = crate::json_schema::compile(&shapes, &namespaces);
+        let compiled =
+            crate::json_schema::compile(&shapes, &namespaces).expect("schema compilation");
         let out = emit_pydantic(&compiled, &config()).expect("emit compiled schema");
 
         assert!(out.model_paths.contains_key("Person"));
@@ -3110,10 +3071,6 @@ mod tests {
                         "ex:one": {
                             "oneOf": [{ "type": "integer" }, { "type": "number" }]
                         },
-                        "ex:lookahead": {
-                            "type": "string",
-                            "pattern": "^(?=A)A"
-                        },
                         "ex:temporal": {
                             "type": "string",
                             "format": "date-time",
@@ -3169,20 +3126,61 @@ mod tests {
                     .and_then(|location| location.subject.as_deref())
                     == Some("#/$defs/Lossy/properties/ex:temporal/format")
         }));
-        assert!(out.losses.entries().iter().any(|entry| {
-            entry.code.as_ref() == "keyword-validation-dropped"
-                && entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
-                    == Some("#/$defs/Lossy/properties/ex:lookahead/pattern")
-        }));
         assert!(
             out.losses
                 .entries()
                 .iter()
                 .all(|entry| entry.location.is_some())
         );
+    }
+
+    #[test]
+    fn refuses_semantic_pattern_mismatches_in_every_schema_position() {
+        for pattern in [r"\d", r"\s", r"\w", ".", r"(?=a)", r"\p{L}"] {
+            let constraint = json!({"type": "string", "pattern": pattern});
+            let mut variants = vec![constraint.clone()];
+            for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+                variants.push(json!({key: [constraint.clone()]}));
+            }
+            for key in [
+                "items",
+                "not",
+                "if",
+                "then",
+                "else",
+                "contains",
+                "propertyNames",
+                "additionalProperties",
+                "unevaluatedProperties",
+                "unevaluatedItems",
+                "additionalItems",
+                "contentSchema",
+            ] {
+                variants.push(json!({key: constraint.clone()}));
+            }
+            for key in [
+                "properties",
+                "patternProperties",
+                "dependentSchemas",
+                "$defs",
+            ] {
+                variants.push(json!({key: {"nested": constraint.clone()}}));
+            }
+            for definition in variants {
+                let schema = json!({"$defs": {"Probe": definition}});
+                let error = emit_pydantic(&compiled(&schema), &config())
+                    .expect_err("unsafe pattern must refuse");
+                assert!(error.to_string().contains("pattern"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn refuses_non_string_pattern_metadata() {
+        let schema = json!({"$defs": {"Probe": {"type": "string", "pattern": 42}}});
+        let error =
+            emit_pydantic(&compiled(&schema), &config()).expect_err("pattern must be typed");
+        assert!(error.to_string().contains("pattern must be a string"));
     }
 
     #[test]

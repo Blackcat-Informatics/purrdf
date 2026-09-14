@@ -115,7 +115,7 @@ const BUILTIN_PREFIXES: &[(&str, &str)] = &[
 /// # ";
 /// # let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(ttl, None).unwrap();
 /// # let shapes = purrdf_shapes::shapes::from_dataset(&dataset).unwrap();
-/// let out = compile(&shapes, &ns);
+/// let out = compile(&shapes, &ns).map_err(|error| error.to_string())?;
 /// # assert!(out.schema_json.contains("gmeow:Cat"));
 /// # Ok::<(), String>(())
 /// ```
@@ -542,6 +542,15 @@ pub enum SchemaCompilationInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SchemaCompileError {
+    /// A SHACL pattern cannot be emitted with its accepted language intact.
+    Pattern {
+        /// Shape carrying the constraint.
+        shape: String,
+        /// Projected property key.
+        property: String,
+        /// Precise source or translation failure.
+        reason: String,
+    },
     /// RDFC-1.0 canonicalization exceeded its fixed safety budget.
     Canonicalization {
         /// Graph that could not be canonicalized.
@@ -588,6 +597,16 @@ pub enum SchemaCompileError {
 impl std::fmt::Display for SchemaCompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Pattern {
+                shape,
+                property,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "cannot emit sh:pattern at {shape} property {property}: {reason}"
+                )
+            }
             Self::Canonicalization { input, message } => {
                 write!(f, "failed to canonicalize {input:?} graph: {message}")
             }
@@ -861,6 +880,7 @@ pub struct ValueVocabProjection<'a> {
 /// Accumulates losses while compiling so every emitter helper can record one,
 /// and carries the caller-supplied [`Namespaces`] every helper compacts with.
 struct Ctx<'ns> {
+    pattern_error: Option<SchemaCompileError>,
     /// The runtime loss ledger this compilation accumulates into (surfaced as
     /// [`CompiledSchema::losses`]).
     ledger: LossLedger,
@@ -897,6 +917,7 @@ impl<'ns> Ctx<'ns> {
         ns: &'ns Namespaces,
     ) -> Self {
         Self {
+            pattern_error: None,
             ledger: LossLedger::new(),
             emitted_defs,
             value_vocab_enums,
@@ -933,15 +954,13 @@ impl<'ns> Ctx<'ns> {
 ///
 /// ```text
 /// let ns = Namespaces::new("gmeow", &doc_prefixes)?;
-/// let out = compile(&shapes, &ns);
+/// let out = compile(&shapes, &ns).map_err(|error| error.to_string())?;
 /// ```
 ///
-/// # Panics
-///
-/// Panics (build-time, fail-closed) when an active `sh:targetClass` is in a
-/// namespace with no declared prefix, or when two distinct target classes
-/// would share a `$defs` key — see [`Namespaces::def_key`].
-pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
+/// # Errors
+/// Returns [`SchemaCompileError`] for unsafe namespace keying or a pattern
+/// which cannot be emitted with its accepted language intact.
+pub fn compile(shapes: &Shapes, ns: &Namespaces) -> Result<CompiledSchema, SchemaCompileError> {
     compile_with_value_vocab(shapes, ns, None)
 }
 
@@ -956,7 +975,8 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> CompiledSchema {
 /// # Errors
 ///
 /// Returns a typed error for unsafe canonicalization, malformed/contradictory
-/// ontology axioms, fixed resource ceiling breaches, or schema key collisions.
+/// ontology axioms, fixed resource ceiling breaches, schema key collisions, or
+/// a pattern that cannot be emitted faithfully.
 pub fn compile_schema(
     request: &SchemaCompileRequest<'_>,
 ) -> Result<SchemaCompilation, SchemaCompileError> {
@@ -967,11 +987,9 @@ pub fn compile_schema(
         ontology: request.ontology(),
     });
     let compiled = match request.mode() {
-        SchemaSurfaceMode::ShapedOnly => try_compile_with_value_vocab(
-            request.shapes(),
-            request.namespaces(),
-            projection.as_ref(),
-        )?,
+        SchemaSurfaceMode::ShapedOnly => {
+            compile_with_value_vocab(request.shapes(), request.namespaces(), projection.as_ref())?
+        }
         SchemaSurfaceMode::OntologyComplete => compile_with_surface(
             request.shapes(),
             request.namespaces(),
@@ -1001,22 +1019,10 @@ pub fn compile_schema(
 /// and never mutates the validating shape set, so the live SHACL validator stays
 /// open-world.
 ///
-/// # Panics
-///
-/// Panics (build-time, fail-closed) under the same conditions as [`compile`], and
-/// additionally when a value-vocabulary class is in an undeclared namespace or two
-/// value-vocabulary classes would share a `{LocalName}Enum` `$def` key (or an enum
-/// key collides with a class `$def` key).
+/// # Errors
+/// Returns [`SchemaCompileError`] for unsafe keying, invalid value vocabularies,
+/// resource ceilings, or a pattern that cannot be emitted faithfully.
 pub fn compile_with_value_vocab(
-    shapes: &Shapes,
-    ns: &Namespaces,
-    projection: Option<&ValueVocabProjection<'_>>,
-) -> CompiledSchema {
-    try_compile_with_value_vocab(shapes, ns, projection)
-        .unwrap_or_else(|error| panic!("json_schema: {error}"))
-}
-
-fn try_compile_with_value_vocab(
     shapes: &Shapes,
     ns: &Namespaces,
     projection: Option<&ValueVocabProjection<'_>>,
@@ -1192,6 +1198,9 @@ fn try_compile_with_value_vocab(
     let schema = root_schema(&defs, ns);
     let openapi = openapi_doc(&defs);
 
+    if let Some(error) = ctx.pattern_error {
+        return Err(error);
+    }
     Ok(CompiledSchema {
         schema_json: to_pretty(&schema),
         openapi_json: to_pretty(&openapi),
@@ -1306,6 +1315,9 @@ fn compile_with_surface(
         defs.insert(key.clone(), definition.clone());
     }
 
+    if let Some(error) = ctx.pattern_error {
+        return Err(error);
+    }
     Ok(CompiledSchema {
         schema_json: to_pretty(&root_schema(&defs, ns)),
         openapi_json: to_pretty(&openapi_doc(&defs)),
@@ -2622,60 +2634,19 @@ fn compile_property(
                 value.insert("const".to_owned(), term_const_value(v, ctx.ns));
             }
             Constraint::Pattern { regex, flags, .. } => {
-                // The source text is emitted verbatim: it is the only faithful
-                // record of what the shape author wrote, and rewriting it into
-                // ECMA-262 would be a translation this emitter does not own.
-                // But `sh:pattern` is XSD/XPath and JSON Schema's `pattern` is
-                // ECMA-262, so the copy is a dialect change — and a dialect
-                // change whose effect on the accepted language is not written
-                // down is exactly the silent divergence the loss ledger exists
-                // to make visible.
-                value.insert("pattern".to_owned(), json!(regex));
-                let flags = flags.as_deref().unwrap_or("");
-                // The emitted `pattern` is only usable if the shape's own
-                // XSD/XPath source compiles, because the validator
-                // (`constraints.rs::build_regex`) routes every `sh:pattern`
-                // through the same `xsd_regex::compile`; a pattern it rejects
-                // makes every value node a violation. Recording that as a
-                // DISTINCT loss keeps the emitter and the validator from
-                // disagreeing silently about the same shape.
-                if let Err(error) = purrdf_core::xsd_regex::compile(regex, flags) {
-                    ctx.record(
-                        "sh:pattern rejected",
-                        shape_iri,
-                        &format!(
-                            "sh:pattern on property {key} is not a valid XSD/XPath regular \
-                             expression: {error}; the emitted JSON Schema pattern is \
-                             ECMA-262 and is known-unusable"
-                        ),
-                    );
-                    comments.push(format!(
-                        "the sh:pattern on property {key} is not a valid XSD/XPath regular \
-                         expression ({error}), so the emitted ECMA-262 pattern cannot be \
-                         trusted"
-                    ));
-                }
-                let divergences = purrdf_core::xsd_regex::ecma_262_divergences(regex, flags);
-                if !divergences.is_empty() {
-                    let found = divergences
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    ctx.record(
-                        "sh:pattern dialect",
-                        shape_iri,
-                        &format!(
-                            "sh:pattern on property {key} is XSD/XPath but JSON Schema's pattern \
-                             is ECMA-262; these do not carry the same meaning across the two \
-                             dialects: {found}"
-                        ),
-                    );
-                    comments.push(format!(
-                        "the sh:pattern on property {key} is an XSD/XPath regular expression \
-                         emitted verbatim as an ECMA-262 one; {found} differ between the two \
-                         dialects"
-                    ));
+                match purrdf_core::xsd_regex::to_ecma_262(regex, flags.as_deref().unwrap_or("")) {
+                    Ok(pattern) => {
+                        value.insert("pattern".to_owned(), json!(pattern));
+                    }
+                    Err(error) => {
+                        if ctx.pattern_error.is_none() {
+                            ctx.pattern_error = Some(SchemaCompileError::Pattern {
+                                shape: shape_iri.to_owned(),
+                                property: key.to_owned(),
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
                 }
             }
             Constraint::MinLength(n) => {
@@ -3049,7 +3020,7 @@ mod tests {
         let dataset =
             crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
-        compile(&shapes, &fixture_ns())
+        compile(&shapes, &fixture_ns()).expect("schema compilation")
     }
 
     fn compile_ontology(
@@ -3614,7 +3585,7 @@ mod tests {
             None,
         )
         .expect("ontology Turtle");
-        let legacy = compile(&shapes, &fixture_ns());
+        let legacy = compile(&shapes, &fixture_ns()).expect("schema compilation");
         let requested = compile_schema(&SchemaCompileRequest::new(
             &shapes,
             &fixture_ns(),
@@ -3834,7 +3805,7 @@ mod tests {
             )],
         )
         .expect("gmeow namespaces");
-        let schema = schema_of(&compile(&shapes, &ns));
+        let schema = schema_of(&compile(&shapes, &ns).expect("schema compilation"));
 
         // Primary-namespace class keys its $def by bare local name.
         assert!(
@@ -4066,7 +4037,7 @@ mod tests {
         );
         let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("parse");
         let shapes = from_dataset(&dataset).expect("shapes");
-        let compiled = compile(&shapes, &fixture_ns());
+        let compiled = compile(&shapes, &fixture_ns()).expect("schema compilation");
         let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("s1"));
         assert!(
             validates(&compiled.schema_json, &node),
@@ -4085,7 +4056,7 @@ mod tests {
         );
         let schema = schema_of(&c);
         let code = &def(&schema, "Code")["properties"]["meta:code"];
-        assert_eq!(code["pattern"], json!("^[A-Z]+$"));
+        assert_eq!(code["pattern"], json!("^(?:[A-Z])+$"));
     }
 
     #[test]
@@ -5625,6 +5596,10 @@ mod tests {
     /// prefix (the fixture's non-primary vocabulary namespace) is declared here so
     /// bodies can use `logic:` terms directly.
     fn compile_vocab(body: &str) -> CompiledSchema {
+        try_compile_vocab(body).expect("schema compilation")
+    }
+
+    fn try_compile_vocab(body: &str) -> Result<CompiledSchema, SchemaCompileError> {
         let ttl =
             format!("{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{body}");
         let dataset =
@@ -5798,8 +5773,9 @@ mod tests {
         let dataset =
             crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
         let shapes = from_dataset(&dataset).expect("shape parse");
-        let plain = compile(&shapes, &fixture_ns());
-        let none = compile_with_value_vocab(&shapes, &fixture_ns(), None);
+        let plain = compile(&shapes, &fixture_ns()).expect("schema compilation");
+        let none =
+            compile_with_value_vocab(&shapes, &fixture_ns(), None).expect("schema compilation");
         assert_eq!(
             plain.schema_json, none.schema_json,
             "None must equal compile()"
@@ -5811,7 +5787,8 @@ mod tests {
             vocab: &vocab,
             ontology: dataset.as_ref(),
         };
-        let zero = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj));
+        let zero = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj))
+            .expect("schema compilation");
         assert_eq!(
             plain.schema_json, zero.schema_json,
             "a marker matching zero classes must equal compile()"
@@ -5867,41 +5844,43 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "share schema definition key")]
     fn value_vocab_local_name_twins_hard_fail() {
         // Two vocab classes with the same local name in different declared
         // namespaces both key to `ColorEnum` — the collision guard must reject it.
-        compile_vocab(
+        let result = try_compile_vocab(
             r"
             meta:Color  a logic:AbstractIndividualType .
             logic:Color a logic:AbstractIndividualType .
         ",
         );
+        assert!(matches!(
+            result,
+            Err(SchemaCompileError::DefinitionCollision { .. })
+        ));
     }
 
     #[test]
-    #[should_panic(expected = "has no declared namespace prefix")]
     fn value_vocab_undeclared_namespace_class_hard_fails() {
         // A vocab class in a namespace the Namespaces table does not declare has
         // no prefix CURIE to key its `{Local}Enum` $def / members by.
-        compile_vocab(
+        let result = try_compile_vocab(
             r"
             @prefix und: <https://undeclared.example/> .
             und:Foo a logic:AbstractIndividualType .
             und:bar a und:Foo .
         ",
         );
+        assert!(matches!(result, Err(SchemaCompileError::Namespace { .. })));
     }
 
     #[test]
-    #[should_panic(expected = "share schema definition key")]
     fn value_vocab_enum_key_class_def_key_clash_hard_fails() {
         // A vocab class `logic:Color` enum-keys to `ColorEnum`, which is the SAME
         // `$def` key a primary-namespace target class `meta:ColorEnum` receives
         // (local-name keyed) — the enum-key-vs-class-key clash guard must reject
         // it, distinct from both the twins guard and the undeclared-namespace
         // guard (both `logic:` and `meta:` are declared namespaces here).
-        compile_vocab(
+        let result = try_compile_vocab(
             r"
             logic:Color a logic:AbstractIndividualType .
             logic:red   a logic:Color .
@@ -5911,6 +5890,10 @@ mod tests {
                 sh:property [ sh:path meta:name ; sh:minCount 1 ] .
         ",
         );
+        assert!(matches!(
+            result,
+            Err(SchemaCompileError::DefinitionCollision { .. })
+        ));
     }
 
     #[test]
@@ -6019,6 +6002,7 @@ mod tests {
             ontology: onto.as_ref(),
         };
         compile_with_value_vocab(&shapes, &fixture_ns(), Some(&projection))
+            .expect("schema compilation")
     }
 
     const STABILITY_VOCAB: &str = r"
@@ -6289,7 +6273,8 @@ mod tests {
             vocab: &vocab,
             ontology: dataset.as_ref(),
         };
-        let compiled = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj));
+        let compiled = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj))
+            .expect("schema compilation");
         let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("t1"));
         assert!(
             !validates(&compiled.schema_json, &node),

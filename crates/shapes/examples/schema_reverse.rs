@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(SOURCE_SHAPES, None)
         .map_err(|errors| std::io::Error::other(errors.join("\n")))?;
     let source_shapes = purrdf_shapes::shapes::from_dataset(&dataset)?;
-    let compiled = purrdf_shapes::json_schema::compile(&source_shapes, config.namespaces());
+    let compiled = purrdf_shapes::json_schema::compile(&source_shapes, config.namespaces())?;
     if !compiled.losses.is_empty() {
         return Err("example SHACL source must compile without forward losses".into());
     }
@@ -126,7 +126,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("graphql-september-2025", "graphql-september-2025", graphql),
     ] {
         purrdf::loss::check_ledger_sound(&imported.losses, profile, "shacl")?;
-        let round_trip = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces());
+        let round_trip =
+            purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces())?;
         if round_trip.schema_json != compiled.schema_json {
             return Err(format!("{label} reverse path did not round-trip byte-exactly").into());
         }
