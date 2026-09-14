@@ -80,6 +80,9 @@ purrdf-validate = { path = "crates/validate", version = "1.1.0" }
 purrdf-xsd = { path = "crates/xsd", version = "1.1.0" }
 
 # --- external crates ---
+# Test-only structural source census; both already occur in the resolved graph.
+proc-macro2 = "1"
+syn = { version = "2", features = ["full", "visit"] }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 ahash = { version = "0.8", default-features = false }
 # rayon feature: multi-threaded hashing for large inputs (rayon executes
