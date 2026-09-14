@@ -34,8 +34,9 @@ make bump VERSION=0.2.2
 # 2. Regenerate the committed C-ABI header from the bumped crate version.
 make capi-header
 
-# 3. Regenerate the changelog from the conventional-commit history.
-make changelog
+# 3. Complete the release notes, preserving existing migration guidance.
+# Rename the Unreleased section to the bumped version and release date.
+# Use make changelog only for history-generated notes (see below).
 
 # 4. Review, then commit the release bump, generated header, and changelog.
 git add -A && git commit -m "chore(release): 0.2.2"
@@ -173,15 +174,21 @@ that script could not complete a run.
 
 ## Changelog and release notes
 
-The changelog is generated deterministically from the conventional-commit
-history by [git-cliff](https://git-cliff.org/), configured in `cliff.toml`.
-Install the pinned version once:
+The changelog includes reviewed migration guidance and entries generated from
+conventional-commit history by [git-cliff](https://git-cliff.org/), configured
+in `cliff.toml`. Preserve existing hand-authored notes when preparing a release:
+complete the entries and rename `## [Unreleased]` to the bumped version and
+release date. Commit subjects do not capture all consumer migration steps.
+
+`make changelog` regenerates the whole file and refuses to overwrite
+hand-authored release notes. For history-generated notes, install the pinned
+generator once:
 
 ```sh
 cargo install git-cliff --version 2.13.1 --locked --no-default-features
 ```
 
-Regenerate `CHANGELOG.md` as part of the release commit. Run `make bump` **first**:
+When generating from history, run `make bump` **first**:
 `make changelog` reads the just-bumped workspace version out of `Cargo.toml` and
 passes it to git-cliff as `--tag rust-v<version>`, so the pending (still untagged)
 commits are stamped under a real `## [<version>]` header instead of landing in
@@ -204,8 +211,8 @@ The GitHub Release notes are **not** regenerated at tag time. The
 `release-cargo.yaml` workflow slices the section for the tagged version straight
 out of the committed `CHANGELOG.md` and attaches it to a GitHub Release named
 for the `rust-v*` tag — so the release notes and the committed changelog can
-never drift, and the workflow makes no repository commits. Always run
-`make changelog` and commit the result **before** pushing the release tag.
+never drift, and the workflow makes no repository commits. Complete and commit
+the release's `CHANGELOG.md` section **before** pushing the release tag.
 
 ## Tag Release
 

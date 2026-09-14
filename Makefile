@@ -133,7 +133,7 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 		/^## \[/ { flag = 0 } \
 		flag { print } \
 	' CHANGELOG.md); \
-		test -n "$$(printf '%s' "$$notes" | tr -d '[:space:]')" || { echo "ERROR: CHANGELOG.md has no release-notes section for [$(VERSION)] — run 'make changelog' and commit it before tagging"; exit 1; }
+		test -n "$$(printf '%s' "$$notes" | tr -d '[:space:]')" || { echo "ERROR: CHANGELOG.md has no release-notes section for [$(VERSION)] — complete and commit the release notes before tagging"; exit 1; }
 	@git fetch --quiet origin main
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse refs/remotes/origin/main)" || { echo "ERROR: main is not synchronized with origin/main"; exit 1; }
 	@for tag in "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"; do \
@@ -473,14 +473,14 @@ capi-build: ## Build libpurrdf (cdylib + staticlib + header + pkg-config) via ca
 capi-header: ## Regenerate the committed purrdf.h ABI contract from the crate.
 	@touch crates/rdf-capi/src/lib.rs  # cargo-c only re-runs cbindgen when the crate recompiles
 	cargo capi build -p purrdf-capi
-	@hdr=$$(find $(CARGO_TARGET_DIR) -path '*/include/purrdf/purrdf.h' | head -1); \
+	@hdr=$$(find -H "$(CARGO_TARGET_DIR)" -path '*/include/purrdf/purrdf.h' | head -1); \
 	  test -n "$$hdr" || { echo "FAIL: cargo-c did not emit purrdf.h"; exit 1; }; \
 	  cp "$$hdr" $(CAPI_HEADER); echo "regenerated $(CAPI_HEADER)"
 
 capi-check: ## Verify the committed purrdf.h is current + the C smoke links and runs.
 	@touch crates/rdf-capi/src/lib.rs  # force cbindgen to re-run so a cached build cannot serve a stale header
 	cargo capi build -p purrdf-capi
-	@hdr=$$(find $(CARGO_TARGET_DIR) -path '*/include/purrdf/purrdf.h' | head -1); \
+	@hdr=$$(find -H "$(CARGO_TARGET_DIR)" -path '*/include/purrdf/purrdf.h' | head -1); \
 	  test -n "$$hdr" || { echo "FAIL: cargo-c did not emit purrdf.h"; exit 1; }; \
 	  if ! diff -q "$$hdr" $(CAPI_HEADER) >/dev/null; then \
 	    echo "FAIL: $(CAPI_HEADER) is STALE — run 'make capi-header' and commit the ABI header"; \
