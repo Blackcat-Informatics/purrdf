@@ -503,6 +503,20 @@ terminal! {
 }
 
 terminal! {
+    /// XML 1.0 Fifth Edition §2.2 production `[2]`, `Char`.
+    ///
+    /// <https://www.w3.org/TR/xml/#NT-Char>. Surrogates cannot inhabit a
+    /// Rust `char`; U+FFFE and U+FFFF are excluded, but supplementary-plane
+    /// noncharacters and C1 controls are legal XML characters.
+    tables XML_CHAR_ASCII, XML_CHAR_NON_ASCII;
+    pub const fn is_xml_char(char);
+    base_ranges: &[];
+    ranges_fn: xml_char_ranges;
+    ascii: [(0x09, 0x0A), (0x0D, 0x0D), (0x20, 0x7F)];
+    non_ascii: [(0x80, 0xD7FF), (0xE000, 0xFFFD), (0x10000, 0x0010_FFFF)];
+}
+
+terminal! {
     /// `PN_CHARS_BASE ::= [A-Z] | [a-z] | [#xC0-#xD6] | [#xD8-#xF6] |`
     /// `[#xF8-#x2FF] | [#x370-#x37D] | [#x37F-#x1FFF] | [#x200C-#x200D] |`
     /// `[#x2070-#x218F] | [#x2C00-#x2FEF] | [#x3001-#xD7FF] | [#xF900-#xFDCF] |`

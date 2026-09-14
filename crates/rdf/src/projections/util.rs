@@ -181,28 +181,14 @@ pub fn escape_xml_attribute(value: &str) -> Result<String, ProjectionError> {
 }
 
 fn escape_xml(value: &str, attribute: bool) -> Result<String, ProjectionError> {
-    let mut output = String::with_capacity(value.len());
-    for ch in value.chars() {
-        let code = ch as u32;
-        let valid = matches!(code, 0x9 | 0xa | 0xd)
-            || (0x20..=0xd7ff).contains(&code)
-            || (0xe000..=0xfffd).contains(&code)
-            || (0x1_0000..=0x10_ffff).contains(&code);
-        if !valid {
-            return Err(ProjectionError::term(format!(
-                "U+{code:04X} is not permitted in XML 1.0"
-            )));
-        }
-        match ch {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '"' if attribute => output.push_str("&quot;"),
-            '\'' if attribute => output.push_str("&apos;"),
-            other => output.push(other),
-        }
-    }
-    Ok(output)
+    let context = if attribute {
+        purrdf_core::xml_escape::Context::Attribute
+    } else {
+        purrdf_core::xml_escape::Context::Text
+    };
+    purrdf_core::xml_escape::escape(value, context)
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|error| ProjectionError::term(error.to_string()))
 }
 
 #[cfg(test)]
@@ -229,7 +215,7 @@ mod tests {
         assert_eq!(escape_xml_text("<&>\"'").expect("text"), "&lt;&amp;&gt;\"'");
         assert_eq!(
             escape_xml_attribute("<&>\"'").expect("attribute"),
-            "&lt;&amp;&gt;&quot;&apos;"
+            "&lt;&amp;&gt;&quot;'"
         );
         assert!(escape_xml_text("bad\0value").is_err());
     }
