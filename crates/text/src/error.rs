@@ -24,10 +24,8 @@ pub enum TextError {
     /// back to), an empty set of indexed predicates, or a predicate that is not
     /// an IRI.
     ///
-    /// A BM25 parameter is deliberately *not* on that list: `k1` and `b` are
-    /// crate constants rather than caller knobs, so there is no range for a
-    /// caller to leave. See [`crate::K1`] for why optionality there would be a
-    /// semantic change per consumer rather than a convenience.
+    /// Field parameters and predicate routing are validated by the immutable
+    /// [`crate::RankingProfile`], whose identity carries every scoring choice.
     Config(String),
 
     /// The input data cannot be indexed or queried as given — a predicate the

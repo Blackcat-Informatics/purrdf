@@ -318,14 +318,6 @@ fn ascii_class(byte: u8, mask: u8) -> bool {
     byte < 0x80 && CLASS[byte as usize] & mask != 0
 }
 
-fn is_unreserved(c: char) -> bool {
-    c.is_ascii() && CLASS[c as usize] & UNRESERVED != 0
-}
-
-fn is_sub_delims(c: char) -> bool {
-    c.is_ascii() && CLASS[c as usize] & SUB_DELIMS != 0
-}
-
 /// RFC-3987 §2.2 `ucschar` — the Unicode ranges IRIs add over URIs.
 fn is_ucschar(c: char) -> bool {
     let u = c as u32;
@@ -415,8 +407,7 @@ fn validate_component(
 
 fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     // authority = [ userinfo "@" ] host [ ":" port ]
-    // Split off optional userinfo (last '@' before host — userinfo cannot contain
-    // an unescaped '@', so the first '@' delimits it).
+    // Userinfo cannot contain an unescaped '@', so the first '@' delimits it.
     let (userinfo, rest, host_off) = match find_first_byte(s.as_bytes(), b'@') {
         Some(at) => (Some(&s[..at]), &s[at + 1..], base_off + at + 1),
         None => (None, s, base_off),
@@ -466,36 +457,58 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
                 return Err(IriError::DisallowedChar(c, poff + k));
             }
         }
-        // A port is a TCP/UDP port number: it must fit in a u16. An empty port
-        // (`host:`) is permitted by the grammar (`port = *DIGIT`); a numeric
-        // overflow is not — reject it rather than silently accept garbage.
-        if !p.is_empty() && p.parse::<u16>().is_err() {
-            return Err(IriError::BadAuthority(format!("port out of range: {p}")));
-        }
+        // RFC 3986 §3.2.3 defines the generic syntax as `port = *DIGIT`.
+        // Transport ranges belong to a scheme's connection policy, not IRI
+        // identity. Empty, long, and leading-zero digit strings remain lexical.
     }
     Ok(())
 }
 
 fn validate_host(s: &str, base_off: usize, mode: Mode) -> Result<()> {
     if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-        // IP-literal: IPv6address / IPvFuture. Light validation: hex, ':', '.',
-        // and (for IPvFuture) 'v', unreserved, sub-delims. Reject empties.
-        if inner.is_empty() {
-            return Err(IriError::BadAuthority("empty IP-literal".to_owned()));
+        // RFC 3986 §3.2.2: IP-literal = "[" (IPv6address / IPvFuture) "]".
+        // Character membership alone does not establish either production.
+        return validate_ip_literal(inner, base_off + 1);
+    }
+    // reg-name / IPv4: unreserved / pct / sub-delims (+ ucschar in IRI mode).
+    validate_component(s, base_off, 0, false, mode)
+}
+
+/// Validate an IP-literal's contents without normalizing its spelling.
+fn validate_ip_literal(inner: &str, base_off: usize) -> Result<()> {
+    if matches!(inner.as_bytes().first(), Some(b'v' | b'V')) {
+        // ABNF string literals are case-insensitive. The version is nonempty
+        // hexadecimal; the address is a nonempty exact terminal class.
+        let (version, address) = inner[1..].split_once('.').ok_or_else(|| {
+            IriError::BadAuthority(format!(
+                "IPvFuture at byte {base_off} requires a version and '.'"
+            ))
+        })?;
+        if version.is_empty() || address.is_empty() {
+            return Err(IriError::BadAuthority(format!(
+                "IPvFuture at byte {base_off} needs a nonempty version and address"
+            )));
         }
-        for (k, c) in inner.char_indices() {
-            let ok = c.is_ascii_hexdigit()
-                || matches!(c, ':' | '.' | 'v' | 'V')
-                || is_unreserved(c)
-                || is_sub_delims(c);
-            if !ok {
-                return Err(IriError::DisallowedChar(c, base_off + 1 + k));
+        for (at, ch) in version.char_indices() {
+            if !ch.is_ascii_hexdigit() {
+                return Err(IriError::DisallowedChar(ch, base_off + 1 + at));
+            }
+        }
+        let address_off = base_off + version.len() + 2;
+        for (at, ch) in address.char_indices() {
+            if !crate::terminals::is_ipvfuture_address_char(ch) {
+                return Err(IriError::DisallowedChar(ch, address_off + at));
             }
         }
         return Ok(());
     }
-    // reg-name / IPv4: unreserved / pct / sub-delims (+ ucschar in IRI mode).
-    validate_component(s, base_off, 0, false, mode)
+    // The standard parser is pure address syntax: no lookup, socket, clock or
+    // other I/O. It handles every IPv6 compression and embedded IPv4 form on
+    // native and wasm targets, without adding a second address parser here.
+    inner.parse::<core::net::Ipv6Addr>().map_err(|_| {
+        IriError::BadAuthority(format!("invalid IPv6 address {inner:?} at byte {base_off}"))
+    })?;
+    Ok(())
 }
 
 fn validate_path(s: &str, base_off: usize, mode: Mode) -> Result<()> {

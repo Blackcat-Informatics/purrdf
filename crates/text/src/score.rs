@@ -4,57 +4,17 @@
 //! BM25 ranking: exact scores, per-partition ranks, and a total order with no
 //! ties in it.
 //!
-//! # The constants are constants
+//! # One fielded arithmetic path
 //!
-//! [`K1`] and [`B`] are crate constants, not caller parameters. There is no
-//! parameter struct, no builder and no knob, and that is a deliberate
-//! restriction rather than an unfinished one.
+//! The immutable [`crate::RankingProfile`] identifies field weights, length
+//! normalization, predicate routing, bounds, rounding and query aggregation.
+//! [`K1`] stays fixed at 1.2; [`B`] is the single-field profile's default 0.75.
+//! Every profile, including that single field, runs the same prepared BM25F
+//! scorer. Field frequencies are normalized and weighted before saturation;
+//! summing independently saturated field scores is a different ranking law.
 //!
-//! AGENTS.md states the rule plainly: *PurRDF is a carrier; optionality changes
-//! semantics per consumer, which is forbidden.* A tuning parameter here would be
-//! exactly that. Two callers pointing the same query at the same index would get
-//! different scores and — worse, because it is the thing downstream actually
-//! consumes — a different `?rank`, and neither answer would be identifiable as
-//! the wrong one. Ranked retrieval's whole output is an order, so a knob that
-//! changes the order changes the answer.
-//!
-//! This is **not** the "caller-supplied configuration" rule that governs
-//! [`TextIndexConfig`](crate::TextIndexConfig)'s predicate IRIs. That rule exists
-//! because PurRDF mints no vocabulary: an IRI PurRDF chose for itself would be a
-//! term of somebody's ontology invented by a carrier, and would end up in an RDF
-//! graph as data. A saturation constant from the retrieval literature is not a
-//! vocabulary, ends up in no graph, and names nothing; the two rules point in
-//! opposite directions here and it is worth saying which one applies.
-//!
-//! The values are the canonical ones from the BM25 literature — `k1 = 1.2` and
-//! `b = 0.75`, the Okapi defaults that every published description of the
-//! function uses when it does not say otherwise. Picking the literature's numbers
-//! rather than inventing better ones is the point: they are the values a reader
-//! can check this implementation against.
-//!
-//! # The formula
-//!
-//! ```text
-//! score(D, Q) = Σ            IDF(t) · ( tf(t,D) · (k1 + 1) )
-//!               t ∈ Q       ────────────────────────────────────────────
-//!                            tf(t,D) + k1 · (1 − b + b · |D| / avgdl)
-//!
-//! IDF(t)      = ln( 1 + (N − df(t) + 1/2) / (df(t) + 1/2) )
-//! ```
-//!
-//! `t` ranges over the **distinct** terms of the analyzed needle, visited in
-//! sorted order. Every step runs in [`Fixed`], every step is checked, and an
-//! intermediate that does not fit is a [`TextError::Overflow`] rather than a
-//! wrapped or saturated number: a wrapped score is a wrong ranking presented as a
-//! right one.
-//!
-//! `N`, `df` and `avgdl` are read from the **document's own partition** and never
-//! pooled. `avgdl` is strictly positive for every partition an index retains,
-//! because a document that analyzes to zero tokens is not retained at all (see
-//! [`TextIndex`]'s zero-token invariant). That guarantee is what makes the
-//! division by `avgdl` safe, so it is checked here as well as asserted there — a
-//! `debug_assert` and a real [`TextError::Domain`] guard, so a later change to the
-//! index cannot quietly reintroduce a division by zero.
+//! Terms are distinct and visited in sorted order. Corpus statistics and the
+//! prepared IDF cache belong to one partition and one immutable profile.
 //!
 //! # Every rank is per partition, and that is a correctness decision
 //!
@@ -146,6 +106,7 @@ use purrdf_core::TermValue;
 use crate::error::TextError;
 use crate::fixed::{Fixed, SCALE_DIGITS};
 use crate::index::{PartitionKey, TextIndex};
+use crate::ranking::{PreparedCorpus, QUERY_TERMS_MAX};
 
 /// The raw constants below are written at [`SCALE_DIGITS`] fractional digits, so
 /// the scale and the literals cannot drift apart unnoticed.
@@ -154,22 +115,14 @@ const _: () = assert!(
     "the BM25 constants are spelled out at twelve fractional digits"
 );
 
-/// The BM25 term-frequency saturation constant, `k1 = 1.2`.
-///
-/// The canonical value from the BM25 literature, and a **constant rather than a
-/// caller parameter**. See this module's documentation: PurRDF is a carrier, and
-/// optionality that changes semantics per consumer is forbidden, so two callers
-/// must not get different scores and different ranks out of the same index and
-/// the same needle.
+/// The fixed BM25F term-frequency saturation constant, `k1 = 1.2`.
 pub const K1: Fixed = Fixed::from_raw(1_200_000_000_000);
 
-/// The BM25 document-length normalization constant, `b = 0.75`.
-///
-/// The canonical value from the BM25 literature, and a constant for the same
-/// reason [`K1`] is.
+/// Default field length normalization for the explicit single-field profile.
 pub const B: Fixed = Fixed::from_raw(750_000_000_000);
 
 /// One half — the `1/2` of the inverse document frequency's two shifts.
+#[cfg(test)]
 const HALF: Fixed = Fixed::from_raw(500_000_000_000);
 
 // ---------------------------------------------------------------------------
@@ -464,115 +417,31 @@ pub fn explain(
             "document {document} names a partition the index does not hold"
         ))
     })?;
-    let length = index
-        .document_length(document)
-        .ok_or_else(|| TextError::data(format!("document {document} has no recorded length")))?;
-
+    let totals = index
+        .field_totals(partition)
+        .ok_or_else(|| TextError::data("partition has no field totals"))?;
+    let corpus = PreparedCorpus::new(index.ranking_profile(), stats.document_count(), totals)?;
+    let frequencies: Vec<(&str, u64)> = terms
+        .iter()
+        .map(|term| (*term, index.document_frequency(partition, term)))
+        .collect();
+    let query = corpus.prepare_query(&frequencies)?;
     let mut out = Vec::with_capacity(terms.len());
-    for term in terms {
-        let document_frequency = index.document_frequency(partition, term);
-        let inverse_document_frequency =
-            inverse_document_frequency(stats.document_count(), document_frequency)?;
-        let term_frequency = index.term_frequency(document, term);
-        let saturation = saturation(term_frequency, length, stats.average_document_length())?;
+    for (ordinal, term) in terms.into_iter().enumerate() {
+        let (document_frequency, inverse_document_frequency) = query
+            .term_statistics(ordinal)
+            .expect("prepared term ordinal");
+        let fields = index.field_inputs(document, term)?;
         out.push(TermContribution {
             term: term.to_owned(),
-            term_frequency,
+            term_frequency: index.term_frequency(document, term),
             document_frequency,
             inverse_document_frequency,
-            contribution: inverse_document_frequency.checked_mul(saturation)?,
+            contribution: query
+                .contribution(ordinal, &fields[..index.ranking_profile().fields().len()])?,
         });
     }
     Ok(out)
-}
-
-// ---------------------------------------------------------------------------
-// The arithmetic
-// ---------------------------------------------------------------------------
-
-/// `ln(1 + (N − df + 1/2) / (df + 1/2))`, entirely in fixed point.
-///
-/// Strictly positive for every `df` in range, including `df == N`: the numerator
-/// is then `1/2`, the quotient is positive, and the logarithm's argument exceeds
-/// one. So a term every document holds still contributes a small positive amount
-/// rather than a negative one — which is the reason this shape of the inverse
-/// document frequency is preferred over the unshifted `ln(N / df)`.
-fn inverse_document_frequency(
-    document_count: u64,
-    document_frequency: u64,
-) -> Result<Fixed, TextError> {
-    debug_assert!(
-        document_frequency <= document_count,
-        "a term cannot occur in more documents than the partition holds"
-    );
-    if document_frequency > document_count {
-        return Err(TextError::domain(format!(
-            "document frequency {document_frequency} exceeds the partition's {document_count} \
-             documents"
-        )));
-    }
-    let count = from_count(document_count)?;
-    let frequency = from_count(document_frequency)?;
-    let numerator = count.checked_sub(frequency)?.checked_add(HALF)?;
-    let denominator = frequency.checked_add(HALF)?;
-    Fixed::ONE
-        .checked_add(numerator.checked_div(denominator)?)?
-        .ln()
-}
-
-/// `tf · (k1 + 1) / (tf + k1 · (1 − b + b · |D| / avgdl))`, entirely in fixed
-/// point.
-///
-/// Exactly zero when `tf` is zero, because the numerator is: the denominator is
-/// strictly positive whatever `tf` is, since `1 − b` is `0.25` and the length
-/// ratio is non-negative. That is why a needle term the document does not hold
-/// needs no special case in either the scorer or [`explain`].
-fn saturation(
-    term_frequency: u64,
-    length: u64,
-    average_document_length: Fixed,
-) -> Result<Fixed, TextError> {
-    // A tripwire, not the guard: the index does not retain a document that
-    // analyzes to no tokens, so a non-positive average here means that invariant
-    // was broken upstream, and a debug build should say so at the break rather
-    // than return a plausible-looking failure from the arithmetic.
-    debug_assert!(
-        average_document_length > Fixed::ZERO,
-        "a retained partition's average document length must be strictly positive"
-    );
-
-    let frequency = from_count(term_frequency)?;
-    let numerator = frequency.checked_mul(K1.checked_add(Fixed::ONE)?)?;
-    let relative = length_ratio(length, average_document_length)?;
-    let normalization = Fixed::ONE
-        .checked_sub(B)?
-        .checked_add(B.checked_mul(relative)?)?;
-    let denominator = frequency.checked_add(K1.checked_mul(normalization)?)?;
-    numerator.checked_div(denominator)
-}
-
-/// `|D| / avgdl`, refusing an average that is not positive.
-///
-/// The guard that holds in every build, paired with [`saturation`]'s debug-only
-/// tripwire. It exists so that a future change to the index's
-/// zero-token-document exclusion cannot silently reintroduce a division by zero
-/// in a release build: there is no length ratio against an empty corpus, so none
-/// is invented.
-fn length_ratio(length: u64, average_document_length: Fixed) -> Result<Fixed, TextError> {
-    if average_document_length <= Fixed::ZERO {
-        return Err(TextError::domain(
-            "a partition reports an average document length that is not positive; the index's \
-             zero-token-document exclusion is what guarantees it cannot be",
-        ));
-    }
-    from_count(length)?.checked_div(average_document_length)
-}
-
-/// A corpus count as a fixed-point number, refusing rather than wrapping.
-fn from_count(value: u64) -> Result<Fixed, TextError> {
-    let value = i64::try_from(value)
-        .map_err(|_| TextError::overflow(format!("{value} does not fit a fixed-point integer")))?;
-    Fixed::from_integer(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -631,10 +500,9 @@ fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
     let mut terms: Vec<&str> = needle.iter().map(String::as_str).collect();
     terms.sort_unstable();
     terms.dedup();
-    if u32::try_from(terms.len()).is_err() {
+    if terms.len() > QUERY_TERMS_MAX {
         return Err(TextError::data(format!(
-            "the needle holds {} distinct terms, which exceeds the u32 space a matched-term count \
-             addresses",
+            "the needle holds {} distinct terms, which exceeds the profile bound of 1024",
             terms.len()
         )));
     }
@@ -670,11 +538,22 @@ fn rank_terms(
     Ok(rows)
 }
 
+/// One query term's retained predicate facts in one candidate document.
+#[derive(Clone, Copy)]
+struct CandidateOccurrence<'a> {
+    /// Canonical document identifier.
+    document: u32,
+    /// Ordinal of the sorted distinct query term.
+    ordinal: u32,
+    /// Borrowed predicate frequencies, avoiding per-candidate lookup or copying.
+    counts: &'a [(u32, u64)],
+}
+
 /// Every document of `partition` that holds at least one of `terms`, scored.
 ///
-/// A document holding none of them is not a candidate. Its score would be a sum
-/// over nothing, which is zero, and a zero-scoring row is not a retrieval result
-/// — emitting one would make every document in the corpus a hit for every query.
+/// A document holding none of them is not a candidate. Candidate membership is
+/// independent of field weights: a matching document can legitimately score
+/// zero, and still participates in the canonical tie order.
 fn candidates(
     index: &TextIndex,
     partition: &PartitionKey,
@@ -687,44 +566,50 @@ fn candidates(
     };
 
     let mut frequencies = Vec::with_capacity(terms.len());
-    // `(document, term ordinal, term frequency)`. Sorting this groups the whole
+    // `(document, term ordinal, predicate frequencies)`. Sorting this groups the whole
     // working set by document while leaving each document's terms in the sorted
     // term order the sum is defined to run in.
-    let mut occurrences: Vec<(u32, u32, u64)> = Vec::new();
+    let mut occurrences: Vec<CandidateOccurrence<'_>> = Vec::new();
     for (ordinal, term) in terms.iter().enumerate() {
         let document_frequency = index.document_frequency(partition, term);
-        frequencies.push(inverse_document_frequency(
-            stats.document_count(),
-            document_frequency,
-        )?);
-        for (document, positions) in index.postings(partition, term) {
-            occurrences.push((document, ordinal as u32, positions.len() as u64));
+        frequencies.push((*term, document_frequency));
+        for (document, counts) in index.field_postings(partition, term) {
+            occurrences.push(CandidateOccurrence {
+                document,
+                ordinal: ordinal as u32,
+                counts,
+            });
         }
     }
-    occurrences.sort_unstable();
+    occurrences.sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
+    let totals = index
+        .field_totals(partition)
+        .ok_or_else(|| TextError::data("partition has no field totals"))?;
+    let corpus = PreparedCorpus::new(index.ranking_profile(), stats.document_count(), totals)?;
+    let query = corpus.prepare_query(&frequencies)?;
 
     let mut out: Vec<Candidate> = Vec::new();
     let mut at = 0;
     while at < occurrences.len() {
-        let document = occurrences[at].0;
-        let length = index.document_length(document).ok_or_else(|| {
-            TextError::data(format!(
-                "a posting names document {document}, which the index does not hold"
-            ))
-        })?;
+        let document = occurrences[at].document;
         let mut score = Fixed::ZERO;
         let mut matched: u32 = 0;
-        while at < occurrences.len() && occurrences[at].0 == document {
-            let (_, ordinal, term_frequency) = occurrences[at];
-            let saturation = saturation(term_frequency, length, stats.average_document_length())?;
-            let contribution = frequencies[ordinal as usize].checked_mul(saturation)?;
+        while at < occurrences.len() && occurrences[at].document == document {
+            let CandidateOccurrence {
+                ordinal, counts, ..
+            } = occurrences[at];
+            let fields = index.field_inputs_from_counts(document, counts)?;
+            let contribution = query.contribution(
+                ordinal as usize,
+                &fields[..index.ranking_profile().fields().len()],
+            )?;
             score = score.checked_add(contribution)?;
             matched += 1;
             at += 1;
         }
         out.push(Candidate {
             document,
-            score,
+            score: index.ranking_profile().validate_score(score)?,
             matched,
         });
     }
@@ -769,11 +654,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::TermValue;
 
-    use super::{
-        B, Constraint, HALF, K1, PartitionFilter, distinct_terms, length_ratio, saturation,
-    };
-    use crate::error::TextError;
-    use crate::fixed::Fixed;
+    use super::{B, Constraint, HALF, K1, PartitionFilter, distinct_terms};
     use crate::index::PartitionKey;
 
     /// The constants denote the literature's values, exactly.
@@ -782,53 +663,6 @@ mod tests {
         assert_eq!(K1.to_decimal_lexical(), "1.200000000000");
         assert_eq!(B.to_decimal_lexical(), "0.750000000000");
         assert_eq!(HALF.to_decimal_lexical(), "0.500000000000");
-    }
-
-    /// A document of exactly average length gets a normalization factor of one,
-    /// so its saturation reduces to `tf·(k1+1)/(tf+k1)` — the hand-checkable
-    /// case every golden in this crate is built on.
-    #[test]
-    fn an_average_length_document_normalizes_to_one() {
-        let average = Fixed::from_integer(4).expect("representable");
-        assert_eq!(
-            saturation(1, 4, average)
-                .expect("finite")
-                .to_decimal_lexical(),
-            "1.000000000000",
-            "tf = 1 at average length is 2.2/2.2"
-        );
-        assert_eq!(
-            saturation(2, 4, average)
-                .expect("finite")
-                .to_decimal_lexical(),
-            "1.375000000000",
-            "tf = 2 at average length is 4.4/3.2"
-        );
-        assert_eq!(
-            saturation(0, 4, average).expect("finite"),
-            Fixed::ZERO,
-            "a term the document does not hold contributes exactly zero"
-        );
-    }
-
-    /// The zero-token invariant is guarded here as well as upheld in the index:
-    /// an average of zero is refused rather than divided by, in **every** build.
-    #[test]
-    fn a_zero_average_document_length_is_a_domain_error() {
-        let error = length_ratio(1, Fixed::ZERO).expect_err("a zero average has no length ratio");
-        assert!(matches!(error, TextError::Domain(_)), "got {error:?}");
-        let negative =
-            length_ratio(1, Fixed::from_integer(-1).expect("representable")).expect_err("likewise");
-        assert!(matches!(negative, TextError::Domain(_)), "got {negative:?}");
-    }
-
-    /// And a debug build trips at the break rather than returning a
-    /// plausible-looking arithmetic failure from three frames away.
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "average document length must be strictly positive")]
-    fn a_zero_average_document_length_trips_the_debug_tripwire() {
-        let _ = saturation(1, 1, Fixed::ZERO);
     }
 
     /// The needle's terms are deduplicated and sorted, whatever order they

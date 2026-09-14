@@ -85,7 +85,7 @@ fn invalid_iris_are_rejected() {
         "http://example.org/a\"b",       // '\"' disallowed (rdf-tests negative)
         "http://example.org/a{b}",       // '{' '}' disallowed
         "http://example.org/a\u{0000}b", // NUL control char disallowed
-        "http://h:99999/",               // port out of u16 range
+        "http://h:12x/",                 // non-digit port
         "3com:foo",                      // path-noscheme ':' in first segment
     ];
     for s in invalid {
