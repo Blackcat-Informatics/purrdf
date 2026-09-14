@@ -91,12 +91,24 @@ fn rejects_colon_in_first_segment_of_relative_path() {
 }
 
 #[test]
-fn rejects_port_out_of_u16_range() {
-    assert!(parse("http://h:8080/p").is_ok());
-    // Empty port is grammar-legal (`port = *DIGIT`).
-    assert!(parse("http://h:/p").is_ok());
-    // 99999 > 65535 -> reject rather than silently accept.
-    assert!(parse("http://h:99999/p").is_err());
+fn generic_port_syntax_is_any_ascii_digit_string() {
+    // RFC 3986 §3.2.3 specifies *DIGIT, not a transport endpoint's u16 range.
+    for port in [
+        "",
+        "0",
+        "8080",
+        "65535",
+        "65536",
+        "99999",
+        "000000000000000000000000000000000000000001",
+        "999999999999999999999999999999999999999999",
+    ] {
+        let text = format!("http://h:{port}/p");
+        assert_eq!(parse(&text).expect("generic port syntax").as_str(), text);
+    }
+    for port in ["-1", "+1", "80x", "８０", "1:2", "%38%30"] {
+        assert!(parse(&format!("http://h:{port}/p")).is_err(), "{port:?}");
+    }
 }
 
 #[test]

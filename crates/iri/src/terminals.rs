@@ -450,6 +450,29 @@ macro_rules! terminal {
 }
 
 terminal! {
+    /// RFC 3986 §3.2.2 `IPvFuture` address character:
+    /// `unreserved / sub-delims / ":"`. RFC 3987 §2.2 imports this
+    /// production unchanged: IRI Unicode and percent encoding are not added.
+    tables IPVFUTURE_ADDRESS_ASCII, IPVFUTURE_ADDRESS_NON_ASCII;
+    pub const fn is_ipvfuture_address_char(char);
+    base_ranges: &[];
+    ranges_fn: ipvfuture_address_char_ranges;
+    ascii: [
+        (0x21, 0x21), // !
+        (0x24, 0x24), // $
+        (0x26, 0x2E), // &'()*+,-.
+        (0x30, 0x3B), // 0-9 : ;
+        (0x3D, 0x3D), // =
+        (0x41, 0x5A), // A-Z
+        (0x5F, 0x5F), // _
+        (0x61, 0x7A), // a-z
+        (0x7E, 0x7E), // ~
+    ];
+    non_ascii: [];
+    cardinality: 78;
+}
+
+terminal! {
     /// `WS ::= #x20 | #x9 | #xD | #xA` — the whitespace a scanner may skip
     /// between two terminals (SPARQL 1.2 §19.8 `WS`; Turtle 1.2 §6.5 names the
     /// same four code points).
