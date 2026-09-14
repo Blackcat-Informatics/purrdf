@@ -141,11 +141,11 @@ pub fn render_export_svg(export: &VizExport, options: &VizSvgOptions) -> Result<
     writeln!(
         out,
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}" width="100%" role="img" aria-labelledby="purrdf-title purrdf-desc" data-purrdf-schema="{}">"#,
-        export.layout.width, export.layout.height, export.schema_version
+        export.layout.width, export.layout.height, xml_attribute(&export.schema_version)?
     )
     .expect("writing to String cannot fail");
     write!(out, "<title id=\"purrdf-title\">").expect("writing to String cannot fail");
-    escape_xml_text(&options.title, &mut out);
+    escape_xml_text(&options.title, &mut out)?;
     out.push_str("</title>\n");
     writeln!(
         out,
@@ -162,10 +162,10 @@ pub fn render_export_svg(export: &VizExport, options: &VizSvgOptions) -> Result<
         out.push_str(
             "<metadata id=\"purrdf-viz-export\" type=\"application/vnd.purrdf.viz+json\">",
         );
-        escape_xml_text(&metadata, &mut out);
+        escape_xml_text(&metadata, &mut out)?;
         out.push_str("</metadata>\n");
     }
-    render_defs(export, &mut out, options.include_styles);
+    render_defs(export, &mut out, options.include_styles)?;
     writeln!(
         out,
         "<rect class=\"canvas\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\"/>",
@@ -174,11 +174,11 @@ pub fn render_export_svg(export: &VizExport, options: &VizSvgOptions) -> Result<
     .expect("writing to String cannot fail");
 
     if export.scene.mode == VizMode::Table {
-        render_table(export, &mut out);
+        render_table(export, &mut out)?;
     } else {
-        render_graph(export, &mut out);
+        render_graph(export, &mut out)?;
     }
-    render_legend(export, &mut out);
+    render_legend(export, &mut out)?;
     out.push_str("</svg>\n");
     Ok(out)
 }
@@ -368,7 +368,7 @@ fn badge_bindings(badge: &VizBadge, owner: &[VizSemanticRef]) -> Vec<VizSemantic
         .map_or_else(|| owner.to_vec(), |binding| vec![binding])
 }
 
-fn render_defs(export: &VizExport, out: &mut String, include_styles: bool) {
+fn render_defs(export: &VizExport, out: &mut String, include_styles: bool) -> Result<(), VizError> {
     out.push_str("<defs>\n");
     for (id, color) in [
         ("arrow-assertion", "#147d8a"),
@@ -388,11 +388,12 @@ fn render_defs(export: &VizExport, out: &mut String, include_styles: bool) {
         writeln!(
             out,
             "<marker id=\"arrow-{}\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"{color}\"/></marker>",
-            edge.id
+            xml_attribute(&edge.id)?
         )
         .expect("writing to String cannot fail");
     }
     for (id, rect) in text_clip_rects(export) {
+        let id = xml_attribute(&id)?;
         writeln!(
             out,
             "<clipPath id=\"clip-{id}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath>",
@@ -406,6 +407,7 @@ fn render_defs(export: &VizExport, out: &mut String, include_styles: bool) {
         out.push_str("</style>\n");
     }
     out.push_str("</defs>\n");
+    Ok(())
 }
 
 fn text_clip_rects(export: &VizExport) -> Vec<(String, VizRect)> {
@@ -460,7 +462,7 @@ fn text_clip_rects(export: &VizExport) -> Vec<(String, VizRect)> {
     clips
 }
 
-fn render_graph(export: &VizExport, out: &mut String) {
+fn render_graph(export: &VizExport, out: &mut String) -> Result<(), VizError> {
     let scene_edges = export
         .scene
         .edges
@@ -469,7 +471,7 @@ fn render_graph(export: &VizExport, out: &mut String) {
         .collect::<BTreeMap<_, _>>();
     for layout in &export.layout.edges {
         if let Some(scene) = scene_edges.get(layout.id.as_str()) {
-            render_edge(scene, layout, out);
+            render_edge(scene, layout, out)?;
         }
     }
     let scene_nodes = export
@@ -480,27 +482,33 @@ fn render_graph(export: &VizExport, out: &mut String) {
         .collect::<BTreeMap<_, _>>();
     for layout in &export.layout.nodes {
         if let Some(scene) = scene_nodes.get(layout.id.as_str()) {
-            render_node(scene, layout, out);
+            render_node(scene, layout, out)?;
         }
     }
+    Ok(())
 }
 
-fn render_edge(scene: &VizSceneEdge, layout: &VizLayoutEdge, out: &mut String) {
+fn render_edge(
+    scene: &VizSceneEdge,
+    layout: &VizLayoutEdge,
+    out: &mut String,
+) -> Result<(), VizError> {
     let class = edge_class(scene.kind);
     let color = edge_stroke(scene.kind, &scene.id);
     writeln!(
         out,
         "<g id=\"svg-{}-group\" class=\"edge {class}\" data-scene-id=\"{}\">",
-        scene.id, scene.id
+        xml_attribute(&scene.id)?,
+        xml_attribute(&scene.id)?
     )
     .expect("writing to String cannot fail");
-    render_accessibility(&scene.accessibility, out);
+    render_accessibility(&scene.accessibility, out)?;
     writeln!(
         out,
         "<path id=\"svg-{}-path\" class=\"edge-path\" d=\"{}\" marker-end=\"url(#arrow-{})\" style=\"stroke:{color}\"/>",
-        scene.id,
+        xml_attribute(&scene.id)?,
         path_data(&layout.points),
-        scene.id
+        xml_attribute(&scene.id)?
     )
     .expect("writing to String cannot fail");
     render_edge_label_leader(&layout.points, layout.label.rect, out);
@@ -510,12 +518,13 @@ fn render_edge(scene: &VizSceneEdge, layout: &VizLayoutEdge, out: &mut String) {
         &layout.label,
         "edge-label",
         out,
-    );
-    render_badges(&scene.id, &scene.badges, &layout.badges, "edge-badge", out);
+    )?;
+    render_badges(&scene.id, &scene.badges, &layout.badges, "edge-badge", out)?;
     if let (Some(scene_anchor), Some(layout_anchor)) = (&scene.anchor, &layout.anchor) {
-        render_anchor(&scene.id, scene_anchor, layout_anchor, out);
+        render_anchor(&scene.id, scene_anchor, layout_anchor, out)?;
     }
     out.push_str("</g>\n");
+    Ok(())
 }
 
 fn render_edge_label_leader(points: &[VizPoint], label: VizRect, out: &mut String) {
@@ -541,14 +550,20 @@ fn render_edge_label_leader(points: &[VizPoint], label: VizRect, out: &mut Strin
     .expect("writing to String cannot fail");
 }
 
-fn render_anchor(edge_id: &str, scene: &VizEdgeAnchor, layout: &VizLayoutAnchor, out: &mut String) {
+fn render_anchor(
+    edge_id: &str,
+    scene: &VizEdgeAnchor,
+    layout: &VizLayoutAnchor,
+    out: &mut String,
+) -> Result<(), VizError> {
+    let escaped_edge_id = xml_attribute(edge_id)?;
     writeln!(
         out,
-        "<g id=\"svg-{edge_id}-anchor\" class=\"statement-anchor\" data-scene-id=\"{}\">",
-        scene.id
+        "<g id=\"svg-{escaped_edge_id}-anchor\" class=\"statement-anchor\" data-scene-id=\"{}\">",
+        xml_attribute(&scene.id)?
     )
     .expect("writing to String cannot fail");
-    render_accessibility(&scene.accessibility, out);
+    render_accessibility(&scene.accessibility, out)?;
     render_rect(layout.rect, "anchor-shape", out);
     render_text(
         &format!("svg-{edge_id}-anchor-label"),
@@ -556,18 +571,23 @@ fn render_anchor(edge_id: &str, scene: &VizEdgeAnchor, layout: &VizLayoutAnchor,
         &layout.label,
         "anchor-label",
         out,
-    );
+    )?;
     render_badges(
         &format!("{edge_id}-anchor"),
         &scene.badges,
         &layout.badges,
         "anchor-badge",
         out,
-    );
+    )?;
     out.push_str("</g>\n");
+    Ok(())
 }
 
-fn render_node(scene: &VizSceneNode, layout: &VizLayoutNode, out: &mut String) {
+fn render_node(
+    scene: &VizSceneNode,
+    layout: &VizLayoutNode,
+    out: &mut String,
+) -> Result<(), VizError> {
     let mut class = format!("node {}", node_class(scene.kind));
     if scene
         .badges
@@ -586,11 +606,13 @@ fn render_node(scene: &VizSceneNode, layout: &VizLayoutNode, out: &mut String) {
     writeln!(
         out,
         "<g id=\"svg-{}-group\" class=\"{class}\" data-scene-id=\"{}\">",
-        scene.id, scene.id
+        xml_attribute(&scene.id)?,
+        xml_attribute(&scene.id)?
     )
     .expect("writing to String cannot fail");
-    render_accessibility(&scene.accessibility, out);
-    write!(out, "<rect id=\"svg-{}-shape\" ", scene.id).expect("writing to String cannot fail");
+    render_accessibility(&scene.accessibility, out)?;
+    write!(out, "<rect id=\"svg-{}-shape\" ", xml_attribute(&scene.id)?)
+        .expect("writing to String cannot fail");
     render_rect_attributes(layout.rect, "node-shape", out);
     out.push_str("/>\n");
     if scene.kind == VizSceneNodeKind::Statement {
@@ -608,22 +630,26 @@ fn render_node(scene: &VizSceneNode, layout: &VizLayoutNode, out: &mut String) {
         &layout.label,
         "node-label",
         out,
-    );
-    render_badges(&scene.id, &scene.badges, &layout.badges, "node-badge", out);
+    )?;
+    render_badges(&scene.id, &scene.badges, &layout.badges, "node-badge", out)?;
     for port in &layout.ports {
         writeln!(
             out,
             "<circle id=\"svg-{}-port-{}\" class=\"node-port\" cx=\"{}\" cy=\"{}\" r=\"3\"/>",
-            scene.id, port.id, port.point.x, port.point.y
+            xml_attribute(&scene.id)?,
+            xml_attribute(&port.id)?,
+            port.point.x,
+            port.point.y
         )
         .expect("writing to String cannot fail");
     }
     out.push_str("</g>\n");
+    Ok(())
 }
 
-fn render_table(export: &VizExport, out: &mut String) {
+fn render_table(export: &VizExport, out: &mut String) -> Result<(), VizError> {
     let (Some(scene), Some(layout)) = (&export.scene.table, &export.layout.table) else {
-        return;
+        return Ok(());
     };
     out.push_str("<g id=\"svg-table\" class=\"statement-table\">\n");
     for cell in &layout.cells {
@@ -659,13 +685,14 @@ fn render_table(export: &VizExport, out: &mut String) {
             &cell.label,
             "table-label",
             out,
-        );
+        )?;
         out.push_str("</g>\n");
     }
     out.push_str("</g>\n");
+    Ok(())
 }
 
-fn render_legend(export: &VizExport, out: &mut String) {
+fn render_legend(export: &VizExport, out: &mut String) -> Result<(), VizError> {
     let layout = export
         .layout
         .legend
@@ -680,7 +707,8 @@ fn render_legend(export: &VizExport, out: &mut String) {
         writeln!(
             out,
             "<g id=\"svg-{}\" class=\"legend-entry {}\">",
-            entry.id, entry.id
+            xml_attribute(&entry.id)?,
+            xml_attribute(&entry.id)?
         )
         .expect("writing to String cannot fail");
         render_rect(geometry.rect, "legend-entry-shape", out);
@@ -700,10 +728,11 @@ fn render_legend(export: &VizExport, out: &mut String) {
             &label_rect,
             "legend-label",
             out,
-        );
+        )?;
         out.push_str("</g>\n");
     }
     out.push_str("</g>\n");
+    Ok(())
 }
 
 fn render_legend_symbol(entry: &VizLegendEntry, rect: VizRect, out: &mut String) {
@@ -754,9 +783,10 @@ fn render_label_box(
     layout: &VizLayoutLabel,
     class: &str,
     out: &mut String,
-) {
+) -> Result<(), VizError> {
     render_rect(layout.rect, &format!("{class}-box"), out);
-    render_text(id, scene, layout, class, out);
+    render_text(id, scene, layout, class, out)?;
+    Ok(())
 }
 
 fn render_text(
@@ -765,7 +795,8 @@ fn render_text(
     layout: &VizLayoutLabel,
     class: &str,
     out: &mut String,
-) {
+) -> Result<(), VizError> {
+    let id = xml_attribute(id)?;
     write!(
         out,
         "<text id=\"{id}\" class=\"{class}\" text-anchor=\"middle\" unicode-bidi=\"isolate\" clip-path=\"url(#clip-{id})\""
@@ -773,7 +804,7 @@ fn render_text(
     .expect("writing to String cannot fail");
     if let Some(language) = &scene.language {
         out.push_str(" lang=\"");
-        escape_xml_attr(language, out);
+        escape_xml_attr(language, out)?;
         out.push('"');
     }
     if let Some(direction) = scene.direction {
@@ -789,7 +820,7 @@ fn render_text(
     }
     out.push('>');
     out.push_str("<title>");
-    escape_xml_text(&scene.full_text, out);
+    escape_xml_text(&scene.full_text, out)?;
     out.push_str("</title>");
     let line_count = i32::try_from(layout.lines.len()).unwrap_or(1);
     let first_y = layout.rect.y + layout.rect.height / 2 - (line_count - 1) * 9 + 5;
@@ -801,10 +832,11 @@ fn render_text(
             first_y + i32::try_from(index).unwrap_or_default() * 18
         )
         .expect("writing to String cannot fail");
-        escape_xml_text(line, out);
+        escape_xml_text(line, out)?;
         out.push_str("</tspan>");
     }
     out.push_str("</text>\n");
+    Ok(())
 }
 
 fn render_badges(
@@ -813,7 +845,8 @@ fn render_badges(
     layout: &[VizLayoutBadge],
     class: &str,
     out: &mut String,
-) {
+) -> Result<(), VizError> {
+    let escaped_owner_id = xml_attribute(owner_id)?;
     for geometry in layout {
         let Some(badge) = scene.get(geometry.index) else {
             continue;
@@ -821,7 +854,7 @@ fn render_badges(
         let kind = badge_class(badge.kind);
         writeln!(
             out,
-            "<g id=\"svg-{owner_id}-badge-{}\" class=\"{class} {kind}\">",
+            "<g id=\"svg-{escaped_owner_id}-badge-{}\" class=\"{class} {kind}\">",
             geometry.index
         )
         .expect("writing to String cannot fail");
@@ -836,17 +869,19 @@ fn render_badges(
             &label,
             "badge-label",
             out,
-        );
+        )?;
         out.push_str("</g>\n");
     }
+    Ok(())
 }
 
-fn render_accessibility(value: &VizAccessibility, out: &mut String) {
+fn render_accessibility(value: &VizAccessibility, out: &mut String) -> Result<(), VizError> {
     out.push_str("<title>");
-    escape_xml_text(&value.title, out);
+    escape_xml_text(&value.title, out)?;
     out.push_str("</title><desc>");
-    escape_xml_text(&value.description, out);
+    escape_xml_text(&value.description, out)?;
     out.push_str("</desc>\n");
+    Ok(())
 }
 
 fn render_rect(rect: VizRect, class: &str, out: &mut String) {
@@ -1061,28 +1096,19 @@ fn plain_scene_label(value: &str) -> VizSceneLabel {
     }
 }
 
-fn escape_xml_attr(value: &str, out: &mut String) {
-    for character in value.chars() {
-        match character {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            _ => out.push(character),
-        }
-    }
+fn xml_attribute(value: &str) -> Result<std::borrow::Cow<'_, str>, VizError> {
+    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Attribute)
+        .map_err(|error| VizError::Serialize(error.to_string()))
 }
 
-fn escape_xml_text(value: &str, out: &mut String) {
-    for character in value.chars() {
-        match character {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(character),
-        }
-    }
+fn escape_xml_attr(value: &str, out: &mut String) -> Result<(), VizError> {
+    purrdf_core::xml_escape::push(value, purrdf_core::xml_escape::Context::Attribute, out)
+        .map_err(|error| VizError::Serialize(error.to_string()))
+}
+
+fn escape_xml_text(value: &str, out: &mut String) -> Result<(), VizError> {
+    purrdf_core::xml_escape::push(value, purrdf_core::xml_escape::Context::Text, out)
+        .map_err(|error| VizError::Serialize(error.to_string()))
 }
 
 const SVG_STYLE: &str = r"
@@ -1239,6 +1265,59 @@ mod tests {
                             .is_some_and(|value| value > 0)
                 })
         }));
+    }
+
+    #[test]
+    fn svg_export_attributes_use_the_same_xml_law() {
+        let mut document = render_graph_input_svg(
+            &input(true),
+            &VizSpec::default(),
+            &VizRenderOptions::default(),
+        )
+        .unwrap();
+        let value = "a<&>\"\t\n\r";
+        document.export.schema_version = value.to_owned();
+        document.export.scene.nodes[0].id = value.to_owned();
+        document.export.layout.nodes[0].id = value.to_owned();
+        let svg = render_export_svg(&document.export, &VizSvgOptions::default()).unwrap();
+        let xml = roxmltree::Document::parse(&svg).unwrap();
+        assert_eq!(
+            xml.root_element().attribute("data-purrdf-schema"),
+            Some(value)
+        );
+        assert!(
+            xml.descendants()
+                .any(|node| node.attribute("data-scene-id") == Some(value))
+        );
+        document.export.schema_version = "\u{FFFF}".to_owned();
+        assert!(render_export_svg(&document.export, &VizSvgOptions::default()).is_err());
+    }
+
+    #[test]
+    fn svg_preserves_xml_characters_and_refuses_invalid_titles() {
+        let title = "\t\n\r\r\n<&>\u{85}\u{A0}🐈\u{10FFFF}";
+        let mut options = VizRenderOptions::default();
+        options.svg.title = title.to_owned();
+        let document =
+            render_graph_input_svg(&input(true), &VizSpec::default(), &options).expect("valid SVG");
+        let xml = roxmltree::Document::parse(&document.svg).expect("read emitted SVG");
+        assert_eq!(
+            xml.descendants()
+                .find(|node| node.attribute("id") == Some("purrdf-title"))
+                .and_then(|node| node.text()),
+            Some(title)
+        );
+        assert!(!document.svg.contains('\r'));
+        for character in ['\0', '\u{1F}', '\u{FFFE}', '\u{FFFF}'] {
+            options.svg.title = format!("title{character}");
+            let error = render_graph_input_svg(&input(true), &VizSpec::default(), &options)
+                .expect_err("invalid XML character");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("U+{:04X}", character as u32))
+            );
+        }
     }
 
     #[test]
