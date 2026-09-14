@@ -22,6 +22,7 @@
 //! | [`geo`] | [`purrdf_geo`] (GeoSPARQL 1.1 geometry, `geof:` functions, query rewrite) |
 //! | [`text`] | [`purrdf_text`] (deterministic full-text search over RDF 1.2 literals) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
+//! | [`json`] | [`purrdf_json`] (byte-identical ordered JSON codec) |
 //! | [`markdown`] | [`purrdf_markdown`] (structural Markdown slicer under the shipped specification) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
 //! | [`viz`] | [`purrdf_rdf::viz`] |
@@ -259,6 +260,11 @@ pub mod validate {
 /// byte spans of the source, under the specification that ships with the crate.
 pub mod markdown {
     pub use purrdf_markdown::*;
+}
+
+/// Ordered JSON as a verified RDF 1.2 byte cover with queryable occurrences.
+pub mod json {
+    pub use purrdf_json::*;
 }
 
 /// The common umbrella surface, for `use purrdf::prelude::*;`.

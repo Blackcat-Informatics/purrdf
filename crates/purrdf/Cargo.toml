@@ -63,3 +63,6 @@ purrdf-validate = { workspace = true }
 # `SourceDocument` and `Document` — and to hand the slicer's claims straight to
 # the parser at this crate's root — while depending on `purrdf` alone.
 purrdf-markdown = { workspace = true }
+
+# Ordered JSON is an always-available data carrier over the shared IR.
+purrdf-json.workspace = true
