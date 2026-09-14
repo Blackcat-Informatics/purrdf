@@ -63,10 +63,11 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_text::{
-    Analyzer, GraphSelector, PartitionFilter, PartitionKey, TextIndex, TextIndexConfig, select,
+    Analyzer, B, FieldInput, Fixed, GraphSelector, PartitionFilter, PartitionKey, PreparedCorpus,
+    RankingField, RankingProfile, TextIndex, TextIndexConfig, select,
 };
 
 /// The one predicate the corpus hangs its text off.
@@ -250,6 +251,27 @@ fn benchmark(criterion: &mut Criterion) {
         });
     });
 
+    let reranking = RankingProfile::new(
+        vec![
+            RankingField::new("weighted text", Fixed::from_integer(4).expect("weight"), B)
+                .expect("field"),
+        ],
+        Vec::new(),
+        Some(0),
+    )
+    .expect("profile");
+    group.bench_function("remap_retained_predicate_facts", |bencher| {
+        bencher.iter_batched(
+            || index.clone(),
+            |index| {
+                index
+                    .with_ranking_profile(black_box(reranking.clone()))
+                    .expect("rerank")
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
     group.bench_function("search_unbounded", |bencher| {
         bencher.iter(|| {
             select(
@@ -331,5 +353,41 @@ fn benchmark(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark);
+/// Compare preparation with the hot scoring path; IDF work is measured once,
+/// outside the per-document measurement, just as the production index hoists it.
+fn fielded_arithmetic(criterion: &mut Criterion) {
+    let profile = RankingProfile::new(
+        (0..16)
+            .map(|at| RankingField::new(format!("field-{at}"), Fixed::ONE, B).expect("field"))
+            .collect(),
+        Vec::new(),
+        Some(0),
+    )
+    .expect("profile");
+    let corpus = PreparedCorpus::new(&profile, 4096, &[131_072; 16]).expect("corpus");
+    let names: Vec<String> = (0..8).map(|at| format!("term-{at}")).collect();
+    let terms: Vec<(&str, u64)> = names.iter().map(|name| (name.as_str(), 23)).collect();
+    let query = corpus.prepare_query(&terms).expect("query");
+    let document = vec![
+        vec![
+            FieldInput {
+                term_frequency: 2,
+                length: 32
+            };
+            16
+        ];
+        8
+    ];
+    let mut group = criterion.benchmark_group("bm25f");
+    group.bench_function("prepare_eight_idfs", |bencher| {
+        bencher.iter(|| corpus.prepare_query(black_box(&terms)).expect("prepare"));
+    });
+    group.bench_function("score_eight_terms_sixteen_fields", |bencher| {
+        bencher.iter(|| query.score(black_box(&document)).expect("score"));
+    });
+    group.finish();
+}
+
+criterion_group!(benches, benchmark, fielded_arithmetic);
+
 criterion_main!(benches);
