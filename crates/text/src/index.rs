@@ -77,10 +77,11 @@ use purrdf_core::{DatasetView, FastMap, GraphMatch, RdfTextDirection, TermRef, T
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
 use crate::error::TextError;
 use crate::fixed::Fixed;
+use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, RankingProfile};
 use crate::term_bytes::{FINGERPRINT_BYTES, MAX_TRIPLE_DEPTH, encode_term, push_str};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
-const INDEX_DIGEST_DOMAIN: &str = "purrdf-text/index/v1";
+const INDEX_DIGEST_DOMAIN: &str = "purrdf-text/index/v2";
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`].
 const SOURCE_DIGEST_DOMAIN: &str = "purrdf-text/source/v1";
 
@@ -295,6 +296,8 @@ pub struct Document {
     language: Option<String>,
     /// How many analyzed tokens the document holds. Never zero.
     length: u64,
+    /// Analyzed token counts by selected predicate ordinal.
+    predicate_lengths: Vec<(u32, u64)>,
     /// Which of the index's partitions this document belongs to.
     partition: u32,
 }
@@ -328,6 +331,8 @@ struct Posting {
     document: u32,
     /// The token positions the term occupies, ascending.
     positions: Vec<u32>,
+    /// Frequencies by predicate ordinal, retained independently of ranking.
+    predicate_frequencies: Vec<(u32, u64)>,
 }
 
 /// The half-open run of one term's postings that belongs to one partition.
@@ -374,6 +379,14 @@ struct TermEntry {
 pub struct TextIndex {
     /// The configuration this index was built under.
     config: TextIndexConfig,
+    /// Complete immutable fielded ranking law.
+    ranking: RankingProfile,
+    /// Selected predicate ordinals mapped to ranking fields.
+    predicate_fields: Vec<usize>,
+    /// Field lengths by document; derived without reanalysis.
+    field_lengths: Vec<Vec<u64>>,
+    /// Exact field token totals by partition.
+    field_totals: Vec<Vec<u128>>,
     /// The Unicode table versions the analyzer resolved against at build time.
     unicode: UnicodeVersions,
     /// Documents in id order — that is, sorted by `(graph, subject, language)`.
@@ -442,8 +455,184 @@ impl TextIndex {
     ) -> Result<Self, TextError> {
         let rows = collect_rows(dataset, config)?;
         let source_fingerprint = digest_rows(&rows)?;
-        let (documents, dictionary) = analyze_rows(&rows)?;
-        Self::assemble(config.clone(), &documents, &dictionary, source_fingerprint)
+        let (documents, dictionary) = analyze_rows(&rows, config)?;
+        Self::assemble(
+            config.clone(),
+            &documents,
+            &dictionary,
+            source_fingerprint,
+            RankingProfile::single_field(),
+        )
+    }
+
+    /// Build directly under a fielded ranking law, including documents whose
+    /// combined length exceeds the per-field bound.
+    ///
+    /// # Errors
+    /// Propagates indexing errors and refuses incomplete routing or field bounds.
+    pub fn from_dataset_with_ranking<D: DatasetView>(
+        dataset: &D,
+        config: &TextIndexConfig,
+        profile: RankingProfile,
+    ) -> Result<Self, TextError> {
+        for predicate in config.predicates() {
+            profile.field_for(predicate)?;
+        }
+        let rows = collect_rows(dataset, config)?;
+        let source_fingerprint = digest_rows(&rows)?;
+        let (documents, dictionary) = analyze_rows(&rows, config)?;
+        Self::assemble(
+            config.clone(),
+            &documents,
+            &dictionary,
+            source_fingerprint,
+            profile,
+        )
+    }
+
+    /// Apply a complete ranking profile without re-tokenizing or rebuilding
+    /// postings. Predicate-level facts remain authoritative; only field lengths,
+    /// corpus totals and the answer fingerprint are recomputed.
+    ///
+    /// # Errors
+    /// Refuses incomplete predicate routing or a merged field longer than the
+    /// profile permits. The consumed index is returned only after validation.
+    pub fn with_ranking_profile(mut self, profile: RankingProfile) -> Result<Self, TextError> {
+        self.ranking = profile;
+        self.rebuild_field_statistics()?;
+        self.fingerprint = self.compute_fingerprint()?;
+        Ok(self)
+    }
+
+    /// The named, immutable ranking law used for every score.
+    pub const fn ranking_profile(&self) -> &RankingProfile {
+        &self.ranking
+    }
+
+    /// Tokenization identity, independent of ranking and predicate routing.
+    /// Includes the complete Unicode table versions.
+    pub fn analyzer_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
+        let mut digest = Digest::new(crate::ANALYZER_PROFILE_ID);
+        for version in [
+            self.unicode.core,
+            self.unicode.normalization,
+            self.unicode.case_folding,
+            self.unicode.segmentation,
+        ] {
+            digest.number(version.major);
+            digest.number(version.minor);
+            digest.number(version.patch);
+        }
+        digest.finish()
+    }
+
+    /// Exact field token totals for a partition, in ranking field order.
+    pub fn field_totals(&self, partition: &PartitionKey) -> Option<&[u128]> {
+        self.partition_index(partition)
+            .map(|at| self.field_totals[at as usize].as_slice())
+    }
+
+    /// A document's field lengths, in ranking field order.
+    pub fn field_lengths(&self, document: u32) -> Option<&[u64]> {
+        self.field_lengths.get(document as usize).map(Vec::as_slice)
+    }
+
+    /// Nonzero `(predicate ordinal, token count)` facts, in configuration order. These
+    /// facts do not change when the ranking profile changes.
+    pub fn predicate_lengths(&self, document: u32) -> Option<&[(u32, u64)]> {
+        self.documents
+            .get(document as usize)
+            .map(|doc| doc.predicate_lengths.as_slice())
+    }
+
+    /// Fill a stack-allocated field input buffer for one document and term.
+    pub(crate) fn field_inputs(
+        &self,
+        document: u32,
+        term: &str,
+    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
+        let doc = self
+            .document(document)
+            .ok_or_else(|| TextError::data("field input names an absent document"))?;
+        let frequencies = self
+            .term_entry(term)
+            .and_then(|entry| {
+                let postings = span_slice(entry, doc.partition);
+                postings
+                    .binary_search_by_key(&document, |posting| posting.document)
+                    .ok()
+                    .map(|at| postings[at].predicate_frequencies.as_slice())
+            })
+            .unwrap_or(&[]);
+        self.field_inputs_from_counts(document, frequencies)
+    }
+
+    /// Assemble field inputs from a posting already located by the query walk.
+    /// This avoids a dictionary lookup per candidate and query term.
+    pub(crate) fn field_inputs_from_counts(
+        &self,
+        document: u32,
+        frequencies: &[(u32, u64)],
+    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
+        let lengths = self
+            .field_lengths
+            .get(document as usize)
+            .ok_or_else(|| TextError::data("field input names an absent document"))?;
+        let mut fields = [FieldInput::default(); MAX_FIELDS];
+        for (input, &length) in fields.iter_mut().zip(lengths) {
+            input.length = length;
+        }
+        for &(predicate, frequency) in frequencies {
+            fields[self.predicate_fields[predicate as usize]].term_frequency += frequency;
+        }
+        Ok(fields)
+    }
+
+    /// Retained predicate frequencies along a term's existing posting walk.
+    pub(crate) fn field_postings<'a>(
+        &'a self,
+        partition: &PartitionKey,
+        term: &str,
+    ) -> impl Iterator<Item = (u32, &'a [(u32, u64)])> + use<'a> {
+        self.partition_postings(partition, term)
+            .iter()
+            .map(|posting| (posting.document, posting.predicate_frequencies.as_slice()))
+    }
+
+    /// Derive field statistics from retained predicate facts, validating every
+    /// document before any query (including an empty query) can observe it.
+    fn rebuild_field_statistics(&mut self) -> Result<(), TextError> {
+        self.predicate_fields = self
+            .config
+            .predicates
+            .iter()
+            .map(|predicate| self.ranking.field_for(predicate))
+            .collect::<Result<_, _>>()?;
+        self.field_lengths = Vec::with_capacity(self.documents.len());
+        self.field_totals = vec![vec![0; self.ranking.fields().len()]; self.partitions.len()];
+        for document in &self.documents {
+            let mut lengths = vec![0_u64; self.ranking.fields().len()];
+            for &(predicate, length) in &document.predicate_lengths {
+                let field = self.predicate_fields[predicate as usize];
+                lengths[field] = lengths[field]
+                    .checked_add(length)
+                    .ok_or_else(|| TextError::overflow("merged field length exceeds u64"))?;
+                if lengths[field] > FIELD_LENGTH_MAX {
+                    return Err(TextError::data("merged field length exceeds 2^24"));
+                }
+            }
+            for (total, &length) in self.field_totals[document.partition as usize]
+                .iter_mut()
+                .zip(&lengths)
+            {
+                *total += u128::from(length);
+            }
+            self.field_lengths.push(lengths);
+        }
+        for ((_, stats), totals) in self.partitions.iter().zip(&self.field_totals) {
+            PreparedCorpus::new(&self.ranking, stats.document_count, totals)?;
+        }
+        Ok(())
     }
 
     /// The configuration this index was built under.
@@ -683,6 +872,7 @@ impl TextIndex {
         documents: &[AnalyzedDocument],
         dictionary: &[String],
         source_fingerprint: [u8; FINGERPRINT_BYTES],
+        ranking: RankingProfile,
     ) -> Result<Self, TextError> {
         if u32::try_from(documents.len()).is_err() {
             return Err(TextError::data(format!(
@@ -700,6 +890,7 @@ impl TextIndex {
                 subject: document.key.subject.clone(),
                 language: document.key.language.clone(),
                 length: document.tokens.len() as u64,
+                predicate_lengths: document.predicate_lengths.clone(),
                 partition: partition_of[&document.key],
             })
             .collect();
@@ -708,6 +899,10 @@ impl TextIndex {
 
         let mut index = Self {
             config,
+            ranking,
+            predicate_fields: Vec::new(),
+            field_lengths: Vec::new(),
+            field_totals: Vec::new(),
             unicode: unicode_versions(),
             documents: table,
             subject_order,
@@ -716,6 +911,7 @@ impl TextIndex {
             fingerprint: [0; FINGERPRINT_BYTES],
             source_fingerprint,
         };
+        index.rebuild_field_statistics()?;
         index.fingerprint = index.compute_fingerprint()?;
         Ok(index)
     }
@@ -723,6 +919,10 @@ impl TextIndex {
     /// Digest the whole index, in the order [`Self::fingerprint`] documents.
     fn compute_fingerprint(&self) -> Result<[u8; FINGERPRINT_BYTES], TextError> {
         let mut digest = Digest::new(INDEX_DIGEST_DOMAIN);
+        digest.text(crate::ANALYZER_PROFILE_ID);
+        for byte in self.ranking.fingerprint() {
+            digest.tag(byte);
+        }
 
         digest.count(self.config.predicates.len());
         for predicate in &self.config.predicates {
@@ -754,6 +954,11 @@ impl TextIndex {
             digest.term(&document.subject)?;
             digest.optional_text(document.language.as_deref());
             digest.number(document.length);
+            digest.count(document.predicate_lengths.len());
+            for &(predicate, length) in &document.predicate_lengths {
+                digest.number(u64::from(predicate));
+                digest.number(length);
+            }
             digest.number(u64::from(document.partition));
         }
 
@@ -763,6 +968,11 @@ impl TextIndex {
             digest.count(entry.postings.len());
             for posting in &entry.postings {
                 digest.number(u64::from(posting.document));
+                digest.count(posting.predicate_frequencies.len());
+                for &(predicate, frequency) in &posting.predicate_frequencies {
+                    digest.number(u64::from(predicate));
+                    digest.number(frequency);
+                }
                 digest.count(posting.positions.len());
                 for position in &posting.positions {
                     digest.number(u64::from(*position));
@@ -872,7 +1082,9 @@ struct AnalyzedDocument {
     /// The document's identity.
     key: DocumentKey,
     /// `(dictionary ordinal, position)` for each token, in stream order.
-    tokens: Vec<(u32, u32)>,
+    tokens: Vec<(u32, u32, u32)>,
+    /// Token counts by predicate ordinal, before field routing.
+    predicate_lengths: Vec<(u32, u64)>,
 }
 
 /// Read every configured predicate's literal rows out of both RDF 1.2 layers.
@@ -1033,7 +1245,10 @@ fn resolve_value<D: DatasetView>(
 ///
 /// Returns the documents and the term dictionary in **intern** order; the
 /// dictionary is re-sorted and the ordinals remapped in [`build_terms`].
-fn analyze_rows(rows: &[SourceRow]) -> Result<(Vec<AnalyzedDocument>, Vec<String>), TextError> {
+fn analyze_rows(
+    rows: &[SourceRow],
+    config: &TextIndexConfig,
+) -> Result<(Vec<AnalyzedDocument>, Vec<String>), TextError> {
     let mut groups: FastMap<DocumentKey, Vec<u32>> = FastMap::default();
     for (index, row) in rows.iter().enumerate() {
         let key = DocumentKey {
@@ -1062,13 +1277,18 @@ fn analyze_rows(rows: &[SourceRow]) -> Result<(Vec<AnalyzedDocument>, Vec<String
                 .then_with(|| left.direction.cmp(&right.direction))
         });
 
-        let mut tokens: Vec<(u32, u32)> = Vec::new();
+        let mut tokens: Vec<(u32, u32, u32)> = Vec::new();
+        let mut predicate_lengths: Vec<(u32, u64)> = Vec::new();
         // Positions run consecutively across the whole concatenation rather than
         // restarting per literal, so a phrase can span two of a document's
         // literals exactly as it would span two sentences of one literal.
         let mut position: u32 = 0;
         let mut failure: Option<TextError> = None;
         for index in indices {
+            let predicate = config
+                .predicates
+                .binary_search(&rows[index as usize].predicate)
+                .expect("walk selected configured predicates");
             analyzer.analyze_each(&rows[index as usize].lexical_form, &mut scratch, |token| {
                 if failure.is_some() {
                     return;
@@ -1082,7 +1302,23 @@ fn analyze_rows(rows: &[SourceRow]) -> Result<(Vec<AnalyzedDocument>, Vec<String
                         ordinal
                     }
                 };
-                tokens.push((ordinal, position));
+                tokens.push((ordinal, position, predicate as u32));
+                let length = match predicate_lengths.last_mut() {
+                    Some((prior, length)) if *prior == predicate as u32 => {
+                        *length += 1;
+                        *length
+                    }
+                    _ => {
+                        predicate_lengths.push((predicate as u32, 1));
+                        1
+                    }
+                };
+                if length > FIELD_LENGTH_MAX {
+                    failure = Some(TextError::data(
+                        "a predicate holds more than 2^24 analyzed tokens in one document",
+                    ));
+                    return;
+                }
                 match position.checked_add(1) {
                     Some(next) => position = next,
                     None => {
@@ -1104,7 +1340,11 @@ fn analyze_rows(rows: &[SourceRow]) -> Result<(Vec<AnalyzedDocument>, Vec<String
         if tokens.is_empty() {
             continue;
         }
-        documents.push(AnalyzedDocument { key, tokens });
+        documents.push(AnalyzedDocument {
+            key,
+            tokens,
+            predicate_lengths,
+        });
     }
 
     // Ids are assigned by content order, never by intern order.
@@ -1185,10 +1425,10 @@ fn build_terms(
 
     let mut postings: Vec<Vec<Posting>> = vec![Vec::new(); dictionary.len()];
     for (id, document) in documents.iter().enumerate() {
-        let mut tokens: Vec<(u32, u32)> = document
+        let mut tokens: Vec<(u32, u32, u32)> = document
             .tokens
             .iter()
-            .map(|&(ordinal, position)| (rank[ordinal as usize], position))
+            .map(|&(ordinal, position, predicate)| (rank[ordinal as usize], position, predicate))
             .collect();
         tokens.sort_unstable();
 
@@ -1196,13 +1436,20 @@ fn build_terms(
         while at < tokens.len() {
             let term = tokens[at].0;
             let mut positions = Vec::new();
+            let mut predicate_frequencies: Vec<(u32, u64)> = Vec::new();
             while at < tokens.len() && tokens[at].0 == term {
                 positions.push(tokens[at].1);
+                let predicate = tokens[at].2;
+                match predicate_frequencies.last_mut() {
+                    Some((prior, frequency)) if *prior == predicate => *frequency += 1,
+                    _ => predicate_frequencies.push((predicate, 1)),
+                }
                 at += 1;
             }
             postings[term as usize].push(Posting {
                 document: id as u32,
                 positions,
+                predicate_frequencies,
             });
         }
     }

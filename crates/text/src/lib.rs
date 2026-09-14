@@ -70,6 +70,7 @@ mod analysis;
 mod error;
 mod fixed;
 mod index;
+mod ranking;
 mod relation;
 mod score;
 mod term_bytes;
@@ -85,3 +86,14 @@ pub use score::{
     B, Constraint, K1, PartitionFilter, Scored, TermContribution, explain, rank_partition, select,
 };
 pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
+
+/// Exact-token analyzer identity; Unicode versions are bound by the index's
+/// analyzer fingerprint. This identity promises no substring matching.
+pub const ANALYZER_PROFILE_ID: &str = "purrdf-compatibility-caseless-uax29-v1";
+
+pub use ranking::{
+    DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, INDEX_CORPUS_PROFILE_ID,
+    MAX_FIELDS, PreparedCorpus, PreparedQuery, QUERY_TERMS_MAX, RANKING_PROFILE_ID,
+    RANKING_PROFILE_VERSION, RankingField, RankingProfile, SCORE_BITS, SCORE_MAX,
+    TERM_FREQUENCY_MAX,
+};
