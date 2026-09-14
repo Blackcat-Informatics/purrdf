@@ -243,11 +243,10 @@ join without a mapping, and the mapping is the part that never gets written.
 A deployment sovereign over its own terms keeps `under(base)` and loses
 nothing: the law, the identities, and the split are the same either way, and
 the profile's contract id tells the two apart.
-One honest caveat about that namespace: it is not publicly dereferenceable.
-It is a stable identifier, not a URL that resolves today — a redirect for it
-is being registered, and no date is promised. That costs nothing here: RDF
-asks no IRI to dereference, so the terms, the identities, and the contract id
-over them are the same whether it resolves or not.
+The registered [w3id redirect](https://w3id.org/purrdf/markdown) resolves to
+the project site. The shipped specification defines these terms. Resolving
+the namespace is not part of the codec: terms, identities, and the contract
+id are computed locally from the declared profile and source bytes.
 No derived IRI wears two roles: the classes, the predicates, and the
 datatypes are three disjoint sets, so a section's heading text is carried by
 `heading` and typed with `headingText`, and a lineage by `lineage` typed with
