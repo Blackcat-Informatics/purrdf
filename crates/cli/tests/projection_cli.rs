@@ -3,9 +3,10 @@
 
 //! End-to-end `project`/`lift` carrier coverage over the built CLI.
 
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+
+mod support;
 
 use purrdf_rdf::{ProjectionConfig, ProjectionPackage};
 use sha2::{Digest, Sha256};
@@ -22,22 +23,7 @@ fn run(args: &[&str]) -> Output {
 }
 
 fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
-    let mut child = Command::new(PURRDF)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf");
-    let write_result = child.stdin.take().expect("stdin").write_all(stdin);
-    if let Err(error) = write_result {
-        assert_eq!(
-            error.kind(),
-            std::io::ErrorKind::BrokenPipe,
-            "write stdin: {error}"
-        );
-    }
-    child.wait_with_output().expect("wait")
+    support::run_with_stdin(Command::new(PURRDF).args(args), stdin)
 }
 
 fn write(path: &Path, bytes: &[u8]) -> String {
