@@ -539,8 +539,7 @@ pub fn is_valid_xml_text(label: &str) -> bool {
 /// whitespace. `#x9`/`#xA`/`#xD` are legal `Char`s but are whitespace, so the
 /// whitespace test alone removes them from the `[#x20-…]` gap below.
 fn is_xml_text_char(c: char) -> bool {
-    !c.is_whitespace()
-        && matches!(c as u32, 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x0010_FFFF)
+    !c.is_whitespace() && purrdf_iri::terminals::is_xml_char(c)
 }
 
 /// Inclusive Unicode scalar-value range `[lo, hi]`.
