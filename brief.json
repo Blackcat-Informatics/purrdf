@@ -1,0 +1,17 @@
+{
+  "issue": 294,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "fix(rdf): the XML writers emit literals they cannot read back",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [],
+  "defect_classes": {},
+  "coverage": [
+    "issue #294 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['fix(rdf):', 'writers', 'literals']: 0 other item(s)",
+    "no GhpRsq-Defect-Class trailers in history yet \u2014 recurrence cannot be counted from trailers for this repo"
+  ]
+}

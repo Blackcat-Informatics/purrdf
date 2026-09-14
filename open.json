@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 294,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/294-xml-writers-emit-literals-they-cannot",
+  "branch": "paudley/294-xml-writers-emit-literals-they-cannot",
+  "slug": "xml-writers-emit-literals-they-cannot",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/294-xml-writers-emit-literals-they-cannot/.stage/xml-writers-emit-literals-they-cannot",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "ed03dcd1fb52009e642474ea7e518b1b029a0a6a",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/294-xml-writers-emit-literals-they-cannot",
+    "branch:paudley/294-xml-writers-emit-literals-they-cannot",
+    "stage:/home/paudley/Active/purrdf/.worktrees/294-xml-writers-emit-literals-they-cannot/.stage/xml-writers-emit-literals-they-cannot",
+    "issue:/home/paudley/Active/purrdf/.worktrees/294-xml-writers-emit-literals-they-cannot/.stage/xml-writers-emit-literals-they-cannot/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-09-14T13:37:22-0600"
+}
