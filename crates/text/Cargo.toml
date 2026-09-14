@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-text"
-description = "Deterministic in-memory full-text search over RDF 1.2 literals, exposed to SPARQL through the property-function seam under caller-supplied IRIs; exact fixed-point BM25 ranking with no floating-point arithmetic."
+description = "Deterministic in-memory full-text search over RDF 1.2 literals, exposed to SPARQL through the property-function seam under caller-supplied IRIs; exact fixed-point BM25F ranking with no floating-point arithmetic."
 version.workspace = true
 edition.workspace = true
 repository.workspace = true

@@ -39,7 +39,8 @@ it.
 | `resolution.rs` | **RFC 3986 §5.4.1** (normal examples) and **§5.4.2** (abnormal examples), base `http://a/b/c/d;p?q` | The canonical reference-resolution table every conformant URI library is measured against — transcribed verbatim. |
 | `w3c_iri.rs` — `valid_uris_and_iris` | **RFC 3986 §1.1.2** worked examples + representative absolute IRIs of the shape W3C `rdf-tests` uses | Positive validity corpus. |
 | `w3c_iri.rs` — `valid_iri_only` | **RFC 3987 §3.1** example IRIs (non-ASCII `ucschar`: Japanese, Devanagari, Cyrillic, Latin-1) | IRI-valid but URI-invalid corpus. |
-| `w3c_iri.rs` — `invalid_iris_are_rejected` | **RFC 3987 §2.2 / RFC 3986 §2–§3** grammar (disallowed characters, truncated `pct-encoded`, unterminated IP-literal, out-of-range port) plus the disallowed-character cases the `rdf-tests` negative Turtle IRIREF fixtures assert | Negative corpus. |
+| `w3c_iri.rs` — `invalid_iris_are_rejected` | **RFC 3987 §2.2 / RFC 3986 §2–§3** grammar (disallowed characters, truncated `pct-encoded`, unterminated IP-literal, non-digit port) plus the disallowed-character cases the `rdf-tests` negative Turtle IRIREF fixtures assert | Negative corpus. |
+| `authority.rs` | [RFC 3986 §3.2.2](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.2) IPv6address / IPvFuture and [§3.2.3](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.3) generic port syntax; RFC 3987 §2.2 imports both productions | Exact grammar boundaries and lexical preservation through public IRI/base APIs. |
 | `iri_suite.rs` | CURIE / prefixed-name expansion + `rdf-tests`-style IRIREF handling | First-party edge cases layered on the RFC grammar. |
 | `proptest.rs` | Property-based round-trip / idempotence invariants over the RFC 3986/3987 grammar | Generative, not a fixed corpus. |
 
@@ -52,3 +53,9 @@ example IRIs plus the character classes their grammars mandate; they are faithfu
 to the normative text rather than fetched from a git suite, because (a) the crate
 is zero-dependency and (b) no standalone W3C IRI manifest exists to vendor. Any
 future divergence from these normative tables is a real bug, not a skip.
+
+Generic port syntax is `*DIGIT`: it imposes no integer-width or transport range
+limit. The previous negative vector `http://h:99999/` was an incorrect
+first-party restriction, not an RFC requirement. It is now a positive boundary;
+non-digit ports remain negative. IP-literal vectors likewise test the complete
+IPv6address or IPvFuture production, rather than a permissive character bag.
