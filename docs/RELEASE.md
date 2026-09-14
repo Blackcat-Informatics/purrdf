@@ -113,6 +113,62 @@ new crates. Publish the crate manually, first`. Creating a record is therefore
 the **only** thing an API token does in this release process; later versions
 are published through Trusted Publishing.
 
+### New crates: set up publishing before tagging
+
+Create new crate records before cutting the release tags. This lets the
+maintainer configure Trusted Publishing while the release checks run, so the
+first tagged run can publish the complete workspace in dependency order.
+
+1. Complete the real crate in the workspace at the intended release version.
+   Separately, create an isolated package outside the workspace with the same
+   crate name, version `0.0.0`, no dependencies, and an empty `#![no_std]`
+   library. Include the normal license and repository metadata, and a README
+   stating that this version creates the registry record and exposes no runtime
+   API. Keep the workspace version and dependency requirements at the real
+   release version; the isolated package is not part of the release source.
+2. With `bootstrap_dir` pointing to that isolated package, verify and publish
+   it using a token authorized to create the crate. Verification stays enabled:
+
+   ```sh
+   rustup run stable cargo publish --dry-run --manifest-path "$bootstrap_dir/Cargo.toml"
+   CARGO_REGISTRY_TOKEN="${CARGO_TOKEN:?CARGO_TOKEN is required}" \
+     rustup run stable cargo publish --manifest-path "$bootstrap_dir/Cargo.toml"
+   ```
+
+3. On the new crate's crates.io **Settings** page, add the Trusted Publisher
+   using the table above and enable **Require trusted publishing**. Repeat for
+   every new crate. The publisher entry and the lock are separate requirements;
+   the public record's `trustpub_only` field proves the lock, not the entry.
+4. Once each record exists, remove it from `PURRDF_UNBOOTSTRAPPED_CRATES` in
+   `scripts/release-crates.sh` and update the bootstrap status below. Commit
+   those changes with the release preparation. Before tagging, require both
+   checks to pass:
+
+   ```sh
+   python3 scripts/check-doc-claims.py
+   bash scripts/check-crates-io-records.sh
+   ```
+
+5. Follow the normal release steps above. With the ledger empty and every
+   publisher configured, the trusted lane publishes every functional crate
+   version in one run, without pausing for token publication. The isolated
+   `0.0.0` package needs no unreleased dependencies; the workspace bootstrap
+   script instead publishes real implementations after their dependencies are
+   available on the registry.
+6. After the functional release is published, set `new_crate` to its registered
+   name and yank its `0.0.0` version using a token with the separate **yank**
+   permission:
+
+   ```sh
+   CARGO_REGISTRY_TOKEN="${CARGO_TOKEN:?a token with yank permission is required}" \
+     rustup run stable cargo yank --version 0.0.0 "$new_crate"
+   ```
+
+   Yanking prevents new dependency resolutions from choosing the bootstrap
+   version while retaining the crate record and publisher settings. Keep those
+   records; deleting a crate would undo the setup. Yank can be reversed with
+   `cargo yank --undo --version 0.0.0 "$new_crate"`.
+
 ### Bootstrap: complete (ledger empty)
 
 All 23 crates in the release set above have crates.io records. Before
@@ -162,10 +218,9 @@ Two things to carry forward if a future release ever needs this pattern again:
 * **It is reversible** (`cargo yank --undo --version …`), which is what makes it
   the right tool here rather than a request to crates.io support.
 
-The better outcome is not needing a placeholder at all: that is what
-`scripts/bootstrap-crates-io.sh` exists for, and why its plan/package mismatch
-was worth fixing — the placeholders were published by hand precisely because
-that script could not complete a run.
+For new crate records, use the upfront setup procedure above. It keeps
+registry setup separate from the functional release and lets the first trusted
+release run complete without a bootstrap interleave.
 
 
 ## Changelog and release notes
