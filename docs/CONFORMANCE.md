@@ -617,20 +617,56 @@ way the matrix stays honest:
   `crates/rdf-core/corpus/xsd-regex/rejected-constructs.cases` (four cases,
   including a multi-digit reference, which must be named whole rather than
   read as a reference plus a literal digit).
-- **XSD/XPath regex `(?m)^` at a trailing newline — a one-position
-  divergence, pinned by test.** XPath F&O 3.1 §5.6.2 defines the `m` flag's
-  `^` as matching "the start of the entire string, and the position
-  immediately after a newline character **other than a newline that appears as
-  the last character in the string**". The `regex` crate's `multi_line` has no
-  such exception and matches at that final position too, and it offers no
-  look-around expressive enough to exclude it. So `REGEX("a\n", "^", "m")`
-  finds two match positions where XPath finds one. This is the **only**
-  divergence in the dialect that is neither implemented nor refused, which is
-  also why it is not a corpus case: there is no pattern whose acceptance could
-  assert it without asserting the wrong answer. It is pinned instead by a unit
-  test in `purrdf_core::xsd_regex` that records exactly *where* it diverges, so
-  a future `regex` release that happens to close the gap is caught rather than
-  silently relied upon.
+- **XSD/XPath multiline anchors at a trailing newline.** XPath F&O 3.1
+  §5.6.2 excludes the position after a final LF for both `^` and `$` under
+  `m`. Rust regex includes it: on `"a\n"`, `^` matches positions `[0, 2]`
+  instead of `[0]`, and `$` matches `[1, 2]` instead of `[1]`. The shared
+  validator's unit test pins these existing engine behaviors. The ECMA-262
+  emitter implements the exact XPath rules with assertions.
+- **XSD/XPath case variants under `i`.** XPath F&O 3.1 §5.6.2 defines case
+  variants using equal full lower-case strings or equal full upper-case
+  strings. Rust regex uses Unicode simple case folding. For example, both
+  `i` and dotless `ı` uppercase to `I`, but the Rust validator's `^i$` under
+  `i` rejects `ı`. A unit test pins this existing validator difference.
+  The ECMA-262 emitter refuses the `i` flag with a typed error naming XPath
+  case-variant semantics.
+
+### SHACL pattern emission
+
+The JSON Schema and OpenAPI emitters translate `sh:pattern` and `sh:flags`
+through `purrdf_core::xsd_regex::to_ecma_262`. The target is Unicode ECMA-262:
+`RegExp(source, "u")`, following JSON Schema 2020-12 Core §6.4. Consumers must
+use Unicode processing and must not add other flags. A bare schema string does
+not prevent its validator from enabling Unicode mode.
+
+The shared XSD scanner recognizes the source once. Normalized character sets
+expand XML-name escapes, Unicode categories and blocks, and subtraction into
+explicit scalar ranges. Wildcards and anchors retain XPath's meaning; `s`,
+`m`, `x`, and `q` are incorporated into the emitted source. Under `q`, `s`,
+`m`, and `x` have no effect, as XPath specifies. Every flag combination
+containing `i` is refused because simple case folding does not implement XPath
+case variants. Unknown flags also refuse. The emitter enforces the exact
+multiline anchor rules, including the final newline exclusion; the separately
+documented Rust-validator differences above remain specific to that validator. Source and output limits are hard errors.
+
+`json_schema::compile`, `compile_with_value_vocab`, and `compile_schema` all
+return `Result`. A pattern that cannot be translated returns
+`SchemaCompileError::Pattern`; no schema with a weaker or unusable pattern is
+returned. The obsolete pattern pass-through loss codes are no longer emitted
+or declared. The native `pattern_emission` integration test executes production
+JSON Schema patterns in Node's Unicode ECMAScript engine, with independent
+acceptance cases and the exact multiline-anchor position rule. Node is a test
+tool only; the runtime remains pure Rust and builds for wasm.
+
+Pydantic emission checks the accepted language of its pattern grammar before
+installing any runtime field constraint. Explicit scalar ranges, literals,
+groups, and quantifiers shared by Unicode ECMA-262 and Rust regex are admitted.
+Engine-specific escapes, shorthand classes, wildcard differences,
+and unsupported assertions cause a typed `PydanticError`, including inside
+nested schema positions. Compilation success alone is not semantic evidence.
+The reverse schema importer uses the same proven grammar and translates
+explicit Unicode escapes into XSD scalar ranges. Unsupported input returns
+`SchemaImportError` instead of copying a foreign pattern into `sh:pattern`.
 
 ### XSD/XPath regex: the recognizer boundary and the liberal edges
 

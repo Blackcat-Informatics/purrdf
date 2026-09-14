@@ -69,18 +69,9 @@ pub(super) fn ecma_262_divergences(pattern: &str) -> Vec<Ecma262Divergence> {
             // ECMA-262's is `[0-9]`. Reported despite the verbatim
             // pass-through: the MEANING differs.
             Ok(Token::Escape('d' | 'D')) => note(Ecma262Divergence::DigitEscape),
-            // EVERY `\p{…}`/`\P{…}` diverges, and for one of two reasons:
-            //
-            // * an `Is`-prefixed BLOCK name is not an ECMA-262 concept at
-            //   all, so the construct cannot mean the same thing in any
-            //   ECMA-262 mode;
-            // * an Appendix G general CATEGORY (`\p{L}`, `\p{Nd}`, …) is
-            //   only a Unicode property escape under ECMA-262's `u` flag —
-            //   without it `\p` is an IdentityEscape and the text matches the
-            //   literal characters `p{L}`. JSON Schema's `pattern` is a bare
-            //   string with no flag surface, so the `u` flag can never be
-            //   set, and the meaning changes. The flag path in the public
-            //   wrapper only fires for `sh:flags`, so it cannot cover this.
+            // This diagnostic targets flagless JavaScript. Unicode categories
+            // need `u`; Unicode blocks additionally need expansion. The JSON
+            // Schema emitter uses its own Unicode-target translation instead.
             Ok(Token::UnicodeProperty { name, .. }) => {
                 if name.starts_with("Is") {
                     note(Ecma262Divergence::UnicodeBlock { name });

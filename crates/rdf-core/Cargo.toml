@@ -75,6 +75,8 @@ smallvec = { workspace = true }
 # `purrdf-shex`, `purrdf-slice`, `purrdf-sparql-{algebra,eval}`). See
 # `crate::xsd_regex`'s module doc for the dialect-translation rationale.
 regex = { workspace = true }
+# Normalized regex IR for faithful Unicode ECMA-262 pattern emission.
+regex-syntax = { workspace = true }
 
 [dev-dependencies]
 # Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing

@@ -2081,7 +2081,7 @@ mod tests {
         );
         let dataset = crate::text_ingest::parse_turtle_to_dataset(&source, None).expect("parse");
         let shapes = crate::shapes::from_dataset(&dataset).expect("shapes");
-        crate::json_schema::compile(&shapes, config().namespaces())
+        crate::json_schema::compile(&shapes, config().namespaces()).expect("schema compilation")
     }
 
     #[test]
@@ -2135,8 +2135,10 @@ mod tests {
 
         let repeated = import_document(&document, &config(), None).expect("repeat import");
         assert_eq!(imported.losses.render_json(), repeated.losses.render_json());
-        let first = crate::json_schema::compile(&imported.shapes, config().namespaces());
-        let second = crate::json_schema::compile(&repeated.shapes, config().namespaces());
+        let first = crate::json_schema::compile(&imported.shapes, config().namespaces())
+            .expect("schema compilation");
+        let second = crate::json_schema::compile(&repeated.shapes, config().namespaces())
+            .expect("schema compilation");
         assert_eq!(first.schema_json, second.schema_json);
 
         let yaml = write_linkml(&document).expect("canonical YAML");
@@ -2146,7 +2148,8 @@ mod tests {
             imported.losses.render_json(),
             from_yaml.losses.render_json()
         );
-        let yaml_compiled = crate::json_schema::compile(&from_yaml.shapes, config().namespaces());
+        let yaml_compiled = crate::json_schema::compile(&from_yaml.shapes, config().namespaces())
+            .expect("schema compilation");
         assert_eq!(first.schema_json, yaml_compiled.schema_json);
     }
 
@@ -2210,7 +2213,8 @@ mod tests {
                 .iter()
                 .any(|shape| shape.id.to_string().contains("Person"))
         );
-        let recompiled = crate::json_schema::compile(&imported.shapes, config().namespaces());
+        let recompiled = crate::json_schema::compile(&imported.shapes, config().namespaces())
+            .expect("schema compilation");
         assert_eq!(recompiled.schema_json, compiled.schema_json);
 
         let mut bad_yaml = package.clone();
