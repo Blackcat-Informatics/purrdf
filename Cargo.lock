@@ -1323,6 +1323,7 @@ dependencies = [
  "purrdf-geo",
  "purrdf-gts",
  "purrdf-iri",
+ "purrdf-json",
  "purrdf-markdown",
  "purrdf-rdf",
  "purrdf-shapes",
@@ -1496,6 +1497,17 @@ dependencies = [
  "criterion",
  "pretty_assertions",
  "proptest",
+]
+
+[[package]]
+name = "purrdf-json"
+version = "1.1.0"
+dependencies = [
+ "criterion",
+ "purrdf-core",
+ "purrdf-rdf",
+ "purrdf-sparql-eval",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
