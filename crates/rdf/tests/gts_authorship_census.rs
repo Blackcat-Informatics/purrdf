@@ -26,8 +26,9 @@
 //!            repository that can bring a GTS segment header into existence.
 //!
 //! The `tests` module below proves the detector is not vacuous: a synthetic
-//! source carrying a constructor reference MUST be flagged, and commented-out or
-//! `#[cfg(test)]`-scoped calls MUST NOT be.
+//! source carrying a constructor reference MUST be flagged. Comments and calls
+//! inside `#[cfg(test)]` modules MUST NOT be flagged. A `#[cfg(test)]` function
+//! at file scope is still counted, preferring a loud row over a silent omission.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
