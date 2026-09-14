@@ -19,9 +19,10 @@
 //!   `EXTERNAL` shape, a semantic action — is refused BY NAME instead of becoming a verdict;
 //! * `--loss-ledger`/`--jsonld-options` are refused rather than silently ignored.
 
-use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+
+mod support;
 
 /// A `Command` for the built `purrdf` binary.
 fn purrdf() -> Command {
@@ -38,20 +39,7 @@ fn run(args: &[&str]) -> Output {
 
 /// Run `purrdf` with `args`, writing `stdin_bytes` to its standard input.
 fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
-    let mut child = purrdf()
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(stdin_bytes.as_bytes())
-        .expect("write stdin");
-    child.wait_with_output().expect("wait for purrdf")
+    support::run_with_stdin(purrdf().args(args), stdin_bytes.as_bytes())
 }
 
 /// stdout of an [`Output`] as a `String`.
@@ -425,7 +413,13 @@ fn stdin_data_requires_an_explicit_from_and_then_validates() {
     let dir = tempfile::tempdir().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
 
-    let bare = pipe(&["shex", "--schema", &schema, "--data", "-", ALICE], DATA);
+    // Keep the writer active until the early argument refusal closes stdin;
+    // the helper must return the CLI's status and diagnostic after that close.
+    let unread = DATA.repeat(32_768);
+    let bare = pipe(
+        &["shex", "--schema", &schema, "--data", "-", ALICE],
+        &unread,
+    );
     assert_eq!(code(&bare), 2, "a usage error: {}", stderr(&bare));
     assert!(stderr(&bare).contains("--from"), "{}", stderr(&bare));
 
