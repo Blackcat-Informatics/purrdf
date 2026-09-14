@@ -431,7 +431,7 @@ impl RdfXmlParser {
                 );
             }
             Some("Literal") => {
-                let xml_literal = serialize_children_as_xml(element);
+                let xml_literal = serialize_children_as_xml(element)?;
                 let literal = RdfLiteral::typed(xml_literal, rdf_iri(RDF_XML_LITERAL)?);
                 return self.insert_statement(
                     subject.clone().into(),
@@ -1043,7 +1043,7 @@ fn validate_language_tag(language: &str) -> Result<(), RdfDiagnostic> {
 /// `rdf:parseType="Literal"` object value. The literal's apex elements carry the
 /// in-scope namespace declarations (inclusive canonicalization); descendants inherit
 /// them and add none — matching the prior purrdf-gts XML-literal canonicalization.
-fn serialize_children_as_xml(element: Node<'_, '_>) -> String {
+fn serialize_children_as_xml(element: Node<'_, '_>) -> Result<String, RdfDiagnostic> {
     // In-scope namespace declarations on the literal apex, in declaration order
     // (excluding the implicit `xml` prefix, which is never rendered).
     let apex_ns: Vec<(String, String)> = element
@@ -1059,10 +1059,10 @@ fn serialize_children_as_xml(element: Node<'_, '_>) -> String {
     let mut out = String::new();
     for child in element.children() {
         if child.is_element() || child.is_text() {
-            serialize_xml_node(child, Some(&apex_ns), &mut out);
+            serialize_xml_node(child, Some(&apex_ns), &mut out)?;
         }
     }
-    out
+    Ok(out)
 }
 
 /// One step of the XML-literal walk: an element/text node still to be written, or the end
@@ -1095,7 +1095,11 @@ enum XmlLiteralStep<'a, 'input> {
 /// Pre-order with an owed end tag reproduces the recursive walk's bytes exactly: children are
 /// pushed in reverse so they pop in document order, and the [`XmlLiteralStep::Close`] pushed
 /// before them pops after the whole subtree.
-fn serialize_xml_node(node: Node<'_, '_>, apex_ns: Option<&[(String, String)]>, out: &mut String) {
+fn serialize_xml_node(
+    node: Node<'_, '_>,
+    apex_ns: Option<&[(String, String)]>,
+    out: &mut String,
+) -> Result<(), RdfDiagnostic> {
     let mut stack = vec![XmlLiteralStep::Open(node, true)];
     while let Some(step) = stack.pop() {
         let (node, is_apex) = match step {
@@ -1109,7 +1113,7 @@ fn serialize_xml_node(node: Node<'_, '_>, apex_ns: Option<&[(String, String)]>, 
         };
         if node.is_text() {
             if let Some(text) = node.text() {
-                out.push_str(&escape_xml_text(text));
+                out.push_str(&escape_xml_text(text)?);
             }
             continue;
         }
@@ -1122,9 +1126,9 @@ fn serialize_xml_node(node: Node<'_, '_>, apex_ns: Option<&[(String, String)]>, 
         if let Some(namespaces) = apex_ns.filter(|_| is_apex) {
             for (prefix, iri) in namespaces {
                 if prefix.is_empty() {
-                    let _ = write!(out, " xmlns=\"{}\"", escape_xml_attr(iri));
+                    let _ = write!(out, " xmlns=\"{}\"", escape_xml_attr(iri)?);
                 } else {
-                    let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(iri));
+                    let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(iri)?);
                 }
             }
         }
@@ -1132,7 +1136,7 @@ fn serialize_xml_node(node: Node<'_, '_>, apex_ns: Option<&[(String, String)]>, 
             out.push(' ');
             out.push_str(&raw_attr_name(node, attr));
             out.push_str("=\"");
-            out.push_str(&escape_xml_attr(attr.value()));
+            out.push_str(&escape_xml_attr(attr.value())?);
             out.push('"');
         }
         // Canonical XML has no self-closing form: always emit a start/end pair.
@@ -1145,6 +1149,7 @@ fn serialize_xml_node(node: Node<'_, '_>, apex_ns: Option<&[(String, String)]>, 
                 .map(|child| XmlLiteralStep::Open(child, false)),
         );
     }
+    Ok(())
 }
 
 /// The raw (prefixed) element name as it would be written: `prefix:local` when the
@@ -1172,111 +1177,16 @@ fn qualify(node: Node<'_, '_>, namespace: Option<&str>, local: &str) -> String {
     }
 }
 
-/// XML character-data escape (`&`, `<`, `>`), borrowed when nothing needs escaping.
-fn escape_xml_text(value: &str) -> Cow<'_, str> {
-    escape_xml(value, false)
+/// Lossless XML character data under the shared XML 1.0 law.
+fn escape_xml_text(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
+    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Text)
+        .map_err(|error| serialize_err(error.to_string()))
 }
 
-/// XML attribute-value escape: [`escape_xml_text`] plus `"`.
-fn escape_xml_attr(value: &str) -> Cow<'_, str> {
-    escape_xml(value, true)
-}
-
-/// Single-pass escaper. The trigger set is ASCII, so a byte scan finds the first
-/// trigger exactly, and an input without one — nearly every IRI and lexical form — is
-/// returned borrowed: no allocation, where the chained `replace` calls made three (or
-/// four) full copies of every value. Escaping `&` before the other triggers is what
-/// made the chain exact; mapping each trigger once here yields the identical bytes.
-fn escape_xml(value: &str, quote: bool) -> Cow<'_, str> {
-    let is_trigger = |b: u8| matches!(b, b'&' | b'<' | b'>') || (quote && b == b'"');
-    let Some(first) = value.bytes().position(is_trigger) else {
-        return Cow::Borrowed(value);
-    };
-    let mut out = String::with_capacity(value.len() + 16);
-    out.push_str(&value[..first]);
-    for ch in value[first..].chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' if quote => out.push_str("&quot;"),
-            other => out.push(other),
-        }
-    }
-    Cow::Owned(out)
-}
-
-#[cfg(test)]
-mod escape_tests {
-    use super::{escape_xml_attr, escape_xml_text};
-
-    /// The chained-`replace` escapers this module shipped before the single-pass one,
-    /// kept as the reference the new implementation is compared against.
-    fn reference_text(value: &str) -> String {
-        value
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    }
-
-    fn reference_attr(value: &str) -> String {
-        reference_text(value).replace('"', "&quot;")
-    }
-
-    #[test]
-    fn single_pass_matches_chained_replace() {
-        let inputs = [
-            "",
-            "plain",
-            "&",
-            "<",
-            ">",
-            "\"",
-            "a & b",
-            "<tag>",
-            "say \"hi\"",
-            "&amp; already",
-            "<a href=\"x\">&</a>",
-            "ünïcödé & 日本語 <> \" 🦀",
-            "&&&<<<>>>\"\"\"",
-            "trailing&",
-            "&leading",
-        ];
-        for input in inputs {
-            assert_eq!(
-                &*escape_xml_text(input),
-                reference_text(input),
-                "text {input:?}"
-            );
-            assert_eq!(
-                &*escape_xml_attr(input),
-                reference_attr(input),
-                "attr {input:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn untriggered_input_is_borrowed() {
-        assert!(matches!(
-            escape_xml_text("no triggers ünïcödé"),
-            std::borrow::Cow::Borrowed(_)
-        ));
-        assert!(matches!(
-            escape_xml_attr("no triggers 'single' ok"),
-            std::borrow::Cow::Borrowed(_)
-        ));
-        assert!(matches!(escape_xml_text("a<b"), std::borrow::Cow::Owned(_)));
-        assert!(matches!(
-            escape_xml_attr("a\"b"),
-            std::borrow::Cow::Owned(_)
-        ));
-        // `"` is a trigger only in attribute position.
-        assert!(matches!(
-            escape_xml_text("a\"b"),
-            std::borrow::Cow::Borrowed(_)
-        ));
-    }
+/// Lossless double-quoted XML attribute value.
+fn escape_xml_attr(value: &str) -> Result<Cow<'_, str>, RdfDiagnostic> {
+    purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Attribute)
+        .map_err(|error| serialize_err(error.to_string()))
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -1374,14 +1284,14 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
     );
     for (namespace, prefix) in &namespaces {
         if prefix != "rdf" && prefix != "xsd" {
-            let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(namespace));
+            let _ = write!(out, " xmlns:{prefix}=\"{}\"", escape_xml_attr(namespace)?);
         }
     }
     // The document base, when one is in force: `xml:base` on the root scopes it to the
     // whole document, which is what every relativized `rdf:about` / `rdf:resource` below
     // resolves against on re-read.
     if let Some(base) = graph.base() {
-        let _ = write!(out, " xml:base=\"{}\"", escape_xml_attr(base.as_str()));
+        let _ = write!(out, " xml:base=\"{}\"", escape_xml_attr(base.as_str())?);
     }
     // Declare RDF 1.2 so a round-trip preserves triple terms and base direction (their
     // parse is gated on `rdf:version="1.2"`).
@@ -1475,11 +1385,15 @@ fn write_node_attribute(
             let _ = write!(
                 out,
                 " rdf:about=\"{}\"",
-                escape_xml_attr(&iri_reference(graph, ser_value(term)?))
+                escape_xml_attr(&iri_reference(graph, ser_value(term)?))?
             );
         }
         SerTermKind::Bnode => {
-            let _ = write!(out, " rdf:nodeID=\"{}\"", escape_xml_attr(ser_value(term)?));
+            let _ = write!(
+                out,
+                " rdf:nodeID=\"{}\"",
+                escape_xml_attr(ser_value(term)?)?
+            );
         }
         other => {
             return Err(serialize_err(format!(
@@ -1632,20 +1546,20 @@ fn write_property(
             let _ = writeln!(
                 out,
                 "{indent}<{name} rdf:resource=\"{}\"/>",
-                escape_xml_attr(&iri_reference(graph, ser_value(term)?))
+                escape_xml_attr(&iri_reference(graph, ser_value(term)?))?
             );
         }
         SerTermKind::Bnode => {
             let _ = writeln!(
                 out,
                 "{indent}<{name} rdf:nodeID=\"{}\"/>",
-                escape_xml_attr(ser_value(term)?)
+                escape_xml_attr(ser_value(term)?)?
             );
         }
         SerTermKind::Literal => {
             let _ = write!(out, "{indent}<{name}");
             if let Some(language) = &term.lang {
-                let _ = write!(out, " xml:lang=\"{}\"", escape_xml_attr(language));
+                let _ = write!(out, " xml:lang=\"{}\"", escape_xml_attr(language)?);
             }
             if let Some(direction) = &term.direction {
                 let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
@@ -1654,10 +1568,10 @@ fn write_property(
                 let _ = write!(
                     out,
                     " rdf:datatype=\"{}\"",
-                    escape_xml_attr(ser_value(ser_term(graph, datatype)?)?)
+                    escape_xml_attr(ser_value(ser_term(graph, datatype)?)?)?
                 );
             }
-            let _ = writeln!(out, ">{}</{name}>", escape_xml_text(ser_value(term)?));
+            let _ = writeln!(out, ">{}</{name}>", escape_xml_text(ser_value(term)?)?);
         }
         SerTermKind::Triple => {
             let (s, p, o) = term
