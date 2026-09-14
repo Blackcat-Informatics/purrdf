@@ -72,6 +72,7 @@ check: ## The full local gate: fmt, clippy, build, tests, hygiene.
 	python3 scripts/check-wasm-js-exports.py
 	python3 scripts/check-entailment-surface.py
 	python3 scripts/conformance-matrix.py --self-test
+	python3 crates/text/tests/reference/bm25f.py --check
 	cargo test --workspace --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
@@ -390,15 +391,16 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# scoped to this npm-artifact build only, so `make wasm` stays baseline-clean.
 	@# This raises the artifact's browser baseline to engines with wasm SIMD
 	@# (all major browsers since ~2021; Node >= 18, the package's engine floor).
-	@# Append rather than overwrite so any env / .cargo/config.toml RUSTFLAGS
-	@# (sccache, linker args, extra target features) survive alongside +simd128.
+	@# Preserve explicit environment RUSTFLAGS and deny warnings in the artifact
+	@# build. Setting RUSTFLAGS replaces Cargo's configured rustflags, so those
+	@# configuration values are not implicitly inherited by this command.
 	@# --remap-path-prefix makes the artifact independent of WHERE it was built.
 	@# rustc embeds absolute source paths (panic locations, debug info); this
 	@# artifact carried 116 of them, all under the builder's home directory, so its
 	@# byte size depended on the operator's USERNAME. Both varying roots are
 	@# remapped onto fixed tokens. CARGO_HOME may be relocated, so its default is
 	@# only a fallback.
-	RUSTFLAGS="$${RUSTFLAGS} -C target-feature=+simd128 --remap-path-prefix=$(CURDIR)=/purrdf --remap-path-prefix=$${CARGO_HOME:-$$HOME/.cargo}=/cargo" \
+	RUSTFLAGS="$${RUSTFLAGS} -D warnings -C target-feature=+simd128 --remap-path-prefix=$(CURDIR)=/purrdf --remap-path-prefix=$${CARGO_HOME:-$$HOME/.cargo}=/cargo" \
 		cargo build -p purrdf-wasm --target wasm32-unknown-unknown --release --locked
 	@# wasm-bindgen-cli must match the crate's exact wasm-bindgen pin (see [workspace.dependencies]).
 	PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen \
