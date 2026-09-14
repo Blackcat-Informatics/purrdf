@@ -1012,7 +1012,9 @@ impl ImportContext<'_> {
                 SchemaImportError::new(format!("{path}/pattern must be a string"))
             })?;
             constraints.push(Constraint::Pattern {
-                regex: regex.to_owned(),
+                regex: purrdf_core::xsd_regex::from_ecma_262(regex).map_err(|error| {
+                    SchemaImportError::new(format!("cannot import {path}/pattern: {error}"))
+                })?,
                 flags: None,
                 compiled: Arc::new(OnceLock::new()),
             });
@@ -2295,7 +2297,52 @@ mod tests {
         let dataset =
             crate::text_ingest::parse_turtle_to_dataset(&source, None).expect("parse shape");
         let shapes = crate::shapes::from_dataset(&dataset).expect("type shape");
-        crate::json_schema::compile(&shapes, config().namespaces())
+        crate::json_schema::compile(&shapes, config().namespaces()).expect("schema compilation")
+    }
+
+    #[test]
+    fn imported_patterns_execute_with_xpath_semantics() {
+        use crate::engine::PreparedShapes;
+
+        for (pattern, input, expected) in [
+            ("a+", "aaa", true),
+            ("a+", "bbb", false),
+            ("a|b", "a", true),
+            ("a|b", "b", true),
+            ("a|b", "c", false),
+            ("", "", true),
+            ("", "anything", true),
+            ("(?:)", "", true),
+            (r"[^\u{0}-\u{10ffff}]", "", false),
+            (r"[^\u{0}-\u{10ffff}]", "a", false),
+            (r"^\u{1f980}+$", "🦀🦀", true),
+            (r"^\u{1f980}+$", "a", false),
+        ] {
+            let schema = json!({
+                "$schema": JSON_SCHEMA_DIALECT,
+                "$defs": {"Probe": {
+                    "type": "object",
+                    "properties": {"ex:code": {"type": "string", "pattern": pattern}}
+                }}
+            });
+            let imported =
+                import_json_schema(&schema.to_string(), &config()).expect("import schema");
+            let prepared = PreparedShapes::new(Arc::new(imported.shapes));
+            let data = crate::text_ingest::parse_turtle_to_dataset(
+                &format!(
+                    "@prefix ex: <https://example.org/> . ex:probe a ex:Probe ; ex:code {} .",
+                    serde_json::to_string(input).expect("literal")
+                ),
+                None,
+            )
+            .expect("data");
+            let report = prepared
+                .bind_dataset(&data)
+                .expect("bind data")
+                .validate()
+                .expect("validate");
+            assert_eq!(report.conforms, expected, "{pattern:?} on {input:?}");
+        }
     }
 
     #[test]
@@ -2362,7 +2409,8 @@ mod tests {
             "unexpected reverse losses: {}",
             imported.losses.render_json()
         );
-        let recompiled = crate::json_schema::compile(&imported.shapes, config().namespaces());
+        let recompiled = crate::json_schema::compile(&imported.shapes, config().namespaces())
+            .expect("schema compilation");
         assert_eq!(recompiled.schema_json, compiled.schema_json);
         assert_eq!(recompiled.openapi_json, compiled.openapi_json);
         assert!(recompiled.losses.is_empty());
@@ -2400,7 +2448,8 @@ mod tests {
             "unexpected reverse losses: {}",
             imported.losses.render_json()
         );
-        let recompiled = crate::json_schema::compile(&imported.shapes, config().namespaces());
+        let recompiled = crate::json_schema::compile(&imported.shapes, config().namespaces())
+            .expect("schema compilation");
         assert_eq!(recompiled.schema_json, compiled.schema_json);
         assert!(recompiled.losses.is_empty());
     }

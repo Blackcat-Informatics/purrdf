@@ -20,9 +20,10 @@
 //! * a tripped governor writes NO report and exits **3**;
 //! * every inapplicable flag is refused BY NAME rather than accepted and ignored.
 
-use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+
+mod support;
 
 /// A `Command` for the built `purrdf` binary.
 fn purrdf() -> Command {
@@ -51,24 +52,7 @@ fn run(args: &[&str]) -> Output {
 /// and stderr are untouched — a child that exited early is judged by what it
 /// returned, exactly as before.
 fn pipe(args: &[&str], stdin_bytes: &str) -> Output {
-    let mut child = purrdf()
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf");
-    match child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(stdin_bytes.as_bytes())
-    {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
-        Err(error) => panic!("write stdin: {error:?}"),
-    }
-    child.wait_with_output().expect("wait for purrdf")
+    support::run_with_stdin(purrdf().args(args), stdin_bytes.as_bytes())
 }
 
 /// stdout of an [`Output`] as a `String`.

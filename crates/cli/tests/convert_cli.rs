@@ -47,9 +47,10 @@
 //! documents that TriX/HexTuples degrade it to a plain language tag.
 
 use std::fmt::Write as _;
-use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+
+mod support;
 
 use purrdf_rdf::JsonLdContextLimits;
 
@@ -827,20 +828,10 @@ fn explicit_from_overrides_a_misleading_extension() {
 /// through the process convert correctly.
 #[test]
 fn stdin_to_stdout_with_explicit_formats() {
-    let mut child = purrdf()
-        .args(["convert", "--from", "nquads", "--to", "turtle", "-", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf for the stdin pipe");
-    child
-        .stdin
-        .take()
-        .expect("child stdin")
-        .write_all(SEED_A.as_bytes())
-        .expect("write to child stdin");
-    let out = child.wait_with_output().expect("await child");
+    let out = support::run_with_stdin(
+        purrdf().args(["convert", "--from", "nquads", "--to", "turtle", "-", "-"]),
+        SEED_A.as_bytes(),
+    );
     assert!(
         out.status.success(),
         "stdin->stdout convert failed: {}",
@@ -1773,20 +1764,10 @@ fn empty_iri_reference_from_a_file_resolves_to_the_files_own_iri() {
 /// base to derive and no honest answer but to fail. The message names `--base`.
 #[test]
 fn the_same_document_on_stdin_is_refused_and_names_the_remedy() {
-    let mut child = purrdf()
-        .args(["convert", "--to", "ntriples", "--from", "turtle", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(b"<> a <http://example.org/test> .\n")
-        .expect("write stdin");
-    let out = child.wait_with_output().expect("wait for purrdf");
+    let out = support::run_with_stdin(
+        purrdf().args(["convert", "--to", "ntriples", "--from", "turtle", "-"]),
+        b"<> a <http://example.org/test> .\n",
+    );
 
     assert!(
         !out.status.success(),
@@ -1819,8 +1800,8 @@ fn the_same_document_on_stdin_is_refused_and_names_the_remedy() {
 #[test]
 fn a_base_in_scope_still_resolves_the_same_reference() {
     // 1. Explicitly supplied on the command line.
-    let mut child = purrdf()
-        .args([
+    let out = support::run_with_stdin(
+        purrdf().args([
             "convert",
             "--to",
             "ntriples",
@@ -1829,19 +1810,9 @@ fn a_base_in_scope_still_resolves_the_same_reference() {
             "--base",
             "http://example.org/dir/",
             "-",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn purrdf");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(b"<rel> a <http://example.org/test> .\n")
-        .expect("write stdin");
-    let out = child.wait_with_output().expect("wait for purrdf");
+        ]),
+        b"<rel> a <http://example.org/test> .\n",
+    );
     assert!(
         out.status.success(),
         "--base must resolve it: {}",
@@ -2490,28 +2461,7 @@ fn an_rdfxml_qualified_name_refusal_names_whichever_base_is_in_scope() {
 
 /// Run `purrdf` with `args`, writing `stdin` to the child, and return the captured output.
 fn run_with_stdin(args: &[&str], stdin: &[u8]) -> Output {
-    let mut child = purrdf()
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the built purrdf binary");
-    let written = child
-        .stdin
-        .take()
-        .expect("piped child stdin")
-        .write_all(stdin);
-    if let Err(error) = written {
-        // A refusal can close the pipe before the whole document is written; that is the
-        // behaviour under test, not a harness failure.
-        assert_eq!(
-            error.kind(),
-            std::io::ErrorKind::BrokenPipe,
-            "write to child stdin: {error}"
-        );
-    }
-    child.wait_with_output().expect("await the purrdf child")
+    support::run_with_stdin(purrdf().args(args), stdin)
 }
 
 /// Run `purrdf` with `args` from the working directory `cwd`, so a dot-relative argument

@@ -45,8 +45,8 @@ fn reverse_evidence(
     if imported.losses.render_json() != repeated.losses.render_json() {
         return Err("Pydantic reverse ledger is not deterministic".into());
     }
-    let first = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces());
-    let second = purrdf_shapes::json_schema::compile(&repeated.shapes, config.namespaces());
+    let first = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces())?;
+    let second = purrdf_shapes::json_schema::compile(&repeated.shapes, config.namespaces())?;
     if first.schema_json != second.schema_json {
         return Err("Pydantic reverse shapes are not byte-deterministic".into());
     }
@@ -246,9 +246,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         ],
                         "minLength": 2
                     },
-                    "ex:lookahead": {
+                    "ex:prefix": {
                         "type": "string",
-                        "pattern": "^(?=A)A"
+                        "pattern": "^A"
                     },
                     "ex:name": { "type": "string", "minLength": 1 },
                     "ex:nullableCount": {
@@ -380,16 +380,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             )
         })
         .collect();
-    let expected_losses = BTreeSet::from([
-        (
-            "format-validation-widened",
-            "#/$defs/Person/properties/ex:when/format",
-        ),
-        (
-            "keyword-validation-dropped",
-            "#/$defs/Person/properties/ex:lookahead/pattern",
-        ),
-    ]);
+    let expected_losses = BTreeSet::from([(
+        "format-validation-widened",
+        "#/$defs/Person/properties/ex:when/format",
+    )]);
     if observed_losses != expected_losses {
         return Err(format!(
             "oracle fixture loss contract disagrees: {}",

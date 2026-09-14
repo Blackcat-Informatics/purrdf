@@ -35,6 +35,8 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+mod support;
+
 /// The rdf:type IRI, spelled out (the inferred-triple assertions key on it).
 const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
 
@@ -545,9 +547,6 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
 /// `rdf:type` triple in the captured stdout.
 #[test]
 fn stdin_to_stdout_with_from_and_to() {
-    use std::io::Write as _;
-    use std::process::Stdio;
-
     let input = concat!(
         "@prefix ex: <http://example.org/> .\n",
         "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
@@ -555,22 +554,12 @@ fn stdin_to_stdout_with_from_and_to() {
         "ex:rex a ex:Dog .\n",
     );
 
-    let mut child = purrdf()
-        .args([
+    let out = support::run_with_stdin(
+        purrdf().args([
             "reason", "--regime", "rdfs", "--from", "ttl", "--to", "nt", "-", "-",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the built purrdf binary");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(input.as_bytes())
-        .expect("write fixture to stdin");
-    let out = child.wait_with_output().expect("wait for purrdf");
+        ]),
+        input.as_bytes(),
+    );
 
     assert!(
         out.status.success(),

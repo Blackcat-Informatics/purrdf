@@ -19,7 +19,9 @@
 
 use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
+
+mod support;
 
 use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::writer::Writer;
@@ -68,23 +70,7 @@ fn run(args: &[&str]) -> Output {
 /// output would deadlock the moment the child's output fills the OS pipe buffer — which
 /// is invisible with a tiny fixture and real with a large one.
 fn run_with_stdin(args: &[&str], stdin_bytes: &[u8]) -> Output {
-    let mut child = purrdf()
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the built purrdf binary");
-    let mut stdin = child.stdin.take().expect("child stdin is piped");
-    let bytes = stdin_bytes.to_vec();
-    let writer = std::thread::spawn(move || {
-        // A broken pipe (the child rejected the input before draining stdin) is not a
-        // test failure: the child's exit status carries the verdict.
-        let _ = stdin.write_all(&bytes);
-    });
-    let output = child.wait_with_output().expect("wait for purrdf");
-    writer.join().expect("join the stdin writer thread");
-    output
+    support::run_with_stdin(purrdf().args(args), stdin_bytes)
 }
 
 /// stderr of an [`Output`] as a `String`, for diagnostics + refusal assertions.

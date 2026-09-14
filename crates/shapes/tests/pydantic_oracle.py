@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 
 REPO = Path(__file__).resolve().parents[3]
-FLAT_BASELINE_SHA256 = "a89d78ba9be04d5d10be8709ea81da938176e5c678920c09007c3b94d60d3625"
+FLAT_BASELINE_SHA256 = "9277681d425755b085048a302ddd2fa530630a98154352eba8e6672e6a7dff70"
 SCHEMA_MAP_KEYWORDS = (
     "$defs",
     "properties",
@@ -252,7 +252,7 @@ def _assert_package_runtime(
         "ex:color": "ex:red",
         "ex:friend": {"ex:age": 39, "ex:name": "Bob"},
         "ex:label": "Al",
-        "ex:lookahead": "A",
+        "ex:prefix": "A",
         "ex:name": "Alice",
         "ex:nullableCount": 2,
         "ex:nullableName": "Name",
@@ -282,6 +282,7 @@ def _assert_package_runtime(
     assert nullable_dump["ex:nullableName"] is None
     assert nullable_dump["ex:nullableTags"] is None
 
+    _assert_rejects(models["Person"], {**person_payload, "ex:prefix": "B"})
     _assert_rejects(models["Person"], {"ex:age": -1, "ex:name": "Alice"})
     _assert_rejects(models["Person"], {"ex:age": 1, "ex:name": ""})
     _assert_rejects(models["Person"], {"ex:age": 1, "name": "Alice"})

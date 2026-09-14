@@ -68,8 +68,8 @@ fn reverse_payload(
     let compile_imported = |value: &ImportedShapes| {
         purrdf_shapes::json_schema::compile(&value.shapes, config.namespaces())
     };
-    let compiled = compile_imported(&imported);
-    let repeated_compiled = compile_imported(&repeated);
+    let compiled = compile_imported(&imported)?;
+    let repeated_compiled = compile_imported(&repeated)?;
     if compiled.schema_json != repeated_compiled.schema_json {
         return Err("LinkML reverse shapes are not byte-deterministic".into());
     }

@@ -13,6 +13,10 @@
 //! same semantics instead of three independently-maintained copies (ETHOS
 //! §O).
 //!
+//! [`to_ecma_262`] emits Unicode ECMA-262 from that same recognized source;
+//! [`from_ecma_262`] imports the proven shared grammar as valid XSD syntax.
+//! [`ecma_262_rust_compatible`] checks the semantics a Rust runtime can install.
+//!
 //! # The one permanent limitation: backreferences
 //!
 //! XPath F&O 3.1 §5.6.1.4 adds `backReference ::= "\" [1-9][0-9]*` to the
@@ -40,14 +44,12 @@
 //! own — silently different — resolution),
 //! the `.` wildcard's `#xA`/`#xD` exclusion, and the `i s m x q` flags.
 //!
-//! One documented, tested, permanent MINOR divergence remains: under the
-//! `m` flag, XPath's `^` excludes the position immediately after a newline
-//! that is the last character in the string, and Rust's `multi_line` has no
-//! way to express that one exception (pinned by the
-//! `known_divergence_m_flag_trailing_newline` test in this module — this
-//! plan intentionally pins the ACTUAL divergent behavior with a test rather
-//! than relying on it silently, so a future `regex` upgrade that happens to
-//! change this is caught, not silently trusted).
+//! The Rust validator has two documented semantic differences from XPath:
+//! under `m`, both anchors include the position after a final newline; under
+//! `i`, Unicode simple case folding omits some full case variants, such as
+//! dotless `ı` matching `i`. Tests pin these engine behaviors explicitly.
+//! Unicode ECMA-262 emission implements the exact `m` rules and refuses `i`
+//! with a typed error rather than inheriting those validator differences.
 //!
 //! # A recognizer, not a pass-through
 //!
@@ -118,12 +120,14 @@
 mod blocks;
 mod classes;
 mod ecma;
+mod ecma_emit;
 mod emit;
 mod error;
 mod replace;
 mod scan;
 mod xflag;
 
+pub use ecma_emit::{Ecma262Error, ecma_262_rust_compatible, from_ecma_262, to_ecma_262};
 pub use error::{ReplacementError, XsdRegexError};
 
 use std::borrow::Cow;
@@ -266,18 +270,11 @@ impl CompiledPattern {
     }
 }
 
-/// One way a construct in a `sh:pattern`/`REGEX`/`PATTERN` source **changes
-/// meaning** when its text is copied verbatim into bare ECMA-262 — the dialect
-/// JSON Schema's `pattern` keyword, JavaScript, and most other `pattern`
-/// consumers are specified in.
+/// A divergence when source is copied to ECMA-262 **without Unicode mode**.
 ///
-/// This is data, not prose: a consumer can branch on the variant (and read the
-/// carried property name or flag letters) instead of string-matching the
-/// English sentence. [`Display`](std::fmt::Display) renders the exact wording
-/// the loss ledger has always carried, so existing notes do not move.
-///
-/// [`ecma_262_divergences`] returns these in first-appearance order, with
-/// duplicates collapsed.
+/// This diagnostic API describes flagless JavaScript consumers. JSON Schema
+/// 2020-12 recommends Unicode mode instead; its emitter uses [`to_ecma_262`].
+/// Values are returned in first-appearance order with duplicates collapsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ecma262Divergence {
     /// `\i`/`\I`/`\c`/`\C`: XSD's XML-name multi-character escapes. ECMA-262
@@ -295,11 +292,9 @@ pub enum Ecma262Divergence {
     /// ECMA-262's `[0-9]`. Reported even though [`compile`] passes the escape
     /// through verbatim.
     DigitEscape,
-    /// A `\p{…}`/`\P{…}` Appendix G general category (e.g. `Nd`), which
-    /// ECMA-262 only accepts as a Unicode property escape under the `u` flag;
-    /// JSON Schema's bare `pattern` string has no flag surface to set it, so
-    /// it reads `\p` as an IdentityEscape instead. `name` is the property name
-    /// without the `\p{…}` wrapper.
+    /// A general-category escape needs Unicode mode. Without `u`, JavaScript
+    /// reads it as an identity escape. JSON Schema's recommended Unicode mode
+    /// supplies that context; this diagnostic describes a flagless consumer.
     UnicodeCategory {
         /// The Appendix G general-category name (`L`, `Nd`, `Zs`, …).
         name: String,
@@ -341,8 +336,7 @@ impl fmt::Display for Ecma262Divergence {
             Self::UnicodeBlock { .. } => f.write_str("\\p{Is…} block escape"),
             Self::UnicodeCategory { name } => write!(
                 f,
-                "\\p{{{name}}} category escape (ECMA-262 needs the `u` flag, which JSON \
-                 Schema's flagless `pattern` cannot set)"
+                "\\p{{{name}}} category escape (requires Unicode ECMA-262)"
             ),
             Self::DotWildcard => f.write_str(". wildcard"),
             Self::ClassSubtraction => f.write_str("[…-[…]] class subtraction"),
@@ -372,6 +366,33 @@ impl fmt::Display for Ecma262Divergence {
 /// name-escape count ([`XsdRegexError::TooManyFoldedClassEscapes`]) that caused
 /// translation or the underlying `regex` compile to fail.
 pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexError> {
+    let prepared = prepare(pattern, flags)?;
+    let regex = regex::RegexBuilder::new(&prepared.source)
+        .case_insensitive(prepared.case_insensitive)
+        .dot_matches_new_line(prepared.dot_all)
+        .multi_line(prepared.multi_line)
+        .build()?;
+    Ok(CompiledPattern {
+        regex,
+        is_literal: prepared.mode == PatternMode::Literal,
+    })
+}
+
+struct PreparedPattern {
+    source: String,
+    case_insensitive: bool,
+    dot_all: bool,
+    multi_line: bool,
+    mode: PatternMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PatternMode {
+    Regex,
+    Literal,
+}
+
+fn prepare(pattern: &str, flags: &str) -> Result<PreparedPattern, XsdRegexError> {
     if pattern.len() > MAX_SOURCE_BYTES {
         return Err(XsdRegexError::TooLarge {
             bytes: pattern.len(),
@@ -413,12 +434,12 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
                 limit: MAX_TRANSLATED_BYTES,
             });
         }
-        let regex = regex::RegexBuilder::new(&escaped)
-            .case_insensitive(case_insensitive)
-            .build()?;
-        return Ok(CompiledPattern {
-            regex,
-            is_literal: true,
+        return Ok(PreparedPattern {
+            source: escaped,
+            case_insensitive,
+            dot_all: false,
+            multi_line: false,
+            mode: PatternMode::Literal,
         });
     }
 
@@ -438,58 +459,22 @@ pub fn compile(pattern: &str, flags: &str) -> Result<CompiledPattern, XsdRegexEr
             limit: MAX_TRANSLATED_BYTES,
         });
     }
-    let regex = regex::RegexBuilder::new(&translated)
-        .case_insensitive(case_insensitive)
-        .dot_matches_new_line(dot_all)
-        .multi_line(multi_line)
-        .build()?;
-    Ok(CompiledPattern {
-        regex,
-        is_literal: false,
+    Ok(PreparedPattern {
+        source: translated,
+        case_insensitive,
+        dot_all,
+        multi_line,
+        mode: PatternMode::Regex,
     })
 }
 
-/// Everything in `(pattern, flags)` whose **meaning differs between the
-/// XSD/XPath `regExp` dialect and bare ECMA-262** — the dialect JSON Schema's
-/// `pattern` keyword, JavaScript, and most other `pattern` consumers are
-/// specified in.
+/// Report differences when XSD/XPath source is copied to flagless JavaScript.
 ///
-/// An emitter that copies a `sh:pattern`'s source text into an ECMA-262 slot
-/// is performing a dialect change, and this is how it finds out whether that
-/// change altered the accepted language. Returns an empty vector when the
-/// pattern and its flags mean the same thing in both dialects (the common
-/// case — `^[A-Z]+$` and friends).
-///
-/// The question is **meaning**, which is deliberately a different question
-/// from whether [`compile`] had to rewrite the source. Neither direction
-/// implies the other:
-///
-/// * `\d`/`\D` is reported even though [`compile`] passes it through
-///   verbatim, because XSD's `\d` is `\p{Nd}` (every Unicode decimal digit)
-///   while ECMA-262's is `[0-9]`.
-/// * `\p{L}` is reported even though [`compile`] passes that general-category
-///   escape through verbatim, because ECMA-262 reads `\p` as an IdentityEscape
-///   (the literal characters `p{L}`) unless the `u` flag is set — and JSON
-///   Schema's bare `pattern` string has no flag surface with which to set it.
-///
-/// Divergences are returned as [`Ecma262Divergence`] values so a consumer can
-/// branch on the kind instead of string-matching English prose; the
-/// [`Display`](std::fmt::Display) rendering of each one is the exact note text
-/// this reporter has always produced. They are in first-appearance order with
-/// duplicates collapsed.
-///
-/// Two kinds are reported:
-///
-/// * **Constructs**, class-aware — a `.` or a `-[` inside a character class is
-///   a literal, not a metacharacter, and is not reported.
-/// * **Flags**, because ECMA-262 regular-expression *literals* have flags but
-///   JSON Schema's `pattern` is a bare string with **no flag surface at all**,
-///   so every flag is lost — and `x` and `q` have no ECMA-262 spelling even
-///   where flags can be expressed.
-///
-/// This is not a validity check. Every input it reports on is a perfectly
-/// well-formed `sh:pattern`; the question is only whether its meaning
-/// survives the copy.
+/// This is a conservative diagnostic, not a validity or translation check.
+/// JSON Schema 2020-12 Core §6.4 recommends Unicode mode, so its emitter calls
+/// [`to_ecma_262`] instead. Nonempty XPath flags are reported because copying
+/// the source alone does not apply them. General categories are reported here
+/// because this diagnostic's target does not enable `u`.
 #[must_use]
 pub fn ecma_262_divergences(pattern: &str, flags: &str) -> Vec<Ecma262Divergence> {
     let mut out = ecma::ecma_262_divergences(pattern);
@@ -533,28 +518,25 @@ mod tests {
         assert!(re.as_regex().is_match("xa"));
     }
 
-    /// XPath F&O 3.1 §5.6.2: under `m`, `^` matches "the position
-    /// immediately after a newline character other than a newline that
-    /// appears as the last character in the string" — i.e. NOT immediately
-    /// after a *trailing* newline. Rust's `multi_line` has no lookaround
-    /// expressive enough to carve out that one position, so it DOES match
-    /// there — a permanent, documented, minor divergence. This test pins
-    /// the ACTUAL (divergent) behavior so a future `regex` upgrade that
-    /// happens to change it is caught by a test failure, not silently
-    /// relied upon or silently drifted further.
+    /// XPath F&O 3.1 §5.6.2 excludes the position after a final LF for
+    /// both multiline anchors. These assertions pin the existing Rust engine
+    /// behavior, not the exact XPath behavior exercised by the ECMA emitter.
     #[test]
     fn known_divergence_m_flag_trailing_newline() {
-        let re = compile("^", "m").expect("compile");
-        let positions: Vec<usize> = re.as_regex().find_iter("a\n").map(|m| m.start()).collect();
-        // Spec-correct XPath behavior would be `[0]` only (position 2, right
-        // after the trailing newline, should NOT match). Rust's actual,
-        // divergent behavior matches at both position 0 and position 2.
-        assert_eq!(
-            positions,
-            vec![0, 2],
-            "if this now reads [0], regex's multi_line semantics changed and \
-             the documented divergence in this module's doc comment is stale"
-        );
+        for (source, actual) in [("^", vec![0, 2]), ("$", vec![1, 2])] {
+            let re = compile(source, "m").expect("compile");
+            let positions: Vec<usize> = re.as_regex().find_iter("a\n").map(|m| m.start()).collect();
+            assert_eq!(positions, actual);
+        }
+    }
+
+    /// XPath defines case variants by equal lower-case OR upper-case strings.
+    /// Both `i` and dotless `ı` uppercase to `I`; simple folding omits that pair.
+    #[test]
+    fn known_divergence_i_flag_dotless_case_variant() {
+        let re = compile("^i$", "i").expect("compile");
+        assert!(re.as_regex().is_match("I"));
+        assert!(!re.as_regex().is_match("ı"));
     }
 
     #[test]

@@ -2321,6 +2321,7 @@ mod tests {
         let dataset = crate::text_ingest::parse_turtle_to_dataset(&source, None).expect("parse");
         let shapes = crate::shapes::from_dataset(&dataset).expect("shapes");
         crate::json_schema::compile(&shapes, import_config().namespaces())
+            .expect("schema compilation")
     }
 
     fn sdl(package: &GraphqlPackage) -> &str {
@@ -2467,11 +2468,13 @@ mod tests {
             imported.losses.render_json()
         );
         let recompiled =
-            crate::json_schema::compile(&imported.shapes, import_config().namespaces());
+            crate::json_schema::compile(&imported.shapes, import_config().namespaces())
+                .expect("schema compilation");
         assert_eq!(recompiled.schema_json, compiled.schema_json);
 
         let repeated = import_graphql_package(&package, &import_config()).expect("repeat");
-        let repeated = crate::json_schema::compile(&repeated.shapes, import_config().namespaces());
+        let repeated = crate::json_schema::compile(&repeated.shapes, import_config().namespaces())
+            .expect("schema compilation");
         assert_eq!(repeated.schema_json, recompiled.schema_json);
 
         let mut bad = package.clone();
