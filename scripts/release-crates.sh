@@ -82,7 +82,4 @@ PURRDF_RELEASE_CRATES=(
 # refuses any entry that has a record, by name.
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
-PURRDF_UNBOOTSTRAPPED_CRATES=(
-  purrdf-markdown
-  purrdf-json
-)
+PURRDF_UNBOOTSTRAPPED_CRATES=()

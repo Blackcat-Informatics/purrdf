@@ -110,29 +110,25 @@ crates.io requires a crate to exist before a Trusted Publisher can be
 configured for it, and refuses to create one from a Trusted Publishing token —
 its publish handler answers `Trusted Publishing tokens do not support creating
 new crates. Publish the crate manually, first`. Creating a record is therefore
-the **only** thing an API token does in this release process, and the next
-section is exact about how little that is.
+the **only** thing an API token does in this release process; later versions
+are published through Trusted Publishing.
 
-### Outstanding bootstrap: `purrdf-markdown`, `purrdf-json`
+### Bootstrap: complete (ledger empty)
 
-Two crates are in the release set above with no crates.io record yet:
-`purrdf-markdown` is the **fifteenth** in publish order, and `purrdf-json` is the
-**sixteenth**. Both follow `purrdf-rdf`, their shared workspace dev-dependency,
-and precede `purrdf-slice`. `PURRDF_UNBOOTSTRAPPED_CRATES` in
-[`scripts/release-crates.sh`](../scripts/release-crates.sh) names both; the
-ledger is held to the registry in both directions by the preflight. Each entry
-leaves once its record exists. The release lane publishes the fourteen crates
-ahead of them, skips both visibly, then continues through later crates until
-it reaches a dependency on either new crate.
+All 23 crates in the release set above have crates.io records. Before
+publishing, each must have the Trusted Publisher configuration above and the
+*Require trusted publishing* lock. `PURRDF_UNBOOTSTRAPPED_CRATES` in
+[`scripts/release-crates.sh`](../scripts/release-crates.sh) is empty. The
+registry preflight verifies the records, locks, and empty ledger before
+packaging.
 
-That first dependent is the flagship umbrella, `purrdf`, twenty-second in
-publish order: `crates/purrdf/Cargo.toml` takes both `purrdf-markdown` and
-`purrdf-json` as normal dependencies. `purrdf-slice` through `purrdf-validate`
-publish normally and the stop lands on the umbrella. `purrdf-wasm`,
-twenty-third and dependent on the umbrella, remains unpublished behind it.
-The token bootstrap creates the two new records from the exact release tag;
-after their Trusted Publisher entries and locks are configured, rerunning the
-same release lane publishes the umbrella and WebAssembly binding.
+`purrdf-markdown` and `purrdf-json` have **0.0.0** bootstrap records, created by
+token publication solely to configure Trusted Publishing. Those versions
+expose no runtime API; their functional release is **2.0.0**. With the records
+and publisher settings established, the trusted release lane publishes all 23
+crates in dependency order without a token-bootstrap interleave. The 0.0.0
+versions can be yanked after the functional release, retaining the crate
+records and publisher settings.
 
 The three crates that once had no crates.io record — `purrdf-cdt`,
 `purrdf-text`, `purrdf-geo` — were bootstrapped during the 0.13.0 release:
@@ -226,13 +222,11 @@ git push origin rust-v0.1.5
 
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
-not locked to Trusted Publishing (see [Outstanding
-bootstrap](#outstanding-bootstrap-purrdf-markdown-purrdf-json)); that
-check runs before packaging. It then publishes crates in dependency order,
-skips any crate/version that already exists on crates.io (which keeps re-runs
-safe after a partial publish), skips ledgered crates, and stops cleanly at the
-first crate that depends on one — the interleave described there — resuming
-with `gh run rerun <run-id>`.
+not locked to Trusted Publishing (see [bootstrap status](#bootstrap-complete-ledger-empty)).
+The ledger is empty, so every release crate must have its record and lock
+before packaging. The lane publishes crates in dependency order and skips any
+crate/version already present on crates.io. A partially completed release
+resumes with `gh run rerun <run-id>`.
 
 ## PyPI Release
 
