@@ -19,7 +19,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 `purrdf-text` is the in-memory full-text index of the PurRDF toolkit. It reads
 RDF 1.2 literals out of a frozen dataset, tokenizes them by the Unicode word
 boundaries of `UAX #29` over NFC-normalized text (`UAX #15`), and answers ranked
-retrieval queries with BM25 scores.
+retrieval queries with BM25F scores.
 
 ## Caller-supplied IRIs
 
@@ -56,13 +56,26 @@ the property-function seam, compared as SPARQL-JSON strings — is asserted
 natively. Only the ranking claim is executed on both targets, so only it is
 stated for both.
 
-## BM25 without knobs, ranked within a partition
+## Versioned BM25F, ranked within a partition
 
-The BM25 constants `k1 = 1.2` and `b = 0.75` are the canonical values from the
-retrieval literature, and they are **crate constants rather than caller
-parameters**. PurRDF is a carrier, and optionality that changes semantics per
-consumer is forbidden: two callers must not get different scores — and so
-different ranks — out of the same index and the same needle.
+Ranking uses one fielded BM25F path, including the single-field case. The
+immutable `RankingProfile` binds up to sixteen named fields, each field's
+weight and length normalization, total predicate routing, exact arithmetic,
+query aggregation, input bounds and the score bound into a fingerprint.
+`k1 = 1.2` is fixed. `RankingProfile::single_field()` explicitly routes every
+selected predicate to one field with weight one and `b = 0.75`.
+
+`TextIndex::from_dataset_with_ranking` builds under an explicit profile;
+`with_ranking_profile` reweights or remaps an existing index from retained
+predicate-level token facts without re-tokenizing. Analyzer identity is
+separate from ranking identity. The pure `PreparedCorpus` and `PreparedQuery`
+APIs expose the same scoring implementation for other stores, binding cached
+IDFs to validated corpus statistics and the immutable profile.
+
+The maximum score is exactly `65_536 * 10^12` raw units and needs 56 bits.
+Scores above that exact maximum are refused even if they fit in 56 bits.
+See [the ranking contract](RANKING.md) for the bound proof, operation order,
+independent arithmetic reference and vocabulary-search ownership decision.
 
 Corpus statistics are computed per `(graph, language)` partition, so a score is a
 number relative to one corpus. `?rank` is therefore the 1-based position of a
