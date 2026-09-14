@@ -3,7 +3,7 @@
 
 //! GTS-AUTHORSHIP CENSUS — the closed list of places that can mint a GTS file.
 //!
-//! Every authoring decision this branch introduced (which in-band dictionaries a
+//! Every authoring decision (which in-band dictionaries a
 //! pack pins, which one primes which frame, the declared `zstd` level) is
 //! carried in [`WriterOptions`] and chosen at ONE moment: when a
 //! header-minting `Writer` constructor runs. A new call site added later that
@@ -26,10 +26,15 @@
 //!            repository that can bring a GTS segment header into existence.
 //!
 //! The `tests` module below proves the detector is not vacuous: a synthetic
-//! source carrying a call site MUST be flagged, and commented-out or
+//! source carrying a constructor reference MUST be flagged, and commented-out or
 //! `#[cfg(test)]`-scoped calls MUST NOT be.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
+use syn::parse::Parser;
+use syn::visit::{self, Visit};
 
 /// The `Writer` constructors that MINT a new segment header, and therefore
 /// decide the pack's `WriterOptions` (dictionaries, declared level, layout).
@@ -121,193 +126,468 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Blank out `//`-to-end-of-line comments, preserving line structure.
-///
-/// This is what keeps the doc examples in `lib.rs`/`reader.rs` — which do call
-/// `Writer::new` — out of the census: they are comments, not call sites. A `//`
-/// inside a string literal (`"https://…"`) is NOT a comment, so the scan is
-/// quote-aware; treating one as a comment would silently truncate real code.
-fn strip_line_comments(source: &str) -> String {
-    source
-        .lines()
-        .map(|line| line[..comment_start(line)].to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+// Resolve only explicit Rust paths, without expanding macros or evaluating cfg.
+// Comments and literals cannot become paths. Imports and type aliases are
+// hoisted in each lexical scope; unrelated local types shadow imported names.
+type Names = BTreeMap<String, Vec<String>>;
 
-/// The byte offset where `line`'s comment begins, or `line.len()`.
-fn comment_start(line: &str) -> usize {
-    let bytes = line.as_bytes();
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        let ch = bytes[index];
-        if escaped {
-            escaped = false;
-        } else if ch == b'\\' && in_string {
-            escaped = true;
-        } else if ch == b'"' {
-            in_string = !in_string;
-        } else if !in_string && ch == b'/' && bytes.get(index + 1) == Some(&b'/') {
-            return index;
-        }
-        index += 1;
-    }
-    line.len()
-}
-
-/// Blank out every `#[cfg(test)] mod … { … }` body, preserving line structure.
-/// Test modules author GTS constantly and are not authorship surface.
-///
-/// The source is rustfmt-normalised, so a module opened by an attribute at
-/// indentation `n` is closed by the first later line that is exactly `}` at
-/// indentation `n`. That is exact and, unlike brace counting over
-/// comment-stripped text, cannot be thrown off by a brace inside a string
-/// literal. `#[cfg(test)]` on a non-`mod` item is deliberately NOT stripped: a
-/// test-only helper that mints a header is still a call site a reviewer should
-/// see.
-///
-/// Panics when a test module is never closed — this gate must fail LOUDLY rather
-/// than silently blind itself to the rest of the file.
-fn strip_test_module(path: &Path, stripped: &str) -> String {
-    let mut lines: Vec<String> = stripped.lines().map(str::to_string).collect();
-    let mut index = 0;
-    while index < lines.len() {
-        let line = lines[index].clone();
-        if line.trim_start() != "#[cfg(test)]" {
-            index += 1;
-            continue;
-        }
-        let indent = line.len() - line.trim_start().len();
-        let opens_module = lines[index + 1..]
-            .iter()
-            .find(|next| !next.trim().is_empty())
-            .is_some_and(|next| {
-                let body = next.trim_start();
-                body.starts_with("mod ") || body.starts_with("pub mod ")
-            });
-        if !opens_module {
-            index += 1;
-            continue;
-        }
-        let closer = format!("{}}}", " ".repeat(indent));
-        let end = match lines[index..]
-            .iter()
-            .position(|candidate| candidate.trim_end() == closer)
-        {
-            Some(offset) => index + offset,
-            None => panic!(
-                "{}: the #[cfg(test)] module opened at line {} is never closed by a \
-                 `}}` at its own indentation — the census scanner cannot safely exclude it",
-                path.display(),
-                index + 1
-            ),
-        };
-        for line in &mut lines[index..=end] {
-            line.clear();
-        }
-        index = end + 1;
-    }
-    lines.join("\n")
-}
-
-/// The name declared by a `fn NAME(` item on `line`, if any.
-fn declared_fn(line: &str) -> Option<String> {
-    let at = line.find("fn ")?;
-    // `fn` must start a token: preceded by nothing, whitespace, or `(` (for a
-    // `dyn Fn`-free world this is enough; `Fn(` is capitalised and so excluded).
-    if at > 0 && !matches!(line.as_bytes()[at - 1], b' ' | b'\t') {
-        return None;
-    }
-    let rest = &line[at + 3..];
-    let name: String = rest
-        .chars()
-        .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
-        .collect();
-    (!name.is_empty()).then_some(name)
-}
-
-/// Whether `line` calls one of the header-minting `Writer` constructors.
-fn mints_a_header(line: &str) -> bool {
-    MINTING_CONSTRUCTORS
+fn path_names(path: &syn::Path) -> Vec<String> {
+    path.leading_colon
         .iter()
-        .any(|ctor| calls_writer_ctor(line, ctor))
+        .map(|_| "::".to_string())
+        .chain(path.segments.iter().map(|part| part.ident.to_string()))
+        .collect()
 }
 
-/// Whether `haystack` names `Writer::<ctor>(` as a WHOLE type name.
-///
-/// `contains` alone is wrong: `OkfWriter::new(` ends in `Writer::new(` and is a
-/// different type entirely. A leading `::` or module path is fine
-/// (`purrdf_gts::writer::Writer::new(`), a leading identifier character is not.
-fn calls_writer_ctor(haystack: &str, ctor: &str) -> bool {
-    let needle = format!("Writer::{ctor}(");
-    let mut from = 0;
-    while let Some(offset) = haystack[from..].find(&needle) {
-        let at = from + offset;
-        let preceded_by_ident = at > 0
-            && haystack[..at]
-                .chars()
-                .next_back()
-                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_');
-        if !preceded_by_ident {
-            return true;
+fn expression_path(expr: &syn::ExprPath) -> Vec<String> {
+    let mut path = path_names(&expr.path);
+    if let Some(qself) = &expr.qself {
+        // The separator after `<Type>` is not an external-crate root.
+        if path.first().is_some_and(|part| part == "::") {
+            path.remove(0);
         }
-        from = at + 1;
+        // A trait-associated function is not an inherent Writer constructor.
+        if qself.position != 0 {
+            return Vec::new();
+        }
+        if let syn::Type::Path(ty) = qself.ty.as_ref() {
+            let mut qualified = path_names(&ty.path);
+            qualified.append(&mut path);
+            path = qualified;
+        }
     }
-    false
+    path
 }
 
-/// Extract the `(enclosing fn, line)` census sites from one already-stripped
-/// source body.
-fn sites_in(body: &str) -> Vec<String> {
-    let mut enclosing: Option<String> = None;
-    let mut out = Vec::new();
-    for line in body.lines() {
-        if let Some(name) = declared_fn(line) {
-            enclosing = Some(name);
+fn is_writer(path: &[String]) -> bool {
+    path == ["purrdf_gts", "writer", "Writer"] || path == ["purrdf", "gts", "writer", "Writer"]
+}
+
+fn test_module(module: &syn::ItemMod) -> bool {
+    module.attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Path>()
+                .is_ok_and(|path| path.is_ident("test"))
+    })
+}
+
+fn module_path(relative: &str) -> Vec<String> {
+    let parts: Vec<_> = relative.split('/').collect();
+    let package = parts[1].replace('-', "_");
+    let name = if package == "purrdf" {
+        package
+    } else {
+        format!("purrdf_{package}")
+    };
+    let mut path = vec![name];
+    for part in &parts[3..] {
+        let name = part.strip_suffix(".rs").unwrap_or(part);
+        if !matches!(name, "lib" | "main" | "mod") {
+            path.push(name.to_string());
         }
-        if mints_a_header(line) {
-            out.push(
-                enclosing
+    }
+    path
+}
+
+fn imports(tree: &syn::UseTree, prefix: &[String], out: &mut Vec<(String, Vec<String>)>) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            let mut prefix = prefix.to_vec();
+            prefix.push(path.ident.to_string());
+            imports(&path.tree, &prefix, out);
+        }
+        syn::UseTree::Name(name) => {
+            let mut path = prefix.to_vec();
+            let name = name.ident.to_string();
+            if name != "self" {
+                path.push(name);
+            }
+            let binding = path.last().expect("use path is nonempty").clone();
+            out.push((binding, path));
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut path = prefix.to_vec();
+            if rename.ident != "self" {
+                path.push(rename.ident.to_string());
+            }
+            out.push((rename.rename.to_string(), path));
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                imports(item, prefix, out);
+            }
+        }
+        syn::UseTree::Glob(_) => out.push(("*".into(), prefix.to_vec())),
+    }
+}
+
+struct Census<'a> {
+    file: &'a str,
+    module: Vec<String>,
+    names: Names,
+    modules: BTreeMap<Vec<String>, Names>,
+    enclosing: Option<String>,
+    sites: Vec<String>,
+    constructors: Vec<String>,
+    writer_impl: bool,
+    constructor_body: bool,
+}
+
+impl<'a> Census<'a> {
+    fn new(file: &'a str) -> Self {
+        Self {
+            file,
+            module: module_path(file),
+            names: Names::new(),
+            modules: BTreeMap::new(),
+            enclosing: None,
+            sites: Vec::new(),
+            constructors: Vec::new(),
+            writer_impl: false,
+            constructor_body: false,
+        }
+    }
+
+    fn resolve(&self, path: &[String]) -> Vec<String> {
+        let Some(first) = path.first() else {
+            return Vec::new();
+        };
+        let mut resolved = match first.as_str() {
+            "::" => Vec::new(),
+            "crate" => vec![self.module[0].clone()],
+            "self" => self.module.clone(),
+            "super" => {
+                let mut parent = self.module.clone();
+                parent.pop();
+                parent
+            }
+            _ => self
+                .names
+                .get(first)
+                .cloned()
+                .unwrap_or_else(|| vec![first.clone()]),
+        };
+        for part in &path[1..] {
+            if part == "super" {
+                resolved.pop();
+                continue;
+            }
+            if let Some(target) = self
+                .modules
+                .get(&resolved)
+                .and_then(|names| names.get(part))
+            {
+                resolved = target.clone();
+            } else {
+                resolved.push(part.clone());
+            }
+        }
+        resolved
+    }
+
+    fn declare(&mut self, items: &[&syn::Item], local: bool) {
+        let mut aliases = Vec::new();
+        for item in items {
+            let ident = match item {
+                syn::Item::Struct(item) => Some(&item.ident),
+                syn::Item::Enum(item) => Some(&item.ident),
+                syn::Item::Union(item) => Some(&item.ident),
+                syn::Item::Trait(item) => Some(&item.ident),
+                syn::Item::Mod(item) if !test_module(item) => Some(&item.ident),
+                syn::Item::Type(item) => {
+                    if let syn::Type::Path(ty) = item.ty.as_ref() {
+                        aliases.push((item.ident.to_string(), path_names(&ty.path)));
+                    }
+                    Some(&item.ident)
+                }
+                syn::Item::Use(item) => {
+                    let root = item
+                        .leading_colon
+                        .iter()
+                        .map(|_| "::".to_string())
+                        .collect::<Vec<_>>();
+                    imports(&item.tree, &root, &mut aliases);
+                    None
+                }
+                _ => None,
+            };
+            if let Some(ident) = ident {
+                let mut path = self.module.clone();
+                if local {
+                    path.push("<local>".into());
+                }
+                path.push(ident.to_string());
+                self.names.insert(ident.to_string(), path);
+            }
+        }
+        // Repeated resolution admits alias chains regardless of declaration order.
+        for _ in 0..=aliases.len() {
+            let before = self.names.clone();
+            for (name, path) in &aliases {
+                let resolved = self.resolve(path);
+                if name == "*" {
+                    if let Some(names) = self.modules.get(&resolved) {
+                        for (name, path) in names {
+                            self.names
+                                .entry(name.clone())
+                                .or_insert_with(|| path.clone());
+                        }
+                    }
+                    let mut writer = resolved;
+                    writer.push("Writer".into());
+                    if is_writer(&writer) {
+                        self.names.entry("Writer".into()).or_insert(writer);
+                    }
+                } else {
+                    self.names.insert(name.clone(), resolved);
+                }
+            }
+            if self.names == before {
+                break;
+            }
+        }
+    }
+
+    fn shadow_generics(&mut self, generics: &syn::Generics) {
+        for param in generics.type_params() {
+            self.names
+                .insert(param.ident.to_string(), vec!["<generic>".into()]);
+        }
+    }
+
+    fn record(&mut self, path: &[String]) {
+        if let Some((method, ty)) = path.split_last()
+            && MINTING_CONSTRUCTORS.contains(&method.as_str())
+            && is_writer(&self.resolve(ty))
+            && !self.constructor_body
+        {
+            self.sites.push(
+                self.enclosing
                     .clone()
-                    .unwrap_or_else(|| "<no enclosing fn>".to_string()),
+                    .unwrap_or_else(|| "<no enclosing fn>".into()),
             );
         }
     }
-    out
+
+    fn tokens(&mut self, tokens: TokenStream) {
+        // Parse normal macro arguments as expressions, then statement-bearing
+        // bodies as blocks, so lexical shadowing works inside either shape.
+        let expressions =
+            syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+        if let Ok(expressions) = expressions.parse2(tokens.clone()) {
+            for expr in &expressions {
+                self.visit_expr(expr);
+            }
+            return;
+        }
+        let block = TokenTree::Group(Group::new(Delimiter::Brace, tokens.clone()));
+        if let Ok(block) = syn::parse2::<syn::Block>(TokenStream::from(block)) {
+            self.visit_block(&block);
+            return;
+        }
+        // An opaque macro DSL still exposes literal Rust paths as tokens. Scan
+        // those conservatively; refuse binding declarations alongside GTS paths
+        // rather than guessing their expansion or overlooking an alias.
+        let tokens: Vec<_> = tokens.into_iter().collect();
+        for (index, token) in tokens.iter().enumerate() {
+            if !matches!(token, TokenTree::Ident(ident) if ident == "use") {
+                continue;
+            }
+            let parser = |input: syn::parse::ParseStream<'_>| {
+                let import = input.parse::<syn::ItemUse>()?;
+                let _: TokenStream = input.parse()?;
+                Ok(import)
+            };
+            if let Ok(import) = parser.parse2(tokens[index..].iter().cloned().collect()) {
+                let mut aliases = Vec::new();
+                let root = import
+                    .leading_colon
+                    .iter()
+                    .map(|_| "::".to_string())
+                    .collect::<Vec<_>>();
+                imports(&import.tree, &root, &mut aliases);
+                assert!(
+                    !aliases.iter().any(|(_, path)| {
+                        let path = self.resolve(path);
+                        path.starts_with(&["purrdf_gts".into()])
+                            || path.starts_with(&["purrdf".into(), "gts".into()])
+                    }),
+                    "{}: opaque macro body mixes GTS Writer paths with binding declarations; express this authoring code as a Rust function so the census can resolve its scope",
+                    self.file
+                );
+            }
+        }
+        let mut paths = Vec::new();
+        let mut cursor = 0;
+        while cursor < tokens.len() {
+            let parser = |input: syn::parse::ParseStream<'_>| {
+                let path = input.parse::<syn::ExprPath>()?;
+                let remainder = input.parse::<TokenStream>()?;
+                Ok((path, remainder))
+            };
+            let suffix = tokens[cursor..].iter().cloned().collect();
+            if let Ok((path, remainder)) = parser.parse2(suffix) {
+                cursor = tokens.len() - remainder.into_iter().count();
+                paths.push(expression_path(&path));
+            } else {
+                cursor += 1;
+            }
+        }
+        let binding = tokens.iter().any(|token| matches!(token, TokenTree::Ident(ident)
+            if matches!(ident.to_string().as_str(), "use" | "type" | "struct" | "enum" | "union" | "mod")));
+        let writer = paths
+            .iter()
+            .any(|path| (1..=path.len()).any(|len| is_writer(&self.resolve(&path[..len]))));
+        assert!(
+            !(binding && writer),
+            "{}: opaque macro body mixes GTS Writer paths with binding declarations; express this authoring code as a Rust function so the census can resolve its scope",
+            self.file
+        );
+        for path in paths {
+            self.record(&path);
+        }
+        for token in tokens {
+            if let TokenTree::Group(group) = token {
+                self.tokens(group.stream());
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for Census<'_> {
+    fn visit_file(&mut self, file: &'ast syn::File) {
+        self.declare(&file.items.iter().collect::<Vec<_>>(), false);
+        self.modules.insert(self.module.clone(), self.names.clone());
+        visit::visit_file(self, file);
+    }
+
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if test_module(module) {
+            return;
+        }
+        let Some((_, items)) = &module.content else {
+            return;
+        };
+        let saved = std::mem::take(&mut self.names);
+        self.module.push(module.ident.to_string());
+        self.declare(&items.iter().collect::<Vec<_>>(), false);
+        self.modules.insert(self.module.clone(), self.names.clone());
+        for item in items {
+            self.visit_item(item);
+        }
+        self.module.pop();
+        self.names = saved;
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        let saved = self.names.clone();
+        let items = block
+            .stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                syn::Stmt::Item(item) => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.declare(&items, true);
+        visit::visit_block(self, block);
+        self.names = saved;
+    }
+
+    fn visit_item_fn(&mut self, function: &'ast syn::ItemFn) {
+        let saved = self.names.clone();
+        let enclosing = self.enclosing.replace(function.sig.ident.to_string());
+        let constructor_body = std::mem::replace(&mut self.constructor_body, false);
+        self.shadow_generics(&function.sig.generics);
+        visit::visit_item_fn(self, function);
+        self.constructor_body = constructor_body;
+        self.enclosing = enclosing;
+        self.names = saved;
+    }
+
+    fn visit_item_impl(&mut self, implementation: &'ast syn::ItemImpl) {
+        let saved = self.names.clone();
+        self.shadow_generics(&implementation.generics);
+        let ty = match implementation.self_ty.as_ref() {
+            syn::Type::Path(ty) => self.resolve(&path_names(&ty.path)),
+            _ => Vec::new(),
+        };
+        let writer_impl = std::mem::replace(
+            &mut self.writer_impl,
+            is_writer(&ty) && implementation.trait_.is_none(),
+        );
+        self.names.insert("Self".into(), ty);
+        visit::visit_item_impl(self, implementation);
+        self.writer_impl = writer_impl;
+        self.names = saved;
+    }
+
+    fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
+        let saved = self.names.clone();
+        let name = function.sig.ident.to_string();
+        if self.writer_impl && matches!(function.vis, syn::Visibility::Public(_)) {
+            struct ReturnsSelf(bool);
+            impl<'ast> Visit<'ast> for ReturnsSelf {
+                fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+                    self.0 |= path.path.is_ident("Self");
+                    visit::visit_type_path(self, path);
+                }
+            }
+            let mut returns = ReturnsSelf(false);
+            returns.visit_return_type(&function.sig.output);
+            if returns.0 {
+                self.constructors.push(name.clone());
+            }
+        }
+        let constructor_body = std::mem::replace(
+            &mut self.constructor_body,
+            self.writer_impl && MINTING_CONSTRUCTORS.contains(&name.as_str()),
+        );
+        let enclosing = self.enclosing.replace(name);
+        self.shadow_generics(&function.sig.generics);
+        visit::visit_impl_item_fn(self, function);
+        self.enclosing = enclosing;
+        self.constructor_body = constructor_body;
+        self.names = saved;
+    }
+
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        let path = expression_path(expr);
+        self.record(&path);
+        visit::visit_expr_path(self, expr);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.tokens(mac.tokens.clone());
+    }
+}
+
+fn scan<'a>(relative: &'a str, source: &str) -> Census<'a> {
+    let parsed = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("{relative}: census cannot parse Rust source: {error}"));
+    let mut census = Census::new(relative);
+    census.visit_file(&parsed);
+    census
 }
 
 /// RULE 1 — the `Writer` constructor set is closed and classified.
 #[test]
 fn the_writer_constructor_set_is_exactly_the_pinned_minting_and_continuing_sets() {
-    let root = repo_root();
-    let source = std::fs::read_to_string(root.join("crates/gts/src/writer.rs")).expect("writer.rs");
-    let body = strip_line_comments(&source);
-    let body = strip_test_module(Path::new("crates/gts/src/writer.rs"), &body);
-
-    // A constructor is a `pub fn` whose return type names `Self`.
-    let mut found: Vec<String> = body
-        .lines()
-        .filter(|line| line.contains("pub fn ") && line.contains("Self"))
-        .filter_map(declared_fn)
-        .collect();
+    let relative = "crates/gts/src/writer.rs";
+    let source = std::fs::read_to_string(repo_root().join(relative)).expect("writer.rs");
+    let mut found = scan(relative, &source).constructors;
     found.sort();
     found.dedup();
-
-    let mut expected: Vec<String> = MINTING_CONSTRUCTORS
+    let mut expected: Vec<_> = MINTING_CONSTRUCTORS
         .iter()
-        .chain(CONTINUING_CONSTRUCTORS.iter())
+        .chain(&CONTINUING_CONSTRUCTORS)
         .map(|name| (*name).to_string())
         .collect();
     expected.sort();
-
     assert_eq!(
         found, expected,
-        "purrdf_gts::writer::Writer's constructor set changed. A new HEADER-MINTING \
-         constructor must also be classified in MINTING_CONSTRUCTORS and every one of \
-         its call sites added to AUTHORSHIP_SITES; a new CONTINUING constructor \
-         (mints no header) belongs in CONTINUING_CONSTRUCTORS."
+        "GTS Writer constructors must be explicitly classified as header-minting or segment-continuing"
     );
 }
 
@@ -315,229 +595,269 @@ fn the_writer_constructor_set_is_exactly_the_pinned_minting_and_continuing_sets(
 #[test]
 fn every_production_gts_authorship_site_is_in_the_census() {
     let root = repo_root();
-    let mut observed: Vec<(String, String)> = Vec::new();
+    let mut observed = Vec::new();
     for path in production_sources(&root) {
         let relative = path
             .strip_prefix(&root)
-            .expect("scanned paths live under the root")
+            .expect("source below root")
             .to_string_lossy()
             .replace('\\', "/");
         let source = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
-        if !MINTING_CONSTRUCTORS
-            .iter()
-            .any(|ctor| source.contains(&format!("Writer::{ctor}(")))
-        {
-            continue;
-        }
-        let body = strip_line_comments(&source);
-        let body = strip_test_module(&path, &body);
-        for enclosing in sites_in(&body) {
-            observed.push((relative.clone(), enclosing));
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        for function in scan(&relative, &source).sites {
+            observed.push((relative.clone(), function));
         }
     }
     observed.sort();
     observed.dedup();
-
-    let mut expected: Vec<(String, String)> = AUTHORSHIP_SITES
+    let mut expected: Vec<_> = AUTHORSHIP_SITES
         .iter()
         .map(|(file, function)| ((*file).to_string(), (*function).to_string()))
         .collect();
     expected.sort();
-    let mut deduped = expected.clone();
-    deduped.dedup();
+    expected.dedup();
     assert_eq!(
-        deduped.len(),
+        expected.len(),
         AUTHORSHIP_SITES.len(),
-        "AUTHORSHIP_SITES carries a duplicate row"
+        "duplicate census row"
     );
-
     assert_eq!(
         observed, expected,
-        "the GTS-authorship census changed. Every function that mints a GTS segment \
-         header must state its in-band dictionaries and its declared zstd level, or it \
-         silently emits an undicted pack at the writer's default level. Add the new row \
-         to AUTHORSHIP_SITES only after checking that."
+        "the GTS-authorship census changed; every new author must state its dictionaries and declared zstd level before its row is admitted"
     );
 }
 
-/// The three general-purpose PUBLIC authoring facades are present under their
-/// pinned names — a rename or removal must be a conscious edit here.
 #[test]
 fn the_public_authoring_facades_are_present_and_named() {
-    let root = repo_root();
-    let census: Vec<(&str, &str)> = AUTHORSHIP_SITES.to_vec();
-    assert!(
-        census.contains(&("crates/rdf/src/gts_write.rs", "to_writer")),
-        "gts_write::to_writer must be in the census"
-    );
-    assert!(
-        census.contains(&("crates/gts/src/compact.rs", "compact_streamable")),
-        "compact::compact_streamable must be in the census"
-    );
-    // `to_gts` is a public facade that authors a whole GTS file but mints its
-    // header THROUGH `to_writer`, so it is not a direct census site. Pin that
-    // delegation, or the census would silently lose a public entry point if
-    // `to_gts` ever grew its own `Writer`.
-    let gts_write =
-        std::fs::read_to_string(root.join("crates/rdf/src/gts_write.rs")).expect("gts_write.rs");
-    let body = strip_line_comments(&gts_write);
-    let body = strip_test_module(Path::new("crates/rdf/src/gts_write.rs"), &body);
-    assert!(
-        body.contains("pub fn to_gts("),
-        "gts_write::to_gts must remain a public authoring facade"
-    );
-    let to_gts = body.split("pub fn to_gts(").nth(1).expect("to_gts body");
-    assert!(
-        to_gts.contains("to_writer("),
-        "to_gts must author THROUGH to_writer; if it mints its own Writer it becomes a \
-         census site and must be added to AUTHORSHIP_SITES"
-    );
+    assert!(AUTHORSHIP_SITES.contains(&("crates/rdf/src/gts_write.rs", "to_writer")));
+    assert!(AUTHORSHIP_SITES.contains(&("crates/gts/src/compact.rs", "compact_streamable")));
+    let source = std::fs::read_to_string(repo_root().join("crates/rdf/src/gts_write.rs"))
+        .expect("gts_write.rs");
+    let parsed = syn::parse_file(&source).expect("valid Rust");
+    let function = parsed
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(function)
+                if function.sig.ident == "to_gts"
+                    && matches!(function.vis, syn::Visibility::Public(_)) =>
+            {
+                Some(function)
+            }
+            _ => None,
+        })
+        .expect("to_gts remains a public facade");
+    struct Delegates(bool);
+    impl<'ast> Visit<'ast> for Delegates {
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            self.0 |= matches!(call.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("to_writer"));
+            visit::visit_expr_call(self, call);
+        }
+    }
+    let mut delegates = Delegates(false);
+    delegates.visit_block(&function.block);
+    assert!(delegates.0, "to_gts must author through to_writer");
 }
 
 mod detector_self_tests {
     use super::*;
 
-    const SYNTHETIC: &str = r#"
-/// A doc example: let w = Writer::new("doc");
-// let w = Writer::with_options("commented", opts);
-pub fn authors_a_pack() -> Vec<u8> {
-    let mut w = Writer::new("synthetic");
-    w.into_bytes()
-}
-
-fn helper() -> usize {
-    0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_test_may_author_freely() {
-        let _ = Writer::new("test-only");
-        let _ = Writer::with_options("test-only", Default::default());
-    }
-}
-"#;
-
-    /// The detector FINDS a real production call site, attributed to its fn.
-    #[test]
-    fn a_production_call_site_is_flagged() {
-        let body = strip_line_comments(SYNTHETIC);
-        let body = strip_test_module(Path::new("synthetic.rs"), &body);
-        assert_eq!(sites_in(&body), vec!["authors_a_pack".to_string()]);
+    fn sites(source: &str) -> Vec<String> {
+        scan("crates/rdf/src/synthetic.rs", source).sites
     }
 
-    /// …and a commented-out one is NOT — otherwise the doc examples in
-    /// `lib.rs`/`reader.rs` would pollute the census.
     #[test]
-    fn commented_out_call_sites_are_not_flagged() {
-        let body = strip_line_comments("// let w = Writer::new(\"x\");\n/// Writer::new(\"y\")\n");
-        assert_eq!(sites_in(&body), [] as [String; 0]);
-    }
-
-    /// …and neither is one inside the trailing `#[cfg(test)]` module.
-    #[test]
-    fn test_module_call_sites_are_not_flagged() {
-        let body = strip_line_comments(SYNTHETIC);
-        let full = sites_in(&body);
+    fn unrelated_local_and_imported_writers_are_not_gts_authors() {
         assert_eq!(
-            full.len(),
-            3,
-            "before excluding the test module the scanner sees all three sites"
+            sites(
+                r#"
+            struct Writer<'a>(&'a str);
+            impl<'a> Writer<'a> { fn new(s: &'a str) -> Self { Self(s) } }
+            fn project() { Writer::new("json"); OkfWriter::new(); other::Writer::new(); }
+            mod nested { use other::Writer; fn unrelated() { Writer::new(); } }
+        "#
+            ),
+            Vec::<String>::new()
         );
-        let trimmed = strip_test_module(Path::new("synthetic.rs"), &body);
-        assert_eq!(sites_in(&trimmed).len(), 1);
-    }
-
-    /// The scanner refuses to run blind: an unclosed test module is a loud
-    /// failure, never a silently-skipped rest-of-file.
-    #[test]
-    #[should_panic(expected = "is never closed")]
-    fn an_unclosed_test_module_is_a_loud_failure() {
-        let body = strip_line_comments("#[cfg(test)]\nmod tests {\n    fn t() {}\n");
-        let _ = strip_test_module(Path::new("synthetic.rs"), &body);
-    }
-
-    /// A test module is excluded, and production code BELOW it is still scanned.
-    #[test]
-    fn code_after_a_test_module_is_still_scanned() {
-        let body = strip_line_comments(
-            "#[cfg(test)]\nmod tests {\n    fn t() { Writer::new(\"t\"); }\n}\n\n\
-             pub fn later() { Writer::new(\"real\"); }\n",
-        );
-        let trimmed = strip_test_module(Path::new("synthetic.rs"), &body);
-        assert_eq!(sites_in(&trimmed), vec!["later".to_string()]);
     }
 
     #[test]
-    fn a_trailing_comment_on_the_module_closer_is_accepted() {
-        let body = strip_line_comments(
-            "#[cfg(test)]\nmod tests {\n    fn t() { Writer::new(\"t\"); }\n} // tests\n\n\
-             pub fn later() { Writer::new(\"real\"); }\n",
-        );
-        let trimmed = strip_test_module(Path::new("synthetic.rs"), &body);
-        assert_eq!(sites_in(&trimmed), vec!["later".to_string()]);
-    }
-
-    /// `#[cfg(test)]` on a NON-module item is not a module and is not stripped —
-    /// a test-only helper that mints a header is still a call site.
-    #[test]
-    fn a_cfg_test_attribute_on_a_plain_item_is_not_treated_as_a_module() {
-        let body =
-            strip_line_comments("#[cfg(test)]\npub fn helper() { Writer::new(\"helper\"); }\n");
-        let trimmed = strip_test_module(Path::new("synthetic.rs"), &body);
-        assert_eq!(sites_in(&trimmed), vec!["helper".to_string()]);
-    }
-
-    /// A `//` inside a string literal is not a comment — truncating there would
-    /// silently swallow whatever followed on the line.
-    #[test]
-    fn a_double_slash_inside_a_string_is_not_a_comment() {
-        let line = r#"    let iri = "https://example.org/cat"; // trailing"#;
+    fn qualified_renamed_grouped_module_and_type_alias_paths_are_authors() {
         assert_eq!(
-            strip_line_comments(line).trim_end(),
-            r#"    let iri = "https://example.org/cat";"#
-        );
-        assert_eq!(
-            sites_in(&strip_line_comments(
-                r#"fn f() { let s = "a // b"; Writer::new("real"); }"#
-            )),
-            vec!["f".to_string()],
-            "a call site after a string containing // must still be seen"
+            sites(
+                r#"
+            use purrdf_gts as gts;
+            use gts::writer::{self as writer_module, Writer as PackWriter};
+            type Alias = PackWriter;
+            fn qualified() { purrdf_gts::writer::Writer::new("x"); }
+            fn renamed() { PackWriter :: with_options ("x", options); }
+            fn module_alias() { writer_module::Writer::deterministic("x"); }
+            fn type_alias() { Alias::with_layout("x", layout); }
+            fn split_line() { PackWriter
+                :: new
+                ("x"); }
+            fn function_value() { let make = Alias::new; make("x"); }
+            fn qualified_self() { <Alias>::new("x"); }
+            fn umbrella() { purrdf::gts::writer::Writer::new("x"); }
+        "#
+            ),
+            [
+                "qualified",
+                "renamed",
+                "module_alias",
+                "type_alias",
+                "split_line",
+                "function_value",
+                "qualified_self",
+                "umbrella"
+            ]
         );
     }
 
-    /// A DIFFERENT type whose name ends in `Writer` is not this `Writer` — the
-    /// OKF codec's `OkfWriter::new` must never enter the GTS census.
     #[test]
-    fn a_type_whose_name_merely_ends_in_writer_is_not_flagged() {
-        assert!(!mints_a_header(
-            "    let mut writer = OkfWriter::new(config);"
-        ));
-        assert!(!mints_a_header(
-            "    let w = EmbeddingStreamWriter::new(cursor);"
-        ));
-        assert!(mints_a_header("    let mut w = Writer::new(\"files\");"));
-        assert!(mints_a_header(
-            "    purrdf_gts::writer::Writer::with_options(profile, opts)"
-        ));
+    fn absolute_external_paths_bypass_local_module_shadowing() {
+        assert_eq!(
+            sites(
+                r#"
+            mod purrdf_gts { pub mod writer { pub struct Writer; } }
+            fn unrelated() { purrdf_gts::writer::Writer::new("local"); }
+            fn absolute() { ::purrdf_gts::writer::Writer::new("real"); }
+            use ::purrdf_gts::writer::Writer as Pack;
+            fn imported() { Pack::new("real"); }
+        "#
+            ),
+            ["absolute", "imported"]
+        );
     }
 
-    /// `declared_fn` reads the item name, not an arbitrary `fn` substring.
     #[test]
-    fn declared_fn_reads_the_item_name() {
+    fn nested_scopes_shadow_and_restore_imported_names() {
         assert_eq!(
-            declared_fn("pub fn to_writer(").as_deref(),
-            Some("to_writer")
+            sites(
+                r#"
+            use purrdf_gts::writer::Writer;
+            fn before() { Writer::new("x"); }
+            fn nested() {
+                { Writer::new("local"); struct Writer; }
+                { type Writer = Other; Writer::new("local"); }
+                Writer::new("real");
+                fn helper() { struct Writer; Writer::new("local"); }
+            }
+            fn generic<Writer>() { Writer::new("generic"); }
+            fn after() { Writer::new("x"); }
+            mod child {
+                use super::Writer as ParentWriter;
+                struct Writer;
+                fn real() { ParentWriter::new("x"); }
+                fn unrelated() { Writer::new("x"); }
+            }
+        "#
+            ),
+            ["before", "nested", "after", "real"]
         );
+    }
+
+    #[test]
+    fn cfg_test_modules_are_excluded_without_hiding_later_code() {
         assert_eq!(
-            declared_fn("    fn writer(&self) -> X {").as_deref(),
-            Some("writer")
+            sites(
+                r#"
+            use purrdf_gts::writer::Writer;
+            #[cfg(test)] #[allow(dead_code)] mod checks {
+                use super::*;
+                fn excluded() { Writer::new("test"); }
+                mod nested { fn excluded() { purrdf_gts::writer::Writer::new("test"); } }
+            }
+            #[cfg(test)] fn visible_helper() { Writer::new("helper"); }
+            fn later() { Writer::new("real"); }
+        "#
+            ),
+            ["visible_helper", "later"]
         );
-        assert_eq!(declared_fn("let confn = 3;"), None);
-        assert_eq!(declared_fn("    let x = 1;"), None);
+    }
+
+    #[test]
+    fn comments_and_literals_cannot_mint_headers() {
+        assert_eq!(
+            sites(
+                r##"
+            use purrdf_gts::writer::Writer;
+            // Writer::new("comment");
+            /* Writer::new("block"); /* Writer::new("nested"); */ */
+            /// Writer::new("doc");
+            fn f() {
+                let s = "Writer::new(\"string\") //";
+                let s = r#"Writer::with_options("raw", options)"#;
+                let s = b"Writer::new(\"bytes\")";
+                let s = '\'';
+                Writer::new("real");
+            }
+        "##
+            ),
+            ["f"]
+        );
+    }
+
+    #[test]
+    fn macro_arguments_and_opaque_token_paths_are_scanned() {
+        assert_eq!(
+            sites(
+                r#"
+            use purrdf_gts::writer::Writer as Pack;
+            fn expressions() { emit!("header", Pack::new("x")); }
+            fn block() { build! { struct Pack; Pack::new("local"); } }
+            fn opaque() { build! { header => Pack::new("x") } }
+            fn generic_path() { build! { header => Pack::new::<Profile>("x") } }
+            fn absolute_path() { build! { header => ::purrdf_gts::writer::Writer::new("x") } }
+            fn qualified_self() { build! { header => <Pack>::new("x") } }
+            fn literal() { build! { header => "Pack::new(x)" } }
+            macro_rules! make { () => { purrdf_gts::writer::Writer::new("x") }; }
+        "#
+            ),
+            [
+                "expressions",
+                "opaque",
+                "generic_path",
+                "absolute_path",
+                "qualified_self",
+                "<no enclosing fn>"
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "opaque macro body mixes GTS Writer paths with binding declarations")]
+    fn opaque_macro_bindings_cannot_silently_hide_authors() {
+        sites(
+            r#"fn f() { build! { import => use purrdf_gts::writer::Writer as Pack; Pack::new("x") } }"#,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "opaque macro body mixes GTS Writer paths with binding declarations")]
+    fn opaque_grouped_imports_cannot_hide_renamed_authors() {
+        sites(
+            r#"fn f() { build! { import => use purrdf_gts::{writer::Writer as Pack}; Pack::new("x") } }"#,
+        );
+    }
+
+    #[test]
+    fn gts_crate_paths_and_glob_imports_resolve() {
+        let source = r#"
+            use crate::writer::*;
+            fn glob() { Writer::new("x"); }
+            fn qualified() { crate::writer::Writer::new("x"); }
+            mod nested { use super::*; fn inherited() { Writer::new("x"); } }
+        "#;
+        assert_eq!(
+            scan("crates/gts/src/files.rs", source).sites,
+            ["glob", "qualified", "inherited"]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "census cannot parse Rust source")]
+    fn malformed_source_fails_loudly() {
+        sites("#[cfg(test)] mod tests {");
     }
 }

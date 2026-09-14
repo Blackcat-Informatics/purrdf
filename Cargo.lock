@@ -1550,6 +1550,7 @@ dependencies = [
  "memchr",
  "oxilangtag",
  "pretty_assertions",
+ "proc-macro2",
  "proptest",
  "purrdf-cdt",
  "purrdf-core",
@@ -1566,6 +1567,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha2",
+ "syn 2.0.118",
 ]
 
 [[package]]

@@ -343,7 +343,6 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf/src/native_codecs/mod.rs", "EPIC"),
         ("crates/rdf/src/native_codecs/mod.rs", "Task 1"),
         ("crates/rdf/src/turtle_normalize.rs", "Task 5"),
-        ("crates/rdf/tests/gts_authorship_census.rs", "this branch"),
         ("crates/rdf/tests/gts_certify.rs", "Task 5"),
         ("crates/rdf/tests/gts_certify.rs", "Task 6"),
         ("crates/rdf/tests/gts_certify.rs", "the plan's"),
