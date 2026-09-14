@@ -223,3 +223,13 @@ fn the_integer_logarithm_agrees_with_its_hand_values_on_this_target() {
         "2.302585092994"
     );
 }
+
+#[path = "support/bm25f_reference.rs"]
+mod bm25f_reference;
+
+/// All fielded scoring vectors, including maximum bounds, agree on this target.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+fn the_independent_fielded_reference_is_reproduced_on_this_target() {
+    bm25f_reference::verify_reference_corpus();
+}
