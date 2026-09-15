@@ -443,7 +443,8 @@ fn bench_reader_scaling(c: &mut Criterion) {
 fn bench_reader_decryption(c: &mut Criterion) {
     use purrdf_gts::cose::{decrypt0, encrypt0};
 
-    let key = [47; 32];
+    let mut key = [0; 32];
+    getrandom::fill(&mut key).expect("benchmark encryption randomness");
     let resolve = |kid: &str| (kid == "reader-benchmark").then_some(key);
     let mut group = c.benchmark_group("gts_reader_decryption");
     group.sample_size(10);
