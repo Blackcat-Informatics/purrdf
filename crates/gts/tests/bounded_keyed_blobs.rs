@@ -6,7 +6,8 @@
 //! Streaming blob limits remain effective when a content key is supplied.
 
 use purrdf_gts::reader::{
-    BlobPayload, ReadOptions, StreamingReadResult, StreamingSink, read_to_sink_with_options,
+    BlobPayload, ReadOptions, StreamingReadResult, StreamingSink, read_to_sink_from_reader,
+    read_to_sink_with_options,
 };
 use purrdf_gts::writer::{Encrypt0Options, FrameOptions, Writer};
 
@@ -201,4 +202,98 @@ fn bounded_decryption_preserves_missing_and_wrong_key_failures() {
             result.diagnostics
         );
     }
+}
+
+struct ShortReads<'a> {
+    remaining: &'a [u8],
+    step: usize,
+}
+
+impl std::io::Read for ShortReads<'_> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        const SIZES: [usize; 7] = [1, 17, 2, 4093, 3, 257, 5];
+        let length = output
+            .len()
+            .min(self.remaining.len())
+            .min(SIZES[self.step % SIZES.len()]);
+        self.step += 1;
+        output[..length].copy_from_slice(&self.remaining[..length]);
+        self.remaining = &self.remaining[length..];
+        Ok(length)
+    }
+}
+
+fn encoded_payload_len(container: &[u8]) -> usize {
+    let (items, torn) = purrdf_gts::wire::iter_items(container);
+    assert!(torn.is_none());
+    items
+        .iter()
+        .find_map(|(_, value)| {
+            value
+                .as_map()
+                .and_then(|map| purrdf_gts::wire::map_get(map, "d"))
+                .and_then(ciborium::Value::as_bytes)
+                .map(Vec::len)
+        })
+        .expect("authored blob must contain encoded bytes")
+}
+
+#[test]
+fn short_reads_preserve_exact_encoded_and_decoded_limit_boundaries() {
+    let key = fresh_bytes();
+    for length in [0, 1, 15, 16, 17, 4095, 4096, 4097, 65536] {
+        let plaintext: Vec<u8> = (0..=255).cycle().take(length).collect();
+        let container = blob(&plaintext, &[], Some(key));
+        let encoded = encoded_payload_len(&container);
+        for (encoded_limit, decoded_limit, accepted) in [
+            (encoded, length, true),
+            (encoded + 1, length + 1, true),
+            (encoded - 1, length, false),
+            (encoded, length.saturating_sub(1), length == 0),
+        ] {
+            let mut sink = Sink {
+                encoded_limit: Some(encoded_limit),
+                decoded_limit: Some(decoded_limit),
+                ..Sink::default()
+            };
+            let resolve = |kid: &str| (kid == "recipient").then_some(key);
+            let result = read_to_sink_from_reader(
+                ShortReads {
+                    remaining: &container,
+                    step: 0,
+                },
+                ReadOptions::new(true, None).with_content_key(&resolve),
+                &mut sink,
+            );
+            if accepted {
+                assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+                assert_eq!(sink.payloads, vec![plaintext.clone()]);
+            } else {
+                assert_limit(&result, &sink, "exceeds");
+            }
+        }
+    }
+}
+
+#[test]
+fn short_read_authentication_failure_never_emits_plaintext() {
+    let key = fresh_bytes();
+    let container = blob(&vec![0; 65536], &[], Some(key));
+    let resolve = |_: &str| Some(wrong_key(key));
+    let mut sink = Sink::default();
+    let result = read_to_sink_from_reader(
+        ShortReads {
+            remaining: &container,
+            step: 0,
+        },
+        ReadOptions::new(true, None).with_content_key(&resolve),
+        &mut sink,
+    );
+    assert_eq!(sink.payloads, Vec::<Vec<u8>>::new());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "MissingKey")
+    );
 }
