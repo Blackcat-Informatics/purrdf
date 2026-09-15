@@ -394,7 +394,7 @@ fn many_blob_container(count: usize, metadata: bool) -> Vec<u8> {
 fn bench_reader_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("gts_reader_scaling");
     group.sample_size(10);
-    for count in [256, 1024, 4096, 16384] {
+    for count in [1, 4, 16, 256, 1024, 4096, 16384] {
         group.throughput(Throughput::Elements(count as u64));
         for metadata in [false, true] {
             let data = many_blob_container(count, metadata);
@@ -444,6 +444,44 @@ fn bench_reader_scaling(c: &mut Criterion) {
                 },
             );
         }
+    }
+    group.finish();
+}
+
+fn bench_reader_union(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gts_reader_union");
+    group.sample_size(10);
+    for per_segment in [256, 4096] {
+        let count = per_segment * 4;
+        let mut data = Vec::new();
+        for segment in 0..4 {
+            let mut writer = Writer::new("generic");
+            for index in 0..per_segment {
+                let mut payload = deterministic_payload(256);
+                let identity = (segment * per_segment + index) as u64;
+                payload[..8].copy_from_slice(&identity.to_le_bytes());
+                writer.add_blob_owned(payload, Some("application/octet-stream"), None);
+            }
+            data.extend(writer.into_bytes());
+        }
+        let graph = read(&data, true, None);
+        assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+        assert_eq!(
+            graph.blobs.len(),
+            count,
+            "all segment blobs must be distinct"
+        );
+        assert_eq!(graph.blob_meta.len(), count, "every blob retains metadata");
+        assert_eq!(graph.segment_heads.len(), 4, "all segments must be folded");
+        drop(graph);
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(
+            BenchmarkId::new("metadata_4_segments", count),
+            &data,
+            |bencher, data| {
+                bencher.iter(|| black_box(read(black_box(data), true, None)));
+            },
+        );
     }
     group.finish();
 }
@@ -576,6 +614,7 @@ criterion_group!(
     bench_verify,
     bench_dict_compaction,
     bench_reader_scaling,
+    bench_reader_union,
     bench_reader_decryption
 );
 criterion_main!(benches);
