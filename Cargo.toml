@@ -13,6 +13,7 @@ members = [
     "crates/geo",
     "crates/gts",
     "crates/iri",
+    "crates/json",
     "crates/markdown",
     "crates/purrdf",
     "crates/rdf",
@@ -65,6 +66,7 @@ purrdf-events = { path = "crates/rdf-events", version = "1.1.0" }
 purrdf-geo = { path = "crates/geo", version = "1.1.0" }
 purrdf-gts = { path = "crates/gts", version = "1.1.0" }
 purrdf-iri = { path = "crates/iri", version = "1.1.0" }
+purrdf-json = { path = "crates/json", version = "1.1.0" }
 purrdf-markdown = { path = "crates/markdown", version = "1.1.0" }
 purrdf-rdf = { path = "crates/rdf", version = "1.1.0" }
 purrdf-shapes = { path = "crates/shapes", version = "1.1.0" }
@@ -78,6 +80,9 @@ purrdf-validate = { path = "crates/validate", version = "1.1.0" }
 purrdf-xsd = { path = "crates/xsd", version = "1.1.0" }
 
 # --- external crates ---
+# Test-only structural source census; both already occur in the resolved graph.
+proc-macro2 = "1"
+syn = { version = "2", features = ["full", "visit"] }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 ahash = { version = "0.8", default-features = false }
 # rayon feature: multi-threaded hashing for large inputs (rayon executes

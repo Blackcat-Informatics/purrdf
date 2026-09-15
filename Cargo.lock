@@ -1323,6 +1323,7 @@ dependencies = [
  "purrdf-geo",
  "purrdf-gts",
  "purrdf-iri",
+ "purrdf-json",
  "purrdf-markdown",
  "purrdf-rdf",
  "purrdf-shapes",
@@ -1499,6 +1500,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-json"
+version = "1.1.0"
+dependencies = [
+ "criterion",
+ "purrdf-core",
+ "purrdf-rdf",
+ "purrdf-sparql-eval",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "purrdf-markdown"
 version = "1.1.0"
 dependencies = [
@@ -1539,6 +1551,7 @@ dependencies = [
  "memchr",
  "oxilangtag",
  "pretty_assertions",
+ "proc-macro2",
  "proptest",
  "purrdf-cdt",
  "purrdf-core",
@@ -1555,6 +1568,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha2",
+ "syn 2.0.118",
 ]
 
 [[package]]

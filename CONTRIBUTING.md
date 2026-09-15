@@ -36,6 +36,12 @@ corpora that gate all of it. Issues and pull requests are welcome.
 
 ## Development
 
+Install Node.js and ensure `node` is on `PATH` before running the native Rust
+tests. The pattern-emission conformance oracle executes Unicode ECMAScript in
+Node; `make check`, `make test`, and `cargo test --workspace` require it. CI
+installs Node.js 24 explicitly. The oracle is mandatory and does not skip when
+Node is absent.
+
 ```bash
 make doctor     # what this machine actually enforces (run when a gate prints SKIP)
 make metadata   # regenerate + verify generated artifacts (loss matrices, queries)

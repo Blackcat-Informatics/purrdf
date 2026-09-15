@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-json"
+description = "Lossless ordered JSON to RDF 1.2: queryable occurrences over a verified verbatim byte cover"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+documentation = "https://docs.rs/purrdf-json"
+keywords = ["json", "rdf", "linked-data", "lossless", "ordered"]
+categories = ["encoding", "parser-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+purrdf-core.workspace = true
+
+[dev-dependencies]
+purrdf-rdf.workspace = true
+purrdf-sparql-eval.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test.workspace = true
+
+[[bench]]
+name = "ordered_json"
+harness = false
+
+[[bench]]
+name = "ordered_json_alloc"
+harness = false
+
+[[bench]]
+name = "ordered_json_corpus"
+harness = false

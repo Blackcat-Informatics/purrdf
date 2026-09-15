@@ -13,7 +13,7 @@ endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -45,7 +45,7 @@ metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 fmt: ## Auto-format the workspace.
 	cargo fmt --all
 
-check: ## The full local gate: fmt, clippy, build, tests, hygiene.
+check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --locked -- -D warnings
 	cargo check --workspace --lib --tests --locked
@@ -158,7 +158,13 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	git push --atomic origin "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"
 	@echo "OK: pushed rust-v$(VERSION), py-v$(VERSION), npm-v$(VERSION)"
 
-test: ## Run the workspace test suite.
+node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance oracle.
+	@command -v node >/dev/null 2>&1 && node --version >/dev/null 2>&1 || { \
+		echo "ERROR: Node.js is required for the native Unicode ECMAScript conformance oracle; install Node.js and put node on PATH." >&2; \
+		exit 1; \
+	}
+
+test: node-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
@@ -176,7 +182,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 22 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 23 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -216,7 +222,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
@@ -289,7 +295,7 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
-			-p purrdf-rdf -p purrdf-markdown -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
+			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
 			-p purrdf-geo -p purrdf-text \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
@@ -338,7 +344,7 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 		&& echo "on PATH — \`make wasm-test\` runs for real" \
 		|| echo "absent — \`make wasm-test\` SKIPs"
 	@printf 'node:                                '
-	@command -v node >/dev/null 2>&1 && node --version || echo "absent — the wasm test harness SKIPs"
+	@command -v node >/dev/null 2>&1 && node --version || echo "absent — make check and make test FAIL; the wasm test harness SKIPs"
 	@printf 'cargo build directory:               '
 	@echo "$(CARGO_TARGET_DIR)"
 	@echo
@@ -357,7 +363,8 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# in the other direction, and the reason its arithmetic is exact i128 fixed point
 	@# with a fixed-iteration integer `ln` instead of a libm call. So this lane
 	@# compiles the tagged tests to wasm32 and runs them in Node, against the same
-	@# pinned expectations the native `cargo test` run asserts.
+	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
+	@# crosses the same production RDF codecs against a pinned byte corpus.
 	@#
 	@# wasm-bindgen-test-runner ships in the same pinned wasm-bindgen-cli archive the
 	@# wasm lane already installs, so there is no second version to keep in step.
@@ -380,7 +387,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-sparql-eval --test knn_wasm_determinism \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-text --test wasm_determinism; \
+			-p purrdf-text --test wasm_determinism \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-json --test roundtrip; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
