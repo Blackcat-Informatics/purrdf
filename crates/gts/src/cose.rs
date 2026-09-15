@@ -11,9 +11,15 @@ use aes_gcm::aead::{Aead, AeadInPlace, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use ciborium::value::{Integer, Value};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use serde::{Serialize, Serializer};
+use std::borrow::Cow;
 
 use crate::model;
 use crate::wire;
+
+mod borrowed;
+#[cfg(test)]
+mod tests;
 
 const ALG: i64 = 1;
 const KID: i64 = 4;
@@ -171,11 +177,20 @@ fn encrypt0_protected() -> Vec<u8> {
 
 /// The COSE `Enc_structure` bound as AAD (RFC 9052 §5.3): no external AAD.
 fn enc_structure(protected: &[u8]) -> Vec<u8> {
-    wire::encode(&Value::Array(vec![
-        Value::Text("Encrypt0".to_string()),
-        Value::Bytes(protected.to_vec()),
-        Value::Bytes(Vec::new()),
-    ]))
+    struct Bytes<'a>(&'a [u8]);
+
+    impl Serialize for Bytes<'_> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_bytes(self.0)
+        }
+    }
+
+    // One array byte, nine context bytes, at most nine byte-string header
+    // bytes, and one empty byte string. No owned CBOR tree or growth copies.
+    let mut aad = Vec::with_capacity(protected.len().saturating_add(20));
+    ciborium::ser::into_writer(&("Encrypt0", Bytes(protected), Bytes(&[])), &mut aad)
+        .expect("CBOR encoding to a Vec cannot fail");
+    aad
 }
 
 /// Seal `plaintext` as a COSE_Encrypt0 with an explicit 12-byte `iv` (§9.3).
@@ -224,15 +239,20 @@ pub fn encrypt0(plaintext: &[u8], kid: &str, key: &[u8; 32], iv: &[u8; 12]) -> V
 }
 
 /// The cleartext fields of a parsed COSE_Encrypt0.
-struct Encrypt0Parts {
-    kid: String,
-    protected: Vec<u8>,
-    iv: Vec<u8>,
-    ciphertext: Vec<u8>,
+struct Encrypt0Parts<'a> {
+    kid: Cow<'a, str>,
+    protected: Cow<'a, [u8]>,
+    iv: Cow<'a, [u8]>,
+    ciphertext: Cow<'a, [u8]>,
 }
 
 /// Parse a COSE_Encrypt0 into its cleartext fields, or `None` if malformed.
-fn parse_encrypt0(blob: &[u8]) -> Option<Encrypt0Parts> {
+fn parse_encrypt0(blob: &[u8]) -> Option<Encrypt0Parts<'_>> {
+    borrowed::parse(blob).or_else(|| parse_encrypt0_owned(blob))
+}
+
+/// Preserve the complete decoder's accepted forms outside the borrowed view.
+fn parse_encrypt0_owned(blob: &[u8]) -> Option<Encrypt0Parts<'_>> {
     let value: Value = ciborium::de::from_reader(blob).ok()?;
     let body = match value {
         Value::Tag(_, inner) => *inner,
@@ -262,16 +282,16 @@ fn parse_encrypt0(blob: &[u8]) -> Option<Encrypt0Parts> {
         _ => None,
     })?;
     Some(Encrypt0Parts {
-        kid,
-        protected,
-        iv,
-        ciphertext,
+        kid: kid.into(),
+        protected: protected.into(),
+        iv: iv.into(),
+        ciphertext: ciphertext.into(),
     })
 }
 
 /// The recipient `kid` of a COSE_Encrypt0 (for key lookup), or `None`.
 pub fn recipient_kid(blob: &[u8]) -> Option<String> {
-    parse_encrypt0(blob).map(|p| p.kid)
+    parse_encrypt0(blob).map(|p| p.kid.into_owned())
 }
 
 /// Open a COSE_Encrypt0 using a content key resolved by `kid` (§9.3).
@@ -295,24 +315,34 @@ pub fn decrypt0(
 }
 
 /// Internal bounded decryption failures, without extending the public error enum.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum BoundedDecrypt0Error {
     Crypto(Encrypt0Error),
     Limit,
 }
 
-/// Decrypt in the parsed ciphertext buffer after checking the exact plaintext size.
+/// Decrypt after checking the exact plaintext size.
 ///
-/// COSE parsing consumes encoded input storage. The AES-GCM tag is excluded from
-/// the decoded limit, and no separate plaintext buffer is allocated.
+/// The usual definite envelope borrows its fields from encoded input and copies
+/// only the plaintext-sized ciphertext prefix. Other CBOR forms reuse the full
+/// decoder's buffer. The AES-GCM tag is excluded from the decoded limit.
 pub(crate) fn decrypt0_bounded(
     blob: &[u8],
     resolve: impl Fn(&str) -> Option<[u8; 32]>,
     limit: usize,
 ) -> Result<Vec<u8>, BoundedDecrypt0Error> {
+    let parts =
+        parse_encrypt0(blob).ok_or(BoundedDecrypt0Error::Crypto(Encrypt0Error::Malformed))?;
+    decrypt_parts(parts, resolve, limit)
+}
+
+fn decrypt_parts(
+    parts: Encrypt0Parts<'_>,
+    resolve: impl Fn(&str) -> Option<[u8; 32]>,
+    limit: usize,
+) -> Result<Vec<u8>, BoundedDecrypt0Error> {
     use BoundedDecrypt0Error::{Crypto, Limit};
 
-    let mut parts = parse_encrypt0(blob).ok_or(Crypto(Encrypt0Error::Malformed))?;
     let key = resolve(&parts.kid).ok_or(Crypto(Encrypt0Error::MissingKey))?;
     if parts.iv.len() != 12 {
         return Err(Crypto(Encrypt0Error::Malformed));
@@ -326,16 +356,17 @@ pub(crate) fn decrypt0_bounded(
         return Err(Limit);
     }
     let tag = Tag::clone_from_slice(&parts.ciphertext[plaintext_len..]);
-    parts.ciphertext.truncate(plaintext_len);
+    let mut plaintext = match parts.ciphertext {
+        Cow::Borrowed(bytes) => bytes[..plaintext_len].to_vec(),
+        Cow::Owned(mut bytes) => {
+            bytes.truncate(plaintext_len);
+            bytes
+        }
+    };
     let aad = enc_structure(&parts.protected);
     let cipher = Aes256Gcm::new((&key).into());
     cipher
-        .decrypt_in_place_detached(
-            Nonce::from_slice(&parts.iv),
-            &aad,
-            &mut parts.ciphertext,
-            &tag,
-        )
+        .decrypt_in_place_detached(Nonce::from_slice(&parts.iv), &aad, &mut plaintext, &tag)
         .map_err(|_| Crypto(Encrypt0Error::AuthFailed))?;
-    Ok(parts.ciphertext)
+    Ok(plaintext)
 }
