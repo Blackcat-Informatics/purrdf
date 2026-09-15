@@ -20,9 +20,10 @@ use crate::codec::{
     Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded,
 };
 use crate::model::{
-    AnnotationRow, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow, Signature,
-    StreamableInfo, Suppression, Term, TermKind, Triple3,
+    AnnotationRow, BlobEntry, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow,
+    Signature, StreamableInfo, Suppression, Term, TermKind, Triple3,
 };
+use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
     RowDecode, check_quad_positions, decode_annotation_row, decode_reifier_row,
@@ -530,6 +531,8 @@ struct Folder<'g, 's, 'k> {
     segment_index: usize,
     materialize: bool,
     catalog: HashMap<i128, Codec>,
+    blob_index: DigestIndex,
+    blob_meta_index: DigestIndex,
     // Layout-state bookkeeping (§3.3): intact index frames seen, digests the
     // graph has described via stream:digest so far, and each inline blob's
     // arrival (frame index, digest, was-it-described-at-arrival).
@@ -632,12 +635,7 @@ impl Folder<'_, '_, '_> {
         let Some(sink) = self.sink.as_deref_mut() else {
             return;
         };
-        let meta = self
-            .g
-            .blob_meta
-            .iter()
-            .find(|(stored, _)| stored == digest)
-            .map(|(_, meta)| meta);
+        let meta = self.blob_meta_index.get(&self.g.blob_meta, digest);
         sink.blob(self.segment_index, digest, meta);
         sink.blob_payload(BlobPayload {
             segment_index: self.segment_index,
@@ -1024,7 +1022,8 @@ impl Folder<'_, '_, '_> {
                 Ok(Value::Bytes(bytes)) => {
                     let digest = digest_str(&bytes);
                     if let Some(meta) = pub_meta {
-                        self.g.set_blob_meta(digest.clone(), meta);
+                        self.blob_meta_index
+                            .set(&mut self.g.blob_meta, digest.clone(), meta);
                     }
                     self.blob_events.push((
                         index,
@@ -1040,7 +1039,11 @@ impl Folder<'_, '_, '_> {
                         encoded_len,
                     );
                     if self.materialize {
-                        self.g.set_blob(digest.clone(), bytes);
+                        self.blob_index.set(
+                            &mut self.g.blobs,
+                            digest.clone(),
+                            BlobEntry::bytes(bytes),
+                        );
                     }
                 }
                 Ok(_) => {}
@@ -1075,7 +1078,8 @@ impl Folder<'_, '_, '_> {
 
         if let Some(digest) = pub_meta.as_ref().and_then(public_blob_digest) {
             if let Some(meta) = pub_meta {
-                self.g.set_blob_meta(digest.clone(), meta);
+                self.blob_meta_index
+                    .set(&mut self.g.blob_meta, digest.clone(), meta);
             }
             self.emit_blob(
                 &digest,
@@ -1089,9 +1093,17 @@ impl Folder<'_, '_, '_> {
                 && self.materialize
             {
                 if chain.is_empty() {
-                    self.g.set_blob(digest.clone(), raw.clone());
+                    self.blob_index.set(
+                        &mut self.g.blobs,
+                        digest.clone(),
+                        BlobEntry::bytes(raw.clone()),
+                    );
                 } else {
-                    self.g.set_lazy_blob(digest.clone(), raw.clone(), chain);
+                    self.blob_index.set(
+                        &mut self.g.blobs,
+                        digest.clone(),
+                        BlobEntry::lazy(raw.clone(), chain),
+                    );
                 }
             }
             self.blob_events
@@ -1106,7 +1118,8 @@ impl Folder<'_, '_, '_> {
             Ok(Value::Bytes(bytes)) => {
                 let digest = digest_str(&bytes);
                 if let Some(meta) = pub_meta {
-                    self.g.set_blob_meta(digest.clone(), meta);
+                    self.blob_meta_index
+                        .set(&mut self.g.blob_meta, digest.clone(), meta);
                 }
                 self.blob_events
                     .push((index, digest.clone(), self.described.contains(&digest)));
@@ -1119,7 +1132,8 @@ impl Folder<'_, '_, '_> {
                     encoded_len,
                 );
                 if self.materialize {
-                    self.g.set_blob(digest.clone(), bytes);
+                    self.blob_index
+                        .set(&mut self.g.blobs, digest.clone(), BlobEntry::bytes(bytes));
                 }
             }
             Ok(_) => {}
@@ -1264,7 +1278,11 @@ impl Folder<'_, '_, '_> {
                         continue;
                     }
                     if self.materialize {
-                        self.g.set_blob(digest.clone(), bytes.clone());
+                        self.blob_index.set(
+                            &mut self.g.blobs,
+                            digest.clone(),
+                            BlobEntry::bytes(bytes.clone()),
+                        );
                     }
                     self.emit_blob(&digest, Some(bytes), &[], None, true, bytes.len());
                 }
@@ -1710,6 +1728,8 @@ struct ActiveStreamingSegment {
     segment_index: usize,
     valid_header: bool,
     catalog: HashMap<i128, Codec>,
+    blob_index: DigestIndex,
+    blob_meta_index: DigestIndex,
     index_records: Vec<IndexRecord>,
     described: HashSet<String>,
     blob_events: Vec<(usize, String, bool)>,
@@ -1794,6 +1814,8 @@ impl ActiveStreamingSegment {
             segment_index,
             valid_header,
             catalog,
+            blob_index: DigestIndex::default(),
+            blob_meta_index: DigestIndex::default(),
             index_records: Vec::new(),
             described: HashSet::new(),
             blob_events: Vec::new(),
@@ -1818,6 +1840,8 @@ impl ActiveStreamingSegment {
         // `replication.rs`).
         let frame_index = self.frame_ids.len();
         let catalog = std::mem::take(&mut self.catalog);
+        let blob_index = std::mem::take(&mut self.blob_index);
+        let blob_meta_index = std::mem::take(&mut self.blob_meta_index);
         let index_records = std::mem::take(&mut self.index_records);
         let described = std::mem::take(&mut self.described);
         let blob_events = std::mem::take(&mut self.blob_events);
@@ -1829,6 +1853,8 @@ impl ActiveStreamingSegment {
             segment_index: self.segment_index,
             materialize: false,
             catalog,
+            blob_index,
+            blob_meta_index,
             index_records,
             described,
             blob_events,
@@ -1923,12 +1949,16 @@ impl ActiveStreamingSegment {
             self.frame_ids.push(Vec::new());
         }
         let catalog = std::mem::take(&mut folder.catalog);
+        let blob_index = std::mem::take(&mut folder.blob_index);
+        let blob_meta_index = std::mem::take(&mut folder.blob_meta_index);
         let index_records = std::mem::take(&mut folder.index_records);
         let described = std::mem::take(&mut folder.described);
         let blob_events = std::mem::take(&mut folder.blob_events);
         let rebound_reifiers = std::mem::take(&mut folder.rebound_reifiers);
         drop(folder);
         self.catalog = catalog;
+        self.blob_index = blob_index;
+        self.blob_meta_index = blob_meta_index;
         self.index_records = index_records;
         self.described = described;
         self.blob_events = blob_events;
@@ -1952,6 +1982,8 @@ impl ActiveStreamingSegment {
                     segment_index: self.segment_index,
                     materialize: false,
                     catalog: HashMap::new(),
+                    blob_index: std::mem::take(&mut self.blob_index),
+                    blob_meta_index: std::mem::take(&mut self.blob_meta_index),
                     index_records: Vec::new(),
                     described: HashSet::new(),
                     blob_events: Vec::new(),
@@ -2308,6 +2340,8 @@ fn read_segment_with_sink(
             segment_index,
             materialize: true,
             catalog,
+            blob_index: DigestIndex::default(),
+            blob_meta_index: DigestIndex::default(),
             index_records: Vec::new(),
             described: HashSet::new(),
             blob_events: Vec::new(),

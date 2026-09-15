@@ -7,6 +7,7 @@ use ciborium::value::Value;
 
 use crate::model::{Graph, Quad, Suppression, Term, TermKind, Triple3};
 use crate::reader::{as_idx, as_text, text_or};
+use crate::reader_index::DigestIndex;
 use crate::wire::map_get;
 
 // --------------------------------------------------------------------------- //
@@ -51,6 +52,8 @@ enum InternKey {
 #[derive(Default)]
 struct Unioner {
     out: Graph,
+    blob_index: DigestIndex,
+    blob_meta_index: DigestIndex,
     intern: HashMap<InternKey, usize>,
 }
 
@@ -265,10 +268,12 @@ pub(crate) fn union_segments(segments: &[Graph]) -> Graph {
             u.out.annotations.push(row);
         }
         for (digest, entry) in &seg.blobs {
-            u.out.set_blob_entry(digest.clone(), entry.clone());
+            u.blob_index
+                .set(&mut u.out.blobs, digest.clone(), entry.clone());
         }
         for (digest, meta) in &seg.blob_meta {
-            u.out.set_blob_meta(digest.clone(), meta.clone());
+            u.blob_meta_index
+                .set(&mut u.out.blob_meta, digest.clone(), meta.clone());
         }
         for (k, v) in &seg.meta {
             // file-level shallow merge; later segments win

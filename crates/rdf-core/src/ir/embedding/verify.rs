@@ -27,7 +27,7 @@ use super::target::{
     RdfAnnotationTarget, RdfDatasetTarget, RdfGraphTarget, RdfReifierTarget, RdfStatementTarget,
     RdfTermTargetRef, TargetKind,
 };
-use super::view::{EmbeddingView, ExternalBindingView, MatrixView, ProjectionView};
+use super::view::{EmbeddingView, ExternalBindingView, MatrixView, ProjectionView, TargetView};
 use super::wire::{PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_HEADER_LENGTH};
 
 const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
@@ -624,7 +624,6 @@ fn verify_source_ordinals(
     // budget — the first is an attempt to forge an identity, the second is not.
     let canonical = try_canonicalize(&dataset)
         .map_err(|err| EmbeddingError::InvalidSourcePack(err.to_string()))?;
-    let reifier_lookup = source_reifier_lookup(pack)?;
     let dataset_target = embedding.source().dataset_target_id();
     let mut checked = 0u64;
 
@@ -633,13 +632,12 @@ fn verify_source_ordinals(
             continue;
         };
         let expected = target_from_source_ordinal(
-            target.kind()?,
+            target,
             ordinal,
             pack,
             &dataset,
             &canonical.labels,
             dataset_target,
-            &reifier_lookup,
         )?;
         if expected != target.id() {
             return Err(EmbeddingError::OrdinalMismatch {
@@ -654,29 +652,15 @@ fn verify_source_ordinals(
     Ok(checked)
 }
 
-type SourceReifierLookup = BTreeMap<(PackId, Option<PackId>), QuadIds<PackId>>;
-
-fn source_reifier_lookup(pack: &PackView<'_>) -> Result<SourceReifierLookup, EmbeddingError> {
-    let mut lookup = BTreeMap::new();
-    for quad in pack.reifier_quads() {
-        if lookup.insert((quad.s, quad.g), quad).is_some() {
-            return Err(EmbeddingError::Duplicate(
-                "source reifier binding in one graph",
-            ));
-        }
-    }
-    Ok(lookup)
-}
-
 fn target_from_source_ordinal(
-    kind: TargetKind,
+    target: TargetView<'_>,
     ordinal: u64,
     pack: &PackView<'_>,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
-    reifier_lookup: &SourceReifierLookup,
 ) -> Result<TargetId, EmbeddingError> {
+    let kind = target.kind()?;
     let mismatch = || EmbeddingError::OrdinalMismatch {
         target_kind: kind.code(),
         ordinal,
@@ -701,7 +685,12 @@ fn target_from_source_ordinal(
         TargetKind::RdfAnnotation => {
             let index = usize::try_from(ordinal).map_err(|_| mismatch())?;
             let quad = pack.annotation_quads().nth(index).ok_or_else(mismatch)?;
-            annotation_target_id(pack, quad, dataset, labels, dataset_target, reifier_lookup)
+            if annotation_target_matches(pack, quad, dataset, labels, dataset_target, target.id())?
+            {
+                Ok(target.id())
+            } else {
+                Err(mismatch())
+            }
         }
         _ => Err(mismatch()),
     }
@@ -841,28 +830,43 @@ fn reifier_target_id(
     .id)
 }
 
-fn annotation_target_id(
+fn annotation_target_matches(
     pack: &PackView<'_>,
     quad: QuadIds<PackId>,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
-    reifier_lookup: &SourceReifierLookup,
-) -> Result<TargetId, EmbeddingError> {
-    let binding =
-        *reifier_lookup
-            .get(&(quad.s, quad.g))
-            .ok_or(EmbeddingError::MissingReference(
-                "annotation reifier binding",
-            ))?;
-    Ok(RdfAnnotationTarget {
-        graph: graph_target_id(pack, quad.g, dataset, labels, dataset_target)?,
-        reifier: reifier_target_id(pack, binding, dataset, labels, dataset_target)?,
-        predicate: term_target_id(pack, quad.p.get(), dataset, labels, dataset_target)?,
-        object: term_target_id(pack, quad.o.get(), dataset, labels, dataset_target)?,
+    expected: TargetId,
+) -> Result<bool, EmbeddingError> {
+    // rdf:reifies is not functional. One annotation row can describe several
+    // statement bindings; the target identity selects the binding it names.
+    // The pack brackets this subject's run by binary search, without a second
+    // lookup table or a scan over unrelated reifiers.
+    let mut bindings = pack
+        .reifier_quads_of(quad.s)
+        .filter(|binding| binding.g == quad.g)
+        .peekable();
+    if bindings.peek().is_none() {
+        return Err(EmbeddingError::MissingReference(
+            "annotation reifier binding",
+        ));
     }
-    .into_target(false, None)?
-    .id)
+    let graph = graph_target_id(pack, quad.g, dataset, labels, dataset_target)?;
+    let predicate = term_target_id(pack, quad.p.get(), dataset, labels, dataset_target)?;
+    let object = term_target_id(pack, quad.o.get(), dataset, labels, dataset_target)?;
+    for binding in bindings {
+        let target = RdfAnnotationTarget {
+            graph,
+            reifier: reifier_target_id(pack, binding, dataset, labels, dataset_target)?,
+            predicate,
+            object,
+        }
+        .into_target(false, None)?;
+        if target.id == expected {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn compare_digest(

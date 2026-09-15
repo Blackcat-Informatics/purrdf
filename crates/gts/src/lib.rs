@@ -84,6 +84,7 @@ pub use policy::{
     ProfileFinding, Severity, SignatureTrust, TrustPolicy, evaluate_profile_policy, signature_trust,
 };
 pub mod reader;
+mod reader_index;
 mod reader_layout;
 mod reader_rows;
 mod reader_union;
