@@ -6,6 +6,15 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [2.0.1] - 2026-09-14
+
+### Bug Fixes
+
+- **gts:** Restore the public `cose::decrypt0` API for standalone encrypted
+  objects. The original signature delegates to the bounded authenticated
+  decryptor used by the GTS reader, preserving existing error behavior and
+  compatibility with the frozen encryption vector.
+
 ## [2.0.0] - 2026-09-14
 
 ### Breaking Changes
