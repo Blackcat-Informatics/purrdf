@@ -13,7 +13,7 @@ endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -45,7 +45,7 @@ metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 fmt: ## Auto-format the workspace.
 	cargo fmt --all
 
-check: ## The full local gate: fmt, clippy, build, tests, hygiene.
+check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets --locked -- -D warnings
 	cargo check --workspace --lib --tests --locked
@@ -158,7 +158,13 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	git push --atomic origin "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"
 	@echo "OK: pushed rust-v$(VERSION), py-v$(VERSION), npm-v$(VERSION)"
 
-test: ## Run the workspace test suite.
+node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance oracle.
+	@command -v node >/dev/null 2>&1 && node --version >/dev/null 2>&1 || { \
+		echo "ERROR: Node.js is required for the native Unicode ECMAScript conformance oracle; install Node.js and put node on PATH." >&2; \
+		exit 1; \
+	}
+
+test: node-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
@@ -338,7 +344,7 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 		&& echo "on PATH — \`make wasm-test\` runs for real" \
 		|| echo "absent — \`make wasm-test\` SKIPs"
 	@printf 'node:                                '
-	@command -v node >/dev/null 2>&1 && node --version || echo "absent — the wasm test harness SKIPs"
+	@command -v node >/dev/null 2>&1 && node --version || echo "absent — make check and make test FAIL; the wasm test harness SKIPs"
 	@printf 'cargo build directory:               '
 	@echo "$(CARGO_TARGET_DIR)"
 	@echo
