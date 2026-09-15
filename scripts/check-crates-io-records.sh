@@ -58,9 +58,9 @@
 # to the crates whose entries matched, and a crate with no entry fails AT its
 # own `cargo publish` ("The provided access token is not valid for crate
 # `<name>`") — after every crate ahead of it has been published. That is a
-# loud stop with a partial, re-runnable publish, not a refusal; the lock
-# check above is the closest a preflight can get, because the setting can only
-# be enabled from the crate's settings page once an entry exists.
+# loud stop with a partial, re-runnable publish. The lock check above proves
+# token publishing is disabled; it does not prove a matching publisher entry
+# exists. Configure both settings before resuming the trusted lane.
 #
 # Usage:
 #   scripts/check-crates-io-records.sh                # the whole release set

@@ -34,8 +34,9 @@ make bump VERSION=0.2.2
 # 2. Regenerate the committed C-ABI header from the bumped crate version.
 make capi-header
 
-# 3. Regenerate the changelog from the conventional-commit history.
-make changelog
+# 3. Complete the release notes, preserving existing migration guidance.
+# Rename the Unreleased section to the bumped version and release date.
+# Use make changelog only for history-generated notes (see below).
 
 # 4. Review, then commit the release bump, generated header, and changelog.
 git add -A && git commit -m "chore(release): 0.2.2"
@@ -109,29 +110,81 @@ crates.io requires a crate to exist before a Trusted Publisher can be
 configured for it, and refuses to create one from a Trusted Publishing token —
 its publish handler answers `Trusted Publishing tokens do not support creating
 new crates. Publish the crate manually, first`. Creating a record is therefore
-the **only** thing an API token does in this release process, and the next
-section is exact about how little that is.
+the **only** thing an API token does in this release process; later versions
+are published through Trusted Publishing.
 
-### Outstanding bootstrap: `purrdf-markdown`, `purrdf-json`
+### New crates: set up publishing before tagging
 
-Two crates are in the release set above with no crates.io record yet:
-`purrdf-markdown` is the **fifteenth** in publish order, and `purrdf-json` is the
-**sixteenth**. Both follow `purrdf-rdf`, their shared workspace dev-dependency,
-and precede `purrdf-slice`. `PURRDF_UNBOOTSTRAPPED_CRATES` in
-[`scripts/release-crates.sh`](../scripts/release-crates.sh) names both; the
-ledger is held to the registry in both directions by the preflight. Each entry
-leaves once its record exists. The release lane publishes the fourteen crates
-ahead of them, skips both visibly, then continues through later crates until
-it reaches a dependency on either new crate.
+Create new crate records before cutting the release tags. This lets the
+maintainer configure Trusted Publishing while the release checks run, so the
+first tagged run can publish the complete workspace in dependency order.
 
-That first dependent is the flagship umbrella, `purrdf`, twenty-second in
-publish order: `crates/purrdf/Cargo.toml` takes both `purrdf-markdown` and
-`purrdf-json` as normal dependencies. `purrdf-slice` through `purrdf-validate`
-publish normally and the stop lands on the umbrella. `purrdf-wasm`,
-twenty-third and dependent on the umbrella, remains unpublished behind it.
-The token bootstrap creates the two new records from the exact release tag;
-after their Trusted Publisher entries and locks are configured, rerunning the
-same release lane publishes the umbrella and WebAssembly binding.
+1. Complete the real crate in the workspace at the intended release version.
+   Separately, create an isolated package outside the workspace with the same
+   crate name, version `0.0.0`, no dependencies, and an empty `#![no_std]`
+   library. Include the normal license and repository metadata, and a README
+   stating that this version creates the registry record and exposes no runtime
+   API. Keep the workspace version and dependency requirements at the real
+   release version; the isolated package is not part of the release source.
+2. With `bootstrap_dir` pointing to that isolated package, verify and publish
+   it using a token authorized to create the crate. Verification stays enabled:
+
+   ```sh
+   rustup run stable cargo publish --dry-run --manifest-path "$bootstrap_dir/Cargo.toml"
+   CARGO_REGISTRY_TOKEN="${CARGO_TOKEN:?CARGO_TOKEN is required}" \
+     rustup run stable cargo publish --manifest-path "$bootstrap_dir/Cargo.toml"
+   ```
+
+3. On the new crate's crates.io **Settings** page, add the Trusted Publisher
+   using the table above and enable **Require trusted publishing**. Repeat for
+   every new crate. The publisher entry and the lock are separate requirements;
+   the public record's `trustpub_only` field proves the lock, not the entry.
+4. Once each record exists, remove it from `PURRDF_UNBOOTSTRAPPED_CRATES` in
+   `scripts/release-crates.sh` and update the bootstrap status below. Commit
+   those changes with the release preparation. Before tagging, require both
+   checks to pass:
+
+   ```sh
+   python3 scripts/check-doc-claims.py
+   bash scripts/check-crates-io-records.sh
+   ```
+
+5. Follow the normal release steps above. With the ledger empty and every
+   publisher configured, the trusted lane publishes every functional crate
+   version in one run, without pausing for token publication. The isolated
+   `0.0.0` package needs no unreleased dependencies; the workspace bootstrap
+   script instead publishes real implementations after their dependencies are
+   available on the registry.
+6. After the functional release is published, set `new_crate` to its registered
+   name and yank its `0.0.0` version using a token with the separate **yank**
+   permission:
+
+   ```sh
+   CARGO_REGISTRY_TOKEN="${CARGO_TOKEN:?a token with yank permission is required}" \
+     rustup run stable cargo yank --version 0.0.0 "$new_crate"
+   ```
+
+   Yanking prevents new dependency resolutions from choosing the bootstrap
+   version while retaining the crate record and publisher settings. Keep those
+   records; deleting a crate would undo the setup. Yank can be reversed with
+   `cargo yank --undo --version 0.0.0 "$new_crate"`.
+
+### Bootstrap: complete (ledger empty)
+
+All 23 crates in the release set above have crates.io records. Before
+publishing, each must have the Trusted Publisher configuration above and the
+*Require trusted publishing* lock. `PURRDF_UNBOOTSTRAPPED_CRATES` in
+[`scripts/release-crates.sh`](../scripts/release-crates.sh) is empty. The
+registry preflight verifies the records, locks, and empty ledger before
+packaging.
+
+`purrdf-markdown` and `purrdf-json` have **0.0.0** bootstrap records, created by
+token publication solely to configure Trusted Publishing. Those versions
+expose no runtime API; their functional release is **2.0.0**. With the records
+and publisher settings established, the trusted release lane publishes all 23
+crates in dependency order without a token-bootstrap interleave. The 0.0.0
+versions can be yanked after the functional release, retaining the crate
+records and publisher settings.
 
 The three crates that once had no crates.io record — `purrdf-cdt`,
 `purrdf-text`, `purrdf-geo` — were bootstrapped during the 0.13.0 release:
@@ -165,23 +218,28 @@ Two things to carry forward if a future release ever needs this pattern again:
 * **It is reversible** (`cargo yank --undo --version …`), which is what makes it
   the right tool here rather than a request to crates.io support.
 
-The better outcome is not needing a placeholder at all: that is what
-`scripts/bootstrap-crates-io.sh` exists for, and why its plan/package mismatch
-was worth fixing — the placeholders were published by hand precisely because
-that script could not complete a run.
+For new crate records, use the upfront setup procedure above. It keeps
+registry setup separate from the functional release and lets the first trusted
+release run complete without a bootstrap interleave.
 
 
 ## Changelog and release notes
 
-The changelog is generated deterministically from the conventional-commit
-history by [git-cliff](https://git-cliff.org/), configured in `cliff.toml`.
-Install the pinned version once:
+The changelog includes reviewed migration guidance and entries generated from
+conventional-commit history by [git-cliff](https://git-cliff.org/), configured
+in `cliff.toml`. Preserve existing hand-authored notes when preparing a release:
+complete the entries and rename `## [Unreleased]` to the bumped version and
+release date. Commit subjects do not capture all consumer migration steps.
+
+`make changelog` regenerates the whole file and refuses to overwrite
+hand-authored release notes. For history-generated notes, install the pinned
+generator once:
 
 ```sh
 cargo install git-cliff --version 2.13.1 --locked --no-default-features
 ```
 
-Regenerate `CHANGELOG.md` as part of the release commit. Run `make bump` **first**:
+When generating from history, run `make bump` **first**:
 `make changelog` reads the just-bumped workspace version out of `Cargo.toml` and
 passes it to git-cliff as `--tag rust-v<version>`, so the pending (still untagged)
 commits are stamped under a real `## [<version>]` header instead of landing in
@@ -204,8 +262,8 @@ The GitHub Release notes are **not** regenerated at tag time. The
 `release-cargo.yaml` workflow slices the section for the tagged version straight
 out of the committed `CHANGELOG.md` and attaches it to a GitHub Release named
 for the `rust-v*` tag — so the release notes and the committed changelog can
-never drift, and the workflow makes no repository commits. Always run
-`make changelog` and commit the result **before** pushing the release tag.
+never drift, and the workflow makes no repository commits. Complete and commit
+the release's `CHANGELOG.md` section **before** pushing the release tag.
 
 ## Tag Release
 
@@ -219,13 +277,11 @@ git push origin rust-v0.1.5
 
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
-not locked to Trusted Publishing (see [Outstanding
-bootstrap](#outstanding-bootstrap-purrdf-markdown-purrdf-json)); that
-check runs before packaging. It then publishes crates in dependency order,
-skips any crate/version that already exists on crates.io (which keeps re-runs
-safe after a partial publish), skips ledgered crates, and stops cleanly at the
-first crate that depends on one — the interleave described there — resuming
-with `gh run rerun <run-id>`.
+not locked to Trusted Publishing (see [bootstrap status](#bootstrap-complete-ledger-empty)).
+The ledger is empty, so every release crate must have its record and lock
+before packaging. The lane publishes crates in dependency order and skips any
+crate/version already present on crates.io. A partially completed release
+resumes with `gh run rerun <run-id>`.
 
 ## PyPI Release
 

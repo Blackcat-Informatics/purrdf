@@ -6,14 +6,15 @@
 PurRDF ships one logical version across three registries — crates.io (the Rust
 workspace), PyPI (``purrdf``), and npm (``@blackcatinformatics/purrdf``) — from
 three independent tag namespaces (``rust-v*`` / ``py-v*`` / ``npm-v*``). Nothing
-mechanically forces those four version sources to agree, and nothing forces the
+mechanically forces those release version sources to agree, and nothing forces the
 crates.io release lane to publish exactly the crates that are publishable. This
 lint closes both gaps as a hard, no-optionality gate:
 
 1. **Version coherence.** The workspace version (``Cargo.toml``
    ``[workspace.package].version``), the PyPI project version
    (``bindings/python/pyproject.toml`` ``[project].version``), the npm
-   package version (``crates/rdf-wasm/js/package.json`` ``version``), and the
+   package version (``crates/rdf-wasm/js/package.json`` ``version``), both root
+   versions in ``crates/rdf-wasm/js/package-lock.json``, and the
    cited version (``CITATION.cff`` ``version``) must be byte-identical. A single
    tag then names one coherent release. ``CITATION.cff`` is not a build input, so
    it drifted out of the lane between 0.2.1 and 0.5.0; pinning it here keeps the
@@ -35,14 +36,14 @@ lint closes both gaps as a hard, no-optionality gate:
    resolve (via ``cargo metadata``) to exactly the canonical workspace version.
    A crate that hardcodes ``version = "0.1.0"`` instead of
    ``version.workspace = true`` would otherwise sail through the top-level
-   three-file byte check while publishing at the wrong version; this assertion
+   metadata byte check while publishing at the wrong version; this assertion
    catches that drift and names every offending crate.
 
 4. **Internal dependency-requirement pins.** Every intra-workspace dependency
    requirement (each ``{ path, version }`` pin, resolved via ``cargo metadata``)
    must be pinned exactly to the canonical version (semver floor-equality). A
    partial bump that leaves ``purrdf 0.3.0`` requiring ``purrdf-core ^0.2.1``
-   passes the three-file byte check AND per-crate coherence AND a local build
+   passes the metadata byte check AND per-crate coherence AND a local build
    (path deps win locally), then publishes a crate wired to the OLD registry
    crate — an irreversible break this gate catches before the tag is cut.
 
@@ -83,6 +84,20 @@ def npm_version(root: Path) -> str:
         )
     )
     return data["version"]
+
+
+def npm_lock_versions(root: Path) -> dict[str, str]:
+    """Read the lockfile's package identity without inspecting dependency versions."""
+    label = "crates/rdf-wasm/js/package-lock.json"
+    data = json.loads((root / label).read_text(encoding="utf-8"))
+    versions = {
+        f"{label} .version": data["version"],
+        f'{label} .packages[""].version': data["packages"][""]["version"],
+    }
+    for source, version in versions.items():
+        if not isinstance(version, str):
+            raise ValueError(f"{source} must be a version string")
+    return versions
 
 
 def citation_version(root: Path) -> str:
@@ -252,6 +267,7 @@ def main() -> int:
         "Cargo.toml [workspace.package].version": workspace_version(root),
         "bindings/python/pyproject.toml [project].version": pyproject_version(root),
         "crates/rdf-wasm/js/package.json .version": npm_version(root),
+        **npm_lock_versions(root),
         "CITATION.cff version": citation_version(root),
     }
     distinct = set(versions.values())

@@ -6,10 +6,22 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
-## [Unreleased]
+## [2.0.0] - 2026-09-14
 
 ### Breaking Changes
 
+- **BREAKING** **text:** Ranking now uses one bounded BM25F arithmetic law,
+  including the single-field case. Intermediate rounding can change existing
+  scores, and index fingerprints use the `index/v2` domain. Rebuild cached
+  rankings and pin the complete named ranking profile; the exported 56-bit
+  score width derives from its exact inclusive bound.
+- **BREAKING** **shapes:** `json_schema::compile` and
+  `compile_with_value_vocab` return `Result` and report unsafe pattern or
+  namespace emission as typed errors. Callers must handle compilation failure.
+  JSON Schema patterns target Unicode ECMA-262. XPath case-insensitive flags
+  are refused because simple Unicode case folding does not preserve their
+  semantics; unsupported Pydantic and reverse-import patterns also refuse
+  rather than installing a constraint with a different meaning.
 - **BREAKING** **core:** `Canonicalized` now reports the presentation that
   produced it in `presentation: CanonPresentation` — the fourth coordinate of
   the canonicalization pin `(profile, version, presentation, hash)`, readable
@@ -28,6 +40,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Bug Fixes
 
+- **rdf/core/results:** XML egress shares one XML 1.0 character law across
+  RDF/XML, TriX, SPARQL XML results, projections and SVG. Carriage returns use
+  character references; attribute tabs and line feeds do too, preserving their
+  values through XML normalization. Forbidden scalars produce an error naming
+  the scalar. Dynamic SVG attributes and XMLLiteral normalization follow the
+  same rule. These repairs deliberately change emitted bytes; apostrophes stay
+  literal inside double-quoted attributes. Frozen conformance vectors are
+  unchanged.
+- **iri:** Bracketed hosts must satisfy the IPv6 or IPvFuture grammar;
+  character membership alone no longer admits malformed IP literals. Generic
+  ports accept arbitrary ASCII digit strings as RFC 3986 requires, including
+  values above 65535 and leading zeros. Valid lexical spellings remain intact.
 - **core/rdf:** Located duplicate quads keep their source locations on the
   deduplicated row during owned insertion, row remapping and GTS import.
   Unrealized location handles cannot attach to a later unrelated row, and
@@ -126,6 +150,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Features
 
+- **json:** New core-only runtime crate `purrdf-json`, also available through
+  `purrdf::json`, carries ordered JSON as RDF 1.2 and reconstructs the original
+  bytes. Member order, duplicate names, whitespace, escapes, exact number
+  spellings and empty containers survive production RDF serialization and
+  parsing. Value occurrences expose paths and parent links, containers expose
+  their sizes, and structural runs cover syntax bytes. Decoding requires an
+  explicit document and profile, validates ownership, metadata, byte cover and
+  digest, then reparses the source to verify every structural assertion before
+  returning it.
+- **text:** Immutable ranking profiles configure up to sixteen BM25F fields.
+  Retained predicate-level token facts support field remapping and reweighting
+  without tokenization. Corpus-bound prepared queries compute IDFs once and
+  share the same scorer across ranking, explanations and heap ceilings. A
+  short independent integer reference reproduces the exact conformance vectors
+  executed on native and wasm targets.
 - **core:** Canonicalization is idempotent over its own output, and the
   `purrdf-rdfc12` profile version moves from 1 to 2 to say so. A quad written in
   exactly one of the two shapes the RDF 1.2 overlay lowers into — a reifier row

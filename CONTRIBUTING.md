@@ -108,8 +108,9 @@ bash scripts/sweep-cargo-build-dirs.sh --delete   # remove orphans
 
 ## Versioning & releases
 
-**Pre-1.0 semver.** While the version is `0.x`, a **minor** bump may carry breaking
-API changes; a **patch** bump is bugfix-only and API-compatible. The crates.io crate
+**Semantic versioning.** A breaking API change requires a **major** bump; a
+**minor** bump is additive and API-compatible, and a **patch** bump is bugfix-only.
+The crates.io crate
 suite, the PyPI `purrdf` package, the npm `@blackcatinformatics/purrdf` package,
 and the `CITATION.cff` citation record share **one** workspace version and ship in
 lockstep — CI runs a version-coherence check that fails if the four sources
@@ -118,8 +119,8 @@ disagree.
 **MSRV.** The supported floor is `rust-version` in `Cargo.toml` (currently **1.96**)
 on the **stable** channel, and CI enforces it with a dedicated MSRV job. That floor
 is what you build against as a consumer; it is unaffected by the toolchain
-contributors run. Raising the MSRV is a notable, changelog-recorded change that,
-pre-1.0, rides a minor bump.
+contributors run. Raising the MSRV is a notable, changelog-recorded change that
+rides a minor bump and never ships in a patch release.
 
 **Development toolchain.** `rust-toolchain.toml` names a **floating nightly** for
 local work and CI gates, because nightly clippy and rustdoc carry lints stable

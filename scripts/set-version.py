@@ -16,6 +16,7 @@ Top-level version sources:
 * ``Cargo.toml``                         — ``[workspace.package] version``
 * ``bindings/python/pyproject.toml``     — ``[project] version``
 * ``crates/rdf-wasm/js/package.json``    — top-level ``version``
+* ``crates/rdf-wasm/js/package-lock.json`` — top-level and root-package versions
 
 Internal dependency-requirement pins (every intra-workspace path dependency —
 a dependency line carrying BOTH ``path = "…"`` and ``version = "…"``):
@@ -42,6 +43,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -88,6 +90,40 @@ def set_json_version(path: Path, version: str) -> None:
     )
     if n == 0:
         raise SystemExit(f'FAIL: no "version" key found in {path}')
+    path.write_text(new_text, encoding="utf-8")
+
+
+def set_npm_lock_version(path: Path, version: str) -> None:
+    """Update only the lockfile's two root version values, preserving all other bytes."""
+    text = path.read_text(encoding="utf-8")
+    expected = json.loads(text)
+    expected["version"] = version
+    expected["packages"][""]["version"] = version
+    new_text, top_count = re.subn(
+        r'^(  "version"\s*:\s*")[^"]*(")',
+        rf"\g<1>{version}\g<2>",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    # npm writes the root package under the empty key at four-space indentation.
+    # Scope its six-space version to that object; dependency versions have the
+    # same indentation elsewhere in packages and must remain untouched.
+    root = re.search(r'^    ""\s*:\s*\{.*?(?=^    \})', new_text, re.MULTILINE | re.DOTALL)
+    if top_count != 1 or root is None:
+        raise SystemExit(f"FAIL: missing npm lockfile root version metadata in {path}")
+    body, root_count = re.subn(
+        r'^(      "version"\s*:\s*")[^"]*(")',
+        rf"\g<1>{version}\g<2>",
+        root.group(),
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if root_count != 1:
+        raise SystemExit(f"FAIL: missing npm lockfile root-package version in {path}")
+    new_text = new_text[:root.start()] + body + new_text[root.end():]
+    if json.loads(new_text) != expected:
+        raise SystemExit(f"FAIL: npm lockfile rewrite changed unrelated metadata in {path}")
     path.write_text(new_text, encoding="utf-8")
 
 
@@ -207,12 +243,13 @@ def main(argv: list[str]) -> int:
 
     root = repo_root()
 
-    # 1. The three top-level version sources.
+    # 1. Registry versions, including npm's lockfile root metadata.
     set_toml_version(root / "Cargo.toml", "[workspace.package]", version)
     set_toml_version(
         root / "bindings" / "python" / "pyproject.toml", "[project]", version
     )
     set_json_version(root / "crates" / "rdf-wasm" / "js" / "package.json", version)
+    set_npm_lock_version(root / "crates" / "rdf-wasm" / "js" / "package-lock.json", version)
 
     # 2. Every intra-workspace path-dependency version pin: the
     #    [workspace.dependencies] internal pins and the member renamed-dep pins.
