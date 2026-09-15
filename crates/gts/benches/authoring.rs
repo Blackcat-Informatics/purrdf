@@ -485,12 +485,16 @@ fn bench_reader_decryption(c: &mut Criterion) {
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         group.throughput(Throughput::Bytes(length as u64));
         let before = allocation_snapshot();
-        assert_eq!(decrypt0(&envelope, resolve).unwrap(), plaintext);
+        let opened = decrypt0(&envelope, resolve).unwrap();
+        assert_eq!(opened, plaintext);
         let allocated = allocation_delta(before, allocation_snapshot());
         println!(
-            "[gts_decryption] standalone/{length}: allocations={} allocated_bytes={}",
-            allocated.0, allocated.1
+            "[gts_decryption] standalone/{length}: allocations={} allocated_bytes={} returned_capacity={}",
+            allocated.0,
+            allocated.1,
+            opened.capacity()
         );
+        drop(opened);
         group.bench_with_input(
             BenchmarkId::new("standalone", length),
             &envelope,
