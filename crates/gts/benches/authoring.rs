@@ -368,6 +368,14 @@ fn read_blob_stream(data: &[u8], options: ReadOptions<'_>) -> ReaderSink {
     sink
 }
 
+struct PayloadCheck<'a>(&'a [u8]);
+
+impl StreamingSink for PayloadCheck<'_> {
+    fn blob_payload(&mut self, payload: BlobPayload<'_>) {
+        assert_eq!(payload.bytes, Some(self.0), "streamed plaintext must match");
+    }
+}
+
 fn many_blob_container(count: usize, metadata: bool) -> Vec<u8> {
     let mut writer = Writer::new("generic");
     for index in 0..count {
@@ -468,6 +476,13 @@ fn bench_reader_decryption(c: &mut Criterion) {
             )
             .unwrap();
         let container = writer.into_bytes();
+        // Check exact streaming output outside timing and allocation measurement.
+        let result = read_to_sink_with_options(
+            &container,
+            ReadOptions::new(true, None).with_content_key(&resolve),
+            &mut PayloadCheck(&plaintext),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         group.throughput(Throughput::Bytes(length as u64));
         let before = allocation_snapshot();
         assert_eq!(decrypt0(&envelope, resolve).unwrap(), plaintext);
