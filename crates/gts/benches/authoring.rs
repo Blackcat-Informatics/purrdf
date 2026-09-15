@@ -5,26 +5,34 @@
 // which would otherwise trip the workspace `missing_docs` lint.
 #![allow(missing_docs)]
 
-//! GTS authoring hot-path benchmark.
+//! GTS authoring and reader hot-path benchmarks.
 //!
 //! Report-only, `cargo bench -p purrdf-gts` (the `make bench` lane). This keeps
 //! the core container work measurable: rsyncable zstd block compression and
 //! deterministic snapshot emission over a representative folded graph.
+//! Reader cases vary blob count independently of payload size and compare
+//! standalone decryption with encrypted frame streaming. Allocation counters
+//! report cumulative traffic on the calling thread, not peak memory or a
+//! process-wide total; parallel full folds can allocate on other threads.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use ciborium::value::Value;
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ed25519_dalek::SigningKey;
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::compact::{CompactionParams, DictPlan, DictStrategy, compact_streamable};
 use purrdf_gts::mmr;
 use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
-use purrdf_gts::reader::read;
+use purrdf_gts::reader::{
+    BlobPayload, ReadOptions, StreamingSink, read, read_to_sink_with_options,
+};
 use purrdf_gts::wire::{canonical, deterministic, encode};
-use purrdf_gts::writer::{SnapshotOptions, Writer, digest_string, snapshot_from_graph};
+use purrdf_gts::writer::{
+    Encrypt0Options, FrameOptions, SnapshotOptions, Writer, digest_string, snapshot_from_graph,
+};
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -340,6 +348,179 @@ fn bench_verify(c: &mut Criterion) {
     group.finish();
 }
 
+#[derive(Default)]
+struct ReaderSink {
+    blobs: usize,
+    bytes: usize,
+}
+
+impl StreamingSink for ReaderSink {
+    fn blob_payload(&mut self, payload: BlobPayload<'_>) {
+        self.blobs += 1;
+        self.bytes += payload.bytes.map_or(0, <[u8]>::len);
+    }
+}
+
+fn read_blob_stream(data: &[u8], options: ReadOptions<'_>) -> ReaderSink {
+    let mut sink = ReaderSink::default();
+    let result = read_to_sink_with_options(data, options, &mut sink);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    sink
+}
+
+struct PayloadCheck<'a>(&'a [u8]);
+
+impl StreamingSink for PayloadCheck<'_> {
+    fn blob_payload(&mut self, payload: BlobPayload<'_>) {
+        assert_eq!(payload.bytes, Some(self.0), "streamed plaintext must match");
+    }
+}
+
+fn many_blob_container(count: usize, metadata: bool) -> Vec<u8> {
+    let mut writer = Writer::new("generic");
+    for index in 0..count {
+        let mut payload = deterministic_payload(256);
+        // Keep every blob unique even beyond the payload generator's byte period.
+        payload[..8].copy_from_slice(&(index as u64).to_le_bytes());
+        if metadata {
+            writer.add_blob_owned(payload, Some("application/octet-stream"), None);
+        } else {
+            writer.add_frame("blob", None, Some(payload), None, None);
+        }
+    }
+    writer.into_bytes()
+}
+
+fn bench_reader_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gts_reader_scaling");
+    group.sample_size(10);
+    for count in [256, 1024, 4096, 16384] {
+        group.throughput(Throughput::Elements(count as u64));
+        for metadata in [false, true] {
+            let data = many_blob_container(count, metadata);
+            let label = if metadata { "metadata" } else { "plain" };
+            let before = allocation_snapshot();
+            let sink = read_blob_stream(&data, ReadOptions::new(true, None));
+            let allocated = allocation_delta(before, allocation_snapshot());
+            assert_eq!((sink.blobs, sink.bytes), (count, count * 256));
+            println!(
+                "[gts_reader] stream_{label}/{count}: encoded={} allocations={} allocated_bytes={}",
+                data.len(),
+                allocated.0,
+                allocated.1
+            );
+            group.bench_with_input(
+                BenchmarkId::new(format!("stream_{label}"), count),
+                &data,
+                |bencher, data| {
+                    bencher.iter(|| {
+                        black_box(read_blob_stream(
+                            black_box(data),
+                            ReadOptions::new(true, None),
+                        ))
+                    });
+                },
+            );
+            let before = allocation_snapshot();
+            let graph = read(&data, true, None);
+            let allocated = allocation_delta(before, allocation_snapshot());
+            assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+            assert_eq!(graph.blobs.len(), count);
+            println!(
+                "[gts_reader] fold_{label}/{count}: encoded={} allocations={} allocated_bytes={}",
+                data.len(),
+                allocated.0,
+                allocated.1
+            );
+            group.bench_with_input(
+                BenchmarkId::new(format!("fold_{label}"), count),
+                &data,
+                |bencher, data| {
+                    bencher.iter(|| {
+                        let graph = read(black_box(data), true, None);
+                        assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+                        black_box(graph)
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn bench_reader_decryption(c: &mut Criterion) {
+    use purrdf_gts::cose::{decrypt0, encrypt0};
+
+    let mut key = [0; 32];
+    getrandom::fill(&mut key).expect("benchmark encryption randomness");
+    let resolve = |kid: &str| (kid == "reader-benchmark").then_some(key);
+    let mut group = c.benchmark_group("gts_reader_decryption");
+    group.sample_size(10);
+    for (index, length) in [256, 65536, 1_048_576].into_iter().enumerate() {
+        let plaintext = deterministic_payload(length);
+        let iv = [u8::try_from(index).unwrap(); 12];
+        let envelope = encrypt0(&plaintext, "reader-benchmark", &key, &iv);
+        let mut writer = Writer::new("generic");
+        writer
+            .add_frame_with_options(
+                "blob",
+                FrameOptions {
+                    raw: Some(plaintext.clone()),
+                    encrypt: Some(Encrypt0Options {
+                        kid: "reader-benchmark".into(),
+                        key,
+                        iv,
+                    }),
+                    ..FrameOptions::default()
+                },
+            )
+            .unwrap();
+        let container = writer.into_bytes();
+        // Check exact streaming output outside timing and allocation measurement.
+        let result = read_to_sink_with_options(
+            &container,
+            ReadOptions::new(true, None).with_content_key(&resolve),
+            &mut PayloadCheck(&plaintext),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        group.throughput(Throughput::Bytes(length as u64));
+        let before = allocation_snapshot();
+        assert_eq!(decrypt0(&envelope, resolve).unwrap(), plaintext);
+        let allocated = allocation_delta(before, allocation_snapshot());
+        println!(
+            "[gts_decryption] standalone/{length}: allocations={} allocated_bytes={}",
+            allocated.0, allocated.1
+        );
+        group.bench_with_input(
+            BenchmarkId::new("standalone", length),
+            &envelope,
+            |b, data| {
+                b.iter(|| black_box(decrypt0(black_box(data), resolve).unwrap()));
+            },
+        );
+        let before = allocation_snapshot();
+        let sink = read_blob_stream(
+            &container,
+            ReadOptions::new(true, None).with_content_key(&resolve),
+        );
+        let allocated = allocation_delta(before, allocation_snapshot());
+        assert_eq!((sink.blobs, sink.bytes), (1, length));
+        println!(
+            "[gts_decryption] stream/{length}: allocations={} allocated_bytes={}",
+            allocated.0, allocated.1
+        );
+        group.bench_with_input(BenchmarkId::new("stream", length), &container, |b, data| {
+            b.iter(|| {
+                black_box(read_blob_stream(
+                    black_box(data),
+                    ReadOptions::new(true, None).with_content_key(&resolve),
+                ))
+            });
+        });
+    }
+    group.finish();
+}
+
 /// A fixed multi-blob source with repeated structure — the corpus a pack
 /// dictionary strategy actually has something to train on (mirrors
 /// `purrdf_gts::compact::tests::source_with_blobs`).
@@ -393,6 +574,8 @@ criterion_group!(
     bench_canonical_authoring,
     bench_mmr_root,
     bench_verify,
-    bench_dict_compaction
+    bench_dict_compaction,
+    bench_reader_scaling,
+    bench_reader_decryption
 );
 criterion_main!(benches);
