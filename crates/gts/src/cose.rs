@@ -274,6 +274,26 @@ pub fn recipient_kid(blob: &[u8]) -> Option<String> {
     parse_encrypt0(blob).map(|p| p.kid)
 }
 
+/// Open a COSE_Encrypt0 using a content key resolved by `kid` (§9.3).
+///
+/// Standalone COSE consumers use the same bounded implementation as the GTS
+/// reader. Plaintext cannot exceed its encoded envelope's length, so this
+/// entry point does not need a second AES-GCM implementation or an unbounded
+/// decoded-output allowance.
+///
+/// # Errors
+/// Returns an error for a malformed envelope, an unresolved key, or failed
+/// authentication. No unauthenticated plaintext is returned.
+pub fn decrypt0(
+    blob: &[u8],
+    resolve: impl Fn(&str) -> Option<[u8; 32]>,
+) -> Result<Vec<u8>, Encrypt0Error> {
+    decrypt0_bounded(blob, resolve, blob.len()).map_err(|error| match error {
+        BoundedDecrypt0Error::Crypto(error) => error,
+        BoundedDecrypt0Error::Limit => Encrypt0Error::Malformed,
+    })
+}
+
 /// Internal bounded decryption failures, without extending the public error enum.
 #[derive(Debug)]
 pub(crate) enum BoundedDecrypt0Error {
