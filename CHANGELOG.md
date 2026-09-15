@@ -6,6 +6,36 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [2.0.2] - 2026-09-14
+
+### Bug Fixes
+
+- **core:** Certified embedding source verification accepts one RDF 1.2
+  reifier bound to multiple distinct statements, including citations projected
+  from Markdown concordance rows with several anchors. Annotation source
+  ordinals verify against the exact statement binding in the same graph;
+  altered annotations, mismatched bindings, and stale ordinals remain rejected.
+
+### Performance
+
+- **gts:** Private digest indexes remove repeated blob and metadata scans from
+  streaming reads, materialized reads, and segment union. Ordered replacement,
+  inherited metadata, lazy payloads, and segment isolation retain their existing
+  behavior. Tables of up to 16 digests avoid index allocation.
+- **gts:** Standalone and streaming COSE decryption borrow fields from definite
+  envelopes and allocate only the plaintext buffer and authentication data.
+  Other accepted CBOR forms retain the complete decoder. For a 1 MiB plaintext,
+  measured cumulative allocation requests fall by approximately 75% standalone
+  and 37% through streaming, preserving authentication and error ordering.
+
+### Tests
+
+- **core/markdown:** Cover multi-anchor certified embedding sources, multiple
+  statement bindings, graph separation, altered annotations, and stale ordinals.
+- **gts:** Expand decryption compatibility and limit-boundary coverage, verify
+  ordered blob replacement across snapshots and segments, and measure reader
+  scaling and decryption allocation traffic.
+
 ## [2.0.1] - 2026-09-14
 
 ### Bug Fixes
