@@ -247,9 +247,17 @@ fn standalone_decryption_accepts_untagged_and_indefinite_length_envelopes() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn fresh_key() -> [u8; 32] {
+    let mut key = [0; 32];
+    getrandom::fill(&mut key).expect("test encryption randomness");
+    key
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn standalone_decryption_passes_recipient_identity_to_the_key_resolver_verbatim() {
-    let key = [41; 32];
+    let key = fresh_key();
     let plaintext = b"binary\0plaintext\xff";
     for (index, kid) in ["", " recipient ", "recipient\0key", "鍵/🐈"]
         .into_iter()
@@ -269,9 +277,10 @@ fn standalone_decryption_passes_recipient_identity_to_the_key_resolver_verbatim(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn standalone_decryption_preserves_binary_plaintext_across_block_and_length_boundaries() {
-    let key = [43; 32];
+    let key = fresh_key();
     for (index, length) in [1, 15, 16, 17, 255, 256, 257, 4095, 4096, 4097, 65536]
         .into_iter()
         .enumerate()
