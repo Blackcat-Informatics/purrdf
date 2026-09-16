@@ -1585,6 +1585,7 @@ version = "2.0.2"
 dependencies = [
  "criterion",
  "insta",
+ "purrdf-core",
  "purrdf-iri",
  "purrdf-rdf",
  "purrdf-sparql-algebra",

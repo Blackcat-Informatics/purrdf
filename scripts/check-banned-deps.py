@@ -63,7 +63,7 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "oxsdatatypes": "purrdf-xsd",
     "oxrdf": "purrdf-core",
     "oxigraph": "the native purrdf engine",
-    "petgraph": "the first-party iterative Tarjan SCC (purrdf-slice / purrdf-shex)",
+    "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
 }
 
 # Package name -> first-party replacement. Banned only as a DIRECT dependency

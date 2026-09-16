@@ -51,6 +51,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_core::graph::tarjan_scc;
 use sha2::{Digest, Sha256};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
@@ -176,9 +177,37 @@ pub struct LinkUnit {
 }
 
 impl LinkUnit {
-    /// Whether this link unit is a genuine cycle (more than one member).
+    /// Whether this link unit holds **more than one mutually dependent slice**.
+    ///
+    /// This is a member-count test, and it is all the member list can support: a
+    /// slice that depends on itself is a strongly connected component of size
+    /// one, exactly like an independent slice, so the two are indistinguishable
+    /// here. A self-dependency is a genuine cycle — it has to be reasoned as a
+    /// fixpoint just as a two-slice cycle does — and this method does not see
+    /// it. Use [`is_cycle_in`](Self::is_cycle_in), which reads the edges the
+    /// unit was built from, when self-dependency matters.
     pub fn is_cycle(&self) -> bool {
         self.members.len() > 1
+    }
+
+    /// Whether this link unit is a cycle **including self-dependency**, judged
+    /// against the dependency edges it was built from.
+    ///
+    /// More than one member is always a cycle. A single member is a cycle when
+    /// it declares a build edge to itself. That fact lives in the edges rather
+    /// than in [`members`](Self::members), because a self-looping slice and an
+    /// independent one produce the same size-one component — which is why this
+    /// method takes `edges` and [`is_cycle`](Self::is_cycle) cannot.
+    ///
+    /// Pass the same slice you passed to [`link_units`]; edges belonging to
+    /// other slices are ignored.
+    pub fn is_cycle_in(&self, edges: &[DependencyEdge]) -> bool {
+        self.members.len() > 1
+            || edges.iter().any(|edge| {
+                edge.from_slice == edge.to_slice
+                    && is_build_edge(edge)
+                    && self.contains(&edge.from_slice)
+            })
     }
 
     /// Whether the given slice IRI is a member of this link unit (attribution at
@@ -256,77 +285,11 @@ fn build_unit_graph(
     (nodes, adjacency)
 }
 
-/// Iterative Tarjan strongly-connected components over an adjacency list.
-/// Hand-rolled, explicit stack (no recursion on caller-controlled depth);
-/// mirrors the first-party implementation in `purrdf-shex`. The enumeration
-/// order is an algorithm artifact — [`link_units`] sorts members and units
-/// afterwards, so output determinism never rests on it.
-fn tarjan_scc(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    const UNSET: usize = usize::MAX;
-    let n = adjacency.len();
-    let mut index = vec![UNSET; n];
-    let mut low = vec![0usize; n];
-    let mut on_stack = vec![false; n];
-    let mut stack: Vec<usize> = Vec::new();
-    let mut next_index = 0usize;
-    let mut components: Vec<Vec<usize>> = Vec::new();
-    // Work frames: (node, next child position).
-    let mut work: Vec<(usize, usize)> = Vec::new();
-
-    for root in 0..n {
-        if index[root] != UNSET {
-            continue;
-        }
-        work.push((root, 0));
-        while let Some(&mut (node, ref mut child_pos)) = work.last_mut() {
-            if *child_pos == 0 {
-                index[node] = next_index;
-                low[node] = next_index;
-                next_index += 1;
-                stack.push(node);
-                on_stack[node] = true;
-            }
-            let mut advanced = false;
-            while *child_pos < adjacency[node].len() {
-                let child = adjacency[node][*child_pos];
-                *child_pos += 1;
-                if index[child] == UNSET {
-                    work.push((child, 0));
-                    advanced = true;
-                    break;
-                }
-                if on_stack[child] {
-                    low[node] = low[node].min(index[child]);
-                }
-            }
-            if advanced {
-                continue;
-            }
-            // Node finished.
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[node]);
-            }
-            if low[node] == index[node] {
-                let mut component = Vec::new();
-                while let Some(member) = stack.pop() {
-                    on_stack[member] = false;
-                    component.push(member);
-                    if member == node {
-                        break;
-                    }
-                }
-                components.push(component);
-            }
-        }
-    }
-    components
-}
-
 /// Compute the **link units** (SCCs) of a catalog under its S4 dependency edges
 /// (RFC §8). Mutually dependent slices collapse to one [`LinkUnit`]; singletons
 /// remain individually nameable. The result is deterministic: members are
 /// sorted within each unit, and units are sorted by their smallest member.
+/// [`tarjan_scc`] guarantees neither order itself, so both are imposed here.
 pub fn link_units(catalog: &SliceCatalog, edges: &[DependencyEdge]) -> Vec<LinkUnit> {
     let (nodes, adjacency) = build_unit_graph(catalog, edges);
     let mut units: Vec<LinkUnit> = tarjan_scc(&adjacency)

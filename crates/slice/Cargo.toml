@@ -31,6 +31,14 @@ path = "src/lib.rs"
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
 purrdf = { package = "purrdf-rdf", path = "../rdf", version = "2.0.2" }
+# The ring-fenced kernel, named directly (not through the `purrdf` umbrella) for
+# `graph::tarjan_scc`: the workspace's ONE strongly-connected-components
+# implementation, which the link-unit linker runs over slice dependency edges.
+# It is a generic index-graph algorithm with no RDF surface, so it does not
+# belong on the umbrella's re-export list; a direct edge also states the real
+# dependency instead of laundering it. Already upstream of this crate in the
+# publish order, so the release lane is unchanged.
+purrdf-core = { workspace = true }
 # Native SPARQL parser — competency/verify queries are PARSED
 # (RFC §10), never text-searched, to extract referenced term IRIs. Replaces the
 # oxigraph-family SPARQL parser; RDF-1.2 quoted triple terms are first-class.

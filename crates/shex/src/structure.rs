@@ -15,13 +15,17 @@
 //! * **the negation requirement** — a negated reference (under `NOT`, or
 //!   through a triple constraint whose predicate is `EXTRA` on the
 //!   enclosing shape) inside a dependency-graph strongly-connected
-//!   component. SCCs are computed with a hand-rolled iterative Tarjan.
+//!   component. SCCs come from the workspace's one implementation,
+//!   [`purrdf_core::graph::tarjan_scc`] (iterative, no recursion on a
+//!   caller-supplied schema).
 //!
 //! [`check_structure`] reports **all** violations, not just the first.
 
 use std::collections::{HashMap, HashSet};
 
 use core::fmt;
+
+use purrdf_core::graph::tarjan_scc;
 
 use crate::ast::{Schema, Shape, ShapeExpr, TripleExpr};
 
@@ -424,84 +428,22 @@ impl<'a> Walker<'a, '_> {
     }
 }
 
-/// Iterative Tarjan strongly-connected components over an adjacency list.
-/// Hand-rolled (no `petgraph`), explicit stack (no recursion on user input).
-fn tarjan_scc(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    let n = adjacency.len();
-    const UNSET: usize = usize::MAX;
-    let mut index = vec![UNSET; n];
-    let mut low = vec![0usize; n];
-    let mut on_stack = vec![false; n];
-    let mut stack: Vec<usize> = Vec::new();
-    let mut next_index = 0usize;
-    let mut components: Vec<Vec<usize>> = Vec::new();
-    // Work frames: (node, next child position).
-    let mut work: Vec<(usize, usize)> = Vec::new();
-
-    for root in 0..n {
-        if index[root] != UNSET {
-            continue;
-        }
-        work.push((root, 0));
-        while let Some(&mut (node, ref mut child_pos)) = work.last_mut() {
-            if *child_pos == 0 {
-                index[node] = next_index;
-                low[node] = next_index;
-                next_index += 1;
-                stack.push(node);
-                on_stack[node] = true;
-            }
-            let mut advanced = false;
-            while *child_pos < adjacency[node].len() {
-                let child = adjacency[node][*child_pos];
-                *child_pos += 1;
-                if index[child] == UNSET {
-                    work.push((child, 0));
-                    advanced = true;
-                    break;
-                }
-                if on_stack[child] {
-                    low[node] = low[node].min(index[child]);
-                }
-            }
-            if advanced {
-                continue;
-            }
-            // Node finished.
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[node]);
-            }
-            if low[node] == index[node] {
-                let mut component = Vec::new();
-                while let Some(member) = stack.pop() {
-                    on_stack[member] = false;
-                    component.push(member);
-                    if member == node {
-                        break;
-                    }
-                }
-                components.push(component);
-            }
-        }
-    }
-    components
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn tarjan_finds_cycle() {
-        // 0 → 1 → 2 → 0, 3 isolated.
+    fn tarjan_finds_reference_cycle_over_shape_indices() {
+        // The shared SCC authority, exercised in the shape-index space this
+        // module builds: shapes 0 → 1 → 2 → 0 are one reference cycle, shape 3
+        // depends on nothing. The algorithm's own battery lives with the
+        // implementation in `purrdf_core::graph`.
         let adjacency = vec![vec![1], vec![2], vec![0], vec![]];
         let mut components = tarjan_scc(&adjacency);
         for c in &mut components {
             c.sort_unstable();
         }
         components.sort();
-        assert!(components.contains(&vec![0, 1, 2]));
-        assert!(components.contains(&vec![3]));
+        assert_eq!(components, vec![vec![0, 1, 2], vec![3]]);
     }
 }
