@@ -135,7 +135,6 @@ memchr = "2"
 # dev-dependency demonstrating the mmap seam. Not wasm32-relevant (mmap has no
 # meaning there); `make wasm` builds `--lib` only, so this never reaches it.
 memmap2 = "0.9"
-# Allocation-free RFC 5646 language-tag parser for CSVW metadata. Its default
 pretty_assertions = "1"
 proptest = "1"
 pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
