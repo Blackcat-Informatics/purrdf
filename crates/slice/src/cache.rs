@@ -51,7 +51,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use petgraph::graph::{DiGraph, NodeIndex};
 use sha2::{Digest, Sha256};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
@@ -210,29 +209,32 @@ fn is_build_edge(edge: &DependencyEdge) -> bool {
     edge.edge_kind.is_semantic() && edge.reconciliation != ReconciliationStatus::Stale
 }
 
-/// Build a directed dependency graph projected from S4 edges, over the slice
+/// Build the directed dependency graph projected from S4 edges, over the slice
 /// IRIs of a catalog: a `from → to` edge means *from depends on to*. Every slice
 /// in the catalog is a node, even with no edges (singletons must still appear as
-/// their own link unit / product seed).
-fn build_unit_graph(catalog: &SliceCatalog, edges: &[DependencyEdge]) -> DiGraph<SliceIri, ()> {
-    let mut graph = DiGraph::new();
-    let mut index: BTreeMap<SliceIri, NodeIndex> = BTreeMap::new();
-
-    // Sort slice IRIs for deterministic node insertion order.
-    let mut slices: Vec<SliceIri> = catalog
+/// their own link unit / product seed). Returns the sorted node list and an
+/// index-based adjacency list over it.
+fn build_unit_graph(
+    catalog: &SliceCatalog,
+    edges: &[DependencyEdge],
+) -> (Vec<SliceIri>, Vec<Vec<usize>>) {
+    // Sort slice IRIs for deterministic node numbering.
+    let mut nodes: Vec<SliceIri> = catalog
         .records()
         .iter()
         .map(|r| r.manifest.slice_iri.clone())
         .collect();
-    slices.sort();
-    slices.dedup();
-    for slice in &slices {
-        let idx = graph.add_node(slice.clone());
-        index.insert(slice.clone(), idx);
-    }
+    nodes.sort();
+    nodes.dedup();
+    let index: BTreeMap<&SliceIri, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(position, slice)| (slice, position))
+        .collect();
 
     // Add build-relevant edges (semantic, non-stale). Deduplicate so multiple
     // evidence rows for one (from,to) do not multiply edges.
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
     let mut seen: BTreeSet<(SliceIri, SliceIri)> = BTreeSet::new();
     for edge in edges {
         if !is_build_edge(edge) {
@@ -248,10 +250,77 @@ fn build_unit_graph(catalog: &SliceCatalog, edges: &[DependencyEdge]) -> DiGraph
             // catalog node set is authoritative.
             continue;
         };
-        graph.add_edge(from, to, ());
+        adjacency[from].push(to);
     }
 
-    graph
+    (nodes, adjacency)
+}
+
+/// Iterative Tarjan strongly-connected components over an adjacency list.
+/// Hand-rolled, explicit stack (no recursion on caller-controlled depth);
+/// mirrors the first-party implementation in `purrdf-shex`. The enumeration
+/// order is an algorithm artifact — [`link_units`] sorts members and units
+/// afterwards, so output determinism never rests on it.
+fn tarjan_scc(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    const UNSET: usize = usize::MAX;
+    let n = adjacency.len();
+    let mut index = vec![UNSET; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next_index = 0usize;
+    let mut components: Vec<Vec<usize>> = Vec::new();
+    // Work frames: (node, next child position).
+    let mut work: Vec<(usize, usize)> = Vec::new();
+
+    for root in 0..n {
+        if index[root] != UNSET {
+            continue;
+        }
+        work.push((root, 0));
+        while let Some(&mut (node, ref mut child_pos)) = work.last_mut() {
+            if *child_pos == 0 {
+                index[node] = next_index;
+                low[node] = next_index;
+                next_index += 1;
+                stack.push(node);
+                on_stack[node] = true;
+            }
+            let mut advanced = false;
+            while *child_pos < adjacency[node].len() {
+                let child = adjacency[node][*child_pos];
+                *child_pos += 1;
+                if index[child] == UNSET {
+                    work.push((child, 0));
+                    advanced = true;
+                    break;
+                }
+                if on_stack[child] {
+                    low[node] = low[node].min(index[child]);
+                }
+            }
+            if advanced {
+                continue;
+            }
+            // Node finished.
+            work.pop();
+            if let Some(&(parent, _)) = work.last() {
+                low[parent] = low[parent].min(low[node]);
+            }
+            if low[node] == index[node] {
+                let mut component = Vec::new();
+                while let Some(member) = stack.pop() {
+                    on_stack[member] = false;
+                    component.push(member);
+                    if member == node {
+                        break;
+                    }
+                }
+                components.push(component);
+            }
+        }
+    }
+    components
 }
 
 /// Compute the **link units** (SCCs) of a catalog under its S4 dependency edges
@@ -259,12 +328,12 @@ fn build_unit_graph(catalog: &SliceCatalog, edges: &[DependencyEdge]) -> DiGraph
 /// remain individually nameable. The result is deterministic: members are
 /// sorted within each unit, and units are sorted by their smallest member.
 pub fn link_units(catalog: &SliceCatalog, edges: &[DependencyEdge]) -> Vec<LinkUnit> {
-    let graph = build_unit_graph(catalog, edges);
-    let mut units: Vec<LinkUnit> = petgraph::algo::tarjan_scc(&graph)
+    let (nodes, adjacency) = build_unit_graph(catalog, edges);
+    let mut units: Vec<LinkUnit> = tarjan_scc(&adjacency)
         .into_iter()
         .map(|component| {
             let mut members: Vec<SliceIri> =
-                component.into_iter().map(|n| graph[n].clone()).collect();
+                component.into_iter().map(|n| nodes[n].clone()).collect();
             members.sort();
             LinkUnit { members }
         })
@@ -405,7 +474,8 @@ fn slice_phase_leaf(
         hasher.update(b"\x1e");
     }
 
-    Ok(hex(hasher.finalize().as_slice()))
+    let digest = hasher.finalize();
+    Ok(format!("{digest:x}"))
 }
 
 // ── Merkle cache key ────────────────────────────────────────────────────────
@@ -470,7 +540,8 @@ fn merkle_root(
         hasher.update(leaf.as_bytes());
         hasher.update(b"\x1e");
     }
-    Ok(hex(hasher.finalize().as_slice()))
+    let digest = hasher.finalize();
+    Ok(format!("{digest:x}"))
 }
 
 /// Compute the cache key for a **source unit** (one slice) at `phase`.
@@ -531,17 +602,6 @@ pub fn product_unit_key(
         members: unit.closure.clone(),
         root,
     })
-}
-
-// ── Hex helper ──────────────────────────────────────────────────────────────
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
 }
 
 #[cfg(test)]

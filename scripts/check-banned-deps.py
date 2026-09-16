@@ -12,9 +12,8 @@ resolved closure across every edge kind, so a reintroduction through a
 dev-dependency or a transitive edge is caught the same way as a direct one.
 
 The ban list names the replacement so the failure message teaches the fix.
-Dependencies that are scheduled for replacement but still present (``hex``,
-``petgraph``) are NOT listed here — they join the list in the change that
-removes them, so this gate never lies about the present.
+A dependency joins the list in the change that removes it, so this gate never
+lies about the present.
 """
 
 import re
@@ -30,6 +29,8 @@ BANNED: dict[str, str] = {
     "oxsdatatypes": "purrdf-xsd",
     "oxrdf": "purrdf-core",
     "oxigraph": "the native purrdf engine",
+    "hex": 'core::fmt::LowerHex formatting (`format!("{digest:x}")`)',
+    "petgraph": "the first-party iterative Tarjan SCC (purrdf-slice / purrdf-shex)",
 }
 
 PACKAGE_NAME = re.compile(r'^name = "([^"]+)"$', re.MULTILINE)

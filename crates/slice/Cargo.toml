@@ -40,16 +40,9 @@ purrdf-sparql-algebra = { workspace = true }
 # implementation of that step in the workspace, since `purrdf-slice` is the only
 # library crate here that opens files. Zero-dependency foundation crate.
 purrdf-iri = { workspace = true }
-# Strongly-connected-component computation over the S4 dependency graph
-# (RFC §8 link units). `petgraph` is a published registry crate (no `path`),
-# so it is an external boundary, not a first-party layering edge — the
-# crate-layering gate (S0.9) is unaffected. Version aligns with the workspace
-# lockfile resolution.
-petgraph = { workspace = true }
 # Default features (std) re-enabled; the workspace-level entry is
 # default-features = false for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }
-hex = { workspace = true }
 # The prefix-consistency lint scans authored `.ttl` / `.rq` sources for `@prefix` /
 # `PREFIX` declarations with a regex, to police registry-prefix shadowing. External
 # published crate (already in the workspace lockfile, used by purrdf-validate/purrdf-shapes),

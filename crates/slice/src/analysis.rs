@@ -124,7 +124,8 @@ pub fn bundle_content_id(raw_digests: &[&str]) -> String {
         h.update(d.as_bytes());
         h.update(b"\n");
     }
-    hex::encode(h.finalize())
+    let digest = h.finalize();
+    format!("{digest:x}")
 }
 
 // ── Analysis graph output ─────────────────────────────────────────────────────
