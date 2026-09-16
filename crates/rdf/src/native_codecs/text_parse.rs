@@ -35,6 +35,7 @@
 
 use std::collections::HashMap;
 
+use purrdf_iri::langtag;
 use purrdf_iri::terminals::is_ws;
 use purrdf_iri::{BaseOrigin, BaseScope, Iri, IriError, Position};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize, tokenize_turtle};
@@ -1010,7 +1011,16 @@ impl<'a> TokenCursor<'a> {
                     unreachable!()
                 };
                 let (base, dir) = split_lang_direction(raw, self.lineno, col)?;
-                validate_language_tag(&base, self.lineno, col)?;
+                // N-Triples / N-Quads: RFC 5646 well-formedness, which is what
+                // `ntriples-langdir-bad-4` requires. See `validate_language_tag`
+                // for why the profile is the relaxed one and why the Turtle
+                // parser below names a different grammar.
+                validate_language_tag(
+                    &base,
+                    langtag::Profile::Rfc5646PrivateUseRelaxed,
+                    self.lineno,
+                    col,
+                )?;
                 lang = Some(base);
                 direction = dir;
             }
@@ -1130,43 +1140,77 @@ fn absolute_iri_by_grammar(
         .map_err(|e| iri_err_at(&e, line_no, column))
 }
 
-/// Validate a BCP-47 language tag, including the long private-use subtag relaxation
-/// (`x-purrdf-…`) purrdf-gts applies.
-fn validate_language_tag(tag: &str, line_no: u32, column: u32) -> Result<(), RdfDiagnostic> {
-    let mut parts = tag.split('-');
-    let Some(primary) = parts.next() else {
-        return Err(err_at("empty language tag", line_no, column));
-    };
-    if primary.is_empty()
-        || primary.len() > 8
-        || !primary.bytes().all(|byte| byte.is_ascii_alphabetic())
-    {
-        return Err(err_at(
-            format!("invalid language tag {tag:?}"),
-            line_no,
-            column,
-        ));
+/// Validate the language part of an `@lang[--dir]` tag against `profile`.
+///
+/// The judgement is [`purrdf_iri::langtag`]'s — NOT a transcription of it. The
+/// hand-rolled predicate this replaced had drifted into its own dialect
+/// (1-character primary subtags, unbounded subtag counts, no grammar beyond
+/// "alphanumeric"), which accepted `e` and `en-US-abc`; the module accepts
+/// exactly the grammar the named profile draws and nothing else.
+///
+/// The failure keeps the language tag's own line/column and, following
+/// [`iri_err_at`], reports the module's
+/// [`langtag::LanguageTagError::diagnostic_code`] rather than the generic parse
+/// code, so the user is told *which* production refused instead of only that
+/// something did.
+///
+/// # Why the caller picks the profile
+///
+/// Both parsers in this file reach here, and they are held to DIFFERENT
+/// grammars because their specifications state different grammars. Neither is
+/// a lenience knob.
+///
+/// * The N-Triples / N-Quads line parser passes
+///   [`langtag::Profile::Rfc5646PrivateUseRelaxed`]. Its conformance corpus
+///   requires RFC 5646 well-formedness: `ntriples-langdir-bad-4`
+///   (`"Hello"@cantbethislong`) is a NEGATIVE syntax test, and it is the
+///   eight-character subtag ceiling that refuses it. The profile is the
+///   relaxed one only because this codec must re-read what this workspace
+///   WRITES — `crates/shapes/corpus/31-lenient-langtag/data.nt` carries
+///   `@x-purrdf-afrikaans`, a nine-character private-use subtag. That single
+///   lifted bound is the whole of the widening.
+/// * The Turtle / TriG document parser passes
+///   [`langtag::Profile::ConcreteSyntaxLangtag`], the `LANGTAG` terminal those
+///   grammars actually spell:
+///   `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`. That terminal is
+///   deliberately looser than RFC 5646 and approved corpora depend on the
+///   looseness: the vendored shexTest vectors carry `"ab"@en-fr-jura` and
+///   `"septante"@fr-be-fbcl`, both read as `text/turtle` by the ShEx
+///   validation-conformance harness and neither well-formed under §2.1
+///   (`jura` and `fbcl` are four alphabetic characters, and `variant` admits
+///   four characters only when the first is a DIGIT). A downstream project's
+///   private-use tags push the same way, its `x-<project>-<language name>`
+///   family routinely running past the eight-character private-use cap. So
+///   Turtle is held to its own terminal, which still refuses the genuine
+///   garbage the two paths used to disagree about — `@1`, `@-` and `@9-9` are
+///   now refused by BOTH.
+///
+/// Holding Turtle to the terminal rather than to §2.1 does leave ONE residual
+/// difference, and it is the specifications' own: `@cantbethislong` is refused
+/// from N-Triples, as `ntriples-langdir-bad-4` demands, and accepted from
+/// Turtle, whose terminal caps no subtag. No Turtle or TriG negative-syntax
+/// test asks otherwise — the only two in the W3C corpus that concern language
+/// tags are `nt-ttl12-langdir-bad-1` (`@en--unk`) and `nt-ttl12-langdir-bad-2`
+/// (`@en--LTR`), and both are refused by [`split_lang_direction`] before the
+/// tag itself is judged.
+fn validate_language_tag(
+    tag: &str,
+    profile: langtag::Profile,
+    line_no: u32,
+    column: u32,
+) -> Result<(), RdfDiagnostic> {
+    match langtag::parse_with(tag, profile) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(RdfDiagnostic::error(
+            error.diagnostic_code(),
+            format!("invalid language tag {tag:?}: {error}"),
+        )
+        .with_location(RdfLocation {
+            line: Some(line_no),
+            column: Some(column),
+            ..RdfLocation::default()
+        })),
     }
-    let mut private_use = primary.eq_ignore_ascii_case("x");
-    for subtag in parts {
-        let alnum = !subtag.is_empty() && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric());
-        let acceptable = if private_use {
-            alnum
-        } else {
-            alnum && subtag.len() <= 8
-        };
-        if !acceptable {
-            return Err(err_at(
-                format!("invalid language tag {tag:?}"),
-                line_no,
-                column,
-            ));
-        }
-        if subtag.eq_ignore_ascii_case("x") {
-            private_use = true;
-        }
-    }
-    Ok(())
 }
 
 fn node_is(node: &Node, kinds: &[fn(&Node) -> bool]) -> bool {
@@ -1855,6 +1899,13 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 // `@lang` token, so the direction is re-parsed at the `from_nquads`
                 // stage. To match that exactly, split here into lang + direction.
                 let (base, dir) = split_lang_direction(raw, l, c)?;
+                // Turtle / TriG: the `LANGTAG` terminal those grammars spell,
+                // which is looser than RFC 5646 and which approved W3C corpora
+                // depend on being looser. Validating at all is what stops the
+                // lexer's `[A-Za-z0-9-]+` token shape from being the entire
+                // contract — `@1`, `@-` and `@9-9` used to parse here and be
+                // refused from N-Triples. See `validate_language_tag`.
+                validate_language_tag(&base, langtag::Profile::ConcreteSyntaxLangtag, l, c)?;
                 lang = Some(base);
                 direction = dir;
             }
@@ -3207,6 +3258,77 @@ mod tests {
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(32));
         assert!(e.message.contains("invalid language tag"));
+        // The reason reaches the user, not just the verdict.
+        assert_eq!(e.code, "langtag-subtag-length-over-eight");
+    }
+
+    /// A REFUSAL IS A CLAIM TOO.
+    ///
+    /// The predicate this codec used to apply was its own dialect — a
+    /// 1-character primary subtag and any run of ≤8-character alphanumeric
+    /// subtags — so `@e` and `@en-US-abc` were interned as language tags. Both
+    /// halves are asserted: the refused column is what the old predicate
+    /// wrongly took, the accepted column is the neighbouring *well-formed* tag
+    /// that must still parse. Proving only the refusal would be the mirror bug.
+    #[test]
+    fn langtags_refused_by_rfc5646_have_an_accepted_neighbour() {
+        fn line(tag: &str) -> String {
+            format!("<http://ex/s> <http://ex/p> \"x\"@{tag} .\n")
+        }
+        fn verdict(tag: &str) -> Result<(), RdfDiagnostic> {
+            parse_lines_sequential(&line(tag), false, 1, &BaseScope::empty(), &mut NoSpans)
+                .map(|_| ())
+        }
+
+        // (wrongly accepted before, the neighbour that must still be taken)
+        let pairs: &[(&str, &str)] = &[
+            ("e", "en"),
+            ("a-DE", "ab-DE"),
+            ("en-US-abc", "en-US-abcde"),
+            ("en-Lat1", "en-Latn"),
+            ("de-419-DE", "de-DE"),
+            ("en-a234", "en-1234"),
+            ("zh-cmn-yue-nan-hak", "zh-cmn-yue-nan"),
+            // The private-use widening lifts the LENGTH bound on private-use
+            // subtags and nothing else: the marker still needs a subtag, and an
+            // over-long subtag BEFORE the marker is not a private-use one.
+            // (A non-alphanumeric cannot be tested here: `LangTag` lexes as
+            // `[A-Za-z0-9-]+`, so such a tag never reaches this validator.)
+            ("en-x", "en-x-a"),
+            ("en-abcdefghi-x-a", "en-abcdefgh-x-a"),
+        ];
+        for (refused, accepted) in pairs {
+            let error = verdict(refused).expect_err("must be refused");
+            assert!(
+                error.message.contains("invalid language tag"),
+                "{refused:?}: {}",
+                error.message
+            );
+            assert!(
+                error.code.starts_with("langtag-"),
+                "{refused:?} must carry the langtag module's code, got {:?}",
+                error.code
+            );
+            let location = error.location.as_ref().expect("located");
+            assert_eq!(location.line, Some(1), "{refused:?} keeps its line");
+            assert_eq!(location.column, Some(32), "{refused:?} keeps its column");
+            verdict(accepted).unwrap_or_else(|e| panic!("{accepted:?} must parse: {}", e.message));
+        }
+
+        // The private-use tags this workspace's own corpora carry — the reason
+        // this site uses the relaxed profile rather than plain RFC 5646.
+        for accepted in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "i-enochian",
+            "x-purrdf-english",
+            "x-purrdf-afrikaans",
+            "x-purrdf-norwegiannynorsk",
+            "de-CH-x-phonebk",
+        ] {
+            verdict(accepted).unwrap_or_else(|e| panic!("{accepted:?} must parse: {}", e.message));
+        }
     }
 
     /// A non-IRI datatype after `^^` reports the column of the datatype token, not
@@ -3307,6 +3429,147 @@ mod tests {
         assert_eq!(loc.line, Some(1));
         assert_eq!(loc.column, Some(32));
         assert!(e.message.contains("invalid literal base direction"));
+    }
+
+    /// A REFUSAL IS A CLAIM TOO — the Turtle / TriG half.
+    ///
+    /// This path used to validate NOTHING: the lexer's `[A-Za-z0-9-]+` token
+    /// shape was the entire contract, so `"x"@1` parsed from Turtle while the
+    /// N-Triples parser in this same file refused it. It is now held to the
+    /// `LANGTAG` terminal the Turtle grammar spells,
+    /// `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`.
+    ///
+    /// Both halves are mandatory here, and the accept half is the load-bearing
+    /// one: that terminal is looser than RFC 5646 *on purpose*, and approved
+    /// W3C vectors plus a downstream project's published tags depend on the
+    /// looseness. Tightening this to §2.1 would pass every refusal assertion
+    /// below and still be a bug.
+    #[test]
+    fn doc_langtags_are_held_to_the_langtag_terminal_in_both_directions() {
+        fn verdict(tag: &str) -> Result<(), RdfDiagnostic> {
+            let text = format!("<http://ex/s> <http://ex/p> \"x\"@{tag} .\n");
+            DocParser::new(&text, BaseScope::empty(), false, &mut NoSpans)
+                .parse()
+                .map(|_| ())
+        }
+
+        // NEWLY REFUSED. Turtle took every one of these before; each is garbage
+        // the terminal itself excludes, and each keeps its line and column —
+        // the tag starts at column 32 on this line.
+        for refused in ["1", "-", "9-9", "en-", "123-456"] {
+            let Err(error) = verdict(refused) else {
+                panic!("{refused:?} must be refused by the `LANGTAG` terminal")
+            };
+            assert!(
+                error.message.contains("invalid language tag"),
+                "{refused:?}: {}",
+                error.message
+            );
+            assert!(
+                error.code.starts_with("langtag-"),
+                "{refused:?} must carry the langtag module's code, got {:?}",
+                error.code
+            );
+            let location = error.location.as_ref().expect("located");
+            assert_eq!(location.line, Some(1), "{refused:?} keeps its line");
+            assert_eq!(location.column, Some(32), "{refused:?} keeps its column");
+        }
+
+        // `@en--` is refused one layer earlier: `split_lang_direction` sees a
+        // `--` suffix that is neither `ltr` nor `rtl`. Pinned here so that a
+        // future reshuffle cannot let it through unnoticed.
+        let error = verdict("en--").expect_err("`@en--` must be refused");
+        assert!(
+            error.message.contains("invalid literal base direction"),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.location.as_ref().expect("located").column, Some(32));
+
+        // MUST STILL BE ACCEPTED. The first group is well-formed RFC 5646; the
+        // rest is not, and is exactly why this path is held to the terminal
+        // rather than to §2.1.
+        for accepted in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "i-enochian",
+            "de-CH-x-phonebk",
+            // RDF 1.2 base-direction forms.
+            "en--ltr",
+            "en--rtl",
+            // Approved W3C ShEx validation vectors, read as `text/turtle`:
+            // `jura` and `fbcl` are four ALPHA, and `variant` admits four
+            // characters only when the first is a DIGIT.
+            "en-fr-jura",
+            "fr-be-fbcl",
+            // A downstream project's published `x-<project>-<language name>`
+            // private-use family, and this workspace's own. The long names run
+            // past the eight-character private-use cap and are the common case.
+            "x-gmeow-english",
+            "x-gmeow-chinese-latn",
+            "x-gmeow-norwegiannynorsk",
+            "x-purrdf-english",
+            "x-purrdf-afrikaans",
+            "x-purrdf-norwegiannynorsk",
+        ] {
+            verdict(accepted).unwrap_or_else(|e| panic!("{accepted:?} must parse: {}", e.message));
+        }
+    }
+
+    /// The two literal paths in this file now agree wherever their grammars do.
+    ///
+    /// The divergence this closes was not a nuance: `@1` was accepted by the
+    /// Turtle parser and refused by the N-Triples parser, in the same file. The
+    /// ONE residual difference is the specifications' own and is asserted here
+    /// so it stays deliberate — `@cantbethislong` is a W3C N-Triples negative
+    /// syntax test (`ntriples-langdir-bad-4`) and the Turtle terminal caps no
+    /// subtag.
+    #[test]
+    fn the_two_literal_paths_agree_on_langtags_except_where_the_grammars_do_not() {
+        fn line(tag: &str) -> String {
+            format!("<http://ex/s> <http://ex/p> \"x\"@{tag} .\n")
+        }
+        fn turtle(tag: &str) -> bool {
+            DocParser::new(&line(tag), BaseScope::empty(), false, &mut NoSpans)
+                .parse()
+                .is_ok()
+        }
+        fn ntriples(tag: &str) -> bool {
+            parse_lines_sequential(&line(tag), false, 1, &BaseScope::empty(), &mut NoSpans).is_ok()
+        }
+
+        // Both refuse.
+        for garbage in ["1", "-", "9-9", "123-456", "en-"] {
+            assert!(!turtle(garbage), "Turtle must refuse {garbage:?}");
+            assert!(!ntriples(garbage), "N-Triples must refuse {garbage:?}");
+        }
+        // Both accept, including the over-cap private-use tags a downstream
+        // project publishes.
+        for good in [
+            "en",
+            "en-US",
+            "x-gmeow-english",
+            "x-gmeow-chinese-latn",
+            "x-gmeow-norwegiannynorsk",
+            "x-purrdf-afrikaans",
+        ] {
+            assert!(turtle(good), "Turtle must accept {good:?}");
+            assert!(ntriples(good), "N-Triples must accept {good:?}");
+        }
+        // The residual, deliberate difference.
+        assert!(
+            turtle("cantbethislong"),
+            "the Turtle `LANGTAG` terminal caps no subtag"
+        );
+        assert!(
+            !ntriples("cantbethislong"),
+            "`ntriples-langdir-bad-4` requires this refusal"
+        );
+        // …and it is only that tag's LENGTH, not its shape: the neighbour that
+        // fits the §2.1 ceiling is taken by both.
+        assert!(turtle("cantbeth"));
+        assert!(ntriples("cantbeth"));
     }
 
     /// An undeclared prefix in the object position (DocParser path) reports the

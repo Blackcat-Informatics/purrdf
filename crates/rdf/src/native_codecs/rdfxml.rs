@@ -52,6 +52,7 @@ use crate::nesting::guard_xml_nesting;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
+use purrdf_iri::langtag;
 
 /// The RDF/XML codec: a standalone (non-line-family) [`RdfCodec`] over the in-repo W3C
 /// RDF/XML grammar. RDF/XML is treated as star-INcapable under the transcode loss
@@ -1024,17 +1025,37 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
     Ok(())
 }
 
-/// The language-tag contract the prior purrdf-gts `validate_language_tag` enforced:
-/// non-empty, hyphen-separated subtags that are each non-empty and ASCII alphanumeric.
+/// The `xml:lang` contract: the RFC 5646 `Language-Tag` production, decided by
+/// [`purrdf_iri::langtag`].
+///
+/// The predicate this replaced was "non-empty, hyphen-separated, every subtag
+/// ASCII alphanumeric" and had NO grammar and NO length bound at all, so it
+/// interned `xml:lang="1"`, `xml:lang="123-456"` and
+/// `xml:lang="abcdefghijklmnop"` as language tags. Worse, it disagreed with the
+/// line/Turtle codecs on the same input, so whether a document's language tag
+/// survived ingestion depended on which syntax it arrived in. Both codecs now
+/// ask the same module the same question.
+///
+/// The profile is [`langtag::Profile::Rfc5646PrivateUseRelaxed`], matching
+/// `validate_language_tag` in
+/// [`text_parse`](crate::native_codecs::text_parse), because the RDF/XML
+/// serializer writes whatever `@lang` a dataset carries into `xml:lang` — a
+/// dataset read from `@x-purrdf-afrikaans` N-Triples must round-trip through
+/// RDF/XML. A narrower profile here would re-open the cross-codec divergence
+/// this replacement exists to close, pointing the other way.
+///
+/// The failure reports the module's
+/// [`langtag::LanguageTagError::diagnostic_code`], so the user learns which
+/// production refused. RDF/XML parse diagnostics carry no line/column (the XML
+/// reader does not surface one), which this does not change.
 fn validate_language_tag(language: &str) -> Result<(), RdfDiagnostic> {
-    let valid = !language.is_empty()
-        && language.split('-').all(|subtag| {
-            !subtag.is_empty() && subtag.chars().all(|ch| ch.is_ascii_alphanumeric())
-        });
-    if !valid {
-        return Err(parse_err(format!("invalid language tag {language:?}")));
+    match langtag::parse_with(language, langtag::Profile::Rfc5646PrivateUseRelaxed) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(RdfDiagnostic::error(
+            error.diagnostic_code(),
+            format!("RDF/XML: invalid language tag {language:?}: {error}"),
+        )),
     }
-    Ok(())
 }
 
 // ── XML-literal (`rdf:parseType="Literal"`) inclusive canonicalization ──────────
@@ -1788,6 +1809,89 @@ mod tests {
     /// Parse RDF/XML straight into a frozen dataset, for assertions over quads.
     fn parse(text: &str, base: Option<&str>) -> Arc<RdfDataset> {
         parse_rdfxml_to_dataset(text, &mut scope(base)).expect("parse rdf/xml")
+    }
+
+    /// An `xml:lang` document with `lang` on the literal-bearing property.
+    fn lang_document(lang: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\"?>\n<rdf:RDF \
+             xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" \
+             xmlns:ex=\"http://example.org/\">\
+             <rdf:Description rdf:about=\"http://example.org/s\">\
+             <ex:p xml:lang=\"{lang}\">v</ex:p>\
+             </rdf:Description></rdf:RDF>"
+        )
+    }
+
+    /// A REFUSAL IS A CLAIM TOO.
+    ///
+    /// The predicate this codec used to apply had no grammar and no length
+    /// bound, so `xml:lang="1"`, `"9-9"`, `"123-456"` and `"abcdefghijklmnop"`
+    /// were all interned as language tags — and the line/Turtle codecs refused
+    /// the same strings, so a document's language tag survived or did not
+    /// depending only on which syntax carried it.
+    ///
+    /// Both halves are asserted, because tightening is exactly where
+    /// over-refusal hides: the refused column is what the old predicate wrongly
+    /// took, and the accepted column is the neighbouring *well-formed* tag at
+    /// the same site, which must still parse. A change that only proved the
+    /// refusal would be the mirror bug.
+    #[test]
+    fn xml_lang_refuses_non_tags_and_still_takes_their_valid_neighbours() {
+        // (wrongly accepted before, the neighbour that must still be taken)
+        let pairs: &[(&str, &str)] = &[
+            // No grammar at all: a bare digit run is not a `language`.
+            ("1", "en"),
+            ("9-9", "en-US"),
+            ("123-456", "zh-Hans-CN"),
+            // No length bound at all.
+            ("abcdefghijklmnop", "abcdefgh"),
+            ("en-abcdefghijklmnop", "en-abcdefgh"),
+            // Shapes the other two codecs already refused, so the divergence
+            // closes in both directions.
+            ("e", "en"),
+            ("en-US-abc", "en-US-abcde"),
+            // The private-use widening is bounded: the marker still needs a
+            // subtag, and the relaxation only lifts the LENGTH bound.
+            ("en-x", "en-x-a"),
+            ("x-purrdf-afri!", "x-purrdf-afrikaans"),
+        ];
+        for (refused, accepted) in pairs {
+            let error = parse_rdfxml_to_dataset(&lang_document(refused), &mut scope(None))
+                .expect_err(&format!("xml:lang={refused:?} must be refused"));
+            assert!(
+                error.message.contains("invalid language tag"),
+                "{refused:?}: {}",
+                error.message
+            );
+            assert!(
+                error.code.starts_with("langtag-"),
+                "{refused:?} must carry the langtag module's code, got {:?}",
+                error.code
+            );
+            assert!(
+                parse_rdfxml_to_dataset(&lang_document(accepted), &mut scope(None)).is_ok(),
+                "xml:lang={accepted:?} must still be accepted"
+            );
+        }
+
+        // The tags this workspace's own artifacts carry must round-trip through
+        // RDF/XML, which is why this site uses the private-use-relaxed profile.
+        for accepted in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "x-purrdf-english",
+            "x-purrdf-afrikaans",
+            "x-purrdf-norwegiannynorsk",
+            "i-enochian",
+        ] {
+            assert!(
+                parse_rdfxml_to_dataset(&lang_document(accepted), &mut scope(None)).is_ok(),
+                "xml:lang={accepted:?} must be accepted"
+            );
+        }
     }
 
     /// A DEEP DOCUMENT IS A DIAGNOSTIC, NOT A DEAD PROCESS.

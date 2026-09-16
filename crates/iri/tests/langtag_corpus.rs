@@ -10,7 +10,9 @@
 //! repetition or length bound it sits on. Every refused input is paired with an
 //! accepted neighbor (repo refusal discipline).
 
-use purrdf_iri::langtag::{LanguageTagError, TagForm, is_well_formed, parse};
+use purrdf_iri::langtag::{
+    LanguageTagError, Profile, TagForm, is_well_formed, is_well_formed_with, parse, parse_with,
+};
 
 /// RFC 5646 Appendix A — every well-formed example, transcribed verbatim.
 const APPENDIX_A_WELL_FORMED: &[&str] = &[
@@ -213,6 +215,141 @@ fn abnf_boundaries_with_accepted_neighbors() {
 fn case_is_insignificant_for_well_formedness() {
     for tag in ["en-US", "EN-us", "eN-Us", "zh-hant", "ZH-HANT", "X-FOO"] {
         assert!(is_well_formed(tag), "{tag:?}");
+    }
+}
+
+/// The private-use tags PurRDF's own artifacts carry, and the bound that makes
+/// [`Profile::Rfc5646PrivateUseRelaxed`] necessary rather than defensive.
+///
+/// Each of these appears verbatim in a workspace fixture or corpus, so the
+/// pairing below is a live contract: the left column is what §2.1 says, the
+/// right column is what a codec reading those artifacts must be able to take.
+#[test]
+fn purrdf_private_use_tags_need_the_relaxed_profile() {
+    // Over the §2.1 ceiling — the relaxation is load-bearing for these.
+    for over_ceiling in ["x-purrdf-afrikaans", "x-purrdf-norwegiannynorsk"] {
+        assert_eq!(
+            parse(over_ceiling),
+            Err(LanguageTagError::SubtagLengthOverEight),
+            "{over_ceiling:?} exceeds `privateuse = \"x\" 1*(\"-\" (1*8alphanum))`"
+        );
+        assert!(
+            is_well_formed_with(over_ceiling, Profile::Rfc5646PrivateUseRelaxed),
+            "{over_ceiling:?} must be accepted by the relaxed profile"
+        );
+    }
+    // Within it — accepted by BOTH profiles, so this tag alone would never
+    // have justified the widening.
+    assert!(is_well_formed("x-purrdf-english"));
+    assert!(is_well_formed_with(
+        "x-purrdf-english",
+        Profile::Rfc5646PrivateUseRelaxed
+    ));
+}
+
+/// The relaxed profile is a widening and nothing else: it must never accept a
+/// tag the strict profile rejects for a reason other than the private-use
+/// ceiling, and must never reject one the strict profile accepts.
+#[test]
+fn the_relaxed_profile_is_a_strict_superset() {
+    let accepted_everywhere = APPENDIX_A_WELL_FORMED
+        .iter()
+        .chain(GRANDFATHERED.iter())
+        .chain(["en-US", "x-purrdf-english", "und"].iter());
+    for tag in accepted_everywhere {
+        assert!(is_well_formed(tag), "{tag:?} under RFC 5646");
+        assert!(
+            is_well_formed_with(tag, Profile::Rfc5646PrivateUseRelaxed),
+            "{tag:?} must stay accepted under the relaxed profile"
+        );
+    }
+    // Refusals that have nothing to do with private use survive the widening,
+    // each with the neighbour that must still be taken.
+    let pairs: &[(&str, &str)] = &[
+        ("", "en"),
+        ("e", "en"),
+        ("a-DE", "ab-DE"),
+        ("de-419-DE", "de-DE"),
+        ("en-Lat1", "en-Latn"),
+        ("en-ü", "en-u-uu"),
+        ("not a tag", "und"),
+        ("abcdefghi", "abcdefgh"),
+    ];
+    for (refused, accepted) in pairs {
+        assert_eq!(
+            parse(refused).err(),
+            parse_with(refused, Profile::Rfc5646PrivateUseRelaxed).err(),
+            "{refused:?} must refuse identically under both profiles"
+        );
+        assert!(
+            is_well_formed_with(accepted, Profile::Rfc5646PrivateUseRelaxed),
+            "{accepted:?} must stay accepted"
+        );
+    }
+}
+
+/// The tags the [`Profile::ConcreteSyntaxLangtag`] terminal exists to keep
+/// readable, sourced the same way as the rest of this corpus: from artifacts
+/// that are actually published rather than from imagination.
+///
+/// The first group is W3C's — two tags carried by approved ShEx validation
+/// vectors which the conformance harness reads as `text/turtle`. The second is
+/// a private-use family a downstream project publishes across a large body of
+/// literals, whose language-name subtags routinely run past the eight-character
+/// private-use cap. Neither group is well-formed RFC 5646, and refusing either
+/// would be an over-refusal of input the ecosystem really does write.
+#[test]
+fn the_terminal_profile_keeps_published_tags_readable() {
+    // (tag, is it well-formed RFC 5646?)
+    let published: &[(&str, bool)] = &[
+        // W3C ShEx validation vectors, read as `text/turtle`. `jura` and `fbcl`
+        // are four ALPHA, and `variant` admits four characters only when the
+        // first is a DIGIT — so §2.1 refuses both.
+        ("en-fr-jura", false),
+        ("fr-be-fbcl", false),
+        // A downstream project's `x-<project>-<language name>` family. The
+        // short names fit §2.1; the long ones do not, and they are the common
+        // case rather than the exotic one.
+        ("x-gmeow-english", true),
+        ("x-gmeow-chinese-latn", true),
+        ("x-gmeow-norwegiannynorsk", false),
+        ("x-gmeow-westernfrisian", false),
+        // This workspace's own artifacts, for the same reason.
+        ("x-purrdf-english", true),
+        ("x-purrdf-afrikaans", false),
+        ("x-purrdf-norwegiannynorsk", false),
+    ];
+    for (tag, rfc5646_well_formed) in published {
+        assert_eq!(
+            is_well_formed(tag),
+            *rfc5646_well_formed,
+            "{tag:?} under RFC 5646"
+        );
+        assert!(
+            is_well_formed_with(tag, Profile::ConcreteSyntaxLangtag),
+            "{tag:?} is published and must stay readable"
+        );
+    }
+
+    // The widening is not a rubber stamp: the terminal still has a grammar, and
+    // each refusal below is paired with the neighbour that must survive it.
+    let refused: &[(&str, &str)] = &[
+        ("1", "en"),
+        ("-", "en"),
+        ("9-9", "en-9"),
+        ("en-", "en"),
+        ("123-456", "abc-456"),
+        ("en-ü", "en-u-uu"),
+    ];
+    for (bad, neighbour) in refused {
+        assert!(
+            !is_well_formed_with(bad, Profile::ConcreteSyntaxLangtag),
+            "{bad:?} is not a `LANGTAG` terminal"
+        );
+        assert!(
+            is_well_formed_with(neighbour, Profile::ConcreteSyntaxLangtag),
+            "{neighbour:?} must stay accepted"
+        );
     }
 }
 
