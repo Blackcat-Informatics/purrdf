@@ -31,9 +31,11 @@
 //!   [`PrefixMap`], subsuming the SSSOM serializer's hand-rolled prefix logic.
 //!   `oxiri` has none of this — it is the EXTEND deliverable for this slice.
 //! * **BCP 47 language tags** — [`langtag`], RFC 5646 `Language-Tag`
-//!   well-formedness (the first-party `oxilangtag` replacement), shared by
-//!   embedding metadata and CSVW validation. Well-formedness only: registry
-//!   validity and RFC 4647 matching land with their first consumers.
+//!   well-formedness against the §2.1 ABNF and the closed §2.2.8 grandfathered
+//!   list, shared by embedding metadata and CSVW validation. Well-formedness is
+//!   the whole of it: subtags are never checked against the IANA Language
+//!   Subtag Registry, and RFC 4647 language-range matching is not implemented
+//!   anywhere in this crate.
 //! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
 //!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) that
 //!   every scanner above this leaf shares. They live here because a scanner's

@@ -4,38 +4,65 @@
 //! BCP 47 / RFC 5646 language-tag **well-formedness** (the `Language-Tag`
 //! production of [RFC 5646 §2.1]).
 //!
-//! This is the first-party replacement for the `oxilangtag` dependency: a
-//! zero-dependency, wasm-clean checker for the exact ABNF, written from the
-//! specification. It decides **well-formedness only** — the purely syntactic
-//! judgement of §2.2.9. Registry-based *validity* (subtags checked against the
-//! IANA registry) and RFC 4647 *matching* are deliberately not here; each
-//! lands together with its first consumer, so no unexercised surface ships.
+//! # Scope
 //!
-//! The accepted language is intentionally identical to the predecessor's so
-//! that replacing the dependency changes **no acceptance decision** anywhere
-//! in the workspace. Two properties of that language deserve calling out:
+//! [`parse`] decides **well-formedness** and nothing else: the purely syntactic
+//! judgement of RFC 5646 §2.2.9, taken against the §2.1 ABNF and the closed
+//! §2.2.8 grandfathered list. It does **not** decide *validity* — whether each
+//! subtag is registered in the IANA Language Subtag Registry — and it is not an
+//! RFC 4647 language-range matcher. Neither of those is available anywhere in
+//! this crate; a caller that needs them must obtain them elsewhere.
 //!
-//! * A tag with a **duplicate extension singleton** (`ar-a-aaa-b-bbb-a-ccc`)
-//!   is *well-formed* but not *valid* (RFC 5646 §2.2.9 draws exactly this
-//!   line). It is accepted here.
-//! * The 26 **grandfathered** tags of §2.2.8 are matched case-insensitively
-//!   as whole units.
+//! Two consequences of where §2.2.9 draws that line are worth stating outright,
+//! because both look like bugs to a reader who expects validity:
 //!
-//! Per the repo `no-optionality / hard-fail` doctrine every rejection is a
-//! typed [`LanguageTagError`] naming *why* the string was refused, and every
-//! failure carries a stable [`LanguageTagError::diagnostic_code`]. This module
-//! is the single owner of the `langtag-*` code family.
+//! * A tag with a **duplicate extension singleton** (`ar-a-aaa-b-bbb-a-ccc`) is
+//!   well-formed and *not* valid. It is accepted here.
+//! * Subtags are never looked up, so `qq-Zzzz-QQ` is well-formed even though no
+//!   such language, script or region is registered.
+//!
+//! Case is insignificant to the judgement, and the input is never re-encoded or
+//! case-normalized: RDF keeps language tags lexical-verbatim, and the §2.1.1
+//! case conventions are a *presentation* recommendation, not part of the
+//! grammar.
+//!
+//! # How the grammar is decomposed
+//!
+//! The parser is recursive descent with one function per line of the `langtag`
+//! production, driven by a shared subtag `Cursor`. See [`parse`] for the
+//! production-to-function map. There is no parser state variable: the sequence
+//! of calls *is* the production, and each optional or repeated section is a
+//! `take_if`/`while let` over a predicate that is itself one ABNF alternative.
+//! No backtracking is needed, because at every position the admissible
+//! productions are disjoint on subtag shape (a 3-letter subtag can only be an
+//! `extlang`, a 4-letter one only a `script`, and so on).
+//!
+//! # Failure
+//!
+//! Every rejection is a typed [`LanguageTagError`] naming the production that
+//! refused, and carries a stable [`LanguageTagError::diagnostic_code`]. This
+//! module is the single owner of the `langtag-*` code family.
+//!
+//! # How the accepted language is pinned
+//!
+//! `tests/langtag_differential.rs` holds a frozen accept/reject table of 3935
+//! candidate tags, generated from the ABNF and labelled by an external oracle,
+//! and asserts [`is_well_formed`] against every row. `tests/PROVENANCE.md`
+//! records where the inputs and the verdicts each came from. A disagreement
+//! there is a defect in this module, never in the table.
 //!
 //! [RFC 5646 §2.1]: https://www.rfc-editor.org/rfc/rfc5646#section-2.1
 
 use core::fmt;
 
-/// The 26 grandfathered tags of RFC 5646 §2.2.8 (17 irregular + 9 regular),
-/// matched case-insensitively as complete tags. The list is closed by the
-/// specification: "no new grandfathered tags will be created".
+/// The closed `grandfathered` set of RFC 5646 §2.2.8, in the order the RFC
+/// presents it: the seventeen `irregular` tags, then the nine `regular` ones.
+///
+/// Matched case-insensitively as whole tags. The set is closed by the
+/// specification — "no new grandfathered tags will be created" — so this array
+/// is complete by construction rather than by maintenance.
 const GRANDFATHERED: [&str; 26] = [
-    "art-lojban",
-    "cel-gaulish",
+    // irregular
     "en-GB-oed",
     "i-ami",
     "i-bnn",
@@ -50,17 +77,34 @@ const GRANDFATHERED: [&str; 26] = [
     "i-tao",
     "i-tay",
     "i-tsu",
-    "no-bok",
-    "no-nyn",
     "sgn-BE-FR",
     "sgn-BE-NL",
     "sgn-CH-DE",
+    // regular
+    "art-lojban",
+    "cel-gaulish",
+    "no-bok",
+    "no-nyn",
     "zh-guoyu",
     "zh-hakka",
     "zh-min",
     "zh-min-nan",
     "zh-xiang",
 ];
+
+/// The longest subtag any RFC 5646 production admits.
+///
+/// Read off the ABNF rather than assumed: `language` tops out at `5*8ALPHA`,
+/// `variant` at `5*8alphanum`, an `extension` subtag at `2*8alphanum` and a
+/// `privateuse` subtag at `1*8alphanum`; the fixed-width productions
+/// (`extlang`, `script`, `region`, `singleton`) are all shorter. Eight is
+/// therefore a bound every subtag position shares, which is what makes the
+/// lexical pre-pass in [`check_subtag_envelope`] legitimate.
+const SUBTAG_CEILING: usize = 8;
+
+/// `extlang = 3ALPHA *2("-" 3ALPHA)` — the repetition is bounded at two, so at
+/// most three `extlang` subtags in total.
+const EXTLANG_REPEAT_LIMIT: usize = 2;
 
 /// Which of the three top-level `Language-Tag` alternatives matched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,26 +119,40 @@ pub enum TagForm {
 
 /// Why a string failed the `Language-Tag` production.
 ///
-/// The variants are deliberately specific so callers (and fixtures) can assert
-/// *why* a tag was rejected, not merely that it was.
+/// One variant per way the decomposition in [`parse`] can refuse: two from the
+/// lexical envelope every production shares, four from a named production that
+/// could not be satisfied, and one for input left over after the whole
+/// production ran. Callers (and fixtures) can therefore assert *which* rule
+/// refused, not merely that something did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LanguageTagError {
-    /// Two adjacent hyphens, a leading/trailing hyphen, or an empty input
-    /// produced a zero-length subtag.
-    EmptySubtag,
-    /// A subtag exceeds the 8-character ceiling every alternative shares.
-    SubtagTooLong,
-    /// The primary language subtag is not 2–8 ASCII letters.
-    InvalidLanguage,
-    /// A subtag fits no production admissible in its position.
-    InvalidSubtag,
-    /// More than three `extlang` subtags (`extlang = 3ALPHA *2("-" 3ALPHA)`).
-    TooManyExtlangs,
-    /// An extension singleton with no following subtag (`en-a`).
-    EmptyExtension,
-    /// A `x`/`X` singleton with no following private-use subtag (`en-x`, `x-`).
-    EmptyPrivateUse,
+    /// A subtag position held no characters at all: an empty input, a leading
+    /// or trailing `-`, or two adjacent hyphens. Every production requires at
+    /// least one character per subtag.
+    SubtagLengthZero,
+    /// A subtag ran past the eight-character bound shared by every production
+    /// (see `SUBTAG_CEILING`).
+    SubtagLengthOverEight,
+    /// The first subtag satisfies no alternative of
+    /// `language = 2*3ALPHA ["-" extlang] / 4ALPHA / 5*8ALPHA` — it is shorter
+    /// than two characters, longer than eight, or not entirely ASCII letters.
+    LanguageProductionUnmatched,
+    /// A fourth `extlang` subtag followed a full one. `extlang` is
+    /// `3ALPHA *2("-" 3ALPHA)`, so its repetition stops at three.
+    ExtlangRepetitionExceeded,
+    /// An `extension` singleton was not followed by a subtag, but
+    /// `extension = singleton 1*("-" (2*8alphanum))` requires at least one
+    /// (`en-a`, `en-a-b-cc`).
+    SingletonWithoutSubtag,
+    /// An `x`/`X` marker was not followed by a subtag, but
+    /// `privateuse = "x" 1*("-" (1*8alphanum))` requires at least one (`x`,
+    /// `en-x`).
+    PrivateUseWithoutSubtag,
+    /// Subtags remained after every section of the production had its turn, so
+    /// the leftover fits nowhere the grammar still allows (`de-419-DE`,
+    /// `en-Lat1`, `en-ü`).
+    UnconsumedSubtag,
 }
 
 impl LanguageTagError {
@@ -105,13 +163,13 @@ impl LanguageTagError {
     #[must_use]
     pub const fn diagnostic_code(self) -> &'static str {
         match self {
-            Self::EmptySubtag => "langtag-empty-subtag",
-            Self::SubtagTooLong => "langtag-subtag-too-long",
-            Self::InvalidLanguage => "langtag-invalid-language",
-            Self::InvalidSubtag => "langtag-invalid-subtag",
-            Self::TooManyExtlangs => "langtag-too-many-extlangs",
-            Self::EmptyExtension => "langtag-empty-extension",
-            Self::EmptyPrivateUse => "langtag-empty-private-use",
+            Self::SubtagLengthZero => "langtag-subtag-length-zero",
+            Self::SubtagLengthOverEight => "langtag-subtag-length-over-eight",
+            Self::LanguageProductionUnmatched => "langtag-language-production-unmatched",
+            Self::ExtlangRepetitionExceeded => "langtag-extlang-repetition-exceeded",
+            Self::SingletonWithoutSubtag => "langtag-singleton-without-subtag",
+            Self::PrivateUseWithoutSubtag => "langtag-private-use-without-subtag",
+            Self::UnconsumedSubtag => "langtag-unconsumed-subtag",
         }
     }
 }
@@ -119,13 +177,17 @@ impl LanguageTagError {
 impl fmt::Display for LanguageTagError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            Self::EmptySubtag => "empty subtag in language tag",
-            Self::SubtagTooLong => "language-tag subtag longer than 8 characters",
-            Self::InvalidLanguage => "primary language subtag is not 2-8 ASCII letters",
-            Self::InvalidSubtag => "subtag fits no RFC 5646 production at its position",
-            Self::TooManyExtlangs => "more than three extended-language subtags",
-            Self::EmptyExtension => "extension singleton with no following subtag",
-            Self::EmptyPrivateUse => "private-use marker with no following subtag",
+            Self::SubtagLengthZero => "language tag has a zero-length subtag",
+            Self::SubtagLengthOverEight => "language-tag subtag longer than 8 characters",
+            Self::LanguageProductionUnmatched => {
+                "first subtag matches no alternative of the RFC 5646 `language` production"
+            }
+            Self::ExtlangRepetitionExceeded => {
+                "more than three `extlang` subtags (the repetition is bounded at two)"
+            }
+            Self::SingletonWithoutSubtag => "extension singleton with no following subtag",
+            Self::PrivateUseWithoutSubtag => "private-use marker with no following subtag",
+            Self::UnconsumedSubtag => "subtag left over after the RFC 5646 `langtag` production",
         };
         f.write_str(message)
     }
@@ -133,25 +195,74 @@ impl fmt::Display for LanguageTagError {
 
 impl core::error::Error for LanguageTagError {}
 
+/// A half-open byte range into the tag a [`LanguageTag`] borrows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Span {
+    /// Byte offset of the first character of the section.
+    start: usize,
+    /// Byte offset one past its last character.
+    end: usize,
+}
+
+impl Span {
+    /// The section this span covers. Both offsets are subtag boundaries, which
+    /// are ASCII `-` positions or the ends of the string, so they always fall
+    /// on a character boundary.
+    fn of(self, tag: &str) -> &str {
+        &tag[self.start..self.end]
+    }
+
+    /// How many bytes the span covers.
+    const fn len(self) -> usize {
+        self.end - self.start
+    }
+}
+
 /// A well-formed RFC 5646 language tag, borrowing the input verbatim.
 ///
-/// The tag text is never re-encoded or case-normalized: RDF keeps language
-/// tags lexical-verbatim, and case formatting (§2.1.1) is a *presentation*
-/// convention, not part of well-formedness.
+/// Each section of the `langtag` production is recorded as the byte range it
+/// occupied, so every accessor is a slice of the original input: nothing is
+/// copied, re-encoded or case-normalized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LanguageTag<'a> {
+    /// The input, exactly as supplied.
     tag: &'a str,
+    /// Which top-level alternative matched.
     form: TagForm,
-    language_end: usize,
-    extlang_end: usize,
-    script_end: usize,
-    region_end: usize,
-    variant_end: usize,
-    extension_end: usize,
-    private_use_start: Option<usize>,
+    /// `language`, minus any `extlang`; `None` for the whole-tag forms.
+    language: Option<Span>,
+    /// The `extlang` subtags as one hyphen-joined run.
+    extlang: Option<Span>,
+    /// `script = 4ALPHA`.
+    script: Option<Span>,
+    /// `region = 2ALPHA / 3DIGIT`.
+    region: Option<Span>,
+    /// Every `variant` subtag as one hyphen-joined run.
+    variants: Option<Span>,
+    /// Every `extension` including its singleton, as one hyphen-joined run.
+    extensions: Option<Span>,
+    /// `privateuse` including its `x`/`X` marker; the whole tag for the
+    /// whole-tag form.
+    private_use: Option<Span>,
 }
 
 impl<'a> LanguageTag<'a> {
+    /// A tag that matched a whole-tag alternative (`privateuse` as the entire
+    /// input, or `grandfathered`), which has no decomposable sections.
+    const fn whole(tag: &'a str, form: TagForm, private_use: Option<Span>) -> Self {
+        Self {
+            tag,
+            form,
+            language: None,
+            extlang: None,
+            script: None,
+            region: None,
+            variants: None,
+            extensions: None,
+            private_use,
+        }
+    }
+
     /// The tag exactly as supplied.
     #[must_use]
     pub const fn as_str(&self) -> &'a str {
@@ -168,51 +279,48 @@ impl<'a> LanguageTag<'a> {
     /// whole-tag private-use tag has no decomposable components).
     #[must_use]
     pub fn primary_language(&self) -> Option<&'a str> {
-        matches!(self.form, TagForm::Langtag).then(|| &self.tag[..self.language_end])
+        self.language.map(|span| span.of(self.tag))
     }
 
     /// The extended-language subtags, hyphen-joined, when present.
     #[must_use]
     pub fn extended_language(&self) -> Option<&'a str> {
-        self.component(self.language_end, self.extlang_end)
+        self.extlang.map(|span| span.of(self.tag))
     }
 
     /// The script subtag, when present.
     #[must_use]
     pub fn script(&self) -> Option<&'a str> {
-        self.component(self.extlang_end, self.script_end)
+        self.script.map(|span| span.of(self.tag))
     }
 
     /// The region subtag, when present.
     #[must_use]
     pub fn region(&self) -> Option<&'a str> {
-        self.component(self.script_end, self.region_end)
+        self.region.map(|span| span.of(self.tag))
     }
 
     /// The variant subtags in order of appearance.
     pub fn variants(&self) -> impl Iterator<Item = &'a str> {
-        self.component(self.region_end, self.variant_end)
+        self.variants
+            .map(|span| span.of(self.tag))
             .into_iter()
             .flat_map(|section| section.split('-'))
     }
 
     /// The raw extension section (`a-myext-b-another`), hyphen-joined, when
-    /// present. Singleton grouping is the caller's concern until an extension
-    /// consumer exists.
+    /// present. Grouping the subtags under their singletons is the caller's
+    /// concern: well-formedness does not interpret extensions.
     #[must_use]
     pub fn extensions(&self) -> Option<&'a str> {
-        self.component(self.variant_end, self.extension_end)
+        self.extensions.map(|span| span.of(self.tag))
     }
 
     /// The private-use section including its `x`/`X` marker (`x-phonebk`), or
     /// the whole tag for the whole-tag private-use form.
     #[must_use]
     pub fn private_use(&self) -> Option<&'a str> {
-        self.private_use_start.map(|start| &self.tag[start..])
-    }
-
-    fn component(&self, before: usize, end: usize) -> Option<&'a str> {
-        (matches!(self.form, TagForm::Langtag) && end > before).then(|| &self.tag[before + 1..end])
+        self.private_use.map(|span| span.of(self.tag))
     }
 }
 
@@ -228,286 +336,383 @@ pub fn is_well_formed(tag: &str) -> bool {
     parse(tag).is_ok()
 }
 
-/// Parses `tag` against the RFC 5646 `Language-Tag` production.
+/// Parses `tag` against `Language-Tag = langtag / privateuse / grandfathered`.
+///
+/// The three alternatives are tried in the order below, and the `langtag` body
+/// is one call per line of the production:
+///
+/// | ABNF | implemented by |
+/// |------|----------------|
+/// | `grandfathered` | `is_grandfathered` |
+/// | `privateuse` (whole tag) | `take_private_use` |
+/// | `language = 2*3ALPHA ["-" extlang] / 4ALPHA / 5*8ALPHA` | `take_language` |
+/// | `extlang = 3ALPHA *2("-" 3ALPHA)` | `take_extlang` |
+/// | `["-" script]` | `Cursor::take_if(is_script)` |
+/// | `["-" region]` | `Cursor::take_if(is_region)` |
+/// | `*("-" variant)` | `take_variants` |
+/// | `*("-" extension)` | `take_extensions` |
+/// | `["-" privateuse]` | `take_private_use` |
 ///
 /// # Errors
 ///
-/// A typed [`LanguageTagError`] naming the first production the input failed;
-/// never a degraded fallback.
+/// A typed [`LanguageTagError`] naming the production that refused; see that
+/// type for the failure map.
 pub fn parse(tag: &str) -> Result<LanguageTag<'_>, LanguageTagError> {
-    if GRANDFATHERED
+    // `grandfathered` first: it is a closed set of literals, most of which the
+    // `langtag` production cannot analyse at all (`i-ami` has a one-letter
+    // primary language) and some of which it would analyse into *different*
+    // components (`art-lojban` would read as a language plus a variant). The
+    // set is disjoint from `privateuse`, so only `langtag` is shadowed, and
+    // only for the 26 tags the RFC says are grandfathered.
+    if is_grandfathered(tag) {
+        return Ok(LanguageTag::whole(tag, TagForm::Grandfathered, None));
+    }
+
+    // Every remaining alternative is a hyphen-separated list of 1..=8-character
+    // subtags. Checking that envelope once, up front, keeps the two length
+    // failures out of the production functions below, which then only ever ask
+    // "does this subtag have the shape my production names?".
+    check_subtag_envelope(tag)?;
+
+    let mut cursor = Cursor::new(tag);
+
+    // `privateuse` as the whole tag. It is the only alternative that may begin
+    // with the reserved `x` singleton, so a leading `x` commits to it: there is
+    // no `langtag` reading to fall back to.
+    if let Some(span) = take_private_use(&mut cursor)? {
+        require_exhausted(&cursor)?;
+        return Ok(LanguageTag::whole(tag, TagForm::PrivateUse, Some(span)));
+    }
+
+    // `langtag = language ["-" script] ["-" region] *("-" variant)
+    //            *("-" extension) ["-" privateuse]`
+    let (language, extlang) = take_language(&mut cursor)?;
+    let script = cursor.take_if(is_script);
+    let region = cursor.take_if(is_region);
+    let variants = take_variants(&mut cursor);
+    let extensions = take_extensions(&mut cursor)?;
+    let private_use = take_private_use(&mut cursor)?;
+    require_exhausted(&cursor)?;
+
+    Ok(LanguageTag {
+        tag,
+        form: TagForm::Langtag,
+        language: Some(language),
+        extlang,
+        script,
+        region,
+        variants,
+        extensions,
+        private_use,
+    })
+}
+
+/// `true` when `tag` is one of the 26 closed `grandfathered` tags of §2.2.8.
+///
+/// Whole-tag comparison, so `zh-min` and `zh-min-nan` cannot shadow each other,
+/// and case-insensitive, because RFC 5234 literals are.
+fn is_grandfathered(tag: &str) -> bool {
+    GRANDFATHERED
         .iter()
-        .any(|entry| entry.eq_ignore_ascii_case(tag))
-    {
-        return Ok(LanguageTag {
-            tag,
-            form: TagForm::Grandfathered,
-            language_end: 0,
-            extlang_end: 0,
-            script_end: 0,
-            region_end: 0,
-            variant_end: 0,
-            extension_end: 0,
-            private_use_start: None,
-        });
-    }
-    if let Some(rest) = strip_private_use_marker(tag) {
-        parse_private_use_subtags(rest)?;
-        return Ok(LanguageTag {
-            tag,
-            form: TagForm::PrivateUse,
-            language_end: 0,
-            extlang_end: 0,
-            script_end: 0,
-            region_end: 0,
-            variant_end: 0,
-            extension_end: 0,
-            private_use_start: Some(0),
-        });
-    }
-    parse_langtag(tag)
+        .any(|candidate| candidate.eq_ignore_ascii_case(tag))
 }
 
-/// Strips a whole-tag `privateuse` marker: `x-...` / `X-...`.
-fn strip_private_use_marker(tag: &str) -> Option<&str> {
-    let mut bytes = tag.bytes();
-    (matches!(bytes.next(), Some(b'x' | b'X')) && bytes.next() == Some(b'-')).then(|| &tag[2..])
-}
-
-/// `privateuse = "x" 1*("-" (1*8alphanum))` — the part after `x-`.
-fn parse_private_use_subtags(rest: &str) -> Result<(), LanguageTagError> {
-    if rest.is_empty() {
-        return Err(LanguageTagError::EmptyPrivateUse);
-    }
-    for subtag in rest.split('-') {
+/// Enforces the subtag-length envelope every production shares.
+///
+/// Byte lengths are used rather than character counts. That is exact for the
+/// grammar, whose every terminal is ASCII: a subtag that would need the
+/// distinction is one containing a multi-byte character, which no production
+/// admits anyway.
+fn check_subtag_envelope(tag: &str) -> Result<(), LanguageTagError> {
+    for subtag in tag.split('-') {
         if subtag.is_empty() {
-            return Err(LanguageTagError::EmptySubtag);
+            return Err(LanguageTagError::SubtagLengthZero);
         }
-        if subtag.len() > 8 {
-            return Err(LanguageTagError::SubtagTooLong);
-        }
-        if !is_alphanumeric(subtag) {
-            return Err(LanguageTagError::InvalidSubtag);
+        if subtag.len() > SUBTAG_CEILING {
+            return Err(LanguageTagError::SubtagLengthOverEight);
         }
     }
     Ok(())
 }
 
-/// Position in the `langtag` production. Each state names what the *previous*
-/// subtag established; the admissible productions for the next subtag follow
-/// RFC 5646's ordering (`language ["-" script] ["-" region] *("-" variant)
-/// *("-" extension) ["-" privateuse]`).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Position {
-    Start,
-    /// After a 2–3 letter primary language: `extlang` is still admissible.
-    AfterShortLanguage,
-    /// After a 4+ letter primary language or an `extlang` run: script next.
-    AfterLanguage,
-    AfterScript,
-    AfterRegion,
-    /// Inside an extension; `expects_subtag` is `true` until the singleton has
-    /// at least one 2–8 alphanumeric subtag.
-    InExtension {
-        expects_subtag: bool,
-    },
-    /// Inside the trailing private-use section; `expects_subtag` is `true`
-    /// until the `x` marker has at least one subtag.
-    InPrivateUse {
-        expects_subtag: bool,
-    },
+/// A forward cursor over a tag's hyphen-separated subtags.
+///
+/// Holds a byte offset rather than an iterator so that each accepted subtag can
+/// report the [`Span`] it occupied, which is what lets the accessors on
+/// [`LanguageTag`] slice the original input.
+#[derive(Debug)]
+struct Cursor<'a> {
+    /// The tag being walked.
+    tag: &'a str,
+    /// Byte offset at which the pending subtag starts.
+    at: usize,
+    /// Set once the final subtag has been consumed. Needed because a cursor
+    /// sitting at `tag.len()` is otherwise indistinguishable from one pointing
+    /// at a trailing empty subtag.
+    exhausted: bool,
 }
 
-/// The ordinary `langtag` alternative, walked subtag-by-subtag with byte
-/// offsets so the component accessors can slice the original text.
-#[allow(clippy::too_many_lines)] // one production per arm; splitting would scatter the grammar
-fn parse_langtag(tag: &str) -> Result<LanguageTag<'_>, LanguageTagError> {
-    let mut position = Position::Start;
-    let mut language_end = 0;
-    let mut extlang_end = 0;
-    let mut script_end = 0;
-    let mut region_end = 0;
-    let mut variant_end = 0;
-    let mut extension_end = 0;
-    let mut private_use_start = None;
-    let mut extlang_count = 0u8;
-
-    let mut offset = 0usize;
-    for subtag in tag.split('-') {
-        let end = offset + subtag.len();
-        if subtag.is_empty() {
-            return Err(LanguageTagError::EmptySubtag);
+impl<'a> Cursor<'a> {
+    /// A cursor positioned at the first subtag of `tag`.
+    const fn new(tag: &'a str) -> Self {
+        Self {
+            tag,
+            at: 0,
+            exhausted: false,
         }
-        if subtag.len() > 8 {
-            return Err(LanguageTagError::SubtagTooLong);
-        }
-        position = match position {
-            Position::Start => {
-                // language = 2*3ALPHA / 4ALPHA / 5*8ALPHA (the union is any
-                // 2-8 letter run; which arm matched decides extlang admission).
-                if subtag.len() < 2 || !is_alphabetic(subtag) {
-                    return Err(LanguageTagError::InvalidLanguage);
-                }
-                language_end = end;
-                if subtag.len() < 4 {
-                    Position::AfterShortLanguage
-                } else {
-                    Position::AfterLanguage
-                }
-            }
-            Position::InPrivateUse { .. } => {
-                // privateuse subtags: 1*8alphanum, no further sections.
-                if !is_alphanumeric(subtag) {
-                    return Err(LanguageTagError::InvalidSubtag);
-                }
-                Position::InPrivateUse {
-                    expects_subtag: false,
-                }
-            }
-            _ if matches!(subtag, "x" | "X") => {
-                if position
-                    == (Position::InExtension {
-                        expects_subtag: true,
-                    })
-                {
-                    return Err(LanguageTagError::EmptyExtension);
-                }
-                private_use_start = Some(offset);
-                Position::InPrivateUse {
-                    expects_subtag: true,
-                }
-            }
-            _ if subtag.len() == 1 && is_alphanumeric(subtag) => {
-                // singleton = alphanum except x/X (handled above).
-                if position
-                    == (Position::InExtension {
-                        expects_subtag: true,
-                    })
-                {
-                    return Err(LanguageTagError::EmptyExtension);
-                }
-                Position::InExtension {
-                    expects_subtag: true,
-                }
-            }
-            Position::InExtension { .. } => {
-                // extension subtags: 2*8alphanum (a 1-char subtag was taken by
-                // the singleton arm above).
-                if !is_alphanumeric(subtag) {
-                    return Err(LanguageTagError::InvalidSubtag);
-                }
-                extension_end = end;
-                Position::InExtension {
-                    expects_subtag: false,
-                }
-            }
-            Position::AfterShortLanguage if subtag.len() == 3 && is_alphabetic(subtag) => {
-                // extlang = 3ALPHA *2("-" 3ALPHA): at most three segments.
-                extlang_count += 1;
-                if extlang_count > 3 {
-                    return Err(LanguageTagError::TooManyExtlangs);
-                }
-                extlang_end = end;
-                Position::AfterShortLanguage
-            }
-            Position::AfterShortLanguage | Position::AfterLanguage
-                if subtag.len() == 4 && is_alphabetic(subtag) =>
-            {
-                // script = 4ALPHA
-                script_end = end;
-                Position::AfterScript
-            }
-            Position::AfterShortLanguage | Position::AfterLanguage | Position::AfterScript
-                if subtag.len() == 2 && is_alphabetic(subtag)
-                    || subtag.len() == 3 && is_numeric(subtag) =>
-            {
-                // region = 2ALPHA / 3DIGIT
-                region_end = end;
-                Position::AfterRegion
-            }
-            Position::AfterShortLanguage
-            | Position::AfterLanguage
-            | Position::AfterScript
-            | Position::AfterRegion
-                if is_alphanumeric(subtag)
-                    && (subtag.len() >= 5 && subtag.as_bytes()[0].is_ascii_alphabetic()
-                        || subtag.len() >= 4 && subtag.as_bytes()[0].is_ascii_digit()) =>
-            {
-                // variant = 5*8alphanum / (DIGIT 3alphanum)
-                variant_end = end;
-                Position::AfterRegion
-            }
-            Position::AfterShortLanguage
-            | Position::AfterLanguage
-            | Position::AfterScript
-            | Position::AfterRegion => return Err(LanguageTagError::InvalidSubtag),
-        };
-        offset = end + 1;
     }
 
-    match position {
-        Position::InExtension {
-            expects_subtag: true,
-        } => return Err(LanguageTagError::EmptyExtension),
-        Position::InPrivateUse {
-            expects_subtag: true,
-        } => return Err(LanguageTagError::EmptyPrivateUse),
-        _ => {}
+    /// The pending subtag and the span it occupies, without consuming it.
+    fn peek(&self) -> Option<(Span, &'a str)> {
+        if self.exhausted {
+            return None;
+        }
+        let rest: &'a str = &self.tag[self.at..];
+        let length = rest.find('-').unwrap_or(rest.len());
+        let (text, _) = rest.split_at(length);
+        Some((
+            Span {
+                start: self.at,
+                end: self.at + length,
+            },
+            text,
+        ))
     }
 
-    // Cascade the section ends so every accessor slices a well-defined range
-    // even when intermediate sections are absent.
-    extlang_end = extlang_end.max(language_end);
-    script_end = script_end.max(extlang_end);
-    region_end = region_end.max(script_end);
-    variant_end = variant_end.max(region_end);
-    extension_end = extension_end.max(variant_end);
+    /// Consumes the pending subtag.
+    fn bump(&mut self) {
+        let rest = &self.tag[self.at..];
+        match rest.find('-') {
+            Some(separator) => self.at += separator + 1,
+            None => {
+                self.at = self.tag.len();
+                self.exhausted = true;
+            }
+        }
+    }
 
-    Ok(LanguageTag {
-        tag,
-        form: TagForm::Langtag,
-        language_end,
-        extlang_end,
-        script_end,
-        region_end,
-        variant_end,
-        extension_end,
-        private_use_start,
-    })
+    /// Consumes the pending subtag when it satisfies `production`, and reports
+    /// the span it occupied. This is the whole of an ABNF `[...]` option and
+    /// one step of a `*(...)` repetition.
+    fn take_if(&mut self, production: impl Fn(&str) -> bool) -> Option<Span> {
+        let (span, text) = self.peek()?;
+        if !production(text) {
+            return None;
+        }
+        self.bump();
+        Some(span)
+    }
+
+    /// `true` when the pending subtag satisfies `production`, without
+    /// consuming anything.
+    fn peek_is(&self, production: impl Fn(&str) -> bool) -> bool {
+        self.peek().is_some_and(|(_, text)| production(text))
+    }
 }
 
-fn is_alphabetic(subtag: &str) -> bool {
-    subtag.bytes().all(|byte| byte.is_ascii_alphabetic())
+/// Refuses a tag with subtags the production never reached.
+fn require_exhausted(cursor: &Cursor<'_>) -> Result<(), LanguageTagError> {
+    if cursor.peek().is_some() {
+        return Err(LanguageTagError::UnconsumedSubtag);
+    }
+    Ok(())
 }
 
-fn is_numeric(subtag: &str) -> bool {
-    subtag.bytes().all(|byte| byte.is_ascii_digit())
+/// `language = 2*3ALPHA ["-" extlang] / 4ALPHA / 5*8ALPHA`
+///
+/// Returns the primary language span and the `extlang` run, if any. The three
+/// alternatives collapse to "2..=8 ASCII letters" for the primary subtag; what
+/// distinguishes them is that only the `2*3ALPHA` one admits a following
+/// `extlang`, which is why the length is re-tested before recursing.
+fn take_language(cursor: &mut Cursor<'_>) -> Result<(Span, Option<Span>), LanguageTagError> {
+    let Some(span) = cursor.take_if(is_language) else {
+        return Err(LanguageTagError::LanguageProductionUnmatched);
+    };
+    if span.len() > 3 {
+        // The `4ALPHA` and `5*8ALPHA` alternatives have no `["-" extlang]`.
+        return Ok((span, None));
+    }
+    let extlang = take_extlang(cursor)?;
+    Ok((span, extlang))
 }
 
-fn is_alphanumeric(subtag: &str) -> bool {
-    subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+/// `extlang = 3ALPHA *2("-" 3ALPHA)`
+fn take_extlang(cursor: &mut Cursor<'_>) -> Result<Option<Span>, LanguageTagError> {
+    let Some(first) = cursor.take_if(is_extlang_subtag) else {
+        return Ok(None);
+    };
+    let mut run = first;
+    for _ in 0..EXTLANG_REPEAT_LIMIT {
+        match cursor.take_if(is_extlang_subtag) {
+            Some(repeat) => run.end = repeat.end,
+            None => return Ok(Some(run)),
+        }
+    }
+    // The repetition is spent. A further 3-letter subtag can satisfy no later
+    // production — `script` is 4ALPHA, `region` is 2ALPHA or 3DIGIT, `variant`
+    // is 5*8alphanum or DIGIT 3alphanum, `singleton` and the `privateuse`
+    // marker are one character — so it is unambiguously one `extlang` too
+    // many, and saying so beats a generic leftover-subtag complaint. Anything
+    // that is *not* 3 letters still falls through to the sections below, so
+    // `zh-cmn-yue-nan-Hant-CN` is unaffected.
+    if cursor.peek_is(is_extlang_subtag) {
+        return Err(LanguageTagError::ExtlangRepetitionExceeded);
+    }
+    Ok(Some(run))
+}
+
+/// `*("-" variant)`
+fn take_variants(cursor: &mut Cursor<'_>) -> Option<Span> {
+    let mut run: Option<Span> = None;
+    while let Some(variant) = cursor.take_if(is_variant) {
+        run = Some(extend(run, variant));
+    }
+    run
+}
+
+/// `*("-" extension)`, where `extension = singleton 1*("-" (2*8alphanum))`
+///
+/// The `1*` is the only thing that can fail: a one-character alphanumeric
+/// subtag is never an extension subtag, so it ends the inner repetition and is
+/// re-offered to the outer one as the next singleton.
+fn take_extensions(cursor: &mut Cursor<'_>) -> Result<Option<Span>, LanguageTagError> {
+    let mut run: Option<Span> = None;
+    while let Some(singleton) = cursor.take_if(is_singleton) {
+        let mut extension = singleton;
+        let mut subtags = 0usize;
+        while let Some(subtag) = cursor.take_if(is_extension_subtag) {
+            extension.end = subtag.end;
+            subtags += 1;
+        }
+        if subtags == 0 {
+            return Err(LanguageTagError::SingletonWithoutSubtag);
+        }
+        run = Some(extend(run, extension));
+    }
+    Ok(run)
+}
+
+/// `privateuse = "x" 1*("-" (1*8alphanum))`
+///
+/// Used twice, because the ABNF uses it twice: as the whole `Language-Tag` and
+/// as the trailing option of `langtag`.
+fn take_private_use(cursor: &mut Cursor<'_>) -> Result<Option<Span>, LanguageTagError> {
+    let Some(marker) = cursor.take_if(is_private_use_marker) else {
+        return Ok(None);
+    };
+    let mut run = marker;
+    let mut subtags = 0usize;
+    while let Some(subtag) = cursor.take_if(is_private_use_subtag) {
+        run.end = subtag.end;
+        subtags += 1;
+    }
+    if subtags == 0 {
+        return Err(LanguageTagError::PrivateUseWithoutSubtag);
+    }
+    Ok(Some(run))
+}
+
+/// Grows a hyphen-joined run to cover one more section.
+fn extend(run: Option<Span>, next: Span) -> Span {
+    Span {
+        start: run.map_or(next.start, |run| run.start),
+        end: next.end,
+    }
+}
+
+/// `ALPHA` over a whole subtag. Vacuously true for the empty string, which
+/// [`check_subtag_envelope`] has already excluded.
+fn all_alpha(text: &str) -> bool {
+    text.bytes().all(|byte| byte.is_ascii_alphabetic())
+}
+
+/// `DIGIT` over a whole subtag.
+fn all_digit(text: &str) -> bool {
+    text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// `alphanum` (RFC 5646's `ALPHA / DIGIT`) over a whole subtag.
+fn all_alphanum(text: &str) -> bool {
+    text.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+/// The primary subtag of `language = 2*3ALPHA ... / 4ALPHA / 5*8ALPHA`: the
+/// union of the three alternatives' first subtags is 2..=8 letters.
+fn is_language(text: &str) -> bool {
+    (2..=SUBTAG_CEILING).contains(&text.len()) && all_alpha(text)
+}
+
+/// One `3ALPHA` subtag of `extlang`.
+fn is_extlang_subtag(text: &str) -> bool {
+    text.len() == 3 && all_alpha(text)
+}
+
+/// `script = 4ALPHA`
+fn is_script(text: &str) -> bool {
+    text.len() == 4 && all_alpha(text)
+}
+
+/// `region = 2ALPHA / 3DIGIT`
+fn is_region(text: &str) -> bool {
+    (text.len() == 2 && all_alpha(text)) || (text.len() == 3 && all_digit(text))
+}
+
+/// `variant = 5*8alphanum / (DIGIT 3alphanum)`
+///
+/// The two alternatives do not overlap: the second is exactly four characters,
+/// the first at least five.
+fn is_variant(text: &str) -> bool {
+    match text.len() {
+        4 => text.starts_with(|first: char| first.is_ascii_digit()) && all_alphanum(text),
+        5..=SUBTAG_CEILING => all_alphanum(text),
+        _ => false,
+    }
+}
+
+/// `singleton = DIGIT / %x41-57 / %x59-5A / %x61-77 / %x79-7A`
+///
+/// That is one alphanumeric character with `x` and `X` carved out, the RFC
+/// having reserved them for `privateuse`.
+fn is_singleton(text: &str) -> bool {
+    text.len() == 1 && all_alphanum(text) && !is_private_use_marker(text)
+}
+
+/// One `2*8alphanum` subtag of `extension`.
+fn is_extension_subtag(text: &str) -> bool {
+    (2..=SUBTAG_CEILING).contains(&text.len()) && all_alphanum(text)
+}
+
+/// The `"x"` literal that opens `privateuse`. ABNF literals are
+/// case-insensitive (RFC 5234 §2.3), so `X` opens it too.
+fn is_private_use_marker(text: &str) -> bool {
+    text.eq_ignore_ascii_case("x")
+}
+
+/// One `1*8alphanum` subtag of `privateuse`.
+fn is_private_use_subtag(text: &str) -> bool {
+    (1..=SUBTAG_CEILING).contains(&text.len()) && all_alphanum(text)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LanguageTagError, TagForm, is_well_formed, parse};
+    use super::{GRANDFATHERED, LanguageTagError, TagForm, is_well_formed, parse};
 
     #[test]
-    fn components_decompose() {
-        let tag = parse("zh-yue-Hant-HK-1901-a-myext-x-private-use").expect("well-formed");
+    fn langtag_sections_are_reported_as_slices_of_the_input() {
+        let tag = parse("zh-cmn-Hans-CN-1901-u-islamcal-x-priv").expect("well-formed");
         assert_eq!(tag.form(), TagForm::Langtag);
+        assert_eq!(tag.as_str(), "zh-cmn-Hans-CN-1901-u-islamcal-x-priv");
         assert_eq!(tag.primary_language(), Some("zh"));
-        assert_eq!(tag.extended_language(), Some("yue"));
-        assert_eq!(tag.script(), Some("Hant"));
-        assert_eq!(tag.region(), Some("HK"));
+        assert_eq!(tag.extended_language(), Some("cmn"));
+        assert_eq!(tag.script(), Some("Hans"));
+        assert_eq!(tag.region(), Some("CN"));
         assert_eq!(tag.variants().collect::<Vec<_>>(), ["1901"]);
-        assert_eq!(tag.extensions(), Some("a-myext"));
-        assert_eq!(tag.private_use(), Some("x-private-use"));
-        assert_eq!(tag.as_str(), "zh-yue-Hant-HK-1901-a-myext-x-private-use");
+        assert_eq!(tag.extensions(), Some("u-islamcal"));
+        assert_eq!(tag.private_use(), Some("x-priv"));
     }
 
     #[test]
-    fn absent_components_are_none() {
+    fn absent_sections_are_none() {
         let tag = parse("de").expect("well-formed");
         assert_eq!(tag.primary_language(), Some("de"));
         assert_eq!(tag.extended_language(), None);
@@ -519,70 +724,134 @@ mod tests {
     }
 
     #[test]
-    fn whole_tag_private_use_and_grandfathered_forms() {
-        let private = parse("x-whatever").expect("well-formed");
-        assert_eq!(private.form(), TagForm::PrivateUse);
-        assert_eq!(private.private_use(), Some("x-whatever"));
-        assert_eq!(private.primary_language(), None);
+    fn repeated_sections_join_with_their_hyphens() {
+        let tag = parse("sl-rozaj-biske-1994").expect("well-formed");
+        assert_eq!(
+            tag.variants().collect::<Vec<_>>(),
+            ["rozaj", "biske", "1994"]
+        );
+        let extensions = parse("en-a-myext-b-another").expect("well-formed");
+        assert_eq!(extensions.extensions(), Some("a-myext-b-another"));
+    }
 
-        let grandfathered = parse("i-Enochian").expect("well-formed");
+    #[test]
+    fn whole_tag_forms_have_no_decomposable_sections() {
+        let private_use = parse("x-whatever").expect("well-formed");
+        assert_eq!(private_use.form(), TagForm::PrivateUse);
+        assert_eq!(private_use.primary_language(), None);
+        assert_eq!(private_use.private_use(), Some("x-whatever"));
+
+        let grandfathered = parse("i-enochian").expect("well-formed");
         assert_eq!(grandfathered.form(), TagForm::Grandfathered);
         assert_eq!(grandfathered.primary_language(), None);
-        assert_eq!(grandfathered.as_str(), "i-Enochian");
+        assert_eq!(grandfathered.private_use(), None);
     }
 
     #[test]
-    fn typed_refusals() {
-        assert_eq!(parse(""), Err(LanguageTagError::EmptySubtag));
-        assert_eq!(parse("en-"), Err(LanguageTagError::EmptySubtag));
-        assert_eq!(parse("-en"), Err(LanguageTagError::EmptySubtag));
-        assert_eq!(parse("e"), Err(LanguageTagError::InvalidLanguage));
-        assert_eq!(parse("a1"), Err(LanguageTagError::InvalidLanguage));
-        assert_eq!(
-            parse("abcdefghi"),
-            Err(LanguageTagError::SubtagTooLong),
-            "nine-letter primary subtag"
-        );
-        assert_eq!(parse("en-a"), Err(LanguageTagError::EmptyExtension));
-        assert_eq!(parse("en-a-b-cc"), Err(LanguageTagError::EmptyExtension));
-        assert_eq!(parse("en-x"), Err(LanguageTagError::EmptyPrivateUse));
-        assert_eq!(parse("x-"), Err(LanguageTagError::EmptyPrivateUse));
-        assert_eq!(
-            parse("ab-abc-abc-abc-abc"),
-            Err(LanguageTagError::TooManyExtlangs)
-        );
-        assert_eq!(parse("de-419-DE"), Err(LanguageTagError::InvalidSubtag));
-        assert_eq!(parse("en-ü"), Err(LanguageTagError::InvalidSubtag));
-    }
-
-    #[test]
-    fn refused_inputs_have_accepted_neighbors() {
-        // Refusal discipline: every refusal above sits beside an accepted
-        // neighbor, so a tightened production cannot silently over-refuse.
-        for (refused, accepted) in [
-            ("e", "en"),
-            ("en-", "en"),
-            ("en-a", "en-a-bb"),
-            ("en-x", "en-x-a"),
-            ("x-", "x-a"),
-            ("abcdefghi", "abcdefgh"),
-            ("ab-abc-abc-abc-abc", "ab-abc-abc-abc"),
-            ("de-419-DE", "de-DE"),
-        ] {
-            assert!(parse(refused).is_err(), "{refused:?} must refuse");
-            assert!(is_well_formed(accepted), "{accepted:?} must accept");
+    fn grandfathered_list_is_the_closed_set_of_twenty_six() {
+        assert_eq!(GRANDFATHERED.len(), 26);
+        for (index, tag) in GRANDFATHERED.iter().enumerate() {
+            assert!(
+                !GRANDFATHERED[..index].contains(tag),
+                "{tag:?} appears twice"
+            );
+            assert_eq!(
+                parse(tag).expect("grandfathered").form(),
+                TagForm::Grandfathered
+            );
         }
     }
 
     #[test]
-    fn diagnostic_codes_are_stable() {
+    fn every_error_variant_is_reachable_with_an_accepted_neighbour() {
+        // (refused input, the error it must name, a neighbour that must accept)
+        let cases: &[(&str, LanguageTagError, &str)] = &[
+            ("en--US", LanguageTagError::SubtagLengthZero, "en-US"),
+            (
+                "abcdefghi",
+                LanguageTagError::SubtagLengthOverEight,
+                "abcdefgh",
+            ),
+            ("e", LanguageTagError::LanguageProductionUnmatched, "en"),
+            (
+                "zh-cmn-yue-nan-hak",
+                LanguageTagError::ExtlangRepetitionExceeded,
+                "zh-cmn-yue-nan",
+            ),
+            ("en-a", LanguageTagError::SingletonWithoutSubtag, "en-a-bb"),
+            ("en-x", LanguageTagError::PrivateUseWithoutSubtag, "en-x-a"),
+            ("de-419-DE", LanguageTagError::UnconsumedSubtag, "de-DE"),
+        ];
+        for (refused, expected, accepted) in cases {
+            assert_eq!(parse(refused), Err(*expected), "{refused:?}");
+            assert!(is_well_formed(accepted), "{accepted:?} must stay accepted");
+        }
+    }
+
+    #[test]
+    fn the_extlang_bound_refuses_only_a_fourth_extlang() {
+        // `extlang = 3ALPHA *2("-" 3ALPHA)`: one subtag plus at most two more.
+        assert!(is_well_formed("zh-cmn"));
+        assert!(is_well_formed("zh-cmn-yue"));
+        assert!(is_well_formed("zh-cmn-yue-nan"));
         assert_eq!(
-            LanguageTagError::EmptySubtag.diagnostic_code(),
-            "langtag-empty-subtag"
+            parse("zh-cmn-yue-nan-hak"),
+            Err(LanguageTagError::ExtlangRepetitionExceeded)
         );
+        // A spent repetition must not poison the sections that follow it.
+        assert!(is_well_formed("zh-cmn-yue-nan-Hant"));
+        assert!(is_well_formed("zh-cmn-yue-nan-Hant-CN"));
+        assert!(is_well_formed("zh-cmn-yue-nan-CN"));
+        assert!(is_well_formed("zh-cmn-yue-nan-x-priv"));
+        // `extlang` only follows the `2*3ALPHA` alternative of `language`.
+        assert!(is_well_formed("abcd-Latn"));
         assert_eq!(
-            LanguageTagError::EmptyPrivateUse.diagnostic_code(),
-            "langtag-empty-private-use"
+            parse("abcd-efg"),
+            Err(LanguageTagError::UnconsumedSubtag),
+            "a 4ALPHA primary language admits no extlang"
         );
+    }
+
+    #[test]
+    fn diagnostic_codes_are_stable_and_distinct() {
+        let codes = [
+            LanguageTagError::SubtagLengthZero,
+            LanguageTagError::SubtagLengthOverEight,
+            LanguageTagError::LanguageProductionUnmatched,
+            LanguageTagError::ExtlangRepetitionExceeded,
+            LanguageTagError::SingletonWithoutSubtag,
+            LanguageTagError::PrivateUseWithoutSubtag,
+            LanguageTagError::UnconsumedSubtag,
+        ]
+        .map(LanguageTagError::diagnostic_code);
+        assert_eq!(codes[0], "langtag-subtag-length-zero");
+        assert_eq!(codes[6], "langtag-unconsumed-subtag");
+        for (index, code) in codes.iter().enumerate() {
+            assert!(code.starts_with("langtag-"), "{code:?}");
+            assert!(!codes[..index].contains(code), "{code:?} appears twice");
+        }
+    }
+
+    #[test]
+    fn well_formedness_ignores_registry_validity() {
+        // §2.2.9 puts a duplicate singleton on the invalid-but-well-formed side.
+        assert!(is_well_formed("ar-a-aaa-b-bbb-a-ccc"));
+        // Unregistered subtags of the right shape are likewise well-formed.
+        assert!(is_well_formed("qq-Zzzz-QQ"));
+    }
+
+    #[test]
+    fn case_is_insignificant() {
+        for tag in ["en-US", "EN-us", "eN-Us", "ZH-HANT", "X-FOO", "I-ENOCHIAN"] {
+            assert!(is_well_formed(tag), "{tag:?}");
+        }
+    }
+
+    #[test]
+    fn non_ascii_and_control_input_is_refused() {
+        for tag in ["en-ü", "ünn", "en\u{9}US", "en-US\u{0}"] {
+            assert!(!is_well_formed(tag), "{tag:?} must refuse");
+        }
+        assert!(is_well_formed("en-US"), "the ASCII neighbour still accepts");
     }
 }

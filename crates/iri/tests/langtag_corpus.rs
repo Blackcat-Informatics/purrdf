@@ -4,9 +4,11 @@
 //! RFC 5646 `Language-Tag` well-formedness corpus.
 //!
 //! Sources (see `tests/PROVENANCE.md`): the worked examples of **RFC 5646
-//! Appendix A**, the closed grandfathered list of **§2.2.8**, and boundary
-//! cases derived directly from the **§2.1 ABNF**. Every refused input is
-//! paired with an accepted neighbor (repo refusal discipline).
+//! Appendix A** transcribed verbatim, the closed grandfathered list of
+//! **§2.2.8** in the RFC's own order, and boundary cases derived subtag-by-
+//! subtag from the **§2.1 ABNF** — each one names the production and the
+//! repetition or length bound it sits on. Every refused input is paired with an
+//! accepted neighbor (repo refusal discipline).
 
 use purrdf_iri::langtag::{LanguageTagError, TagForm, is_well_formed, parse};
 
@@ -58,10 +60,10 @@ const APPENDIX_A_WELL_FORMED: &[&str] = &[
     "en-a-myext-b-another",
 ];
 
-/// RFC 5646 §2.2.8 — the closed grandfathered list (17 irregular + 9 regular).
+/// RFC 5646 §2.2.8 — the closed grandfathered list, in the order the RFC
+/// presents it: the 17 `irregular` tags, then the 9 `regular` ones.
 const GRANDFATHERED: &[&str] = &[
-    "art-lojban",
-    "cel-gaulish",
+    // irregular
     "en-GB-oed",
     "i-ami",
     "i-bnn",
@@ -76,11 +78,14 @@ const GRANDFATHERED: &[&str] = &[
     "i-tao",
     "i-tay",
     "i-tsu",
-    "no-bok",
-    "no-nyn",
     "sgn-BE-FR",
     "sgn-BE-NL",
     "sgn-CH-DE",
+    // regular
+    "art-lojban",
+    "cel-gaulish",
+    "no-bok",
+    "no-nyn",
     "zh-guoyu",
     "zh-hakka",
     "zh-min",
@@ -101,12 +106,12 @@ fn appendix_a_invalid_examples() {
     // RFC 5646 §2.2.9 draws. The first two fail the ABNF and must refuse:
     assert_eq!(
         parse("de-419-DE"),
-        Err(LanguageTagError::InvalidSubtag),
+        Err(LanguageTagError::UnconsumedSubtag),
         "two region subtags"
     );
     assert_eq!(
         parse("a-DE"),
-        Err(LanguageTagError::InvalidLanguage),
+        Err(LanguageTagError::LanguageProductionUnmatched),
         "single-character primary language"
     );
     // The third is *invalid* (duplicate singleton) but still *well-formed*;
@@ -159,9 +164,18 @@ fn abnf_boundaries_with_accepted_neighbors() {
         ("x-", "x-a", "whole-tag private use needs a subtag"),
         ("x-abcdefghi", "x-abcdefgh", "private-use subtag ceiling"),
         (
-            "ab-abc-abc-abc-abc",
-            "ab-abc-abc-abc",
-            "at most three extlangs",
+            // `extlang = 3ALPHA *2("-" 3ALPHA)`: one subtag plus at most two
+            // repetitions, so three in total.
+            "zh-cmn-yue-nan-hak",
+            "zh-cmn-yue-nan",
+            "the extlang repetition is bounded at two",
+        ),
+        (
+            // `["-" extlang]` hangs off the `2*3ALPHA` alternative of
+            // `language` only, not off `4ALPHA` or `5*8ALPHA`.
+            "abcd-efg",
+            "abcd-Latn",
+            "a 4ALPHA primary language admits no extlang",
         ),
         ("en-Lat1", "en-Latn", "script is exactly 4 letters"),
         (
@@ -175,6 +189,23 @@ fn abnf_boundaries_with_accepted_neighbors() {
     for (refused, accepted, why) in pairs {
         assert!(parse(refused).is_err(), "{refused:?} must refuse ({why})");
         assert!(is_well_formed(accepted), "{accepted:?} must accept ({why})");
+    }
+
+    // Spending the extlang repetition must not refuse the sections that may
+    // legitimately follow it: `script`, `region`, `variant`, `extension` and
+    // `privateuse` all still apply after a third extlang subtag.
+    for accepted in [
+        "zh-cmn-yue-nan-Hant",
+        "zh-cmn-yue-nan-CN",
+        "zh-cmn-yue-nan-Hant-CN",
+        "zh-cmn-yue-nan-Hant-CN-1901",
+        "zh-cmn-yue-nan-u-islamcal",
+        "zh-cmn-yue-nan-x-priv",
+    ] {
+        assert!(
+            is_well_formed(accepted),
+            "{accepted:?} must accept: only a *fourth extlang* is barred"
+        );
     }
 }
 
