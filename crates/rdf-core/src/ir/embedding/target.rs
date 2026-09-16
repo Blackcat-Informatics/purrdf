@@ -5,8 +5,6 @@
 
 use core::cmp::Ordering;
 
-use oxilangtag::LanguageTag;
-
 use crate::{ContentDigest, RdfTextDirection};
 
 use super::contract::{TlvEntryRef, TlvWireType, canonical_tlv, push_tlv, validate_sha256_field};
@@ -1232,7 +1230,7 @@ fn validate_language_tag(language: &str) -> Result<(), EmbeddingError> {
         && language
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-    if !canonical_lowercase || LanguageTag::parse(language).is_err() {
+    if !canonical_lowercase || !purrdf_iri::langtag::is_well_formed(language) {
         return Err(EmbeddingError::Malformed("invalid lowercase language tag"));
     }
     Ok(())

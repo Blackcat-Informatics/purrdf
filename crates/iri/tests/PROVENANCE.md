@@ -43,6 +43,7 @@ it.
 | `authority.rs` | [RFC 3986 §3.2.2](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.2) IPv6address / IPvFuture and [§3.2.3](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.3) generic port syntax; RFC 3987 §2.2 imports both productions | Exact grammar boundaries and lexical preservation through public IRI/base APIs. |
 | `iri_suite.rs` | CURIE / prefixed-name expansion + `rdf-tests`-style IRIREF handling | First-party edge cases layered on the RFC grammar. |
 | `proptest.rs` | Property-based round-trip / idempotence invariants over the RFC 3986/3987 grammar | Generative, not a fixed corpus. |
+| `langtag_corpus.rs` | **RFC 5646 Appendix A** worked examples (well-formed, and the invalid set split along the §2.2.9 well-formed/valid line), the closed **§2.2.8** grandfathered list, and boundary vectors derived from the **§2.1** ABNF | `Language-Tag` well-formedness corpus; every refusal is paired with an accepted neighbor. Written from the RFC, not from the replaced `oxilangtag` dependency's tests. |
 
 ## Fidelity statement
 

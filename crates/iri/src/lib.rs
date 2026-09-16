@@ -30,6 +30,10 @@
 //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
 //!   [`PrefixMap`], subsuming the SSSOM serializer's hand-rolled prefix logic.
 //!   `oxiri` has none of this — it is the EXTEND deliverable for this slice.
+//! * **BCP 47 language tags** — [`langtag`], RFC 5646 `Language-Tag`
+//!   well-formedness (the first-party `oxilangtag` replacement), shared by
+//!   embedding metadata and CSVW validation. Well-formedness only: registry
+//!   validity and RFC 4647 matching land with their first consumers.
 //! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
 //!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) that
 //!   every scanner above this leaf shares. They live here because a scanner's
@@ -115,6 +119,7 @@
 mod base;
 mod curie;
 mod error;
+pub mod langtag;
 mod normalize;
 mod parse;
 pub mod pos;

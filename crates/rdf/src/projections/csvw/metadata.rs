@@ -5,7 +5,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use oxilangtag::LanguageTag;
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -2105,7 +2104,7 @@ fn link_property(
 }
 
 fn valid_language_tag(value: &str) -> bool {
-    LanguageTag::parse(value).is_ok()
+    purrdf_iri::langtag::is_well_formed(value)
 }
 
 fn expand_datatype(
