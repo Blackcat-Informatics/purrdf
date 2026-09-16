@@ -1625,7 +1625,14 @@ pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
 
 /// Lowercase hexadecimal rendering of `bytes`, built with the same `write!`
 /// discipline the rest of this module uses (never `format!` + `push_str`).
-fn hex_lower(bytes: &[u8]) -> String {
+///
+/// This crate's one general-purpose (variable-length, one-shot) hex renderer —
+/// [`crate::cache::ContractHash::to_hex`] reuses it rather than carrying its own copy.
+/// [`crate::chase`]'s witness-label renderer deliberately does NOT: it is called once per
+/// invented witness inside the chase's fixpoint loop, so it keeps its own lookup-table
+/// implementation rather than paying this function's per-byte `write!` formatting overhead
+/// on a hot path.
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         write!(out, "{byte:02x}").expect("writing to a String never fails");

@@ -137,6 +137,7 @@ use purrdf_core::RdfDataset;
 use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
+use crate::digest_hex::hex;
 use crate::owl_dl::Kb;
 use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, derive};
 use crate::owl_dl::concept::{Decomp, Role};
@@ -4923,22 +4924,16 @@ fn head_atom_hash(hasher: &mut blake3::Hasher, atom: &HeadAtom) {
 }
 
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
+//
+// The hex renderer used to live here too, as its own `char::from_digit` loop; it is now
+// `crate::digest_hex::hex`, the one first-party renderer this crate's three digest-bearing
+// proof modules share (see that module's doc comment for why).
 
 /// A [`DlProofError::Malformed`] carrying `detail`.
 pub(crate) fn malformed(detail: &str) -> DlProofError {
     DlProofError::Malformed {
         detail: detail.to_owned(),
     }
-}
-
-/// 32 bytes as 64 lowercase hex characters.
-fn hex(digest: [u8; 32]) -> String {
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push(char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is one hex digit"));
-        out.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is one hex digit"));
-    }
-    out
 }
 
 /// Append a length-prefixed byte string.
