@@ -33,6 +33,28 @@
 //! with that tag; its `predicate` constraint matches only a lexical or spatial
 //! term carrying that predicate.
 //!
+//! # Matching is not enough: a producer must also be *invocable*
+//!
+//! Accepting a term's shape and being able to render that term into an argument
+//! position are two different claims, and a producer can make the first without
+//! the second: a query embedding has no SPARQL constant form, a blank-node seed
+//! is a non-distinguished variable rather than a ground value, and a relation
+//! that can only run with its depth bound cannot be called by one that leaves
+//! the depth free. So after matching, the planner runs the compiler's own
+//! [`place`](crate::matching::place) and records
+//! [`RejectionReason::UnsatisfiedConstraint`] for a producer that cannot be
+//! invoked, rather than binding it and emitting a call that silently drops the
+//! facet it could not write. If that leaves nothing bound, the request reaches
+//! nothing and [`PlanError::NoApplicableProducers`] is the answer.
+//!
+//! A producer the registry declares **mandatory** is not exempt. If placement
+//! refuses one, the plan records the rejection and
+//! [`compile`](crate::compile) refuses the plan with
+//! [`MissingMandatoryProducer`](crate::AdmissionError::MissingMandatoryProducer):
+//! the registry insists that producer serve every request, and this request
+//! cannot be delivered to it. That is a visible, typed refusal at the admission
+//! waist, which is the only place a coverage claim is enforced.
+//!
 //! # The registry is read, never duplicated
 //!
 //! Every declaration the planner consumes — a producer's IRI, its capability,
@@ -44,11 +66,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, TermKind, TermPattern};
+use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, RankedDeclaration};
 use purrdf_text::Fixed;
 
 use crate::error::PlanError;
 use crate::iri::{Iri, Weight};
+use crate::matching::{pattern_matches, place};
 use crate::plan::{
     Plan, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry, StatisticsSnapshot,
 };
@@ -81,7 +104,8 @@ const UNIT_WEIGHT_RAW: i128 = Fixed::ONE.into_raw();
 /// * [`PlanError::RegistryDeclaration`] when a registered relation's declaration
 ///   panics under the seam's containment.
 /// * [`PlanError::NoApplicableProducers`] when no registered producer accepts any
-///   term of the request.
+///   term of the request, or when every producer that does accept one cannot be
+///   invoked for it.
 /// * [`PlanError::StatisticsUnavailable`] when a selected producer declares an
 ///   unbounded row count and statistics supply no cardinality to bound it.
 pub fn plan(
@@ -110,21 +134,17 @@ pub fn plan(
                 message: error.to_string(),
             })?;
 
-    // 3. Match request terms to producers by declared capability only.
-    let mut bindings: Vec<ProducerBinding> = Vec::new();
-    let mut decisions: Vec<ProducerDecision> = Vec::new();
-    // Stratum -> worst-case declared row bound over its selected producers.
-    let mut declared_bounds: BTreeMap<Iri, u64> = BTreeMap::new();
-
+    // 3. Match request terms to producers by declared capability only. This pass
+    //    settles term matching and nothing else; a producer that matches here is
+    //    still only a candidate, because whether its declaration can actually
+    //    *render* those terms into its argument positions is decided in step 5.
+    let mut candidates: Vec<Candidate<'_>> = Vec::new();
     for descriptor in &descriptors {
         let producer = descriptor.iri.clone();
         // A relation registered without a ranked declaration declares nothing,
         // and nothing is what the planner reads back: it does not fuse.
         let Some(declaration) = descriptor.ranked.as_ref() else {
-            decisions.push(ProducerDecision::Rejected {
-                producer,
-                reason: RejectionReason::NotRanked,
-            });
+            candidates.push(Candidate::rejected(producer, RejectionReason::NotRanked));
             continue;
         };
         // The seam declares its stratum with the kernel IRI; a plan carries the
@@ -145,46 +165,105 @@ pub fn plan(
             .collect();
 
         if matched.is_empty() {
-            decisions.push(ProducerDecision::Rejected {
+            candidates.push(Candidate::rejected(
                 producer,
-                reason: RejectionReason::NoAcceptedTerm,
-            });
+                RejectionReason::NoAcceptedTerm,
+            ));
             continue;
         }
 
+        candidates.push(Candidate {
+            producer,
+            outcome: Outcome::Matched {
+                descriptor,
+                declaration,
+                stratum,
+                matched,
+            },
+        });
+    }
+
+    // 4. The depth every candidate would be invoked at. `place` renders the
+    //    per-stratum depth into an argument for a producer that declares a depth
+    //    placement, so the bound has to exist before placement runs — over the
+    //    term-matched set, which is the widest set placement can survive from.
+    let provisional = depth_bounds(&candidates, statistics);
+
+    // 5. Placement: can this producer's declaration actually render the terms it
+    //    matched into its own argument positions, under a mode it declares? A
+    //    producer that cannot is rejected here rather than emitted as a call that
+    //    silently drops the facet it could not write.
+    let mut bindings: Vec<ProducerBinding> = Vec::new();
+    let mut decisions: Vec<ProducerDecision> = Vec::with_capacity(candidates.len());
+    let mut selected: Vec<(Iri, u64)> = Vec::new();
+    for candidate in &candidates {
+        let (descriptor, declaration, stratum, matched) = match &candidate.outcome {
+            Outcome::Rejected(reason) => {
+                decisions.push(ProducerDecision::Rejected {
+                    producer: candidate.producer.clone(),
+                    reason: *reason,
+                });
+                continue;
+            }
+            Outcome::Matched {
+                descriptor,
+                declaration,
+                stratum,
+                matched,
+            } => (*descriptor, *declaration, stratum, matched),
+        };
+        let depth = provisional.get(stratum).copied().unwrap_or(u32::MAX);
+        if place(
+            &candidate.producer,
+            descriptor,
+            declaration,
+            &request.terms,
+            matched,
+            depth,
+        )
+        .is_err()
+        {
+            decisions.push(ProducerDecision::Rejected {
+                producer: candidate.producer.clone(),
+                reason: RejectionReason::UnsatisfiedConstraint,
+            });
+            continue;
+        }
         decisions.push(ProducerDecision::Selected {
-            producer: producer.clone(),
+            producer: candidate.producer.clone(),
             stratum: stratum.clone(),
         });
         bindings.push(ProducerBinding {
-            producer,
+            producer: candidate.producer.clone(),
             stratum: stratum.clone(),
-            request_terms: matched,
+            request_terms: matched.clone(),
         });
-
-        let bound = declared_row_bound(descriptor);
-        declared_bounds
-            .entry(stratum)
-            .and_modify(|current| *current = (*current).max(bound))
-            .or_insert(bound);
+        selected.push((stratum.clone(), declared_row_bound(descriptor)));
     }
 
     if bindings.is_empty() {
         return Err(PlanError::NoApplicableProducers);
     }
 
-    // 4. Per-stratum depth: the declared row bound, capped by a measured
-    //    cardinality when statistics offer one. An unbounded declaration with no
-    //    statistic to bound it has no finite depth to record.
+    // 6. Per-stratum depth over the SURVIVING set: a producer dropped in step 5
+    //    can lower its stratum's worst-case bound, and recording the wider bound
+    //    would license a depth no remaining producer can fill. The bound is the
+    //    declared row count, capped by a measured cardinality when statistics
+    //    offer one; an unbounded declaration with no statistic to bound it has no
+    //    finite depth to record.
+    let mut declared_bounds: BTreeMap<Iri, u64> = BTreeMap::new();
+    for (stratum, bound) in selected {
+        declared_bounds
+            .entry(stratum)
+            .and_modify(|current| *current = (*current).max(bound))
+            .or_insert(bound);
+    }
     let strata: BTreeSet<Iri> = declared_bounds.keys().cloned().collect();
     let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(strata.len());
     let mut stratum_weights: HashMap<Iri, Weight> = HashMap::with_capacity(strata.len());
     for stratum in &strata {
         let declared = declared_bounds.get(stratum).copied().unwrap_or(0);
-        let bound = match statistics.cardinality(stratum) {
-            Some(cardinality) => declared.min(cardinality),
-            None => declared,
-        };
+        let bound = capped(declared, stratum, statistics);
         if bound == u64::MAX {
             return Err(PlanError::StatisticsUnavailable {
                 predicate: Box::new(stratum.clone()),
@@ -210,6 +289,89 @@ pub fn plan(
         registry_instance_id: registry.instance_id(),
         registry_content_fingerprint: content_fingerprint,
     })
+}
+
+/// One considered producer, between term matching and placement.
+///
+/// Planning is two passes over the registry's descriptions rather than one,
+/// because placement needs a depth and the depth needs the set placement
+/// survives. This value is what the first pass hands the second; it borrows the
+/// registry's own description rather than copying any of it.
+struct Candidate<'a> {
+    /// The registered producer IRI, byte-exact.
+    producer: String,
+    /// What the first pass decided.
+    outcome: Outcome<'a>,
+}
+
+impl Candidate<'_> {
+    /// A producer the first pass already refused.
+    const fn rejected(producer: String, reason: RejectionReason) -> Self {
+        Self {
+            producer,
+            outcome: Outcome::Rejected(reason),
+        }
+    }
+}
+
+/// The first pass's decision for one producer.
+enum Outcome<'a> {
+    /// Refused on term matching alone; placement is never consulted.
+    Rejected(RejectionReason),
+    /// At least one request term matched a declared shape.
+    Matched {
+        /// The registry's own description of the relation.
+        descriptor: &'a PfDescriptor,
+        /// The ranked declaration supplied where it was registered.
+        declaration: &'a RankedDeclaration,
+        /// The stratum it ranks within.
+        stratum: Iri,
+        /// The request-term indices it matched, ascending.
+        matched: Vec<u32>,
+    },
+}
+
+/// The depth each stratum would carry over the term-matched candidates.
+///
+/// This is the provisional bound placement is run against, not the bound the
+/// plan records: it is computed over the widest set (every producer whose terms
+/// matched), so a producer can only ever be handed a depth at least as large as
+/// the one its stratum finally records. An unbounded stratum with no statistic
+/// has no finite depth here; it is carried as [`u32::MAX`] rather than refused,
+/// because the refusal belongs to the surviving set and is raised there.
+fn depth_bounds(candidates: &[Candidate<'_>], statistics: &impl Statistics) -> BTreeMap<Iri, u32> {
+    let mut bounds: BTreeMap<Iri, u64> = BTreeMap::new();
+    for candidate in candidates {
+        let Outcome::Matched {
+            descriptor,
+            stratum,
+            ..
+        } = &candidate.outcome
+        else {
+            continue;
+        };
+        let bound = declared_row_bound(descriptor);
+        bounds
+            .entry(stratum.clone())
+            .and_modify(|current| *current = (*current).max(bound))
+            .or_insert(bound);
+    }
+    bounds
+        .into_iter()
+        .map(|(stratum, declared)| {
+            let bound = capped(declared, &stratum, statistics);
+            let depth = u32::try_from(bound).unwrap_or(u32::MAX);
+            (stratum, depth)
+        })
+        .collect()
+}
+
+/// A declared row bound, lowered (never raised) by a measured cardinality.
+fn capped(declared: u64, stratum: &Iri, statistics: &impl Statistics) -> u64 {
+    match statistics.cardinality(stratum) {
+        Some(cardinality) => declared.min(cardinality),
+        None => declared,
+    }
 }
 
 /// Refuse a request term that cannot name anything.
@@ -249,69 +411,6 @@ fn declared_row_bound(descriptor: &PfDescriptor) -> u64 {
         .map(|mode| mode.rows_per_invocation)
         .max()
         .unwrap_or(0)
-}
-
-/// Whether the producer's declared pattern accepts the request term.
-fn pattern_matches(pattern: &TermPattern, term: &RequestTerm) -> bool {
-    if !kind_matches(pattern.kind, term) {
-        return false;
-    }
-    // No request term carries a datatype, so a datatype constraint matches nothing.
-    if pattern.datatype.is_some() {
-        return false;
-    }
-    if let Some(language) = &pattern.language {
-        match term {
-            RequestTerm::Lexical {
-                language: Some(term_language),
-                ..
-            } if term_language == language => {}
-            _ => return false,
-        }
-    }
-    if let Some(predicate) = &pattern.predicate {
-        let matches = match term {
-            RequestTerm::Lexical {
-                predicate: Some(term_predicate),
-                ..
-            } => term_predicate.as_str() == predicate,
-            RequestTerm::Spatial {
-                predicate: term_predicate,
-                ..
-            } => term_predicate.as_str() == predicate,
-            _ => false,
-        };
-        if !matches {
-            return false;
-        }
-    }
-    true
-}
-
-/// Whether a declared term kind accepts a request term.
-fn kind_matches(kind: TermKind, term: &RequestTerm) -> bool {
-    if kind == TermKind::Any {
-        return true;
-    }
-    match term {
-        RequestTerm::Lexical { .. } | RequestTerm::Spatial { .. } => kind == TermKind::Literal,
-        RequestTerm::EntitySeed { entity } => seed_kind(entity.as_str()) == Some(kind),
-        // A vector term targets no RDF term kind; only `Any` accepts it.
-        RequestTerm::Vector { .. } => false,
-    }
-}
-
-/// The RDF term kind a canonical seed lexical names, when it names one.
-fn seed_kind(text: &str) -> Option<TermKind> {
-    if text.starts_with('<') {
-        Some(TermKind::Iri)
-    } else if text.starts_with("_:") {
-        Some(TermKind::Blank)
-    } else if text.starts_with('"') {
-        Some(TermKind::Literal)
-    } else {
-        None
-    }
 }
 
 /// The predicate a request term names, when it names one.

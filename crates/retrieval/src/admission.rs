@@ -21,6 +21,9 @@
 //! * every stratum depth respects the registry's declared row bound;
 //! * every stratum weight keys a declared stratum and is strictly positive under
 //!   §5 of the design record;
+//! * every bound producer can actually be *invoked* for the request terms the
+//!   plan gives it — every declared placement renders, no two contend for one
+//!   position, and some declared access pattern serves the result;
 //! * the plan was planned against the registry the environment now supplies (the
 //!   durable content fingerprint first, then the live instance identity) and
 //!   against the statistics revision the environment reports.
@@ -182,6 +185,31 @@ pub enum AdmissionError {
         version: u16,
     },
 
+    /// A bound producer cannot be invoked for the request terms the plan gives
+    /// it: some facet it declares a placement for cannot be rendered, two
+    /// placements contend for one position, or no declared access pattern
+    /// serves the resulting invocation.
+    ///
+    /// The planner already refuses such a producer, so a plan carrying one was
+    /// hand-built or edited. It is refused here rather than emitted as a call
+    /// that silently drops the facet — the same reason every other dimension is
+    /// re-derived at the waist.
+    #[error(
+        "producer {producer} cannot be invoked for the plan's request terms ({rule}): {detail}"
+    )]
+    UnsatisfiablePlacement {
+        /// The producer that cannot be invoked.
+        producer: Box<Iri>,
+        /// The stable name of the placement rule that refused.
+        rule: &'static str,
+        /// What that rule refused, in words.
+        detail: String,
+        /// The invocation's own access-pattern code, when one was derived.
+        invocation: Option<String>,
+        /// Every access pattern the registry declares for the producer.
+        declared: Vec<String>,
+    },
+
     /// The plan is internally inconsistent or a registry declaration could not
     /// be read — a structural defect rather than a policy refusal.
     #[error("plan is malformed: {reason}")]
@@ -208,6 +236,7 @@ impl AdmissionError {
             Self::RegistryMismatch { .. } => "registry_instance_mismatch",
             Self::RegistryFingerprintMismatch { .. } => "registry_fingerprint_mismatch",
             Self::InvalidPlanVersion { .. } => "invalid_plan_version",
+            Self::UnsatisfiablePlacement { .. } => "unsatisfiable_placement",
             Self::MalformedPlan { .. } => "malformed_plan",
         }
     }

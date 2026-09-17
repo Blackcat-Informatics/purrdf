@@ -74,17 +74,29 @@ fn vector_request() -> RetrievalRequest {
 
 /// Each accepted pattern, with the request term's value rendered into the
 /// object-side position. The mocks are arity (1,1) and project `?c0`, so the
-/// candidate is position 0 and every facet binds at position 1.
+/// candidate is position 0 and a rendered facet binds at position 1.
+///
+/// An unconstrained `TermKind::Any` pattern is the exception: it also accepts a
+/// vector term, whose query embedding has no SPARQL constant form, so it
+/// declares no placement at all. Its argument stays a free variable, which is
+/// exactly what "I take the whole request without needing it written out" is.
 fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
     patterns
         .into_iter()
-        .map(|pattern| AcceptedTerm {
-            pattern,
-            placements: vec![TermPlacement {
-                facet: RequestFacet::Value,
-                position: 1,
-                datatype: None,
-            }],
+        .map(|pattern| {
+            let placements = if pattern == TermPattern::of_kind(TermKind::Any) {
+                Vec::new()
+            } else {
+                vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: 1,
+                    datatype: None,
+                }]
+            };
+            AcceptedTerm {
+                pattern,
+                placements,
+            }
         })
         .collect()
 }

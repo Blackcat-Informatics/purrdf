@@ -70,17 +70,29 @@ fn kernel_iri(text: &str) -> purrdf_core::Iri {
 
 /// Each accepted pattern, with the request term's value rendered into the
 /// object-side position. The mocks are arity (1,1) and project `?c0`, so the
-/// candidate is position 0 and every facet binds at position 1.
+/// candidate is position 0 and a rendered facet binds at position 1.
+///
+/// An unconstrained `TermKind::Any` pattern is the exception: it also accepts a
+/// vector term, whose query embedding has no SPARQL constant form, so it
+/// declares no placement at all. Its argument stays a free variable, which is
+/// exactly what "I take the whole request without needing it written out" is.
 fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
     patterns
         .into_iter()
-        .map(|pattern| AcceptedTerm {
-            pattern,
-            placements: vec![TermPlacement {
-                facet: RequestFacet::Value,
-                position: 1,
-                datatype: None,
-            }],
+        .map(|pattern| {
+            let placements = if pattern == TermPattern::of_kind(TermKind::Any) {
+                Vec::new()
+            } else {
+                vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: 1,
+                    datatype: None,
+                }]
+            };
+            AcceptedTerm {
+                pattern,
+                placements,
+            }
         })
         .collect()
 }
@@ -135,11 +147,30 @@ impl PropertyFunction for MockProducer {
 
     fn open(
         &self,
-        _args: &PfArgs<'_>,
+        args: &PfArgs<'_>,
         _ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
+        // A bound position is an input the call site supplied, and the engine
+        // drops any row that disagrees with it there. Echoing the input back is
+        // the cheapest correct behaviour, and it is what makes these fixtures
+        // sensitive to the constants the compiler renders.
+        let bound: Vec<Option<TermValue>> =
+            args.flattened().map(Option::<&TermValue>::cloned).collect();
+        let mut rows: Vec<Vec<TermValue>> = Vec::with_capacity(self.emitted.len());
+        for row in &self.emitted {
+            let mut echoed = Vec::with_capacity(row.len());
+            for (position, value) in row.iter().enumerate() {
+                echoed.push(
+                    bound
+                        .get(position)
+                        .and_then(Clone::clone)
+                        .unwrap_or_else(|| value.clone()),
+                );
+            }
+            rows.push(echoed);
+        }
         Ok(Box::new(RowCursor {
-            rows: self.emitted.clone().into_iter(),
+            rows: rows.into_iter(),
         }))
     }
 }
