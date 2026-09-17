@@ -8,8 +8,9 @@ use std::collections::HashMap;
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, ProducerBinding, ProducerDecision,
-    RegistryId, RejectionReason, RequestTerm, StatisticsEntry, StatisticsSnapshot, Term, Weight,
+    Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
+    ProducerDecision, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
+    StatisticsSnapshot, Term, Weight,
 };
 
 fn iri(text: &str) -> Iri {
@@ -76,7 +77,54 @@ fn baseline() -> Plan {
         },
         registry_instance_id: RegistryId::from_raw(7),
         registry_content_fingerprint: "example-fingerprint".to_owned(),
+        origin: PlanOrigin::SameProcess,
     }
+}
+
+#[test]
+fn every_decode_path_records_a_deserialized_origin() {
+    let plan = baseline();
+    assert_eq!(
+        plan.origin,
+        PlanOrigin::SameProcess,
+        "a plan built here names a registry identity this process can compare"
+    );
+
+    let decoded = Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical decode");
+    assert_eq!(
+        decoded.origin,
+        PlanOrigin::Deserialized,
+        "the canonical decoder records that the instance id it read is foreign"
+    );
+
+    let json = serde_json::to_string(&plan).expect("plan serializes");
+    let round_tripped: Plan = serde_json::from_str(&json).expect("plan deserializes");
+    assert_eq!(
+        round_tripped.origin,
+        PlanOrigin::Deserialized,
+        "serde skips origin, so a decoded plan gets the default, which is the decoded case"
+    );
+    assert!(
+        !json.contains("origin"),
+        "origin is provenance, not content, so it is not part of the document: {json}"
+    );
+}
+
+#[test]
+fn origin_is_provenance_and_moves_neither_bytes_nor_identity() {
+    // A plan and its own round trip differ in origin and in nothing else, so
+    // they must stay one plan with one identity; otherwise pinning a plan and
+    // reloading it would name a different plan.
+    let planned = baseline();
+    let decoded = Plan::from_canonical_bytes(&planned.canonical_bytes()).expect("canonical decode");
+    assert_ne!(planned.origin, decoded.origin);
+    assert_eq!(decoded, planned, "equality is over content");
+    assert_eq!(decoded.canonical_bytes(), planned.canonical_bytes());
+    assert_eq!(decoded.id(), planned.id());
+
+    let mut flipped = baseline();
+    flipped.origin = PlanOrigin::Deserialized;
+    assert_eq!(flipped.id(), baseline().id(), "origin is not in the digest");
 }
 
 #[test]
@@ -148,6 +196,9 @@ fn canonical_bytes_are_stable_across_map_order() {
 // Each mutation starts from a fresh clone of the baseline on purpose; the final
 // clone is flagged only because it happens to be the last use of `base`.
 #[allow(clippy::redundant_clone)]
+// Every *content* field. `origin` is provenance rather than content and is
+// deliberately outside the digest; `origin_is_provenance_and_moves_neither_bytes_nor_identity`
+// pins that exclusion from the other side.
 fn digest_is_sensitive_to_every_field() {
     let base = baseline();
     let base_id = base.id();

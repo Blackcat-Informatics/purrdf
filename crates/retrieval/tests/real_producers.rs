@@ -634,6 +634,9 @@ async fn manual_composition(
         trailer: fused.trailer,
         plan_id: planned.id(),
         profile_id: profile.id(),
+        // The profile weights both of this fixture's strata, so nothing is set
+        // aside; the `expect` above is what asserts that.
+        unweighted_strata: Vec::new(),
     }
 }
 

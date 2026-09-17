@@ -116,7 +116,8 @@ pub use id::{
 };
 pub use iri::{Iri, Term, Weight};
 pub use plan::{
-    Plan, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry, StatisticsSnapshot,
+    Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
+    StatisticsSnapshot,
 };
 pub use planner::plan;
 pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};

@@ -144,9 +144,13 @@ pub fn compile(
     let mut units = Vec::new();
     for (stratum, depth) in &plan.stratum_depths {
         let Some(bindings) = by_stratum.get(stratum) else {
-            // A declared stratum with no bound producer has no relation to run;
-            // admission has already refused anything structurally inconsistent,
-            // so this is simply nothing to emit.
+            // A stratum the plan gives a depth but no producer has no relation
+            // to run, so there is nothing to emit for it. That is the only case
+            // this arm can reach: admission refuses a binding whose stratum the
+            // plan records no depth for, so iterating the depth keys cannot skip
+            // a bound producer. Without that check this `continue` would be the
+            // silent narrowing — a producer dropped from the emitted text with
+            // nothing reporting it.
             continue;
         };
         let sparql = emit_unit(plan, bindings, &admitted.descriptors, *depth)?;

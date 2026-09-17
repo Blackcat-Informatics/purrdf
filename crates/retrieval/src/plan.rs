@@ -13,6 +13,16 @@
 //! can be edited wrongly, and one that can be deserialized can be forged. The
 //! pipeline therefore admits plans at a later `compile` stage; this module
 //! defines the value and its canonical, versioned, domain-separated identity.
+//!
+//! # A plan records where it came from
+//!
+//! One of the two registry identities a plan carries — the live instance id —
+//! is a process-lifetime counter, so it is meaningful only inside the process
+//! that minted it. A plan that crossed a process boundary carries a number that
+//! names no live registry, and a number that names no live registry is
+//! indistinguishable, by inspection, from one that names a *different* live
+//! registry. Those two cases must be admitted on different terms, so the plan
+//! records which it is in [`PlanOrigin`] rather than leaving admission to guess.
 
 use std::collections::HashMap;
 
@@ -73,6 +83,59 @@ mod registry_serde {
     ) -> Result<RegistryId, D::Error> {
         Ok(RegistryId::from_raw(u64::deserialize(deserializer)?))
     }
+}
+
+/// Where a plan value came from, and therefore which of the two registry
+/// identities admission can hold it to.
+///
+/// [`Plan::registry_instance_id`] is a
+/// [`RegistryId`](purrdf_sparql_eval::RegistryId): a monotonic counter that is
+/// unique among the registries built during **one** process's lifetime, and
+/// meaningless outside it. So the same stored number means two different things:
+///
+/// * in the process that planned it, it names a registry admission can compare
+///   against, and a mismatch is a real refusal — two registries that declare
+///   byte-identical contents can still register one IRI to two implementations
+///   that answer differently, and the instance id is the only value that sees
+///   that difference;
+/// * in any other process, it names nothing at all, and comparing it against a
+///   freshly minted counter refuses every plan that was ever serialized.
+///
+/// Nothing in the number itself distinguishes those two cases, so the plan
+/// records which it is. A [`Deserialized`](Self::Deserialized) plan is admitted
+/// against [`Plan::registry_content_fingerprint`] — the durable,
+/// instance-independent digest of the registry's declared contents — which is
+/// the strongest claim a plan that crossed a process boundary can make.
+///
+/// # It is data, like every other field
+///
+/// Origin is public and editable, exactly like the rest of the plan, and
+/// admission treats it as untrusted input like the rest of the plan. Editing it
+/// never removes a check: it only chooses which of the two registry identities
+/// the plan is held to, and both are checked against the live environment.
+/// Marking a decoded plan [`SameProcess`](Self::SameProcess) makes admission
+/// *stricter* (the instance must now match); marking a fresh plan
+/// [`Deserialized`](Self::Deserialized) leaves it held to the content
+/// fingerprint, which is the same bar every serialized plan clears.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PlanOrigin {
+    /// The plan was produced in this process — by [`plan`](crate::plan), or by
+    /// a caller building one by hand against a live registry — so
+    /// [`Plan::registry_instance_id`] names a registry this process minted and
+    /// admission holds the plan to that exact instance.
+    SameProcess,
+    /// The plan was reconstructed from bytes, by
+    /// [`Plan::from_canonical_bytes`] or by serde, so
+    /// [`Plan::registry_instance_id`] is a counter value from some other
+    /// process and admission holds the plan to
+    /// [`Plan::registry_content_fingerprint`] instead.
+    ///
+    /// This is the default because it is what every decode path produces: a
+    /// value carried by `#[serde(skip)]` is filled in by [`Default`], and a
+    /// decoded plan is precisely the case that must not be held to a counter it
+    /// cannot have minted.
+    #[default]
+    Deserialized,
 }
 
 /// A producer's binding of one selection of a request term.
@@ -153,9 +216,15 @@ pub struct StatisticsSnapshot {
 ///
 /// Every field is public and owned, so a caller can inspect and edit the plan
 /// and hand it back. [`Plan::id`] is the plan's canonical identity; two plans
-/// are equal iff their fields are equal iff their canonical bytes and ids are
-/// equal.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// are equal iff their content fields are equal iff their canonical bytes and
+/// ids are equal.
+///
+/// [`Plan::origin`] is the one field outside that biconditional, because it is
+/// provenance rather than content: a plan and its own decoded round trip are the
+/// same plan and must keep one identity, yet they are reached differently and
+/// are therefore admitted against different registry identities. It is absent
+/// from [`Plan::canonical_bytes`] and from equality for that single reason.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Plan {
     /// The plan layout version. Callers constructing a plan by hand must set
     /// this to [`PLAN_VERSION`](crate::PLAN_VERSION); a decoded plan whose header
@@ -174,15 +243,49 @@ pub struct Plan {
     pub stratum_weights: HashMap<Iri, Weight>,
     /// The statistics snapshot the plan was planned against.
     pub statistics_snapshot: StatisticsSnapshot,
-    /// The live registry instance the plan was planned against, if any. This is
-    /// a process-lifetime value; a deserialized plan is admitted against
+    /// The live registry instance the plan was planned against. This is a
+    /// process-lifetime value, so it is compared only when
+    /// [`Plan::origin`] says the plan never left the process that recorded it;
+    /// a [`PlanOrigin::Deserialized`] plan is admitted against
     /// [`Plan::registry_content_fingerprint`] instead.
     #[serde(with = "registry_serde")]
     pub registry_instance_id: RegistryId,
     /// The durable, instance-independent fingerprint of the registry's declared
     /// contents the plan was planned against.
     pub registry_content_fingerprint: String,
+    /// Where this plan value came from, which decides which registry identity
+    /// admission holds it to.
+    ///
+    /// Skipped by serde and absent from [`Plan::canonical_bytes`]: it describes
+    /// how this value was *reached*, not what it says, so encoding it would give
+    /// a plan and its own round trip two identities. Every decode path
+    /// therefore yields [`PlanOrigin::Deserialized`], which is
+    /// [`PlanOrigin`]'s [`Default`].
+    #[serde(skip)]
+    pub origin: PlanOrigin,
 }
+
+impl PartialEq for Plan {
+    /// Equality over the plan's content, which excludes [`Plan::origin`].
+    ///
+    /// The type documents that two plans are equal iff their canonical bytes
+    /// are equal iff their ids are equal, and origin is deliberately not in the
+    /// canonical bytes; comparing it here would break that biconditional and
+    /// make a plan unequal to its own decoded round trip.
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.request_terms == other.request_terms
+            && self.producer_bindings == other.producer_bindings
+            && self.producer_decisions == other.producer_decisions
+            && self.stratum_depths == other.stratum_depths
+            && self.stratum_weights == other.stratum_weights
+            && self.statistics_snapshot == other.statistics_snapshot
+            && self.registry_instance_id == other.registry_instance_id
+            && self.registry_content_fingerprint == other.registry_content_fingerprint
+    }
+}
+
+impl Eq for Plan {}
 
 impl Plan {
     /// The version this build writes and understands.
@@ -233,7 +336,12 @@ impl Plan {
         let registry_instance_id = RegistryId::from_raw(reader.u64()?);
         let registry_content_fingerprint = reader.string("registry content fingerprint")?;
         reader.finish()?;
+        // Reconstructed from bytes, so the instance id just read is a counter
+        // value this process cannot have minted; the plan is held to its
+        // content fingerprint instead. Recorded here rather than inferred at
+        // admission, which cannot tell a foreign counter from a stale one.
         Ok(Self {
+            origin: PlanOrigin::Deserialized,
             version,
             request_terms,
             producer_bindings,

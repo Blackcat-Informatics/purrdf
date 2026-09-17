@@ -35,7 +35,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, Fixed, FusionProfile, FusionResult, FusionStream, Iri, Plan,
+    AdmissionEnvironment, Fixed, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanOrigin,
     ProducerBinding, ProducerReceipt, ProtocolError, RankedStream, RankedStreamImpl, RequestTerm,
     RetrievalRequest, Statistics, StatisticsSnapshot, Term, Weight, compile, contribution, execute,
     fuse, plan, search,
@@ -525,6 +525,9 @@ fn start_at_compile_hand_built_plan() {
         },
         registry_instance_id: registry.instance_id(),
         registry_content_fingerprint: registry.content_fingerprint().expect("fingerprint"),
+        // Built here, against the live registry whose instance id it just read,
+        // so it is held to that instance exactly as the planner's own output is.
+        origin: PlanOrigin::SameProcess,
     };
 
     let env = AdmissionEnvironment {

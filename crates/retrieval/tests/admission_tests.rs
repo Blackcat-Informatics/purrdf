@@ -17,7 +17,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, Fixed, Iri, Metric, Plan,
+    AdmissionEnvironment, AdmissionError, CompiledRetrieval, Fixed, Iri, Metric, Plan, PlanOrigin,
     ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, Statistics,
     Term, Weight, compile, execute,
 };
@@ -248,6 +248,74 @@ fn registry_with_different_declaration() -> PropertyFunctionRegistry {
             &ex("stratum/universal"),
             vec![TermPattern::of_kind(TermKind::Any)],
             true,
+        ),
+    );
+    registry
+}
+
+/// A ranked producer that declares **no access mode at all**.
+///
+/// A host can register a relation that reports no invocation pattern — an index
+/// that is not built yet, a relation gated on configuration the host has not
+/// supplied. Such a producer declares no worst-case row count either, because a
+/// row count is declared per mode, and "declared nothing" is not "declared
+/// zero": zero is a promise that nothing ranks there.
+struct NoModeProducer {
+    arity: PfArity,
+}
+
+impl PropertyFunction for NoModeProducer {
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        self.arity
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        &[]
+    }
+
+    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+        // Never reached: a row count is reported per declared mode, and this
+        // relation declares none.
+        0
+    }
+
+    fn open(
+        &self,
+        _args: &PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        Ok(Box::new(RowCursor {
+            rows: Vec::new().into_iter(),
+        }))
+    }
+}
+
+/// The fixture's mandatory catch-all producer, plus a producer that declares no
+/// access mode under a stratum of its own.
+fn registry_with_a_modeless_producer() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/any"),
+        producer(200, "universal/", 3),
+        ranked(
+            &ex("stratum/universal"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+        ),
+    );
+    registry.register_ranked(
+        ex("pf/modeless"),
+        Arc::new(NoModeProducer {
+            arity: PfArity::new(1, 1),
+        }),
+        ranked(
+            &ex("stratum/modeless"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            false,
         ),
     );
     registry
@@ -698,6 +766,380 @@ fn same_fingerprint_different_implementation_refused() {
         matches!(error, AdmissionError::RegistryMismatch { .. }),
         "got {error:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 7b. A plan that crossed a process boundary
+//
+// The instance id is a per-process counter, so a plan that was serialized and
+// reloaded carries a number no live registry can ever match. Holding such a plan
+// to it would refuse every portable plan there is, which is why the plan records
+// its origin and the durable content fingerprint carries the claim instead.
+//
+// These are pairs: the plan that must be admitted, and the neighbouring one that
+// must still be refused, so neither the refusal nor the relaxation can drift.
+// ---------------------------------------------------------------------------
+
+/// The canonical-bytes path and the serde path must agree, so each of the two
+/// decoders is exercised against the same rebuilt registry.
+fn decoded_both_ways(plan: &Plan) -> Vec<(&'static str, Plan)> {
+    let canonical =
+        Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical bytes decode");
+    let json = serde_json::to_string(plan).expect("a plan serializes");
+    let serde_decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    vec![("canonical", canonical), ("serde", serde_decoded)]
+}
+
+#[test]
+fn a_deserialized_plan_is_admitted_against_a_rebuilt_registry() {
+    let planned_against = fixture_registry();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&planned_against, &stats);
+    let original = compile(
+        &plan,
+        &AdmissionEnvironment {
+            registry: &planned_against,
+            statistics: &stats,
+        },
+    )
+    .expect("the fresh plan is admitted in its own process");
+
+    // Stand in for the reload: the registry the plan was planned against is
+    // gone, and an independently built one declaring the same relations takes
+    // its place. Its instance id is a fresh counter value, so it cannot match.
+    drop(planned_against);
+    let rebuilt = fixture_registry();
+    let env = AdmissionEnvironment {
+        registry: &rebuilt,
+        statistics: &stats,
+    };
+
+    for (path, decoded) in decoded_both_ways(&plan) {
+        assert_eq!(
+            decoded.origin,
+            PlanOrigin::Deserialized,
+            "{path}: the decoder records that the plan crossed a boundary"
+        );
+        assert_ne!(
+            decoded.registry_instance_id,
+            rebuilt.instance_id(),
+            "{path}: a reloaded counter can never name a freshly minted registry"
+        );
+        let compiled = compile(&decoded, &env)
+            .unwrap_or_else(|error| panic!("{path}: a reloaded plan must admit, got {error:?}"));
+        assert_eq!(
+            compiled.plan_id,
+            plan.id(),
+            "{path}: it is still the same pinned plan"
+        );
+        assert_eq!(
+            compiled.units, original.units,
+            "{path}: and it compiles to the same text the planning process emitted"
+        );
+        assert_eq!(
+            compiled.registry_id,
+            rebuilt.instance_id(),
+            "{path}: the units are pinned to the registry that admitted them"
+        );
+    }
+}
+
+#[test]
+fn a_deserialized_plan_against_different_declarations_is_refused() {
+    // The neighbour of the test above: same reload, but the registry now
+    // declares something else, which the durable fingerprint sees. Relaxing the
+    // instance check must not have relaxed this one.
+    let planned_against = fixture_registry();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&planned_against, &stats);
+    drop(planned_against);
+
+    let changed = registry_with_different_declaration();
+    let env = AdmissionEnvironment {
+        registry: &changed,
+        statistics: &stats,
+    };
+    for (path, decoded) in decoded_both_ways(&plan) {
+        let error = compile(&decoded, &env).expect_err("a moved registry is refused");
+        assert_eq!(
+            error.dimension(),
+            "registry_fingerprint_mismatch",
+            "{path}: the durable dimension is the one that refuses, got {error:?}"
+        );
+        match error {
+            AdmissionError::RegistryFingerprintMismatch { expected, got } => {
+                assert_eq!(expected, plan.registry_content_fingerprint);
+                assert_eq!(got, changed.content_fingerprint().expect("fingerprint"));
+            }
+            other => panic!("{path}: expected a fingerprint mismatch, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn origin_is_what_selects_the_identity_a_plan_is_held_to() {
+    // The same decoded plan, the same rebuilt registry, and only the origin
+    // differs: as `Deserialized` it is admitted on the fingerprint, and as
+    // `SameProcess` it claims a live instance it does not name and is refused.
+    // Editing origin therefore never removes a check — it chooses which of the
+    // two registry identities applies, and this direction is the stricter one.
+    let planned_against = fixture_registry();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&planned_against, &stats);
+    drop(planned_against);
+
+    let rebuilt = fixture_registry();
+    let env = AdmissionEnvironment {
+        registry: &rebuilt,
+        statistics: &stats,
+    };
+    let mut decoded =
+        Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical bytes decode");
+    compile(&decoded, &env).expect("as a deserialized plan it is admitted");
+
+    decoded.origin = PlanOrigin::SameProcess;
+    let error =
+        compile(&decoded, &env).expect_err("as a same-process plan it names no live instance");
+    match error {
+        AdmissionError::RegistryMismatch {
+            expected_instance,
+            got_instance,
+        } => {
+            assert_eq!(expected_instance, plan.registry_instance_id);
+            assert_eq!(got_instance, rebuilt.instance_id());
+        }
+        other => panic!("expected RegistryMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_same_process_plan_is_still_held_to_its_live_instance() {
+    // The relaxation above must not have reached the plans that never left the
+    // process: two registries that declare byte-identical contents can register
+    // one IRI to two implementations that answer differently, and only the
+    // instance id sees that. The fingerprints here are equal on purpose.
+    let first = fixture_registry();
+    let second = fixture_registry();
+    assert_eq!(
+        first.content_fingerprint().expect("fingerprint"),
+        second.content_fingerprint().expect("fingerprint")
+    );
+    let stats = statistics("r1");
+    let plan = fresh_plan(&first, &stats);
+    assert_eq!(plan.origin, PlanOrigin::SameProcess);
+
+    let error = compile(
+        &plan,
+        &AdmissionEnvironment {
+            registry: &second,
+            statistics: &stats,
+        },
+    )
+    .expect_err("a same-process plan names a live instance, and this is not it");
+    assert_eq!(error.dimension(), "registry_instance_mismatch");
+
+    // And its own registry still admits it, which is the valid neighbour.
+    compile(
+        &plan,
+        &AdmissionEnvironment {
+            registry: &first,
+            statistics: &stats,
+        },
+    )
+    .expect("the registry it was planned against admits it");
+}
+
+// ---------------------------------------------------------------------------
+// 7c. Every bound producer reaches the emitted text
+//
+// `compile` emits one unit per stratum **depth** entry and looks that stratum's
+// bindings up from there, so a binding whose stratum carries no depth is never
+// visited. Nothing about the emitted text would look wrong: it parses, it runs,
+// and it answers less than the registry promised. Admission therefore enforces
+// the implication in both directions.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn admission_refuses_a_binding_whose_stratum_has_no_depth() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let mut plan = fresh_plan(&registry, &stats);
+    // The text producer stays bound; only its stratum's depth is removed — an
+    // edit that is invisible in the plan's binding list.
+    let removed = plan
+        .stratum_depths
+        .remove(&iri(&ex("stratum/text")))
+        .expect("the planner recorded a depth for the text stratum");
+    assert!(
+        plan.producer_bindings
+            .iter()
+            .any(|binding| binding.producer == ex("pf/literal")),
+        "the producer whose depth was removed is still bound"
+    );
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let error = compile(&plan, &env).expect_err("a producer that would never compile is refused");
+    assert_eq!(error.dimension(), "malformed_plan");
+    match error {
+        AdmissionError::MalformedPlan { reason } => {
+            assert!(
+                reason.contains(&ex("pf/literal")) && reason.contains(&ex("stratum/text")),
+                "the refusal names the producer and the stratum: {reason}"
+            );
+        }
+        other => panic!("expected MalformedPlan, got {other:?}"),
+    }
+
+    // Restoring the depth restores the plan: the refusal is about that one edit
+    // and nothing else.
+    plan.stratum_depths
+        .insert(iri(&ex("stratum/text")), removed);
+    compile(&plan, &env).expect("the plan admits once every bound stratum has its depth again");
+}
+
+#[test]
+fn every_bound_stratum_with_a_depth_emits_its_branch() {
+    // The valid neighbour, stated positively: a plan whose every bound stratum
+    // carries a depth is admitted, and every binding it records appears in the
+    // emitted text. That is the property the refusal above protects.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&registry, &stats);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let compiled = compile(&plan, &env).expect("the plan admits");
+
+    assert_eq!(plan.producer_bindings.len(), 3, "three producers are bound");
+    for binding in &plan.producer_bindings {
+        assert!(
+            plan.stratum_depths.contains_key(&binding.stratum),
+            "every bound stratum carries a depth"
+        );
+        let unit = compiled
+            .units
+            .iter()
+            .find(|unit| unit.stratum == binding.stratum)
+            .unwrap_or_else(|| panic!("stratum {} emits a unit", binding.stratum));
+        assert!(
+            unit.sparql.contains(&binding.producer),
+            "producer {} has a branch in its stratum's unit: {}",
+            binding.producer,
+            unit.sparql
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7d. An undeclared row bound is not a bound of zero
+//
+// A producer that declares no access mode declares no worst-case row count.
+// Reading that back as zero bounds its stratum at zero rows and refuses every
+// positive depth — a refusal that also misreports the cause, telling the host
+// its registry bounds the stratum at nothing.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_stratum_whose_producer_declares_no_mode_bounds_no_depth() {
+    let registry = registry_with_a_modeless_producer();
+    let stats = statistics("r1");
+    let mut plan = fresh_plan(&registry, &stats);
+    // Placement refuses a producer with no declared mode, so the planner never
+    // binds it; the stratum is still declared, and a plan may carry a depth for
+    // it exactly as it may for any other declared stratum.
+    assert!(
+        plan.producer_decisions.iter().any(|decision| matches!(
+            decision,
+            ProducerDecision::Rejected { producer, reason }
+                if producer == &ex("pf/modeless")
+                    && *reason == RejectionReason::UnsatisfiedConstraint
+        )),
+        "the modeless producer is recorded as rejected: {:?}",
+        plan.producer_decisions
+    );
+    plan.stratum_depths.insert(iri(&ex("stratum/modeless")), 25);
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let compiled = compile(&plan, &env)
+        .expect("a stratum whose producers declared no row count bounds no depth");
+    assert!(
+        compiled
+            .units
+            .iter()
+            .all(|unit| unit.stratum != iri(&ex("stratum/modeless"))),
+        "and it emits nothing, having no bound producer"
+    );
+}
+
+#[test]
+fn a_declared_row_bound_still_refuses_a_raised_depth() {
+    // The neighbour of the relaxation above, in the same registry: a stratum
+    // whose producer *did* declare a row count is still held to it exactly.
+    let registry = registry_with_a_modeless_producer();
+    let stats = statistics("r1");
+    let mut plan = fresh_plan(&registry, &stats);
+    plan.stratum_depths
+        .insert(iri(&ex("stratum/universal")), 201);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let error = compile(&plan, &env).expect_err("a raised depth is still refused");
+    match error {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+        } => {
+            assert_eq!(*stratum, iri(&ex("stratum/universal")));
+            assert_eq!(declared, 200);
+            assert_eq!(requested, 201);
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_stratum_no_producer_ranks_under_still_bounds_a_depth_at_zero() {
+    // The third case, pinned so it stays distinguishable from the two above: a
+    // stratum the registry ranks nothing under declared a bound — of zero —
+    // because nothing can rank there. That is not the same fact as a stratum
+    // whose producers declared no row count, and it is refused where that one
+    // is admitted.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let mut plan = fresh_plan(&registry, &stats);
+    plan.stratum_depths.insert(iri(&ex("stratum/ghost")), 5);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let error = compile(&plan, &env).expect_err("a depth for a stratum nothing ranks under");
+    match error {
+        AdmissionError::DepthBoundViolation {
+            stratum,
+            declared,
+            requested,
+        } => {
+            assert_eq!(*stratum, iri(&ex("stratum/ghost")));
+            assert_eq!(declared, 0);
+            assert_eq!(requested, 5);
+        }
+        other => panic!("expected DepthBoundViolation, got {other:?}"),
+    }
+
+    // A depth of zero for the same stratum is an honest empty stratum, not a
+    // violation, which is the neighbour that keeps the bound from being read as
+    // "this stratum may not appear".
+    plan.stratum_depths.insert(iri(&ex("stratum/ghost")), 0);
+    compile(&plan, &env).expect("a zero depth is within a zero bound");
 }
 
 // ---------------------------------------------------------------------------

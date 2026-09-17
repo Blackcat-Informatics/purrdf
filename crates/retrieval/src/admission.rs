@@ -24,9 +24,38 @@
 //! * every bound producer can actually be *invoked* for the request terms the
 //!   plan gives it — every declared placement renders, no two contend for one
 //!   position, and some declared access pattern serves the result;
+//! * every producer the plan binds is bound to a stratum the plan records a
+//!   depth for, so a compiler that emits one unit per depth entry cannot skip a
+//!   bound producer;
 //! * the plan was planned against the registry the environment now supplies (the
-//!   durable content fingerprint first, then the live instance identity) and
-//!   against the statistics revision the environment reports.
+//!   durable content fingerprint first, then the live instance identity for a
+//!   plan that never left this process) and against the statistics revision the
+//!   environment reports.
+//!
+//! # Which registry identity a plan is held to
+//!
+//! A plan records two registry identities, and they are not interchangeable.
+//! [`Plan::registry_content_fingerprint`](crate::Plan::registry_content_fingerprint)
+//! is durable: it digests what the registry *declares*, so two registries built
+//! independently — in two processes, on two machines — produce the same value
+//! when they declare the same relations. It is checked for every plan, always,
+//! and is never relaxed.
+//!
+//! [`Plan::registry_instance_id`](crate::Plan::registry_instance_id) is a
+//! process-lifetime counter. Within one process it sees what the fingerprint
+//! cannot: two registries can declare byte-identical contents and still register
+//! one IRI to two implementations that answer differently. Across a process
+//! boundary it sees nothing at all — the counter restarts, so a plan that was
+//! serialized and reloaded carries a number no live registry can match, and
+//! comparing it would refuse every portable plan there is.
+//!
+//! So the comparison is made against the plan's own recorded origin
+//! ([`PlanOrigin`](crate::PlanOrigin)): a
+//! [`SameProcess`](crate::PlanOrigin::SameProcess) plan must name the live
+//! instance, and a [`Deserialized`](crate::PlanOrigin::Deserialized) plan stands
+//! on the content fingerprint, which is the strongest claim it can make. Origin
+//! is recorded by the decode paths rather than inferred here, because a foreign
+//! counter and a stale one are the same number.
 //!
 //! # Mandatory is read, never inferred
 //!
@@ -66,7 +95,7 @@ use purrdf_text::Fixed;
 
 use crate::id::PLAN_VERSION;
 use crate::iri::Iri;
-use crate::plan::Plan;
+use crate::plan::{Plan, PlanOrigin};
 use crate::statistics::Statistics;
 
 /// Everything `compile` needs from outside the plan: the live registry and the
@@ -182,6 +211,12 @@ pub enum AdmissionError {
     /// same IRI to different implementations that answer differently. The
     /// instance identity is the only value that can see that difference, so it is
     /// checked rather than inferred from the fingerprint.
+    ///
+    /// Raised only for a plan that records
+    /// [`PlanOrigin::SameProcess`](crate::PlanOrigin::SameProcess). A
+    /// deserialized plan's recorded counter names no live registry, so there is
+    /// nothing here to compare and the durable content fingerprint carries the
+    /// whole claim; see this module's header.
     #[error(
         "registry instance mismatch: plan was planned against {expected_instance:?}, environment holds {got_instance:?}"
     )]
@@ -289,14 +324,55 @@ fn ranked_stratum(descriptor: &PfDescriptor) -> Option<Iri> {
         .map(|declaration| Iri::from(declaration.stratum.clone()))
 }
 
-/// A descriptor's worst-case declared row count across its access modes.
-fn declared_row_bound(descriptor: &PfDescriptor) -> u64 {
+/// What a registry declared about how many rows a stratum can yield.
+///
+/// "No bound was declared" and "the declared bound is zero" are different facts
+/// about a registry and must not share a representation: zero rows is a promise
+/// that nothing ranks there, and it refuses every positive depth, while a
+/// missing declaration is the registry saying nothing, which can refuse nothing.
+/// Collapsing the two is how a producer that declares no access mode ends up
+/// bounding its stratum at zero and failing every plan that records a depth for
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RowBound {
+    /// Every producer under the stratum that declared a worst case declared a
+    /// finite one, and this is the largest of them.
+    Declared(u64),
+    /// No producer under the stratum declared a worst-case row count at all, so
+    /// the registry set no bound here and admission enforces none.
+    Undeclared,
+}
+
+impl RowBound {
+    /// The worst case of two bounds under one stratum.
+    ///
+    /// [`Undeclared`](Self::Undeclared) is the identity, not the dominant value:
+    /// a producer that declared nothing makes no claim, so it neither raises nor
+    /// erases a claim another producer under the same stratum did make. That
+    /// keeps the check exactly as strong as what the registry declared — the
+    /// same "read, never inferred" rule this module applies to `mandatory`.
+    const fn widen(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Declared(left), Self::Declared(right)) => {
+                Self::Declared(if left > right { left } else { right })
+            }
+            (Self::Declared(bound), Self::Undeclared)
+            | (Self::Undeclared, Self::Declared(bound)) => Self::Declared(bound),
+            (Self::Undeclared, Self::Undeclared) => Self::Undeclared,
+        }
+    }
+}
+
+/// A descriptor's worst-case declared row count across its access modes, or
+/// [`RowBound::Undeclared`] when it declares no access mode and therefore
+/// declares no row count.
+fn declared_row_bound(descriptor: &PfDescriptor) -> RowBound {
     descriptor
         .modes
         .iter()
         .map(|mode| mode.rows_per_invocation)
         .max()
-        .unwrap_or(0)
+        .map_or(RowBound::Undeclared, RowBound::Declared)
 }
 
 /// Parse a registry IRI, mapping a refusal to a malformed-plan error.
@@ -358,14 +434,23 @@ pub(crate) fn admit_plan(
         });
     }
 
-    // 3. The live instance identity. Two registries that declare byte-identical
-    //    contents can still answer differently, and only this value can see that.
+    // 3. The live instance identity, for the plans that carry a meaningful one.
+    //    Two registries that declare byte-identical contents can still answer
+    //    differently, and only this value can see that — but only within the
+    //    process that minted it. A plan that crossed a process boundary records
+    //    a counter this process never minted, so it is held to the durable
+    //    fingerprint step 2 already matched and nothing weaker.
     let instance_id = env.registry.instance_id();
-    if plan.registry_instance_id != instance_id {
-        return Err(AdmissionError::RegistryMismatch {
-            expected_instance: plan.registry_instance_id,
-            got_instance: instance_id,
-        });
+    match plan.origin {
+        PlanOrigin::SameProcess => {
+            if plan.registry_instance_id != instance_id {
+                return Err(AdmissionError::RegistryMismatch {
+                    expected_instance: plan.registry_instance_id,
+                    got_instance: instance_id,
+                });
+            }
+        }
+        PlanOrigin::Deserialized => {}
     }
 
     // 4. Statistics staleness: the plan records the revision it was planned
@@ -383,14 +468,14 @@ pub(crate) fn admit_plan(
     //    single read so they cannot disagree about what the registry declares.
     let described = describe(env.registry)?;
     let mut descriptors: BTreeMap<String, PfDescriptor> = BTreeMap::new();
-    let mut strata: BTreeMap<Iri, u64> = BTreeMap::new();
+    let mut strata: BTreeMap<Iri, RowBound> = BTreeMap::new();
     let mut mandatory: Vec<(String, Iri)> = Vec::new();
     for descriptor in described {
         if let Some(stratum) = ranked_stratum(&descriptor) {
             let bound = declared_row_bound(&descriptor);
             strata
                 .entry(stratum.clone())
-                .and_modify(|current| *current = (*current).max(bound))
+                .and_modify(|current| *current = current.widen(bound))
                 .or_insert(bound);
             // Read, not derived: the host's own `mandatory` flag and nothing
             // else. A producer whose patterns happen to accept everything is
@@ -445,8 +530,18 @@ pub(crate) fn admit_plan(
         }
     }
 
-    // Every recorded binding must name a ranked producer, and every request-term
-    // index it carries must address the plan's own request.
+    // Every recorded binding must name a ranked producer, must be bound to a
+    // stratum the plan itself records a depth for, and every request-term index
+    // it carries must address the plan's own request.
+    //
+    // The depth entry is not bookkeeping. `compile` emits one unit per *depth*
+    // entry and looks its bindings up from there, so a binding whose stratum has
+    // no depth is never visited: the plan compiles to well-formed query text
+    // that runs a producer fewer than the registry promised, with nothing
+    // anywhere saying so. That is the silent narrowing this waist exists to
+    // prevent, so the implication is enforced in both directions — the loop
+    // below refuses a binding with no depth, and the depth loop further down
+    // refuses a depth that exceeds what the registry declared.
     for binding in &plan.producer_bindings {
         let Some(descriptor) = descriptors.get(&binding.producer) else {
             return Err(AdmissionError::MalformedPlan {
@@ -460,6 +555,14 @@ pub(crate) fn admit_plan(
             return Err(AdmissionError::MalformedPlan {
                 reason: format!(
                     "producer {} is bound to stratum {}, which the registry does not declare for it",
+                    binding.producer, binding.stratum
+                ),
+            });
+        }
+        if !plan.stratum_depths.contains_key(&binding.stratum) {
+            return Err(AdmissionError::MalformedPlan {
+                reason: format!(
+                    "producer {} is bound to stratum {}, but the plan records no depth for it, so the producer would never be compiled",
                     binding.producer, binding.stratum
                 ),
             });
@@ -479,9 +582,23 @@ pub(crate) fn admit_plan(
 
     // 7. Per-stratum depth bounds: the plan may lower a depth (statistics do not
     //    raise it), never raise it above the registry's declared row bound. A
-    //    stratum the registry does not declare has a declared bound of zero.
+    //    stratum no ranked producer emits under is bounded at zero — nothing
+    //    ranks there, so no depth is fillable — but a stratum whose producers
+    //    declared no row count at all is bounded by nothing, and is refused for
+    //    nothing.
     for (stratum, depth) in &plan.stratum_depths {
-        let declared = strata.get(stratum).copied().unwrap_or(0);
+        let declared = match strata.get(stratum) {
+            // Declared nothing, so it bounds nothing: there is no number here
+            // for a depth to exceed, and inventing zero would refuse a plan the
+            // registry never spoke against.
+            Some(RowBound::Undeclared) => continue,
+            // `u64::MAX` is the seam's spelling of "genuinely unbounded", and it
+            // admits every `u32` depth by arithmetic rather than by a rule.
+            Some(&RowBound::Declared(bound)) => bound,
+            // No ranked producer emits under this stratum at all, so nothing can
+            // rank there and no positive depth is fillable.
+            None => 0,
+        };
         if u64::from(*depth) > declared {
             return Err(AdmissionError::DepthBoundViolation {
                 stratum: Box::new(stratum.clone()),

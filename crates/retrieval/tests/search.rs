@@ -401,6 +401,9 @@ async fn manual_composition(
         trailer: fused.trailer,
         plan_id: planned.id(),
         profile_id: profile.id(),
+        // The fixture profile weights all three strata, so nothing is set aside;
+        // the `expect` in the bridge above is what asserts that.
+        unweighted_strata: Vec::new(),
     }
 }
 
@@ -431,6 +434,9 @@ fn render(result: &SearchResult) -> String {
     }
     for (stratum, status) in &result.trailer.statuses {
         let _ = writeln!(out, "status {} {status:?}", stratum.as_str());
+    }
+    for stratum in &result.unweighted_strata {
+        let _ = writeln!(out, "unweighted {}", stratum.as_str());
     }
     let _ = writeln!(
         out,
@@ -552,14 +558,15 @@ fn fusion_error_propagates() {
     let registry = fixture_registry();
     let stats = statistics("r1");
     let env = fixture_env(&registry, &stats);
-    // A profile that weights only one of the executor's three strata cannot
-    // fuse the others.
-    let narrow = FusionProfile::new(
-        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
+    // A profile whose only weight names a stratum this plan never reaches. Every
+    // stratum that ran is unweighted, so nothing that ran can contribute and
+    // there is no partial answer to return.
+    let disjoint = FusionProfile::new(
+        BTreeMap::from([(iri(&ex("stratum/elsewhere")), Fixed::ONE)]),
         K,
         4,
     )
-    .expect("the narrow profile is valid");
+    .expect("the disjoint profile is valid");
 
     let error = block_on(search(
         &mixed_request(),
@@ -567,21 +574,108 @@ fn fusion_error_propagates() {
         &stats,
         &*common::empty_dataset(),
         &env,
-        &narrow,
+        &disjoint,
     ))
-    .expect_err("a profile missing a stratum is refused at fusion");
+    .expect_err("a profile that weights none of the executed strata is refused");
     match error {
         SearchError::FusionError(FusionError::UnknownStratum { stratum }) => {
-            // `compile` orders units by stratum IRI, so `stratum/graph` is the
-            // first stream and the first stratum the profile does not weight.
+            // Reported in ascending stratum order, so `stratum/graph` is named.
             assert_eq!(
                 stratum,
                 ex("stratum/graph"),
-                "the undeclared stratum is named exactly"
+                "the unweighted stratum is named exactly"
             );
         }
         other => panic!("expected a fusion refusal, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 2b. A profile that weights only some of the plan's strata
+//
+// The profile is deliberately not a planning input, so a plan's strata and a
+// profile's weights are two independent lists that can legitimately disagree.
+// The pair below is the whole policy: a partial overlap answers from the strata
+// the profile weights and names the rest, and only a disjoint profile refuses.
+// Refusing the partial case too would throw away every stratum the profile did
+// weight in order to report one it did not.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    // Weights one of the three strata the plan reaches. The other two ran and
+    // produced rows; they have no weight, so they have no contribution.
+    let narrow = FusionProfile::new(
+        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
+        K,
+        4,
+    )
+    .expect("the narrow profile is valid");
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &narrow,
+    ))
+    .expect("the weighted stratum still answers");
+
+    assert_eq!(
+        result.unweighted_strata,
+        vec![iri(&ex("stratum/graph")), iri(&ex("stratum/universal"))],
+        "the strata the profile does not weight are reported, in stratum order"
+    );
+    assert_eq!(
+        result.rows.len(),
+        2,
+        "the text producer's two rows are the whole answer"
+    );
+    for row in &result.rows {
+        for (stratum, _, _) in &row.contributions {
+            assert_eq!(
+                *stratum,
+                iri(&ex("stratum/text")),
+                "only the weighted stratum contributes"
+            );
+        }
+    }
+    assert_eq!(
+        result.trailer.statuses.len(),
+        1,
+        "only the fused stratum has a fusion status"
+    );
+}
+
+#[test]
+fn a_profile_that_weights_every_stratum_sets_nothing_aside() {
+    // The neighbouring valid case of the refusal above and of the report above:
+    // when the profile covers the plan, the report is empty and every stratum
+    // answers.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = fixture_profile();
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+    ))
+    .expect("the fixture search answers");
+    assert!(
+        result.unweighted_strata.is_empty(),
+        "nothing is set aside when the profile weights every stratum, got {:?}",
+        result.unweighted_strata
+    );
+    assert_eq!(result.trailer.statuses.len(), 3);
 }
 
 // ---------------------------------------------------------------------------

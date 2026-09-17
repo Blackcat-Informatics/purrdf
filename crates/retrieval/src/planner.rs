@@ -73,7 +73,8 @@ use crate::error::PlanError;
 use crate::iri::{Iri, Weight};
 use crate::matching::{pattern_matches, place};
 use crate::plan::{
-    Plan, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry, StatisticsSnapshot,
+    Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
+    StatisticsSnapshot,
 };
 use crate::request::{RequestTerm, RetrievalRequest};
 use crate::statistics::Statistics;
@@ -288,6 +289,9 @@ pub fn plan(
         statistics_snapshot,
         registry_instance_id: registry.instance_id(),
         registry_content_fingerprint: content_fingerprint,
+        // Planned here, against a registry this process holds, so the instance
+        // id above names something admission can still compare against.
+        origin: PlanOrigin::SameProcess,
     })
 }
 

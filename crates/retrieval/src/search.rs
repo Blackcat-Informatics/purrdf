@@ -34,6 +34,41 @@
 //! trailer entry; its own status remains in [`ExecutionResult::statuses`]. A
 //! caller that must distinguish "answered with nothing" from "could not answer"
 //! stops at `execute` and reads those statuses directly.
+//!
+//! # A stratum the profile does not weight
+//!
+//! The fusion profile is deliberately **not** a planning input: the plan is
+//! pinned against a registry, and the law an answer is composed under is chosen
+//! later and independently. So the strata a plan reaches and the strata a
+//! profile weights are two separate lists, and they can legitimately disagree —
+//! a caller can fuse the same plan under a profile that scores only the text
+//! stratum today and one that scores text and vectors tomorrow.
+//!
+//! A stratum the profile declares no weight for therefore has no contribution to
+//! make: a weight is exactly "how much does this count", and saying nothing is
+//! not the same as saying the request is malformed. `search` fuses the strata
+//! the profile *does* weight and names the rest in
+//! [`SearchResult::unweighted_strata`]. Failing the whole request instead would
+//! throw away every stratum the profile did weight in order to report one it did
+//! not — the over-refusal the repository treats as exactly as severe as a wrong
+//! answer.
+//!
+//! The skipped strata are **reported, never dropped**: they arrive as a typed,
+//! stratum-named list on the answer, in stratum order, so a caller can see
+//! precisely which part of its plan its profile did not score.
+//!
+//! One case is still a refusal: when the profile weights *none* of the strata
+//! the plan reached, there is no answer to keep working. The plan and the
+//! profile are disjoint, every row that ran would be discarded, and an empty
+//! result would be indistinguishable from a search that legitimately found
+//! nothing. That is [`FusionError::UnknownStratum`], naming the first executed
+//! stratum the profile does not weight.
+//!
+//! [`fuse`] itself keeps refusing an unweighted stratum outright, and that is
+//! not a contradiction: its caller hands it `(stratum, stream)` pairs directly
+//! and thereby asserts that each one belongs in this fusion. `search` makes no
+//! such assertion on the caller's behalf — it decides which streams to hand over
+//! and reports what it left out.
 
 use purrdf_core::DatasetView;
 use purrdf_sparql_eval::PropertyFunctionRegistry;
@@ -73,6 +108,21 @@ pub struct SearchResult {
     pub plan_id: PlanId,
     /// The identity of the fusion profile the answer was fused under.
     pub profile_id: FusionProfileId,
+    /// Every stratum that ran but that the profile declares no weight for, in
+    /// ascending stratum order.
+    ///
+    /// These strata produced rows and those rows are **not** in
+    /// [`Self::rows`]: with no weight there is no contribution they could make.
+    /// They are named here rather than dropped, because "the profile did not
+    /// score this part of the plan" and "this part of the plan found nothing"
+    /// are different facts and a caller must be able to tell them apart.
+    ///
+    /// Empty for the ordinary case, where the profile weights every stratum the
+    /// plan reached. It can never be the *only* thing here: a profile that
+    /// weights none of the executed strata is refused outright, so a non-empty
+    /// list always accompanies at least one fused stratum. See this module's
+    /// header.
+    pub unweighted_strata: Vec<Iri>,
 }
 
 /// A failure of any stage of the search composition, tagged with the stage that
@@ -123,12 +173,21 @@ pub enum SearchError {
 /// the profile in force. Nothing else is added: `search` is the composition and
 /// nothing more.
 ///
+/// A stratum `profile` declares no weight for is fused out of the answer and
+/// named in [`SearchResult::unweighted_strata`]; the strata the profile does
+/// weight still answer. See this module's header for why that is a report rather
+/// than a refusal.
+///
 /// # Errors
 ///
 /// The corresponding [`SearchError`] variant of whichever stage refuses:
 /// [`SearchError::PlanError`], [`SearchError::AdmissionError`],
 /// [`SearchError::ExecutionError`], or [`SearchError::FusionError`]. Each carries
 /// the stage's own typed error unchanged.
+///
+/// [`FusionError::UnknownStratum`] additionally names `search`'s one refusal of
+/// its own: `profile` weights none of the strata that ran, so no row it produced
+/// could contribute to the answer.
 // The composition is awaited in one task and never crosses a thread boundary, so
 // the `Send` bound this lint wants to express would buy nothing and would force a
 // `Sync` statistics provider and environment into every caller. The
@@ -160,20 +219,36 @@ where
 
     // 4. Bridge each surviving stream to the fusion protocol. The weight is read
     //    from the profile so the contribution attached here is exactly the one
-    //    fusion re-verifies; a stratum the profile does not weight cannot be
-    //    bridged and is refused as a fusion failure.
+    //    fusion re-verifies; a stratum the profile does not weight has no
+    //    contribution to make, so it is set aside by name rather than taking the
+    //    whole request down with it. See this module's header.
     let mut streams: Vec<(Iri, RankedStreamAdapter)> = Vec::with_capacity(execution.streams.len());
+    let mut unweighted_strata: Vec<Iri> = Vec::new();
     for stratum_stream in execution.streams {
-        let weight = profile.weight(&stratum_stream.stratum).ok_or_else(|| {
-            SearchError::FusionError(FusionError::UnknownStratum {
-                stratum: stratum_stream.stratum.as_str().to_owned(),
-            })
-        })?;
         let stratum = stratum_stream.stratum.clone();
+        let Some(weight) = profile.weight(&stratum) else {
+            unweighted_strata.push(stratum);
+            continue;
+        };
         streams.push((
             stratum,
             RankedStreamAdapter::new(stratum_stream.stream, weight, profile.k_parameter()),
         ));
+    }
+    // `execute` yields its streams in the compiler's stratum order, but the
+    // report is sorted rather than inherited: it is part of the answer, and an
+    // answer's fields do not depend on an upstream stage's ordering.
+    unweighted_strata.sort();
+    if streams.is_empty() {
+        // Disjoint plan and profile: nothing that ran can contribute, so there
+        // is no partial answer to keep working and an empty one would claim the
+        // search found nothing. The refusal names the stratum, in the same
+        // order the report uses.
+        if let Some(stratum) = unweighted_strata.first() {
+            return Err(SearchError::FusionError(FusionError::UnknownStratum {
+                stratum: stratum.as_str().to_owned(),
+            }));
+        }
     }
 
     // 5. Fuse. `Term` is the item type: the executor's candidate terms.
@@ -186,6 +261,7 @@ where
         trailer: fused.trailer,
         plan_id: plan.id(),
         profile_id: profile.id(),
+        unweighted_strata,
     })
 }
 
