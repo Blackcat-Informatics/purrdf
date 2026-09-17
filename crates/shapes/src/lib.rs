@@ -43,6 +43,7 @@ pub mod model;
 pub(crate) mod parallel;
 pub mod path;
 pub(crate) mod prebinding;
+pub mod product;
 pub mod pydantic;
 pub mod report;
 pub mod rules;
