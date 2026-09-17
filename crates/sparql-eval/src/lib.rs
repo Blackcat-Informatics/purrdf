@@ -191,6 +191,14 @@ pub use property_fn::{
     MemoryRelation, PfArgs, PfArity, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
     PropertyFunctionRegistry,
 };
+// The property-function registry's CONTENT-only identity. It lives in the private
+// planning module beside the instance-bearing fingerprint it mirrors — the two must
+// fold the identical declared fields, and keeping them adjacent is what stops them
+// drifting — but a caller binding a persisted artifact to the registries it requires
+// needs to reach it, so it is re-exported here under a name that says which registry
+// kind it covers. Its two siblings need no re-export: `agg_fn` and `user_fn` are
+// already public modules.
+pub use property_fn_plan::content_fingerprint as property_function_content_fingerprint;
 // The path-witness seam: the step definition and traversal envelope a host configures, the
 // frozen snapshot they are compiled into, and the two relations that bind walks over it —
 // every derivation, or one shortest witness per endpoint. Re-exported for the same reason

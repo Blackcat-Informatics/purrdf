@@ -120,10 +120,11 @@
 
 use std::sync::Arc;
 
-use purrdf_core::TermValue;
+use purrdf_core::{ContentDigest, TermValue};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
+use crate::registry_id::append_framed_part;
 use crate::user_fn::{Arity, Volatility};
 
 // ---------------------------------------------------------------------------
@@ -944,6 +945,73 @@ pub(crate) fn registry_fingerprint(aggregates: &AggregateRegistry) -> Result<Str
     Ok(out)
 }
 
+/// The domain separator every custom-aggregate content fingerprint opens with — see
+/// `crate::property_fn_plan`'s constant of the same name for why each registry kind
+/// needs its own.
+const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/aggregate-registry";
+
+/// A **content-only** fingerprint of `aggregates`: the identical declared descriptor
+/// fields `registry_fingerprint` folds — every registered IRI's declared arity,
+/// volatility, algebraic class, state bound and named scalarval parameters,
+/// IRI-sorted — with the registry's instance id **omitted**, digested as a
+/// [`ContentDigest`].
+///
+/// The exact twin of `crate::property_fn_plan::content_fingerprint`, for the exact
+/// same reason: `registry_fingerprint` leads with a process-lifetime counter, and
+/// an artifact that must name the registries it requires and have that requirement
+/// checked in ANOTHER process cannot use a counter that restarted at `1` there. See
+/// that function's doc comment for the full register — what this binds
+/// (declarations, never implementations), and why persisting the instance id was
+/// rejected rather than merely unhelpful.
+///
+/// Scalarvals fold in here exactly as they do in `registry_fingerprint`, and for
+/// the same reason: a declared `; NAME=value` parameter set is what prepare-time
+/// admission checks a call against, so two registries declaring the same IRI with
+/// different accepted names or kinds admit different queries and must not share a
+/// fingerprint of any tier.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] if a registered aggregate's declaration methods panic —
+/// [`AggregateRegistry::describe`]'s own failure, propagated unchanged.
+pub fn content_fingerprint(aggregates: &AggregateRegistry) -> Result<ContentDigest, EvalError> {
+    let mut bytes = Vec::new();
+    append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
+    for descriptor in aggregates.describe()? {
+        append_framed_part(&mut bytes, "iri", descriptor.iri.as_bytes());
+        append_framed_part(
+            &mut bytes,
+            "arity",
+            descriptor.arity.stable_encoding().as_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "volatility",
+            descriptor.volatility.label().as_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "algebraic-class",
+            descriptor.algebraic_class.label().as_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "state-bound",
+            &descriptor.state_bound.to_be_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "scalarval-count",
+            &(descriptor.scalarvals.len() as u64).to_be_bytes(),
+        );
+        for spec in &descriptor.scalarvals {
+            append_framed_part(&mut bytes, "scalarval-name", spec.name.as_bytes());
+            append_framed_part(&mut bytes, "scalarval-kind", spec.kind.label().as_bytes());
+        }
+    }
+    Ok(ContentDigest::of(&bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1447,6 +1515,158 @@ mod tests {
                 .to_string()
                 .contains("panicked while reporting its arity"),
             "got {error}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod content_fingerprint_tests {
+    use std::sync::Arc;
+
+    use super::{
+        AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate,
+        Volatility, content_fingerprint, registry_fingerprint,
+    };
+    use crate::error::EvalError;
+    use purrdf_core::TermValue;
+
+    const EX_AGG: &str = "http://example.org/ns#customAgg";
+    const EX_OTHER: &str = "http://example.org/ns#customOther";
+
+    /// An accumulator that answers nothing: these fixtures exist to be DECLARED, not
+    /// folded.
+    struct NullAccumulator;
+
+    impl AggregateAccumulator for NullAccumulator {
+        fn step(&mut self, _args: &[TermValue]) -> Result<(), EvalError> {
+            Ok(())
+        }
+
+        fn combine(&mut self, _other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+            Ok(())
+        }
+
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
+
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    /// An aggregate that declares exactly what its constructor was handed, so a test
+    /// can vary one declared field at a time.
+    struct DeclaredAggregate {
+        arity: Arity,
+        volatility: Volatility,
+    }
+
+    impl CustomAggregate for DeclaredAggregate {
+        fn arity(&self) -> Arity {
+            self.arity
+        }
+        fn volatility(&self) -> Volatility {
+            self.volatility
+        }
+        fn algebraic_class(&self) -> AlgebraicClass {
+            AlgebraicClass::Commutative
+        }
+        fn state_bound(&self) -> u64 {
+            0
+        }
+        fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+            Box::new(NullAccumulator)
+        }
+    }
+
+    /// A registry holding one [`DeclaredAggregate`] under `iri`.
+    fn one(iri: &str, arity: Arity, volatility: Volatility) -> AggregateRegistry {
+        let mut registry = AggregateRegistry::new();
+        registry.register(iri, Arc::new(DeclaredAggregate { arity, volatility }));
+        registry
+    }
+
+    /// Two independently built registries declaring the same aggregate agree on the
+    /// content fingerprint while still differing on the instance-bearing one — the
+    /// second half is what proves the content tier is doing something the first
+    /// cannot.
+    #[test]
+    fn content_fingerprint_is_stable_across_registry_instances() {
+        let a = one(EX_AGG, Arity::Exact(1), Volatility::Stable);
+        let b = one(EX_AGG, Arity::Exact(1), Volatility::Stable);
+
+        assert_eq!(
+            content_fingerprint(&a).expect("ok"),
+            content_fingerprint(&b).expect("ok")
+        );
+        assert_ne!(
+            registry_fingerprint(&a).expect("ok"),
+            registry_fingerprint(&b).expect("ok"),
+            "the instance-bearing fingerprint must still tell the two apart"
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_iri() {
+        assert_ne!(
+            content_fingerprint(&one(EX_AGG, Arity::Exact(1), Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_OTHER, Arity::Exact(1), Volatility::Stable)).expect("ok"),
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_arity() {
+        assert_ne!(
+            content_fingerprint(&one(EX_AGG, Arity::Exact(1), Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_AGG, Arity::Exact(2), Volatility::Stable)).expect("ok"),
+        );
+        // `Exact(1)` and `Range { min: 1, max: 1 }` admit the same call counts but are
+        // different declarations, and `Arity::stable_encoding` keeps them apart.
+        assert_ne!(
+            content_fingerprint(&one(EX_AGG, Arity::Exact(1), Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(
+                EX_AGG,
+                Arity::Range { min: 1, max: 1 },
+                Volatility::Stable
+            ))
+            .expect("ok"),
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_volatility() {
+        assert_ne!(
+            content_fingerprint(&one(EX_AGG, Arity::Exact(1), Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_AGG, Arity::Exact(1), Volatility::Volatile)).expect("ok"),
+        );
+    }
+
+    /// Pinned for the same reason the property-function one is: it is the value a
+    /// consumer computes for a registry it never received.
+    ///
+    /// It must also NOT equal the empty property-function registry's digest — that is
+    /// what the per-module domain separator buys, and without it a caller folding both
+    /// registry kinds could not tell which one an artifact had bound.
+    #[test]
+    fn content_fingerprint_empty_registry_is_pinned() {
+        let empty = content_fingerprint(&AggregateRegistry::EMPTY).expect("ok");
+        assert_eq!(
+            content_fingerprint(&AggregateRegistry::new()).expect("ok"),
+            empty
+        );
+        assert_eq!(
+            empty.to_hex(),
+            "42985008d93785213c25910c16c0644bfc8c23f50538e849eb81a69e2dfdb727",
+            "the empty aggregate registry digest is a persisted constant"
+        );
+        assert_ne!(
+            empty,
+            crate::property_fn_plan::content_fingerprint(
+                &crate::property_fn::PropertyFunctionRegistry::EMPTY
+            )
+            .expect("ok"),
+            "two empty registries of DIFFERENT kinds must not collide"
         );
     }
 }

@@ -34,6 +34,7 @@
 //! of its budget on a query that could never have run. A caller's ceiling is for the
 //! work its query does, not for discovering that the query is misconfigured.
 
+use purrdf_core::ContentDigest;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, Literal, NamedNodePattern,
@@ -47,6 +48,7 @@ use crate::error::EvalError;
 use crate::expr::xsd_of;
 use crate::modifier::is_numeric_xsd;
 use crate::property_fn::{PfArity, PropertyFunctionRegistry};
+use crate::registry_id::append_framed_part;
 
 /// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
 ///
@@ -1161,6 +1163,110 @@ pub(crate) fn registry_fingerprint(
     Ok(out)
 }
 
+/// The domain separator every property-function content fingerprint opens with, so
+/// a digest of this registry kind can never equal a digest of another kind that
+/// happens to fold a structurally identical field sequence (an empty
+/// property-function registry and an empty aggregate registry would otherwise
+/// collide, and a caller binding both would be unable to tell which it had).
+const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/property-function-registry";
+
+/// A **content-only** fingerprint of `relations`: the identical declared descriptor
+/// fields `registry_fingerprint` folds — every registered IRI's subject and object
+/// arity, its declared volatility, and its declared modes with their row bounds,
+/// IRI-sorted — with the registry's instance id **omitted**, digested as a
+/// [`ContentDigest`].
+///
+/// # Why a second fingerprint rather than a change to the first
+///
+/// `registry_fingerprint` leads with the registry's
+/// `RegistryId` (`crate::registry_id::RegistryId`), and must keep doing so: that id
+/// is the only thing that can tell apart two registries which declare identically
+/// but resolve an IRI to two different implementations, and it is what stops a plan
+/// prepared against one registry from silently running against another. But the id
+/// is a process-lifetime counter. Written into a persisted artifact and read back in
+/// another process, it compares two readings of two unrelated sequences — a
+/// comparison whose outcome is meaningless in both directions. So an artifact that
+/// must name the host registries it requires, and have that requirement checked
+/// somewhere else, cannot use `registry_fingerprint` at all; it needs a value that
+/// is a pure function of declarations. The two answer different questions and both
+/// remain: this one is additive and changes nothing about the first.
+///
+/// # What it binds, and what it deliberately does not
+///
+/// It binds **declarations**, not implementations. Two independently built
+/// registries that declare the same IRIs with the same arities, volatilities and
+/// modes produce the same digest even when their
+/// [`PropertyFunction`](crate::property_fn::PropertyFunction) implementations return
+/// entirely different rows — exactly the hole the instance id closes in-process, and
+/// one no content-derived value can close, because a trait object exposes no content
+/// to digest. A caller crossing a process boundary must therefore pair this digest
+/// with whatever separately identifies the implementations behind the declarations,
+/// and must not read a match as proof that two registries compute the same answers.
+///
+/// # The rejected alternative: a hash of the instance id's persisted rendering
+///
+/// Persisting `RegistryId::stable_encoding` and comparing it on restore was rejected
+/// outright. It does not merely fail to help — it fails in the shape that is hardest
+/// to see: the restoring process's registries carry ids drawn from a counter that
+/// restarted at `1`, so a bare `2` may match a completely unrelated registry
+/// (accepting an artifact that should be refused) while an identically-declared
+/// rebuild of the exact registry the artifact was produced against gets a different
+/// id and is refused (refusing one that should be accepted). Both failures are silent
+/// and neither is reproducible.
+///
+/// # Encoding
+///
+/// Framed through `append_framed_part` (`crate::registry_id::append_framed_part`),
+/// whose length-prefixing makes the byte sequence injective, then digested. An empty
+/// registry is not special-cased: it digests the domain separator alone, so
+/// [`PropertyFunctionRegistry::EMPTY`](crate::property_fn::PropertyFunctionRegistry::EMPTY)
+/// and any other empty registry agree, exactly as they do under
+/// `registry_fingerprint`'s empty-string short circuit.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] if a registered relation's declaration methods panic —
+/// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)'s
+/// own failure, propagated unchanged.
+pub fn content_fingerprint(
+    relations: &PropertyFunctionRegistry,
+) -> Result<ContentDigest, EvalError> {
+    let mut bytes = Vec::new();
+    append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
+    for descriptor in relations.describe()? {
+        append_framed_part(&mut bytes, "iri", descriptor.iri.as_bytes());
+        append_framed_part(
+            &mut bytes,
+            "subject-arity",
+            &(descriptor.subject_arity as u64).to_be_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "object-arity",
+            &(descriptor.object_arity as u64).to_be_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "volatility",
+            descriptor.volatility.label().as_bytes(),
+        );
+        append_framed_part(
+            &mut bytes,
+            "mode-count",
+            &(descriptor.modes.len() as u64).to_be_bytes(),
+        );
+        for mode in &descriptor.modes {
+            append_framed_part(&mut bytes, "mode-code", mode.code.as_bytes());
+            append_framed_part(
+                &mut bytes,
+                "mode-rows",
+                &mode.rows_per_invocation.to_be_bytes(),
+            );
+        }
+    }
+    Ok(ContentDigest::of(&bytes))
+}
+
 #[cfg(test)]
 mod registry_fingerprint_tests {
     use std::sync::Arc;
@@ -1268,6 +1374,216 @@ mod registry_fingerprint_tests {
             registry_fingerprint(&cloned).expect("ok"),
             "a clone shares the source's actual implementations, so it is the same \
              registry instance for fingerprint purposes"
+        );
+    }
+}
+
+#[cfg(test)]
+mod content_fingerprint_tests {
+    use std::sync::Arc;
+
+    use purrdf_core::binding_pattern::BindingPattern;
+
+    use super::{content_fingerprint, registry_fingerprint};
+    use crate::error::EvalError;
+    use crate::property_fn::{
+        PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    };
+    use crate::user_fn::Volatility;
+
+    const EX_REL: &str = "http://example.org/ns#rel";
+    const EX_OTHER: &str = "http://example.org/ns#other";
+
+    /// A relation that declares exactly what its constructor was handed and nothing
+    /// else, so a test can vary ONE declared field at a time and watch the content
+    /// fingerprint move. Never dispatched — these fixtures exist to be described.
+    #[derive(Debug)]
+    struct DeclaredRelation {
+        arity: PfArity,
+        volatility: Volatility,
+        modes: [BindingPattern; 1],
+    }
+
+    impl DeclaredRelation {
+        fn new(subject: usize, object: usize, volatility: Volatility) -> Self {
+            let arity = PfArity::new(subject, object);
+            Self {
+                arity,
+                volatility,
+                modes: [arity.all_free_mode()],
+            }
+        }
+    }
+
+    /// The empty cursor [`DeclaredRelation::open`] hands out.
+    struct EmptyCursor;
+
+    impl PfCursor for EmptyCursor {
+        fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    impl PropertyFunction for DeclaredRelation {
+        fn volatility(&self) -> Volatility {
+            self.volatility
+        }
+
+        fn arity(&self) -> PfArity {
+            self.arity
+        }
+
+        fn modes(&self) -> &[BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn PfCursor>, EvalError> {
+            Ok(Box::new(EmptyCursor))
+        }
+    }
+
+    /// A registry holding one [`DeclaredRelation`] under `iri`.
+    fn one(
+        iri: &str,
+        subject: usize,
+        object: usize,
+        volatility: Volatility,
+    ) -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            iri,
+            Arc::new(DeclaredRelation::new(subject, object, volatility)),
+        );
+        registry
+    }
+
+    /// The whole point of the content tier: two registries built INDEPENDENTLY — two
+    /// distinct instances, two distinct `RegistryId`s — that declare the same thing
+    /// must produce the SAME content fingerprint, so a consumer process can reproduce
+    /// a producer's value from a rebuilt registry.
+    ///
+    /// The second half is what proves this function is not merely a rename of
+    /// `registry_fingerprint`: over the very same pair, the instance-bearing
+    /// fingerprint must still DIFFER, because the guarantee it makes in-process is
+    /// unchanged by the addition of the content tier.
+    #[test]
+    fn content_fingerprint_is_stable_across_registry_instances() {
+        let a = one(EX_REL, 1, 1, Volatility::Stable);
+        let b = one(EX_REL, 1, 1, Volatility::Stable);
+
+        assert_eq!(
+            content_fingerprint(&a).expect("ok"),
+            content_fingerprint(&b).expect("ok"),
+            "the content fingerprint must be a pure function of declarations, so two \
+             independently built registries declaring the same thing agree"
+        );
+        assert_ne!(
+            registry_fingerprint(&a).expect("ok"),
+            registry_fingerprint(&b).expect("ok"),
+            "the instance-bearing fingerprint must still tell the same two registries \
+             apart — the content tier is additive, not a replacement"
+        );
+    }
+
+    /// Registration order must not reach the digest: the fold reads
+    /// `describe()`, which is IRI-sorted.
+    #[test]
+    fn content_fingerprint_ignores_registration_order() {
+        let mut a = PropertyFunctionRegistry::new();
+        a.register(
+            EX_REL,
+            Arc::new(DeclaredRelation::new(1, 1, Volatility::Stable)),
+        );
+        a.register(
+            EX_OTHER,
+            Arc::new(DeclaredRelation::new(2, 1, Volatility::Volatile)),
+        );
+        let mut b = PropertyFunctionRegistry::new();
+        b.register(
+            EX_OTHER,
+            Arc::new(DeclaredRelation::new(2, 1, Volatility::Volatile)),
+        );
+        b.register(
+            EX_REL,
+            Arc::new(DeclaredRelation::new(1, 1, Volatility::Stable)),
+        );
+
+        assert_eq!(
+            content_fingerprint(&a).expect("ok"),
+            content_fingerprint(&b).expect("ok")
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_iri() {
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_OTHER, 1, 1, Volatility::Stable)).expect("ok"),
+            "two registries declaring DIFFERENT IRIs must never share a digest"
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_arity() {
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_REL, 1, 2, Volatility::Stable)).expect("ok"),
+            "object arity is a declared field and must reach the digest"
+        );
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_REL, 2, 1, Volatility::Stable)).expect("ok"),
+            "subject arity is a declared field and must reach the digest"
+        );
+        // The framing is injective across the two arity fields: (1, 2) and (2, 1)
+        // have the same total, and must still differ.
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 2, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_REL, 2, 1, Volatility::Stable)).expect("ok"),
+        );
+    }
+
+    #[test]
+    fn content_fingerprint_separates_volatility() {
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Volatile)).expect("ok"),
+            "volatility decides whether a call may run on a fork-join worker, so two \
+             registries that disagree about it are two configurations"
+        );
+    }
+
+    /// The empty registry's digest is pinned to a literal, because it is the value a
+    /// consumer in another process computes for a registry it never received — if it
+    /// ever moves, every previously persisted artifact silently stops matching.
+    ///
+    /// The canonical `EMPTY` constant and a freshly built empty registry agree, the
+    /// same way they do under `registry_fingerprint`'s empty-string short circuit.
+    #[test]
+    fn content_fingerprint_empty_registry_is_pinned() {
+        let empty = content_fingerprint(&PropertyFunctionRegistry::EMPTY).expect("ok");
+        assert_eq!(
+            content_fingerprint(&PropertyFunctionRegistry::new()).expect("ok"),
+            empty,
+            "every empty registry resolves every IRI to None, so all of them agree"
+        );
+        assert_eq!(
+            empty.to_hex(),
+            "8eff9bd84a3475cacc74c92f7149b15d09717c24dfde5b0e0ce4350cbc152259",
+            "the empty property-function registry digest is a persisted constant"
+        );
+        assert_ne!(
+            content_fingerprint(&one(EX_REL, 1, 1, Volatility::Stable)).expect("ok"),
+            empty,
+            "a non-empty registry must never digest as the empty one"
         );
     }
 }
