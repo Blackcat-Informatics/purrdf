@@ -160,3 +160,22 @@ harness = false
 # `make bench` lane only — excluded from `make check`.
 name = "pattern_validate"
 harness = false
+
+[[bench]]
+# Phase separation for the prepared-shapes product: the cold parse-and-prepare
+# path, the producer's encode, the three restore tiers (structural open, memo
+# admit, memo-free rebuild), the reusable class-catalog derivation, and the
+# per-dataset bind and validate. Public API only, so the identical file measures
+# a base revision. Report-only; `make bench` lane only — excluded from
+# `make check`. No speedup, ratio or threshold is asserted anywhere in it.
+name = "shacl_product_reuse"
+harness = false
+
+[[bench]]
+# Allocation traffic, retained bytes and peak working set for the same phases,
+# plus the encoded artifact's length. A separate process from the timed target
+# above so the tracking allocator's atomics cannot distort its latencies
+# (mirrors `purremb_alloc` / `pack_input_alloc`). Report-only; `make bench` lane
+# only — excluded from `make check`.
+name = "shacl_product_alloc"
+harness = false
