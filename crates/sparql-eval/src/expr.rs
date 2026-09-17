@@ -32,7 +32,8 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue, ViewTermId,
+    BlankScope, DatasetView, GraphMatch, RdfLiteral, RdfTextDirection, TermRef, TermValue,
+    ViewTermId,
 };
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
@@ -4413,6 +4414,40 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
 }
 
 /// `STRDT(lexical, datatypeIri)`.
+///
+/// # Failure mode
+///
+/// Identical to [`eval_str_lang`]'s and for the same reason: SPARQL 1.1 §17.2
+/// turns an expression error into an **unbound** result, not an aborted query,
+/// and §17.4.2.4 makes an out-of-domain argument an error. Every refusal below
+/// is therefore `Ok(None)`, matching the two `return Ok(None)` arms this
+/// function already had for a non-`xsd:string` lexical form and a non-IRI
+/// datatype argument.
+///
+/// # Shape
+///
+/// `STRDT` names the datatype but supplies no language tag and no base
+/// direction, so the literal it is about to mint is exactly the components
+/// `(datatype, None, None)` — and some datatypes have no such literal.
+/// `rdf:langString` is the standing example: RDF 1.2 Concepts §3.3 says a
+/// literal with that datatype *has* a language tag, so `STRDT("x",
+/// rdf:langString)` describes a term that is not an RDF literal at all.
+///
+/// The rule is not restated here. [`RdfLiteral::validate_components`] is the
+/// kernel's single decision on whether a datatype/language/direction triple is
+/// a literal, and it is the same call the `RdfDatasetBuilder` makes on the
+/// CONSTRUCT path — which is why, before this gate, `CONSTRUCT` refused
+/// `STRDT("x", rdf:langString)` with `rdf-ir-literal-shape` while the identical
+/// `SELECT` printed `"x"^^rdf:langString` into TSV that PurRDF's own N-Triples
+/// reader then rejects. Asking the kernel rather than transcribing its list
+/// also means the set of tag-requiring datatypes is defined in exactly one
+/// place: widen it there and `STRDT` follows.
+///
+/// This gate is deliberately narrow. `STRDT` is a general-purpose constructor;
+/// it still mints `xsd:integer`, `xsd:string`, and wholly unknown datatype IRIs
+/// with any lexical form, because `validate_components` judges literal SHAPE
+/// and never datatype lexical validity (`STRDT("x", xsd:integer)` is an
+/// ill-typed literal, which RDF and SPARQL both permit as a term).
 fn eval_str_dt<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -4425,6 +4460,10 @@ fn eval_str_dt<D: DatasetView + Sync>(
     let Some(TermValue::Iri(dt)) = arg(vals, 1) else {
         return Ok(None);
     };
+    // No tag, no direction: ask the kernel whether that shape is a literal.
+    if RdfLiteral::validate_components(dt, None, None).is_err() {
+        return Ok(None);
+    }
     Ok(Some(intern(ctx, typed(&lex, dt))))
 }
 
@@ -8767,12 +8806,51 @@ mod tests {
     /// Tags the `LANGTAG` grammar refuses. Before the gate every one of these
     /// reached a serializer verbatim — `"x"@en us` in TSV, `"xml:lang":"en us"`
     /// in JSON — output no SPARQL-results reader can parse back.
-    const REFUSED_TAGS: &[&str] = &["en us", "1", "9-9", "123-456", "en-", "-", "!!!"];
+    ///
+    /// # What each entry actually exercises
+    ///
+    /// Read this before trusting the corpus as evidence about
+    /// [`LANGTAG_PROFILE`] itself, because only part of it is:
+    ///
+    /// * `"en us"`, `"-"` and `"!!!"` contain characters the SPARQL **tokenizer**
+    ///   cannot put inside a `LANGTAG` token at all, so on the parser side of
+    ///   `str_lang_agrees_with_the_profile_the_query_parser_already_enforces`
+    ///   they never reach a profile — they are evidence that STRLANG refuses
+    ///   what the concrete syntax cannot even spell, not evidence about which
+    ///   profile either door uses.
+    /// * `"1"`, `"9-9"`, `"123-456"` and `"en-"` are well-formed token shapes
+    ///   that the profile — not the tokenizer — rejects, so these genuinely
+    ///   test the grammar on both sides.
+    /// * `"abcdefghi"` is the one entry that separates
+    ///   [`Profile::ConcreteSyntaxLangtagBounded`](purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded)
+    ///   from its unbounded sibling `ConcreteSyntaxLangtag`. The two profiles
+    ///   differ ONLY by RFC 5646 §2.1's eight-character ceiling on non-private
+    ///   subtags, so without a nine-character subtag here every verdict in the
+    ///   corpus would be identical under either profile and the agreement test
+    ///   could not see the eval gate drift toward permissiveness. `abcdefgh`
+    ///   (eight) is accepted; this is the first refused length.
+    const REFUSED_TAGS: &[&str] = &[
+        "en us",
+        "1",
+        "9-9",
+        "123-456",
+        "en-",
+        "-",
+        "!!!",
+        "abcdefghi",
+    ];
 
     /// Tags that MUST still bind. The over-refusal half: three of these
     /// (`i-enochian`, the two `x-` private-use tags) and the two
     /// terminal-only shapes (`en-fr-jura`, `fr-be-fbcl`) are exactly what a
     /// profile chosen one notch too strict would silently start dropping.
+    ///
+    /// `en-x-cantbethislong` is the mirror of `"abcdefghi"` above: the §2.1
+    /// ceiling that refuses a nine-character `language` subtag **lifts** after
+    /// the `x` private-use marker, so this pins the exact shape of the bound
+    /// rather than just its existence. Without it, a gate that clamped every
+    /// subtag to eight characters would still pass the whole corpus while
+    /// silently dropping PurRDF's own `x-`-tagged artifacts.
     const ACCEPTED_TAGS: &[&str] = &[
         "en",
         "en-US",
@@ -8783,6 +8861,7 @@ mod tests {
         "x-gmeow-english",
         "en-fr-jura",
         "fr-be-fbcl",
+        "en-x-cantbethislong",
     ];
 
     /// `STRLANG(lexical, tag)` as a whole [`TermValue`], or `None` when the
@@ -8887,6 +8966,104 @@ mod tests {
         assert!(well_formed_langtag("en-us"));
     }
 
+    /// `STRDT(lexical, <dt>)` as a whole [`TermValue`], or `None` when the
+    /// expression is unbound (a SPARQL expression error).
+    fn str_dt(ds: &RdfDataset, lexical: &str, dt: &str) -> Option<TermValue> {
+        let mut ctx = EvalCtx::new(ds);
+        let schema = VarSchema::new();
+        let expr = Expression::FunctionCall(Function::StrDt, vec![lit(lexical), iri(dt)]);
+        let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
+        Some(value_of(&ctx, term))
+    }
+
+    /// The datatypes that have no untagged literal: naming one in `STRDT`
+    /// describes a term RDF 1.2 Concepts §3.3 does not define.
+    const TAG_REQUIRING_DATATYPES: &[&str] = &[RDF_LANG_STRING, RDF_DIR_LANG_STRING];
+
+    /// Datatypes `STRDT` must keep minting. The over-refusal half: `STRDT` is a
+    /// general-purpose constructor, so tightening it for the language-string
+    /// datatypes must not touch anything else — including an ill-typed lexical
+    /// form (`"x"^^xsd:integer`, a perfectly legal RDF term) and a datatype IRI
+    /// the engine has never heard of.
+    const STR_DT_SURVIVORS: &[(&str, &str)] = &[
+        ("x", "http://www.w3.org/2001/XMLSchema#integer"),
+        ("x", "http://www.w3.org/2001/XMLSchema#string"),
+        ("1", "http://www.w3.org/2001/XMLSchema#int"),
+        ("x", "http://example.org/custom"),
+        ("x", "http://www.w3.org/1999/02/22-rdf-syntax-ns#HTML"),
+        ("true", "http://www.w3.org/2001/XMLSchema#boolean"),
+        ("2026-09-17", "http://www.w3.org/2001/XMLSchema#date"),
+    ];
+
+    #[test]
+    fn str_dt_refuses_a_datatype_with_no_untagged_literal() {
+        let ds = empty_ds();
+        for dt in TAG_REQUIRING_DATATYPES {
+            assert_eq!(
+                str_dt(&ds, "x", dt),
+                None,
+                "STRDT(\"x\", <{dt}>) supplies no language tag, so it names a term \
+                 that is not an RDF literal; it must be a SPARQL expression error \
+                 (unbound), not a literal a serializer then writes into TSV that \
+                 PurRDF's own N-Triples reader refuses"
+            );
+        }
+    }
+
+    #[test]
+    fn str_dt_still_mints_every_other_datatype() {
+        let ds = empty_ds();
+        for (lexical, dt) in STR_DT_SURVIVORS {
+            let value = str_dt(&ds, lexical, dt)
+                .unwrap_or_else(|| panic!("STRDT({lexical:?}, <{dt}>) must still bind"));
+            assert_eq!(
+                value,
+                TermValue::Literal {
+                    lexical_form: (*lexical).to_owned(),
+                    datatype: (*dt).to_owned(),
+                    language: None,
+                    direction: None,
+                },
+                "the gate must not change which literal STRDT produces, only \
+                 whether it produces one"
+            );
+        }
+    }
+
+    #[test]
+    fn str_dt_defers_to_the_kernels_one_literal_shape_rule() {
+        // The point of the gate is that `sparql-eval` holds no second copy of
+        // "which datatypes require a tag". Pin that: STRDT binds for a datatype
+        // exactly when `RdfLiteral::validate_components` — the same call the
+        // CONSTRUCT path's dataset builder makes — accepts the `(dt, no tag, no
+        // direction)` shape STRDT is about to mint. Widen the kernel's set and
+        // this test keeps passing; transcribe a private list here and it breaks.
+        let ds = empty_ds();
+        let survivors = STR_DT_SURVIVORS.iter().map(|(_, dt)| *dt);
+        for dt in TAG_REQUIRING_DATATYPES.iter().copied().chain(survivors) {
+            assert_eq!(
+                str_dt(&ds, "x", dt).is_some(),
+                RdfLiteral::validate_components(dt, None, None).is_ok(),
+                "STRDT and the IR kernel must agree about <{dt}>"
+            );
+        }
+    }
+
+    #[test]
+    fn str_dt_and_construct_agree_about_the_language_string_datatypes() {
+        // The asymmetry this closes, stated as the two doors themselves: a
+        // CONSTRUCT template routes the term through `RdfDatasetBuilder`, which
+        // refuses it with `rdf-ir-literal-shape`, while SELECT interned it into
+        // the evaluator's scratch arena that the builder never sees. Build the
+        // literal the old SELECT path produced and confirm the builder — not a
+        // re-statement of its rule — is what rejects it.
+        for dt in TAG_REQUIRING_DATATYPES {
+            let error = RdfLiteral::validate_components(dt, None, None)
+                .expect_err("the kernel must refuse a language-string datatype with no tag");
+            assert_eq!(error, "a language-string datatype requires a language tag");
+        }
+    }
+
     #[test]
     fn str_lang_agrees_with_the_profile_the_query_parser_already_enforces() {
         // The asymmetry this fixes: a tag written as a literal `@tag` in query
@@ -8905,5 +9082,44 @@ mod tests {
                 "STRLANG and the concrete-syntax `@{tag}` must agree"
             );
         }
+    }
+
+    #[test]
+    fn the_corpus_can_actually_see_the_two_gates_drift_apart() {
+        // `str_lang_agrees_with_the_profile_the_query_parser_already_enforces`
+        // is only worth its name if the corpus contains a tag the candidate
+        // profiles DISAGREE about; otherwise swapping `LANGTAG_PROFILE` for a
+        // laxer one leaves every verdict unchanged and the agreement test green
+        // while the two doors have silently parted. `ConcreteSyntaxLangtagBounded`
+        // and `ConcreteSyntaxLangtag` differ ONLY by RFC 5646 §2.1's
+        // eight-character ceiling outside private use, so the discriminator has
+        // to be an over-long non-private subtag. Assert one is present rather
+        // than trusting a reader to notice.
+        use purrdf_iri::langtag::{Profile, is_well_formed_with};
+        assert!(
+            ACCEPTED_TAGS
+                .iter()
+                .chain(REFUSED_TAGS)
+                .any(
+                    |tag| is_well_formed_with(tag, Profile::ConcreteSyntaxLangtagBounded)
+                        != is_well_formed_with(tag, Profile::ConcreteSyntaxLangtag)
+                ),
+            "the corpus must contain a tag the bounded and unbounded profiles \
+             judge differently, or the agreement test cannot detect drift \
+             toward permissiveness"
+        );
+        // Name the discriminator so a later edit that drops it fails here with
+        // the reason rather than only weakening the `any` above: refused by both
+        // gates today, and refused only because of the length bound.
+        assert!(!well_formed_langtag("abcdefghi"));
+        assert!(is_well_formed_with(
+            "abcdefghi",
+            Profile::ConcreteSyntaxLangtag
+        ));
+        assert!(well_formed_langtag("abcdefgh"), "eight is still fine");
+        // …and the mirror: the ceiling lifts after the `x` private-use marker,
+        // so a nine-character PRIVATE subtag must still be accepted. This is the
+        // over-refusal half of the same bound.
+        assert!(well_formed_langtag("en-x-cantbethislong"));
     }
 }
