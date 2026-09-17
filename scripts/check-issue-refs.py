@@ -377,8 +377,9 @@ AMBIGUOUS_BRANCH_PHRASES: frozenset[str] = frozenset(
     }
 )
 
-# Files where "the plan's"/"the plan §" denotes a runtime QUERY, COMPACTION, or
-# EXECUTION plan VALUE — "the plan's pre-order", "the plan's transform chain" —
+# Files where "the plan's"/"the plan §" denotes a runtime QUERY, COMPACTION,
+# EXECUTION, or RETRIEVAL plan VALUE — "the plan's pre-order", "the plan's
+# transform chain", "the plan's canonical identity" —
 # and not a development-planning document. The phrase is banned outright rather
 # than guessed at, because English gives no reliable signal: "arrived at through
 # the plan's soundness certificate" reads identically whether "plan" is a query
@@ -393,6 +394,12 @@ AMBIGUOUS_PLAN_PHRASES: frozenset[str] = frozenset(
         "crates/gts/tests/pinned_dict_compaction.rs",
         "crates/rdf-core/src/ir/dataset.rs",
         "crates/rdf/tests/dict_vectors.rs",
+        "crates/retrieval/src/admission.rs",
+        "crates/retrieval/src/canonical.rs",
+        "crates/retrieval/src/compile.rs",
+        "crates/retrieval/src/lib.rs",
+        "crates/retrieval/src/plan.rs",
+        "crates/retrieval/src/planner.rs",
         "crates/sparql-eval/src/governor/ledger.rs",
         "crates/sparql-eval/src/property_fn.rs",
         "crates/sparql-eval/tests/governed_query.rs",
