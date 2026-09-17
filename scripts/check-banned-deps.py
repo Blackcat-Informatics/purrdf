@@ -30,13 +30,34 @@ Two independent rules, matched to how each dependency was actually replaced:
   any upstream dependency happens to use ``hex`` internally, with no fix
   available in this repository. That would be over-refusal: rejecting an edge
   that was never PurRDF's own. So this rule does NOT scan ``Cargo.lock`` at
-  all; it reads workspace member manifests directly (``[dependencies]``,
-  ``[dev-dependencies]``, ``[build-dependencies]``, and their
-  ``[target.'cfg(...)'.*]`` equivalents) plus the root
-  ``[workspace.dependencies]`` table, and only fails if one of them names the
-  package directly. Widening the tier-1 scan to every committed lock does NOT
-  widen this one: tier 2 still never opens a lockfile, so the over-refusal the
-  tier split exists to prevent stays prevented.
+  all; it reads first-party manifests directly (``[dependencies]``,
+  ``[dev-dependencies]``, ``[build-dependencies]``, their
+  ``[target.'cfg(...)'.*]`` equivalents, and any ``[workspace.dependencies]``
+  table), and only fails if one of them names the package directly. Widening
+  the tier-1 scan to every committed lock does NOT widen this one: tier 2
+  still never opens a lockfile, so the over-refusal the tier split exists to
+  prevent stays prevented.
+
+  "First-party manifest" is **not** "workspace member". Two first-party roots
+  are committed but deliberately kept out of the root workspace via its
+  ``exclude`` list — ``crates/geo/determinism`` (the wasm32 determinism
+  harness) and ``crates/gts/fuzz`` — and a member-only scan cannot see either,
+  so a direct ``hex`` in one of them passed the gate silently. That is the
+  same corner the tier-1 scan had to be widened for. The manifest set is
+  therefore the union of two derivations, so neither can narrow it alone:
+
+  1. every ``Cargo.toml`` tracked by git (basename match), which picks up a
+     third excluded root added later without anyone remembering this file; and
+  2. the manifests the root ``Cargo.toml`` declares — ``[workspace] members``,
+     each ``[workspace] exclude`` root's own manifest, and the members that
+     root declares in its own ``[workspace]`` table — which picks up a
+     brand-new crate that is a member already but not yet ``git add``-ed.
+
+  Derivation 1 is safe only because this repository vendors no third-party
+  Rust source: every committed ``Cargo.toml`` is PurRDF's own, so scanning all
+  of them refuses nothing that was not PurRDF's edge to begin with. If vendored
+  source is ever committed, the answer is an explicit allowlist for those
+  paths, never a narrowing back to workspace members.
 
 **Substitution.** A ``[patch]``/``[replace]`` override that redirects a
 banned name to a different source is scanned for too: ``[[patch.unused]]``
@@ -58,6 +79,7 @@ never lies about the present.
 
 from __future__ import annotations
 
+import posixpath
 import re
 import subprocess
 import sys
@@ -94,37 +116,48 @@ PATCH_UNUSED_BLOCK_RE = re.compile(
 )
 
 
-class LockfileDiscoveryError(RuntimeError):
-    """Raised when the set of committed lockfiles cannot be established.
+class TrackedFileDiscoveryError(RuntimeError):
+    """Raised when the set of git-tracked files cannot be established.
 
-    Never downgraded to "scan the root one and hope": a gate that silently
-    narrows its own scope is the exact failure this discovery step exists to
-    fix, so an unusable ``git`` is a hard error, not a degraded mode.
+    Never downgraded to "scan the root manifest/lock and hope": a gate that
+    silently narrows its own scope is the exact failure this discovery step
+    exists to fix, so an unusable ``git`` is a hard error, not a degraded mode.
     """
 
 
-def lockfile_paths_from_ls_files(listing: str) -> list[str]:
-    """The ``Cargo.lock`` paths in a NUL-separated ``git ls-files -z`` listing.
+def paths_with_basename(listing: str, basename: str) -> list[str]:
+    """Paths in a NUL-separated ``git ls-files -z`` listing whose final
+    component is exactly ``basename``.
 
     Matching is on the **basename**, so near-miss names that are not actually
-    lockfiles (``Cargo.lock.bak``, a ``Cargo.lock.md`` write-up, a
-    ``vendor/Cargo.lock.orig``) are not scanned. Returned in sorted order so
-    the failure output is deterministic regardless of git's listing order.
+    the file in question (``Cargo.lock.bak``, a ``Cargo.lock.md`` write-up, a
+    ``Cargo.toml.orig``) are not scanned. Returned in sorted order so the
+    failure output is deterministic regardless of git's listing order.
     """
     return sorted(
         path
         for path in listing.split("\0")
-        if path and path.rsplit("/", 1)[-1] == "Cargo.lock"
+        if path and path.rsplit("/", 1)[-1] == basename
     )
 
 
-def committed_lockfiles(root: Path) -> list[Path]:
-    """Every ``Cargo.lock`` tracked by git under ``root``.
+def lockfile_paths_from_ls_files(listing: str) -> list[str]:
+    """The ``Cargo.lock`` paths in a NUL-separated ``git ls-files -z`` listing."""
+    return paths_with_basename(listing, "Cargo.lock")
+
+
+def manifest_paths_from_ls_files(listing: str) -> list[str]:
+    """The ``Cargo.toml`` paths in a NUL-separated ``git ls-files -z`` listing."""
+    return paths_with_basename(listing, "Cargo.toml")
+
+
+def tracked_listing(root: Path) -> str:
+    """The raw ``git ls-files -z`` listing for ``root``.
 
     Uses git rather than a filesystem glob on purpose: "committed" is the
-    property that matters (an untracked lock in a scratch directory or a
-    ``target/`` tree is not something a reviewer can be held to), and git is
-    the only authority on it.
+    property that matters (an untracked manifest or lock in a scratch
+    directory or a ``target/`` tree is not something a reviewer can be held
+    to), and git is the only authority on it.
     """
     try:
         completed = subprocess.run(
@@ -134,11 +167,16 @@ def committed_lockfiles(root: Path) -> list[Path]:
             text=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise LockfileDiscoveryError(
+        raise TrackedFileDiscoveryError(
             f"could not list git-tracked files under {root} to find every "
-            f"committed Cargo.lock: {exc}"
+            f"committed Cargo.lock and Cargo.toml: {exc}"
         ) from exc
-    return [root / path for path in lockfile_paths_from_ls_files(completed.stdout)]
+    return completed.stdout
+
+
+def committed_lockfiles(root: Path) -> list[Path]:
+    """Every ``Cargo.lock`` tracked by git under ``root``."""
+    return [root / path for path in lockfile_paths_from_ls_files(tracked_listing(root))]
 
 
 def lock_failures(display_path: str, lock_text: str) -> list[str]:
@@ -219,29 +257,116 @@ def direct_dependency_names(manifest: dict) -> set[str]:
     return names
 
 
+def manifest_path_for(directory: str) -> str:
+    """The repository-relative ``Cargo.toml`` path for a crate directory.
+
+    ``directory`` comes straight out of a ``members``/``exclude`` list, so it
+    may be ``"."`` (the single-package workspace ``crates/gts/fuzz`` declares)
+    or carry a trailing ``.`` component; ``normpath`` folds both so the set
+    never holds ``a/./Cargo.toml`` and ``a/Cargo.toml`` as two entries.
+    """
+    normalized = posixpath.normpath(directory)
+    return "Cargo.toml" if normalized == "." else f"{normalized}/Cargo.toml"
+
+
+def declared_member_manifests(root: Path, base: str, workspace_table: dict) -> set[str]:
+    """Manifest paths for every member a single ``[workspace]`` table declares.
+
+    ``base`` is the repository-relative directory that owns the table (``""``
+    for the root manifest), because an excluded root's ``members`` entries are
+    relative to *it*, not to the repository root.
+
+    A member entry may be a glob (``crates/*``); those are expanded against
+    the filesystem, since a glob names whatever is on disk and there is no
+    manifest text to read otherwise. A table with no ``members`` key is not an
+    error — Cargo then treats the manifest's own package as the sole member,
+    and that manifest is added by the caller.
+    """
+    manifests: set[str] = set()
+    for entry in workspace_table.get("members", []):
+        relative = posixpath.normpath(f"{base}/{entry}" if base else entry)
+        if any(character in entry for character in "*?["):
+            manifests.update(
+                path.relative_to(root).as_posix()
+                for path in root.glob(f"{relative}/Cargo.toml")
+            )
+        else:
+            manifests.add(manifest_path_for(relative))
+    return manifests
+
+
+def declared_manifests(root: Path) -> set[str]:
+    """Manifest paths the root ``Cargo.toml`` declares, directly or via an
+    excluded root's own ``[workspace]`` table.
+
+    This is the half of the tier-2 manifest set that does not depend on git,
+    so a first-party crate that is already a workspace member but not yet
+    ``git add``-ed is still scanned.
+    """
+    root_manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    workspace_table = root_manifest.get("workspace", {})
+
+    manifests = {"Cargo.toml"}
+    manifests.update(declared_member_manifests(root, "", workspace_table))
+
+    for excluded in workspace_table.get("exclude", []):
+        excluded_manifest_path = manifest_path_for(excluded)
+        excluded_file = root / excluded_manifest_path
+        if not excluded_file.is_file():
+            # `exclude` may legitimately name a directory that holds no crate
+            # at all (build scratch, fixtures). Nothing to read, nothing to
+            # ban — this is not a narrowing of the scan.
+            continue
+        manifests.add(excluded_manifest_path)
+        excluded_manifest = tomllib.loads(excluded_file.read_text(encoding="utf-8"))
+        manifests.update(
+            declared_member_manifests(
+                root,
+                posixpath.normpath(excluded),
+                excluded_manifest.get("workspace", {}),
+            )
+        )
+
+    return manifests
+
+
+def first_party_manifests(root: Path) -> list[str]:
+    """Every first-party ``Cargo.toml`` tier 2 must read, repository-relative.
+
+    The union of the git-tracked manifests and the declared ones (see the
+    module docstring): either derivation alone has a blind spot the other
+    covers, and a union can only ever widen, so neither can quietly shrink the
+    gate. Declared paths with no file on disk are dropped — a manifest that
+    does not exist cannot declare a dependency, and Cargo itself is the right
+    thing to complain about a broken ``members`` entry.
+    """
+    manifests = set(manifest_paths_from_ls_files(tracked_listing(root)))
+    manifests.update(declared_manifests(root))
+    return sorted(path for path in manifests if (root / path).is_file())
+
+
 def direct_edge_offenders(root: Path) -> dict[str, list[str]]:
     """Tier-2 names found as a direct dependency, mapped to the declaring
     manifest path(s).
 
-    Reads the root ``Cargo.toml``'s ``[workspace.dependencies]`` table and
-    every workspace member's own manifest — never ``Cargo.lock`` — so a
-    transitive third-party use of a ``BANNED_DIRECT_ONLY`` package is
-    invisible to this function by construction, not by accident.
+    Reads first-party manifests only — never ``Cargo.lock`` — so a transitive
+    third-party use of a ``BANNED_DIRECT_ONLY`` package is invisible to this
+    function by construction, not by accident. Each manifest contributes both
+    its own direct dependency tables and, if it is a workspace root, its
+    ``[workspace.dependencies]`` table, which is a direct first-party edge in
+    exactly the same sense.
     """
-    root_manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
     offenders: dict[str, list[str]] = {}
 
-    workspace_deps = set(root_manifest.get("workspace", {}).get("dependencies", {}).keys())
-    for name in workspace_deps & BANNED_DIRECT_ONLY.keys():
-        offenders.setdefault(name, []).append("Cargo.toml [workspace.dependencies]")
-
-    for member in root_manifest["workspace"]["members"]:
-        manifest_path = f"{member}/Cargo.toml"
-        member_manifest = tomllib.loads(
-            (root / manifest_path).read_text(encoding="utf-8")
-        )
-        declared = direct_dependency_names(member_manifest)
-        for name in declared & BANNED_DIRECT_ONLY.keys():
+    for manifest_path in first_party_manifests(root):
+        manifest = tomllib.loads((root / manifest_path).read_text(encoding="utf-8"))
+        workspace_deps = set(manifest.get("workspace", {}).get("dependencies", {}))
+        for name in sorted(workspace_deps & BANNED_DIRECT_ONLY.keys()):
+            offenders.setdefault(name, []).append(
+                f"{manifest_path} [workspace.dependencies]"
+            )
+        declared = direct_dependency_names(manifest)
+        for name in sorted(declared & BANNED_DIRECT_ONLY.keys()):
             offenders.setdefault(name, []).append(manifest_path)
 
     return offenders
@@ -407,7 +532,7 @@ def self_test() -> int:
     #     quietly narrows back to `REPO_ROOT / "Cargo.lock"` fails here.
     try:
         repo_locks = committed_lockfiles(REPO_ROOT)
-    except LockfileDiscoveryError as exc:
+    except TrackedFileDiscoveryError as exc:
         failures.append(f"could not discover this repository's lockfiles: {exc}")
     else:
         relative = sorted(
@@ -425,6 +550,109 @@ def self_test() -> int:
             if not lock.is_file():
                 failures.append(f"discovered lockfile does not exist: {lock}")
 
+    # --- (D) tier-2 manifest discovery: the same basename filter applied to
+    #     `Cargo.toml`, so a manifest in an excluded root is found and a
+    #     near-miss name is not.
+    manifest_listing = "\0".join(
+        [
+            "Cargo.toml",
+            "crates/iri/Cargo.toml",
+            "crates/geo/determinism/Cargo.toml",
+            "crates/gts/fuzz/Cargo.toml",
+            "docs/Cargo.toml.md",
+            "vendor/Cargo.toml.orig",
+            "scripts/check-banned-deps.py",
+        ]
+    )
+    discovered_manifests = manifest_paths_from_ls_files(manifest_listing)
+    expected_manifests = [
+        "Cargo.toml",
+        "crates/geo/determinism/Cargo.toml",
+        "crates/gts/fuzz/Cargo.toml",
+        "crates/iri/Cargo.toml",
+    ]
+    if discovered_manifests != expected_manifests:
+        failures.append(
+            f"manifest discovery picked {discovered_manifests}, expected "
+            f"{expected_manifests}"
+        )
+
+    # --- (D) `.`-valued and trailing-`.` member entries fold to one path, so
+    #     the single-package workspace an excluded fuzz root declares
+    #     (`members = ["."]`) does not become a second, unreadable entry.
+    if manifest_path_for("crates/gts/fuzz/.") != "crates/gts/fuzz/Cargo.toml":
+        failures.append("a trailing `.` member directory did not normalize")
+    if manifest_path_for(".") != "Cargo.toml":
+        failures.append("the `.` member directory did not normalize to the root")
+    fuzz_members = declared_member_manifests(
+        REPO_ROOT, "crates/gts/fuzz", {"members": ["."]}
+    )
+    if fuzz_members != {"crates/gts/fuzz/Cargo.toml"}:
+        failures.append(
+            "an excluded root's own `members` table did not resolve relative "
+            f"to that root: {sorted(fuzz_members)}"
+        )
+
+    # --- (D) THE REGRESSION THIS TIER-2 WIDENING EXISTS FOR: the excluded
+    #     first-party roots are git-tracked but are NOT workspace members, so
+    #     a members-only scan cannot see them. A direct `hex` in either one
+    #     passed the gate silently before they were included.
+    excluded_roots = [
+        "crates/geo/determinism/Cargo.toml",
+        "crates/gts/fuzz/Cargo.toml",
+    ]
+    try:
+        scanned = first_party_manifests(REPO_ROOT)
+    except TrackedFileDiscoveryError as exc:
+        failures.append(f"could not discover this repository's manifests: {exc}")
+    else:
+        root_manifest = tomllib.loads(
+            (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        )
+        members = root_manifest["workspace"]["members"]
+        for member in members:
+            if f"{member}/Cargo.toml" not in scanned:
+                failures.append(f"workspace member {member} is not scanned by tier 2")
+        for excluded_root in excluded_roots:
+            if excluded_root not in scanned:
+                failures.append(
+                    f"{excluded_root} is a committed first-party manifest outside "
+                    "`[workspace] members` and is not scanned by tier 2; a direct "
+                    "ban there would pass silently"
+                )
+        if len(scanned) <= len(members) + 1:
+            failures.append(
+                "tier 2 scans no more manifests than the workspace members plus "
+                f"the root; the excluded roots are what it was widened for "
+                f"(found {len(scanned)})"
+            )
+
+        # --- (D) THE OVER-REFUSAL CHECK for the widened manifest set. Two
+        #     halves. First, tier 2 must still read manifests and ONLY
+        #     manifests: if a lockfile ever reached this set, a transitive
+        #     third-party `hex` would start failing the gate with no fix
+        #     available here — the exact over-refusal the tier split exists to
+        #     prevent. Second, every newly reached manifest must be readable,
+        #     so widening the scan cannot turn a parse error into a gate
+        #     outage. Whether a first-party manifest legitimately *declares* a
+        #     banned package is main()'s verdict to report, not something this
+        #     self-test silently exempts.
+        for scanned_path in scanned:
+            if scanned_path.rsplit("/", 1)[-1] != "Cargo.toml":
+                failures.append(
+                    f"tier 2 was handed a non-manifest to read: {scanned_path}"
+                )
+            else:
+                try:
+                    tomllib.loads(
+                        (REPO_ROOT / scanned_path).read_text(encoding="utf-8")
+                    )
+                except (OSError, tomllib.TOMLDecodeError) as exc:
+                    failures.append(
+                        f"a scanned first-party manifest is unreadable: "
+                        f"{scanned_path}: {exc}"
+                    )
+
     if failures:
         for message in failures:
             print(f"SELF-TEST FAIL: {message}")
@@ -441,7 +669,7 @@ def main() -> int:
 
     try:
         lockfiles = committed_lockfiles(REPO_ROOT)
-    except LockfileDiscoveryError as exc:
+    except TrackedFileDiscoveryError as exc:
         print(f"FAIL: {exc}")
         return 1
     if not lockfiles:

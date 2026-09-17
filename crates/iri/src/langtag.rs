@@ -898,7 +898,7 @@ impl<'a> LanguageTag<'a> {
     ///
     /// // `["-" extlang]` hangs off the `2*3ALPHA` alternative of `language`
     /// // only, so a 4ALPHA primary language never has one.
-    /// assert_eq!(parse("abcd-Latn")?.extended_language(), None);
+    /// assert_eq!(parse("mnop-Efgh")?.extended_language(), None);
     /// assert_eq!(parse("cmn-Hans-CN")?.extended_language(), None);
     /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
     /// ```
@@ -2695,9 +2695,12 @@ mod tests {
         assert!(is_well_formed("zh-cmn-yue-nan-CN"));
         assert!(is_well_formed("zh-cmn-yue-nan-x-priv"));
         // `extlang` only follows the `2*3ALPHA` alternative of `language`.
-        assert!(is_well_formed("abcd-Latn"));
+        // `mnop` steps the `4ALPHA` reserved-language bound and `Efgh` the
+        // `script = 4ALPHA` one, so the second subtag can only be a script;
+        // `jkl` is the `3ALPHA` extlang shape the 4ALPHA branch cannot admit.
+        assert!(is_well_formed("mnop-Efgh"));
         assert_eq!(
-            parse("abcd-efg"),
+            parse("mnop-jkl"),
             Err(LanguageTagError::UnconsumedSubtag),
             "a 4ALPHA primary language admits no extlang"
         );
