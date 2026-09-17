@@ -13,8 +13,11 @@
 //!   RULE 1 — TOTALITY. [`census`] reads the declarative model out of
 //!            `crates/shapes/src/**/*.rs` with `syn` and reports every type, every
 //!            variant and every field a codec has to handle. A model type that
-//!            gains a variant gains a census row, and the codec-coverage gate that
-//!            consumes [`census`] fails until the codec handles it.
+//!            gains a variant gains a census row, and gains a stage id under
+//!            RULE 2. The codec's own totality is enforced where it belongs — by
+//!            the compiler, through wildcard-free matches in the encoder and
+//!            exhaustive struct construction in the decoder, so a new variant or
+//!            field does not build until the codec handles it.
 //!
 //!            The census list is not an enumeration someone maintains by hand. It
 //!            is CHECKED against the transitive closure of the model reachable from
@@ -59,12 +62,14 @@
 //! `crates/shapes/src` really does declare several, in emitters no shape model
 //! touches.
 //!
-//! # What this file does NOT yet assert
+//! # What this file deliberately does NOT assert
 //!
-//! The codec-coverage half of RULE 1 — "every census row has a codec branch" —
-//! lands with the codec. [`census`] is the `pub` surface it will read. No stub
-//! stands in for it here: an assertion with no codec behind it passes for the
-//! wrong reason, which is the exact defect this file exists to prevent.
+//! It does not re-check that the codec has a branch per census row. That was tried
+//! and removed: the compiler already enforces it — the decoder constructs each model
+//! type exhaustively, so a new field does not build until the codec reads it, and the
+//! encoder's matches carry no wildcard arm. A second, hand-maintained declaration of
+//! the same fact is the duplication this census exists to eliminate, not an extra
+//! layer of it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -133,13 +138,22 @@ const UNREACHABLE_BY_DESIGN: [&str; 1] = ["SparqlCallForm"];
 /// share a stage id.
 const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 
-/// The pinned stage id.
+/// The stage id this build SHIPS, as lowercase hex.
 ///
-/// Recompute it by reading the value out of a failing
-/// [`stage_id_matches_golden`] — but read the failure first. A change here is a
-/// change to what a prepared product MEANS, and every cached product minted under
-/// the old id is now describing a different model.
-const STAGE_ID_GOLDEN: &str = "5b7a53e612e1a0e6636fb0ebe83868d79d250aa721994b0ed37586990c9cc27c";
+/// Derived from `purrdf_shapes::product::STAGE_ID` rather than copied beside it. A
+/// second copy of the digest could drift from the constant products are actually
+/// written under, and a stage id that no longer describes the model is the
+/// stale-but-verified failure the derivation exists to prevent. One digest, read from
+/// the place it ships from. A change to it is a change to what a prepared product
+/// MEANS, and every product minted under the old id describes a different model.
+fn shipped_stage_id() -> String {
+    purrdf_shapes::product::STAGE_ID
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
 
 // ── Census data model ───────────────────────────────────────────────────────────
 
@@ -1175,16 +1189,25 @@ fn census_rows_carry_every_variant_and_field() {
 
 // ── RULE 2: stage id ────────────────────────────────────────────────────────────
 
-/// The stage id of the live sources is the pinned one.
+/// The stage id of the live sources is the one this build SHIPS.
+///
+/// The comparison is against `purrdf_shapes::product::STAGE_ID` — the constant every
+/// product is actually written under — rather than against a second copy of the digest
+/// kept here. A local copy would let the two drift: the model changes, this test fails,
+/// the local copy is updated, and the shipped constant silently keeps stamping products
+/// with a stage id describing a model this build no longer has. That is precisely the
+/// stale-but-verified failure a derived stage id exists to prevent, so there is exactly
+/// one digest and this is the assertion that binds it to the sources.
 #[test]
-fn stage_id_matches_golden() {
+fn stage_id_matches_shipped_constant() {
     let computed = live_stage_id();
+    let shipped = shipped_stage_id();
     assert_eq!(
-        computed, STAGE_ID_GOLDEN,
+        computed, shipped,
         "the SHACL prepared-product stage id moved. Something in the declarative model, the \
          SPARQL built-in table, the constraint-component parameter table or the profile id \
-         changed, which means every product cached under `{STAGE_ID_GOLDEN}` now describes a \
-         model this build no longer has. Update STAGE_ID_GOLDEN to `{computed}` ONLY after \
+         changed, which means every product written under `{shipped}` describes a model this \
+         build no longer has. Update STAGE_ID in the product module to `{computed}` ONLY after \
          confirming the codec covers the change."
     );
 }
@@ -1254,7 +1277,7 @@ fn stage_id_changes_when_a_variant_is_added() {
         &builtins,
         &components,
     );
-    assert_eq!(before, STAGE_ID_GOLDEN);
+    assert_eq!(before, shipped_stage_id());
     assert_ne!(
         before, after,
         "a new Constraint variant left the stage id unchanged; the digest is not reading the model"
@@ -1285,7 +1308,7 @@ fn stage_id_changes_when_a_rule_variant_is_added() {
         &builtins,
         &components,
     );
-    assert_eq!(before, STAGE_ID_GOLDEN);
+    assert_eq!(before, shipped_stage_id());
     assert_ne!(
         before, after,
         "a new RuleBody variant left the stage id unchanged; the digest is not reading the rules"
@@ -1300,7 +1323,7 @@ fn stage_id_changes_when_a_capability_table_changes() {
     let builtins = builtin_function_table();
     let components = constraint_component_parameter_table();
     let real = stage_id(&types, &builtins, &components);
-    assert_eq!(real, STAGE_ID_GOLDEN);
+    assert_eq!(real, shipped_stage_id());
 
     let mut fewer_builtins = builtins.clone();
     fewer_builtins

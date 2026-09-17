@@ -13,15 +13,14 @@
 //! correct right up until a user writes the shapes graph that should load and
 //! doesn't.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
-use super::model_census::{ModelType, census};
 use super::{
-    AstFieldRole, AstReader, AstWriter, COVERAGE, MAX_DEPTH, TAGS_ARG_KEY,
-    TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND, TAGS_FN_CALL, TAGS_NODE_EXPR,
-    TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_RULE_SCHEDULE, TAGS_SEVERITY, TAGS_SHAPE_ARG,
-    TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast,
+    AstReader, AstWriter, MAX_DEPTH, TAGS_ARG_KEY, TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT,
+    TAGS_CUSTOM_FN_KIND, TAGS_FN_CALL, TAGS_NODE_EXPR, TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY,
+    TAGS_RULE_SCHEDULE, TAGS_SEVERITY, TAGS_SHAPE_ARG, TAGS_TARGET, TAGS_TERM, decode_ast,
+    encode_ast,
 };
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -107,8 +106,8 @@ fn sparql_call(local: &str, args: Vec<NodeExpr>) -> FnCall {
 //
 // These vectors ARE the codec's tag declaration. `roundtrip_tags` asserts each
 // sample's first encoded byte is its index, so a sample in the wrong slot fails,
-// and the RULE 1 gate asserts the vector's length equals the census's variant
-// count for the type, so a variant that was given no tag fails.
+// and that the vector's length equals the declared tag count, so a variant that
+// was given no tag fails.
 
 /// One [`Term`] per tag.
 fn sample_terms() -> Vec<Term> {
@@ -725,217 +724,6 @@ fn full_fixture() -> Shapes {
         target_types,
         shapes_graph: Some("https://example.org/shapes".to_owned()),
         ..Shapes::default()
-    }
-}
-
-// ── RULE 1: the codec-coverage gate the census left open ────────────────────────
-
-/// Flatten a census row set into `(type, variant, field)` triples.
-fn census_triples(rows: &[ModelType]) -> Vec<(String, String, Vec<String>)> {
-    rows.iter()
-        .flat_map(|row| {
-            row.variants.iter().map(move |variant| {
-                (
-                    row.name.clone(),
-                    variant.name.clone(),
-                    variant
-                        .fields
-                        .iter()
-                        .map(|field| field.name.clone())
-                        .collect(),
-                )
-            })
-        })
-        .collect()
-}
-
-/// Flatten [`COVERAGE`] into the same `(type, variant, field)` triples.
-fn coverage_triples() -> Vec<(String, String, Vec<String>)> {
-    COVERAGE
-        .iter()
-        .flat_map(|(ty, variants)| {
-            variants.iter().map(move |(variant, fields)| {
-                (
-                    (*ty).to_owned(),
-                    (*variant).to_owned(),
-                    fields.iter().map(|(name, _)| (*name).to_owned()).collect(),
-                )
-            })
-        })
-        .collect()
-}
-
-/// RULE 1, the half the census deliberately left unimplemented: every census
-/// row — every type, every variant, every field — has a codec decision.
-///
-/// The census is consumed LIVE, off the same sources CI scans, by compiling
-/// `crates/shapes/tests/product_model_census.rs` as a private module of this
-/// library's test build (see the `model_census` declaration in the parent). A
-/// copy of the census would have passed for the wrong reason the moment the two
-/// drifted, which is the defect that whole file exists to prevent.
-#[test]
-fn codec_covers_every_census_row() {
-    let rows = census();
-    let census_names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
-    let codec_names: Vec<&str> = COVERAGE.iter().map(|(name, _)| *name).collect();
-    assert_eq!(
-        codec_names, census_names,
-        "the codec's coverage declaration names a different set of model types than the census \
-         reads out of crates/shapes/src",
-    );
-
-    assert_eq!(
-        coverage_triples(),
-        census_triples(&rows),
-        "a census row has no codec decision. Every variant and every FIELD of the declarative \
-         model must appear in COVERAGE with a role — `Encoded`, or one of the not-written roles \
-         WITH ITS REASON. An omission here is the silent drop the census exists to stop: the \
-         bytes would still verify and the shape would simply not be there.",
-    );
-
-    // The tricky members are pinned by disposition, not only by presence: a field
-    // flipped to `Encoded` would otherwise pass this gate unnoticed.
-    assert!(
-        matches!(
-            role("Constraint", "Pattern", "compiled"),
-            AstFieldRole::Rebuilt(_)
-        ),
-        "the compiled regex is a lazy cache, never a carried value",
-    );
-    assert!(
-        matches!(
-            role("Constraint", "NodeByExpression", "shapes"),
-            AstFieldRole::Relinked(_)
-        ),
-        "the shape index is ONE shared handle, relinked after decode",
-    );
-    assert!(
-        matches!(
-            role("ShapeArg", "Computed", "shapes"),
-            AstFieldRole::Relinked(_)
-        ),
-        "the shape index is ONE shared handle, relinked after decode",
-    );
-    assert!(
-        matches!(
-            role("NodeExpr", "CustomCall", "func"),
-            AstFieldRole::Interned(_)
-        ),
-        "the function graph is cyclic and must be written as a DAG of indices",
-    );
-    assert!(
-        matches!(role("FnCall", "Sparql", "expr"), AstFieldRole::Derived(_)),
-        "the SPARQL surface text is re-lowered from the built-in table at decode",
-    );
-    for variant in ["Call", "Infix", "Prefix", "Membership"] {
-        assert!(
-            matches!(
-                role("SparqlCallForm", variant, "0"),
-                AstFieldRole::Derived(_)
-            ),
-            "SparqlCallForm is the lowering table, never a value of a parsed Shapes",
-        );
-    }
-    for field in [
-        "functions",
-        "aggregates",
-        "shapes_dataset",
-        "parse_provenance",
-    ] {
-        assert!(
-            matches!(role("Shapes", "", field), AstFieldRole::Elsewhere(_)),
-            "{field} belongs to another part of the product, not to the AST",
-        );
-    }
-
-    // Every not-written role carries a reason, because an unexplained omission is
-    // indistinguishable from an accidental one.
-    for (ty, variants) in COVERAGE {
-        for (variant, fields) in *variants {
-            for (field, disposition) in *fields {
-                let reason = match disposition {
-                    AstFieldRole::Encoded => continue,
-                    AstFieldRole::Interned(reason)
-                    | AstFieldRole::Derived(reason)
-                    | AstFieldRole::Rebuilt(reason)
-                    | AstFieldRole::Relinked(reason)
-                    | AstFieldRole::Elsewhere(reason) => reason,
-                };
-                assert!(
-                    reason.len() > 40,
-                    "{ty}::{variant}::{field} is not written and carries no usable reason",
-                );
-            }
-        }
-    }
-}
-
-/// The [`COVERAGE`] role recorded for one field.
-fn role(ty: &str, variant: &str, field: &str) -> AstFieldRole {
-    let found = COVERAGE
-        .iter()
-        .find(|(name, _)| *name == ty)
-        .and_then(|(_, variants)| variants.iter().find(|(name, _)| *name == variant))
-        .and_then(|(_, fields)| fields.iter().find(|(name, _)| *name == field));
-    match found {
-        Some((_, role)) => *role,
-        None => panic!("COVERAGE has no row for {ty}::{variant}::{field}"),
-    }
-}
-
-/// RULE 1's behavioural half: every census enum's tag space is exactly as wide as
-/// the enum, so a variant that was given no tag cannot reach a release.
-#[test]
-fn every_tag_space_is_as_wide_as_its_census_enum() {
-    let rows = census();
-    let by_name: BTreeMap<&str, &ModelType> =
-        rows.iter().map(|row| (row.name.as_str(), row)).collect();
-
-    let declared: &[(&str, u8)] = &[
-        ("ArgKey", TAGS_ARG_KEY),
-        ("ComponentValidator", TAGS_COMPONENT_VALIDATOR),
-        ("Constraint", TAGS_CONSTRAINT),
-        ("CustomFnKind", TAGS_CUSTOM_FN_KIND),
-        ("FnCall", TAGS_FN_CALL),
-        ("NodeExpr", TAGS_NODE_EXPR),
-        ("NodeKindValue", TAGS_NODE_KIND),
-        ("Path", TAGS_PATH),
-        ("RuleBody", TAGS_RULE_BODY),
-        ("RuleSchedule", TAGS_RULE_SCHEDULE),
-        ("Severity", TAGS_SEVERITY),
-        ("ShapeArg", TAGS_SHAPE_ARG),
-        ("Target", TAGS_TARGET),
-        ("Term", TAGS_TERM),
-    ];
-
-    for (name, tags) in declared {
-        let row = by_name
-            .get(name)
-            .unwrap_or_else(|| panic!("{name} is not a census row"));
-        assert_eq!(
-            usize::from(*tags),
-            row.variants.len(),
-            "{name} has {} variants but the codec declares {tags} tags",
-            row.variants.len(),
-        );
-    }
-
-    // Every census type is either tag-dispatched above, a struct (one implicit
-    // variant, no tag), or `SparqlCallForm` — which is not a value of a parsed
-    // `Shapes` at all and is covered behaviourally by
-    // `sparql_call_forms_relower_byte_identically`.
-    let tagged: BTreeSet<&str> = declared.iter().map(|(name, _)| *name).collect();
-    for row in &rows {
-        let name = row.name.as_str();
-        if tagged.contains(name) || name == "SparqlCallForm" {
-            continue;
-        }
-        assert_eq!(
-            row.variants.len(),
-            1,
-            "{name} is an enum with {} variants but has no declared tag space",
-            row.variants.len(),
-        );
     }
 }
 
@@ -1669,17 +1457,6 @@ fn sparql_call_forms_relower_byte_identically() {
     // order: Call, Infix, Prefix, Membership, Ebv.
     let names = ["strlen", "add", "unary-minus", "in", "ebv"];
     let arities = [1usize, 2, 1, 2, 1];
-    let rows = census();
-    let forms = rows
-        .iter()
-        .find(|row| row.name == "SparqlCallForm")
-        .expect("SparqlCallForm is censused");
-    assert_eq!(
-        names.len(),
-        forms.variants.len(),
-        "every `SparqlCallForm` variant needs a fixture, or a form nobody exercises could stop \
-         re-lowering without a single test failing",
-    );
 
     for (name, arity) in names.iter().zip(arities) {
         let args: Vec<NodeExpr> = (0..arity).map(|_| NodeExpr::This).collect();

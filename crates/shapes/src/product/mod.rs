@@ -169,13 +169,14 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// declarative model plus the tables the model's meaning depends on.
 ///
 /// Derived, never hand-incremented. `crates/shapes/tests/product_model_census.rs`
-/// computes it from the live sources with `syn`, and
-/// `stage_id_is_the_census_golden` in this module's tests holds this constant
-/// against that computation, so the two cannot drift. A hand-maintained version
-/// counter is precisely how an authenticated cache serves stale-but-verified wrong
-/// answers: the bytes verify, the counter matches, and the meaning moved underneath
-/// both. Here the digest IS the meaning, so it cannot.
-const STAGE_ID: [u8; 32] = [
+/// computes it from the live sources with `syn` and pins the result as
+/// `STAGE_ID_GOLDEN`; the bytes here are that digest. Re-derive them from a
+/// failing `stage_id_matches_golden` rather than editing either by hand. A
+/// hand-maintained version counter is precisely how an authenticated cache serves
+/// stale-but-verified wrong answers: the bytes verify, the counter matches, and
+/// the meaning moved underneath both. Here the digest IS the meaning, so it
+/// cannot.
+pub const STAGE_ID: [u8; 32] = [
     0x5b, 0x7a, 0x53, 0xe6, 0x12, 0xe1, 0xa0, 0xe6, 0x63, 0x6f, 0xb0, 0xeb, 0xe8, 0x38, 0x68, 0xd7,
     0x9d, 0x25, 0x0a, 0xa7, 0x21, 0x99, 0x4b, 0x0e, 0xd3, 0x75, 0x86, 0x99, 0x0c, 0x9c, 0xc2, 0x7c,
 ];

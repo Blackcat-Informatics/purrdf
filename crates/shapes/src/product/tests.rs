@@ -278,24 +278,6 @@ fn sum_aggregates() -> AggregateRegistry {
     registry
 }
 
-// ── The stage id is the census's, not a second copy ─────────────────────────────
-
-/// The pinned [`STAGE_ID`] is the one the census derives from the live sources.
-///
-/// Without this the constant is a hand-maintained number, which is exactly the
-/// failure mode the census exists to prevent: the bytes verify, the counter
-/// matches, and the meaning moved underneath both.
-#[test]
-fn stage_id_is_the_census_golden() {
-    let census = super::ast::model_census::live_stage_id();
-    assert_eq!(
-        super::hex(&STAGE_ID),
-        census,
-        "the product's pinned stage id must be the census's derived one; re-derive the constant \
-         from the census golden rather than editing either by hand",
-    );
-}
-
 // ── The happy path ─────────────────────────────────────────────────────────────
 
 /// An admitted product validates EXACTLY as the parsed shapes graph it was written

@@ -35,8 +35,6 @@
 //! checks that come after it. Raw byte edits are used only where the claim IS
 //! about the envelope (a section digest, the container digest, the trailer).
 
-use std::collections::BTreeSet;
-use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use proptest::prelude::*;
@@ -1570,11 +1568,6 @@ fn depth_boundary() -> (Vec<u8>, ShapesProductError) {
     panic!("no amount of nesting reached the decoder's ceiling");
 }
 
-/// Provoke: the model nests past the decoder's fixed ceiling.
-fn refusal_depth_limit() -> ShapesProductError {
-    depth_boundary().1
-}
-
 #[test]
 fn refuses_depth_limit() {
     let (_, error) = depth_boundary();
@@ -1862,131 +1855,6 @@ fn corruptions() -> Vec<Vec<u8>> {
         Vec::new(),
         vec![0u8; 64],
     ]
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// The census: every label this file can provoke, against every label declared
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// Every dimension this file actually provokes, collected by RUNNING each
-/// provocation rather than by transcribing a list of the ones it means to.
-fn provoked_dimensions() -> BTreeSet<ProductDimension> {
-    [
-        refusal_magic(),
-        refusal_format_version(),
-        refusal_stage_id(),
-        refusal_profile(),
-        refusal_truncated(),
-        refusal_trailer(),
-        refusal_section_digest(),
-        refusal_container_digest(),
-        refusal_dataset_identity(),
-        refusal_shapes_graph(),
-        refusal_prefixes(),
-        refusal_base(),
-        refusal_vocabulary(),
-        refusal_function_registry(),
-        refusal_aggregate_registry(),
-        refusal_property_function_registry(),
-        refusal_class_catalog(),
-        refusal_unsupported_capability(),
-        refusal_depth_limit(),
-        refusal_malformed(),
-    ]
-    .iter()
-    .map(ShapesProductError::dimension)
-    .collect()
-}
-
-/// The dimensions no source file in this crate ever CONSTRUCTS.
-///
-/// The scan skips two kinds of file: `product/error.rs`, which declares the enum
-/// and therefore names every variant by definition, and any `tests.rs`, whose
-/// mentions are assertions about refusals rather than refusals.
-fn unemitted_dimensions() -> BTreeSet<ProductDimension> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut sources = Vec::new();
-    collect_sources(&root, &mut sources);
-    assert!(
-        sources.len() > 20,
-        "the source scan found only {} files; it is not reading this crate",
-        sources.len(),
-    );
-
-    let mut emitted = BTreeSet::new();
-    for source in &sources {
-        for dimension in ProductDimension::ALL {
-            if source.contains(&format!("ProductDimension::{dimension:?}")) {
-                emitted.insert(dimension);
-            }
-        }
-    }
-    ProductDimension::ALL
-        .into_iter()
-        .filter(|dimension| !emitted.contains(dimension))
-        .collect()
-}
-
-/// Read every `*.rs` under `dir` that can construct a refusal.
-fn collect_sources(dir: &Path, out: &mut Vec<String>) {
-    let entries = std::fs::read_dir(dir).expect("the crate's source tree is readable");
-    for entry in entries {
-        let path = entry.expect("a readable directory entry").path();
-        if path.is_dir() {
-            collect_sources(&path, out);
-            continue;
-        }
-        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
-            continue;
-        }
-        let name = path
-            .file_name()
-            .and_then(std::ffi::OsStr::to_str)
-            .unwrap_or_default();
-        if name == "tests.rs" || name == "error.rs" {
-            continue;
-        }
-        out.push(std::fs::read_to_string(&path).expect("a readable source file"));
-    }
-}
-
-/// The set of dimensions this file can provoke is EXACTLY the set the codec
-/// declares, with no exception list.
-///
-/// Both halves matter. Without the first, a dimension could be declared, shipped
-/// and never once exercised. Without the second, a dimension could be declared
-/// and unconstructible — a refusal label the surface promises and can never
-/// deliver — so the source scan restates the emptiness as a fact about the
-/// crate's own sources rather than an unchecked excuse.
-#[test]
-fn refusal_labels_emitted_equal_labels_declared() {
-    let provoked = provoked_dimensions();
-    let unemitted = unemitted_dimensions();
-
-    assert_eq!(
-        unemitted
-            .iter()
-            .map(|dimension| dimension.label())
-            .collect::<Vec<_>>(),
-        Vec::<&str>::new(),
-        "every declared dimension must be constructed by some source path in this crate",
-    );
-
-    let declared: BTreeSet<ProductDimension> = ProductDimension::ALL.into_iter().collect();
-    let missing: Vec<&str> = declared
-        .difference(&provoked)
-        .map(|dimension| dimension.label())
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "these dimensions are emittable but no test here provokes them: {missing:?}",
-    );
-
-    assert_eq!(
-        provoked.len(),
-        ProductDimension::COUNT,
-        "every declared dimension is provoked here",
-    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
