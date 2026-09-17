@@ -39,7 +39,7 @@ use super::identity::Identity;
 /// The 8-byte magic every artifact envelope ENDS with. Unlike the header's
 /// magic — which the instantiating codec supplies, so that two products are
 /// never mistaken for each other — the trailer magic is fixed for every
-/// artifact in this workspace: a human-legible ASCII tag that says "a purrdf
+/// artifact in this workspace: a human-legible ASCII tag that says "a PurRDF
 /// artifact envelope ended exactly here" regardless of which codec wrote it.
 const TRAILER_MAGIC: [u8; 8] = *b"PURRAEND";
 
