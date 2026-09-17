@@ -483,33 +483,51 @@ pub fn read_effective_matrix(effective: &EffectiveMatrixView<'_>) -> Result<Vect
                     .to_owned(),
             }
         })?;
-    let mut data: Vec<f64> = Vec::with_capacity(row_count.saturating_mul(dimension));
-    for row in 0..row_count {
-        let index = row as u64;
-        let before = data.len();
-        match dtype {
-            VectorDtype::F32 => {
-                for value in effective.f32_row(index)? {
-                    data.push(f64::from(value?));
-                }
-            }
-            VectorDtype::F64 => {
-                for value in effective.f64_row(index)? {
+    let expected = row_count.saturating_mul(dimension);
+
+    // The matrix is kept at the width the artifact stores it. Widening a binary32 corpus to
+    // binary64 here would be exact and would change no arithmetic -- and would cost twice the
+    // resident memory for that privilege. At a million rows of 4,096 components that is
+    // sixteen gigabytes spent on nothing, and on wasm32 it is the difference between a corpus
+    // loading and being refused. Every distance is still computed in binary64, in the same
+    // order, with the same separate roundings; the widening happens per component inside the
+    // fold, where it is free.
+    match dtype {
+        VectorDtype::F32 => {
+            let mut data: Vec<f32> = Vec::with_capacity(expected);
+            for row in 0..row_count {
+                let before = data.len();
+                for value in effective.f32_row(row as u64)? {
                     data.push(value?);
                 }
+                check_row_width(row, data.len() - before, dimension)?;
             }
+            VectorMatrix::from_f32(row_count, dimension, data)
         }
-        if data.len() - before != dimension {
-            return Err(HnswError::ParameterValidation {
-                description: format!(
-                    "row {row} decoded {} component(s); the effective dimension is \
-                     {dimension}",
-                    data.len() - before
-                ),
-            });
+        VectorDtype::F64 => {
+            let mut data: Vec<f64> = Vec::with_capacity(expected);
+            for row in 0..row_count {
+                let before = data.len();
+                for value in effective.f64_row(row as u64)? {
+                    data.push(value?);
+                }
+                check_row_width(row, data.len() - before, dimension)?;
+            }
+            VectorMatrix::new(row_count, dimension, data)
         }
     }
-    VectorMatrix::new(row_count, dimension, data)
+}
+
+/// Refuse a decoded row whose component count disagrees with the declared dimension.
+fn check_row_width(row: usize, decoded: usize, dimension: usize) -> Result<()> {
+    if decoded == dimension {
+        return Ok(());
+    }
+    Err(HnswError::ParameterValidation {
+        description: format!(
+            "row {row} decoded {decoded} component(s); the effective dimension is {dimension}"
+        ),
+    })
 }
 
 /// Answer whether `guard`'s payload is the canonical image of building `source_matrix`

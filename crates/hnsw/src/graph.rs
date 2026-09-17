@@ -34,7 +34,7 @@ use std::collections::BTreeSet;
 
 use crate::error::{HnswError, Result};
 use crate::params::Params;
-use purrdf_sparql_eval::knn::{Kernel, Ranked};
+use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked, norm};
 
 /// The canonical image's magic marker; identifies the format before any length is trusted.
 pub(crate) const IMAGE_MAGIC: [u8; 8] = *b"PURHNSW1";
@@ -53,7 +53,48 @@ pub(crate) const IMAGE_VERSION: u32 = 1;
 pub struct VectorMatrix {
     rows: usize,
     dims: usize,
-    data: Vec<f64>,
+    data: Vectors,
+}
+
+/// A matrix's components, at the width PURREMB stored them.
+///
+/// PURREMB defines both `binary32` and `binary64` matrices (§12), and an embedding corpus is
+/// usually the former. Widening one to `f64` at load is EXACT, so it changes no arithmetic
+/// -- and costs exactly twice the resident memory for that privilege. At a million rows of
+/// 4,096 components that is sixteen gigabytes spent on nothing, and on `wasm32`, whose
+/// address space stops at four gigabytes, it is the difference between a corpus loading and
+/// being refused.
+///
+/// So the width is kept and the widening moved into the distance fold, where it is free. The
+/// answer is bit-identical either way -- `purrdf_sparql_eval::knn::Scalar` and its tests pin
+/// that -- which is what makes this a memory decision rather than a numerical one.
+///
+/// There is deliberately no narrowing constructor. `f64` to `f32` loses bits, so a genuine
+/// `binary64` artifact stays `binary64`.
+#[derive(Debug, Clone, PartialEq)]
+enum Vectors {
+    /// `binary32`, as PURREMB's `f32_row` yields it.
+    F32(Vec<f32>),
+    /// `binary64`.
+    F64(Vec<f64>),
+}
+
+impl Vectors {
+    fn len(&self) -> usize {
+        match self {
+            Self::F32(data) => data.len(),
+            Self::F64(data) => data.len(),
+        }
+    }
+
+    /// Whether every component is finite. A non-finite input would poison every candidate it
+    /// touched, so a matrix that cannot be ranked should not exist.
+    fn first_non_finite(&self) -> Option<usize> {
+        match self {
+            Self::F32(data) => data.iter().position(|value| !value.is_finite()),
+            Self::F64(data) => data.iter().position(|value| !value.is_finite()),
+        }
+    }
 }
 
 impl VectorMatrix {
@@ -66,6 +107,23 @@ impl VectorMatrix {
     /// [`HnswError::ArithmeticOverflow`] if that product does not fit `usize`.
     /// [`HnswError::NonFiniteComponent`] if any component is not finite.
     pub fn new(rows: usize, dims: usize, data: Vec<f64>) -> Result<Self> {
+        Self::assemble(rows, dims, Vectors::F64(data))
+    }
+
+    /// Assemble a matrix from a flat row-major `binary32` buffer.
+    ///
+    /// The width is kept rather than widened, which halves what the corpus costs resident.
+    /// Every distance is still computed in binary64, in the same order, with the same
+    /// separate roundings -- see [`Vectors`].
+    ///
+    /// # Errors
+    ///
+    /// As [`VectorMatrix::new`].
+    pub fn from_f32(rows: usize, dims: usize, data: Vec<f32>) -> Result<Self> {
+        Self::assemble(rows, dims, Vectors::F32(data))
+    }
+
+    fn assemble(rows: usize, dims: usize, data: Vectors) -> Result<Self> {
         if rows == 0 || dims == 0 {
             return Err(HnswError::ParameterValidation {
                 description: format!("a {rows}x{dims} matrix has an empty axis"),
@@ -82,13 +140,11 @@ impl VectorMatrix {
                 ),
             });
         }
-        for (index, value) in data.iter().enumerate() {
-            if !value.is_finite() {
-                return Err(HnswError::NonFiniteComponent {
-                    row: index / dims,
-                    column: index % dims,
-                });
-            }
+        if let Some(index) = data.first_non_finite() {
+            return Err(HnswError::NonFiniteComponent {
+                row: index / dims,
+                column: index % dims,
+            });
         }
         Ok(Self { rows, dims, data })
     }
@@ -128,21 +184,170 @@ impl VectorMatrix {
         self.dims
     }
 
-    /// Row `row`'s components.
+    /// Row `row`'s components, if this matrix stores `binary64`.
+    ///
+    /// Returns `None` for a `binary32` matrix, where no `&[f64]` exists to borrow. A caller
+    /// that wants a distance should ask for the distance -- [`VectorMatrix::distance`] and
+    /// its siblings work at either width and allocate nothing.
     ///
     /// # Panics
     ///
     /// Panics if `row` is not a valid row index; callers validate the index first.
     #[must_use]
-    pub fn row(&self, row: usize) -> &[f64] {
+    pub fn row_f64(&self, row: usize) -> Option<&[f64]> {
         let start = row * self.dims;
-        &self.data[start..start + self.dims]
+        match &self.data {
+            Vectors::F64(data) => Some(&data[start..start + self.dims]),
+            Vectors::F32(_) => None,
+        }
     }
 
-    /// The whole buffer, row-major.
+    /// Row `row`'s components, for a caller that knows this matrix stores `binary64`.
+    ///
+    /// A convenience for code that built the matrix itself and therefore knows its width --
+    /// fixtures, generators, harnesses. Nothing on a search path should use it: a production
+    /// caller does not know an artifact's width and should ask for a distance instead, which
+    /// [`VectorMatrix::distance`] and its siblings answer at either width.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` is not a valid row index, or if this matrix stores `binary32` -- in
+    /// which case no `&[f64]` exists to return and the caller's assumption was wrong.
+    #[must_use]
+    pub fn row(&self, row: usize) -> &[f64] {
+        self.row_f64(row).expect(
+            "this matrix stores binary32, so there is no `&[f64]` to borrow; ask for a \
+             distance, or use `row_to_vec`",
+        )
+    }
+
+    /// The whole buffer, for a caller that knows this matrix stores `binary64`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this matrix stores `binary32`.
     #[must_use]
     pub fn as_slice(&self) -> &[f64] {
-        &self.data
+        match &self.data {
+            Vectors::F64(data) => data,
+            Vectors::F32(_) => {
+                panic!("this matrix stores binary32; `as_slice` has no `&[f64]` to return")
+            }
+        }
+    }
+
+    /// Row `row`'s components widened into an owned buffer.
+    ///
+    /// Allocates, and is for inspection rather than for ranking: nothing on a search path
+    /// should call it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` is not a valid row index.
+    #[must_use]
+    pub fn row_to_vec(&self, row: usize) -> Vec<f64> {
+        let start = row * self.dims;
+        match &self.data {
+            Vectors::F64(data) => data[start..start + self.dims].to_vec(),
+            Vectors::F32(data) => data[start..start + self.dims]
+                .iter()
+                .copied()
+                .map(f64::from)
+                .collect(),
+        }
+    }
+
+    /// The L2 norm of row `row`, at whatever width it is stored.
+    #[must_use]
+    pub fn norm_of_row(&self, row: usize) -> f64 {
+        let start = row * self.dims;
+        match &self.data {
+            Vectors::F64(data) => norm(&data[start..start + self.dims]),
+            Vectors::F32(data) => norm(&data[start..start + self.dims]),
+        }
+    }
+
+    /// The distance between two stored rows under `kernel`, or `None` if it left the finite
+    /// range.
+    #[must_use]
+    pub fn distance(
+        &self,
+        kernel: Kernel,
+        a: usize,
+        a_norm: f64,
+        b: usize,
+        b_norm: f64,
+    ) -> Option<f64> {
+        let (a_start, b_start) = (a * self.dims, b * self.dims);
+        match &self.data {
+            Vectors::F64(data) => kernel.distance(
+                &data[a_start..a_start + self.dims],
+                a_norm,
+                &data[b_start..b_start + self.dims],
+                b_norm,
+            ),
+            Vectors::F32(data) => kernel.distance(
+                &data[a_start..a_start + self.dims],
+                a_norm,
+                &data[b_start..b_start + self.dims],
+                b_norm,
+            ),
+        }
+    }
+
+    /// The distance from an external `binary64` query to a stored row.
+    ///
+    /// The query is `f64` because it was computed rather than stored -- an embedding produced
+    /// at query time has no artifact width. A mixed-width pair is the ordinary case and is
+    /// bit-identical to a matched one.
+    #[must_use]
+    pub fn distance_from_query(
+        &self,
+        kernel: Kernel,
+        query: &[f64],
+        query_norm: f64,
+        row: usize,
+        row_norm: f64,
+    ) -> Option<f64> {
+        let start = row * self.dims;
+        match &self.data {
+            Vectors::F64(data) => {
+                kernel.distance(query, query_norm, &data[start..start + self.dims], row_norm)
+            }
+            Vectors::F32(data) => {
+                kernel.distance(query, query_norm, &data[start..start + self.dims], row_norm)
+            }
+        }
+    }
+
+    /// [`VectorMatrix::distance`], permitted to stop once it cannot clear `bound`.
+    #[must_use]
+    pub fn distance_bounded(
+        &self,
+        kernel: Kernel,
+        a: usize,
+        a_norm: f64,
+        b: usize,
+        b_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        let (a_start, b_start) = (a * self.dims, b * self.dims);
+        match &self.data {
+            Vectors::F64(data) => kernel.distance_bounded(
+                &data[a_start..a_start + self.dims],
+                a_norm,
+                &data[b_start..b_start + self.dims],
+                b_norm,
+                bound,
+            ),
+            Vectors::F32(data) => kernel.distance_bounded(
+                &data[a_start..a_start + self.dims],
+                a_norm,
+                &data[b_start..b_start + self.dims],
+                b_norm,
+                bound,
+            ),
+        }
     }
 }
 

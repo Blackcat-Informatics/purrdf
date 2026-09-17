@@ -54,7 +54,7 @@ use std::collections::BTreeSet;
 
 use rayon::prelude::*;
 
-use purrdf_sparql_eval::knn::{Kernel, Ranked, norm};
+use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
 use crate::HnswIndex;
 use crate::error::{HnswError, Result};
@@ -238,11 +238,12 @@ fn repair_connectivity(
                 continue;
             }
             let host = choose_host(graph, &reachable, &protected, bound, entry, orphan)?;
-            let distance = kernel
+            let distance = matrix
                 .distance(
-                    matrix.row(host),
+                    kernel,
+                    host,
                     norm_of(norms, host),
-                    matrix.row(orphan),
+                    orphan,
                     norm_of(norms, orphan),
                 )
                 .ok_or(HnswError::NonFiniteDistance { row: orphan })?;
@@ -331,7 +332,7 @@ pub(crate) fn compute_norms(matrix: &VectorMatrix, kernel: Kernel) -> Result<Vec
     }
     let mut norms = Vec::with_capacity(matrix.rows());
     for row in 0..matrix.rows() {
-        let value = norm(matrix.row(row));
+        let value = matrix.norm_of_row(row);
         if value <= 0.0 {
             return Err(HnswError::ZeroNorm { row });
         }

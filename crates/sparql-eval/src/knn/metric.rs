@@ -103,11 +103,11 @@ impl Kernel {
     /// about the total; those are computed in full and then classified. The API is total so
     /// a caller need not branch on the kernel to stay correct.
     #[must_use]
-    pub fn distance_bounded(
+    pub fn distance_bounded<A: Scalar, B: Scalar>(
         self,
-        query: &[f64],
+        query: &[A],
         query_norm: f64,
-        candidate: &[f64],
+        candidate: &[B],
         candidate_norm: f64,
         bound: Bound,
     ) -> Bounded {
@@ -124,6 +124,12 @@ impl Kernel {
     /// The distance from `query` to `candidate` under this kernel, or `None` when the
     /// computation left the finite range.
     ///
+    /// The operands may be stored at either width PURREMB defines, independently of each
+    /// other -- an `f64` query against an `f32` corpus is the ordinary case for a search
+    /// whose query was embedded at query time. Widening is exact and happens per component
+    /// inside the fold, so the answer is bit-identical to one computed from operands widened
+    /// in advance. See [`Scalar`].
+    ///
     /// `query_norm` and `candidate_norm` are the operands' [`norm`]s. They are
     /// parameters rather than recomputed here because a candidate's norm does not depend
     /// on the query: a search over `n` candidates computes each one once at index
@@ -139,11 +145,11 @@ impl Kernel {
     /// receive a confidently-ranked answer computed from a number that overflowed. Saying
     /// so instead is the whole difference between a wrong answer and an error.
     #[must_use]
-    pub fn distance(
+    pub fn distance<A: Scalar, B: Scalar>(
         self,
-        query: &[f64],
+        query: &[A],
         query_norm: f64,
-        candidate: &[f64],
+        candidate: &[B],
         candidate_norm: f64,
     ) -> Option<f64> {
         let value = match self {
@@ -158,6 +164,38 @@ impl Kernel {
             }
         };
         value.is_finite().then_some(value)
+    }
+}
+
+/// A stored scalar that widens to binary64 **exactly**.
+///
+/// PURREMB stores embedding matrices as either `binary32` or `binary64` (§12), and widening
+/// an `f32` to an `f64` is lossless -- every `f32` is representable. So a kernel can accept
+/// either width and widen per component inside its fold, and get bit-for-bit the answer it
+/// would have got from a matrix widened up front.
+///
+/// That distinction is worth the trait. Widening at LOAD doubles the resident size of an
+/// `f32` corpus and changes no arithmetic; widening in the FOLD costs nothing and changes no
+/// arithmetic either. At a million rows of 4,096 components that is sixteen gigabytes of
+/// difference for an identical answer, and on `wasm32` -- whose address space stops at four
+/// gigabytes -- it is the difference between a corpus loading and being refused.
+///
+/// Narrowing is NOT offered and must not be added: `f64` to `f32` loses bits, so a genuine
+/// `binary64` artifact has to stay `binary64`.
+pub trait Scalar: Copy {
+    /// This value as an `f64`, exactly.
+    fn widen(self) -> f64;
+}
+
+impl Scalar for f32 {
+    fn widen(self) -> f64 {
+        f64::from(self)
+    }
+}
+
+impl Scalar for f64 {
+    fn widen(self) -> f64 {
+        self
     }
 }
 
@@ -208,10 +246,10 @@ pub enum Bounded {
               them would make this kernel's answer depend on whether the target has an FMA \
               instruction, which is exactly the divergence the module docs rule out"
 )]
-fn dot(a: &[f64], b: &[f64]) -> f64 {
+fn dot<A: Scalar, B: Scalar>(a: &[A], b: &[B]) -> f64 {
     let mut sum = 0.0_f64;
     for (x, y) in a.iter().zip(b.iter()) {
-        let product = x * y;
+        let product = x.widen() * y.widen();
         sum += product;
     }
     sum
@@ -223,7 +261,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 /// one squared-Euclidean fold in this crate and the bounded form cannot drift away from the
 /// full one. An infinite bound can only be met by a sum that has already overflowed, which
 /// that function reports separately.
-fn squared_euclidean(a: &[f64], b: &[f64]) -> f64 {
+fn squared_euclidean<A: Scalar, B: Scalar>(a: &[A], b: &[B]) -> f64 {
     match squared_euclidean_bounded(a, b, Bound::Above(f64::INFINITY)) {
         Bounded::Below(sum) => sum,
         // A partial sum that overflowed. `Kernel::distance` turns a non-finite value into
@@ -250,7 +288,7 @@ fn squared_euclidean(a: &[f64], b: &[f64]) -> f64 {
     clippy::suboptimal_flops,
     reason = "see `dot`: the multiply and the add are deliberately separate roundings"
 )]
-fn squared_euclidean_bounded(a: &[f64], b: &[f64], bound: Bound) -> Bounded {
+fn squared_euclidean_bounded<A: Scalar, B: Scalar>(a: &[A], b: &[B], bound: Bound) -> Bounded {
     /// How many terms are folded between bound tests. Purely a cost knob: the sums are
     /// monotone, so a later test still abandons, and finishing the loop returns the exact
     /// same total whatever this is.
@@ -259,7 +297,7 @@ fn squared_euclidean_bounded(a: &[f64], b: &[f64], bound: Bound) -> Bounded {
     let mut sum = 0.0_f64;
     for (block_a, block_b) in a.chunks(BLOCK).zip(b.chunks(BLOCK)) {
         for (x, y) in block_a.iter().zip(block_b.iter()) {
-            let delta = x - y;
+            let delta = x.widen() - y.widen();
             let square = delta * delta;
             sum += square;
         }
@@ -297,11 +335,11 @@ fn squared_euclidean_bounded(a: &[f64], b: &[f64], bound: Bound) -> Bounded {
               `purrdf_core`'s `norm_fold` bit for bit"
 )]
 #[must_use]
-pub fn norm(vector: &[f64]) -> f64 {
+pub fn norm<T: Scalar>(vector: &[T]) -> f64 {
     let mut scale = 0.0_f64;
     let mut sum_of_squares = 1.0_f64;
     for value in vector {
-        let magnitude = value.abs();
+        let magnitude = value.widen().abs();
         if magnitude == 0.0 {
             continue;
         }
@@ -592,7 +630,7 @@ mod tests {
     #[test]
     fn a_zero_vector_norms_to_zero_rather_than_to_a_nan() {
         assert_eq!(norm(&[0.0_f64, 0.0, 0.0]), 0.0);
-        assert_eq!(norm(&[]), 0.0);
+        assert_eq!(norm::<f64>(&[]), 0.0);
         assert_eq!(norm(&[-0.0_f64]), 0.0);
     }
 
@@ -831,5 +869,58 @@ mod tests {
             None,
             "and the unbounded fold still refuses it too"
         );
+    }
+
+    #[test]
+    fn an_f32_operand_scores_exactly_as_its_widened_copy_does() {
+        // The licence for storing a corpus at the width PURREMB stored it. Widening an f32
+        // is exact, so folding widened-per-component must give the SAME BITS as folding a
+        // matrix widened in advance -- otherwise halving the resident size would quietly be
+        // a different index. Asserted on bits, not on an epsilon.
+        let mut state = 0xF32_0000_1234_ABCD_u64;
+        let mut next = || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0) as f32
+        };
+        for len in [1_usize, 63, 64, 65, 200, 4_096] {
+            let a32: Vec<f32> = (0..len).map(|_| next()).collect();
+            let b32: Vec<f32> = (0..len).map(|_| next()).collect();
+            let a64: Vec<f64> = a32.iter().copied().map(f64::from).collect();
+            let b64: Vec<f64> = b32.iter().copied().map(f64::from).collect();
+
+            assert_eq!(
+                norm(&a32).to_bits(),
+                norm(&a64).to_bits(),
+                "len {len}: the norm fold must not see the storage width"
+            );
+
+            for kernel in [
+                Kernel::SquaredEuclidean,
+                Kernel::NegativeDot,
+                Kernel::Cosine,
+            ] {
+                let (na, nb) = (norm(&a64), norm(&b64));
+                let narrow = kernel.distance(&a32, na, &b32, nb).expect("finite");
+                let wide = kernel.distance(&a64, na, &b64, nb).expect("finite");
+                assert_eq!(
+                    narrow.to_bits(),
+                    wide.to_bits(),
+                    "{kernel:?} at len {len}: storing narrow must not move a single bit"
+                );
+
+                // And the mixed case, which is the ordinary one: a query embedded at query
+                // time is f64, the corpus it searches is f32.
+                let mixed = kernel.distance(&a64, na, &b32, nb).expect("finite");
+                assert_eq!(
+                    mixed.to_bits(),
+                    wide.to_bits(),
+                    "{kernel:?} at len {len}: a mixed-width pair must agree too"
+                );
+            }
+        }
     }
 }

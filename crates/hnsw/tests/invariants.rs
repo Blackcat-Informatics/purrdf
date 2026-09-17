@@ -310,3 +310,46 @@ fn asymmetric_adjacency_is_explained_by_the_degree_bound() {
         }
     }
 }
+
+#[test]
+fn a_narrow_matrix_builds_the_identical_graph_to_its_widened_copy() {
+    // The whole licence for keeping a binary32 corpus narrow. Widening an f32 is exact, so a
+    // matrix stored at PURREMB's own width must produce the SAME GRAPH, byte for byte, as
+    // the same data widened up front. If it did not, halving the resident size would quietly
+    // be a different index -- and the guard commitment over the canonical image would move.
+    //
+    // Asserted on the canonical image rather than on a sample of answers: two graphs can
+    // agree on every probe you happen to try and differ elsewhere.
+    let (rows, dims) = (192_usize, 12_usize);
+    let mut state = 0x1F32_D00D_u64;
+    let narrow: Vec<f32> = (0..rows * dims)
+        .map(|_| {
+            state = purrdf_hnsw::level::splitmix64(state);
+            let value = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
+            (if value == 0.0 { 0.125 } else { value }) as f32
+        })
+        .collect();
+    let widened: Vec<f64> = narrow.iter().copied().map(f64::from).collect();
+
+    for params in parameter_sets() {
+        for metric in kernels() {
+            let from_f32 = build(
+                VectorMatrix::from_f32(rows, dims, narrow.clone()).expect("valid"),
+                &metric,
+                params,
+            )
+            .expect("builds");
+            let from_f64 = build(
+                VectorMatrix::new(rows, dims, widened.clone()).expect("valid"),
+                &metric,
+                params,
+            )
+            .expect("builds");
+            assert_eq!(
+                from_f32.canonical_image(),
+                from_f64.canonical_image(),
+                "{metric:?} {params:?}: the stored width must not reach the graph"
+            );
+        }
+    }
+}

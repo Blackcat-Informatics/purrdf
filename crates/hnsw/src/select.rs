@@ -87,10 +87,11 @@ pub(crate) fn select_neighbors(
             // The value is never kept -- only whether it falls under the candidate's own
             // distance -- so the kernel may stop as soon as it cannot. Equality already
             // falsifies the test, hence `AtOrAbove`.
-            match kernel.distance_bounded(
-                matrix.row(candidate.row),
+            match matrix.distance_bounded(
+                kernel,
+                candidate.row,
                 norm_of(norms, candidate.row),
-                matrix.row(picked.row),
+                picked.row,
                 norm_of(norms, picked.row),
                 Bound::AtOrAbove(candidate.distance),
             ) {

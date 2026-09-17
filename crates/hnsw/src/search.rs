@@ -151,10 +151,22 @@ pub(crate) struct Query<'a> {
     kernel: Kernel,
     norms: &'a [f64],
     cache: &'a DistanceCache,
-    /// The vector every candidate is ranked against.
-    vector: &'a [f64],
+    /// What every candidate is ranked against.
+    target: Target<'a>,
     /// Its L2 norm, or `0.0` for a kernel that does not divide by one.
     norm: f64,
+}
+
+/// What a query ranks candidates against.
+///
+/// A stored row is named rather than borrowed because the matrix may hold `binary32`, in
+/// which case no `&[f64]` exists to borrow. An external query is always `binary64`: it was
+/// computed at query time and has no artifact width.
+enum Target<'a> {
+    /// A vector the matrix does not hold.
+    Vector(&'a [f64]),
+    /// A row the matrix does hold.
+    Row(usize),
 }
 
 impl<'a> Query<'a> {
@@ -179,7 +191,7 @@ impl<'a> Query<'a> {
             kernel,
             norms,
             cache,
-            vector,
+            target: Target::Vector(vector),
             norm,
         }
     }
@@ -200,7 +212,7 @@ impl<'a> Query<'a> {
             kernel,
             norms,
             cache,
-            vector: matrix.row(query_row),
+            target: Target::Row(query_row),
             norm: norm_of(norms, query_row),
         }
     }
@@ -216,15 +228,18 @@ impl<'a> Query<'a> {
         if let Some(distance) = self.cache.get(row) {
             return Ok(distance);
         }
-        let distance = self
-            .kernel
-            .distance(
-                self.vector,
-                self.norm,
-                self.matrix.row(row),
-                norm_of(self.norms, row),
-            )
-            .ok_or(HnswError::NonFiniteDistance { row })?;
+        let candidate_norm = norm_of(self.norms, row);
+        let distance = match self.target {
+            Target::Vector(vector) => {
+                self.matrix
+                    .distance_from_query(self.kernel, vector, self.norm, row, candidate_norm)
+            }
+            Target::Row(seed) => {
+                self.matrix
+                    .distance(self.kernel, seed, self.norm, row, candidate_norm)
+            }
+        }
+        .ok_or(HnswError::NonFiniteDistance { row })?;
         self.cache.insert(row, distance);
         Ok(distance)
     }
