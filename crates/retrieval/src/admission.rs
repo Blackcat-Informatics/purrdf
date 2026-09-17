@@ -32,7 +32,7 @@
 use std::collections::BTreeMap;
 
 use purrdf_sparql_eval::{
-    PfDescriptor, PropertyFunctionRegistry, RegistryId, RetrievalCapability, TermKind, TermPattern,
+    PfDescriptor, PropertyFunctionRegistry, RegistryId, TermKind, TermPattern,
 };
 use purrdf_text::Fixed;
 
@@ -239,11 +239,14 @@ pub(crate) fn always_applicable(pattern: &TermPattern) -> bool {
 }
 
 /// The stratum a ranked descriptor emits under, if it is ranked.
+///
+/// A relation registered without a ranked declaration declares nothing, and
+/// nothing is what admission reads back: it emits under no stratum.
 fn ranked_stratum(descriptor: &PfDescriptor) -> Option<Iri> {
-    match &descriptor.retrieval {
-        RetrievalCapability::Ranked { stratum, .. } => Some(Iri::from(stratum.clone())),
-        RetrievalCapability::NotRanked => None,
-    }
+    descriptor
+        .ranked
+        .as_ref()
+        .map(|declaration| Iri::from(declaration.stratum.clone()))
 }
 
 /// A descriptor's worst-case declared row count across its access modes.
@@ -349,11 +352,12 @@ pub(crate) fn admit_plan(
                 .entry(stratum.clone())
                 .and_modify(|current| *current = (*current).max(bound))
                 .or_insert(bound);
-            if matches!(
-                &descriptor.retrieval,
-                RetrievalCapability::Ranked { accepted_terms, .. }
-                    if accepted_terms.iter().any(always_applicable)
-            ) {
+            if descriptor.ranked.as_ref().is_some_and(|declaration| {
+                declaration
+                    .accepted_terms
+                    .iter()
+                    .any(|accepted| always_applicable(&accepted.pattern))
+            }) {
                 mandatory.push((descriptor.iri.clone(), stratum));
             }
         }

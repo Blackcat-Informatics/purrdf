@@ -41,9 +41,9 @@ use purrdf_retrieval::{
     fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity, PfCursor,
-    PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankOrdering,
-    RetrievalCapability, TermKind, TermPattern, Volatility,
+    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankOrdering,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const K: u32 = 60;
@@ -68,12 +68,35 @@ fn kernel_iri(text: &str) -> purrdf_core::Iri {
     purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
 }
 
-fn ranked(stratum_iri: &str, accepted_terms: Vec<TermPattern>) -> RetrievalCapability {
-    RetrievalCapability::Ranked {
+/// Each accepted pattern, with the request term's value rendered into the
+/// object-side position. The mocks are arity (1,1) and project `?c0`, so the
+/// candidate is position 0 and every facet binds at position 1.
+fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
+    patterns
+        .into_iter()
+        .map(|pattern| AcceptedTerm {
+            pattern,
+            placements: vec![TermPlacement {
+                facet: RequestFacet::Value,
+                position: 1,
+                datatype: None,
+            }],
+        })
+        .collect()
+}
+
+/// A ranked declaration, supplied where a producer is registered. `mandatory`
+/// is declared by the host rather than inferred: it states, explicitly, what an
+/// unconstrained `TermKind::Any` pattern used to imply.
+fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedDeclaration {
+    RankedDeclaration {
         stratum: kernel_iri(stratum_iri),
-        accepted_terms,
+        accepted_terms: accepted(patterns),
+        depth_placement: None,
+        candidate_position: 0,
         ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
+        mandatory,
     }
 }
 
@@ -90,7 +113,6 @@ struct MockProducer {
     arity: PfArity,
     mode: BindingPattern,
     rows: u64,
-    capability: RetrievalCapability,
     emitted: Vec<Vec<TermValue>>,
 }
 
@@ -109,10 +131,6 @@ impl PropertyFunction for MockProducer {
 
     fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
         self.rows
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        self.capability.clone()
     }
 
     fn open(
@@ -137,12 +155,7 @@ impl PfCursor for RowCursor {
 }
 
 /// A ranked producer emitting `count` distinct `(entity, score)` row pairs.
-fn make_producer(
-    capability: RetrievalCapability,
-    rows: u64,
-    prefix: &str,
-    count: usize,
-) -> Arc<dyn PropertyFunction> {
+fn make_producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
     let arity = PfArity::new(1, 1);
     let emitted = (0..count)
         .map(|index| {
@@ -156,7 +169,6 @@ fn make_producer(
         arity,
         mode: arity.all_free_mode(),
         rows,
-        capability,
         emitted,
     })
 }
@@ -169,14 +181,10 @@ fn single_registry(
     count: usize,
 ) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
-    registry.register(
+    registry.register_ranked(
         producer_iri,
-        make_producer(
-            ranked(stratum_iri, vec![TermPattern::of_kind(TermKind::Any)]),
-            rows,
-            "hand/",
-            count,
-        ),
+        make_producer(rows, "hand/", count),
+        ranked(stratum_iri, vec![TermPattern::of_kind(TermKind::Any)], true),
     );
     registry
 }
@@ -509,16 +517,13 @@ fn start_at_execute_evaluator_only() {
     // No `Plan`, `CompiledRetrieval`, `ExecutionResult` or `FusionProfile` is
     // constructed: the relation is reached by writing the query by hand.
     let mut registry = PropertyFunctionRegistry::new();
-    registry.register(
+    registry.register_ranked(
         ex("pf/match"),
-        make_producer(
-            ranked(
-                &ex("stratum/direct"),
-                vec![TermPattern::of_kind(TermKind::Any)],
-            ),
-            10,
-            "direct/",
-            3,
+        make_producer(10, "direct/", 3),
+        ranked(
+            &ex("stratum/direct"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
         ),
     );
 

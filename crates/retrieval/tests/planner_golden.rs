@@ -17,8 +17,9 @@ use purrdf_retrieval::{
     plan,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, RankOrdering, RetrievalCapability, TermKind, TermPattern, Volatility,
+    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
+    TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 // ---------------------------------------------------------------------------
@@ -71,13 +72,46 @@ fn vector_request() -> RetrievalRequest {
     RetrievalRequest::from_terms(vec![vector_term()])
 }
 
-fn ranked(stratum: &str, accepted_terms: Vec<TermPattern>) -> RetrievalCapability {
-    RetrievalCapability::Ranked {
+/// Each accepted pattern, with the request term's value rendered into the
+/// object-side position. The mocks are arity (1,1) and project `?c0`, so the
+/// candidate is position 0 and every facet binds at position 1.
+fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
+    patterns
+        .into_iter()
+        .map(|pattern| AcceptedTerm {
+            pattern,
+            placements: vec![TermPlacement {
+                facet: RequestFacet::Value,
+                position: 1,
+                datatype: None,
+            }],
+        })
+        .collect()
+}
+
+/// A ranked declaration, supplied where a producer is registered. `mandatory`
+/// is declared by the host rather than inferred: it states, explicitly, what an
+/// unconstrained `TermKind::Any` pattern used to imply.
+fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedDeclaration {
+    RankedDeclaration {
         stratum: kernel_iri(stratum),
-        accepted_terms,
+        accepted_terms: accepted(patterns),
+        depth_placement: None,
+        candidate_position: 0,
         ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
+        mandatory,
     }
+}
+
+/// A mock relation of arity (1,1) declaring `rows` rows per invocation.
+fn relation(rows: u64) -> Arc<dyn PropertyFunction> {
+    let arity = PfArity::new(1, 1);
+    Arc::new(MockProducer {
+        arity,
+        mode: arity.all_free_mode(),
+        rows,
+    })
 }
 
 /// The mixed registry: one always-applicable (`Any`) producer, one
@@ -91,48 +125,47 @@ fn mixed_registry() -> PropertyFunctionRegistry {
         language: Some("en".to_owned()),
         predicate: Some(ex("body")),
     };
-    for (name, capability, rows) in [
+    for (name, declaration, rows) in [
         (
             ex("pf/any"),
-            ranked(
+            Some(ranked(
                 &ex("stratum/universal"),
                 vec![TermPattern::of_kind(TermKind::Any)],
-            ),
+                true,
+            )),
             200,
         ),
         (
             ex("pf/literal"),
-            ranked(&ex("stratum/text"), vec![literal_pattern]),
+            Some(ranked(&ex("stratum/text"), vec![literal_pattern], false)),
             100,
         ),
         (
             ex("pf/iri"),
-            ranked(
+            Some(ranked(
                 &ex("stratum/graph"),
                 vec![TermPattern::of_kind(TermKind::Iri)],
-            ),
+                false,
+            )),
             50,
         ),
         (
             ex("pf/quoted"),
-            ranked(
+            Some(ranked(
                 &ex("stratum/quoted"),
                 vec![TermPattern::of_kind(TermKind::Triple)],
-            ),
+                false,
+            )),
             25,
         ),
-        (ex("pf/not-ranked"), RetrievalCapability::NotRanked, 0),
+        // Registered with no declaration at all: that is the whole of "does not
+        // participate in ranked retrieval".
+        (ex("pf/not-ranked"), None, 0),
     ] {
-        let arity = PfArity::new(1, 1);
-        registry.register(
-            name,
-            Arc::new(MockProducer {
-                arity,
-                mode: arity.all_free_mode(),
-                rows,
-                capability,
-            }),
-        );
+        match declaration {
+            Some(declaration) => registry.register_ranked(name, relation(rows), declaration),
+            None => registry.register(name, relation(rows)),
+        }
     }
     registry
 }
@@ -174,7 +207,6 @@ struct MockProducer {
     arity: PfArity,
     mode: BindingPattern,
     rows: u64,
-    capability: RetrievalCapability,
 }
 
 impl PropertyFunction for MockProducer {
@@ -192,10 +224,6 @@ impl PropertyFunction for MockProducer {
 
     fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
         self.rows
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        self.capability.clone()
     }
 
     fn open(
@@ -433,18 +461,14 @@ fn always_applicable_producer_receives_every_term() {
 #[test]
 fn a_request_that_reaches_nothing_is_refused() {
     let mut registry = PropertyFunctionRegistry::new();
-    let arity = PfArity::new(1, 1);
-    registry.register(
+    registry.register_ranked(
         ex("pf/quoted"),
-        Arc::new(MockProducer {
-            arity,
-            mode: arity.all_free_mode(),
-            rows: 25,
-            capability: ranked(
-                &ex("stratum/quoted"),
-                vec![TermPattern::of_kind(TermKind::Triple)],
-            ),
-        }),
+        relation(25),
+        ranked(
+            &ex("stratum/quoted"),
+            vec![TermPattern::of_kind(TermKind::Triple)],
+            false,
+        ),
     );
     let error = plan(&lexical_request(), &registry, &fixture_statistics())
         .expect_err("a request reaching nothing must be refused");
@@ -503,20 +527,16 @@ fn depths_come_from_the_registry_row_bound_capped_by_statistics() {
 #[test]
 fn the_planner_reads_the_registry_row_bound_not_a_parallel_field() {
     let mut registry = PropertyFunctionRegistry::new();
-    let arity = PfArity::new(1, 1);
-    registry.register(
+    registry.register_ranked(
         ex("pf/any"),
-        Arc::new(MockProducer {
-            arity,
-            mode: arity.all_free_mode(),
-            // 40, not 200: only a planner that reads the seam's declaration can
-            // see this change.
-            rows: 40,
-            capability: ranked(
-                &ex("stratum/universal"),
-                vec![TermPattern::of_kind(TermKind::Any)],
-            ),
-        }),
+        // 40, not 200: only a planner that reads the seam's declaration can
+        // see this change.
+        relation(40),
+        ranked(
+            &ex("stratum/universal"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+        ),
     );
     let plan = plan(&mixed_request(), &registry, &fixture_statistics()).expect("plans");
     assert_eq!(plan.stratum_depths[&iri(&ex("stratum/universal"))], 40);
@@ -525,18 +545,14 @@ fn the_planner_reads_the_registry_row_bound_not_a_parallel_field() {
 #[test]
 fn statistics_lower_but_never_raise_the_declared_bound() {
     let mut registry = PropertyFunctionRegistry::new();
-    let arity = PfArity::new(1, 1);
-    registry.register(
+    registry.register_ranked(
         ex("pf/any"),
-        Arc::new(MockProducer {
-            arity,
-            mode: arity.all_free_mode(),
-            rows: 5_000,
-            capability: ranked(
-                &ex("stratum/universal"),
-                vec![TermPattern::of_kind(TermKind::Any)],
-            ),
-        }),
+        relation(5_000),
+        ranked(
+            &ex("stratum/universal"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+        ),
     );
     let plan = plan(&mixed_request(), &registry, &fixture_statistics()).expect("plans");
     // Declared 5_000, stat 1_000 -> 1_000, never the other direction.
@@ -546,18 +562,14 @@ fn statistics_lower_but_never_raise_the_declared_bound() {
 #[test]
 fn an_unbounded_stratum_without_statistics_is_refused() {
     let mut registry = PropertyFunctionRegistry::new();
-    let arity = PfArity::new(1, 1);
-    registry.register(
+    registry.register_ranked(
         ex("pf/unbounded"),
-        Arc::new(MockProducer {
-            arity,
-            mode: arity.all_free_mode(),
-            rows: u64::MAX,
-            capability: ranked(
-                &ex("stratum/endless"),
-                vec![TermPattern::of_kind(TermKind::Any)],
-            ),
-        }),
+        relation(u64::MAX),
+        ranked(
+            &ex("stratum/endless"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+        ),
     );
     let error = plan(&lexical_request(), &registry, &no_stratum_cardinality())
         .expect_err("an unbounded stratum with no statistic has no finite depth");

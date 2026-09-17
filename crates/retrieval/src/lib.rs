@@ -53,10 +53,12 @@
 //! # A composition outside the kernel
 //!
 //! Nothing in `purrdf-core` or the property-function seam changes to admit this
-//! layer. The seam gains one additive, required capability declaration
-//! (`purrdf_sparql_eval::PropertyFunction::retrieval_capability`) so a producer
-//! can state which request terms it accepts and how its rows rank — declarative
-//! data, never a function pointer.
+//! layer, and no relation implements anything extra to participate. The
+//! declaration lives beside the registry, supplied where a producer is wired up
+//! (`purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked`) and read
+//! back by IRI, so a producer states which request terms it accepts and how its
+//! rows rank — declarative data, never a function pointer — while every relation
+//! that has nothing to do with ranked retrieval says nothing at all.
 //!
 //! # It mints no vocabulary
 //!

@@ -46,7 +46,7 @@ use crate::convert::literal_to_value;
 use crate::error::EvalError;
 use crate::expr::xsd_of;
 use crate::modifier::is_numeric_xsd;
-use crate::property_fn::{PfArity, PropertyFunctionRegistry};
+use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
 
 /// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
 ///
@@ -1186,13 +1186,17 @@ pub(crate) fn content_fingerprint(
             out.push(':');
             out.push_str(&mode.rows_per_invocation.to_string());
         }
-        // The ranked-retrieval capability declaration (T3): a producer's
-        // participation in fusion is a declaration a prepared plan's identity
-        // must cover, exactly as arity, volatility and modes are. `NotRanked`
-        // contributes a fixed one-byte description, so a relation that does not
-        // fuse cannot perturb the digest of one that does.
+        // The ranked-retrieval declaration the host supplied at registration: a
+        // producer's participation in fusion is a declaration a prepared plan's
+        // identity must cover, exactly as arity, volatility and modes are. A
+        // relation registered without one contributes the fixed one-byte
+        // `NOT_RANKED_CANONICAL` description, so a producer that does not fuse
+        // cannot perturb the digest of one that does.
         out.push('\u{5}');
-        out.push_str(&descriptor.retrieval.canonical_description());
+        match descriptor.ranked.as_ref() {
+            None => out.push_str(NOT_RANKED_CANONICAL),
+            Some(declaration) => out.push_str(&declaration.canonical_description()),
+        }
         out.push('\u{4}');
     }
     Ok(out)

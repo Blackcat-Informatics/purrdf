@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The ranked-retrieval capability declaration: it is owned, serializable data
-//! (no function pointers), it is reported by `describe`, and it participates in
-//! the registry's durable content fingerprint.
+//! (no function pointers) and it is reported by `describe`. The registry's
+//! durable content fingerprint covers a producer's fusion participation as
+//! declared at registration, which is the side table the composition layer
+//! reads.
 
 use std::sync::Arc;
 
 use purrdf_sparql_eval::{
-    BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PropertyFunction,
-    PropertyFunctionRegistry, RankOrdering, RetrievalCapability, TermKind, TermPattern, Volatility,
+    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor,
+    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
+    RetrievalCapability, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const EX_REL: &str = "http://example.org/ns#ranked";
@@ -103,10 +106,48 @@ fn not_ranked_is_an_explicit_declaration() {
     );
 }
 
+/// The fingerprint reads the registry's side table, so the declaration under
+/// test is the one supplied at registration — not the relation's own (now
+/// superseded) trait declaration, which both registries below make identical so
+/// it cannot account for any difference observed here.
+fn ranked_declaration() -> RankedDeclaration {
+    RankedDeclaration {
+        stratum: purrdf_core::parse_iri(EX_STRATUM).expect("fixture IRI"),
+        accepted_terms: vec![AcceptedTerm {
+            pattern: TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: Some("en".to_owned()),
+                predicate: None,
+            },
+            placements: vec![TermPlacement {
+                facet: RequestFacet::Value,
+                position: 1,
+                datatype: None,
+            }],
+        }],
+        depth_placement: None,
+        candidate_position: 0,
+        ordering: RankOrdering::StrictlyDescending,
+        duplicates: DuplicatePolicy::Unique,
+        mandatory: true,
+    }
+}
+
+fn registry_declaring(declaration: Option<RankedDeclaration>) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    let relation = Arc::new(CapabilityRelation::new(ranked()));
+    match declaration {
+        Some(declaration) => registry.register_ranked(EX_REL, relation, declaration),
+        None => registry.register(EX_REL, relation),
+    }
+    registry
+}
+
 #[test]
 fn capability_participates_in_the_content_fingerprint() {
-    let ranked_registry = registry_with(ranked());
-    let plain_registry = registry_with(RetrievalCapability::NotRanked);
+    let ranked_registry = registry_declaring(Some(ranked_declaration()));
+    let plain_registry = registry_declaring(None);
     assert_ne!(
         ranked_registry
             .content_fingerprint()
@@ -117,7 +158,7 @@ fn capability_participates_in_the_content_fingerprint() {
         "a producer's fusion participation is a declaration the fingerprint must cover"
     );
     // Two registries declaring the same ranked capability fingerprint alike.
-    let same = registry_with(ranked());
+    let same = registry_declaring(Some(ranked_declaration()));
     assert_eq!(
         ranked_registry
             .content_fingerprint()

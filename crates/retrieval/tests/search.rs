@@ -25,8 +25,9 @@ use purrdf_retrieval::{
     fuse, plan, search,
 };
 use purrdf_sparql_eval::{
-    BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    PropertyFunctionRegistry, RankOrdering, RetrievalCapability, TermKind, TermPattern, Volatility,
+    AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
+    TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const K: u32 = 60;
@@ -47,12 +48,35 @@ fn kernel_iri(text: &str) -> purrdf_core::Iri {
     purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
 }
 
-fn ranked(stratum: &str, accepted_terms: Vec<TermPattern>) -> RetrievalCapability {
-    RetrievalCapability::Ranked {
+/// Each accepted pattern, with the request term's value rendered into the
+/// object-side position. The mocks are arity (1,1) and project `?c0`, so the
+/// candidate is position 0 and every facet binds at position 1.
+fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
+    patterns
+        .into_iter()
+        .map(|pattern| AcceptedTerm {
+            pattern,
+            placements: vec![TermPlacement {
+                facet: RequestFacet::Value,
+                position: 1,
+                datatype: None,
+            }],
+        })
+        .collect()
+}
+
+/// A ranked declaration, supplied where a producer is registered. `mandatory`
+/// is declared by the host rather than inferred: it states, explicitly, what an
+/// unconstrained `TermKind::Any` pattern used to imply.
+fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedDeclaration {
+    RankedDeclaration {
         stratum: kernel_iri(stratum),
-        accepted_terms,
+        accepted_terms: accepted(patterns),
+        depth_placement: None,
+        candidate_position: 0,
         ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
+        mandatory,
     }
 }
 
@@ -87,7 +111,6 @@ struct MockProducer {
     arity: PfArity,
     mode: BindingPattern,
     rows: u64,
-    capability: RetrievalCapability,
     emitted: Vec<Vec<TermValue>>,
 }
 
@@ -106,10 +129,6 @@ impl PropertyFunction for MockProducer {
 
     fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
         self.rows
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        self.capability.clone()
     }
 
     fn open(
@@ -133,12 +152,7 @@ impl PfCursor for RowCursor {
     }
 }
 
-fn producer(
-    capability: RetrievalCapability,
-    rows: u64,
-    prefix: &str,
-    count: usize,
-) -> Arc<dyn PropertyFunction> {
+fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
     let arity = PfArity::new(1, 1);
     let emitted = (0..count)
         .map(|index| {
@@ -152,7 +166,6 @@ fn producer(
         arity,
         mode: arity.all_free_mode(),
         rows,
-        capability,
         emitted,
     })
 }
@@ -167,43 +180,32 @@ fn fixture_registry() -> PropertyFunctionRegistry {
         language: Some("en".to_owned()),
         predicate: Some(ex("body")),
     };
-    registry.register(
+    registry.register_ranked(
         ex("pf/any"),
-        producer(
-            ranked(
-                &ex("stratum/universal"),
-                vec![TermPattern::of_kind(TermKind::Any)],
-            ),
-            200,
-            "universal/",
-            3,
+        producer(200, "universal/", 3),
+        ranked(
+            &ex("stratum/universal"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
         ),
     );
-    registry.register(
+    registry.register_ranked(
         ex("pf/literal"),
-        producer(
-            ranked(&ex("stratum/text"), vec![literal_pattern]),
-            100,
-            "text/",
-            2,
-        ),
+        producer(100, "text/", 2),
+        ranked(&ex("stratum/text"), vec![literal_pattern], false),
     );
-    registry.register(
+    registry.register_ranked(
         ex("pf/iri"),
-        producer(
-            ranked(
-                &ex("stratum/graph"),
-                vec![TermPattern::of_kind(TermKind::Iri)],
-            ),
-            50,
-            "graph/",
-            1,
+        producer(50, "graph/", 1),
+        ranked(
+            &ex("stratum/graph"),
+            vec![TermPattern::of_kind(TermKind::Iri)],
+            false,
         ),
     );
-    registry.register(
-        ex("pf/not-ranked"),
-        producer(RetrievalCapability::NotRanked, 0, "unranked/", 0),
-    );
+    // Registered with no declaration at all: that is the whole of "does not
+    // participate in ranked retrieval".
+    registry.register(ex("pf/not-ranked"), producer(0, "unranked/", 0));
     registry
 }
 

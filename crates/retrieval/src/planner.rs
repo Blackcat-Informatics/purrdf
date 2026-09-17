@@ -12,7 +12,9 @@
 //! # Matching is a lookup, never inference
 //!
 //! A producer declares, as serializable data, which request-term shapes it
-//! accepts ([`RetrievalCapability::Ranked::accepted_terms`]). The planner
+//! accepts — the registry's side table holds that declaration
+//! ([`RankedDeclaration::accepted_terms`](purrdf_sparql_eval::RankedDeclaration::accepted_terms)),
+//! supplied where the producer was registered. The planner
 //! matches a request term against those declarations by a fixed lookup over
 //! term kind, language and predicate — it never infers capability from a
 //! producer's name, from a statistical signal, or from what other producers
@@ -42,9 +44,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use purrdf_sparql_eval::{
-    PfDescriptor, PropertyFunctionRegistry, RetrievalCapability, TermKind, TermPattern,
-};
+use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, TermKind, TermPattern};
 use purrdf_text::Fixed;
 
 use crate::error::PlanError;
@@ -118,12 +118,9 @@ pub fn plan(
 
     for descriptor in &descriptors {
         let producer = descriptor.iri.clone();
-        let RetrievalCapability::Ranked {
-            stratum,
-            accepted_terms,
-            ..
-        } = &descriptor.retrieval
-        else {
+        // A relation registered without a ranked declaration declares nothing,
+        // and nothing is what the planner reads back: it does not fuse.
+        let Some(declaration) = descriptor.ranked.as_ref() else {
             decisions.push(ProducerDecision::Rejected {
                 producer,
                 reason: RejectionReason::NotRanked,
@@ -132,16 +129,17 @@ pub fn plan(
         };
         // The seam declares its stratum with the kernel IRI; a plan carries the
         // layer's validated, hashable, orderable wrapper.
-        let stratum = Iri::from(stratum.clone());
+        let stratum = Iri::from(declaration.stratum.clone());
 
         let matched: Vec<u32> = request
             .terms
             .iter()
             .enumerate()
             .filter(|(_, term)| {
-                accepted_terms
+                declaration
+                    .accepted_terms
                     .iter()
-                    .any(|pattern| pattern_matches(pattern, term))
+                    .any(|accepted| pattern_matches(&accepted.pattern, term))
             })
             .map(|(index, _)| u32::try_from(index).unwrap_or(u32::MAX))
             .collect();
