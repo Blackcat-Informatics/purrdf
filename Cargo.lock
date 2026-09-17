@@ -1594,6 +1594,7 @@ dependencies = [
  "serde_yaml_ng",
  "smallvec",
  "syn 2.0.118",
+ "wasm-bindgen-test",
 ]
 
 [[package]]

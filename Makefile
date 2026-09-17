@@ -367,6 +367,12 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
 	@#
+	@# The prepared SHACL product is the same hazard with a longer fuse: a product
+	@# is written by a build tool on a host and restored months later in a browser,
+	@# so a codec that is merely self-consistent per target produces a cache that
+	@# never hits and an `open` that refuses perfectly valid bytes. That row
+	@# compares the bytes wasm32 writes against the golden a native build committed.
+	@#
 	@# wasm-bindgen-test-runner ships in the same pinned wasm-bindgen-cli archive the
 	@# wasm lane already installs, so there is no second version to keep in step.
 	@if ! rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
@@ -391,7 +397,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-text --test wasm_determinism \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-json --test roundtrip; \
+			-p purrdf-json --test roundtrip \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-shapes --test product_wasm; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
