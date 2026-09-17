@@ -57,14 +57,6 @@ use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
 /// The one kernel both paths rank by.
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
 
-/// The corpus: rows and dimensions, the width this index targets.
-const LADDER: [(usize, usize); 4] = [
-    (2_048, 4_096),
-    (50_000, 4_096),
-    (200_000, 4_096),
-    (1_000_000, 4_096),
-];
-
 /// The query set: the first [`QUERIES`] rows, and how many repetitions each latency sample
 /// takes. Recall and rank are computed once per query; latency is sampled `REPEATS` times.
 const QUERIES: usize = 64;
@@ -157,38 +149,6 @@ const BUCKETS: [&str; 6] = ["0..k", "k..2k", "2k..4k", "4k..8k", "8k..16k", ">=1
 /// the shared corpus harness for why each of those is load-bearing.
 const FAMILIES: [&str; 2] = ["uniform", "embedding-like"];
 
-/// The scales this run reports.
-///
-/// [`LADDER`] by default -- every declared rung runs, because a point that is not measured
-/// is a point this harness does not claim. `PURRDF_HNSW_BENCH_SCALES` narrows the run to the
-/// named row counts for a smoke test on a host that cannot hold the top rung: the million-row
-/// rung alone is about 33 GiB of `f64` before the graph and the oracle rankings. The knob can
-/// only take rungs AWAY, never add one, which is the same rule `benches/build.rs` follows --
-/// a knob that can widen a run is a knob that can hide a default that was never wide enough.
-fn ladder() -> Vec<(usize, usize)> {
-    let Ok(raw) = std::env::var("PURRDF_HNSW_BENCH_SCALES") else {
-        return LADDER.to_vec();
-    };
-    let wanted: Vec<usize> = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            part.parse::<usize>()
-                .unwrap_or_else(|_| panic!("PURRDF_HNSW_BENCH_SCALES: {part:?} is not a row count"))
-        })
-        .collect();
-    let chosen: Vec<(usize, usize)> = LADDER
-        .into_iter()
-        .filter(|(rows, _)| wanted.contains(rows))
-        .collect();
-    assert!(
-        !chosen.is_empty(),
-        "PURRDF_HNSW_BENCH_SCALES named no rung of the declared ladder {LADDER:?}"
-    );
-    chosen
-}
-
 /// Build the named family at `rows x dims`.
 fn family(name: &str, rows: usize, dims: usize) -> VectorMatrix {
     match name {
@@ -207,12 +167,16 @@ fn main() {
     println!("The exact oracle is Kernel::distance + best() over every row.");
     println!("Recall is comparable ONLY within one ef; each row is a distinct index identity.");
     println!(
-        "Every scale in LADDER is reported. Nothing here is gated off by default: a point \
-         that is not measured is a point this harness does not claim."
+        "Every rung of the shared declared ladder is reported. Nothing here is gated off by \
+         default: a point that is not measured is a point this harness does not claim."
     );
     println!();
 
-    for (rows, dims) in ladder() {
+    // The ladder is `corpus::LADDER`, shared with `benches/build.rs` so that one
+    // `PURRDF_HNSW_BENCH_SCALES` value narrows BOTH harnesses. Two private tables meant the
+    // one variable had two vocabularies, and the documented narrowing example was a command
+    // that panicked in whichever harness the writer had not run.
+    for (rows, dims) in corpus::declared_scales() {
         for name in FAMILIES {
             report(name, rows, dims);
         }

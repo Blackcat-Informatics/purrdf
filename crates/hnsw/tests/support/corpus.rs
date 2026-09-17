@@ -111,6 +111,65 @@ impl CorpusShape {
     }
 }
 
+/// The declared scale ladder BOTH bench harnesses run, as `(rows, dims)`.
+///
+/// ONE table, because the two harnesses read ONE environment variable. They did not share
+/// it: `benches/build.rs` declared 5,000 upward and `benches/recall.rs` declared 2,048
+/// upward, so `PURRDF_HNSW_BENCH_SCALES=5000` narrowed one harness and hard-panicked the
+/// other, and the README's own narrowing example was therefore a command that fails. A
+/// variable with two vocabularies is a variable whose documented value is correct for
+/// whichever harness the writer happened to run.
+pub const LADDER: [(usize, usize); 4] = [
+    (5_000, 4_096),
+    (50_000, 4_096),
+    (200_000, 4_096),
+    (1_000_000, 4_096),
+];
+
+/// [`LADDER`], narrowed to the row counts `PURRDF_HNSW_BENCH_SCALES` names.
+///
+/// Every declared rung runs by default: a point that is not measured is a point these
+/// harnesses do not claim, and a default that skips the one scale the offer is about is how
+/// a missing measurement gets reported as a completed run.
+///
+/// The knob can only take rungs AWAY. That is ENFORCED here rather than promised in prose:
+/// the parsed list is filtered against [`LADDER`], and a row count naming no rung is a hard
+/// failure. `build.rs` previously documented the guarantee in three places while returning
+/// the parsed list verbatim, so `PURRDF_HNSW_BENCH_SCALES=64` printed a `rows 64` row that
+/// the declared ladder never contained. A knob that can widen a run is a knob that can hide
+/// a default that was never wide enough, and a knob whose one-way property lives only in a
+/// doc comment is not one-way.
+pub fn declared_scales() -> Vec<(usize, usize)> {
+    let Some(spec) = std::env::var_os("PURRDF_HNSW_BENCH_SCALES") else {
+        return LADDER.to_vec();
+    };
+    let spec = spec.to_string_lossy();
+    let wanted: Vec<usize> = spec
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<usize>()
+                .unwrap_or_else(|_| panic!("PURRDF_HNSW_BENCH_SCALES: {part:?} is not a row count"))
+        })
+        .collect();
+    let declared: Vec<usize> = LADDER.iter().map(|(rows, _)| *rows).collect();
+    assert!(
+        wanted.iter().all(|rows| declared.contains(rows)),
+        "PURRDF_HNSW_BENCH_SCALES named {wanted:?}, which is not a subset of the declared \
+         ladder {declared:?}; the knob narrows that ladder and cannot add a rung to it"
+    );
+    let chosen: Vec<(usize, usize)> = LADDER
+        .into_iter()
+        .filter(|(rows, _)| wanted.contains(rows))
+        .collect();
+    assert!(
+        !chosen.is_empty(),
+        "PURRDF_HNSW_BENCH_SCALES named no rung of the declared ladder {LADDER:?}"
+    );
+    chosen
+}
+
 /// A deterministic stream of values in `[-1, 1)`, never exactly zero.
 pub(crate) struct Stream(u64);
 

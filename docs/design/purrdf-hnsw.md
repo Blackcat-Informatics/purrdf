@@ -148,10 +148,20 @@ algorithm name.
 The guard's `IndexLossContract` is approximate and non-transforming:
 `transforms_vectors = false`, with no `loss_encoding` and no `loss_parameters`,
 because an HNSW graph stores no vectors at all. The evidence string is exactly
-`approximate: recall measured against the exact oracle and pinned per fixture; an
-offer of candidates is never a proof of absence`;
+`approximate: recall measured against the exact oracle on synthetic corpora up to
+50,000 rows, and UNMEASURED at the 10^6 scale this index exists for; an offer of
+candidates is never a proof of absence`;
 `guard::validate_guard` refuses a guard whose revision says anything else, so a
-host cannot bind an HNSW index without binding that statement.
+host cannot bind an HNSW index without binding that statement — including the
+half that says where the evidence stops.
+
+That quote is checked against `profile::LOSS_EVIDENCE` itself by
+`scripts/check-doc-claims.py`, not maintained by hand. It was maintained by hand,
+and it went stale the moment the constant was corrected: this paragraph went on
+publishing the superseded sentence — the one whose missing scale caveat was
+exactly what the correction added — while the code, its test pin and the shipped
+README all carried the honest one. A document that restates a constant is the
+last place a reader checks and the first place a correction is forgotten.
 
 ### 2.3 Parameter TLV
 

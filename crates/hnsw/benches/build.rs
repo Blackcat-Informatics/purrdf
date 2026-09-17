@@ -5,8 +5,9 @@
 //!
 //! This target exists to disclose the shipped build path's wall-clock cost at scale, rather
 //! than leave it unmeasured. It builds the index through the **shipped build path** —
-//! [`HnswIndex::build`], not a private shortcut — at 5,000, 50,000, 200,000 and 1,000,000
-//! rows, times each once, and prints the table.
+//! [`HnswIndex::build`], not a private shortcut — at every rung of the shared declared
+//! ladder (`corpus::LADDER`: 5,000, 50,000, 200,000 and 1,000,000 rows at 4,096
+//! dimensions), times each once, and prints the table.
 //!
 //! It is **report-only**. Nothing here asserts a timing, no gate invokes it, and a slow
 //! sample on a shared host is not a failure. The number's job is disclosure, not
@@ -30,7 +31,9 @@
 //! That has a real cost: 10^6 rows at 4,096 `f64` components is about 30.5 GiB resident for
 //! the matrix alone, before the graph, so a plain run of this harness needs a host that can
 //! hold it. `PURRDF_HNSW_BENCH_SCALES` narrows the run for a smoke test on a host that
-//! cannot; it can only take scales away, never add one.
+//! cannot; it can only take scales away, and `corpus::declared_scales` ENFORCES that by
+//! filtering the parsed list against the declared ladder rather than trusting this sentence.
+//! The ladder is shared with `benches/recall.rs`, so one documented value narrows both.
 //!
 //! ```text
 //! cargo bench -p purrdf-hnsw --bench build                     # 5k / 50k / 200k / 1M
@@ -62,13 +65,6 @@ mod corpus;
 use corpus::CorpusShape;
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 
-/// Every row in the harness indexes this many dimensions, the width this index targets.
-const DIMS: usize = 4_096;
-
-/// The admission scales, in ascending order. Every one of them runs by default; see the
-/// module docs for what that costs and how to narrow it.
-const SCALES: [usize; 4] = [5_000, 50_000, 200_000, 1_000_000];
-
 /// The index identity every scale is built under.
 ///
 /// These are required configuration, not tuning knobs: a build under different numbers is a
@@ -98,56 +94,30 @@ const fn fnv1a_64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// The scales this run measures.
-///
-/// Every admission scale, with no exception and no opt-in.
-/// `PURRDF_HNSW_BENCH_SCALES` narrows the run to an explicit
-/// comma-separated list (e.g. `5000,50000`) for a quick smoke of the harness itself; it
-/// never widens the default set, so a plain `cargo bench` still visits every scale.
-fn scales() -> Vec<usize> {
-    let Some(spec) = std::env::var_os("PURRDF_HNSW_BENCH_SCALES") else {
-        return SCALES.to_vec();
-    };
-    let spec = spec.to_string_lossy();
-    let parsed: Vec<usize> = spec
-        .split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            part.parse::<usize>()
-                .unwrap_or_else(|_| panic!("PURRDF_HNSW_BENCH_SCALES: {part:?} is not a row count"))
-        })
-        .collect();
-    assert!(
-        !parsed.is_empty(),
-        "PURRDF_HNSW_BENCH_SCALES named no scale"
-    );
-    parsed
-}
-
 fn main() {
     let params = Params::new(M, M0, EF_CONSTRUCTION, EF_SEARCH)
         .expect("the harness parameters satisfy the validation matrix");
     println!("purrdf-hnsw build cost (report-only; no assertion, no gate)");
     println!(
-        "metric=squared-euclidean dims={DIMS} M={M} M0={M0} ef_construction={EF_CONSTRUCTION} \
+        "metric=squared-euclidean M={M} M0={M0} ef_construction={EF_CONSTRUCTION} \
          ef_search={EF_SEARCH} threads={}",
         rayon::current_num_threads()
     );
     println!();
     println!(
-        "{:>10}  {:>12}  {:>12}  {:>10}  {:>16}",
-        "rows", "generate", "build", "img MiB", "graph digest"
+        "{:>10}  {:>6}  {:>12}  {:>12}  {:>10}  {:>16}",
+        "rows", "dims", "generate", "build", "img MiB", "graph digest"
     );
-    println!("{}", "-".repeat(68));
+    println!("{}", "-".repeat(76));
 
-    // Every declared scale runs. A point that is not measured is a point this harness does
+    // Every declared rung runs. A point that is not measured is a point this harness does
     // not claim, and a default that silently skips the one scale the offer is about is how a
     // missing measurement gets reported as a completed run. `PURRDF_HNSW_BENCH_SCALES`
-    // narrows the run for a smoke test; it cannot widen one.
-    for scale in scales() {
+    // narrows the run for a smoke test; `declared_scales` filters it against the ladder, so
+    // it cannot widen one.
+    for (scale, dims) in corpus::declared_scales() {
         let generate = Instant::now();
-        let vectors = matrix(scale, DIMS);
+        let vectors = matrix(scale, dims);
         let generate = generate.elapsed();
 
         let start = Instant::now();
@@ -162,7 +132,7 @@ fn main() {
         let image = index.canonical_image();
         let digest = fnv1a_64(black_box(&image));
         println!(
-            "{scale:>10}  {:>12.3}  {:>12.3}  {:>10.1}  {:>16}",
+            "{scale:>10}  {dims:>6}  {:>12.3}  {:>12.3}  {:>10.1}  {:>16}",
             generate.as_secs_f64(),
             build.as_secs_f64(),
             image.len() as f64 / (1024.0 * 1024.0),

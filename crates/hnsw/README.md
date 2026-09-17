@@ -122,9 +122,13 @@ away. `cargo bench -p purrdf-hnsw --bench build` times the shipped build path
 at 5,000, 50,000, 200,000 and 1,000,000 rows — every scale, with no opt-in,
 because a default that skips the one scale the offer is about reports a missing
 measurement as a completed run. The million-row rung needs about 30.5 GiB
-resident for the matrix alone; `PURRDF_HNSW_BENCH_SCALES=5000,50000` narrows the
-run on a host that cannot hold it, and can only take scales away. Every number
-it prints is a wall-clock sample from
+resident for the matrix alone; `PURRDF_HNSW_BENCH_SCALES=5000` narrows the run
+on a host that cannot hold it. Both bench harnesses declare the **same** ladder
+and read that one variable, so a value that narrows one narrows the other, and
+the knob can only take rungs away: the parsed list is filtered against the
+declared ladder and a row count naming no rung is a hard failure, rather than an
+extra scale the ladder never contained. Every number it prints is a wall-clock
+sample from
 whatever host runs it, reported for disclosure and never as an acceptance
 threshold. The cost that is deterministic and hardware-independent is distance
 evaluations: `CacheState::evaluations` (`crates/hnsw/src/search.rs`) counts
