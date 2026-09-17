@@ -658,6 +658,18 @@ fn permuted_index(stream: usize, rank: u64) -> u64 {
     block * DISAGREEMENT_BLOCK + permuted
 }
 
+/// What a [`LazyStream`] emits at a 1-based rank: the candidate a given stream
+/// carries there. The rows themselves — rank, contribution, receipt — are the
+/// same whichever universe is being enumerated, so the universe is the one thing
+/// a fixture supplies.
+type ItemAt = fn(usize, u64) -> Term;
+
+/// The block-permuted universe [`permuted_index`] describes.
+fn permuted_item(stream_index: usize, rank: u64) -> Term {
+    let index = permuted_index(stream_index, rank);
+    Term::new(format!("candidate-{index:08}"))
+}
+
 /// An effectively unbounded producer that mints rows lazily and counts pulls.
 ///
 /// Nothing is materialized up front: if fusion needed the whole input to emit
@@ -675,6 +687,8 @@ struct LazyStream {
     k: u32,
     /// A shared count of every row pulled from every such stream.
     pulls: Arc<AtomicUsize>,
+    /// The candidate universe this stream enumerates.
+    item_at: ItemAt,
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -689,12 +703,7 @@ impl RankedStream for LazyStream {
         self.pulls.fetch_add(1, Ordering::SeqCst);
         let rank = self.emitted;
         let value = contribution(self.weight, rank, self.k).expect("contribution fits");
-        let index = permuted_index(self.stream_index, rank);
-        Ok(Some((
-            rank,
-            value,
-            Term::new(format!("candidate-{index:08}")),
-        )))
+        Ok(Some((rank, value, (self.item_at)(self.stream_index, rank))))
     }
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
@@ -728,6 +737,7 @@ fn frontier_fixture(
                     weight: Fixed::ONE,
                     k: K,
                     pulls: Arc::clone(pulls),
+                    item_at: permuted_item,
                 },
             )
         })
@@ -788,6 +798,158 @@ fn fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata() {
     );
 
     // Dropped without draining: no producer materialized its full set.
+    drop(fusion);
+    assert_eq!(pulls.load(Ordering::SeqCst), pulled);
+}
+
+// ---------------------------------------------------------------------------
+// 7b. An exact tie is ordered, not awaited
+//
+// Reciprocal-rank fusion ties exactly whenever two strata disagree
+// symmetrically, which is an ordinary outcome and not a corner case. Two
+// candidates with the same final score can each be the other's equal-valued
+// rival; if "could still be ordered ahead of me" were read as a score
+// comparison alone, each would block the other and fusion would read both
+// streams to the end before ordering them. The frontier bound this rung
+// promises is exactly what that costs, so it is asserted here in pulls.
+// ---------------------------------------------------------------------------
+
+/// The raw contribution of a unit-weighted rank-1 row under `K`.
+///
+/// `trunc(10^12 / (60 + 1))`, written out rather than asked for: the tie below
+/// has to be arithmetic this file states and the engine must agree with, not
+/// arithmetic the engine states and this file reads back.
+const RANK_1_RAW: i128 = 16_393_442_622;
+
+/// The same at rank two: `trunc(10^12 / (60 + 2))`.
+const RANK_2_RAW: i128 = 16_129_032_258;
+
+/// How many rows sit behind the tied pair in each stream.
+///
+/// Far more than a bounded frontier can touch, and few enough that a fusion
+/// which wrongly drained them would still finish and fail an assertion rather
+/// than hang.
+const TIE_TAIL_ROWS: u64 = 10_000;
+
+/// The two strata the tie fixture fuses.
+const TIE_STRATA: [&str; 2] = ["tie/left", "tie/right"];
+
+/// Two strata that disagree symmetrically about their top two candidates: `a`
+/// leads the left one with `b` immediately behind it, and the right one is the
+/// mirror image. Everything from rank three on is stream-local filler, present
+/// only so that draining is observably different from not draining.
+fn symmetric_tie_item(stream_index: usize, rank: u64) -> Term {
+    match (stream_index, rank) {
+        (0, 1) | (1, 2) => Term::new("a"),
+        (0, 2) | (1, 1) => Term::new("b"),
+        _ => Term::new(format!("filler-{stream_index}-{rank:08}")),
+    }
+}
+
+#[test]
+fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
+    // The tie, by hand. A unit-weighted row at 1-based rank `r` contributes
+    // `trunc(10^12 / (K + r))`, so the two ranks in play are:
+    assert_eq!(RANK_1_RAW, 1_000_000_000_000 / (i128::from(K) + 1));
+    assert_eq!(RANK_2_RAW, 1_000_000_000_000 / (i128::from(K) + 2));
+
+    // `a` is rank 1 on the left and rank 2 on the right; `b` is rank 2 on the
+    // left and rank 1 on the right. Each sum is written in the order its strata
+    // contribute, and the two are the same number — which is the whole fixture.
+    let a_score = RANK_1_RAW + RANK_2_RAW;
+    let b_score = RANK_2_RAW + RANK_1_RAW;
+    assert_eq!(a_score, 32_522_474_880);
+    assert_eq!(b_score, 32_522_474_880);
+    assert_eq!(a_score, b_score, "this is a fixture only if the scores tie");
+
+    // The engine's contribution is that same arithmetic, so the rows the streams
+    // emit below really do carry these two values.
+    assert_eq!(
+        contribution(Fixed::ONE, 1, K).expect("fits"),
+        Fixed::from_raw(RANK_1_RAW)
+    );
+    assert_eq!(
+        contribution(Fixed::ONE, 2, K).expect("fits"),
+        Fixed::from_raw(RANK_2_RAW)
+    );
+
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let weights: BTreeMap<Iri, Fixed> = TIE_STRATA
+        .iter()
+        .map(|name| (stratum(name), Fixed::ONE))
+        .collect();
+    // Two strata, so a candidate takes at most two contributions.
+    let tie_profile = FusionProfile::new(weights, K, 2).expect("the fixture profile is valid");
+    let streams: Vec<(Iri, LazyStream)> = TIE_STRATA
+        .iter()
+        .enumerate()
+        .map(|(stream_index, name)| {
+            (
+                stratum(name),
+                LazyStream {
+                    stream_index,
+                    emitted: 0,
+                    total: TIE_TAIL_ROWS,
+                    weight: Fixed::ONE,
+                    k: K,
+                    pulls: Arc::clone(&pulls),
+                    item_at: symmetric_tie_item,
+                },
+            )
+        })
+        .collect();
+
+    let mut fusion = FusionStream::new(streams, tie_profile);
+    let first = block_on(fusion.next())
+        .expect("fusion pulls")
+        .expect("the first tied candidate is certified");
+    let second = block_on(fusion.next())
+        .expect("fusion pulls")
+        .expect("the second tied candidate is certified");
+    let pulled = pulls.load(Ordering::SeqCst);
+
+    // Both are emitted, and in the order the declared total tie-break dictates:
+    // the scores are equal, and so are the best ranks — each candidate is rank 1
+    // in exactly one stratum — so the third key decides, and canonical term
+    // bytes put `a` before `b`.
+    assert_eq!(first.entity, Term::new("a"));
+    assert_eq!(second.entity, Term::new("b"));
+    for row in [&first, &second] {
+        assert_eq!(
+            row.score,
+            Fixed::from_raw(a_score),
+            "{} must carry the hand-computed tied score",
+            row.entity.as_str()
+        );
+        assert_eq!(
+            row.contributions.len(),
+            TIE_STRATA.len(),
+            "{} must be certified with both strata counted",
+            row.entity.as_str()
+        );
+        assert!(
+            row.threshold_witness > Fixed::ZERO,
+            "{} was certified with no stream still live, so the tie was settled by \
+             exhaustion rather than by the tie-break",
+            row.entity.as_str()
+        );
+    }
+
+    // Six pulls, and that is the bound the algorithm justifies rather than a
+    // number observed and pinned: each stream gives up rank 1 and rank 2 — the
+    // tied pair itself — plus exactly one lookahead row, which is what drops the
+    // threshold below the tied score and proves both scores final. No row from
+    // rank three on can alter either score, so no row from rank three on is
+    // read. Twenty thousand rows were available behind them.
+    const PER_STREAM: usize = 3;
+    assert!(
+        pulled <= TIE_STRATA.len() * PER_STREAM,
+        "an exact tie pulled {pulled} rows of {} to emit two candidates, which is not a \
+         frontier bound",
+        u64::try_from(TIE_STRATA.len()).expect("two") * TIE_TAIL_ROWS
+    );
+
+    // Dropped without draining: the rows behind the tie were never touched.
     drop(fusion);
     assert_eq!(pulls.load(Ordering::SeqCst), pulled);
 }

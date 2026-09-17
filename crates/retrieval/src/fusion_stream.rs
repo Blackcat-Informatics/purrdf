@@ -540,12 +540,64 @@ impl<S: RankedStream> FusionStream<S> {
         }
     }
 
+    /// Whether `other` could still be ordered ahead of the finalized `state`.
+    ///
+    /// `state` is known final (`U == L`), so the question is only what `other`
+    /// can still become. Three cases, and only the third is subtle:
+    ///
+    /// * `U(other) > L(state)` — `other` may still outscore it. Blocked.
+    /// * `U(other) < L(state)` — `other` can never catch it. Free.
+    /// * `U(other) == L(state)` — `other` can at most tie. If `other` is itself
+    ///   final its tie-break keys are settled, so the declared total order
+    ///   decides and exactly one of the pair goes first. If `other` is not yet
+    ///   final its best rank can still improve — a later stream may report it at
+    ///   a better rank — so it could win a tie it cannot yet be compared on, and
+    ///   the conservative answer is to wait.
+    ///
+    /// The third case is what keeps the frontier bounded: without it a pair of
+    /// finalized, exactly-tied candidates blocks on itself forever.
+    fn outranks(
+        &self,
+        other_id: &CandidateId,
+        other: &CandidateState,
+        id: &CandidateId,
+        state: &CandidateState,
+    ) -> Result<bool, FusionError> {
+        let other_upper = self.upper_bound(other)?;
+        Ok(match other_upper.cmp(&state.lower_bound) {
+            core::cmp::Ordering::Greater => true,
+            core::cmp::Ordering::Less => false,
+            core::cmp::Ordering::Equal => {
+                if other_upper == other.lower_bound {
+                    Self::is_better(other_id, other, id, state)
+                } else {
+                    true
+                }
+            }
+        })
+    }
+
     /// The best candidate that is safe to emit, if any.
     ///
     /// A candidate is emittable when its score is final (`U(x) == L(x)`), it is
-    /// above the threshold, and it strictly beats the upper bound of every other
-    /// candidate. Once every stream is exhausted the threshold is zero and all
+    /// above the threshold, and no other candidate could still be ordered ahead
+    /// of it. Once every stream is exhausted the threshold is zero and all
     /// remaining candidates are ordered by the declared tie-break instead.
+    ///
+    /// # Ties are broken here, not only among the already-emittable
+    ///
+    /// "Could be ordered ahead of it" is the declared total order — score, then
+    /// best rank, then canonical term bytes — and not score alone. A rival whose
+    /// upper bound merely *equals* this candidate's final score cannot outscore
+    /// it; it can at most tie, and a tie is what the tie-break exists to settle.
+    ///
+    /// Comparing scores alone would make two candidates with exactly equal final
+    /// scores each dominate the other, so neither would ever be emittable and
+    /// fusion would pull every stream to exhaustion before the exhausted branch
+    /// below could order them. That is not a corner case: reciprocal-rank fusion
+    /// over strata that disagree symmetrically produces exact ties routinely —
+    /// one candidate at ranks 1 and 2, another at 2 and 1, sum to the same value
+    /// — and the cost is the bounded frontier this type exists to provide.
     fn select_emittable(&self) -> Result<Option<CandidateId>, FusionError> {
         if self.frontier.is_empty() {
             return Ok(None);
@@ -565,7 +617,7 @@ impl<S: RankedStream> FusionStream<S> {
                     if other_id == id {
                         continue;
                     }
-                    if state.lower_bound <= self.upper_bound(other)? {
+                    if self.outranks(other_id, other, id, state)? {
                         dominated = true;
                         break;
                     }
