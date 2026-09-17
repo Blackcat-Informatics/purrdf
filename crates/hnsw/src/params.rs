@@ -42,9 +42,10 @@ impl Params {
     ///   and the level formula's `floor(log2(m))` is undefined for `m < 2`;
     /// * `m0 < m` — layer 0 is the layer every query traverses, so it may not be *less*
     ///   connected than the layers above it;
-    /// * `ef_construction < m` — the candidate beam must be able to hold at least the
-    ///   neighbours it is asked to select, or the selection silently returns fewer than
-    ///   `m` and the degree bound becomes a lie;
+    /// * `ef_construction < m0` — the candidate beam must be able to hold at least the
+    ///   neighbours it is asked to select, or the selection silently returns fewer than the
+    ///   degree bound and the bound becomes a lie. Layer 0 is the binding case because its
+    ///   bound is `m0`, which is never below `m`; a beam that clears `m0` clears `m` too.
     /// * `ef_search < 1` — a beam of zero examines nothing and would answer every query
     ///   with an empty (but not empty-by-data) result.
     pub fn new(m: usize, m0: usize, ef_construction: usize, ef_search: usize) -> Result<Self> {
@@ -62,11 +63,11 @@ impl Params {
                 reason: "must be at least M",
             });
         }
-        if ef_construction < m {
+        if ef_construction < m0 {
             return Err(HnswError::InvalidParameter {
                 name: "ef_construction",
                 value: ef_construction.to_string(),
-                reason: "must be at least M",
+                reason: "must be at least M0",
             });
         }
         if ef_search < 1 {
@@ -149,38 +150,69 @@ impl Params {
             .ok_or(HnswError::ArithmeticOverflow)?;
 
         #[cfg(target_pointer_width = "32")]
-        {
-            const ADDRESSABLE: u64 = u32::MAX as u64;
-            let required = self.estimated_footprint(rows, dims)?;
-            if required > ADDRESSABLE {
-                return Err(HnswError::AddressSpaceExceeded {
-                    required,
-                    maximum: ADDRESSABLE,
-                });
-            }
+        self.admits_on_32_bit(rows, dims)?;
+        Ok(())
+    }
+
+    /// Whether a `rows x dims` build would fit a 32-bit address space.
+    ///
+    /// This is the admission check `validate_against` applies when it is *itself* running on
+    /// a 32-bit target, exposed so a 64-bit host can ask the same question before shipping
+    /// an artifact to `wasm32`. The answer does not depend on the target this code was
+    /// compiled for: it always describes a 32-bit layout.
+    ///
+    /// # Errors
+    ///
+    /// [`HnswError::AddressSpaceExceeded`] when the estimate exceeds the addressable range,
+    /// [`HnswError::ArithmeticOverflow`] if the estimate itself does not fit `u64`.
+    pub fn admits_on_32_bit(self, rows: usize, dims: usize) -> Result<()> {
+        const ADDRESSABLE: u64 = u32::MAX as u64;
+        let required = self.footprint_bytes_32(rows, dims)?;
+        if required > ADDRESSABLE {
+            return Err(HnswError::AddressSpaceExceeded {
+                required,
+                maximum: ADDRESSABLE,
+            });
         }
         Ok(())
     }
 
-    /// A conservative upper estimate of the in-memory footprint in bytes.
+    /// A conservative upper estimate, in bytes, of what this build costs a 32-bit target.
     ///
-    /// Used only by the 32-bit admission check. Vectors and norms are exact; adjacency is
-    /// estimated with the expected node population per level (`n / m^l`) and the full
-    /// degree bound, so the estimate is an over- rather than under-count.
-    #[cfg(target_pointer_width = "32")]
-    fn estimated_footprint(&self, rows: usize, dims: usize) -> Result<u64> {
+    /// Compiled on every target and stated in explicit 32-bit widths rather than in
+    /// `size_of::<usize>()`, so the number means the same thing wherever it is computed and
+    /// both sides of the admission check can be exercised on a 64-bit host. A check that no
+    /// gate ever compiles is a refusal nobody has proven either way, and a size estimator is
+    /// the worst place to leave that untested: an over-count rejects a build that would
+    /// have fitted, and the failure looks exactly like correct strictness.
+    ///
+    /// Vectors and norms are exact. Adjacency is estimated with the expected node population
+    /// per level (`n / m^l`) at the **full** degree bound, which the graph does not reach, so
+    /// the total is an upper bound.
+    ///
+    /// # Errors
+    ///
+    /// [`HnswError::ArithmeticOverflow`] if any product leaves `u64`.
+    pub fn footprint_bytes_32(self, rows: usize, dims: usize) -> Result<u64> {
+        /// Width of an `f64` on any target.
+        const F64_BYTES: u64 = 8;
+        /// A 32-bit `Vec` header: pointer, capacity, length.
+        const VEC_HEADER_BYTES: u64 = 12;
+        /// A 32-bit `Ranked`: an `f64` and a `usize`, padded to the `f64` alignment.
+        const RANKED_BYTES: u64 = 16;
         let vectors = u64::try_from(rows)
             .ok()
             .and_then(|r| r.checked_mul(u64::try_from(dims).ok()?))
-            .and_then(|e| e.checked_mul(size_of::<f64>() as u64))
+            .and_then(|e| e.checked_mul(F64_BYTES))
             .ok_or(HnswError::ArithmeticOverflow)?;
         let norms = u64::try_from(rows)
             .ok()
-            .and_then(|r| r.checked_mul(size_of::<f64>() as u64))
+            .and_then(|r| r.checked_mul(F64_BYTES))
             .ok_or(HnswError::ArithmeticOverflow)?;
+        // One `Vec` header per node for its layer list, plus one per layer it occupies.
         let node_records = u64::try_from(rows)
             .ok()
-            .and_then(|r| r.checked_mul(24))
+            .and_then(|r| r.checked_mul(VEC_HEADER_BYTES.checked_mul(2)?))
             .ok_or(HnswError::ArithmeticOverflow)?;
 
         let cap = u64::from(crate::level::level_cap(rows, self.m));
@@ -203,9 +235,8 @@ impl Params {
                 .ok_or(HnswError::ArithmeticOverflow)?;
             population /= base.max(1);
         }
-        // A `Ranked` edge is a `usize` row plus an `f64` distance.
         let edge_bytes = edges
-            .checked_mul(size_of::<crate::Ranked>() as u64)
+            .checked_mul(RANKED_BYTES)
             .ok_or(HnswError::ArithmeticOverflow)?;
 
         vectors
@@ -277,7 +308,79 @@ mod tests {
         // accepted and only the value past it refused. A `<` that should be `<=` passes a
         // suite that only tests the refusals.
         assert!(Params::new(2, 2, 2, 1).is_ok(), "the minimum set is valid");
-        assert!(Params::new(16, 16, 16, 1).is_ok(), "M0 = M, ef_c = M");
+        assert!(Params::new(16, 16, 16, 1).is_ok(), "M0 = M, ef_c = M0");
+        assert!(Params::new(4, 32, 32, 1).is_ok(), "ef_c exactly at M0");
+    }
+
+    #[test]
+    fn a_beam_too_narrow_for_layer_zero_is_refused() {
+        // Layer 0's bound is M0, so a beam that clears M but not M0 cannot fill the layer
+        // every query traverses, and the bound would be a number the graph never reaches.
+        assert!(
+            Params::new(4, 32, 8, 1).is_err(),
+            "ef_construction 8 cannot fill a layer-0 bound of 32"
+        );
+        assert!(
+            Params::new(4, 32, 32, 1).is_ok(),
+            "and the neighbouring valid set must still be admitted"
+        );
+    }
+
+    #[test]
+    fn the_thirty_two_bit_admission_check_refuses_and_admits() {
+        // Both directions, on whatever host runs the suite. An untested size estimator is a
+        // refusal nobody has proven, and an over-count looks exactly like correct strictness
+        // until a caller meets a build that should have fitted and does not.
+        let params = Params::new(16, 32, 64, 16).expect("valid");
+
+        // Find the smallest row count this parameter set refuses, by doubling then bisecting,
+        // so the boundary is discovered rather than hard-coded against the estimator.
+        let mut over = 1_usize;
+        while params.admits_on_32_bit(over, 256).is_ok() {
+            over = over
+                .checked_mul(2)
+                .expect("a refusal is reached well before usize wraps");
+        }
+        let mut under = over / 2;
+        while under + 1 < over {
+            let mid = under + (over - under) / 2;
+            if params.admits_on_32_bit(mid, 256).is_ok() {
+                under = mid;
+            } else {
+                over = mid;
+            }
+        }
+
+        assert!(
+            params.admits_on_32_bit(under, 256).is_ok(),
+            "the row count just under the bound must still be admitted"
+        );
+        assert!(
+            params.admits_on_32_bit(over, 256).is_err(),
+            "the row count just over the bound must be refused"
+        );
+        assert!(
+            params.footprint_bytes_32(under, 256).expect("estimates") <= u64::from(u32::MAX),
+            "the admitted estimate must be within the addressable range"
+        );
+    }
+
+    #[test]
+    fn the_thirty_two_bit_estimate_is_the_same_on_every_host() {
+        // Stated in explicit 32-bit widths, so a 64-bit host computing it for a wasm32
+        // target gets the number that target would see rather than its own layout.
+        let params = Params::new(16, 32, 64, 16).expect("valid");
+        let vectors_and_norms = 1_000_u64 * 256 * 8 + 1_000 * 8;
+        let estimate = params.footprint_bytes_32(1_000, 256).expect("estimates");
+        assert!(
+            estimate > vectors_and_norms,
+            "the estimate must account for adjacency as well as the matrix"
+        );
+        assert_eq!(
+            estimate,
+            params.footprint_bytes_32(1_000, 256).expect("estimates"),
+            "the estimate is a pure function of its inputs"
+        );
     }
 
     #[test]
