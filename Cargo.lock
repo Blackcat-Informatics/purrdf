@@ -1326,6 +1326,7 @@ dependencies = [
  "purrdf-json",
  "purrdf-markdown",
  "purrdf-rdf",
+ "purrdf-retrieval",
  "purrdf-shapes",
  "purrdf-shex",
  "purrdf-slice",

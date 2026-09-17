@@ -11,7 +11,8 @@
 //! Every heavy compute entry point (parsing, serialization, canonicalization,
 //! GTS fold/emit, SPARQL query/update evaluation, SHACL/ShEx validation,
 //! entailment-regime materialization, slice discovery/analysis, SSSOM
-//! parse/validate) releases the GIL while the engine runs, via
+//! parse/validate, the ranked-retrieval ladder) releases the GIL while the
+//! engine runs, via
 //! [`pyo3::Python::detach`]: Python-side arguments are converted to plain Rust
 //! data first, the engine call runs without the GIL, and Python result objects
 //! are built after the GIL is reacquired. Other Python threads therefore make
@@ -33,6 +34,7 @@ mod py_gts_dataset;
 mod py_gts_view;
 mod py_jsonld;
 mod py_projection;
+mod py_retrieval;
 mod py_shex;
 mod py_slice;
 mod py_sssom;
@@ -59,6 +61,10 @@ fn purrdf_native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let shex_module = PyModule::new(py, "shex")?;
     py_shex::register(&shex_module)?;
     m.add_submodule(&shex_module)?;
+
+    let retrieval_module = PyModule::new(py, "retrieval")?;
+    py_retrieval::register(&retrieval_module)?;
+    m.add_submodule(&retrieval_module)?;
 
     let slice_module = PyModule::new(py, "slice")?;
     py_slice::register(&slice_module)?;

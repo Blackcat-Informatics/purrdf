@@ -1860,3 +1860,74 @@ class slice:
     OwnershipReport = _OwnershipReport
     SliceCatalog = _SliceCatalog
     OwnershipAnalyzer = _OwnershipAnalyzer
+
+# ── Ranked retrieval (bindings/python/src/py_retrieval.rs, purrdf_native.retrieval) ──
+# The composition layer over the ranked property-function producers, surfaced as
+# `purrdf.retrieval`: one request planned, admitted, executed and fused into one
+# ordered answer. Producers, strata and weights are caller-supplied; nothing here
+# has a default, because PurRDF mints no vocabulary.
+#
+# Every weight crosses as an `int` of raw fixed-point units (`SCALE` is one whole
+# unit) and every score comes back as its exact decimal `str`, never a float.
+
+class retrieval:
+    # The decimal exponent of one whole fixed-point unit.
+    SCALE_DIGITS: int
+    # One whole fixed-point unit, in raw units: the weight `Fixed::ONE`.
+    SCALE: int
+
+    # Plan one request against the declared ranked producers, executing nothing.
+    #
+    # Each `request` entry is a tuple whose first element names its kind:
+    # ("lexical", text, language | None, predicate | None),
+    # ("vector", [component, ...], "cosine" | "dot" | "euclidean", hint | None),
+    # ("spatial", geometry, predicate, max_distance_raw | None),
+    # ("temporal", predicate, lower | None, upper | None),
+    # ("numeric", predicate, lower_raw | None, upper_raw | None), or
+    # ("entity", term).
+    #
+    # `text_producers` maps a producer IRI to (stratum, predicate, graph), where
+    # `graph` is "any", "default", or a named-graph IRI. `statistics` must name
+    # its "source" and "revision", and may carry "cardinality" (stratum IRI to
+    # row count) and "selectivity" ((stratum IRI, request-term index) to a value
+    # in [0, 1]).
+    @staticmethod
+    def plan(
+        data: str,
+        request: list[tuple[builtins.object, ...]],
+        *,
+        text_producers: dict[str, tuple[str, str, str]],
+        statistics: dict[str, builtins.object],
+        data_format: str = "turtle",
+        base: str | None = None,
+    ) -> dict[str, builtins.object]: ...
+    # Plan, admit, and emit the per-stratum SPARQL the request compiles to.
+    @staticmethod
+    def compile(
+        data: str,
+        request: list[tuple[builtins.object, ...]],
+        *,
+        text_producers: dict[str, tuple[str, str, str]],
+        statistics: dict[str, builtins.object],
+        data_format: str = "turtle",
+        base: str | None = None,
+    ) -> dict[str, builtins.object]: ...
+    # Run the whole ladder and return one fused answer.
+    #
+    # `weights` maps a stratum IRI to its weight in raw fixed-point units. `k`,
+    # `max_contributions` and `top_k` are required: the fusion law is the
+    # caller's and fused enumeration is top-k by construction.
+    @staticmethod
+    def search(
+        data: str,
+        request: list[tuple[builtins.object, ...]],
+        *,
+        text_producers: dict[str, tuple[str, str, str]],
+        weights: dict[str, int],
+        statistics: dict[str, builtins.object],
+        k: int,
+        max_contributions: int,
+        top_k: int,
+        data_format: str = "turtle",
+        base: str | None = None,
+    ) -> dict[str, builtins.object]: ...

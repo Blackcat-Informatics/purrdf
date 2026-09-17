@@ -71,3 +71,20 @@ The stages:
 Nothing here mints a vocabulary. Producers, strata and weights are
 caller-supplied configuration; the fixtures use `example.org`. There is no
 default registry and no built-in producer.
+
+## Run it
+
+The whole ladder, end to end, over real data and two real ranked producers:
+
+```sh
+cargo run -p purrdf-retrieval --example fused_search
+```
+
+`examples/fused_search.rs` indexes one small corpus twice — once per indexed
+field — registers each index as its own ranked producer under its own stratum,
+runs `search`, and prints the fused ranking with each row's per-stratum
+provenance, every producer's terminal status, and the one request term nothing
+in that registry accepts. It is documentation that executes.
+
+Reached from the umbrella crate as `purrdf::retrieval`, so a consumer that
+registers a ranked relation composes the answer without a second dependency.

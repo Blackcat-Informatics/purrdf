@@ -70,6 +70,7 @@ purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
 purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }
 purrdf-rdf = { path = "crates/rdf", version = "2.0.2" }
+purrdf-retrieval = { path = "crates/retrieval", version = "2.0.2" }
 purrdf-shapes = { path = "crates/shapes", version = "2.0.2" }
 purrdf-shex = { path = "crates/shex", version = "2.0.2" }
 purrdf-slice = { path = "crates/slice", version = "2.0.2" }
