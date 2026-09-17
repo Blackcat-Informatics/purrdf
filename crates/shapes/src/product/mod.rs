@@ -651,7 +651,7 @@ impl PreparedShapes {
 
         let shapes = self.shapes();
 
-        // R7: prove the product about to be written can be restored with every
+        // Prove the product about to be written can be restored with every
         // declared capability intact, BEFORE a single byte exists. The empty host
         // is the right comparison basis — the declared population is exactly the
         // part a restore reinstates from the product's own content.
