@@ -36,7 +36,8 @@ use std::sync::Arc;
 use purrdf_core::RdfDataset;
 use purrdf_shapes::engine::{self, PreparedShapes};
 use purrdf_shapes::product::{
-    HostBindings, ProductDimension, STAGE_ID, ShapesProduct, ShapesProductError, ShapesProfile,
+    AggregateRegistry, HostBindings, ProductDimension, PropertyFunctionRegistry, STAGE_ID,
+    ShapesProduct, ShapesProductError, ShapesProfile, UserFunctionRegistry,
 };
 
 use crate::{SarifOptions, report_to_sarif_string};
@@ -244,9 +245,47 @@ pub fn pack_shapes_product_from_dataset(
 ///
 /// # Errors
 ///
-/// Any [`ProductDimension`] the writer refuses on.
+/// Any [`ProductDimension`] the writer refuses on — including
+/// [`UnsupportedCapability`](ProductDimension::UnsupportedCapability) when
+/// `prepared` carries host-injected native functions or custom aggregates, which
+/// this entry point cannot identify; use
+/// [`prepared_to_product_with_implementations`] for those.
 pub fn prepared_to_product(prepared: &PreparedShapes) -> Result<Vec<u8>, ShapesProductError> {
     prepared.to_product(&ShapesProfile::CORE)
+}
+
+/// Write an already-prepared shapes graph that a host injected NATIVE
+/// implementations into out as a product under [`ShapesProfile::CORE`], binding it
+/// to the build of those implementations.
+///
+/// # Why a second entry point exists at all
+///
+/// A product's identity fingerprints the host registries' DECLARATIONS — each
+/// injected entry's IRI, arity and volatility — because that is the only part of a
+/// registry that reproduces in the process doing the restoring. It is not enough on
+/// its own: two builds of a host can register one IRI to two different closures that
+/// declare identically and compute different answers, so a product bound to
+/// declarations alone would restore against the wrong build of its own natives and
+/// validate green. `implementation_identity` is the caller's answer to the question
+/// the declarations cannot answer — an opaque byte string naming the build, such as
+/// a release version or a commit digest — and it is folded into the product's
+/// binding so a restore that names a different one is refused.
+///
+/// Pair it with [`admit_shapes_product_with_implementations`], which takes the same
+/// value on the restore side. Both sides must spell it identically; PurRDF never
+/// interprets the bytes.
+///
+/// # Errors
+///
+/// [`UnsupportedCapability`](ProductDimension::UnsupportedCapability) when
+/// `implementation_identity` is empty — that is the spelling for a host that injects
+/// nothing, and [`prepared_to_product`] already means it — plus any dimension the
+/// writer refuses on.
+pub fn prepared_to_product_with_implementations(
+    prepared: &PreparedShapes,
+    implementation_identity: &[u8],
+) -> Result<Vec<u8>, ShapesProductError> {
+    prepared.to_product_with_implementation_identity(&ShapesProfile::CORE, implementation_identity)
 }
 
 // ---------------------------------------------------------------------------
@@ -258,19 +297,68 @@ pub fn prepared_to_product(prepared: &PreparedShapes) -> Result<Vec<u8>, ShapesP
 ///
 /// The host bindings are [`HostBindings::empty`], which is what
 /// [`ShapesProfile::CORE`] is defined to need: every capability a product of that
-/// profile can exercise is declared by the shapes graph itself. A host that injects
-/// native SPARQL functions has a richer boundary available to it in
-/// `purrdf-shapes` directly; this is the seam the four bindings share, and none of
-/// them can carry a host closure across its own language boundary.
+/// profile can exercise is declared by the shapes graph itself. That is also all the
+/// four language bindings can use, because none of them can carry a host closure
+/// across its own language boundary. A Rust host that DOES inject native SPARQL
+/// functions or custom aggregates restores through
+/// [`admit_shapes_product_with_implementations`] instead.
 ///
 /// # Errors
 ///
 /// Any structural or identity [`ProductDimension`]. A
 /// [`StageId`](ProductDimension::StageId) refusal specifically means these bytes
 /// were written by another build of this format — [`rebuild_shapes_product`] is the
-/// path for it.
+/// path for it. A [`FunctionRegistry`](ProductDimension::FunctionRegistry) refusal
+/// on a product this process wrote means the product binds host implementations this
+/// call wires none of.
 pub fn admit_shapes_product(product: &[u8]) -> Result<PreparedShapes, ShapesProductError> {
     ShapesProduct::open(product)?.admit(&ShapesProfile::CORE, &HostBindings::empty())
+}
+
+/// **The common path, for a host that injects native implementations.** Open
+/// `product` and admit it against the registries this process wires and the build
+/// they come from.
+///
+/// This is the restore twin of [`prepared_to_product_with_implementations`], and the
+/// entry point a Rust host reaches for when its shapes graphs call native SPARQL
+/// functions or custom aggregates that no shapes graph can describe.
+///
+/// The four arguments after `product` are exactly what the codec binds for a host:
+/// the three registries' DECLARATIONS, plus `implementation_identity` — the opaque
+/// byte string naming the build those declarations resolve to. The identity is the
+/// half a fingerprint cannot supply: two builds can declare one IRI at one arity and
+/// compute different answers, so without it a product prepared against one host's
+/// natives would restore against another's and validate under semantics it was never
+/// compiled for. Pass the same value the product was prepared under; PurRDF never
+/// interprets the bytes.
+///
+/// A host that injects nothing passes [`admit_shapes_product`] instead, which is
+/// this call with three empty registries and an empty identity.
+///
+/// # Errors
+///
+/// [`FunctionRegistry`](ProductDimension::FunctionRegistry),
+/// [`AggregateRegistry`](ProductDimension::AggregateRegistry) or
+/// [`PropertyFunctionRegistry`](ProductDimension::PropertyFunctionRegistry) when the
+/// registries wired here, or the build they are identified as, are not the ones the
+/// product was prepared against; otherwise every dimension
+/// [`admit_shapes_product`] refuses on.
+pub fn admit_shapes_product_with_implementations(
+    product: &[u8],
+    functions: &UserFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    property_functions: &PropertyFunctionRegistry,
+    implementation_identity: &[u8],
+) -> Result<PreparedShapes, ShapesProductError> {
+    ShapesProduct::open(product)?.admit(
+        &ShapesProfile::CORE,
+        &HostBindings::new(
+            functions,
+            aggregates,
+            property_functions,
+            implementation_identity,
+        ),
+    )
 }
 
 /// **The common path, bound to the product the caller MEANT.** Open `product`,
@@ -676,10 +764,14 @@ fn render_component(value: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{
-        ShapesProductRefusal, admit_shapes_product, admit_shapes_product_expecting,
+        PreparedShapes, ShapesProductError, ShapesProductRefusal, admit_shapes_product,
+        admit_shapes_product_expecting, admit_shapes_product_with_implementations,
         certify_shapes_product, explain_shapes_product, pack_shapes_product,
-        pack_shapes_product_from_dataset, parse_identity_digest, rebuild_shapes_product,
+        pack_shapes_product_from_dataset, parse_identity_digest, prepared_to_product,
+        prepared_to_product_with_implementations, rebuild_shapes_product,
         rebuild_shapes_product_expecting, validate_with_rebuilt_shapes_product,
         validate_with_rebuilt_shapes_product_expecting, validate_with_shapes_product,
         validate_with_shapes_product_expecting,
@@ -831,6 +923,71 @@ mod tests {
     #[test]
     fn accepts_a_graph_with_no_imports_neighbour() {
         pack_shapes_product(SHAPES, None).expect("a graph with no owl:imports still packs");
+    }
+
+    // ── Host-injected implementations ───────────────────────────────────────────
+
+    /// The IRI the fixture host injects a native SPARQL function under.
+    const NATIVE_FN: &str = "http://example.org/native";
+
+    /// One build of the fixture host's native implementations. Opaque to PurRDF: a
+    /// real host uses whatever already tells its own builds apart.
+    const BUILD_A: &[u8] = b"example.org/host@1";
+
+    /// A SECOND build, wiring the identical declaration — same IRI, same arity, same
+    /// volatility — to a closure that answers differently. No declaration
+    /// fingerprint can separate the two, which is the whole reason the build is part
+    /// of the binding.
+    const BUILD_B: &[u8] = b"example.org/host@2";
+
+    /// A host registry carrying one native under [`NATIVE_FN`].
+    fn native_registry() -> purrdf_shapes::product::UserFunctionRegistry {
+        use purrdf_sparql_eval::{Arity, Volatility};
+
+        let mut registry = purrdf_shapes::product::UserFunctionRegistry::new();
+        registry.register_native(
+            NATIVE_FN,
+            Arity::Exact(1),
+            Volatility::Stable,
+            Arc::new(|args: &[&purrdf_core::TermValue]| {
+                Ok(args.first().map(|value| (*value).clone()))
+            }),
+        );
+        registry
+    }
+
+    /// The three registries a host wires at restore, declared exactly as the
+    /// fixture preparation's are.
+    fn host_wiring() -> (
+        purrdf_shapes::product::UserFunctionRegistry,
+        purrdf_shapes::product::AggregateRegistry,
+        purrdf_shapes::product::PropertyFunctionRegistry,
+    ) {
+        (
+            native_registry(),
+            purrdf_shapes::product::AggregateRegistry::new(),
+            purrdf_shapes::product::PropertyFunctionRegistry::new(),
+        )
+    }
+
+    /// The fixture shapes graph, prepared with the host's native wired into it.
+    fn prepared_with_native() -> PreparedShapes {
+        let dataset = parse_turtle_to_dataset(SHAPES, None).expect("the fixture Turtle parses");
+        let mut shapes = purrdf_shapes::shapes::from_dataset_with_base(
+            &dataset,
+            None,
+            &extract_prefixes(SHAPES),
+            None,
+            None,
+        )
+        .expect("the fixture shapes parse");
+        shapes.functions = Arc::new(native_registry());
+        PreparedShapes::new(Arc::new(shapes))
+    }
+
+    /// Write the native-injecting preparation out, bound to `build`.
+    fn pack_with_native(build: &[u8]) -> Result<Vec<u8>, ShapesProductError> {
+        prepared_to_product_with_implementations(&prepared_with_native(), build)
     }
 
     /// A second shapes graph, over different classes, so the two products genuinely
@@ -1022,6 +1179,117 @@ mod tests {
             crate::report_to_sarif_string(&rebuilt_report, &SarifOptions::default()),
             crate::report_to_sarif_string(&admitted_report, &SarifOptions::default()),
         );
+    }
+
+    /// The build of a host's native implementations is part of a product's binding,
+    /// and a restore that names a DIFFERENT build is refused rather than executed
+    /// against semantics the product was never compiled for.
+    ///
+    /// The two hosts here are indistinguishable by every fact a registry can state
+    /// about itself: one IRI, one arity, one volatility, two closures that answer
+    /// differently. A binding over declarations alone would admit the second host's
+    /// registry for a product prepared against the first's and validate green — the
+    /// silent wrong answer the whole codec exists to rule out — so this is the
+    /// mismatch the implementation identity closes, executed rather than asserted.
+    #[test]
+    fn refuses_a_restore_under_another_implementation_build() {
+        let product = pack_with_native(BUILD_A).expect("a named injected population packs");
+
+        let (functions, aggregates, relations) = host_wiring();
+        let refusal = admit_shapes_product_with_implementations(
+            &product,
+            &functions,
+            &aggregates,
+            &relations,
+            BUILD_B,
+        )
+        .expect_err("another build of the same declarations is another host");
+        assert_eq!(refusal.dimension(), ProductDimension::FunctionRegistry);
+        assert!(refusal.message().contains("implementation identity"));
+
+        // The gap this closes: a host that wires nothing at all is refused too, so
+        // the binding is not satisfiable by simply declining to name a build.
+        assert_eq!(
+            admit_shapes_product(&product)
+                .expect_err("the injected population is part of the binding")
+                .dimension(),
+            ProductDimension::FunctionRegistry,
+        );
+    }
+
+    /// The neighbouring VALID case: the build a product was PREPARED against
+    /// restores it, and answers exactly what the unbound common path answers for a
+    /// product with nothing injected. A binding nobody can satisfy would send every
+    /// host back to the unchecked restore it exists to replace.
+    #[test]
+    fn accepts_the_same_implementation_build_neighbour() {
+        let product = pack_with_native(BUILD_A).expect("a named injected population packs");
+
+        let (functions, aggregates, relations) = host_wiring();
+        let restored = admit_shapes_product_with_implementations(
+            &product,
+            &functions,
+            &aggregates,
+            &relations,
+            BUILD_A,
+        )
+        .expect("the build this product was prepared against restores it");
+
+        // The restored preparation answers the same report a product with no
+        // injected population reaches over the same data: naming a build changes
+        // which restores are refused, never what a restore answers.
+        let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(DATA)
+            .expect("the data graph parses");
+        let with_native = purrdf_shapes::engine::validate_dataset_with_shapes_graph(
+            data.as_ref(),
+            restored.shapes(),
+            None,
+        )
+        .expect("validated against the restored shapes");
+        let plain = admit_shapes_product(&pack_shapes_product(SHAPES, None).expect("shapes pack"))
+            .expect("the common path admits");
+        let without_native = purrdf_shapes::engine::validate_dataset_with_shapes_graph(
+            data.as_ref(),
+            plain.shapes(),
+            None,
+        )
+        .expect("validated against the plain shapes");
+        assert_eq!(
+            crate::report_to_sarif_string(&with_native, &SarifOptions::default()),
+            crate::report_to_sarif_string(&without_native, &SarifOptions::default()),
+        );
+    }
+
+    /// A preparation that injects native implementations and names no build of them
+    /// is refused at WRITE time, because nothing at restore could tell the host it
+    /// was prepared against from any other host declaring the same IRIs.
+    #[test]
+    fn refuses_packing_an_injected_population_with_no_build() {
+        let prepared = prepared_with_native();
+        let refusal = prepared_to_product(&prepared)
+            .expect_err("an injected population with no build is not writable");
+        assert_eq!(refusal.dimension(), ProductDimension::UnsupportedCapability);
+
+        // ...and so is an EMPTY identity, which is the spelling for "this host
+        // injects nothing" and therefore identifies nothing.
+        assert_eq!(
+            prepared_to_product_with_implementations(&prepared, b"")
+                .expect_err("an empty identity identifies nothing")
+                .dimension(),
+            ProductDimension::UnsupportedCapability,
+        );
+    }
+
+    /// The neighbouring VALID cases for the refusal above: the same injected
+    /// population WITH a build packs, and a preparation that injects nothing still
+    /// packs through the plain entry point every ordinary caller uses.
+    #[test]
+    fn accepts_packing_a_named_injected_population_neighbour() {
+        prepared_to_product_with_implementations(&prepared_with_native(), BUILD_A)
+            .expect("an injected population with a named build is writable");
+
+        let plain = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        admit_shapes_product(&plain).expect("the common path is unchanged");
     }
 
     /// A selector that is not 64 hexadecimal digits carries NO dimension, because no

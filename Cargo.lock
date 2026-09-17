@@ -1731,6 +1731,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-rdf",
  "purrdf-shapes",
+ "purrdf-sparql-eval",
  "serde",
  "serde_json",
 ]

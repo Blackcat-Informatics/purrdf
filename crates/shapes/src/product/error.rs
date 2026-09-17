@@ -106,6 +106,13 @@ pub enum ProductDimension {
     ClassCatalog,
     /// The product declares a capability this build does not implement. The
     /// bytes are well formed; this build simply cannot honour what they ask for.
+    ///
+    /// The writer refuses on this dimension too, for the mirror condition: a
+    /// preparation asking to be written as a product this build cannot state a
+    /// checkable binding for — a declared function a restore would not
+    /// reinstate, or host implementations the caller supplied no identity for.
+    /// In both directions the bytes are not the problem; what cannot be honoured
+    /// is the promise they would make.
     UnsupportedCapability,
     /// A structure nests deeper than the decoder's fixed depth ceiling. The
     /// ceiling exists so that untrusted bytes cannot drive the decoder into

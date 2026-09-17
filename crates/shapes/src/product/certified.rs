@@ -101,7 +101,13 @@ impl CertifiedParts {
         let shapes = Arc::new(shapes);
         let prepared = PreparedShapes::new(Arc::clone(&shapes));
         let classes = prepared.class_catalog();
-        identity::check_restored_identity(declared, &shapes, host.property_functions(), &classes)?;
+        identity::check_restored_identity(
+            declared,
+            &shapes,
+            host.property_functions(),
+            host.implementation_identity(),
+            &classes,
+        )?;
         Ok(Self { prepared })
     }
 

@@ -147,6 +147,12 @@ zero host-injected dependencies — and a caller cannot mint a profile of its ow
 because a profile a caller can spell would be a claim about a product rather
 than a fact about it.
 
+"Zero host-injected dependencies" is a statement about what a product *needs*,
+not a ban on host wiring. A Rust host that injects native SPARQL functions or
+custom aggregates packs and restores through the entry points described in
+[Host-injected implementations](#host-injected-implementations); every other
+caller, and every non-Rust binding, uses the plain path above.
+
 ## What a product carries, and what it does not
 
 A product carries three sections, always all three:
@@ -381,6 +387,68 @@ admits nothing. Holding the resulting view is a statement about framing, never
 about fitness, which is exactly what makes reading a refused product's declared
 identity useful.
 
+## Host-injected implementations
+
+Everything above passes `HostBindings::empty()`, which is what a product of
+`ShapesProfile::CORE` needs: every capability such a product exercises is
+declared by the shapes graph itself. A Rust host may still wire native SPARQL
+functions or custom aggregates of its own, and when it does, the product binds
+**two** facts about that host rather than one:
+
+* the registries' **declarations** — each injected entry's IRI, arity and
+  volatility — which is all a fingerprint reproducible in another process can
+  ever cover; and
+* an **implementation identity**: an opaque byte string the caller uses to name
+  the build those declarations resolve to, such as a release version or a commit
+  digest.
+
+The second is not belt-and-braces. Two builds of one host can register the same
+IRI to two different closures that declare identical arity and volatility and
+compute different answers — indistinguishable by every fact a registry can state
+about itself. A binding over declarations alone would admit a product prepared
+against one build under the other and validate green, which is the silent wrong
+answer this codec exists to rule out.
+
+So a preparation whose injected population is not empty **cannot be packed
+without an identity at all**: the writer refuses on `unsupported-capability`
+rather than emitting a product whose host half nothing could check. And a
+restore that supplies the same declarations under a different identity is
+refused on the registry dimension that carries it.
+
+```rust,ignore
+use purrdf::validate::{
+    admit_shapes_product_with_implementations, prepared_to_product_with_implementations,
+};
+
+// The byte string that tells this build of the host's natives apart from every
+// other build of them. PurRDF never interprets it.
+const BUILD: &[u8] = b"example.org/host@1";
+
+// `prepared` carries the host's natives in `Shapes::functions`.
+let product = prepared_to_product_with_implementations(&prepared, BUILD)?;
+
+// ...and the restore names the same build, beside the registries it wires.
+let restored = admit_shapes_product_with_implementations(
+    &product,
+    &functions,
+    &aggregates,
+    &property_functions,
+    BUILD,
+)?;
+```
+
+What the mechanism does not do is verify the identity. PurRDF cannot read a
+host's machine code and confirm the bytes name it; the identity is the caller's
+claim about its own build, and what the codec enforces is that a restore
+claiming a *different* one stops at the boundary. A host that spells two
+different builds with one identity has told the binding they are the same build.
+
+An absent identity is the empty byte string, and it encodes as nothing at all:
+the three host rows stay the bare declaration fingerprints. That is why a
+product with nothing injected — which is every product the paths above write —
+is byte-identical to what a build that had never heard of implementation
+identities would produce.
+
 ## Corroborating a product
 
 ```console
@@ -484,11 +552,11 @@ which opens the product before it certifies anything.
 | `prefixes` | prepared against a different prefix map | pack and execute under the same prefixes — the map decides which IRI a prefixed name denotes |
 | `base` | prepared against a different base IRI | pack and execute under the same base — relative references resolve against it |
 | `vocabulary` | prepared under a different box-role vocabulary | supply the same vocabulary; PurRDF mints no vocabulary IRIs and there is no default to fall back on |
-| `function-registry` | prepared against a different SPARQL function registry | wire the same functions into the executing host |
-| `aggregate-registry` | prepared against a different custom-aggregate registry | wire the same aggregates into the executing host |
-| `property-function-registry` | prepared against a different property-function registry | wire the same relations into the executing host |
+| `function-registry` | prepared against a different SPARQL function registry, or against a different build of the host implementations behind it | wire the same functions into the executing host, under the same implementation identity |
+| `aggregate-registry` | prepared against a different custom-aggregate registry, or against a different build of the host implementations behind it | wire the same aggregates into the executing host, under the same implementation identity |
+| `property-function-registry` | prepared against a different property-function registry, or against a different build of the host implementations behind it | wire the same relations into the executing host, under the same implementation identity |
 | `class-catalog` | the pinned class analysis is not the one this build re-derives | re-pack with the build that will execute it |
-| `unsupported-capability` | well-formed bytes asking for something this build cannot honour | see the message — a declared function nothing in the model reaches, or a decode larger than the scratch ceiling in force |
+| `unsupported-capability` | well-formed bytes asking for something this build cannot honour, or a preparation this build will not write a product for | see the message — a declared function nothing in the model reaches, a decode larger than the scratch ceiling in force, or host implementations the packer was given no identity for |
 | `depth-limit` | a structure nests past the decoder's fixed ceiling | re-pack from a shapes graph this build parses; the ceiling is a stack guard, not a semantic limit |
 | `malformed` | structurally invalid in a way no other dimension names | discard and re-pack |
 

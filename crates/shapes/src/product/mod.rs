@@ -18,7 +18,10 @@
 //!
 //! # The surface
 //!
-//! [`PreparedShapes::to_product`] writes a preparation out;
+//! [`PreparedShapes::to_product`] writes a preparation out — or
+//! [`PreparedShapes::to_product_with_implementation_identity`], for the one
+//! preparation it refuses: the one that injects host implementations, which it
+//! cannot bind without the caller naming the build behind them;
 //! [`ShapesProduct::open`] performs the envelope's own integrity checks and hands
 //! back a [`ShapesProductView`] that can be INSPECTED without being admitted; and
 //! the view's two consuming methods are the two ways those bytes become a
@@ -129,7 +132,14 @@ use std::sync::Arc;
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactError, ArtifactSpec, ArtifactView, Identity};
 use purrdf_core::governor::{ResourceDimension, TrippedGovernor};
 use purrdf_core::ir::pack::bits::{read_varint, write_varint};
-use purrdf_sparql_eval::{AggregateRegistry, PropertyFunctionRegistry, UserFunctionRegistry};
+/// The three registry types [`HostBindings::new`] binds, re-exported here.
+///
+/// A caller wiring host implementations into a restore has to NAME these types, and
+/// the boundary that asks for them is this module. Re-exporting them means reaching
+/// for that capability costs a caller no dependency on the evaluator crate that
+/// happens to define them — the alternative is an entry point nobody can call
+/// without first discovering which internal crate to add.
+pub use purrdf_sparql_eval::{AggregateRegistry, PropertyFunctionRegistry, UserFunctionRegistry};
 
 use crate::engine::PreparedShapes;
 use crate::model::BoxRoleVocab;
@@ -231,10 +241,35 @@ impl ShapesProfile {
     ///
     /// That is a statement about what a product NEEDS, not a ban on host bindings.
     /// [`HostBindings::empty`] always suffices to restore a product of this
-    /// profile's own capabilities; a host that additionally wires custom
-    /// aggregates or native functions may still do so, and the product's
-    /// [`Identity`] binds whichever it was prepared against, so a restore under
-    /// different ones is refused rather than silently executed.
+    /// profile's own capabilities; a host that additionally wires custom aggregates
+    /// or native functions may still do so, and what the product's [`Identity`]
+    /// binds for that host is two facts in one row, neither of which stands alone:
+    ///
+    /// * the host registries' **declarations** — every injected entry's IRI, arity
+    ///   and volatility — which reproduce in any process from any
+    ///   equivalently-declared registry; and
+    /// * the **implementation identity** the preparing caller supplied
+    ///   ([`HostBindings::new`]'s fourth argument): an opaque byte string naming the
+    ///   build of the native code those declarations resolve to.
+    ///
+    /// Both halves are needed, because declarations alone cannot tell two
+    /// implementations apart. Two registries built independently can register the
+    /// same IRI to two different closures that declare identical arity and
+    /// volatility, compute different answers, and fingerprint identically; a
+    /// binding over declarations alone would admit a product under someone else's
+    /// semantics and validate green. So a preparation whose injected population is
+    /// NOT empty cannot be written without an implementation identity — the writer
+    /// refuses on [`ProductDimension::UnsupportedCapability`] rather than emitting a
+    /// product whose host half nothing could check — and a restore whose bindings
+    /// name a different one is refused on the registry dimension that disagreed,
+    /// rather than silently executed.
+    ///
+    /// The one thing that guarantee does NOT include is the honesty of the
+    /// identity itself: PurRDF cannot read a host's machine code and confirm that
+    /// the bytes name it. The identity is the caller's claim about its own build,
+    /// and what the codec enforces is that a restore claiming a different one stops
+    /// at the boundary. A host that spells two different builds with one identity
+    /// has told the binding they are the same build.
     ///
     /// What the profile genuinely excludes is the one binding no shapes graph can
     /// describe: a product of this profile is prepared against the EMPTY
@@ -267,6 +302,19 @@ impl ShapesProfile {
 /// entry point reads directly, so a restore that checked them and left the
 /// restored value's own empty registries in place would pass every check and then
 /// fail at evaluation with "no custom aggregate is registered".
+///
+/// # The fourth field is not a fourth registry
+///
+/// A registry can state its declarations and nothing more. Two registries built by
+/// two different builds can register one IRI to two different closures that declare
+/// the same arity and the same volatility, compute different answers, and produce
+/// the identical content fingerprint — so a binding assembled from the three
+/// registries alone would let a product prepared against one host's natives restore
+/// against another's and validate green. `implementation_identity` is the caller's
+/// answer to the question the registries cannot answer: *which build of the native
+/// code is behind these declarations?* It is opaque to PurRDF — a release version, a
+/// commit digest, a build id, whatever the host already uses to tell its own builds
+/// apart — and it is folded into the three host rows of the product's [`Identity`].
 #[derive(Debug, Clone, Copy)]
 pub struct HostBindings<'a> {
     /// The host's injected SPARQL function table.
@@ -275,22 +323,43 @@ pub struct HostBindings<'a> {
     aggregates: &'a AggregateRegistry,
     /// The host's property-function table.
     property_functions: &'a PropertyFunctionRegistry,
+    /// The caller's opaque name for the build of the native implementations behind
+    /// the three registries' injected declarations. EMPTY means "nothing injected
+    /// to identify".
+    implementation_identity: &'a [u8],
 }
 
 impl<'a> HostBindings<'a> {
-    /// Bind all three registries. Total by construction: there is no "unset"
-    /// spelling, because an absent registry and an empty one are the same fact and
-    /// a second spelling of it is a second branch nobody exercises.
+    /// Bind all three registries and the identity of the implementations behind
+    /// them. Total by construction: there is no "unset" spelling for any of the
+    /// four, because an absent registry and an empty one are the same fact, an
+    /// absent implementation identity and an empty one are the same fact, and a
+    /// second spelling of either is a second branch nobody exercises.
+    ///
+    /// `implementation_identity` is EMPTY exactly when this host injects nothing
+    /// that needs identifying, which is what [`empty`](Self::empty) passes. A
+    /// non-empty value is folded into the three host rows of a product's
+    /// [`Identity`], so a product prepared under one and restored under another is
+    /// refused on the registry dimension that disagreed. PurRDF never interprets the
+    /// bytes: any byte string a host can reproduce on both sides of the boundary is
+    /// a valid identity, and the empty one is the only value with a meaning of its
+    /// own.
+    ///
+    /// A **non-empty injected population with an empty identity is refused at write
+    /// time**, not best-effort bound — see
+    /// [`PreparedShapes::to_product`](crate::engine::PreparedShapes::to_product).
     #[must_use]
     pub const fn new(
         functions: &'a UserFunctionRegistry,
         aggregates: &'a AggregateRegistry,
         property_functions: &'a PropertyFunctionRegistry,
+        implementation_identity: &'a [u8],
     ) -> Self {
         Self {
             functions,
             aggregates,
             property_functions,
+            implementation_identity,
         }
     }
 
@@ -311,17 +380,32 @@ impl<'a> HostBindings<'a> {
     pub const fn property_functions(&self) -> &'a PropertyFunctionRegistry {
         self.property_functions
     }
+
+    /// The caller's opaque name for the build of the native implementations behind
+    /// these registries' injected declarations, or an EMPTY slice when this host
+    /// injects nothing that needs identifying.
+    #[must_use]
+    pub const fn implementation_identity(&self) -> &'a [u8] {
+        self.implementation_identity
+    }
 }
 
 impl HostBindings<'static> {
     /// A host that injects nothing — the value that suffices for every product of
-    /// [`ShapesProfile::CORE`].
+    /// [`ShapesProfile::CORE`] a caller wired nothing into.
+    ///
+    /// Exactly as cheap as three static references and an empty slice: it allocates
+    /// nothing, computes nothing, and the empty implementation identity encodes as
+    /// nothing at all, so a product restored under this value is bound by precisely
+    /// the rows a build that had never heard of implementation identities would have
+    /// written.
     #[must_use]
     pub const fn empty() -> Self {
         Self::new(
             &EMPTY_FUNCTIONS,
             &EMPTY_AGGREGATES,
             &EMPTY_PROPERTY_FUNCTIONS,
+            &[],
         )
     }
 }
@@ -638,16 +722,82 @@ impl PreparedShapes {
     /// writing a product that no `admit` could ever accept, moves a writer-side
     /// defect into a reader-side mystery at some later date on some other machine.
     ///
+    /// # A preparation that injects natives is written by the other entry point
+    ///
+    /// This one binds NO implementation identity, so it may only write a
+    /// preparation whose injected population is empty — no host natives in
+    /// `Shapes::functions`, no custom aggregates in `Shapes::aggregates`. A
+    /// preparation that does inject is refused here rather than written with a host
+    /// half nothing could check;
+    /// [`to_product_with_implementation_identity`](Self::to_product_with_implementation_identity)
+    /// is the entry point for it.
+    ///
     /// # Errors
     ///
     /// [`ProductDimension::Profile`] when `profile` is not the profile this build
     /// prepares; [`ProductDimension::UnsupportedCapability`] when the shapes graph
-    /// declares something the product format cannot represent;
+    /// declares something the product format cannot represent, or when the
+    /// preparation injects host implementations this entry point cannot identify;
     /// [`ProductDimension::DatasetIdentity`] when the shapes dataset's canonical
     /// identity cannot be established; [`ProductDimension::DepthLimit`] when the
     /// model nests past the codec's ceiling; [`ProductDimension::Malformed`] when
     /// the model is internally inconsistent.
     pub fn to_product(&self, profile: &ShapesProfile) -> Result<Vec<u8>, ShapesProductError> {
+        self.to_product_bound(profile, &[])
+    }
+
+    /// Write this preparation out as a prepared product, binding it to the build of
+    /// the host implementations it was prepared against.
+    ///
+    /// `implementation_identity` is the opaque byte string the caller uses to tell
+    /// its own builds of native SPARQL functions and custom aggregates apart — a
+    /// release version, a commit digest, a build id. It is folded into the product's
+    /// [`Identity`] alongside those registries' declarations, so a restore that
+    /// supplies the same declarations under a DIFFERENT identity is refused rather
+    /// than executed against semantics the product was never compiled for. See
+    /// [`HostBindings::new`], whose fourth argument is the same value on the restore
+    /// side, and [`ShapesProfile::CORE`] for why declarations alone are not enough.
+    ///
+    /// The identity must be non-empty. An empty one is the spelling for "this host
+    /// injects nothing", which is what [`to_product`](Self::to_product) already
+    /// means, and a caller reaching for THIS entry point is stating the opposite.
+    ///
+    /// # Errors
+    ///
+    /// [`ProductDimension::UnsupportedCapability`] when `implementation_identity` is
+    /// empty, plus every dimension [`to_product`](Self::to_product) refuses on.
+    pub fn to_product_with_implementation_identity(
+        &self,
+        profile: &ShapesProfile,
+        implementation_identity: &[u8],
+    ) -> Result<Vec<u8>, ShapesProductError> {
+        if implementation_identity.is_empty() {
+            return Err(ShapesProductError::new(
+                ProductDimension::UnsupportedCapability,
+                "this preparation was asked to bind an EMPTY implementation identity, which is \
+                 the spelling for a host that injects nothing and therefore identifies nothing; \
+                 supply the byte string that tells this host's build of its native functions and \
+                 aggregates apart from every other build of them, or write the product with \
+                 `to_product`, which states that no host implementations are bound at all",
+            ));
+        }
+        self.to_product_bound(profile, implementation_identity)
+    }
+
+    /// The ONE writer, with the implementation identity as its only variable.
+    ///
+    /// [`to_product`](Self::to_product) and
+    /// [`to_product_with_implementation_identity`](Self::to_product_with_implementation_identity)
+    /// are two entry points over this body rather than two bodies, exactly as
+    /// `admit` and `admit_expecting` are on the reader's side: the writer still has
+    /// one path, writes every section on every build, and offers no option a caller
+    /// can set wrong — the second entry point adds a value to the binding, not a
+    /// shape to the container.
+    fn to_product_bound(
+        &self,
+        profile: &ShapesProfile,
+        implementation_identity: &[u8],
+    ) -> Result<Vec<u8>, ShapesProductError> {
         if profile.id() != identity::PROFILE_ID {
             return Err(ShapesProductError::new(
                 ProductDimension::Profile,
@@ -669,6 +819,29 @@ impl PreparedShapes {
         let restorable = certified::assemble_functions(shapes, &HostBindings::empty())?;
         certified::verify_declared_functions(&shapes.functions, &restorable)?;
 
+        // A host half nothing could check is not written at all. The three host rows
+        // bind DECLARATIONS, and two builds can declare one IRI identically while
+        // computing different answers, so a product that injects natives and names
+        // no build of them would restore against any host that happened to declare
+        // the same shapes — validating green under semantics it was never compiled
+        // for. `UnsupportedCapability` is the dimension for it: the bytes would be
+        // well formed and the preparation is representable; what this writer cannot
+        // honour is a binding whose host half is unfalsifiable.
+        if implementation_identity.is_empty()
+            && !identity::injected_population_is_empty(shapes, &EMPTY_PROPERTY_FUNCTIONS)?
+        {
+            return Err(ShapesProductError::new(
+                ProductDimension::UnsupportedCapability,
+                "this preparation injects host implementations — native SPARQL functions, custom \
+                 aggregates, or both — and names no build of them, so nothing at restore could \
+                 tell the host it was prepared against from any other host declaring the same \
+                 IRIs at the same arities; write it with \
+                 `to_product_with_implementation_identity`, passing the byte string that \
+                 identifies this build of those implementations, or prepare the shapes graph \
+                 with no injected functions or aggregates at all",
+            ));
+        }
+
         let ast_bytes = ast::encode_ast(shapes)?;
         let dataset_bytes = dataset::encode_dataset(shapes.dataset())?;
         // The PRODUCER certifies; the consumer trusts the digest chain. This is the
@@ -682,6 +855,7 @@ impl PreparedShapes {
             // relations are wiring no shapes graph can describe. See
             // `ShapesProfile::CORE`.
             &EMPTY_PROPERTY_FUNCTIONS,
+            implementation_identity,
             &self.class_catalog(),
         )?;
 
@@ -916,6 +1090,7 @@ impl<'a> ShapesProductView<'a> {
             host.functions(),
             host.aggregates(),
             host.property_functions(),
+            host.implementation_identity(),
         )?;
         self.refuse_ungovernable_decode()?;
 

@@ -69,9 +69,10 @@ pub use entail::entail_to_ntriples_string;
 pub use model::{Level, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
 pub use product::{
     ShapesProductRefusal, admit_shapes_product, admit_shapes_product_expecting,
-    certify_shapes_product, explain_shapes_product, pack_shapes_product,
-    pack_shapes_product_from_dataset, parse_identity_digest, prepared_to_product,
-    rebuild_shapes_product, rebuild_shapes_product_expecting, validate_with_rebuilt_shapes_product,
+    admit_shapes_product_with_implementations, certify_shapes_product, explain_shapes_product,
+    pack_shapes_product, pack_shapes_product_from_dataset, parse_identity_digest,
+    prepared_to_product, prepared_to_product_with_implementations, rebuild_shapes_product,
+    rebuild_shapes_product_expecting, validate_with_rebuilt_shapes_product,
     validate_with_rebuilt_shapes_product_expecting, validate_with_shapes_product,
     validate_with_shapes_product_expecting,
 };

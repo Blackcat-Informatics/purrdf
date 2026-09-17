@@ -55,9 +55,9 @@
 //! | 4 | the profile id ([`PROFILE_ID`]) | `profile` | [`Profile`] |
 //! | 5 | the box-role vocabulary, **key-sorted** | `box-role-vocab` | [`Vocabulary`] |
 //! | 6 | user functions, [`FnPopulation::Declared`] | `user-functions-declared` | [`FunctionRegistry`] |
-//! | 7 | user functions, [`FnPopulation::Injected`] | `user-functions-injected` | [`FunctionRegistry`] |
-//! | 8 | the custom-aggregate registry | `aggregate-registry` | [`AggregateRegistry`] |
-//! | 9 | the property-function registry | `property-function-registry` | [`PropertyFunctionRegistry`] |
+//! | 7 | user functions, [`FnPopulation::Injected`], + the implementation identity | `user-functions-injected` | [`FunctionRegistry`] |
+//! | 8 | the custom-aggregate registry, + the implementation identity | `aggregate-registry` | [`AggregateRegistry`] |
+//! | 9 | the property-function registry, + the implementation identity | `property-function-registry` | [`PropertyFunctionRegistry`] |
 //! | 10 | the class catalog's digest | `class-catalog` | [`ClassCatalog`] |
 //!
 //! Rows 2 and 5 are sorted because both sources are maps whose *order* is not part
@@ -72,6 +72,53 @@
 //! half is something only its host can wire. One digest over the merged registry
 //! would be unreproducible for the consumer and unusable as a requirement
 //! statement; see [`purrdf_sparql_eval::user_fn::FnPopulation`].
+//!
+//! # Rows 7, 8 and 9 carry a second half: WHICH implementations
+//!
+//! The three host rows are content fingerprints of DECLARATIONS — an entry's IRI,
+//! its arity, its volatility, the metadata a registry can state about itself. That
+//! is all a fingerprint reproducible in another process can ever be, and
+//! `purrdf_sparql_eval`'s own registry-identity documentation states the limit
+//! plainly: two registries built independently can register the same IRI to two
+//! DIFFERENT trait-object implementations that declare identically, and no
+//! declaration digest can tell them apart. A binding built from declarations alone
+//! would therefore admit a product under a same-named, same-arity,
+//! differently-behaving native and validate green under someone else's semantics —
+//! the silent wrong answer this whole codec exists to rule out, arriving through
+//! the one door a fingerprint cannot guard.
+//!
+//! The same documentation states the caller's half of the obligation: a caller
+//! crossing a process boundary binds declarations and must pair that binding with
+//! whatever separately identifies the implementations BEHIND those declarations.
+//! `implementation_identity` is that pairing — an opaque caller-chosen byte string
+//! naming the build of the native code being wired — and
+//! [`bind_implementations`] folds it into each of the three host rows.
+//!
+//! It is folded into all three rather than carried as a row of its own because the
+//! three registries are wired by ONE host build: the natives, the aggregates and
+//! the relations come out of the same binary, so an identity that moved for one of
+//! them has moved for all three, and a row a restore could compare independently of
+//! the registry it qualifies would be a fact about nothing. Folding also keeps the
+//! refusal attributable — a mismatch still reports the registry dimension whose row
+//! disagreed first, rather than a twelfth dimension meaning "something about your
+//! host".
+//!
+//! An ABSENT identity (the empty byte string, which is what
+//! [`HostBindings::empty`](super::HostBindings::empty) carries) encodes as nothing
+//! at all: the row is the bare fingerprint, byte for byte what a build that had
+//! never heard of implementation identities would write. That is what keeps every
+//! product with no injected population — which is every product of
+//! [`ShapesProfile::CORE`](super::ShapesProfile::CORE) a host wires nothing into —
+//! encoding exactly as before. A product whose injected population is NOT empty
+//! cannot be written without one at all; see
+//! [`injected_population_is_empty`] and the writer's refusal.
+//!
+//! What the identity does NOT do is verify itself. PurRDF cannot read a host's
+//! machine code and confirm the bytes name it; the identity is the caller's claim
+//! about its own build, and the codec's guarantee is exactly and only that a
+//! restore claiming a DIFFERENT one is refused. A host that spells two different
+//! builds with one identity has told the binding they are the same build, and the
+//! binding believes it.
 //!
 //! # Row 5 is not optional garnish
 //!
@@ -202,6 +249,14 @@ const COMPONENTS: [(&str, ProductDimension); 11] = [
     ("class-catalog", ProductDimension::ClassCatalog),
 ];
 
+/// The positions of the three HOST-supplied rows in [`COMPONENTS`]: the injected
+/// user functions, the custom aggregates and the property functions.
+///
+/// Named by index against the one table that also drives [`assemble`], so the three
+/// sites that build these rows — the identity assembly, the cheap restore check and
+/// the emptiness test — can never come to mean other rows.
+const HOST_POSITIONS: [usize; 3] = [7, 8, 9];
+
 /// The tag byte an absent structured component value opens with. Distinct from
 /// [`PRESENT`] so `None` can never encode like a present-but-empty value.
 const ABSENT: u8 = 0;
@@ -230,6 +285,30 @@ const PRESENT_PREFIX: &str = "(present) ";
 fn push_part(out: &mut Vec<u8>, part: &[u8]) {
     write_varint(out, part.len() as u64);
     out.extend_from_slice(part);
+}
+
+/// Qualify one host registry's declaration fingerprint with the caller's
+/// implementation identity — the second half of rows 7, 8 and 9.
+///
+/// `fingerprint` is the registry's 32-byte content digest and
+/// `implementation_identity` is the opaque byte string the caller uses to name the
+/// build of the native code behind those declarations. An EMPTY identity is the
+/// absent one and appends nothing, so a product wired to no host implementations
+/// encodes each row as the bare digest — byte for byte what a build that bound
+/// declarations alone would write.
+///
+/// A present identity is appended through [`push_part`], which makes the pair
+/// injective in both halves and makes the two spellings impossible to confuse: the
+/// digest is a fixed 32 bytes, [`push_part`] writes at least one length byte, and an
+/// identity that is present is non-empty by definition — so a qualified row is never
+/// 32 bytes long and can never be read as an unqualified one.
+fn bind_implementations(fingerprint: &[u8], implementation_identity: &[u8]) -> Vec<u8> {
+    let mut out = fingerprint.to_vec();
+    if implementation_identity.is_empty() {
+        return out;
+    }
+    push_part(&mut out, implementation_identity);
+    out
 }
 
 /// Encode an optional single string as PRINTABLE text: [`ABSENT_MARKER`], or
@@ -358,8 +437,10 @@ pub(crate) fn class_catalog_digest(catalog: &ClassCatalog) -> ContentDigest {
 /// (`super::dataset::certify_dataset`); `shapes` supplies the shapes-graph IRI, the
 /// parse provenance, the box-role vocabulary and the two registries a shapes graph
 /// carries; `property_functions` is the host-supplied relation table, which no
-/// shapes graph can describe; and `classes` is the derived class analysis
-/// (`crate::engine::PreparedShapes::class_catalog`).
+/// shapes graph can describe; `implementation_identity` is the caller's opaque name
+/// for the build of the native implementations behind the injected declarations,
+/// empty when there are none (see the [module docs](self)); and `classes` is the
+/// derived class analysis (`crate::engine::PreparedShapes::class_catalog`).
 ///
 /// # Errors
 ///
@@ -373,14 +454,53 @@ pub(crate) fn build_identity(
     dataset: &PackDigest,
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<Identity, ShapesProductError> {
     assemble(
         dataset.as_bytes().as_slice(),
         shapes,
         property_functions,
+        implementation_identity,
         classes,
     )
+}
+
+/// Whether the preparation about to be written injects NOTHING a host would have to
+/// wire — no native functions, no custom aggregates, no host relations.
+///
+/// Defined the way the binding itself defines it, rather than by probing the three
+/// registries' internals: the injected population is empty exactly when the three
+/// host rows are the rows the canonical EMPTY registries produce. A future registry
+/// kind, or a future entry a fingerprint learns to distinguish, therefore reaches
+/// this answer without anyone remembering to add a branch — and the answer can never
+/// disagree with the rows [`assemble`] actually writes, because both come out of
+/// [`host_components`].
+///
+/// The writer asks this to decide whether a product may be written with NO
+/// implementation identity; see [`PreparedShapes::to_product`](crate::engine::PreparedShapes::to_product).
+///
+/// # Errors
+///
+/// The registry dimension whose fingerprint could not be computed, exactly as
+/// [`build_identity`] reports it.
+pub(crate) fn injected_population_is_empty(
+    shapes: &Shapes,
+    property_functions: &PropertyFunctionRegistry,
+) -> Result<bool, ShapesProductError> {
+    let wired = host_components(
+        &shapes.functions,
+        &shapes.aggregates,
+        property_functions,
+        &[],
+    )?;
+    let nothing = host_components(
+        &UserFunctionRegistry::EMPTY,
+        &AggregateRegistry::EMPTY,
+        &PropertyFunctionRegistry::EMPTY,
+        &[],
+    )?;
+    Ok(wired == nothing)
 }
 
 /// Compare a decoded identity against one rebuilt from the RESTORED shapes graph,
@@ -416,13 +536,20 @@ pub(crate) fn check_restored_identity(
     declared: &Identity,
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<(), ShapesProductError> {
     // An identity whose row 0 carries another label has already failed the format's
     // own rules; the empty value below lands as a position-0 disagreement, which
     // `check_identity` reports under `DatasetIdentity`. Fail-closed, never skipped.
     let declared_dataset = declared.component(COMPONENTS[0].0).unwrap_or(&[]);
-    let actual = assemble(declared_dataset, shapes, property_functions, classes)?;
+    let actual = assemble(
+        declared_dataset,
+        shapes,
+        property_functions,
+        implementation_identity,
+        classes,
+    )?;
     check_identity(declared, &actual)
 }
 
@@ -431,7 +558,10 @@ pub(crate) fn check_restored_identity(
 ///
 /// Rows 7, 8 and 9 are the only ones a caller can get wrong by wiring their own
 /// process differently — every other row is a property of the product's own
-/// content, and re-deriving those means decoding the model first.
+/// content, and re-deriving those means decoding the model first. Each of the three
+/// carries the host's declarations AND the identity it gave the implementations
+/// behind them, so a host that wired a same-named, same-arity native out of a
+/// DIFFERENT build is refused here too, not merely one that wired a different IRI.
 /// [`check_restored_identity`] covers all eleven and is what actually binds the
 /// restore; this runs first so a host that supplied the wrong registries is told so
 /// without paying for a dataset restore and an AST decode it is going to discard.
@@ -452,43 +582,72 @@ pub(crate) fn check_host_bindings(
     functions: &UserFunctionRegistry,
     aggregates: &AggregateRegistry,
     property_functions: &PropertyFunctionRegistry,
+    implementation_identity: &[u8],
 ) -> Result<(), ShapesProductError> {
-    // Positions 7, 8 and 9 of `COMPONENTS` — named by index against the one table
-    // that also drives `assemble`, so these can never come to mean other rows.
-    let host: [(usize, Vec<u8>); 3] = [
-        (
-            7,
-            fingerprint(
-                user_fn::content_fingerprint(functions, FnPopulation::Injected),
-                ProductDimension::FunctionRegistry,
-                "host-injected SPARQL function registry",
-            )?,
-        ),
-        (
-            8,
-            fingerprint(
-                agg_fn::content_fingerprint(aggregates),
-                ProductDimension::AggregateRegistry,
-                "custom-aggregate registry",
-            )?,
-        ),
-        (
-            9,
-            fingerprint(
-                property_function_content_fingerprint(property_functions),
-                ProductDimension::PropertyFunctionRegistry,
-                "property-function registry",
-            )?,
-        ),
-    ];
+    let host = host_components(
+        functions,
+        aggregates,
+        property_functions,
+        implementation_identity,
+    )?;
 
-    for (position, computed) in host {
+    for (position, computed) in HOST_POSITIONS.into_iter().zip(host.iter()) {
         let (label, dimension) = COMPONENTS[position];
         if declared.component(label) != Some(computed.as_slice()) {
             return Err(ShapesProductError::new(dimension, fix_for(dimension)));
         }
     }
     Ok(())
+}
+
+/// The three HOST-supplied component values — rows 7, 8 and 9 of [`COMPONENTS`], in
+/// that order — each a registry's declaration fingerprint qualified by the caller's
+/// implementation identity.
+///
+/// One body for all three sites that need these rows: [`assemble`] writes them into
+/// an identity, [`check_host_bindings`] compares them against a declared one, and
+/// [`injected_population_is_empty`] compares them against the empty registries'. A
+/// second transcription of "what a host row is" is precisely how the writer and the
+/// restore check would drift into two answers about one product.
+///
+/// # Errors
+///
+/// [`ProductDimension::FunctionRegistry`],
+/// [`ProductDimension::AggregateRegistry`] or
+/// [`ProductDimension::PropertyFunctionRegistry`] when the corresponding registry
+/// cannot state its own declarations.
+fn host_components(
+    functions: &UserFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    property_functions: &PropertyFunctionRegistry,
+    implementation_identity: &[u8],
+) -> Result<[Vec<u8>; 3], ShapesProductError> {
+    Ok([
+        bind_implementations(
+            &fingerprint(
+                user_fn::content_fingerprint(functions, FnPopulation::Injected),
+                ProductDimension::FunctionRegistry,
+                "host-injected SPARQL function registry",
+            )?,
+            implementation_identity,
+        ),
+        bind_implementations(
+            &fingerprint(
+                agg_fn::content_fingerprint(aggregates),
+                ProductDimension::AggregateRegistry,
+                "custom-aggregate registry",
+            )?,
+            implementation_identity,
+        ),
+        bind_implementations(
+            &fingerprint(
+                property_function_content_fingerprint(property_functions),
+                ProductDimension::PropertyFunctionRegistry,
+                "property-function registry",
+            )?,
+            implementation_identity,
+        ),
+    ])
 }
 
 /// Corroborate a CERTIFIED dataset digest against the one the product's identity
@@ -532,9 +691,16 @@ fn assemble(
     dataset: &[u8],
     shapes: &Shapes,
     property_functions: &PropertyFunctionRegistry,
+    implementation_identity: &[u8],
     classes: &ClassCatalog,
 ) -> Result<Identity, ShapesProductError> {
     let provenance = shapes.provenance();
+    let [injected_functions, aggregates, relations] = host_components(
+        &shapes.functions,
+        &shapes.aggregates,
+        property_functions,
+        implementation_identity,
+    )?;
 
     // In the fixed order of `COMPONENTS`, which is the order documented at the top
     // of this module and pinned by `identity_component_order_is_the_documented_one`.
@@ -550,21 +716,9 @@ fn assemble(
             ProductDimension::FunctionRegistry,
             "SPARQL function registry's declared population",
         )?,
-        fingerprint(
-            user_fn::content_fingerprint(&shapes.functions, FnPopulation::Injected),
-            ProductDimension::FunctionRegistry,
-            "SPARQL function registry's host-injected population",
-        )?,
-        fingerprint(
-            agg_fn::content_fingerprint(&shapes.aggregates),
-            ProductDimension::AggregateRegistry,
-            "custom-aggregate registry",
-        )?,
-        fingerprint(
-            property_function_content_fingerprint(property_functions),
-            ProductDimension::PropertyFunctionRegistry,
-            "property-function registry",
-        )?,
+        injected_functions,
+        aggregates,
+        relations,
         class_catalog_digest(classes).as_bytes().to_vec(),
     ];
 
@@ -698,19 +852,24 @@ fn fix_for(dimension: ProductDimension) -> &'static str {
         }
         ProductDimension::FunctionRegistry => {
             "this product was prepared against a different SPARQL function registry than the one \
-             supplied for its execution; wire the SAME functions into the executing host, \
-             because the registry is what decides how a function IRI resolves"
+             supplied for its execution; wire the SAME functions into the executing host, under \
+             the SAME implementation identity, because the registry is what decides how a \
+             function IRI resolves and the implementation identity is what says which build of \
+             the native code stands behind it"
         }
         ProductDimension::AggregateRegistry => {
             "this product was prepared against a different custom-aggregate registry than the \
              one supplied for its execution; wire the SAME aggregates into the executing host, \
-             because the registry is what an `AGG(<iri>, …)` call resolves against"
+             under the SAME implementation identity, because the registry is what an \
+             `AGG(<iri>, …)` call resolves against and the implementation identity is what says \
+             which build of the native code stands behind it"
         }
         ProductDimension::PropertyFunctionRegistry => {
             "this product was prepared against a different property-function registry than the \
              one supplied for its execution; wire the SAME relations into the executing host, \
-             because the registry is what decides which predicates are calls rather than \
-             ordinary triple patterns"
+             under the SAME implementation identity, because the registry is what decides which \
+             predicates are calls rather than ordinary triple patterns and the implementation \
+             identity is what says which build of the native code stands behind them"
         }
         ProductDimension::ClassCatalog => {
             "this product pinned a class analysis this build does not re-derive from the same \
@@ -891,15 +1050,33 @@ mod tests {
         .expect("re-parse the retained dataset")
     }
 
-    /// The identity of `shapes` under an empty host property-function registry.
+    /// The identity of `shapes` under an empty host property-function registry and
+    /// no implementation identity — the shape every product with nothing injected
+    /// carries.
     fn identity_of(shapes: &Shapes) -> Identity {
         identity_with(shapes, &PropertyFunctionRegistry::new())
     }
 
     /// The identity of `shapes` under a caller-supplied property-function registry.
     fn identity_with(shapes: &Shapes, relations: &PropertyFunctionRegistry) -> Identity {
-        build_identity(&digest_of(shapes), shapes, relations, &catalog_of(shapes))
-            .expect("the fixture environment fingerprints")
+        identity_identified_by(shapes, relations, &[])
+    }
+
+    /// The identity of `shapes` under a caller-supplied property-function registry
+    /// and a caller-supplied implementation identity.
+    fn identity_identified_by(
+        shapes: &Shapes,
+        relations: &PropertyFunctionRegistry,
+        implementation_identity: &[u8],
+    ) -> Identity {
+        build_identity(
+            &digest_of(shapes),
+            shapes,
+            relations,
+            implementation_identity,
+            &catalog_of(shapes),
+        )
+        .expect("the fixture environment fingerprints")
     }
 
     /// Rebuild `identity` with the value at `position` replaced.
@@ -1268,6 +1445,153 @@ mod tests {
         assert_eq!(sole_divergence(&before, &after), 9);
     }
 
+    // ── The implementation identity ─────────────────────────────────────────────
+
+    /// The identity a caller gives its host implementations moves ALL THREE host
+    /// rows and nothing else. Two hosts that declare the same natives, aggregates
+    /// and relations out of two different builds must not share a binding — that is
+    /// the whole gap a declaration fingerprint cannot close.
+    #[test]
+    fn identity_differs_on_the_implementation_identity() {
+        let mut shapes = shapes_of(PLAIN_SHAPES);
+        shapes.functions = Arc::new(injected_functions());
+        let relations = relation_registry();
+
+        let left = identity_identified_by(&shapes, &relations, b"build-a");
+        let right = identity_identified_by(&shapes, &relations, b"build-b");
+
+        assert_ne!(
+            left.digest(),
+            right.digest(),
+            "two builds of the same declarations are two bindings",
+        );
+        let moved: Vec<usize> = left
+            .mismatches(&right)
+            .iter()
+            .filter_map(super::mismatch_position)
+            .collect();
+        assert_eq!(
+            moved,
+            vec![7, 8, 9],
+            "the three host rows carry the identity; no other row may move",
+        );
+    }
+
+    /// An ABSENT implementation identity is the empty byte string, and it encodes as
+    /// NOTHING: the three host rows are the bare declaration fingerprints, byte for
+    /// byte what a build binding declarations alone would have written.
+    ///
+    /// This is what keeps every product with nothing injected — which is every
+    /// product the common path writes — encoding exactly as before, and it is why
+    /// the frozen release artifact still opens.
+    #[test]
+    fn an_absent_implementation_identity_encodes_as_nothing() {
+        let shapes = shapes_of(PLAIN_SHAPES);
+        let identity = identity_of(&shapes);
+
+        for label in [
+            "user-functions-injected",
+            "aggregate-registry",
+            "property-function-registry",
+        ] {
+            let value = identity.component(label).expect("the row is present");
+            assert_eq!(
+                value.len(),
+                32,
+                "{label} must be the bare 32-byte fingerprint when nothing is identified",
+            );
+        }
+
+        // ...and the empty slice is the same fact as no identity at all, so there is
+        // exactly one spelling of "nothing injected" and no second branch.
+        assert_eq!(
+            identity.digest(),
+            identity_identified_by(&shapes, &PropertyFunctionRegistry::new(), b"").digest(),
+        );
+    }
+
+    /// A PRESENT identity can never be read as an absent one, whatever bytes the
+    /// caller chooses: the qualified row is a fixed 32-byte digest plus a
+    /// length-framed value, so it is never 32 bytes long.
+    ///
+    /// The neighbouring valid case is the one a mechanism this strict must not
+    /// break: two hosts naming the SAME build agree exactly, so an identity is a
+    /// binding and not a nonce.
+    #[test]
+    fn a_present_implementation_identity_cannot_forge_an_absent_one() {
+        let mut shapes = shapes_of(PLAIN_SHAPES);
+        shapes.functions = Arc::new(injected_functions());
+        let relations = PropertyFunctionRegistry::new();
+
+        for identity in [b"x".as_slice(), b"\x00".as_slice(), &[0u8; 64]] {
+            let built = identity_identified_by(&shapes, &relations, identity);
+            let row = built
+                .component("user-functions-injected")
+                .expect("the row is present");
+            assert_ne!(
+                row.len(),
+                32,
+                "a qualified row must never be readable as an unqualified one",
+            );
+        }
+
+        assert_eq!(
+            identity_identified_by(&shapes, &relations, b"build-a").digest(),
+            identity_identified_by(&shapes, &relations, b"build-a").digest(),
+            "the same build named twice is one binding, not two",
+        );
+    }
+
+    /// The injected population is empty exactly when nothing a host would have to
+    /// wire is present — and non-empty the moment a native or an aggregate is.
+    ///
+    /// The writer reads this to decide whether a product may be written with no
+    /// implementation identity at all, so an answer that drifted from the rows
+    /// `assemble` writes would either refuse a product nobody needed to identify or
+    /// emit one nothing could check.
+    #[test]
+    fn the_injected_population_is_empty_only_when_nothing_is_wired() {
+        let relations = PropertyFunctionRegistry::new();
+
+        let plain = shapes_of(PLAIN_SHAPES);
+        assert!(
+            super::injected_population_is_empty(&plain, &relations)
+                .expect("the fixture fingerprints"),
+            "a shapes graph nobody wired anything into injects nothing",
+        );
+
+        // A DECLARED function is the neighbouring valid case: it comes out of the
+        // shapes graph's own content and a restore rebuilds it, so it is not
+        // something a host has to identify.
+        let mut declared = shapes_of(PLAIN_SHAPES);
+        declared.functions = Arc::new(declared_functions());
+        assert!(
+            super::injected_population_is_empty(&declared, &relations)
+                .expect("the fixture fingerprints"),
+            "a declared function is rebuilt from the product, not wired by a host",
+        );
+
+        let mut native = shapes_of(PLAIN_SHAPES);
+        native.functions = Arc::new(injected_functions());
+        assert!(
+            !super::injected_population_is_empty(&native, &relations)
+                .expect("the fixture fingerprints"),
+        );
+
+        let mut aggregating = shapes_of(PLAIN_SHAPES);
+        aggregating.aggregates = Arc::new(aggregate_registry());
+        assert!(
+            !super::injected_population_is_empty(&aggregating, &relations)
+                .expect("the fixture fingerprints"),
+        );
+
+        assert!(
+            !super::injected_population_is_empty(&plain, &relation_registry())
+                .expect("the fixture fingerprints"),
+            "a host relation is wiring no shapes graph can describe",
+        );
+    }
+
     #[test]
     fn identity_differs_on_class_catalog() {
         // The catalog is an ARGUMENT, so a catalog derived from a different shape
@@ -1281,6 +1605,7 @@ mod tests {
             &digest_of(&shapes),
             &shapes,
             &PropertyFunctionRegistry::new(),
+            &[],
             &stale,
         )
         .expect("the fixture environment fingerprints");

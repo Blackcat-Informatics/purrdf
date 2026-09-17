@@ -54,6 +54,7 @@ use purrdf_shapes::product::{
 };
 use purrdf_shapes::shapes::{Shapes, from_dataset_with_config_and_graph};
 use purrdf_shapes::text_ingest::{extract_prefixes, parse_turtle_to_dataset};
+use purrdf_sparql_eval::user_fn::{self, FnPopulation};
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
     CustomAggregate, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
@@ -170,6 +171,17 @@ const RELATION_A: &str = "http://example.org/ns#relA";
 /// A second host relation IRI. See [`RELATION_A`].
 const RELATION_B: &str = "http://example.org/ns#relB";
 
+/// The implementation identity the host-injecting fixtures are prepared under: an
+/// opaque byte string standing in for whatever a real host uses to tell its own
+/// builds of its native code apart — a release version, a commit digest, a build id.
+const IMPL_A: &[u8] = b"example.org/host@1";
+
+/// A SECOND build of the very same declarations. Every native it wires declares the
+/// identical IRI, arity and volatility as [`IMPL_A`]'s, so no declaration
+/// fingerprint can tell the two apart — which is exactly the gap the implementation
+/// identity exists to close.
+const IMPL_B: &[u8] = b"example.org/host@2";
+
 // ── Parsing, preparing, restoring ──────────────────────────────────────────────
 
 /// Parse a shapes graph from text, under the prefix header the fixtures share.
@@ -187,10 +199,19 @@ fn product_of(body: &str) -> Vec<u8> {
     product_for(shapes_of(body))
 }
 
-/// Write a product for an already-parsed shapes graph.
+/// Write a product for an already-parsed shapes graph that injects NOTHING.
 fn product_for(shapes: Shapes) -> Vec<u8> {
     PreparedShapes::new(Arc::new(shapes))
         .to_product(&ShapesProfile::CORE)
+        .expect("the fixture is representable")
+}
+
+/// Write a product for an already-parsed shapes graph that a host injected native
+/// functions or custom aggregates into, binding it to the build of those
+/// implementations.
+fn product_for_host(shapes: Shapes, implementation_identity: &[u8]) -> Vec<u8> {
+    PreparedShapes::new(Arc::new(shapes))
+        .to_product_with_implementation_identity(&ShapesProfile::CORE, implementation_identity)
         .expect("the fixture is representable")
 }
 
@@ -1303,11 +1324,12 @@ fn accepts_vocabulary_neighbour() {
 // function-registry
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// A product prepared against a host that injects both natives.
+/// A product prepared against a host that injects both natives, out of the build
+/// [`IMPL_A`] names.
 fn two_native_product() -> Vec<u8> {
     let mut shapes = shapes_of(PLAIN_SHAPES);
     shapes.functions = Arc::new(natives(&[NATIVE_A, NATIVE_B]));
-    product_for(shapes)
+    product_for_host(shapes, IMPL_A)
 }
 
 /// Provoke: the host supplies one fewer native than the product was prepared with.
@@ -1317,7 +1339,7 @@ fn refusal_function_registry() -> ShapesProductError {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &two_native_product(),
-        &HostBindings::new(&fewer, &aggregates, &relations),
+        &HostBindings::new(&fewer, &aggregates, &relations, IMPL_A),
     )
     .expect_err("a host that lost a native is not the host this product was prepared against")
 }
@@ -1341,7 +1363,7 @@ fn accepts_function_registry_neighbour() {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &two_native_product(),
-        &HostBindings::new(&reordered, &aggregates, &relations),
+        &HostBindings::new(&reordered, &aggregates, &relations, IMPL_A),
     )
     .expect("the same natives in another order are the same registry");
 }
@@ -1350,11 +1372,12 @@ fn accepts_function_registry_neighbour() {
 // aggregate-registry
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// A product prepared against a host aggregate of arity one.
+/// A product prepared against a host aggregate of arity one, out of the build
+/// [`IMPL_A`] names.
 fn unary_aggregate_product() -> Vec<u8> {
     let mut shapes = shapes_of(PLAIN_SHAPES);
     shapes.aggregates = Arc::new(aggregates(Arity::Exact(1)));
-    product_for(shapes)
+    product_for_host(shapes, IMPL_A)
 }
 
 /// Provoke: the host's aggregate declares a different arity.
@@ -1364,7 +1387,7 @@ fn refusal_aggregate_registry() -> ShapesProductError {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &unary_aggregate_product(),
-        &HostBindings::new(&functions, &binary, &relations),
+        &HostBindings::new(&functions, &binary, &relations, IMPL_A),
     )
     .expect_err("an aggregate of another arity is another aggregate")
 }
@@ -1387,7 +1410,7 @@ fn accepts_aggregate_registry_neighbour() {
     let relations = PropertyFunctionRegistry::new();
     admit_with(
         &unary_aggregate_product(),
-        &HostBindings::new(&functions, &fresh, &relations),
+        &HostBindings::new(&functions, &fresh, &relations, IMPL_A),
     )
     .expect("a different instance declaring the same aggregate is the same registry");
 }
@@ -1416,7 +1439,7 @@ fn refusal_property_function_registry() -> ShapesProductError {
     let wrong = relations(&[RELATION_B]);
     admit_with(
         &relation_product(&[RELATION_A]),
-        &HostBindings::new(&functions, &aggregates, &wrong),
+        &HostBindings::new(&functions, &aggregates, &wrong, &[]),
     )
     .expect_err("a relation table declaring another IRI is another table")
 }
@@ -1435,7 +1458,7 @@ fn refuses_property_function_registry() {
     let wired = relations(&[RELATION_A]);
     let error = admit_with(
         &product_of(PLAIN_SHAPES),
-        &HostBindings::new(&functions, &aggregates, &wired),
+        &HostBindings::new(&functions, &aggregates, &wired, &[]),
     )
     .expect_err("a CORE product was not prepared against any host relation");
     assert_eq!(
@@ -1452,7 +1475,7 @@ fn accepts_property_function_registry_neighbour() {
     let reordered = relations(&[RELATION_B, RELATION_A]);
     admit_with(
         &relation_product(&[RELATION_A, RELATION_B]),
-        &HostBindings::new(&functions, &aggregates, &reordered),
+        &HostBindings::new(&functions, &aggregates, &reordered, &[]),
     )
     .expect("the same relations in another order are the same table");
 
@@ -1461,9 +1484,185 @@ fn accepts_property_function_registry_neighbour() {
     let fresh = PropertyFunctionRegistry::new();
     admit_with(
         &product_of(PLAIN_SHAPES),
-        &HostBindings::new(&functions, &aggregates, &fresh),
+        &HostBindings::new(&functions, &aggregates, &fresh, &[]),
     )
     .expect("a different but equally empty relation table must still admit");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// the implementation identity
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// [`PLAIN_SHAPES`] with two host natives wired into it — the preparation a host
+/// that injects implementations actually holds.
+///
+/// Built fresh on every call rather than cloned: `Shapes` owns registries full of
+/// `Arc<dyn Fn>` and is deliberately not `Clone`, and a test that needs both the
+/// prepared-side run and the product re-derives instead.
+fn native_plain_shapes() -> Shapes {
+    let mut shapes = shapes_of(PLAIN_SHAPES);
+    shapes.functions = Arc::new(natives(&[NATIVE_A, NATIVE_B]));
+    shapes
+}
+
+/// Provoke: the host declares every native the product requires, at the same
+/// arities and the same volatilities, out of a DIFFERENT build.
+///
+/// This is the case no declaration fingerprint can see. `IMPL_A` and `IMPL_B` wire
+/// registries that are indistinguishable by every fact a registry can state about
+/// itself, so without the implementation identity this restore would succeed and
+/// validate under semantics the product was never compiled against.
+fn refusal_implementation_identity() -> ShapesProductError {
+    let same_declarations = natives(&[NATIVE_A, NATIVE_B]);
+    let aggregates = AggregateRegistry::new();
+    let relations = PropertyFunctionRegistry::new();
+    admit_with(
+        &two_native_product(),
+        &HostBindings::new(&same_declarations, &aggregates, &relations, IMPL_B),
+    )
+    .expect_err("another build of the same declarations is another host")
+}
+
+#[test]
+fn refuses_another_implementation_build() {
+    let error = refusal_implementation_identity();
+    assert_eq!(
+        error.dimension(),
+        ProductDimension::FunctionRegistry,
+        "a host row disagreement is reported on the registry dimension that carries it",
+    );
+    assert!(
+        error.message().contains("implementation identity"),
+        "the refusal must name the half that moved, got {:?}",
+        error.message(),
+    );
+
+    // The gap this closes, stated as a fact rather than an argument: the two hosts
+    // are identical everywhere a declaration fingerprint can look.
+    let left = natives(&[NATIVE_A, NATIVE_B]);
+    let right = natives(&[NATIVE_A, NATIVE_B]);
+    assert_eq!(
+        user_fn::content_fingerprint(&left, FnPopulation::Injected).expect("fingerprints"),
+        user_fn::content_fingerprint(&right, FnPopulation::Injected).expect("fingerprints"),
+        "two builds of the same declarations fingerprint alike; only the identity separates them",
+    );
+}
+
+#[test]
+fn accepts_the_same_implementation_build_neighbour() {
+    // The host that PREPARED the product restores it, and reaches the report the
+    // preparation itself produces. An identity nobody can satisfy would send every
+    // host back to the unbound restore it exists to replace.
+    let data = data_of(PLAIN_DATA);
+    let expected = report_nt(&PreparedShapes::new(Arc::new(native_plain_shapes())), &data);
+
+    let bytes = product_for_host(native_plain_shapes(), IMPL_A);
+    let injected = natives(&[NATIVE_A, NATIVE_B]);
+    let aggregates = AggregateRegistry::new();
+    let relations = PropertyFunctionRegistry::new();
+    let restored = admit_with(
+        &bytes,
+        &HostBindings::new(&injected, &aggregates, &relations, IMPL_A),
+    )
+    .expect("the build a product was prepared against must restore it");
+
+    assert_eq!(
+        report_nt(&restored, &data),
+        expected,
+        "naming the build must change which restores are refused, never what a restore answers",
+    );
+}
+
+#[test]
+fn accepts_an_unidentified_common_path_neighbour() {
+    // The case every ordinary caller hits: nothing injected, nothing identified.
+    // The three host rows must stay the bare declaration fingerprints, so a product
+    // written before implementation identities existed is bound by exactly the same
+    // rows — and `HostBindings::empty` must still admit it, exactly as it always has.
+    let bytes = product_of(PLAIN_SHAPES);
+    for label in [
+        "user-functions-injected",
+        "aggregate-registry",
+        "property-function-registry",
+    ] {
+        assert_eq!(
+            identity_component(&bytes, label).len(),
+            32,
+            "{label} must carry the bare fingerprint when the host identifies nothing",
+        );
+    }
+
+    let restored = admit(&bytes).expect("the empty host still admits the common product");
+    assert_eq!(
+        report_nt(&restored, &data_of(PLAIN_DATA)),
+        plain_expected_report(),
+    );
+
+    // ...and an explicitly EMPTY identity is the same fact as no identity at all:
+    // one spelling, so there is no second branch for a caller to land on.
+    let functions = UserFunctionRegistry::new();
+    let aggregates = AggregateRegistry::new();
+    let relations = PropertyFunctionRegistry::new();
+    admit_with(
+        &bytes,
+        &HostBindings::new(&functions, &aggregates, &relations, &[]),
+    )
+    .expect("an empty implementation identity is the absent one");
+}
+
+#[test]
+fn refuses_writing_a_product_that_cannot_name_its_implementations() {
+    // A preparation that injects natives and names no build of them would restore
+    // against any host declaring the same IRIs at the same arities. The writer
+    // refuses instead of emitting a product whose host half nothing could check.
+    let error = PreparedShapes::new(Arc::new(native_plain_shapes()))
+        .to_product(&ShapesProfile::CORE)
+        .expect_err("an injected population with no identity is not writable");
+    assert_eq!(error.dimension(), ProductDimension::UnsupportedCapability);
+    assert!(
+        error
+            .message()
+            .contains("to_product_with_implementation_identity"),
+        "the refusal must name the entry point that writes it, got {:?}",
+        error.message(),
+    );
+
+    // A custom aggregate is an injected implementation too, and is refused the same
+    // way — the rule is about the population, not about one registry.
+    let mut aggregating = shapes_of(PLAIN_SHAPES);
+    aggregating.aggregates = Arc::new(aggregates(Arity::Exact(1)));
+    assert_eq!(
+        PreparedShapes::new(Arc::new(aggregating))
+            .to_product(&ShapesProfile::CORE)
+            .expect_err("an injected aggregate with no identity is not writable")
+            .dimension(),
+        ProductDimension::UnsupportedCapability,
+    );
+
+    // ...and the EMPTY identity is refused at the identifying entry point too: it
+    // is the spelling for "nothing injected", so a caller passing it there has
+    // asked to identify implementations with a value that identifies nothing.
+    assert_eq!(
+        PreparedShapes::new(Arc::new(native_plain_shapes()))
+            .to_product_with_implementation_identity(&ShapesProfile::CORE, b"")
+            .expect_err("an empty identity identifies nothing")
+            .dimension(),
+        ProductDimension::UnsupportedCapability,
+    );
+}
+
+#[test]
+fn accepts_writing_an_identified_injected_population_neighbour() {
+    // The same preparation, named: the refusal above is about the missing identity
+    // and never about the mere presence of an injected population.
+    let bytes = PreparedShapes::new(Arc::new(native_plain_shapes()))
+        .to_product_with_implementation_identity(&ShapesProfile::CORE, IMPL_A)
+        .expect("an injected population with an identity is writable");
+    opened(&bytes);
+
+    // ...and a shapes graph that injects NOTHING still writes through the plain
+    // entry point, which is the path every ordinary caller takes.
+    product_of(PLAIN_SHAPES);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1868,14 +2067,14 @@ fn accepts_declared_functions_alongside_host_natives() {
         Arc::new(|args: &[&TermValue]| Ok(args.first().map(|value| (*value).clone()))),
     );
     shapes.functions = Arc::new(registry);
-    let bytes = product_for(shapes);
+    let bytes = product_for_host(shapes, IMPL_A);
 
     let injected = natives(&[NATIVE_A]);
     let aggregates = AggregateRegistry::new();
     let relations = PropertyFunctionRegistry::new();
     let restored = admit_with(
         &bytes,
-        &HostBindings::new(&injected, &aggregates, &relations),
+        &HostBindings::new(&injected, &aggregates, &relations, IMPL_A),
     )
     .expect("a declared population plus an injected one must restore");
 

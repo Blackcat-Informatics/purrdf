@@ -151,6 +151,11 @@ ex:S a sh:NodeShape ;
 /// The `AGG(<iri>, …)` IRI the custom-aggregate fixture registers under.
 const AGG_IRI: &str = "http://example.org/ns#sum";
 
+/// The implementation identity the fixtures that inject host implementations bind:
+/// an opaque byte string standing in for whatever a real host uses to tell its own
+/// builds of its native code apart.
+const IMPLEMENTATION_ID: &[u8] = b"example.org/host-build-1";
+
 /// A shapes graph whose `sh:sparql` body resolves an `AGG(<iri>, …)` call. It is
 /// only satisfiable when the host's aggregate registry is actually INSTALLED on the
 /// restored shapes — a restore that merely fingerprinted it fails here with "no
@@ -417,12 +422,17 @@ fn admit_installs_host_aggregates() {
     shapes.aggregates = Arc::new(aggregates.clone());
     let prepared = PreparedShapes::new(Arc::new(shapes));
     let bytes = prepared
-        .to_product(&ShapesProfile::CORE)
+        .to_product_with_implementation_identity(&ShapesProfile::CORE, IMPLEMENTATION_ID)
         .expect("representable");
 
     let functions = UserFunctionRegistry::new();
     let property_functions = PropertyFunctionRegistry::new();
-    let host = HostBindings::new(&functions, &aggregates, &property_functions);
+    let host = HostBindings::new(
+        &functions,
+        &aggregates,
+        &property_functions,
+        IMPLEMENTATION_ID,
+    );
 
     let restored = ShapesProduct::open(&bytes)
         .expect("opens")
@@ -507,7 +517,7 @@ fn core_profile_binds_the_empty_property_function_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &aggregates, &wired),
+            &HostBindings::new(&functions, &aggregates, &wired, &[]),
         )
         .expect_err("a CORE product was not prepared against any host relation");
     assert_eq!(
@@ -520,38 +530,53 @@ fn core_profile_binds_the_empty_property_function_registry() {
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &aggregates, &fresh),
+            &HostBindings::new(&functions, &aggregates, &fresh, &[]),
         )
         .expect("a DIFFERENT but equally empty registry must still admit");
 }
 
 /// The neighbouring refusal: a host that supplies a DIFFERENT aggregate registry
 /// than the product was prepared against is refused, on the aggregate dimension.
+///
+/// The implementation identity is held FIXED across both halves, so the aggregate
+/// registry is the only moving input and the dimension the refusal names is the
+/// dimension that actually moved. A host that also got its identity wrong would
+/// disagree on all three host rows at once, and the codec reports the first — which
+/// is a true statement about a different question.
 #[test]
 fn admit_refuses_a_different_aggregate_registry() {
     let ttl = aggregate_shapes();
     let mut shapes = shapes_of(&ttl);
     shapes.aggregates = Arc::new(sum_aggregates());
     let bytes = PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
+        .to_product_with_implementation_identity(&ShapesProfile::CORE, IMPLEMENTATION_ID)
         .expect("representable");
 
+    let functions = UserFunctionRegistry::new();
+    let property_functions = PropertyFunctionRegistry::new();
+    let none = AggregateRegistry::new();
     let error = ShapesProduct::open(&bytes)
         .expect("opens")
-        .admit(&ShapesProfile::CORE, &HostBindings::empty())
+        .admit(
+            &ShapesProfile::CORE,
+            &HostBindings::new(&functions, &none, &property_functions, IMPLEMENTATION_ID),
+        )
         .expect_err("an empty aggregate registry is not the one this product was prepared with");
     assert_eq!(error.dimension(), ProductDimension::AggregateRegistry);
 
     // ...and the valid neighbour still succeeds, so the strictness is not refusing
     // every host.
     let aggregates = sum_aggregates();
-    let functions = UserFunctionRegistry::new();
-    let property_functions = PropertyFunctionRegistry::new();
     ShapesProduct::open(&bytes)
         .expect("opens")
         .admit(
             &ShapesProfile::CORE,
-            &HostBindings::new(&functions, &aggregates, &property_functions),
+            &HostBindings::new(
+                &functions,
+                &aggregates,
+                &property_functions,
+                IMPLEMENTATION_ID,
+            ),
         )
         .expect("the registry it WAS prepared against admits");
 }
