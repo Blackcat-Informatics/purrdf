@@ -33,7 +33,8 @@ A pure-Rust, wasm-clean leaf crate implementing the
   serde support matching the shexTest ground truth.
 - **Structural checks** (spec §5.7): dangling references, label
   collisions, reference-only cycles, and the negation-stratification
-  requirement (hand-rolled iterative Tarjan SCC).
+  requirement (over `purrdf_core::graph::tarjan_scc`, the workspace's one
+  iterative Tarjan SCC).
 - **`validate`** (spec §5.2–§5.5): fixed shape-map validation over the
   frozen `purrdf-core` dataset IR in interned `TermId` space — node
   constraints (node kind, datatype with lexical-validity checking,

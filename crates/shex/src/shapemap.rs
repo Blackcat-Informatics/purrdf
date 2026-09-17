@@ -103,7 +103,7 @@
 //! erroring; see [`terminals`] for the worked counterexample.
 
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
-use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, terminals};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag, terminals};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
@@ -366,8 +366,8 @@ fn term_key(value: &TermValue) -> String {
 
 // ── the parser ────────────────────────────────────────────────────────────────
 
-/// `[145s] LANGTAG ::= "@" ([a-zA-Z])+ ("-" ([a-zA-Z0-9])+)*`, on the body after
-/// the `@`.
+/// The acceptance language `[145s] LANGTAG ::= "@" ([a-zA-Z])+ ("-"
+/// ([a-zA-Z0-9])+)*` is decided against, for the body after the `@`.
 ///
 /// **This one is deliberately NOT a `PN_CHARS` run and not a Unicode property.**
 /// `LANGTAG` is the one terminal in the ShapeMap grammar that enumerates plain
@@ -378,17 +378,19 @@ fn term_key(value: &TermValue) -> String {
 /// treated the structure as a flat character run, so `"x"@en-` and `"x"@1ab` were
 /// accepted as language tags they are not.
 ///
+/// The transcription that replaced it was wrong a third way: it was a *private*
+/// one. A shape map names nodes in an RDF dataset, so a literal it spells has to
+/// be the literal the dataset holds — and the dataset was read by codecs holding
+/// the tag to [`langtag::Profile::ConcreteSyntaxLangtagBounded`]. A tag the map
+/// took and the codec refused (`@cantbethislong`) selected a node that can never
+/// exist; one the codec took and the map refused would make a parseable dataset
+/// unaddressable. The judgement therefore comes from the workspace's one
+/// language-tag owner, under the one profile every concrete-syntax surface names.
+///
 /// Every real tag still passes, which is the point: `en`, `en-UK`, `zh-Hans`,
-/// `de-CH-1901`, `x-private` and the grandfathered `i-klingon` all begin with an
-/// alphabetic subtag and continue with alphanumeric ones.
-fn is_langtag(tag: &str) -> bool {
-    let mut subtags = tag.split('-');
-    let primary = subtags.next().unwrap_or_default();
-    if primary.is_empty() || !primary.bytes().all(|b| b.is_ascii_alphabetic()) {
-        return false;
-    }
-    subtags.all(|sub| !sub.is_empty() && sub.bytes().all(|b| b.is_ascii_alphanumeric()))
-}
+/// `de-CH-1901`, `x-private`, the grandfathered `i-klingon` and the
+/// terminal-only `en-fr-jura` of the vendored shexTest vectors are all accepted.
+const LANGTAG_PROFILE: langtag::Profile = langtag::Profile::ConcreteSyntaxLangtagBounded;
 
 /// `[18t] IRIREF ::= "<" ([^#x00-#x20<>"{}|^`\] | UCHAR)* ">"` — the content class,
 /// as the complement of [`terminals::is_iriref_forbidden`].
@@ -861,10 +863,11 @@ impl MapParser {
                     break;
                 }
             }
-            if !is_langtag(&tag) {
-                return Err(
-                    self.err("expected a language tag: LANGTAG is [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*")
-                );
+            if let Err(error) = langtag::parse_with(&tag, LANGTAG_PROFILE) {
+                return Err(self.err(&format!(
+                    "expected a language tag: {error} [{code}]",
+                    code = error.diagnostic_code()
+                )));
             }
             Ok(TermValue::lang_literal(lexical, &tag))
         } else {
@@ -1020,5 +1023,110 @@ impl MapParser {
 
     fn err(&self, reason: &str) -> ShexError {
         ShexError::syntax(reason.to_owned(), self.pos)
+    }
+}
+
+// ── `LANGTAG` is decided by the workspace's owner, not by this parser ─────────
+
+#[cfg(test)]
+mod langtag_tests {
+    use super::{NodeSelector, ShexError, TermValue, parse_shape_map};
+
+    /// A one-entry shape map whose node is a literal carrying the tag under
+    /// test. The tag scan stops at the `@` that introduces the shape label, so
+    /// this is the shortest path from a `LANGTAG` to a selected node.
+    fn parse_tagged_node(tag: &str) -> Result<TermValue, ShexError> {
+        let map = parse_shape_map(&format!("\"x\"@{tag}@START"), None)?;
+        match &map.0[0].node {
+            NodeSelector::Node(value) => Ok(value.clone()),
+            other => panic!("expected a concrete node, got {other:?}"),
+        }
+    }
+
+    /// The refusal side: a tag this parser used to accept and every RDF codec
+    /// in the workspace refuses.
+    ///
+    /// A shape map names nodes in a dataset the codecs parsed, so a tag only
+    /// the map takes selects a literal that cannot exist — the entry is dead on
+    /// arrival and nothing says so. `@cantbethislong` is a bare
+    /// fourteen-character subtag, which the N-Triples negative-syntax corpus
+    /// requires to be refused.
+    ///
+    /// The refusal keeps its `ShexError::Syntax` type and its byte offset; the
+    /// reason now names the production that bit instead of restating the
+    /// terminal.
+    #[test]
+    fn a_subtag_over_the_length_ceiling_is_refused_in_a_shape_map() {
+        let error = parse_tagged_node("cantbethislong")
+            .expect_err("a bare fourteen-character subtag is over the §2.1 ceiling");
+        assert!(
+            matches!(error, ShexError::Syntax { .. }),
+            "the error type and its offset are unchanged: {error:?}"
+        );
+        let message = error.to_string();
+        for expected in [
+            "expected a language tag",
+            "langtag-subtag-length-over-eight",
+        ] {
+            assert!(
+                message.contains(expected),
+                "the typed reason must reach the user, missing {expected:?}: {message}"
+            );
+        }
+    }
+
+    /// The acceptance side, which is the half that catches an over-refusal.
+    ///
+    /// Row one is the neighbour one character inside the ceiling, row two moves
+    /// the same over-long subtag behind the `x` marker where the ceiling does
+    /// not apply, and the rest are the tags this workspace's fixtures, the
+    /// vendored shexTest vectors and downstream projects publish. The tag is
+    /// carried through verbatim: a shape map that re-cased or rewrote it would
+    /// select a different literal than the one written.
+    #[test]
+    fn every_tag_the_workspace_writes_still_selects_a_node() {
+        for tag in [
+            "abcdefgh",
+            "en-x-cantbethislong",
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "i-enochian",
+            "de-CH-x-phonebk",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "x-purrdf-english",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "x-gmeow-norwegiannynorsk",
+        ] {
+            assert_eq!(
+                parse_tagged_node(tag).unwrap_or_else(|error| panic!(
+                    "`@{tag}` is written by this workspace and must still parse: {error}"
+                )),
+                TermValue::lang_literal("x", tag),
+                "`@{tag}` must be carried through verbatim"
+            );
+        }
+    }
+
+    /// The terminal's own refusals, unchanged in verdict and now carrying the
+    /// owner's stable code rather than one sentence for every failure.
+    #[test]
+    fn the_langtag_terminals_own_refusals_still_bite_in_a_shape_map() {
+        for (tag, code) in [
+            ("1", "langtag-terminal-primary-not-alpha"),
+            ("9-9", "langtag-terminal-primary-not-alpha"),
+            ("en-", "langtag-subtag-length-zero"),
+            ("en--US", "langtag-subtag-length-zero"),
+        ] {
+            let error = parse_tagged_node(tag)
+                .expect_err("the `LANGTAG` terminal does not admit this")
+                .to_string();
+            assert!(
+                error.contains(code),
+                "`@{tag}` must refuse under {code}, got {error}"
+            );
+        }
     }
 }

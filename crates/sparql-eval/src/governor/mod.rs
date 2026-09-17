@@ -1605,12 +1605,7 @@ fn schedule_preimage(id: &str, version: u32, schedule: &[(&str, u64)]) -> String
 /// The lowercase-hex SHA-256 of [`schedule_preimage`].
 fn schedule_digest(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
     let digest = sha2::Sha256::digest(schedule_preimage(id, version, schedule).as_bytes());
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write as _;
-        write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    hex
+    purrdf_core::hex::lower(&digest)
 }
 
 /// The content-addressed identity of [`CHARGE_SCHEDULE`]: the lowercase-hex SHA-256 of its
@@ -2419,11 +2414,7 @@ mod tests {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../scripts/conformance-frozen/vectors-sparql-governors.sha256");
         let bytes = std::fs::read(&manifest).expect("the corpus freeze manifest must exist");
-        let mut hex = String::with_capacity(64);
-        for byte in sha2::Sha256::digest(&bytes) {
-            use std::fmt::Write as _;
-            write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
-        }
+        let hex = purrdf_core::hex::lower(&sha2::Sha256::digest(&bytes));
         assert_eq!(
             GOVERNOR_CORPUS_DIGEST, hex,
             "the frozen corpus at vectors/sparql-governors/ changed without \

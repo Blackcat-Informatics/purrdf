@@ -222,6 +222,107 @@ fn scc_grouping_cycle_and_singleton() {
     assert!(cycle.contains(&b_iri));
 }
 
+/// A semantic, build-relevant edge between two slice IRIs, built directly.
+///
+/// `link_units` takes an arbitrary edge list, not just the `OwnershipAnalyzer`'s
+/// output, so a self-edge is a shape it must handle even though the analyzer
+/// itself declines to emit one (`collect_reference_evidence` drops references a
+/// slice makes to its own terms).
+fn build_edge(from: &str, to: &str) -> crate::ownership::DependencyEdge {
+    crate::ownership::DependencyEdge {
+        from_slice: from.to_owned(),
+        to_slice: to.to_owned(),
+        edge_kind: crate::ownership::EdgeKind::Ontology,
+        evidence: Vec::new(),
+        reconciliation: crate::ownership::ReconciliationStatus::Undeclared,
+    }
+}
+
+/// A self-dependency **is** a cycle, and an ordinary singleton is **not**.
+///
+/// Both directions are asserted in one fixture because they are the two halves
+/// of the same defect: a size-only test reports the self-dependent slice as
+/// acyclic, while a naive fix that calls every singleton a cycle reports the
+/// independent slice as cyclic. A self-loop is an SCC of size one, exactly like
+/// an isolated node, so neither verdict can be read off the member count —
+/// which is why `is_cycle_in` consults the edges and `is_cycle` does not claim
+/// to.
+#[test]
+fn self_dependency_is_a_cycle_and_an_independent_singleton_is_not() {
+    let a_iri = format!("{NS}slice/aaa");
+    let b_iri = format!("{NS}slice/bbb");
+    let a_term = format!("{NS}Aaa");
+    let b_term = format!("{NS}Bbb");
+
+    let t = TempDir::new().unwrap();
+    let core = t.path().join("slices").join("core");
+    // Two independent slices on disk; the self-edge is supplied by the caller.
+    write_slice(&core, "aaa", &a_iri, &a_term, &[], "# a\n");
+    write_slice(&core, "bbb", &b_iri, &b_term, &[], "# b\n");
+
+    let (catalog, _) = discover(t.path());
+    let edges = vec![build_edge(&a_iri, &a_iri)];
+    let units = link_units(&catalog, &edges);
+
+    // Two singleton units: neither self-loop nor isolation enlarges an SCC.
+    assert_eq!(units.len(), 2);
+    assert!(units.iter().all(|u| u.members.len() == 1));
+
+    let self_dependent = units
+        .iter()
+        .find(|u| u.contains(&a_iri))
+        .expect("expected a link unit for the self-dependent slice");
+    assert!(
+        self_dependent.is_cycle_in(&edges),
+        "a slice that depends on itself must report is_cycle_in() == true"
+    );
+    assert!(
+        !self_dependent.is_cycle(),
+        "is_cycle() is a member-count test and must not claim to see the self-edge"
+    );
+
+    let independent = units
+        .iter()
+        .find(|u| u.contains(&b_iri))
+        .expect("expected a link unit for the independent slice");
+    assert!(
+        !independent.is_cycle_in(&edges),
+        "an ordinary single-member unit must still report is_cycle_in() == false"
+    );
+    assert!(!independent.is_cycle());
+}
+
+/// A self-edge on a member of a *multi-slice* cycle does not disturb the unit:
+/// the SCC is still the full cycle, and it is still a cycle for the other
+/// reason as well.
+#[test]
+fn self_edge_inside_a_multi_member_cycle_keeps_the_unit_intact() {
+    let a_iri = format!("{NS}slice/aaa");
+    let b_iri = format!("{NS}slice/bbb");
+    let a_term = format!("{NS}Aaa");
+    let b_term = format!("{NS}Bbb");
+
+    let t = TempDir::new().unwrap();
+    let core = t.path().join("slices").join("core");
+    write_slice(&core, "aaa", &a_iri, &a_term, &[], "# a\n");
+    write_slice(&core, "bbb", &b_iri, &b_term, &[], "# b\n");
+
+    let (catalog, _) = discover(t.path());
+    let edges = vec![
+        build_edge(&a_iri, &b_iri),
+        build_edge(&b_iri, &a_iri),
+        build_edge(&a_iri, &a_iri),
+    ];
+    let units = link_units(&catalog, &edges);
+
+    assert_eq!(units.len(), 1);
+    let unit = &units[0];
+    assert_eq!(unit.members.len(), 2);
+    assert!(unit.contains(&a_iri) && unit.contains(&b_iri));
+    assert!(unit.is_cycle());
+    assert!(unit.is_cycle_in(&edges));
+}
+
 /// Acceptance 4 — **profile closure**: a product unit for a slice with deps
 /// yields the dependency-closed set (transitive closure).
 #[test]

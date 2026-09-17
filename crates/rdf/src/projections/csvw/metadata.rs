@@ -5,7 +5,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use oxilangtag::LanguageTag;
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -1482,16 +1481,23 @@ fn parse_context_object(
                 })?;
             }
             "@language" => {
-                if let Some(tag) = value.as_str().filter(|tag| valid_language_tag(tag)) {
-                    *language = Some(tag.to_ascii_lowercase());
-                } else {
-                    invalid_warning(
-                        resource,
-                        "$['@context']['@language']",
-                        "BCP47 language tag",
-                        warnings,
-                    );
-                    *language = None;
+                const LOCATION: &str = "$['@context']['@language']";
+                match value.as_str().map(canonical_language_tag) {
+                    Some(Ok(canonical)) => *language = Some(canonical),
+                    Some(Err(error)) => {
+                        invalid_language_tag_warning(
+                            resource,
+                            LOCATION,
+                            "BCP47 language tag",
+                            error,
+                            warnings,
+                        );
+                        *language = None;
+                    }
+                    None => {
+                        invalid_warning(resource, LOCATION, "BCP47 language tag", warnings);
+                        *language = None;
+                    }
                 }
             }
             "@vocab" => {
@@ -1766,7 +1772,19 @@ fn language_property(
 ) -> Option<String> {
     match value {
         None => fallback,
-        Some(Value::String(value)) if valid_language_tag(value) => Some(value.to_ascii_lowercase()),
+        Some(Value::String(value)) => match canonical_language_tag(value) {
+            Ok(canonical) => Some(canonical),
+            Err(error) => {
+                invalid_language_tag_warning(
+                    resource,
+                    location,
+                    "BCP47 language tag",
+                    error,
+                    warnings,
+                );
+                fallback
+            }
+        },
         Some(Value::Null) => None,
         Some(_) => {
             invalid_warning(resource, location, "BCP47 language tag", warnings);
@@ -1968,8 +1986,24 @@ fn natural_language_property(
         }
         Some(Value::Object(languages)) => {
             for (language, values) in languages {
-                if language != "und" && !valid_language_tag(language) {
-                    invalid_warning(resource, location, "language-map title", warnings);
+                // Deliberately NOT canonical-cased. These are map KEYS, and the
+                // fold that has to agree with them is the lowercase one used at
+                // the insert below, at the lookup in `name_from_titles`, and by
+                // the table reader's own header titles. Canonical case would
+                // uppercase a region on one side of that comparison only, and a
+                // title would stop being found — a silent miss wearing the
+                // costume of a normalization. The key discipline here is
+                // case-folding, not presentation.
+                if language != "und"
+                    && let Err(error) = purrdf_iri::langtag::parse(language)
+                {
+                    invalid_language_tag_warning(
+                        resource,
+                        location,
+                        "language-map title",
+                        error,
+                        warnings,
+                    );
                     continue;
                 }
                 let strings = match values {
@@ -2104,8 +2138,47 @@ fn link_property(
     }
 }
 
-fn valid_language_tag(value: &str) -> bool {
-    LanguageTag::parse(value).is_ok()
+/// A `lang`/`@language` property value in its **BCP 47 canonical case**
+/// (RFC 5646 §2.1.1), or the typed reason it is not a language tag at all.
+///
+/// The CSVW metadata model calls this property "a language code as defined by
+/// [BCP47]", and §2.1.1 is what BCP 47 says its canonical spelling is: `en-us`
+/// becomes `en-US`, `zh-hant` becomes `zh-Hant`, `I-ENOCHIAN` becomes the
+/// registered `i-enochian`. Case is insignificant to every consumer of this
+/// value — the natural-language title maps key on the lowercase fold, the
+/// compatibility test in the table reader is `eq_ignore_ascii_case`, and RDF
+/// term identity lowercases language tags at intern time — so canonicalizing
+/// here changes the spelling the *metadata model* carries and nothing that is
+/// compared or emitted downstream.
+///
+/// # Errors
+///
+/// The [`purrdf_iri::langtag::LanguageTagError`] naming the production that
+/// refused, so the warning can say which one rather than "invalid".
+fn canonical_language_tag(value: &str) -> Result<String, purrdf_iri::langtag::LanguageTagError> {
+    purrdf_iri::langtag::canonical_case(value)
+}
+
+/// Records the CSVW "invalid value ignored" warning for a language tag,
+/// carrying the grammar's own reason.
+///
+/// A bare "expected BCP47 language tag" tells an author that something in their
+/// metadata was dropped but not what to fix; the `langtag-*` diagnostic code
+/// names the production that refused, and this module is not its owner, so it
+/// quotes it rather than paraphrasing.
+fn invalid_language_tag_warning(
+    resource: &str,
+    location: &str,
+    expected: &str,
+    error: purrdf_iri::langtag::LanguageTagError,
+    warnings: &mut Vec<CsvwWarning>,
+) {
+    invalid_warning(
+        resource,
+        location,
+        &format!("{expected} ({}: {error})", error.diagnostic_code()),
+        warnings,
+    );
 }
 
 fn expand_datatype(
@@ -2595,9 +2668,14 @@ fn validate_annotation_value(
                                 .at_path(resource),
                         );
                     };
-                    if !valid_language_tag(language) {
+                    // Validate, never rewrite: this walks the caller's own
+                    // JSON-LD annotation, which CSVW carries through verbatim.
+                    // Canonicalizing a tag here would edit the author's
+                    // document rather than check it.
+                    if let Err(error) = purrdf_iri::langtag::parse(language) {
                         return Err(ProjectionError::integrity(format!(
-                            "invalid CSVW @language `{language}`"
+                            "invalid CSVW @language `{language}` ({}: {error})",
+                            error.diagnostic_code()
                         ))
                         .at_path(resource));
                     }
@@ -2727,7 +2805,10 @@ mod tests {
             "de-DE-u-co-phonebk",
             "en-a-bbb-x-a-ccc",
         ] {
-            assert!(valid_language_tag(valid), "rejected valid tag {valid:?}");
+            assert!(
+                canonical_language_tag(valid).is_ok(),
+                "rejected valid tag {valid:?}"
+            );
         }
 
         for invalid in [
@@ -2741,8 +2822,125 @@ mod tests {
             "en-abcdefghi",
         ] {
             assert!(
-                !valid_language_tag(invalid),
+                canonical_language_tag(invalid).is_err(),
                 "accepted invalid tag {invalid:?}"
+            );
+        }
+    }
+
+    /// The `lang` property now carries BCP 47 canonical case rather than a flat
+    /// lowercase fold. Both halves are asserted: the tags whose spelling must
+    /// change, and the tags that must come back byte-identical — a normalizer
+    /// is a rewrite, so "unchanged" is a claim too.
+    #[test]
+    fn language_properties_are_canonical_case() {
+        for (written, canonical) in [
+            ("en-us", "en-US"),
+            ("EN-US", "en-US"),
+            ("zh-hant", "zh-Hant"),
+            ("zh-hans-cn", "zh-Hans-CN"),
+            ("DE-DE", "de-DE"),
+            ("I-ENOCHIAN", "i-enochian"),
+        ] {
+            assert_eq!(
+                canonical_language_tag(written).as_deref(),
+                Ok(canonical),
+                "{written:?}"
+            );
+        }
+        for unchanged in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "und",
+            "es-419",
+            "x-private",
+        ] {
+            assert_eq!(
+                canonical_language_tag(unchanged).as_deref(),
+                Ok(unchanged),
+                "{unchanged:?} must survive unchanged"
+            );
+        }
+    }
+
+    /// The `lang` property's canonical case must not disturb the title lookup,
+    /// which keys on the lowercase fold. Normalizing one side of a comparison
+    /// and not the other is how a "normalization" turns into a silent miss.
+    #[test]
+    fn canonical_case_still_finds_a_language_mapped_title() {
+        let titles = serde_json::json!({"en-US": "Title", "fr": "Titre"});
+        let mut warnings = Vec::new();
+        let mapped = natural_language_property(
+            Some(&titles),
+            None,
+            "http://example.org/t",
+            "$.titles",
+            &mut warnings,
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // Keys are the lowercase fold, whatever case the document wrote.
+        assert_eq!(
+            mapped.get("en-us").map(Vec::as_slice),
+            Some(&["Title".to_owned()][..])
+        );
+
+        // The default language reaching this lookup is now canonical-cased, and
+        // the title is still found.
+        let canonical = canonical_language_tag("en-us").expect("well-formed");
+        assert_eq!(canonical, "en-US");
+        assert_eq!(name_from_titles(&mapped, Some(&canonical), 0), "Title");
+        // …exactly as it was found under the old lowercase spelling.
+        assert_eq!(name_from_titles(&mapped, Some("en-us"), 0), "Title");
+        // A language with no title still falls back rather than mis-matching.
+        assert_eq!(name_from_titles(&mapped, Some("de-DE"), 0), "_col.1");
+    }
+
+    /// A refusal has to say which production refused, and must not have grown
+    /// in the process: each rejected tag is paired with a neighbour that is
+    /// still taken.
+    #[test]
+    fn a_refused_language_tag_carries_its_diagnostic_code() {
+        for (refused, code, accepted) in [
+            ("en--US", "langtag-subtag-length-zero", "en-US"),
+            ("en-u", "langtag-singleton-without-subtag", "en-u-islamcal"),
+            ("en-x", "langtag-private-use-without-subtag", "en-x-a"),
+            ("de-419-DE", "langtag-unconsumed-subtag", "de-DE"),
+            (
+                "en-abcdefghi",
+                "langtag-subtag-length-over-eight",
+                "en-abcdefgh",
+            ),
+            ("a-DE", "langtag-language-production-unmatched", "ab-DE"),
+        ] {
+            let error = canonical_language_tag(refused).expect_err("refused");
+            assert_eq!(error.diagnostic_code(), code, "{refused:?}");
+
+            let mut warnings = Vec::new();
+            let value = Value::String(refused.to_owned());
+            assert_eq!(
+                language_property(
+                    Some(&value),
+                    Some("en".to_owned()),
+                    "http://example.org/t",
+                    "$.lang",
+                    &mut warnings,
+                ),
+                Some("en".to_owned()),
+                "a refused tag falls back rather than being adopted"
+            );
+            assert_eq!(warnings.len(), 1, "{refused:?}");
+            assert!(
+                warnings[0].message.contains(code),
+                "{refused:?} warned {:?}, which does not name the rule",
+                warnings[0].message
+            );
+
+            assert!(
+                canonical_language_tag(accepted).is_ok(),
+                "{accepted:?} must stay accepted"
             );
         }
     }

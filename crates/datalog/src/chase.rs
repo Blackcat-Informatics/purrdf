@@ -526,6 +526,15 @@ const WITNESS_LABEL_BYTES: usize = 16;
 const WITNESS_DIGEST_TAG: &str = "purrdf-datalog restricted chase witness v1";
 
 /// Lowercase hex digits, for rendering a witness label without a formatter.
+///
+/// Deliberately NOT [`crate::resolve_fol::hex_lower`], this crate's other hex renderer:
+/// [`witness_surface`] runs once per invented witness inside the chase's fixpoint loop
+/// (every round, every firing that needs a fresh existential), so it is a hot path in a way
+/// a contract hash or a derivation id — computed once per result, not once per fact — is
+/// not. A lookup-table index avoids `hex_lower`'s per-byte `write!` formatting machinery on
+/// that path; consolidating the two would trade a measurable amount of per-firing work for
+/// uniformity alone, which this repository's performance discipline does not accept without
+/// a bench showing it is free.
 const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
 
 /// The address a Skolem witness is minted against: the SKOLEM FUNCTION APPLICATION that

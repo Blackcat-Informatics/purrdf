@@ -71,6 +71,7 @@ use super::certificate::{DlCertificate, DlCompleteness, Verdict};
 use super::classify::ClassHierarchy;
 use super::module::ModuleMethod;
 use super::realize::Realization;
+use crate::digest_hex::hex;
 use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::proof::{
     CheckReport, DlProof, DlProofContext, DlProofError, MAX_NESTING, ProofAnswer, Reader,
@@ -1567,16 +1568,10 @@ pub(crate) fn receipt_of(
 }
 
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
-
-/// 32 bytes as 64 lowercase hex characters.
-fn hex(digest: [u8; 32]) -> String {
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push(char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is one hex digit"));
-        out.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is one hex digit"));
-    }
-    out
-}
+//
+// The hex renderer used to live here too, as its own `char::from_digit` loop; it is now
+// `crate::digest_hex::hex`, the one first-party renderer this crate's three digest-bearing
+// proof modules share (see that module's doc comment for why).
 
 /// Append a length-prefixed byte string.
 fn frame(out: &mut Vec<u8>, bytes: &[u8]) {

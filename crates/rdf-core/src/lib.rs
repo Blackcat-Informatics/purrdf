@@ -68,6 +68,11 @@ pub mod diagnostic;
 // PyO3-free; the `purrdf-slice` FnO emitter builds a `FnoCatalog` from the slice
 // framework and serializes it here, replacing rdflib `emit_fno`/`_emit_fnom`.
 pub mod fno;
+// The workspace's ONE strongly-connected-components implementation (iterative
+// Tarjan over an index adjacency list). `pub` because its consumers are other
+// crates — the `purrdf-slice` link-unit linker and the `purrdf-shex` structural
+// cycle checks — not `purrdf-core` internals. Dependency-free and wasm-clean.
+pub mod graph;
 // The one execution-governance vocabulary: stop causes, governed resource
 // dimensions, tripped-governor reports, and evidence. Named by the demand-paging
 // tier and the compute tier alike, so there is no parallel taxonomy. Clock-free,
@@ -77,6 +82,11 @@ pub mod governor;
 // FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
 // never hash order).
 pub mod hash;
+// The workspace's one one-shot lowercase-hex renderer (`&[u8]` -> `String`).
+// `pub` because its consumers are other crates — `purrdf-rdf`'s GTS bridges and
+// `purrdf-datalog`'s proof keys — not `purrdf-core` internals. Pure
+// `core`/`alloc`, dependency-free and wasm-clean.
+pub mod hex;
 // The immutable, value-interned RDF 1.2 dataset IR (C1).
 pub mod ir;
 // Generic provenance sidecar for the immutable RDF 1.2 dataset (S2):

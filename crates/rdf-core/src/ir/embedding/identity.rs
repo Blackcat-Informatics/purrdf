@@ -61,19 +61,19 @@ macro_rules! identity_type {
             /// Renders lowercase hexadecimal for diagnostics and tooling.
             #[must_use]
             pub fn to_hex(self) -> String {
-                hex32(&self.0)
+                crate::hex::lower(&self.0)
             }
         }
 
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.debug_tuple(stringify!($name)).field(&hex32(&self.0)).finish()
+                f.debug_tuple(stringify!($name)).field(&crate::hex::lower(&self.0)).finish()
             }
         }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&hex32(&self.0))
+                f.write_str(&crate::hex::lower(&self.0))
             }
         }
     };
@@ -403,16 +403,6 @@ fn hash_fold(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
         hasher.update(field);
     }
     hasher.finalize().into()
-}
-
-fn hex32(bytes: &[u8; 32]) -> String {
-    use fmt::Write as _;
-
-    let mut output = String::with_capacity(64);
-    for byte in bytes {
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
 }
 
 #[cfg(test)]

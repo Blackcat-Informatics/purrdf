@@ -1412,6 +1412,10 @@ mod tests {
         }
     }
 
+    /// Two distinct refusals, and the test must not confuse them: `EN`/`en-US`
+    /// are well-formed BCP 47 in the wrong case for RDF term identity, while
+    /// `ǅ` is not a language tag at all and is refused by the grammar itself
+    /// (`purrdf_iri::langtag`) before the case rule is ever reached.
     #[test]
     fn decoding_rejects_noncanonical_language_tags() {
         for direction in [
@@ -1419,7 +1423,22 @@ mod tests {
             Some(RdfTextDirection::Ltr),
             Some(RdfTextDirection::Rtl),
         ] {
-            for language in ["EN", "en-US", "\u{01c5}"] {
+            for (language, expected) in [
+                (
+                    "EN",
+                    PackDictError::Malformed("dict: language tag is not lowercase"),
+                ),
+                (
+                    "en-US",
+                    PackDictError::Malformed("dict: language tag is not lowercase"),
+                ),
+                (
+                    "\u{01c5}",
+                    PackDictError::Malformed(
+                        purrdf_iri::langtag::LanguageTagError::TerminalPrimaryNotAlpha.message(),
+                    ),
+                ),
+            ] {
                 let datatype = RdfLiteral::language_datatype_iri(direction);
                 let values = [
                     TermValue::iri(datatype),
@@ -1432,7 +1451,7 @@ mod tests {
                 ];
                 assert_eq!(
                     PackDict::open(&encode_test_values(&values).to_bytes()).unwrap_err(),
-                    PackDictError::Malformed("dict: language tag is not lowercase"),
+                    expected,
                     "{language} {direction:?}"
                 );
             }

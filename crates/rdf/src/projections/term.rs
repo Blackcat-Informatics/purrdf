@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use purrdf_core::{BlankScope, DatasetView, RdfLiteral, RdfTextDirection, TermRef, TermValue};
+use purrdf_iri::langtag;
 use serde::{Deserialize, Serialize};
 
 use super::util::canonical_json_bounded;
@@ -388,42 +389,31 @@ impl ProjectionTerm {
     }
 }
 
+/// The language-tag half of a projected literal's identity, decided by
+/// [`purrdf_iri::langtag`].
+///
+/// The predicate this replaced was a third private dialect — a 1-character
+/// primary subtag and any number of ≤8-character alphanumeric subtags after it,
+/// with a bolted-on refusal of a trailing `x` — and so accepted `e`, `a-DE` and
+/// `en-US-abc`, none of which is a language tag. A projection artifact is
+/// persisted and re-read by other tools, so admitting a non-tag there is a
+/// durable lie about the literal's identity, not a transient parse laxity.
+///
+/// The profile is [`langtag::Profile::ConcreteSyntaxLangtagBounded`], the one
+/// acceptance language every native codec names, because a projection is built
+/// from whatever dataset was ingested: the `@x-purrdf-…` tags this workspace's
+/// own fixtures carry and the `@en-fr-jura` of the approved shexTest vectors
+/// must both survive being projected. A narrower profile here would make a
+/// dataset that parses un-projectable, which is the same over-refusal as a
+/// codec that cannot read back what a codec wrote.
+///
+/// The [`ProjectionError::term`] shape is unchanged, and the module's
+/// [`langtag::LanguageTagError`] `Display` is appended so the message names the
+/// production that refused rather than only the tag.
 fn validate_language_tag(tag: &str) -> Result<(), ProjectionError> {
-    let mut parts = tag.split('-');
-    let primary = parts.next().unwrap_or_default();
-    if primary.is_empty()
-        || primary.len() > 8
-        || !primary.bytes().all(|byte| byte.is_ascii_alphabetic())
-    {
-        return Err(ProjectionError::term(format!(
-            "invalid language tag {tag:?}"
-        )));
-    }
-    let mut private_use = primary.eq_ignore_ascii_case("x");
-    let mut saw_subtag = false;
-    let mut ends_with_private_marker = private_use;
-    for subtag in parts {
-        saw_subtag = true;
-        let alphanumeric =
-            !subtag.is_empty() && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric());
-        if !alphanumeric || (!private_use && subtag.len() > 8) {
-            return Err(ProjectionError::term(format!(
-                "invalid language tag {tag:?}"
-            )));
-        }
-        if subtag.eq_ignore_ascii_case("x") {
-            private_use = true;
-            ends_with_private_marker = true;
-        } else {
-            ends_with_private_marker = false;
-        }
-    }
-    if (primary.eq_ignore_ascii_case("x") && !saw_subtag) || ends_with_private_marker {
-        return Err(ProjectionError::term(format!(
-            "invalid language tag {tag:?}"
-        )));
-    }
-    Ok(())
+    langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded)
+        .map(|_| ())
+        .map_err(|error| ProjectionError::term(format!("invalid language tag {tag:?}: {error}")))
 }
 
 #[cfg(test)]
@@ -459,6 +449,90 @@ mod tests {
             ProjectionTerm::from_term_value(&value, limits()).expect("carrier value"),
             term
         );
+    }
+
+    /// A REFUSAL IS A CLAIM TOO.
+    ///
+    /// The predicate this validator used to apply was a private dialect with no
+    /// grammar behind it, so `not a tag` — a string with a SPACE in it — was
+    /// persisted into projection artifacts as if it were a language tag, while
+    /// the `x-purrdf-…` tags the workspace really writes were not.
+    ///
+    /// It now names the codecs' profile, and that is the point: a projection is
+    /// built from whatever dataset was ingested, so anything a codec accepts
+    /// must project. Both halves are asserted, and the accept half is the
+    /// load-bearing one — refusing here makes a dataset that parses
+    /// un-projectable, which is the same over-refusal as a codec that cannot
+    /// read back what a codec wrote. Note the tags here are lowercase because
+    /// `validate_inner` separately requires canonical lowercase — that check is
+    /// unrelated to well-formedness and is deliberately left alone.
+    #[test]
+    fn language_tags_refused_by_the_codec_profile_have_an_accepted_neighbour() {
+        fn literal(language: &str) -> ProjectionTerm {
+            ProjectionTerm::Literal {
+                lexical: "v".to_owned(),
+                datatype: RDF_LANG_STRING.to_owned(),
+                language: Some(language.to_owned()),
+                direction: None,
+            }
+        }
+
+        // (refused, the neighbour one edit away that must still validate)
+        let pairs: &[(&str, &str)] = &[
+            // Not a `LANGTAG` terminal at all.
+            ("not a tag", "und"),
+            ("1", "en"),
+            ("9-9", "en-9"),
+            ("en-", "en"),
+            ("x-purrdf-afri!", "x-purrdf-afri"),
+            // Over the §2.1 length ceiling, which applies outside private use.
+            ("cantbethislong", "cantbeth"),
+            ("abcdefghi", "abcdefgh"),
+            ("en-abcdefghi-x-a", "en-abcdefgh-x-a"),
+        ];
+        for (refused, accepted) in pairs {
+            let error = literal(refused)
+                .validate(limits())
+                .expect_err("must be refused");
+            assert!(
+                error.message().contains("invalid language tag"),
+                "{refused:?}: {}",
+                error.message()
+            );
+            literal(accepted)
+                .validate(limits())
+                .unwrap_or_else(|e| panic!("{accepted:?} must validate: {}", e.message()));
+        }
+
+        // A projection is built from whatever dataset was ingested, so
+        // everything the codecs accept must survive it.
+        for accepted in [
+            // Well-formed RFC 5646.
+            "en",
+            "en-us",
+            "zh-hans-cn",
+            "i-enochian",
+            "de-ch-x-phonebk",
+            // Private use past the §2.1 cap.
+            "x-purrdf-english",
+            "x-purrdf-afrikaans",
+            "x-purrdf-norwegiannynorsk",
+            "x-gmeow-norwegiannynorsk",
+            // Terminal-only tags, which approved W3C vectors carry and which a
+            // projection of such a dataset must therefore hold.
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "e",
+            "a-de",
+            "en-us-abc",
+            "en-lat1",
+            "de-419-de",
+            "en-x",
+        ] {
+            literal(accepted)
+                .validate(limits())
+                .unwrap_or_else(|e| panic!("{accepted:?} must validate: {}", e.message()));
+        }
     }
 
     #[test]

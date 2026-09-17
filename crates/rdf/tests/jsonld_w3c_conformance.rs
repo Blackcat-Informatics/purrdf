@@ -4,7 +4,6 @@
 //! Pinned W3C JSON-LD 1.1 to-RDF conformance vectors.
 
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_rdf::native_codecs::jsonld::{
@@ -68,12 +67,10 @@ struct CompactionVector {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut output, byte| {
-            write!(output, "{byte:02x}").expect("writing to String cannot fail");
-            output
-        })
+    // The digest renders itself, the way `rdf12_canon_profile.rs` in this same
+    // test directory already spells it — one idiom for "SHA-256 as lowercase
+    // hex" across the suite rather than a per-file accumulate loop.
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn flatten_single_carrier_graph(mut value: Value) -> Value {

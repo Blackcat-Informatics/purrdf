@@ -17,7 +17,6 @@ fn invalid_literal_shapes_cannot_cross_native_validation() {
             "x",
             RdfLiteral::language_datatype_iri(Some(RdfTextDirection::Rtl)),
         ),
-        RdfLiteral::language_tagged("x", ""),
     ] {
         let mut builder = RdfDatasetBuilder::new();
         builder.intern_literal(literal);
@@ -29,6 +28,60 @@ fn invalid_literal_shapes_cannot_cross_native_validation() {
             "rdf-ir-literal-shape"
         );
     }
+}
+
+/// A language tag the concrete syntaxes could not write must not cross the
+/// intern path either — this is the hole that let `@en us` reach a serializer
+/// that emits `@` + the tag verbatim. The refusal carries the grammar's own
+/// `langtag-*` code, not a generic shape code, because `purrdf_iri::langtag` is
+/// the one owner of the judgement.
+#[test]
+fn malformed_language_tags_cannot_cross_the_intern_path() {
+    for (tag, code) in [
+        ("en us", "langtag-terminal-primary-not-alpha"),
+        ("1", "langtag-terminal-primary-not-alpha"),
+        ("9-9", "langtag-terminal-primary-not-alpha"),
+        ("123-456", "langtag-terminal-primary-not-alpha"),
+        ("en-", "langtag-subtag-length-zero"),
+        ("-", "langtag-subtag-length-zero"),
+        ("!!!", "langtag-terminal-primary-not-alpha"),
+        ("", "langtag-subtag-length-zero"),
+        // The second `LANGTAG` rule: a well-formed primary subtag followed by
+        // one that is not alphanumeric. (`en us` above trips the FIRST rule —
+        // with no hyphen the whole string is the primary subtag.)
+        ("en-u s", "langtag-terminal-subtag-not-alphanum"),
+    ] {
+        let mut builder = RdfDatasetBuilder::new();
+        builder.intern_literal(RdfLiteral::language_tagged("x", tag));
+        let diagnostic = builder
+            .freeze()
+            .expect_err("a malformed language tag must not publish");
+        assert_eq!(diagnostic.code, code, "{tag:?}");
+        assert!(!diagnostic.message.is_empty(), "{tag:?} gave no reason");
+    }
+}
+
+/// The over-refusal twin: every tag a codec could legitimately hand the kernel
+/// still interns and still freezes, in the case it was authored in.
+#[test]
+fn well_formed_language_tags_still_cross_the_intern_path() {
+    let mut builder = RdfDatasetBuilder::new();
+    for tag in [
+        "en",
+        "en-US",
+        "zh-Hans-CN",
+        "de-CH-x-phonebk",
+        "i-enochian",
+        "x-purrdf-afrikaans",
+        "x-gmeow-english",
+        "en-fr-jura",
+        "fr-be-fbcl",
+    ] {
+        builder.intern_literal(RdfLiteral::language_tagged("x", tag));
+    }
+    builder
+        .freeze()
+        .expect("well-formed language tags must publish");
 }
 
 #[test]
