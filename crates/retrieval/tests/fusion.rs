@@ -233,11 +233,19 @@ fn equal_scores_use_the_declared_tie_break() {
 }
 
 // 4. A checked addition that leaves the range is a loud overflow.
+//
+// Three *distinct* candidates, one per stream, each receive only a single
+// contribution, so neither the per-candidate contribution-count bound nor the
+// per-candidate ceiling ever comes into play for any of them individually.
+// The overflow instead comes from `compute_threshold`, which sums the current
+// head of every stream regardless of candidate identity: three heads at
+// `weight * reciprocal(1 + 1) = weight / 2` each, with `weight == i128::MAX`,
+// sum past the fixed-point range on the third addition.
 #[test]
 fn checked_addition_overflow_is_refused() {
     let huge = Fixed::from_raw(i128::MAX);
     // max_contributions == 1 keeps the admitted ceiling equal to the single
-    // weight, so the profile constructs; three contributions then overflow.
+    // weight per stratum, so the profile constructs without itself overflowing.
     let profile = profile(&[("text", huge), ("vector", huge), ("geo", huge)], 1, 1);
     let streams = vec![
         (
@@ -246,11 +254,11 @@ fn checked_addition_overflow_is_refused() {
         ),
         (
             stratum("vector"),
-            MockStream::new(vec![row(1, huge, 1, "a")], exhausted(1)),
+            MockStream::new(vec![row(1, huge, 1, "b")], exhausted(1)),
         ),
         (
             stratum("geo"),
-            MockStream::new(vec![row(1, huge, 1, "a")], exhausted(1)),
+            MockStream::new(vec![row(1, huge, 1, "c")], exhausted(1)),
         ),
     ];
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
@@ -876,4 +884,187 @@ fn native_and_wasm_share_canonical_bytes_and_output() {
         std::fs::read_to_string(golden_path()).expect("the golden fixture is checked in");
     assert_eq!(render(&result), expected);
     assert_eq!(RECIP_K, 60);
+}
+
+// 13. A candidate that receives more contributions than the profile admits is
+//     a named refusal naming the offending candidate, the count reached and
+//     the declared limit — never a silently accepted count the profile
+//     declared inadmissible, and never the generic `Overflow`.
+#[test]
+fn contribution_count_exceeding_max_is_refused() {
+    let profile = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::ONE),
+            ("geo", Fixed::ONE),
+        ],
+        K,
+        2,
+    );
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+        (
+            stratum("geo"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+    ];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams, &profile,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::MaxContributionsExceeded { item, count: 3, max: 2 })
+                if item == "a"
+        ),
+        "expected MaxContributionsExceeded {{ item: \"a\", count: 3, max: 2 }}, got {result:?}"
+    );
+}
+
+// 14. Valid neighbour of 13: receiving exactly the declared maximum still
+//     succeeds, and the fused score is still the checked sum of every
+//     contribution — the count bound must clip nothing a legitimate answer
+//     needs.
+#[test]
+fn contribution_count_at_max_succeeds() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 2);
+    let c1 = contribution(Fixed::ONE, 1, K).expect("fits");
+    let c2 = contribution(Fixed::ONE, 1, K).expect("fits");
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].entity, Term::new("a"));
+    assert_eq!(result.rows[0].contributions.len(), 2);
+    assert_eq!(
+        result.rows[0].score,
+        c1.checked_add(c2).expect("fits"),
+        "exactly max_contributions contributions must still sum exactly"
+    );
+}
+
+// 15. `ceiling() == max_weight * max_contributions`, but every reciprocal-rank
+//     contribution is *strictly* below its stratum's weight: `K >= 1`
+//     (`InvalidK`) and `rank >= 1` (`InvalidRank`) force
+//     `reciprocal(K + rank) <= 1/2`. So the true achievable maximum under a
+//     valid contribution count is exactly half the declared ceiling, never the
+//     ceiling itself. This fixture drives every stratum to that true maximum —
+//     equal max weight, `K = 1`, `rank = 1`, one contribution per stratum,
+//     exactly `max_contributions` strata — and proves the fused score lands,
+//     exactly, at `ceiling() / 2`. This is the valid neighbour of the ceiling
+//     check: even the most aggressive legitimate load the current decay rule
+//     can produce must still succeed, with real headroom to spare.
+#[test]
+fn maximal_legitimate_score_stays_below_the_ceiling() {
+    let weight = Fixed::from_raw(2_000_000_000_000); // 2.0, an even raw value
+    let k = 1;
+    let names = ["s0", "s1", "s2", "s3"];
+    let weights: Vec<(&str, Fixed)> = names.iter().copied().map(|name| (name, weight)).collect();
+    let profile = profile(&weights, k, 4);
+
+    let streams: Vec<(Iri, MockStream)> = names
+        .iter()
+        .copied()
+        .map(|name| {
+            (
+                stratum(name),
+                MockStream::new(vec![row(1, weight, k, "a")], exhausted(1)),
+            )
+        })
+        .collect();
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].contributions.len(), 4);
+
+    let per_contribution = contribution(weight, 1, k).expect("fits");
+    let mut expected = Fixed::ZERO;
+    for _ in 0..4 {
+        expected = expected.checked_add(per_contribution).expect("fits");
+    }
+    assert_eq!(result.rows[0].score, expected);
+    assert!(
+        expected < profile.ceiling(),
+        "the maximal legitimate score must stay strictly below the declared ceiling"
+    );
+    assert_eq!(
+        expected.checked_add(expected).expect("fits"),
+        profile.ceiling(),
+        "the true achievable maximum is exactly half the declared ceiling, because \
+         K >= 1 and rank >= 1 cap every reciprocal-rank contribution at weight / 2"
+    );
+}
+
+// 16. `CeilingExceeded` is a defensive invariant, not one reachable under
+//     today's sole decay rule: test 15 proves a valid contribution count can
+//     reach at most `ceiling() / 2`. The one configuration whose raw
+//     arithmetic *would* land exactly at `ceiling()` — two equal-weight,
+//     rank-1, `K = 1` contributions under a profile whose `max_contributions`
+//     is 1 — is also the one configuration that already violates the
+//     contribution count, so the count check fires first and
+//     `CeilingExceeded` is never observed for it. This drives `FusionStream`
+//     directly (bypassing `fuse`'s duplicate-stratum guard) because reaching
+//     it needs two streams sharing one stratum tag, which `fuse` itself
+//     refuses before fusion ever begins.
+#[test]
+fn ceiling_boundary_is_gated_by_the_contribution_count_check() {
+    let weight = Fixed::from_raw(2_000_000_000_000); // 2.0, an even raw value
+    let k = 1;
+    let profile = profile(&[("dup", weight)], k, 1);
+    let dup = stratum("dup");
+    let streams = vec![
+        (
+            dup.clone(),
+            MockStream::new(vec![row(1, weight, k, "a")], exhausted(1)),
+        ),
+        (
+            dup,
+            MockStream::new(vec![row(1, weight, k, "a")], exhausted(1)),
+        ),
+    ];
+
+    // The fixture must reach exactly the ceiling for this test to prove
+    // anything: confirm the arithmetic the comment above claims before
+    // asserting on the behaviour it implies.
+    let per_contribution = contribution(weight, 1, k).expect("fits");
+    assert_eq!(
+        per_contribution
+            .checked_add(per_contribution)
+            .expect("fits"),
+        profile.ceiling(),
+        "two rank-1, K=1 contributions at the max weight must sum to exactly the ceiling"
+    );
+
+    let mut fusion = FusionStream::new(streams, profile);
+    let result = block_on(async {
+        loop {
+            match fusion.next().await {
+                Ok(Some(_)) => (),
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(error),
+            }
+        }
+    });
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::MaxContributionsExceeded { item, count: 2, max: 1 })
+                if item == "a"
+        ),
+        "expected MaxContributionsExceeded {{ item: \"a\", count: 2, max: 1 }}, got {result:?}"
+    );
 }

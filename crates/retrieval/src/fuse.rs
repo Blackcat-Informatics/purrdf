@@ -66,8 +66,11 @@ impl<T> fmt::Debug for FusionResult<T> {
 /// [`FusionError::DuplicateStratum`] when two streams share a stratum;
 /// [`FusionError::UnknownStratum`] when a stream's stratum has no declared
 /// weight; [`FusionError::Protocol`] when a stream violates the input protocol;
-/// and [`FusionError::Overflow`] when a checked sum leaves the fixed-point
-/// range.
+/// [`FusionError::Overflow`] when a checked sum leaves the fixed-point range;
+/// [`FusionError::MaxContributionsExceeded`] when a candidate's contribution
+/// count leaves the profile's declared bound; and
+/// [`FusionError::CeilingExceeded`] when a candidate's accumulated score
+/// leaves the profile's declared ceiling.
 pub async fn fuse<S, T>(
     streams: Vec<(Iri, S)>,
     profile: &FusionProfile,

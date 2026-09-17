@@ -186,6 +186,40 @@ pub enum FusionError {
     /// A fusion profile's canonical bytes could not be decoded.
     #[error("malformed fusion profile: {0}")]
     MalformedProfile(String),
+
+    /// A candidate received more contributions than the profile admits.
+    ///
+    /// Checked immediately after the contribution that crossed the bound is
+    /// recorded, so `count` is exactly `max + 1`, never a later, larger tally.
+    #[error(
+        "candidate {item} received {count} contributions, exceeding the fusion profile's declared maximum of {max}"
+    )]
+    MaxContributionsExceeded {
+        /// The candidate that exceeded the bound, as its canonical term text.
+        item: String,
+        /// The contribution count reached.
+        count: u32,
+        /// The profile's declared maximum contribution count.
+        max: u32,
+    },
+
+    /// A candidate's accumulated score exceeded the profile's declared
+    /// ceiling.
+    ///
+    /// Checked immediately after the contribution that crossed the bound is
+    /// summed into the candidate's lower bound, so `score` is the exact sum
+    /// that first left the admitted range.
+    #[error(
+        "candidate {item} reached score {score:?}, exceeding the fusion profile's declared ceiling of {ceiling:?}"
+    )]
+    CeilingExceeded {
+        /// The candidate that exceeded the bound, as its canonical term text.
+        item: String,
+        /// The accumulated score reached.
+        score: purrdf_text::Fixed,
+        /// The profile's declared ceiling.
+        ceiling: purrdf_text::Fixed,
+    },
 }
 
 impl From<crate::ranked_stream::ProtocolError> for FusionError {

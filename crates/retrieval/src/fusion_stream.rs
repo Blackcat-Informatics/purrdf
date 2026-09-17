@@ -204,8 +204,11 @@ impl<S: RankedStream> FusionStream<S> {
     /// # Errors
     ///
     /// [`FusionError::Overflow`] when a checked sum leaves the fixed-point
-    /// range, and [`FusionError::Protocol`] when a stream violates the input
-    /// protocol.
+    /// range; [`FusionError::Protocol`] when a stream violates the input
+    /// protocol; [`FusionError::MaxContributionsExceeded`] when a candidate's
+    /// contribution count leaves the profile's declared bound; and
+    /// [`FusionError::CeilingExceeded`] when a candidate's accumulated score
+    /// leaves the profile's declared ceiling.
     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
         self.ensure_initialized().await?;
         loop {
@@ -497,6 +500,14 @@ impl<S: RankedStream> FusionStream<S> {
     }
 
     /// Process stream `index`'s head into the frontier, then advance it.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::Overflow`] when the checked sum leaves the fixed-point
+    /// range, [`FusionError::MaxContributionsExceeded`] when the candidate's
+    /// contribution count leaves the profile's declared bound, and
+    /// [`FusionError::CeilingExceeded`] when its accumulated score leaves the
+    /// profile's declared ceiling.
     async fn pull(&mut self, index: usize) -> Result<(), FusionError> {
         let Some(head) = self.heads[index].take() else {
             return Ok(());
@@ -514,6 +525,25 @@ impl<S: RankedStream> FusionStream<S> {
             .contributions
             .push((stratum, head.rank, head.contribution));
         entry.seen_streams.insert(index);
+
+        // Both bounds are checked against the profile's own accessors, never
+        // recomputed, so a future change to either derivation cannot drift
+        // enforcement away from what the profile declares.
+        let count = u32::try_from(entry.contributions.len()).unwrap_or(u32::MAX);
+        if count > self.profile.max_contributions() {
+            return Err(FusionError::MaxContributionsExceeded {
+                item: head.item.as_str().to_owned(),
+                count,
+                max: self.profile.max_contributions(),
+            });
+        }
+        if entry.lower_bound > self.profile.ceiling() {
+            return Err(FusionError::CeilingExceeded {
+                item: head.item.as_str().to_owned(),
+                score: entry.lower_bound,
+                ceiling: self.profile.ceiling(),
+            });
+        }
 
         self.heads[index] = self.fetch(index).await?;
         Ok(())
