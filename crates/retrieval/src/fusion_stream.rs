@@ -93,6 +93,16 @@ pub enum ProducerStatus {
 }
 
 impl From<ProducerReceipt> for ProducerStatus {
+    /// Carry a producer's own terminal declaration into the fused trailer,
+    /// variant for variant.
+    ///
+    /// The two enums are deliberately separate types for the same four facts:
+    /// a [`ProducerReceipt`] is what a producer *claims* on the input protocol,
+    /// and a [`ProducerStatus`] is what the trailer *reports* after fusion has
+    /// checked that claim against the rows it actually pulled. Keeping them
+    /// apart is what stops an unverified claim from being mistaken for a
+    /// verified one at the type level. The conversion is total and lossless, so
+    /// nothing a producer said is reworded on the way through.
     fn from(receipt: ProducerReceipt) -> Self {
         match receipt {
             ProducerReceipt::Exhausted { rows_emitted } => Self::Exhausted { rows_emitted },
@@ -194,6 +204,12 @@ struct CandidateState {
 }
 
 impl CandidateState {
+    /// A candidate that has been named by some stream but has accumulated
+    /// nothing yet.
+    ///
+    /// A zero lower bound is the honest starting point rather than a placeholder:
+    /// before any contribution is summed, zero is exactly what this candidate is
+    /// known to score.
     fn new() -> Self {
         Self {
             lower_bound: Fixed::ZERO,

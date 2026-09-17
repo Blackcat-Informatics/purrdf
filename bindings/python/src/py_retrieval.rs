@@ -201,9 +201,9 @@ struct HostStatistics {
     revision: String,
     /// Reported cardinalities, by stratum.
     cardinality: BTreeMap<String, u64>,
-    /// Reported selectivities, as `(stratum, term, value)`. A `Vec` rather than
-    /// a map because the key is a request term, which is not `Ord`.
-    selectivity: Vec<(String, RequestTerm, f64)>,
+    /// Reported selectivities, as `(stratum, term, parts per million)`. A `Vec`
+    /// rather than a map because the key is a request term, which is not `Ord`.
+    selectivity: Vec<(String, RequestTerm, u64)>,
 }
 
 impl Statistics for HostStatistics {
@@ -219,7 +219,7 @@ impl Statistics for HostStatistics {
         self.cardinality.get(stratum.as_str()).copied()
     }
 
-    fn selectivity(&self, stratum: &Iri, term: &RequestTerm) -> Option<f64> {
+    fn selectivity_ppm(&self, stratum: &Iri, term: &RequestTerm) -> Option<u64> {
         self.selectivity
             .iter()
             .find(|(declared, declared_term, _)| {
@@ -706,12 +706,17 @@ fn collect_statistics(
     }
 
     if let Some(selectivity) = statistics.get_item("selectivity")? {
-        let entries: Vec<((String, usize), f64)> = selectivity
+        // Parts per million, as an integer, for the reason the fusion weights
+        // above are raw fixed-point integers: the value reaches a plan's
+        // canonical identity, and a binary float has two spellings of zero and
+        // one value that is not equal to itself. `1_000_000` is "every row
+        // matches".
+        let entries: Vec<((String, usize), u64)> = selectivity
             .cast::<PyDict>()
             .map_err(|_| {
                 PyTypeError::new_err(
                     "`statistics[\"selectivity\"]` maps a (stratum IRI, request-term index) \
-                     pair to a value in [0, 1]",
+                     pair to an integer of parts per million in [0, 1000000], never a float",
                 )
             })?
             .iter()
@@ -720,7 +725,7 @@ fn collect_statistics(
             .map_err(|_: PyErr| {
                 PyTypeError::new_err(
                     "`statistics[\"selectivity\"]` maps a (stratum IRI, request-term index) \
-                     pair to a value in [0, 1]",
+                     pair to an integer of parts per million in [0, 1000000], never a float",
                 )
             })?;
         for ((stratum, index), value) in entries {

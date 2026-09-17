@@ -85,23 +85,21 @@ pub struct ExecutionResult {
 /// A per-stratum failure is *data* — a [`ProducerStatus::ExecutionFailed`] in
 /// [`ExecutionResult::statuses`] — because the remaining strata must still run.
 /// Only a defect that invalidates the run itself is an error here.
+///
+/// # Why there is exactly one variant
+///
+/// Every failure a *unit* can have is attributable to the stratum that unit was
+/// compiled for, and the registry identity is checked before any unit runs, so
+/// there is no window in which an evaluation failure exists without a stratum
+/// to hang it on. That leaves the registry mismatch as the only condition that
+/// invalidates the whole run, and it is the only variant here: a variant no
+/// path can construct is an error a caller writes a `match` arm for and never
+/// reaches, which is worse than no variant at all. The enum stays
+/// `#[non_exhaustive]` so a second whole-run condition can be added without a
+/// breaking change if one is ever found.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ExecutionError {
-    /// A unit failed before it could be attributed to a stratum.
-    #[error("evaluation failed: {0}")]
-    EvalError(#[from] purrdf_sparql_eval::EvalError),
-
-    /// A compiled unit is structurally invalid and cannot be run.
-    #[error("stratum {stratum} carries an invalid compiled unit: {reason}")]
-    InvalidUnit {
-        /// The stratum the unit belongs to. Boxed because [`Iri`] carries five
-        /// parsed spans; see [`AdmissionError`](crate::AdmissionError).
-        stratum: Box<Iri>,
-        /// Why the unit cannot be run.
-        reason: String,
-    },
-
     /// The compiled units were built against a different live registry instance.
     #[error("compiled units name registry instance {expected:?}, but execution holds {got:?}")]
     RegistryMismatch {

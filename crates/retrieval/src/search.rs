@@ -436,11 +436,19 @@ impl RankedStream for RankedStreamAdapter {
         }
         // With `rank >= 1` checked above and `k >= 1` fixed by the validated
         // profile this adapter read its weight from, `weight * recip(k + rank)`
-        // is one checked division and a product strictly below `weight`; it
-        // cannot leave the fixed-point range. Fusion re-verifies the value
-        // regardless.
-        let value = contribution(self.weight, rank, self.k)
-            .expect("a validated profile and a 1-based rank cannot overflow");
+        // is one checked division and a product strictly below `weight`, so it
+        // cannot leave the fixed-point range. That argument is still only an
+        // argument, and this is a library path a caller reaches with its own
+        // stream and its own profile: the refusal is returned as a typed
+        // protocol error rather than asserted with a panic, because a wrong
+        // argument here would abort the caller's process instead of failing its
+        // request. Fusion re-verifies the value regardless.
+        let value = contribution(self.weight, rank, self.k).map_err(|error| {
+            ProtocolError::UncomputableContribution {
+                rank,
+                reason: error.to_string(),
+            }
+        })?;
         Ok(Some((rank, value, item)))
     }
 

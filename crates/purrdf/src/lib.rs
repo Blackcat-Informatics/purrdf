@@ -446,11 +446,11 @@ mod tests {
             fn cardinality(&self, _predicate: &retrieval::Iri) -> Option<u64> {
                 None
             }
-            fn selectivity(
+            fn selectivity_ppm(
                 &self,
-                _predicate: &retrieval::Iri,
+                _subject: &retrieval::Iri,
                 _term: &retrieval::RequestTerm,
-            ) -> Option<f64> {
+            ) -> Option<u64> {
                 None
             }
         }

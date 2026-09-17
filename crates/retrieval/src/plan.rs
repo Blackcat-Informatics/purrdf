@@ -489,6 +489,11 @@ impl Plan {
     }
 }
 
+/// The canonical discriminator byte a vector term's metric is written as.
+///
+/// The byte lands in a plan's identity, so the mapping is fixed forever: a tag
+/// once issued keeps its meaning in every build that reads it, and a new metric
+/// takes a new byte rather than renumbering the existing ones.
 fn metric_tag(metric: Metric) -> u8 {
     match metric {
         Metric::Cosine => METRIC_COSINE,
@@ -497,6 +502,13 @@ fn metric_tag(metric: Metric) -> u8 {
     }
 }
 
+/// The metric a canonical discriminator byte names.
+///
+/// An unrecognised byte is a typed refusal, never a nearest-known metric. A
+/// plan written by a build that knows a metric this one does not is asking a
+/// question this build cannot answer, and answering it under a substituted
+/// metric would return a confidently wrong result for a plan whose identity the
+/// caller still recognises.
 fn metric_from_tag(tag: u8) -> Result<Metric, PlanError> {
     match tag {
         METRIC_COSINE => Ok(Metric::Cosine),
@@ -509,6 +521,7 @@ fn metric_from_tag(tag: u8) -> Result<Metric, PlanError> {
     }
 }
 
+/// The canonical discriminator byte a producer's rejection reason is written as.
 fn reason_tag(reason: RejectionReason) -> u8 {
     match reason {
         RejectionReason::NotRanked => REJECT_NOT_RANKED,
@@ -518,6 +531,12 @@ fn reason_tag(reason: RejectionReason) -> u8 {
     }
 }
 
+/// The rejection reason a canonical discriminator byte names.
+///
+/// Refused rather than defaulted, for the reason [`metric_from_tag`] is: the
+/// reason a producer was dropped is the evidence a caller reads to find out why
+/// its answer is narrower than it expected, and a substituted reason is worse
+/// than no plan at all.
 fn reason_from_tag(tag: u8) -> Result<RejectionReason, PlanError> {
     match tag {
         REJECT_NOT_RANKED => Ok(RejectionReason::NotRanked),
@@ -531,6 +550,7 @@ fn reason_from_tag(tag: u8) -> Result<RejectionReason, PlanError> {
     }
 }
 
+/// The canonical discriminator byte an unserved term's reason is written as.
 fn unserved_tag(reason: UnservedReason) -> u8 {
     match reason {
         UnservedReason::NoProducerAccepts => UNSERVED_NO_PRODUCER_ACCEPTS,
@@ -541,6 +561,12 @@ fn unserved_tag(reason: UnservedReason) -> u8 {
     }
 }
 
+/// The unserved-term reason a canonical discriminator byte names.
+///
+/// Refused rather than defaulted. The three reasons are distinguishable facts
+/// about the registry — nothing accepted the term, everything that accepted it
+/// was then rejected, or the plan was edited — and collapsing one into another
+/// is exactly the loss [`Plan::unserved_terms`] exists to prevent.
 fn unserved_from_tag(tag: u8) -> Result<UnservedReason, PlanError> {
     match tag {
         UNSERVED_NO_PRODUCER_ACCEPTS => Ok(UnservedReason::NoProducerAccepts),
@@ -555,6 +581,11 @@ fn unserved_from_tag(tag: u8) -> Result<UnservedReason, PlanError> {
     }
 }
 
+/// Write the per-term unserved evidence, length-framed and in list order.
+///
+/// The list order is the plan's own and is not re-sorted here: the planner
+/// emits it ascending by request-term index, and the encoding reproduces the
+/// field rather than imposing an order the value does not have.
 fn write_unserved_terms(writer: &mut Writer, terms: &[UnservedTerm]) {
     writer.u64(terms.len() as u64);
     for term in terms {
@@ -563,6 +594,12 @@ fn write_unserved_terms(writer: &mut Writer, terms: &[UnservedTerm]) {
     }
 }
 
+/// Read the per-term unserved evidence.
+///
+/// The pre-allocation is capped rather than taken from the framed count: the
+/// count is untrusted input, and reserving what a forged length asks for would
+/// let a short, malformed plan demand an arbitrary allocation before a single
+/// element is read. Every decoder in this module caps the same way.
 fn read_unserved_terms(reader: &mut Reader<'_>) -> Result<Vec<UnservedTerm>, PlanError> {
     let count = reader.count()?;
     let mut terms = Vec::with_capacity(count.min(1024));
@@ -577,15 +614,28 @@ fn read_unserved_terms(reader: &mut Reader<'_>) -> Result<Vec<UnservedTerm>, Pla
     Ok(terms)
 }
 
+/// Write an IRI as its length-framed canonical text.
 fn write_iri(writer: &mut Writer, iri: &Iri) {
     writer.string(iri.as_str());
 }
 
+/// Read an IRI, re-parsing it with the kernel's own parser.
+///
+/// The text is validated on the way in rather than trusted because it came out
+/// of a plan: a plan is untrusted input, and an [`Iri`] that skipped validation
+/// would carry span offsets that do not describe its own bytes. `what` names
+/// the field, so a refusal says which IRI was malformed.
 fn read_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Iri, PlanError> {
     let text = reader.string(what)?;
     Iri::parse(&text)
 }
 
+/// Write an optional exact value as a presence byte and, when present, its raw
+/// scaled integer.
+///
+/// The raw `i128` is written rather than a rendered decimal: it is the value's
+/// exact representation, so the encoding neither rounds nor depends on a
+/// formatter.
 fn write_option_fixed(writer: &mut Writer, value: Option<Fixed>) {
     match value {
         None => writer.u8(ABSENT),
@@ -596,6 +646,11 @@ fn write_option_fixed(writer: &mut Writer, value: Option<Fixed>) {
     }
 }
 
+/// Read an optional exact value written by [`write_option_fixed`].
+///
+/// A presence byte that is neither absent nor present is a refusal rather than
+/// a treated-as-absent field, because silently reading a constrained endpoint
+/// as unconstrained would widen the query the plan describes.
 fn read_option_fixed(reader: &mut Reader<'_>) -> Result<Option<Fixed>, PlanError> {
     match reader.u8()? {
         ABSENT => Ok(None),
@@ -607,6 +662,15 @@ fn read_option_fixed(reader: &mut Reader<'_>) -> Result<Option<Fixed>, PlanError
     }
 }
 
+/// Write one request term: its arm's discriminator byte, then that arm's fields
+/// in declaration order.
+///
+/// Every arm writes a fixed field sequence, so the encoding is a pure function
+/// of the term. A vector term's components go out as exact bit patterns
+/// ([`Writer::f32_bits`]), which is the same identity `RequestTerm`'s hand-written
+/// `PartialEq` compares by — so two terms are equal exactly when their encodings
+/// are, including the `0.0`/`-0.0` and `NaN` cases a float comparison would get
+/// wrong in both directions.
 fn write_request_term(writer: &mut Writer, term: &RequestTerm) {
     match term {
         RequestTerm::Lexical {
@@ -669,6 +733,11 @@ fn write_request_term(writer: &mut Writer, term: &RequestTerm) {
     }
 }
 
+/// Read one request term written by [`write_request_term`].
+///
+/// An unknown arm byte is a refusal: the request lattice is closed and grows by
+/// addition, so a term this build cannot name is one a newer build wrote, and
+/// planning it as some other arm would answer a different question.
 fn read_request_term(reader: &mut Reader<'_>) -> Result<RequestTerm, PlanError> {
     match reader.u8()? {
         TERM_LEXICAL => {
@@ -744,6 +813,10 @@ fn read_request_term(reader: &mut Reader<'_>) -> Result<RequestTerm, PlanError> 
     }
 }
 
+/// Write the request's terms, length-framed, in the caller's own order.
+///
+/// The order is identity-bearing — producer bindings index into it — so it is
+/// never sorted.
 fn write_request_terms(writer: &mut Writer, terms: &[RequestTerm]) {
     writer.u64(terms.len() as u64);
     for term in terms {
@@ -751,6 +824,7 @@ fn write_request_terms(writer: &mut Writer, terms: &[RequestTerm]) {
     }
 }
 
+/// Read the request's terms, preserving the encoded order.
 fn read_request_terms(reader: &mut Reader<'_>) -> Result<Vec<RequestTerm>, PlanError> {
     let count = reader.count()?;
     let mut terms = Vec::with_capacity(count.min(1024));
@@ -760,6 +834,12 @@ fn read_request_terms(reader: &mut Reader<'_>) -> Result<Vec<RequestTerm>, PlanE
     Ok(terms)
 }
 
+/// Write the producer bindings: per binding, the producer IRI, its stratum, and
+/// the request-term indices it receives.
+///
+/// The producer is written as a plain framed string rather than through
+/// [`write_iri`] because a plan carries the registry's key byte-exactly — what
+/// the host registered under, not a re-canonicalized spelling of it.
 fn write_bindings(writer: &mut Writer, bindings: &[ProducerBinding]) {
     writer.u64(bindings.len() as u64);
     for binding in bindings {
@@ -772,6 +852,11 @@ fn write_bindings(writer: &mut Writer, bindings: &[ProducerBinding]) {
     }
 }
 
+/// Read the producer bindings written by [`write_bindings`].
+///
+/// The indices are read as-is. Whether they address the plan's own request is
+/// not this decoder's question — it is a semantic claim, checked once at the
+/// admission waist against the registry the plan will actually run on.
 fn read_bindings(reader: &mut Reader<'_>) -> Result<Vec<ProducerBinding>, PlanError> {
     let count = reader.count()?;
     let mut bindings = Vec::with_capacity(count.min(1024));
@@ -792,6 +877,12 @@ fn read_bindings(reader: &mut Reader<'_>) -> Result<Vec<ProducerBinding>, PlanEr
     Ok(bindings)
 }
 
+/// Write every considered producer's decision, selected or rejected with its
+/// reason.
+///
+/// Rejections are encoded beside selections rather than dropped: they are the
+/// plan's account of why the answer is the shape it is, and an encoding that
+/// kept only the selections would make two different plans hash alike.
 fn write_decisions(writer: &mut Writer, decisions: &[ProducerDecision]) {
     writer.u64(decisions.len() as u64);
     for decision in decisions {
@@ -810,6 +901,7 @@ fn write_decisions(writer: &mut Writer, decisions: &[ProducerDecision]) {
     }
 }
 
+/// Read the producer decisions written by [`write_decisions`].
 fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, PlanError> {
     let count = reader.count()?;
     let mut decisions = Vec::with_capacity(count.min(1024));
@@ -836,6 +928,13 @@ fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, Plan
     Ok(decisions)
 }
 
+/// Write the per-stratum depths, sorted by stratum IRI.
+///
+/// This sort is where determinism is won. The field is a `HashMap`, whose
+/// iteration order is not a function of its contents, so encoding it in
+/// iteration order would give one plan many identities. Sorting by the
+/// stratum's canonical text makes the bytes — and therefore the plan id — a
+/// pure function of the entries, on every target and in every process.
 fn write_depths(writer: &mut Writer, depths: &HashMap<Iri, u32>) {
     let mut entries: Vec<(&Iri, u32)> = depths.iter().map(|(key, value)| (key, *value)).collect();
     entries.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
@@ -846,6 +945,9 @@ fn write_depths(writer: &mut Writer, depths: &HashMap<Iri, u32>) {
     }
 }
 
+/// Read the per-stratum depths. The encoded order is sorted; the map that comes
+/// back does not preserve it and does not need to, because the next encode sorts
+/// again.
 fn read_depths(reader: &mut Reader<'_>) -> Result<HashMap<Iri, u32>, PlanError> {
     let count = reader.count()?;
     let mut depths = HashMap::with_capacity(count.min(1024));
@@ -857,6 +959,8 @@ fn read_depths(reader: &mut Reader<'_>) -> Result<HashMap<Iri, u32>, PlanError> 
     Ok(depths)
 }
 
+/// Write the per-stratum weights, sorted by stratum IRI for the reason
+/// [`write_depths`] sorts, and each as its exact raw scaled integer.
 fn write_weights(writer: &mut Writer, weights: &HashMap<Iri, Weight>) {
     let mut entries: Vec<(&Iri, Weight)> =
         weights.iter().map(|(key, value)| (key, *value)).collect();
@@ -868,6 +972,13 @@ fn write_weights(writer: &mut Writer, weights: &HashMap<Iri, Weight>) {
     }
 }
 
+/// Read the per-stratum weights written by [`write_weights`].
+///
+/// A raw integer is accepted here whatever its sign. Whether a weight is usable
+/// — strictly positive, keying a stratum the registry declares — is a semantic
+/// question the admission waist answers against a live registry, and refusing it
+/// here would leave a caller unable to decode and inspect the very plan it needs
+/// to correct.
 fn read_weights(reader: &mut Reader<'_>) -> Result<HashMap<Iri, Weight>, PlanError> {
     let count = reader.count()?;
     let mut weights = HashMap::with_capacity(count.min(1024));
@@ -879,6 +990,12 @@ fn read_weights(reader: &mut Reader<'_>) -> Result<HashMap<Iri, Weight>, PlanErr
     Ok(weights)
 }
 
+/// Write the statistics snapshot: the provider's label and revision, then each
+/// entry's subject, cardinality and optional selectivity.
+///
+/// The entries go out in list order rather than sorted, because the planner
+/// already emits them in a deterministic order (ascending by subject) and the
+/// encoding reproduces the field it was given.
 fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
     writer.string(&snapshot.source);
     writer.string(&snapshot.revision);
@@ -896,6 +1013,11 @@ fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
     }
 }
 
+/// Read the statistics snapshot written by [`write_statistics`].
+///
+/// An absent selectivity stays absent: "the provider measured nothing" and
+/// "the provider measured zero" are different facts, and a decoder that read
+/// the first as the second would turn silence into a claim that no row matches.
 fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
     let source = reader.string("statistics source")?;
     let revision = reader.string("statistics revision")?;

@@ -43,7 +43,11 @@ The stages:
   and records the statistics snapshot and both registry identities. It opens no
   store, no file and no clock.
 * `Statistics` — the caller-supplied cardinality/selectivity input planning
-  consults. There is no built-in provider.
+  consults. There is no built-in provider. Both are exact integers — a
+  selectivity is parts per million, never a float — and both **lower** a
+  stratum's depth and never raise it: a cardinality bounds how many rows the
+  stratum holds, a selectivity what fraction of them the request's terms can
+  match. A provider that measured nothing narrows nothing.
 * `Plan` — pure, inspectable, editable and serializable data: the request
   terms, per-producer bindings, selected/rejected producers with reasons, every
   request term that reached no producer at all and why (`UnservedTerm`), the

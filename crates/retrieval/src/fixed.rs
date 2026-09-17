@@ -16,14 +16,22 @@
 
 pub use purrdf_text::Fixed;
 
-/// The default smoothing constant `K` of the reciprocal-rank decay.
+/// Sixty, the conventional reciprocal-rank smoothing constant, offered as a
+/// value a caller may name — **never** as a default.
 ///
 /// `K` is the rank at which an item's contribution is halved: `recip(K + K) =
-/// recip(K)/2`. Sixty is the conventional value chosen by the operators this
-/// layer was extracted from, and it is a *default*, never a hardwired law — the
-/// value that governs a fusion is the one the [`FusionProfile`] carries, and the
-/// profile's identity covers it. A caller selects this constant deliberately or
-/// supplies its own; nothing here silently substitutes it.
+/// recip(K)/2`. Sixty is the value the reciprocal-rank-fusion literature and the
+/// operators this layer was extracted from converged on, and naming it here
+/// spares a caller from re-deriving where it came from.
+///
+/// It is not a fallback and nothing substitutes it. [`FusionProfile::new`]
+/// takes `k` as a required argument, so a profile is impossible to build
+/// without stating its own smoothing constant, and the value that governs a
+/// fusion is always the one that profile carries — covered by the profile's
+/// identity, so an answer names exactly which `K` produced it. A caller that
+/// wants sixty passes this constant; a caller that wants anything else passes
+/// that, and neither path reads a value nobody chose.
 ///
 /// [`FusionProfile`]: crate::FusionProfile
+/// [`FusionProfile::new`]: crate::FusionProfile::new
 pub const RECIP_K: i128 = 60;

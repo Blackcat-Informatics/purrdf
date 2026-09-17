@@ -64,6 +64,14 @@ impl DecayRule {
 /// descending, then the candidate's best (minimum) stratum rank ascending, then
 /// canonical term byte order ascending. The final key is total because two
 /// distinct candidates never share a canonical term.
+///
+/// There is deliberately **no** setter for it. A profile carries this law
+/// because it is the only one, and an API to select among one alternative is a
+/// choice a caller cannot make — it would read as a knob while doing nothing. A
+/// second tie-break is an additive variant plus the selector it would then
+/// genuinely need, written when there is a second law to select; the value is
+/// already in the profile's canonical bytes, so adding one re-opens no
+/// previously-issued identity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TieBreak {
     /// Score descending, best rank ascending, canonical term ascending.
@@ -203,14 +211,6 @@ impl FusionProfile {
             ceiling,
             monotone_depths,
         })
-    }
-
-    /// Replace the declared total tie-break. The default is the canonical law;
-    /// this exists so a future additive tie-break can be selected deliberately.
-    #[must_use]
-    pub fn with_tie_break(mut self, tie_break: TieBreak) -> Self {
-        self.tie_break = tie_break;
-        self
     }
 
     /// The smoothing constant `K` this profile fixes.

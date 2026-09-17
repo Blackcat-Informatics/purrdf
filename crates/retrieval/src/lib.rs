@@ -98,6 +98,25 @@
 //! canonical, length-framed encoding ([`Plan::canonical_bytes`]) — never over a
 //! serde document or a `Hash`. The encoding sorts map entries, so it is a pure
 //! function of the plan's fields and is byte-identical on every target.
+//!
+//! # No float is ever computed with
+//!
+//! Every number this layer derives — a stratum weight, a reciprocal-rank
+//! contribution, a fused score, a per-stratum depth and the selectivity that
+//! bounds it — is exact integer or base-10 fixed-point arithmetic, and the
+//! crate root carries `#![deny(clippy::float_arithmetic)]` so no second path
+//! can be reintroduced. This is the same denial `purrdf-text` and `purrdf-geo`
+//! carry, for the same reason: an order computed in binary floating point is
+//! not reproducible across targets, and it cannot be an identity — `0.0` and
+//! `-0.0` are two spellings of one value and `NaN` is not equal to itself.
+//!
+//! The denial has **no exception**, not even a narrow one. A caller-supplied
+//! embedding is the only float in the crate ([`RequestTerm::Vector`]), and it
+//! is carried, never computed with: it is compared by
+//! [`f32::to_bits`](f32::to_bits) — a total, reflexive function, which is what
+//! makes `RequestTerm`'s `Eq` genuine — and encoded into a plan's canonical
+//! bytes by the same bit pattern. Storing a float and doing arithmetic on one
+//! are different acts, and only the second is refused.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
@@ -105,6 +124,7 @@
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
 #![forbid(unsafe_code)]
+#![deny(clippy::float_arithmetic)]
 
 mod admission;
 mod canonical;

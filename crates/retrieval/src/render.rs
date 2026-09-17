@@ -373,18 +373,31 @@ struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
+    /// A cursor at the start of `text`.
     const fn new(text: &'a str) -> Self {
         Self { text, position: 0 }
     }
 
+    /// The text the cursor has not consumed.
+    ///
+    /// Slicing at `position` is sound because the cursor only ever advances by
+    /// whole `char` widths or by the byte length of a matched ASCII prefix, so
+    /// it never lands inside a multi-byte sequence.
     fn rest(&self) -> &'a str {
         &self.text[self.position..]
     }
 
+    /// Whether every byte has been consumed.
     fn at_end(&self) -> bool {
         self.position >= self.text.len()
     }
 
+    /// Advance past ASCII whitespace.
+    ///
+    /// ASCII only, deliberately. The lexicals this scanner reads are the ones
+    /// [`candidate_lexical`] writes, whose separators are all ASCII, so treating
+    /// a Unicode space as a separator would accept a spelling this layer never
+    /// emits and cannot round-trip.
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.rest().chars().next() {
             if ch.is_ascii_whitespace() {
@@ -395,6 +408,10 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Consume `prefix` if it is next, reporting whether it was.
+    ///
+    /// The cursor is left untouched when the prefix does not match, so a caller
+    /// can try alternatives in order without saving and restoring a position.
     fn eat(&mut self, prefix: &str) -> bool {
         if self.rest().starts_with(prefix) {
             self.position += prefix.len();

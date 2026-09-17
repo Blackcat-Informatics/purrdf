@@ -1889,8 +1889,10 @@ class retrieval:
     # `text_producers` maps a producer IRI to (stratum, predicate, graph), where
     # `graph` is "any", "default", or a named-graph IRI. `statistics` must name
     # its "source" and "revision", and may carry "cardinality" (stratum IRI to
-    # row count) and "selectivity" ((stratum IRI, request-term index) to a value
-    # in [0, 1]).
+    # row count) and "selectivity" ((stratum IRI, request-term index) to an
+    # integer of parts per million in [0, 1000000] — never a float, because the
+    # value reaches the plan's canonical identity). A reported selectivity
+    # lowers that stratum's planned depth; it never raises one.
     @staticmethod
     def plan(
         data: str,

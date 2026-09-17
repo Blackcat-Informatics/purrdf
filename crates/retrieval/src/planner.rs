@@ -78,6 +78,26 @@
 //! machinery. The planner declares no parallel `volatility`, `arity` or
 //! access-pattern fields of its own; the seam's declarations are the single
 //! source, and [`Statistics`] supplies the cardinalities that bound them.
+//!
+//! # Both statistics bound the depth, and neither raises it
+//!
+//! A stratum's depth starts at the registry's declared worst-case row count and
+//! is lowered by whatever the provider measured: first by the stratum's
+//! cardinality (there are only that many rows), then by the selectivity of the
+//! request terms that reach it (only that fraction of them can match). Every
+//! step is a `min`, so a statistic can only ever narrow a depth the registry
+//! already declared — a provider cannot license reading deeper than a producer
+//! promised to answer.
+//!
+//! The selectivity step is deliberately conservative in two ways, because a
+//! depth that falls below the rows a stratum really holds truncates the ranked
+//! list silently. Contributions are **summed** across the terms reaching one
+//! stratum and saturated at unity, so a producer that takes its terms as a
+//! disjunction is bounded as loosely as one that conjoins them; and the product
+//! is rounded **up**, so a ratio never bounds below the count it describes.
+//! Nothing here refuses a plan: the whole step is a `min` over a bound the
+//! registry already set, and a stratum no provider spoke about keeps exactly
+//! the depth it had.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -102,6 +122,13 @@ use crate::statistics::Statistics;
 /// chooses it in the profile at fusion time; admission validates the plan's
 /// weights against the declared strata rather than reading a policy into them.
 const UNIT_WEIGHT_RAW: i128 = Fixed::ONE.into_raw();
+
+/// Parts per million of unity: the value "every row matches" is reported as.
+///
+/// It is the scale [`Statistics::selectivity_ppm`] declares and the scale
+/// [`StatisticsEntry::selectivity_ppm`] records, so a reported selectivity
+/// passes through the planner without a change of unit.
+const PPM_UNIT: u64 = 1_000_000;
 
 /// Plan `request` against `registry`, consulting `statistics`.
 ///
@@ -204,7 +231,7 @@ pub fn plan(
     //    per-stratum depth into an argument for a producer that declares a depth
     //    placement, so the bound has to exist before placement runs — over the
     //    term-matched set, which is the widest set placement can survive from.
-    let provisional = depth_bounds(&candidates, statistics);
+    let provisional = depth_bounds(&candidates, &request.terms, statistics);
 
     // 5. Placement: can this producer's declaration actually render the terms it
     //    matched into its own argument positions, under a mode it declares? A
@@ -284,12 +311,23 @@ pub fn plan(
             .and_modify(|current| *current = (*current).max(bound))
             .or_insert(bound);
     }
+    // Which request terms actually reach each surviving stratum. A selectivity
+    // is a statement about the rows a *term* matches, so only the terms a
+    // stratum's producers were bound to can bound that stratum's depth.
+    let mut reaching: BTreeMap<Iri, BTreeSet<u32>> = BTreeMap::new();
+    for binding in &bindings {
+        reaching
+            .entry(binding.stratum.clone())
+            .or_default()
+            .extend(binding.request_terms.iter().copied());
+    }
     let strata: BTreeSet<Iri> = declared_bounds.keys().cloned().collect();
     let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(strata.len());
     let mut stratum_weights: HashMap<Iri, Weight> = HashMap::with_capacity(strata.len());
     for stratum in &strata {
         let declared = declared_bounds.get(stratum).copied().unwrap_or(0);
-        let bound = capped(declared, stratum, statistics);
+        let reached = terms_at(&request.terms, reaching.get(stratum));
+        let bound = capped(declared, stratum, &reached, statistics);
         if bound == u64::MAX {
             return Err(PlanError::StatisticsUnavailable {
                 predicate: Box::new(stratum.clone()),
@@ -301,7 +339,7 @@ pub fn plan(
 
     // 5. Capture the statistics the planner actually consulted: the strata it
     //    placed and the predicates the request named.
-    let statistics_snapshot = capture_statistics(request, &strata, statistics);
+    let statistics_snapshot = capture_statistics(request, &strata, &reaching, statistics);
 
     // 6. Record both registry identities.
     Ok(Plan {
@@ -369,12 +407,18 @@ enum Outcome<'a> {
 /// the one its stratum finally records. An unbounded stratum with no statistic
 /// has no finite depth here; it is carried as [`u32::MAX`] rather than refused,
 /// because the refusal belongs to the surviving set and is raised there.
-fn depth_bounds(candidates: &[Candidate<'_>], statistics: &impl Statistics) -> BTreeMap<Iri, u32> {
+fn depth_bounds(
+    candidates: &[Candidate<'_>],
+    terms: &[RequestTerm],
+    statistics: &impl Statistics,
+) -> BTreeMap<Iri, u32> {
     let mut bounds: BTreeMap<Iri, u64> = BTreeMap::new();
+    let mut reaching: BTreeMap<Iri, BTreeSet<u32>> = BTreeMap::new();
     for candidate in candidates {
         let Outcome::Matched {
             descriptor,
             stratum,
+            matched,
             ..
         } = &candidate.outcome
         else {
@@ -385,15 +429,36 @@ fn depth_bounds(candidates: &[Candidate<'_>], statistics: &impl Statistics) -> B
             .entry(stratum.clone())
             .and_modify(|current| *current = (*current).max(bound))
             .or_insert(bound);
+        reaching
+            .entry(stratum.clone())
+            .or_default()
+            .extend(matched.iter().copied());
     }
     bounds
         .into_iter()
         .map(|(stratum, declared)| {
-            let bound = capped(declared, &stratum, statistics);
+            let reached = terms_at(terms, reaching.get(&stratum));
+            let bound = capped(declared, &stratum, &reached, statistics);
             let depth = u32::try_from(bound).unwrap_or(u32::MAX);
             (stratum, depth)
         })
         .collect()
+}
+
+/// The request terms a recorded index set names, in ascending index order.
+///
+/// An index the request does not carry is skipped rather than refused: this is
+/// a lookup used to narrow a bound, and a bound is narrowed by the terms that
+/// exist. A plan whose recorded indices address no term of its own request is a
+/// separate, typed refusal at the admission waist, where untrusted plans are
+/// checked.
+fn terms_at<'a>(terms: &'a [RequestTerm], indices: Option<&BTreeSet<u32>>) -> Vec<&'a RequestTerm> {
+    indices.map_or_else(Vec::new, |indices| {
+        indices
+            .iter()
+            .filter_map(|index| terms.get(*index as usize))
+            .collect()
+    })
 }
 
 /// Every request term no binding carries, ascending, with the reason it went
@@ -446,12 +511,75 @@ fn unserved_terms(
         .collect()
 }
 
-/// A declared row bound, lowered (never raised) by a measured cardinality.
-fn capped(declared: u64, stratum: &Iri, statistics: &impl Statistics) -> u64 {
-    match statistics.cardinality(stratum) {
+/// A declared row bound, lowered (never raised) by what the provider measured.
+///
+/// Two independent statistics narrow one number. A measured cardinality says
+/// how many rows the stratum holds at all; a measured selectivity says what
+/// fraction of them `terms` can match, and a term matching a tenth of a
+/// stratum cannot be read a stratum-deep. Each is applied as a `min`, so the
+/// result never exceeds the registry's own declaration and a provider that
+/// measured nothing changes nothing.
+fn capped(
+    declared: u64,
+    stratum: &Iri,
+    terms: &[&RequestTerm],
+    statistics: &impl Statistics,
+) -> u64 {
+    let bound = match statistics.cardinality(stratum) {
         Some(cardinality) => declared.min(cardinality),
         None => declared,
+    };
+    // An unbounded stratum has no row count for a ratio to be a fraction of.
+    // Scaling `u64::MAX` would manufacture a finite bound out of a missing one
+    // and hide the condition `StatisticsUnavailable` exists to report.
+    if bound == u64::MAX {
+        return bound;
     }
+    let Some(ppm) = combined_selectivity_ppm(stratum, terms, statistics) else {
+        return bound;
+    };
+    // Rounded up, in an intermediate wide enough that the product cannot wrap:
+    // a bound derived from a ratio must never fall below the rows the ratio
+    // describes, because a depth below a stratum's real answer truncates its
+    // ranked list with nothing anywhere saying so.
+    let scaled = (u128::from(bound) * u128::from(ppm)).div_ceil(u128::from(PPM_UNIT));
+    u64::try_from(scaled).unwrap_or(bound).min(bound)
+}
+
+/// The selectivity the provider reports for `subject` across `terms`, in parts
+/// per million, or `None` when it reports none for any of them.
+///
+/// The terms are **summed** rather than minimised, and the sum saturates at
+/// unity. Minimising would assume every producer conjoins the terms it is
+/// handed; one that answers their union can return more rows than the most
+/// selective term alone describes, and a bound below that is a silently
+/// truncated ranked list. The sum bounds both readings, and a value a provider
+/// reports above unity — a claim that a term matches more rows than exist — is
+/// clamped there rather than allowed to widen anything.
+///
+/// No term is filtered out by the predicate it names. The provider decides
+/// which `(subject, term)` pairs it can answer, and pre-filtering would make a
+/// selectivity reported under a *stratum* unreachable — which is exactly the
+/// one a stratum's depth is derived from. Asking about every term keeps the
+/// lookup a lookup.
+fn combined_selectivity_ppm(
+    subject: &Iri,
+    terms: &[&RequestTerm],
+    statistics: &impl Statistics,
+) -> Option<u64> {
+    let mut total: Option<u64> = None;
+    for term in terms {
+        let Some(ppm) = statistics.selectivity_ppm(subject, term) else {
+            continue;
+        };
+        total = Some(
+            total
+                .unwrap_or(0)
+                .saturating_add(ppm.min(PPM_UNIT))
+                .min(PPM_UNIT),
+        );
+    }
+    total
 }
 
 /// Refuse a request term that cannot name anything.
@@ -543,9 +671,16 @@ fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
 /// Only facts the provider actually reports are recorded: a subject with no
 /// cardinality is omitted rather than recorded as zero, because zero is a
 /// measurement and absence is not.
+///
+/// The recorded selectivity is the same aggregate the depth was derived from,
+/// over the same terms: for a stratum, the terms `reaching` says were bound to
+/// it; for a request predicate, which no depth is derived for, the whole
+/// request. So the snapshot explains the depth beside it rather than reporting
+/// a second, differently-computed number that happens to sit next to it.
 fn capture_statistics(
     request: &RetrievalRequest,
     strata: &BTreeSet<Iri>,
+    reaching: &BTreeMap<Iri, BTreeSet<u32>>,
     statistics: &impl Statistics,
 ) -> StatisticsSnapshot {
     let mut subjects: BTreeSet<Iri> = strata.clone();
@@ -554,16 +689,21 @@ fn capture_statistics(
             subjects.insert(predicate.clone());
         }
     }
+    let all_terms: Vec<&RequestTerm> = request.terms.iter().collect();
 
     let mut entries = Vec::new();
     for subject in subjects {
         let Some(cardinality) = statistics.cardinality(&subject) else {
             continue;
         };
+        let consulted = match reaching.get(&subject) {
+            Some(indices) => terms_at(&request.terms, Some(indices)),
+            None => all_terms.clone(),
+        };
         entries.push(StatisticsEntry {
             subject: subject.as_str().to_owned(),
             cardinality,
-            selectivity_ppm: selectivity_ppm(&subject, request, statistics),
+            selectivity_ppm: combined_selectivity_ppm(&subject, &consulted, statistics),
         });
     }
 
@@ -572,32 +712,4 @@ fn capture_statistics(
         revision: statistics.revision().to_owned(),
         entries,
     }
-}
-
-/// The most selective reported selectivity for a subject's request terms, in
-/// parts per million.
-fn selectivity_ppm(
-    subject: &Iri,
-    request: &RetrievalRequest,
-    statistics: &impl Statistics,
-) -> Option<u64> {
-    let mut most_selective: Option<f64> = None;
-    for term in &request.terms {
-        if term_predicate(term) != Some(subject) {
-            continue;
-        }
-        if let Some(value) = statistics.selectivity(subject, term) {
-            most_selective = Some(most_selective.map_or(value, |current| current.min(value)));
-        }
-    }
-    most_selective.map(|value| {
-        // The trait's contract is [0, 1]; clamping keeps a provider fault from
-        // producing a nonsensical ratio while still recording a bounded fact.
-        let ratio = if value.is_finite() {
-            value.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        (ratio * 1_000_000.0).round() as u64
-    })
 }

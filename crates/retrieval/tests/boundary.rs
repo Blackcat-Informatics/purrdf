@@ -251,7 +251,7 @@ impl Statistics for MockStatistics {
         self.cardinalities.get(predicate).copied()
     }
 
-    fn selectivity(&self, _predicate: &Iri, _term: &RequestTerm) -> Option<f64> {
+    fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
         None
     }
 }

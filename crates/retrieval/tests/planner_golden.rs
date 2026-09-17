@@ -194,7 +194,7 @@ fn fixture_statistics() -> MockStatistics {
         source: "example-statistics".to_owned(),
         revision: "r1".to_owned(),
         cardinalities,
-        selectivities: vec![(iri(&ex("body")), lexical_term(), 0.5)],
+        selectivities: vec![(iri(&ex("body")), lexical_term(), 500_000)],
     }
 }
 
@@ -260,7 +260,10 @@ struct MockStatistics {
     source: String,
     revision: String,
     cardinalities: BTreeMap<Iri, u64>,
-    selectivities: Vec<(Iri, RequestTerm, f64)>,
+    /// Reported selectivities as `(subject, term, parts per million)`. A `Vec`
+    /// rather than a map because the key carries a [`RequestTerm`], which is
+    /// deliberately not `Ord`.
+    selectivities: Vec<(Iri, RequestTerm, u64)>,
 }
 
 impl Statistics for MockStatistics {
@@ -276,10 +279,10 @@ impl Statistics for MockStatistics {
         self.cardinalities.get(predicate).copied()
     }
 
-    fn selectivity(&self, predicate: &Iri, term: &RequestTerm) -> Option<f64> {
+    fn selectivity_ppm(&self, subject: &Iri, term: &RequestTerm) -> Option<u64> {
         self.selectivities
             .iter()
-            .find(|(subject, candidate, _)| subject == predicate && candidate == term)
+            .find(|(declared, candidate, _)| declared == subject && candidate == term)
             .map(|(_, _, value)| *value)
     }
 }
@@ -951,6 +954,129 @@ fn the_snapshot_records_the_consulted_selectivity() {
     assert_eq!(body.selectivity_ppm, Some(500_000));
     assert_eq!(plan.statistics_snapshot.source, "example-statistics");
     assert_eq!(plan.statistics_snapshot.revision, "r1");
+}
+
+/// The fixture statistics with exactly the reported selectivities given, so a
+/// test states the whole of what the provider knows about selectivity.
+fn selectivity_statistics(reported: Vec<(Iri, RequestTerm, u64)>) -> MockStatistics {
+    MockStatistics {
+        selectivities: reported,
+        ..fixture_statistics()
+    }
+}
+
+/// A selectivity is a statement about the rows a term can match, so it bounds
+/// the depth the way a cardinality does. Both halves are executed: the stratum
+/// the provider spoke about is narrowed, and — the case that would be silently
+/// over-refused if the rule leaked — the stratum it said nothing about, and the
+/// identical plan under a provider that reports no selectivity at all, keep
+/// exactly the depth the registry declared.
+#[test]
+fn a_reported_stratum_selectivity_bounds_that_stratum_and_only_that_stratum() {
+    let reported = selectivity_statistics(vec![(
+        iri(&ex("stratum/text")),
+        lexical_term(),
+        250_000, // a quarter of the stratum's rows can match
+    )]);
+    let narrowed = plan(&lexical_request(), &mixed_registry(), &reported).expect("plans");
+    assert_eq!(
+        narrowed.stratum_depths[&iri(&ex("stratum/text"))],
+        25,
+        "a quarter of 100 rows is 25, so a depth of 100 would license reading rows no term fills"
+    );
+    assert_eq!(
+        narrowed.stratum_depths[&iri(&ex("stratum/universal"))],
+        200,
+        "the stratum the provider said nothing about keeps its declared depth"
+    );
+
+    let silent = selectivity_statistics(Vec::new());
+    let untouched = plan(&lexical_request(), &mixed_registry(), &silent).expect("plans");
+    assert_eq!(
+        untouched.stratum_depths[&iri(&ex("stratum/text"))],
+        100,
+        "a provider that measured no selectivity narrows nothing"
+    );
+
+    // The snapshot explains the depth rather than reporting a second number:
+    // the value that narrowed the stratum is the value recorded beside it.
+    assert_eq!(
+        narrowed
+            .statistics_snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.subject == ex("stratum/text"))
+            .and_then(|entry| entry.selectivity_ppm),
+        Some(250_000)
+    );
+}
+
+/// The bound is rounded up and clamped at unity, because the failure mode of
+/// getting either wrong is a ranked list that is quietly shorter than the
+/// stratum's real answer.
+#[test]
+fn a_selectivity_rounds_up_and_never_raises_a_declared_depth() {
+    // One part per million of 100 rows is a ten-thousandth of a row. Rounding
+    // down would record a depth of zero for a stratum that can still answer.
+    let sparse = selectivity_statistics(vec![(iri(&ex("stratum/text")), lexical_term(), 1)]);
+    assert_eq!(
+        plan(&lexical_request(), &mixed_registry(), &sparse)
+            .expect("plans")
+            .stratum_depths[&iri(&ex("stratum/text"))],
+        1
+    );
+
+    // Unity, and the two provider faults above it, all leave the bound exactly
+    // where the registry's declaration and the cardinality put it. A ratio
+    // cannot widen a depth.
+    for ppm in [1_000_000_u64, 5_000_000, u64::MAX] {
+        let full = selectivity_statistics(vec![(iri(&ex("stratum/text")), lexical_term(), ppm)]);
+        assert_eq!(
+            plan(&lexical_request(), &mixed_registry(), &full)
+                .expect("plans")
+                .stratum_depths[&iri(&ex("stratum/text"))],
+            100,
+            "{ppm} ppm must not raise the declared bound"
+        );
+    }
+
+    // Zero is a measurement, not an absence: the provider says no row under
+    // this stratum matches, and the plan records the depth that follows.
+    let none = selectivity_statistics(vec![(iri(&ex("stratum/text")), lexical_term(), 0)]);
+    assert_eq!(
+        plan(&lexical_request(), &mixed_registry(), &none)
+            .expect("plans")
+            .stratum_depths[&iri(&ex("stratum/text"))],
+        0
+    );
+}
+
+/// Several terms reaching one stratum are summed, not minimised. A producer
+/// that answers the union of the terms it was handed returns more rows than the
+/// most selective of them describes, and a bound below that would truncate its
+/// ranked list with nothing saying so.
+#[test]
+fn selectivities_across_the_terms_one_stratum_receives_are_summed() {
+    let reported = selectivity_statistics(vec![
+        (iri(&ex("stratum/universal")), lexical_term(), 300_000),
+        (iri(&ex("stratum/universal")), vector_term(), 400_000),
+    ]);
+    let planned = plan(&mixed_request(), &mixed_registry(), &reported).expect("plans");
+    assert_eq!(
+        planned.stratum_depths[&iri(&ex("stratum/universal"))],
+        140,
+        "seven tenths of the 200-row bound, not the three tenths the most selective term names"
+    );
+    assert_eq!(
+        planned
+            .statistics_snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.subject == ex("stratum/universal"))
+            .and_then(|entry| entry.selectivity_ppm),
+        Some(700_000),
+        "the recorded aggregate is the one the depth was derived from"
+    );
 }
 
 #[test]

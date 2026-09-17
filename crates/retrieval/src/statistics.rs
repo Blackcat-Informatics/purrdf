@@ -27,6 +27,25 @@
 //! (except where that bound is genuinely unbounded — see
 //! [`PlanError::StatisticsUnavailable`](crate::PlanError::StatisticsUnavailable)),
 //! the latter caps the stratum at zero.
+//!
+//! # Why selectivity is an integer, in parts per million
+//!
+//! A selectivity is a ratio, and every other ratio this layer carries — a
+//! stratum weight, a spatial maximum distance, a fused score — is an exact
+//! base-10 [`Fixed`](crate::Fixed) rather than a binary float, for the reason
+//! [`RequestTerm::NumericRange`](crate::RequestTerm::NumericRange) spells out:
+//! a plan's identity is a digest over its recorded fields, and a type with two
+//! spellings of one value (`0.0` and `-0.0`) and a value that is not equal to
+//! itself (`NaN`) has no place in an identity.
+//!
+//! Parts per million rather than `Fixed` because that is the resolution the
+//! plan actually records
+//! ([`StatisticsEntry::selectivity_ppm`](crate::StatisticsEntry::selectivity_ppm)):
+//! a provider's value is written into the snapshot **verbatim**, with no
+//! rounding step between what was reported and what was recorded, so the
+//! snapshot explains the depth the planner derived from it exactly. It also
+//! closes the last arithmetic path a float could have entered by — the crate
+//! root denies `clippy::float_arithmetic`, so none can.
 
 use crate::iri::Iri;
 use crate::request::RequestTerm;
@@ -51,17 +70,35 @@ pub trait Statistics {
     /// revision read from a clock would make the plan depend on the wall clock.
     fn revision(&self) -> &str;
 
-    /// The cardinality the provider reports for `predicate`, if known.
+    /// The cardinality the provider reports for `subject`, if known.
     ///
     /// The planner consults this for each stratum it places: a measured
     /// cardinality may lower the depth below the producer's declared row bound,
     /// never raise it.
-    fn cardinality(&self, predicate: &Iri) -> Option<u64>;
+    fn cardinality(&self, subject: &Iri) -> Option<u64>;
 
-    /// The selectivity the provider reports for `term` under `predicate`, in
-    /// `[0, 1]`, if known.
+    /// The selectivity the provider reports for `term` under `subject`, in
+    /// parts per million of the rows `subject` carries, if known.
     ///
-    /// A value outside the unit interval is not a statistic; the planner clamps
-    /// it at the boundary rather than letting a provider fault reorder a plan.
-    fn selectivity(&self, predicate: &Iri, term: &RequestTerm) -> Option<f64>;
+    /// `1_000_000` is "every row matches" and `0` is "none does". A value above
+    /// `1_000_000` is not a statistic — it claims a term matches more rows than
+    /// exist — and the planner clamps it at unity rather than letting a provider
+    /// fault narrow a stratum below what its producer can answer.
+    ///
+    /// # What the planner does with it
+    ///
+    /// The subject a depth is derived for is a **stratum**, so a selectivity
+    /// reported under a stratum is the one that bounds it: a term matching a
+    /// tenth of a stratum's rows cannot be read a stratum-deep, and recording a
+    /// depth no term can fill would license reading rows that are not there.
+    /// The bound is applied the way a cardinality is — it lowers a depth, never
+    /// raises one — and it is rounded **up**, so a bound derived from a ratio
+    /// can never fall below the row count the ratio describes.
+    ///
+    /// A provider is free to report under a request predicate instead, or as
+    /// well; a plan records every selectivity it was told, whatever the subject
+    /// (see [`StatisticsSnapshot`](crate::StatisticsSnapshot)). Only a stratum's
+    /// own selectivity bounds a stratum's own depth, because only that one is a
+    /// statement about the rows the depth counts.
+    fn selectivity_ppm(&self, subject: &Iri, term: &RequestTerm) -> Option<u64>;
 }

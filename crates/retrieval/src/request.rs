@@ -62,8 +62,10 @@ pub enum Metric {
 /// that accepts none of them is not reached by that term. `PartialEq` (and
 /// therefore `Eq`) is implemented by hand because the vector arm carries
 /// `f32`: two embeddings are equal iff their bit patterns are equal (compared
-/// via [`f32::to_bits`]), which is the identity [`canonical`](crate::canonical)
-/// uses to encode them. Bit-pattern equality means `0.0f32` and `-0.0f32` are
+/// via [`f32::to_bits`]), which is the identity a plan's canonical encoding
+/// ([`Plan::canonical_bytes`](crate::Plan::canonical_bytes)) writes them under,
+/// so two terms are equal exactly when their encodings are. Bit-pattern
+/// equality means `0.0f32` and `-0.0f32` are
 /// distinct (their bits differ) and a `NaN` embedding equals itself
 /// (`to_bits()` is a total, reflexive function even though `f32`'s `PartialOrd`
 /// is not), so this type's `PartialEq` is a genuine equivalence relation and

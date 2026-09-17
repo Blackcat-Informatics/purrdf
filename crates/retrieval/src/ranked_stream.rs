@@ -123,6 +123,33 @@ pub enum ProtocolError {
     /// The producer reports this itself; fusion never invents an end for it.
     #[error("producer did not terminate")]
     NeverEndingSource,
+
+    /// A row's contribution could not be formed at all, so the producer has no
+    /// value it could honestly emit for that rank.
+    ///
+    /// This is the one variant that is not a producer's *misbehaviour*: it is a
+    /// producer reporting that the fusion law it was asked to compute under
+    /// cannot produce a number for this row — the fixed-point arithmetic left
+    /// its range. Emitting a wrapped or substituted value instead would be a
+    /// wrong order presented as a right one, which is what the whole protocol
+    /// exists to prevent.
+    ///
+    /// No profile this crate can build reaches it: a validated
+    /// [`FusionProfile`](crate::FusionProfile) fixes `K >= 1` and a weight whose
+    /// admitted ceiling already fits, and a contribution is that weight times a
+    /// reciprocal at most one, so the product cannot leave the range. That is an
+    /// argument, though, and this variant is what keeps it from having to be an
+    /// assertion: the conversion from a rank to a contribution is total, it runs
+    /// on a library path a caller reaches with its own stream, and a wrong
+    /// argument here should fail that caller's request rather than abort its
+    /// process.
+    #[error("no contribution can be formed at rank {rank}: {reason}")]
+    UncomputableContribution {
+        /// The 1-based rank whose contribution could not be formed.
+        rank: u64,
+        /// The arithmetic refusal, rendered.
+        reason: String,
+    },
 }
 
 /// A producer's ranked rows, pulled one at a time.
