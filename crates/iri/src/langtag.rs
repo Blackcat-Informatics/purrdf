@@ -45,12 +45,21 @@
 //! * Subtags are never looked up, so `qq-Zzzz-QQ` is well-formed even though no
 //!   such language, script or region is registered.
 //!
-//! Case is insignificant to the judgement, and the input is never re-encoded or
-//! case-normalized: RDF keeps language tags lexical-verbatim, and the §2.1.1
-//! case conventions are a *presentation* recommendation, not part of the
-//! grammar. A caller that wants that presentation asks for it explicitly with
+//! Case is insignificant to the judgement, and *this module* never re-encodes
+//! or case-normalizes: the §2.1.1 case conventions are a *presentation*
+//! recommendation, not part of the grammar, so a parsed tag borrows its input
+//! unchanged. A caller that wants that presentation asks for it explicitly with
 //! [`canonical_case`], which is a separate, allocating rewrite and never
 //! changes what [`parse`] or [`is_well_formed`] answer.
+//!
+//! What a *store* does with the tag afterwards is its own concern and is not
+//! this module's promise: RDF 1.2 Concepts gives language tags a lower-case
+//! value space, and the PurRDF IR folds case when it interns a literal so that
+//! two spellings of one tag are one term. So `"a"@en-US-abc` read from a file
+//! and written back comes out `"a"@en-us-abc`. Do not read this module's
+//! case-blindness as a guarantee that a tag survives a round trip byte-for-byte
+//! — it guarantees only that the *verdict* and the *decomposition* do not
+//! depend on case.
 //!
 //! # What a parsed tag gives you
 //!
