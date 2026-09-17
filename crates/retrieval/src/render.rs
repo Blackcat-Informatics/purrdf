@@ -105,9 +105,51 @@ pub(crate) enum RenderError {
 /// same term, so one must be chosen for the emitted text to be a pure function
 /// of the plan; the short form is that choice.
 pub(crate) fn sparql_term(value: &TermValue) -> Result<String, RenderError> {
-    let mut out = String::new();
+    let mut out = String::with_capacity(lexical_size_hint(value));
     write_term(value, &mut out)?;
     Ok(out)
+}
+
+/// The exact byte length of `value`'s canonical lexical when nothing in it needs
+/// escaping, which is the overwhelmingly common case.
+///
+/// This is a capacity hint, not a bound: a lexical form carrying `"` or a
+/// control character, or an IRI carrying a character the `IRIREF` production
+/// forbids, renders longer and the string grows on its own. What the hint buys
+/// is the repeated doubling that building a term one character at a time from an
+/// empty `String` otherwise pays — a 60-byte IRI costs four allocations without
+/// it and one with it, on every row a stratum emits.
+fn lexical_size_hint(value: &TermValue) -> usize {
+    match value {
+        // `<` + text + `>`.
+        TermValue::Iri(iri) => iri.len() + 2,
+        // `_:` + label.
+        TermValue::Blank { label, .. } => label.len() + 2,
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => {
+            // `"` + lexical + `"`.
+            let mut size = lexical_form.len() + 2;
+            if let Some(tag) = language {
+                // `@` + tag, then `--` + `ltr`/`rtl`.
+                size += tag.len() + 1;
+                if direction.is_some() {
+                    size += 5;
+                }
+            } else if datatype != XSD_STRING {
+                // `^^` + `<` + datatype + `>`.
+                size += datatype.len() + 4;
+            }
+            size
+        }
+        // `<<( ` + s + ` ` + p + ` ` + o + ` )>>`.
+        TermValue::Triple { s, p, o } => {
+            10 + lexical_size_hint(s) + lexical_size_hint(p) + lexical_size_hint(o)
+        }
+    }
 }
 
 /// Write `value` as the canonical term lexical naming a **result**.
@@ -126,10 +168,13 @@ pub(crate) fn sparql_term(value: &TermValue) -> Result<String, RenderError> {
 /// dataset-local; that is refused where it happens, at placement, rather than
 /// pre-emptively here.
 pub(crate) fn candidate_lexical(value: &TermValue) -> String {
+    // Sized up front: this runs once per row every stratum emits.
+    let mut out = String::with_capacity(lexical_size_hint(value));
     if let TermValue::Blank { label, .. } = value {
-        return format!("_:{label}");
+        out.push_str("_:");
+        out.push_str(label);
+        return out;
     }
-    let mut out = String::new();
     // Every non-blank arm is infallible, and a blank nested inside a triple term
     // is written by the same rule rather than refused.
     if write_term(value, &mut out).is_err() {

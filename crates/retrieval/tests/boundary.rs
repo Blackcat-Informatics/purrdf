@@ -15,8 +15,8 @@
 //!
 //! The two rungs differ in kind. Fusion is top-k by construction — it certifies
 //! a row only when a threshold over the live stream heads proves nothing can
-//! overtake it — so its memory is proportional to the un-emitted frontier, not
-//! the input. The unfused streams are unbounded: N independent producers emit in
+//! overtake it — so its frontier holds the candidates the strata still disagree
+//! about, and not the input. The unfused streams are unbounded: N producers emit in
 //! their own rank order and nothing applies a threshold. A completeness claim is
 //! available only from the terminal trailer; a prefix reader holds evidence the
 //! answer is incomplete.
@@ -35,10 +35,11 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, Fixed, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanOrigin,
-    ProducerBinding, ProducerReceipt, ProtocolError, RankedStream, RankedStreamAdapter,
-    RankedStreamImpl, RequestTerm, RetrievalRequest, Statistics, StatisticsSnapshot, Term, TopK,
-    Weight, compile, contribution, execute, fuse, plan, search,
+    AdmissionEnvironment, AdmissionError, CompiledRetrieval, ExecutionError, ExecutionResult,
+    Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanError,
+    PlanOrigin, ProducerBinding, ProducerReceipt, ProtocolError, RankedStream, RankedStreamAdapter,
+    RankedStreamImpl, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics,
+    StatisticsSnapshot, Term, TopK, Weight, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -54,8 +55,9 @@ const K: u32 = 60;
 ///
 /// Fused enumeration is top-k by construction, so every fusion states a bound.
 /// It is far above what any fixture here yields, so nothing below is decided by
-/// the bound — `fused_top_k_bounded_memory` drives the frontier directly, which
-/// is where the bound's own behaviour belongs.
+/// the bound — `fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata`
+/// drives the frontier directly, which is where the bound's own behaviour
+/// belongs.
 const TOP_K: TopK = TopK::new(1024);
 
 // ---------------------------------------------------------------------------
@@ -623,15 +625,55 @@ fn start_at_fuse_hand_built_streams() {
 // 7. Fused is top-k with memory proportional to the frontier
 // ---------------------------------------------------------------------------
 
+/// How many candidates the strata may disagree about at once.
+///
+/// Each stratum below emits the same universe of candidates permuted **within**
+/// blocks of this size, so a candidate's ranks differ across strata by less than
+/// one block and the frontier holds the candidates of at most a couple of blocks
+/// at any moment. It is the disagreement window, and it is what the frontier's
+/// size is proportional to — not the stream length, which is the claim.
+const DISAGREEMENT_BLOCK: u64 = 4;
+
+/// The three strata the frontier fixtures fuse, in their permutation order.
+const FRONTIER_STRATA: [&str; 3] = ["nra/a", "nra/b", "nra/c"];
+
+/// The candidate one stratum emits at 1-based `rank`.
+///
+/// Stratum 0 emits the universe in order; stratum 1 reverses each block; stratum
+/// 2 rotates each block by half its width. Each is a permutation of the same
+/// universe, so every stream emits distinct items (the protocol's uniqueness
+/// rule) and every candidate is eventually seen by every stratum — which is what
+/// makes the frontier hold candidates awaiting confirmation rather than sit
+/// empty. A single-stratum fixture proves nothing here: with one stream there is
+/// nothing to await, and the frontier never holds anything at all.
+fn permuted_index(stream: usize, rank: u64) -> u64 {
+    let index = rank - 1;
+    let block = index / DISAGREEMENT_BLOCK;
+    let offset = index % DISAGREEMENT_BLOCK;
+    let permuted = match stream {
+        0 => offset,
+        1 => DISAGREEMENT_BLOCK - 1 - offset,
+        _ => (offset + DISAGREEMENT_BLOCK / 2) % DISAGREEMENT_BLOCK,
+    };
+    block * DISAGREEMENT_BLOCK + permuted
+}
+
 /// An effectively unbounded producer that mints rows lazily and counts pulls.
 ///
 /// Nothing is materialized up front: if fusion needed the whole input to emit
 /// its first rows, the pull count would approach `total`.
 struct LazyStream {
+    /// Which permutation of the universe this stream emits.
+    stream_index: usize,
+    /// How many rows it has emitted so far.
     emitted: u64,
+    /// How many rows it could emit in total.
     total: u64,
+    /// The stratum weight its contributions are computed under.
     weight: Fixed,
+    /// The profile's smoothing constant.
     k: u32,
+    /// A shared count of every row pulled from every such stream.
     pulls: Arc<AtomicUsize>,
 }
 
@@ -647,10 +689,11 @@ impl RankedStream for LazyStream {
         self.pulls.fetch_add(1, Ordering::SeqCst);
         let rank = self.emitted;
         let value = contribution(self.weight, rank, self.k).expect("contribution fits");
+        let index = permuted_index(self.stream_index, rank);
         Ok(Some((
             rank,
             value,
-            Term::new(format!("candidate-{rank:08}")),
+            Term::new(format!("candidate-{index:08}")),
         )))
     }
 
@@ -659,46 +702,94 @@ impl RankedStream for LazyStream {
     }
 }
 
+/// The three-stratum profile and streams the frontier fixtures share.
+///
+/// `max_contributions` is three, one per stratum, because every candidate is
+/// eventually seen by all three.
+fn frontier_fixture(
+    total: u64,
+    pulls: &Arc<AtomicUsize>,
+) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
+    let weights: BTreeMap<Iri, Fixed> = FRONTIER_STRATA
+        .iter()
+        .map(|name| (stratum(name), Fixed::ONE))
+        .collect();
+    let profile = FusionProfile::new(weights, K, 3).expect("the fixture profile is valid");
+    let streams = FRONTIER_STRATA
+        .iter()
+        .enumerate()
+        .map(|(stream_index, name)| {
+            (
+                stratum(name),
+                LazyStream {
+                    stream_index,
+                    emitted: 0,
+                    total,
+                    weight: Fixed::ONE,
+                    k: K,
+                    pulls: Arc::clone(pulls),
+                },
+            )
+        })
+        .collect();
+    (profile, streams)
+}
+
 #[test]
-fn fused_top_k_bounded_memory() {
-    // A million-row stream; only ten rows are asked for.
+fn fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata() {
+    // Three million-row streams that disagree about the order of every block;
+    // only ten fused rows are asked for.
+    const ROWS: usize = 10;
     let total = 1_000_000u64;
     let pulls = Arc::new(AtomicUsize::new(0));
-    let profile = FusionProfile::new(BTreeMap::from([(stratum("big"), Fixed::ONE)]), K, 1)
-        .expect("the single-stratum profile is valid");
-    let streams = vec![(
-        stratum("big"),
-        LazyStream {
-            emitted: 0,
-            total,
-            weight: Fixed::ONE,
-            k: K,
-            pulls: Arc::clone(&pulls),
-        },
-    )];
+    let (profile, streams) = frontier_fixture(total, &pulls);
 
     let mut fusion = FusionStream::new(streams, profile);
     let mut top = Vec::new();
-    for _ in 0..10 {
+    for _ in 0..ROWS {
         let row = block_on(fusion.next())
             .expect("fusion pulls")
             .expect("a certified row");
         top.push(row);
     }
+    let pulled = pulls.load(Ordering::SeqCst);
 
-    // Certification is a threshold argument over the live heads, not a scan:
-    // emitting ten rows pulls eleven (the initial head plus one advance per
-    // certification), never the million the stream could yield. The frontier is
-    // the request, not the input.
-    assert_eq!(top.len(), 10);
-    assert_eq!(
-        pulls.load(Ordering::SeqCst),
-        11,
-        "fused emission is bounded by the frontier, not the stream"
+    // The frontier was genuinely populated, not bypassed: every certified row
+    // carries a contribution from all three strata, which means it was held
+    // while the other strata caught up to it. That is the state a single-stratum
+    // fixture has none of.
+    assert_eq!(top.len(), ROWS);
+    for row in &top {
+        assert_eq!(
+            row.contributions.len(),
+            FRONTIER_STRATA.len(),
+            "{} was certified without every stratum confirming it",
+            row.entity.as_str()
+        );
+        assert!(
+            row.threshold_witness > Fixed::ZERO,
+            "{} was certified with no stream still live, so nothing was awaited",
+            row.entity.as_str()
+        );
+    }
+
+    // The frontier can never be larger than the rows pulled less the rows
+    // emitted, so bounding the pulls bounds the frontier. Ten rows out of three
+    // million cost a few dozen pulls: certification is a threshold argument over
+    // the live heads, not a scan.
+    assert!(
+        pulled < 64,
+        "fused emission pulled {pulled} rows for {ROWS}, which is not a frontier bound"
     );
-    // Dropped without draining: the producer never materialized its full set.
+    assert!(
+        pulled - ROWS < 32,
+        "{} candidates were still un-emitted after {ROWS} rows",
+        pulled - ROWS
+    );
+
+    // Dropped without draining: no producer materialized its full set.
     drop(fusion);
-    assert!(pulls.load(Ordering::SeqCst) < 100);
+    assert_eq!(pulls.load(Ordering::SeqCst), pulled);
 }
 
 // ---------------------------------------------------------------------------
@@ -828,44 +919,135 @@ fn reporting_names_plan_and_profile() {
 }
 
 // ---------------------------------------------------------------------------
-// 11. No mode flags
+// 11. No stage takes a selector
 // ---------------------------------------------------------------------------
 
-/// The seam is the same behavior observed earlier; a mode flag would be a
-/// second behavior the full pipeline must be kept in agreement with. No stage
-/// of this crate takes one, so a caller that wants less calls an earlier stage.
+/// `execute`'s shape, re-declared and delegated to.
+///
+/// An `async fn`'s return type is opaque, so there is no `fn` pointer type to
+/// coerce it to. A delegation pins the same thing by a different mechanism: the
+/// parameter list is written out here, and the call below supplies exactly those
+/// arguments, so a stage that grew one more would stop compiling at this line.
+// `future_not_send`: the crate's own `execute` carries this allow for the same
+// reason — the dataset is a caller-chosen type parameter, so the future's
+// `Send`-ness is the caller's to establish and is not required here.
+#[allow(clippy::future_not_send)]
+async fn execute_shape<D: purrdf_core::DatasetView + Sync>(
+    compiled: &CompiledRetrieval,
+    registry: &PropertyFunctionRegistry,
+    dataset: &D,
+) -> Result<ExecutionResult, ExecutionError> {
+    execute(compiled, registry, dataset).await
+}
+
+/// `fuse`'s shape, re-declared and delegated to; see [`execute_shape`].
+#[allow(clippy::future_not_send)]
+async fn fuse_shape<S, T>(
+    streams: Vec<(Iri, S)>,
+    profile: &FusionProfile,
+    top_k: TopK,
+) -> Result<FusionResult<T>, FusionError>
+where
+    S: RankedStream<Item = T>,
+    T: Ord + Clone + Into<Term>,
+{
+    fuse(streams, profile, top_k).await
+}
+
+/// `search`'s shape, re-declared and delegated to; see [`execute_shape`].
+#[allow(clippy::future_not_send)]
+async fn search_shape<S, D>(
+    request: &RetrievalRequest,
+    registry: &PropertyFunctionRegistry,
+    statistics: &S,
+    dataset: &D,
+    env: &AdmissionEnvironment<'_>,
+    profile: &FusionProfile,
+    top_k: TopK,
+) -> Result<SearchResult, SearchError>
+where
+    S: Statistics,
+    D: purrdf_core::DatasetView + Sync,
+{
+    search(request, registry, statistics, dataset, env, profile, top_k).await
+}
+
+/// The seam is the same behaviour observed earlier; a mode flag would be a
+/// second behaviour the full pipeline must be kept in agreement with. A caller
+/// that wants less calls an earlier stage, and that is pinned here by **shape**
+/// rather than by spelling: the two synchronous stages are coerced to an
+/// explicit `fn` type and the three asynchronous ones are delegated to through
+/// shims whose parameter lists are written out above.
+///
+/// # What this catches, and what it does not
+///
+/// It catches any change to a stage entry point's parameter list or result
+/// type — a `skip_fuse: bool`, a `dry_run: bool`, an `Option<Mode>`, a reordered
+/// argument, a widened return — as a **compile** error in this file, whatever
+/// the parameter is named.
+///
+/// It does not catch a selector hidden inside a type a stage already takes: a
+/// `skip_fuse` field added to [`AdmissionEnvironment`], [`FusionProfile`] or
+/// [`RetrievalRequest`] would pass, as would an entirely new entry point added
+/// alongside these five. It pins the shape of the boundary, not the whole
+/// surface behind it.
 #[test]
-fn no_mode_flags_in_api() {
-    const SOURCES: &[(&str, &str)] = &[
-        ("lib.rs", include_str!("../src/lib.rs")),
-        ("search.rs", include_str!("../src/search.rs")),
-        ("compile.rs", include_str!("../src/compile.rs")),
-        ("execute.rs", include_str!("../src/execute.rs")),
-        ("fuse.rs", include_str!("../src/fuse.rs")),
-        ("planner.rs", include_str!("../src/planner.rs")),
-    ];
-    const FORBIDDEN: &[&str] = &[
-        "skip_fuse",
-        "skip_plan",
-        "skip_compile",
-        "skip_execute",
-        "dry_run",
-        "skip: bool",
-        "mode: bool",
-        "mode: Option",
-    ];
-    for (name, source) in SOURCES {
-        for flag in FORBIDDEN {
-            assert!(
-                !source.contains(flag),
-                "{name} carries mode flag {flag:?}; stages are seams, never mode switches"
-            );
-        }
-    }
+fn no_stage_takes_a_selector() {
+    // Coercion to a `fn` type checks the whole signature at once. `plan` is
+    // generic over the statistics it reads, so it is pinned at one concrete
+    // instantiation; the other two parameters and the result are exact.
+    let _: fn(
+        &RetrievalRequest,
+        &PropertyFunctionRegistry,
+        &MockStatistics,
+    ) -> Result<Plan, PlanError> = plan;
+    let _: fn(&Plan, &AdmissionEnvironment<'_>) -> Result<CompiledRetrieval, AdmissionError> =
+        compile;
+
+    // The shims are exercised rather than merely declared, so the delegation is
+    // live code a refactor must keep compiling.
+    let registry = single_registry(&ex("stratum/seam"), &ex("pf/seam"), 10, 2);
+    let stats = single_statistics(&ex("stratum/seam"), 10);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let planned = plan(&request, &registry, &stats).expect("plans");
+    let compiled = compile(&planned, &env).expect("admits");
+    let dataset = common::empty_dataset();
+
+    let execution = block_on(execute_shape(&compiled, &registry, &*dataset)).expect("units run");
+    assert_eq!(execution.streams.len(), 1);
+
+    let seam_profile = single_profile(&ex("stratum/seam"));
+    let fused = block_on(fuse_shape::<ScriptedStream, Term>(
+        vec![(
+            stratum("seam"),
+            ScriptedStream::new(vec![row(1, Fixed::ONE, K, "alpha")], exhausted(1)),
+        )],
+        &seam_profile,
+        TOP_K,
+    ))
+    .expect("hand-built streams fuse");
+    assert_eq!(fused.rows.len(), 1);
+
+    let searched = block_on(search_shape(
+        &request,
+        &registry,
+        &stats,
+        &*dataset,
+        &env,
+        &seam_profile,
+        TOP_K,
+    ))
+    .expect("the composed search answers");
+    assert_eq!(searched.plan_id, planned.id());
 }
 
 // ---------------------------------------------------------------------------
-// 12. Native and wasm agree on the bytes
+// 12. The canonical encoding is a pure function of the value
 // ---------------------------------------------------------------------------
 
 /// Render a fusion as deterministic text: rows in final order with their
@@ -919,16 +1101,24 @@ async fn equality_fusion(profile: &FusionProfile) -> FusionResult<Term> {
         .expect("the fixture streams fuse")
 }
 
+/// Encoding and fusion are deterministic across repeated execution **in one
+/// process**: that is exactly as much as a native-only test can observe, and the
+/// name says so. A plan encodes to the same bytes twice, a decode reproduces
+/// them, and two independent runs of one fusion law render identically.
+///
+/// The cross-target claim — that a `wasm32` execution agrees with this one — is
+/// a different claim that this test cannot make, because it never leaves this
+/// target. It is made where it can be executed, in `wasm_determinism`, which
+/// runs the same law on `wasm32-unknown-unknown` against pinned expectations.
 #[test]
-fn native_wasm_execution_equality() {
+fn encoding_and_fusion_are_deterministic_in_one_process() {
     let registry = single_registry(&ex("stratum/eq"), &ex("pf/eq"), 12, 3);
     let stats = single_statistics(&ex("stratum/eq"), 12);
     let request = RetrievalRequest::from_terms(vec![lexical_term()]);
     let planned = plan(&request, &registry, &stats).expect("plans");
 
     // A plan's canonical encoding is a pure function of its fields: repeated
-    // encodings agree and a decode reproduces them exactly, so native and wasm
-    // name the same plan with the same bytes.
+    // encodings agree and a decode reproduces them exactly.
     let plan_bytes = planned.canonical_bytes();
     assert_eq!(plan_bytes, planned.canonical_bytes());
     assert_eq!(
@@ -938,7 +1128,8 @@ fn native_wasm_execution_equality() {
         plan_bytes
     );
 
-    // The fusion profile's canonical encoding is target-independent the same way.
+    // The fusion profile's canonical encoding is a pure function of its fields
+    // the same way.
     let profile = profile(&[("eq1", Fixed::ONE), ("eq2", Fixed::ONE)], K, 4);
     let profile_bytes = profile.canonical_bytes();
     assert_eq!(profile_bytes, profile.canonical_bytes());
@@ -950,7 +1141,7 @@ fn native_wasm_execution_equality() {
     );
 
     // Fused output is byte-identical across two independent runs of the same
-    // law, which is the equality a native and a wasm execution share.
+    // law within this process.
     let first = block_on(equality_fusion(&profile));
     let second = block_on(equality_fusion(&profile));
     assert_eq!(render_fusion(&first), render_fusion(&second));

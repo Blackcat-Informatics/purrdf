@@ -52,3 +52,21 @@ thiserror.workspace = true
 pretty_assertions.workspace = true
 # A document format for the serde round-trip test.
 serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# The wasm32 test harness, for `tests/wasm_determinism.rs` — the one test in this
+# crate that must EXECUTE on wasm32-unknown-unknown rather than merely compile
+# for it. A fused score is a sum of truncated reciprocals and the whole ordering
+# claim rests on those being the same value everywhere; "the same answer on every
+# target" is a claim no number of runs on ONE target can check. Run by
+# `make wasm-test`.
+wasm-bindgen-test = { workspace = true }
+
+# Peak-allocation evidence for the fused frontier, in its own process so the
+# tracking allocator's atomics skew no timed measurement. Report-only: it prints
+# `peak_allocated_bytes` and `rss_delta_kb` and asserts nothing, because this
+# machine is not quiet and a threshold would be a flaky gate. The bound itself is
+# enforced by `tests/fusion_frontier_alloc.rs`, which compares two runs.
+[[bench]]
+name = "fusion_frontier_alloc"
+harness = false

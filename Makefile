@@ -362,7 +362,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# neighbours swap, and the browser returns a different ANSWER than the host.
 	@# `purrdf-text` ranks by BM25, which needs a natural logarithm — the same hazard
 	@# in the other direction, and the reason its arithmetic is exact i128 fixed point
-	@# with a fixed-iteration integer `ln` instead of a libm call. So this lane
+	@# with a fixed-iteration integer `ln` instead of a libm call. `purrdf-retrieval`
+	@# then FUSES those ranked lists: a fused score is a sum of truncated reciprocals,
+	@# and a last bit moved anywhere in that sum swaps two near-tied candidates, so the
+	@# composition needs the same executed proof its inputs do. So this lane
 	@# compiles the tagged tests to wasm32 and runs them in Node, against the same
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
@@ -389,6 +392,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-text --test wasm_determinism \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-retrieval --test wasm_determinism \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-json --test roundtrip; \

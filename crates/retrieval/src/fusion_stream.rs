@@ -12,7 +12,16 @@
 //! the highest-contribution head, maintains the threshold `T` over all heads,
 //! and emits a candidate only when its score is final (`U(x) == L(x)`) and it
 //! provably outranks every other candidate and every not-yet-seen item. Emitted
-//! candidates are removed, so memory is proportional to the un-emitted frontier.
+//! candidates are removed, so the frontier holds only the un-emitted candidates
+//! and never grows with how long the streams are.
+//!
+//! The frontier is not the whole of what a fusion holds, and saying otherwise
+//! would overstate it. Per-stream duplicate detection
+//! ([`ProtocolError::DuplicateItem`]) needs the set of items each stream has
+//! already emitted, and that set is proportional to the rows **pulled** — which
+//! the frontier argument bounds for a caller that certifies its top `k` through
+//! [`FusionStream::next`], and does not bound for one that drives every stream
+//! to its receipt, because draining pulls everything by construction.
 
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
@@ -400,13 +409,18 @@ impl<S: RankedStream> FusionStream<S> {
             .into());
         }
 
-        let stratum = self.streams[index].0.clone();
-        let weight = self
-            .profile
-            .weight(&stratum)
-            .ok_or_else(|| FusionError::UnknownStratum {
-                stratum: stratum.as_str().to_owned(),
-            })?;
+        // The stratum is read by reference, not cloned: an `Iri` owns its text,
+        // so cloning one here would be a heap allocation on every row every
+        // stream emits, to serve a lookup that only borrows and an error arm
+        // that is taken once at most.
+        let weight = {
+            let stratum = &self.streams[index].0;
+            self.profile
+                .weight(stratum)
+                .ok_or_else(|| FusionError::UnknownStratum {
+                    stratum: stratum.as_str().to_owned(),
+                })?
+        };
         let expected =
             crate::reciprocal_rank::contribution(weight, rank, self.profile.k_parameter())?;
         if producer_contribution != expected {
@@ -587,23 +601,25 @@ impl<S: RankedStream> FusionStream<S> {
             return Ok(());
         };
         let stratum = self.streams[index].0.clone();
-        let entry = self
-            .frontier
-            .entry(head.item.clone())
-            .or_insert_with(CandidateState::new);
-        entry.lower_bound = entry
-            .lower_bound
-            .checked_add(head.contribution)
-            .map_err(|_| FusionError::Overflow)?;
-        entry
-            .contributions
-            .push((stratum, head.rank, head.contribution));
-        entry.seen_streams.insert(index);
 
+        // The candidate's next state is derived before the frontier is touched,
+        // for two reasons. It lets the bounds be refused while `head.item` is
+        // still owned here, so the frontier key is *moved* into the map rather
+        // than cloned — an allocation that would otherwise be paid on every row
+        // every stream emits, including the ones already in the frontier. And a
+        // refused row then leaves the frontier exactly as it found it, instead
+        // of a half-updated candidate no later call may read.
+        //
         // Both bounds are checked against the profile's own accessors, never
         // recomputed, so a future change to either derivation cannot drift
         // enforcement away from what the profile declares.
-        let count = u32::try_from(entry.contributions.len()).unwrap_or(u32::MAX);
+        let existing = self.frontier.get(&head.item);
+        let lower_bound = existing
+            .map_or(Fixed::ZERO, |state| state.lower_bound)
+            .checked_add(head.contribution)
+            .map_err(|_| FusionError::Overflow)?;
+        let contribution_count = existing.map_or(0, |state| state.contributions.len()) + 1;
+        let count = u32::try_from(contribution_count).unwrap_or(u32::MAX);
         if count > self.profile.max_contributions() {
             return Err(FusionError::MaxContributionsExceeded {
                 item: head.item.as_str().to_owned(),
@@ -611,13 +627,23 @@ impl<S: RankedStream> FusionStream<S> {
                 max: self.profile.max_contributions(),
             });
         }
-        if entry.lower_bound > self.profile.ceiling() {
+        if lower_bound > self.profile.ceiling() {
             return Err(FusionError::CeilingExceeded {
                 item: head.item.as_str().to_owned(),
-                score: entry.lower_bound,
+                score: lower_bound,
                 ceiling: self.profile.ceiling(),
             });
         }
+
+        let entry = self
+            .frontier
+            .entry(head.item)
+            .or_insert_with(CandidateState::new);
+        entry.lower_bound = lower_bound;
+        entry
+            .contributions
+            .push((stratum, head.rank, head.contribution));
+        entry.seen_streams.insert(index);
 
         self.heads[index] = self.fetch(index).await?;
         Ok(())

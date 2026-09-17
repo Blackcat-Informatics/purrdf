@@ -261,11 +261,6 @@ pub(crate) fn place(
     depth: u32,
 ) -> Result<Invocation, PlacementError> {
     let total = descriptor.subject_arity + descriptor.object_arity;
-    let declared: Vec<String> = descriptor
-        .modes
-        .iter()
-        .map(|mode| mode.code.clone())
-        .collect();
     if total > BindingPattern::MAX_ARITY {
         // The evaluator expresses an access pattern as a 64-bit set, so a
         // relation wider than that has no mode any invocation could satisfy.
@@ -274,7 +269,7 @@ pub(crate) fn place(
                 "<{total} positions, wider than the {} a binding pattern carries>",
                 BindingPattern::MAX_ARITY
             ),
-            declared,
+            declared: declared_modes(descriptor),
         });
     }
     let mut slots: Vec<Option<TermValue>> = vec![None; total];
@@ -329,11 +324,25 @@ pub(crate) fn place(
     {
         return Err(PlacementError::NoSatisfiableMode {
             invocation: mode.code(),
-            declared,
+            declared: declared_modes(descriptor),
         });
     }
 
     Ok(Invocation { slots, mode })
+}
+
+/// Every access-pattern code the relation declares, copied out for a refusal.
+///
+/// Read only where a [`PlacementError::NoSatisfiableMode`] is actually being
+/// built: the codes are owned `String`s, and materializing them on the path
+/// where the placement succeeds would allocate one per declared mode for a
+/// diagnostic nobody reads.
+fn declared_modes(descriptor: &PfDescriptor) -> Vec<String> {
+    descriptor
+        .modes
+        .iter()
+        .map(|mode| mode.code.clone())
+        .collect()
 }
 
 /// Write `value` into `slots[position]`, accepting an identical re-write.
