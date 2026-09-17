@@ -89,6 +89,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-sparql-algebra`
 - `purrdf-sparql-results`
 - `purrdf-sparql-eval`
+- `purrdf-hnsw`
 - `purrdf-text`
 - `purrdf-rdf`
 - `purrdf-markdown`
@@ -169,20 +170,25 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Bootstrap: complete (ledger empty)
+### Outstanding bootstrap: `purrdf-hnsw`
 
-All 23 crates in the release set above have crates.io records. Before
-publishing, each must have the Trusted Publisher configuration above and the
-*Require trusted publishing* lock. `PURRDF_UNBOOTSTRAPPED_CRATES` in
-[`scripts/release-crates.sh`](../scripts/release-crates.sh) is empty. The
-registry preflight verifies the records, locks, and empty ledger before
-packaging.
+One crate is in the release set above with no crates.io record yet:
+`purrdf-hnsw` is the **thirteenth** in publish order. It follows
+`purrdf-sparql-eval`, `purrdf-core` and `purrdf-xsd`, its workspace
+dependencies, and precedes `purrdf-text`. `PURRDF_UNBOOTSTRAPPED_CRATES` in
+[`scripts/release-crates.sh`](../scripts/release-crates.sh) names it; the
+ledger is held to the registry in both directions by the preflight. The entry
+leaves once its record exists. No crate in the release set depends on
+`purrdf-hnsw`, so the lane publishes the twelve crates ahead of it, skips it
+visibly, and continues through every later crate; only `purrdf-hnsw` itself
+waits for the token step described in
+[New crates: set up publishing before tagging](#new-crates-set-up-publishing-before-tagging).
 
 `purrdf-markdown` and `purrdf-json` have **0.0.0** bootstrap records, created by
 token publication solely to configure Trusted Publishing. Those versions
 expose no runtime API; their functional release is **2.0.0**. With the records
-and publisher settings established, the trusted release lane publishes all 23
-crates in dependency order without a token-bootstrap interleave. The 0.0.0
+and publisher settings established, the trusted release lane publishes all 24
+crates in dependency order. The 0.0.0
 versions can be yanked after the functional release, retaining the crate
 records and publisher settings.
 
@@ -277,8 +283,8 @@ git push origin rust-v0.1.5
 
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
-not locked to Trusted Publishing (see [bootstrap status](#bootstrap-complete-ledger-empty)).
-The ledger is empty, so every release crate must have its record and lock
+not locked to Trusted Publishing (see [bootstrap status](#outstanding-bootstrap-purrdf-hnsw)).
+Every release crate the ledger does not name must have its record and lock
 before packaging. The lane publishes crates in dependency order and skips any
 crate/version already present on crates.io. A partially completed release
 resumes with `gh run rerun <run-id>`.

@@ -14,7 +14,7 @@
 //!
 //! # The approximation contract, in the query surface
 //!
-//! R9 declares three governed channels; the first is the guard's
+//! The approximation contract declares three governed channels; the first is the guard's
 //! [`IndexLossContract`](purrdf_core::IndexLossContract) and evidence string, checked by
 //! [`crate::guard::load`]. The other two live here:
 //!
@@ -595,7 +595,7 @@ impl PfCursor for HnswCursor {
 /// Register `space` as a relation under the caller's predicate `iri`.
 ///
 /// PurRDF supplies no IRI: the caller's predicate is what a query text names the provider
-/// by, which is the second of the three approximation channels R9 requires.
+/// by, which is the second of the three approximation channels the contract requires.
 pub fn register_hnsw_relation(
     registry: &mut PropertyFunctionRegistry,
     iri: impl Into<String>,

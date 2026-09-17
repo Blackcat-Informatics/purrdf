@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! R9/R10: the approximation contract and the no-completeness claim, asserted.
+//! The approximation contract and the no-completeness claim, asserted.
 //!
 //! HNSW is an approximate index. This suite makes that contractual rather than
-//! aspirational by testing the three channels R9 requires and the negative behaviour R10
-//! forbids:
+//! aspirational by testing the three governed channels and the negative behaviour the
+//! contract forbids:
 //!
 //! 1. the artifact-level loss contract says *approximate*, the implementation identity
 //!    carries the evidence sentence, and the adapter verifies both at bind time;
@@ -107,7 +107,7 @@ fn drain(
 }
 
 // ---------------------------------------------------------------------------
-// R9: the approximation contract
+// The approximation contract
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -170,7 +170,7 @@ fn the_relation_predicate_iri_is_callers_supplied() {
 }
 
 // ---------------------------------------------------------------------------
-// R10: no completeness claim
+// No completeness claim
 // ---------------------------------------------------------------------------
 
 #[test]

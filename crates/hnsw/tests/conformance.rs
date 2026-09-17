@@ -3,7 +3,7 @@
 
 //! The conformance gate: **every** HNSW result, compared against the exact oracle.
 //!
-//! This is the admission evidence R14 requires. It walks a deterministic fixture family —
+//! This is the admission evidence the contract requires. It walks a deterministic fixture family —
 //! a uniform corpus plus deliberately adversarial small ones (duplicates, equidistant
 //! points, clusters, a hub, near-ties, a singular corpus, and a one-dimensional boundary)
 //! — and, for every query, every `ef_search` and every `k`, it does three things:

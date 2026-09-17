@@ -69,6 +69,7 @@ purrdf-entail = { path = "crates/entail", version = "2.0.2" }
 purrdf-events = { path = "crates/rdf-events", version = "2.0.2" }
 purrdf-geo = { path = "crates/geo", version = "2.0.2" }
 purrdf-gts = { path = "crates/gts", version = "2.0.2" }
+purrdf-hnsw = { path = "crates/hnsw", version = "2.0.2" }
 purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
 purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }

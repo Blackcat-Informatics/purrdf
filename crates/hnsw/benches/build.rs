@@ -5,7 +5,7 @@
 //!
 //! This target exists to replace an unmeasured number with a measured one. The issue that
 //! offered this crate cited its own prototype at "~32 minutes at 10^6 rows" at 4,096
-//! dimensions; R13 requires this implementation's figure instead, and the plan forbids
+//! dimensions; this crate requires its own measured figure instead, and the plan forbids
 //! quoting the prototype's as if it were ours. So the harness builds the index through the
 //! **shipped build path** — [`HnswIndex::build`], not a private shortcut — at 5,000,
 //! 50,000, 200,000 and 1,000,000 rows, times each once, and prints the table.

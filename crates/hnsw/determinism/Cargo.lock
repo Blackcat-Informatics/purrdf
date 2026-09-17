@@ -310,6 +310,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-core",
  "purrdf-sparql-eval",
+ "purrdf-xsd",
  "rayon",
 ]
 
