@@ -79,6 +79,22 @@ fn lang_literal(value: &str, lang: &str) -> Term {
     }
 }
 
+/// The `rdf:dirLangString` form: a literal carrying both halves. The direction
+/// is a *valid* `ltr` throughout — the question these fixtures ask is never
+/// whether a bad direction is caught, but what happens to a good one when the
+/// tag beside it is refused.
+fn dir_lang_literal(value: &str, lang: &str) -> Term {
+    Term {
+        kind: TermKind::Literal,
+        value: Some(value.to_owned()),
+        datatype: None,
+        lang: Some(lang.to_owned()),
+        direction: Some("ltr".to_owned()),
+        reifier: None,
+        triple: None,
+    }
+}
+
 /// A one-quad container whose object is a literal carrying `lang`, authored
 /// through the public writer exactly as a hostile (or merely older) producer
 /// would author it: the writer copies `Term::lang` to the wire verbatim, so this
@@ -89,6 +105,19 @@ fn container_with_tag(lang: &str) -> Vec<u8> {
         iri("https://example.org/s"),
         iri("https://example.org/p"),
         lang_literal("Purr", lang),
+    ]);
+    writer.add_quads(&[(0, 1, 2, None)]);
+    writer.into_bytes()
+}
+
+/// The same container, but the object is an `rdf:dirLangString` — both `"l"`
+/// and `"dir"` present on the wire.
+fn dir_container_with_tag(lang: &str) -> Vec<u8> {
+    let mut writer = Writer::new("generic");
+    writer.add_terms(&[
+        iri("https://example.org/s"),
+        iri("https://example.org/p"),
+        dir_lang_literal("Purr", lang),
     ]);
     writer.add_quads(&[(0, 1, 2, None)]);
     writer.into_bytes()
@@ -161,6 +190,105 @@ fn refused_tags_never_reach_the_folded_term() {
             "the diagnostic must name the term id, got {detail}"
         );
     }
+}
+
+/// A refused tag must take its base direction with it, and must say that it did.
+///
+/// This is the refusal's own blast radius rather than a second bad input. A base
+/// direction is only ever the second half of an `rdf:dirLangString`; once the tag
+/// is gone it qualifies nothing, and a term carrying a direction with no language
+/// is outside RDF 1.2's value space. Carrying it on is not an inert remnant — the
+/// importer downstream refuses such a term with `gts-direction-without-language`,
+/// which names a defect the container never had and points a reader away from the
+/// tag that actually failed.
+#[test]
+fn a_refused_tag_takes_its_base_direction_with_it() {
+    for tag in REFUSED {
+        let graph = read(&dir_container_with_tag(tag), true, None);
+        assert_eq!(
+            graph.terms[2].lang, None,
+            "{tag:?} must not become a folded language tag"
+        );
+        assert_eq!(
+            graph.terms[2].direction, None,
+            "{tag:?} must not leave a base direction standing with no language"
+        );
+        // The lexical form still survives: the damaged items are the tag and the
+        // direction that depended on it, never the row.
+        assert_eq!(graph.terms[2].value.as_deref(), Some("Purr"));
+        assert_eq!(graph.quads.len(), 1, "{tag:?} must not cost the quad");
+
+        // Two drops, two diagnostics. Dropping the direction silently would be
+        // the documented mirror of over-refusal, and would strip a reader of the
+        // one field needed to make sense of the first diagnostic.
+        let codes: Vec<&str> = graph.diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert_eq!(
+            codes,
+            ["DamagedFrame", "DamagedFrame"],
+            "{tag:?} must diagnose the dropped direction as well as the refused tag"
+        );
+        let detail = &graph.diagnostics[1].detail;
+        assert!(
+            detail.contains("base direction") && detail.contains("term 2"),
+            "the second diagnostic must name the dropped direction and its term, got {detail}"
+        );
+    }
+}
+
+/// The over-refusal half, which is the load-bearing one: an accepted tag keeps
+/// its direction. The rule above must fire on a refusal, not on the presence of
+/// a direction.
+#[test]
+fn an_accepted_tag_keeps_its_base_direction() {
+    for tag in ACCEPTED {
+        let graph = read(&dir_container_with_tag(tag), true, None);
+        assert_eq!(
+            graph.terms[2].lang.as_deref(),
+            Some(*tag),
+            "{tag} must survive alongside a base direction"
+        );
+        assert_eq!(
+            graph.terms[2].direction.as_deref(),
+            Some("ltr"),
+            "{tag} is accepted, so its base direction must survive untouched"
+        );
+        assert!(
+            graph.diagnostics.is_empty(),
+            "{tag} with a valid direction must be silent, got {:?}",
+            graph.diagnostics
+        );
+    }
+}
+
+/// A `"dir"` with no `"l"` at all is a different thing, and must stay different:
+/// that is a genuine defect in the container rather than fallout from a refusal,
+/// so nothing here should rename it. It is left to travel on and be reported
+/// accurately downstream.
+#[test]
+fn a_direction_with_no_tag_at_all_is_left_alone() {
+    let mut writer = Writer::new("generic");
+    let mut object = dir_lang_literal("Purr", "en");
+    object.lang = None;
+    writer.add_terms(&[
+        iri("https://example.org/s"),
+        iri("https://example.org/p"),
+        object,
+    ]);
+    writer.add_quads(&[(0, 1, 2, None)]);
+    let graph = read(&writer.into_bytes(), true, None);
+
+    assert_eq!(graph.terms[2].lang, None);
+    assert_eq!(
+        graph.terms[2].direction.as_deref(),
+        Some("ltr"),
+        "a direction that never had a tag beside it is the container's own defect, \
+         not this gate's to rewrite"
+    );
+    assert!(
+        graph.diagnostics.is_empty(),
+        "no tag was refused here, so this gate must stay silent, got {:?}",
+        graph.diagnostics
+    );
 }
 
 #[test]

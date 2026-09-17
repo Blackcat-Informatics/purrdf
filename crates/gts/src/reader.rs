@@ -841,7 +841,11 @@ impl Folder<'_, '_, '_> {
             // the whole row is impossible because term ids are positional —
             // `tid` is `self.g.terms.len()`, so skipping a row would renumber
             // every later term in the segment.
-            let lang = match map_get(entries, "l").and_then(as_text) {
+            // `lang_refused` distinguishes "there was no tag" from "there was a
+            // tag and the grammar refused it". The base-direction arm below
+            // needs that distinction: the two cases must not fold to the same
+            // outcome, because only one of them is a defect in the input.
+            let (lang, lang_refused) = match map_get(entries, "l").and_then(as_text) {
                 Some(tag) => match language_tag_refusal(tag) {
                     Some(code) => {
                         self.diag(
@@ -852,11 +856,11 @@ impl Folder<'_, '_, '_> {
                             ),
                             Some(index),
                         );
-                        None
+                        (None, true)
                     }
-                    None => Some(tag.to_string()),
+                    None => (Some(tag.to_string()), false),
                 },
-                None => None,
+                None => (None, false),
             };
             // Same reasoning as the tag arm above, and the same failure shape. A
             // value outside the closed `ltr`/`rtl` space cannot be carried
@@ -881,6 +885,39 @@ impl Folder<'_, '_, '_> {
                     None
                 }
                 None => None,
+            };
+            // A refused tag takes the base direction down with it. `direction`
+            // is only ever the second half of an `rdf:dirLangString`, so once
+            // the language is gone it describes nothing: carrying it on would
+            // build a term with a direction and no language, which is outside
+            // RDF 1.2's value space. Leaving it standing is not a harmless
+            // remnant either — it makes the importer downstream refuse with
+            // `gts-direction-without-language`, naming a defect the container
+            // never had and pointing away from the tag that actually failed.
+            //
+            // This is a consequence of a refusal, not a second input error, so
+            // it gets its own diagnostic rather than riding along silently on
+            // the tag's: dropping carried data without saying so is the
+            // documented mirror of over-refusal, and it costs a reader exactly
+            // the field it would need to understand the first diagnostic.
+            //
+            // Only a *refused* tag triggers this. A `"dir"` with no `"l"` at
+            // all is a genuine defect in the container, and the importer's
+            // `gts-direction-without-language` is then the correct name for it
+            // — so that case is left alone to be reported accurately.
+            let direction = if lang_refused && direction.is_some() {
+                self.diag(
+                    "DamagedFrame",
+                    format!(
+                        "term {tid} loses its base direction as well, because a base \
+                         direction is only meaningful alongside a language tag and \
+                         this term's tag was refused"
+                    ),
+                    Some(index),
+                );
+                None
+            } else {
+                direction
             };
             let dt_raw = map_get(entries, "dt").and_then(as_i128);
             let rf_raw = map_get(entries, "rf").and_then(as_i128);
