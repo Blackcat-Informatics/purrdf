@@ -199,8 +199,22 @@ pub(crate) fn kind_matches(kind: TermKind, term: &RequestTerm) -> bool {
 }
 
 /// The RDF term kind a canonical seed lexical names, when it names one.
+///
+/// The quoted-triple test precedes the IRI test, and the order is the whole
+/// point: an RDF 1.2 triple term opens `<<`, so a test for `<` alone claims it
+/// first and reports every quoted triple as an IRI. That is not a cosmetic
+/// misnomer — it makes [`TermKind::Triple`] a kind no seed can ever have, so a
+/// producer accepting only quoted triples is never selected, while one
+/// accepting IRIs is handed a term it cannot read.
+///
+/// [`crate::render::decode_term`] discriminates in this same order, and the two
+/// must agree: the decoder decides what a seed *is* and this decides what a
+/// pattern may *match* it, so a disagreement selects a producer on one reading
+/// and hands it a term built on the other.
 pub(crate) fn seed_kind(text: &str) -> Option<TermKind> {
-    if text.starts_with('<') {
+    if text.starts_with("<<") {
+        Some(TermKind::Triple)
+    } else if text.starts_with('<') {
         Some(TermKind::Iri)
     } else if text.starts_with("_:") {
         Some(TermKind::Blank)
@@ -920,6 +934,93 @@ mod tests {
                 PlacementError::Unrenderable { term_index, .. } => assert_eq!(term_index, 0),
                 other => panic!("expected Unrenderable, got {other:?}"),
             }
+        }
+    }
+
+    /// A quoted-triple seed opens `<<`, which also opens `<`, so a classifier
+    /// that tests for `<` first reports it as an IRI. Both halves are asserted
+    /// here because each is a distinct defect: the triple kind becoming
+    /// unmatchable, and the IRI kind capturing a term it cannot read.
+    #[test]
+    fn a_quoted_triple_seed_is_a_triple_and_not_an_iri() {
+        let seed = RequestTerm::EntitySeed {
+            entity: Term::new("<<( <http://example.org/s> <http://example.org/p> \"o\" )>>"),
+        };
+
+        assert_eq!(
+            super::seed_kind("<<( <http://example.org/s> <http://example.org/p> \"o\" )>>"),
+            Some(TermKind::Triple),
+            "a term opening `<<` is a quoted triple, not an IRI"
+        );
+        assert!(
+            super::kind_matches(TermKind::Triple, &seed),
+            "a producer accepting quoted triples must be reachable by one"
+        );
+        assert!(
+            !super::kind_matches(TermKind::Iri, &seed),
+            "a producer accepting IRIs must not be handed a quoted triple"
+        );
+        assert!(
+            super::kind_matches(TermKind::Any, &seed),
+            "an unconstrained pattern still accepts it"
+        );
+    }
+
+    /// The neighbouring valid case: narrowing the quoted-triple classification
+    /// must not have narrowed the IRI one, which is the term shape every
+    /// existing seed fixture uses.
+    #[test]
+    fn an_iri_seed_is_still_an_iri_and_not_a_triple() {
+        let seed = RequestTerm::EntitySeed {
+            entity: Term::new("<http://example.org/seed>"),
+        };
+
+        assert_eq!(
+            super::seed_kind("<http://example.org/seed>"),
+            Some(TermKind::Iri),
+            "a term opening a single `<` is still an IRI"
+        );
+        assert!(
+            super::kind_matches(TermKind::Iri, &seed),
+            "an IRI seed still reaches a producer accepting IRIs"
+        );
+        assert!(
+            !super::kind_matches(TermKind::Triple, &seed),
+            "an IRI is not a quoted triple"
+        );
+    }
+
+    /// `seed_kind` decides what a pattern may match and `decode_term` decides
+    /// what the seed is; if they disagree, a producer is selected on one
+    /// reading and handed a term built on the other.
+    #[test]
+    fn seed_classification_agrees_with_the_decoder() {
+        for (text, kind) in [
+            (
+                "<<( <http://example.org/s> <http://example.org/p> \"o\" )>>",
+                TermKind::Triple,
+            ),
+            ("<http://example.org/seed>", TermKind::Iri),
+            ("\"needle\"", TermKind::Literal),
+            ("\"needle\"@en", TermKind::Literal),
+        ] {
+            assert_eq!(
+                super::seed_kind(text),
+                Some(kind),
+                "classification of {text}"
+            );
+            let decoded = crate::render::decode_term(text)
+                .unwrap_or_else(|error| panic!("the decoder reads {text}: {error}"));
+            let decoded_kind = match decoded {
+                purrdf_core::TermValue::Triple { .. } => TermKind::Triple,
+                purrdf_core::TermValue::Iri(_) => TermKind::Iri,
+                purrdf_core::TermValue::Literal { .. } => TermKind::Literal,
+                purrdf_core::TermValue::Blank { .. } => TermKind::Blank,
+            };
+            assert_eq!(
+                decoded_kind, kind,
+                "the decoder and the classifier disagree about {text}"
+            );
         }
     }
 }
