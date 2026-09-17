@@ -100,10 +100,6 @@ pub enum ProductDimension {
     /// registry supplied for execution, and the registry is what decides which
     /// predicates are calls rather than ordinary triple patterns.
     PropertyFunctionRegistry,
-    /// The SHACL constraint components available at preparation are not the
-    /// components available for execution, so the product would evaluate a
-    /// different set of constraints than it was compiled for.
-    ConstraintComponents,
     /// The class catalog — the asserted `rdfs:subClassOf` closure the product
     /// compiled its class-membership decisions against — does not match the one
     /// supplied for execution.
@@ -125,7 +121,7 @@ impl ProductDimension {
     /// Every admission dimension, in declaration order — the order in which a
     /// decoder checks them. Iterate this rather than hand-listing variants, so a
     /// new dimension reaches every consumer.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 20] = [
         Self::Magic,
         Self::FormatVersion,
         Self::StageId,
@@ -142,7 +138,6 @@ impl ProductDimension {
         Self::FunctionRegistry,
         Self::AggregateRegistry,
         Self::PropertyFunctionRegistry,
-        Self::ConstraintComponents,
         Self::ClassCatalog,
         Self::UnsupportedCapability,
         Self::DepthLimit,
@@ -177,7 +172,6 @@ impl ProductDimension {
             Self::FunctionRegistry => "function-registry",
             Self::AggregateRegistry => "aggregate-registry",
             Self::PropertyFunctionRegistry => "property-function-registry",
-            Self::ConstraintComponents => "constraint-components",
             Self::ClassCatalog => "class-catalog",
             Self::UnsupportedCapability => "unsupported-capability",
             Self::DepthLimit => "depth-limit",
@@ -312,11 +306,10 @@ mod tests {
                 ProductDimension::FunctionRegistry => 13,
                 ProductDimension::AggregateRegistry => 14,
                 ProductDimension::PropertyFunctionRegistry => 15,
-                ProductDimension::ConstraintComponents => 16,
-                ProductDimension::ClassCatalog => 17,
-                ProductDimension::UnsupportedCapability => 18,
-                ProductDimension::DepthLimit => 19,
-                ProductDimension::Malformed => 20,
+                ProductDimension::ClassCatalog => 16,
+                ProductDimension::UnsupportedCapability => 17,
+                ProductDimension::DepthLimit => 18,
+                ProductDimension::Malformed => 19,
             };
             assert_eq!(
                 ProductDimension::ALL[declared_index],

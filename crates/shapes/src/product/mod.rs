@@ -79,7 +79,7 @@
 //! The failure this design prevents is the dangerous half of that collapse:
 //! admitting a product whose *identity* no longer matches the environment
 //! executing it. A product prepared under one vocabulary, prefix map, or
-//! constraint-component set encodes decisions that are only correct under those
+//! function registry encodes decisions that are only correct under those
 //! inputs. Loading it under different ones does not crash — it validates, and
 //! quietly returns a report for a shapes graph nobody asked about. Refusing on a
 //! named dimension is what makes that mismatch loud at the boundary instead of
