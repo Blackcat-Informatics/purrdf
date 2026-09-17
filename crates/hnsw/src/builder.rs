@@ -12,8 +12,9 @@
 //! function of the graph that existed before the batch:
 //!
 //! 1. **Freeze.** The graph from the previous round is the sole snapshot every proposal
-//!    in this round reads. Round 1's snapshot is empty, so its batch is the bootstrap
-//!    seed and links to nothing.
+//!    in this round reads. The entry point is computed from the levels *before* any
+//!    linking and is excluded from every batch, so the snapshot is never empty and no
+//!    round needs a bootstrap special case.
 //! 2. **Propose (parallel).** Each node in the batch runs the standard insertion search
 //!    against the snapshot only: greedy descent above its level when the snapshot has
 //!    layers there, then an `ef_construction` beam at each layer from its top down to
@@ -23,12 +24,33 @@
 //!    `frozen neighbours ∪ inbound proposals`, sorted by `(distance, row)` and truncated
 //!    to the per-layer degree bound. A set union followed by a total sort is order-free,
 //!    so the merge cannot see which worker produced which proposal.
-//! 4. **Commit.** The entry point becomes the minimum row index at the current maximum
-//!    level.
+//! 4. **Commit.** The merged adjacency replaces the frozen one. The entry point does not
+//!    move: it was fixed before the first round and is a function of the levels alone.
 //!
-//! The loop is a `for` over a finite partition of the rows — `ceil(n / B)` rounds with
-//! `B = max(1, isqrt(n))` — so termination is structural. There is no `while pending` and
-//! no level-based re-queue; a node is proposed exactly once, in its own batch.
+//! A final serial pass repairs connectivity — see [`repair_connectivity`] — because the
+//! degree bound in step 3 can drop a node's last inbound edge, and a node nothing points at
+//! is a node no search can reach.
+//!
+//! The loop walks a finite partition of the rows, so termination is structural. There is
+//! no `while pending` and no level-based re-queue; a node is proposed exactly once, in its
+//! own batch.
+//!
+//! # Why the batch schedule doubles from one, and why it is capped
+//!
+//! Nodes within a round cannot link to each other — they all read the same frozen
+//! snapshot. A round is therefore a window of mutual invisibility, and its size is the
+//! only knob controlling how much of the corpus is invisible to how much else.
+//!
+//! The schedule starts at a single row and doubles, so the early graph is dense in links
+//! rather than sparse: the first proposer links into the entry point, the next two link
+//! into those, and so on. A flat schedule of `isqrt(n)` rows would instead leave the whole
+//! first batch reading an empty or near-empty snapshot.
+//!
+//! The doubling is capped at [`MAX_ROUND`] because an uncapped schedule makes the final
+//! round half the corpus, and half the corpus mutually invisible is a graph whose recall
+//! collapses at scale. The cap trades more rounds for a bounded invisibility window.
+
+use std::collections::BTreeSet;
 
 use rayon::prelude::*;
 
@@ -39,10 +61,18 @@ use crate::error::{HnswError, Result};
 use crate::graph::{Edge, Graph, VectorMatrix};
 use crate::level::{level_cap, level_from_index};
 use crate::params::Params;
-use crate::search::{DistanceCache, Query, Visited, greedy_descend, search_layer};
+use crate::search::{DistanceCache, Query, Visited, greedy_descend, norm_of, search_layer};
 
 /// One node's proposal: per layer, the selected neighbours in rank order.
 type NodeProposal = Vec<(u32, Vec<Ranked>)>;
+
+/// The largest number of rows proposed against a single frozen snapshot.
+///
+/// Rows inside one round cannot link to each other, so the round size is exactly the width
+/// of a mutual-invisibility window. Uncapped doubling would make the last round half the
+/// corpus; the cap bounds the window at the price of more rounds. It is a structural
+/// constant, not a tuning knob: changing it changes the graph, and therefore the artifact.
+pub(crate) const MAX_ROUND: usize = 2_048;
 
 /// The round-invariant inputs every proposal in a batch reads.
 struct Round<'a> {
@@ -72,7 +102,7 @@ pub(crate) fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Res
     build_with_batch(matrix, kernel, params, None)
 }
 
-/// Build with an explicit round size, or the profile rule when `batch` is `None`.
+/// Build with a fixed round size, or the capped doubling schedule when `batch` is `None`.
 ///
 /// `batch = Some(1)` is a plain serial insertion: each node proposes against the graph
 /// that already holds every row below it. It exists so the determinism suite can observe
@@ -94,38 +124,188 @@ pub(crate) fn build_with_batch(
     let norms = compute_norms(&matrix, kernel)?;
 
     let mut graph = Graph::with_levels(levels.clone());
-    let batch = batch.unwrap_or_else(|| n.isqrt().max(1)).max(1);
+
+    // The entry point is a pure function of the levels, so it is known before any link
+    // exists. Fixing it here is what removes the bootstrap case: every proposal, including
+    // the very first, searches a snapshot that already holds a reachable node, and
+    // `search_layer` seeds its beam with the entry points themselves. The rule is the
+    // minimum row at the maximum level, so the tie-break comparator reverses the row order.
+    let entry = (0..n)
+        .max_by(|a, b| levels[*a].cmp(&levels[*b]).then_with(|| b.cmp(a)))
+        .ok_or_else(|| HnswError::ParameterValidation {
+            description: "a matrix with no rows has no entry point".to_owned(),
+        })?;
+    graph.promote_entry(entry, levels[entry]);
+
     let mut start = 0;
     while start < n {
-        let end = (start + batch).min(n);
-        let batch_rows: Vec<usize> = (start..end).collect();
-        let edges = {
-            let cache = DistanceCache::new();
-            let round = Round {
-                frozen: &graph,
-                matrix: &matrix,
-                kernel,
-                norms: &norms,
-                params: &params,
-                cache: &cache,
-            };
-            propose_round(&round, &batch_rows, &levels)?
+        // An explicit span is the serial-insert comparison; otherwise the schedule doubles
+        // from one and is capped, per the module docs.
+        let span = match batch {
+            Some(fixed) => fixed.max(1),
+            None if start == 0 => 1,
+            None => start.min(n - start).min(MAX_ROUND),
         };
-        graph.commit(edges, &params);
-
-        // Entry point: the minimum row at the current maximum level. Rows are processed in
-        // ascending order, so the first row to attain a strictly higher level is the
-        // minimum row at that level and no later row can displace it on a tie.
-        for &node in &batch_rows {
-            let level = levels[node];
-            if graph.entry().is_none() || level > graph.max_level() {
-                graph.promote_entry(node, level);
-            }
+        let end = (start + span).min(n);
+        // The entry point is never proposed: it is the node every other row links into.
+        let batch_rows: Vec<usize> = (start..end).filter(|row| *row != entry).collect();
+        if !batch_rows.is_empty() {
+            let edges = {
+                let cache = DistanceCache::new();
+                let round = Round {
+                    frozen: &graph,
+                    matrix: &matrix,
+                    kernel,
+                    norms: &norms,
+                    params: &params,
+                    cache: &cache,
+                };
+                propose_round(&round, &batch_rows, &levels)?
+            };
+            graph.commit(edges, &params);
         }
         start = end;
     }
 
+    repair_connectivity(&mut graph, &matrix, kernel, &norms, &params, entry)?;
+
     Ok(HnswIndex::new(matrix, kernel, params, graph, norms))
+}
+
+/// Close the reachability gap the degree bound can open.
+///
+/// Every link is proposed in both directions, but a merge already at its degree bound keeps
+/// only the nearest entries, so a node whose every chosen neighbour is saturated can finish
+/// the build holding out-edges and no inbound edge at all. Out-edges do not make a row
+/// findable: the beam arrives only by following an inbound edge. Such a row is unreachable
+/// from the entry point and can never be returned — not by a neighbour query, and not even
+/// as its own nearest neighbour at distance zero.
+///
+/// The rate is a function of sparsity rather than of corpus size: measured on a uniform
+/// fixture it is flat near 3% of rows at `M0 = 8` from 250 rows to 5,000, and total at
+/// `M0 = 2`, where greedy nearest selection cannot find a spanning structure even though
+/// the degree budget admits one.
+///
+/// # The repair
+///
+/// Each pass walks the unreachable rows in ascending order and gives each one an inbound
+/// edge from the nearest node that is *already reachable* — preferring one the orphan
+/// itself points at, since adjacency is held in rank order and the first reachable entry is
+/// therefore the nearest. That edge is then **protected**: no later eviction may remove it.
+///
+/// Termination: a protected edge is never removed, every pass converts at least one row
+/// from unreachable to reachable, and total protected capacity (`n * bound`) exceeds the
+/// `n - 1` edges a spanning structure needs, so a host with room always exists. The loop
+/// therefore runs at most `n` passes and cannot oscillate.
+///
+/// Determinism: the orphan order, the host preference, and the eviction choice are all
+/// total functions of the graph, so the repaired graph is a pure function of the build.
+fn repair_connectivity(
+    graph: &mut Graph,
+    matrix: &VectorMatrix,
+    kernel: Kernel,
+    norms: &[f64],
+    params: &Params,
+    entry: usize,
+) -> Result<()> {
+    let n = graph.node_count();
+    let bound = params.degree_bound(0);
+    let mut protected: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+
+    for _ in 0..n {
+        let mut reachable = graph.reachable_from(entry, 0);
+        let orphans: Vec<usize> = (0..n).filter(|row| !reachable[*row]).collect();
+        if orphans.is_empty() {
+            return Ok(());
+        }
+        for orphan in orphans {
+            // Attaching an orphan makes it, and everything it already points at, a legal
+            // host for the orphans still to come in this pass. Holding the reachable set
+            // frozen for the whole pass would exhaust the hosts a sparse graph can offer.
+            if reachable[orphan] {
+                continue;
+            }
+            let host = choose_host(graph, &reachable, &protected, bound, entry, orphan)?;
+            let distance = kernel
+                .distance(
+                    matrix.row(host),
+                    norm_of(norms, host),
+                    matrix.row(orphan),
+                    norm_of(norms, orphan),
+                )
+                .ok_or(HnswError::NonFiniteDistance { row: orphan })?;
+            let linked = graph.link_protected(
+                host,
+                0,
+                Ranked {
+                    distance,
+                    row: orphan,
+                },
+                bound,
+                &protected[host],
+            );
+            debug_assert!(
+                linked,
+                "choose_host only returns a host with unprotected room"
+            );
+            protected[host].insert(orphan);
+            mark_reachable(graph, &mut reachable, orphan);
+        }
+    }
+    Err(HnswError::ParameterValidation {
+        description: "connectivity repair did not converge; the degree bound admits no \
+                      spanning structure over this corpus"
+            .to_owned(),
+    })
+}
+
+/// Mark `from` reachable, and with it everything its out-edges lead to.
+fn mark_reachable(graph: &Graph, reachable: &mut [bool], from: usize) {
+    if reachable[from] {
+        return;
+    }
+    reachable[from] = true;
+    let mut frontier = vec![from];
+    while let Some(row) = frontier.pop() {
+        for neighbor in graph.neighbors(row, 0) {
+            if !reachable[neighbor.row] {
+                reachable[neighbor.row] = true;
+                frontier.push(neighbor.row);
+            }
+        }
+    }
+}
+
+/// The reachable node that will adopt `orphan`, preferring the nearest one it points at.
+fn choose_host(
+    graph: &Graph,
+    reachable: &[bool],
+    protected: &[BTreeSet<usize>],
+    bound: usize,
+    entry: usize,
+    orphan: usize,
+) -> Result<usize> {
+    let has_room = |row: usize| protected[row].len() < bound;
+    // Adjacency is kept in rank order, so the first reachable entry is the nearest one.
+    let nearest = graph
+        .neighbors(orphan, 0)
+        .iter()
+        .map(|candidate| candidate.row)
+        .find(|row| reachable[*row] && has_room(*row));
+    if let Some(row) = nearest {
+        return Ok(row);
+    }
+    if reachable[entry] && has_room(entry) {
+        return Ok(entry);
+    }
+    (0..graph.node_count())
+        .find(|row| reachable[*row] && has_room(*row))
+        .ok_or_else(|| HnswError::ParameterValidation {
+            description: format!(
+                "row {orphan} cannot be reattached: every reachable node has exhausted its \
+                 degree bound of {bound}"
+            ),
+        })
 }
 
 /// The per-row L2 norms, or an empty vector for a kernel that does not divide by one.
@@ -155,11 +335,6 @@ pub(crate) fn compute_norms(matrix: &VectorMatrix, kernel: Kernel) -> Result<Vec
 /// row. The shared [`DistanceCache`] is the only cross-worker state and affects nothing
 /// but how often a distance is recomputed.
 fn propose_round(round: &Round<'_>, batch: &[usize], levels: &[u32]) -> Result<Vec<Edge>> {
-    if round.frozen.entry().is_none() {
-        // Round 1: the snapshot is empty, so the batch is the bootstrap seed and links to
-        // nothing. Later rounds link *into* these nodes, so they are not stranded.
-        return Ok(Vec::new());
-    }
     let node_count = round.frozen.node_count();
     let results: Vec<Result<NodeProposal>> = batch
         .par_iter()

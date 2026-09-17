@@ -231,3 +231,82 @@ fn a_single_row_index_is_the_degenerate_bootstrap() {
     );
     assert_eq!(index.search_rows(0, 5).expect("searches").len(), 1);
 }
+
+/// The rows a layer-0 walk from the entry point can actually arrive at.
+///
+/// Search only ever reaches a node by following an *inbound* edge from a node it has
+/// already reached, so out-edges do not make a row findable. This is a plain BFS over the
+/// same adjacency the beam walks.
+fn reachable_at_layer_zero(index: &HnswIndex) -> Vec<bool> {
+    let mut seen = vec![false; index.rows()];
+    let Some(entry) = index.entry() else {
+        return seen;
+    };
+    seen[entry] = true;
+    let mut frontier = vec![entry];
+    while let Some(row) = frontier.pop() {
+        for neighbor in index.neighbors(row, 0) {
+            if !seen[neighbor.row] {
+                seen[neighbor.row] = true;
+                frontier.push(neighbor.row);
+            }
+        }
+    }
+    seen
+}
+
+#[test]
+fn every_row_is_reachable_from_the_entry_point_at_layer_zero() {
+    // A row the entry cannot reach can never be returned — not by a neighbour query, and
+    // not even as its own nearest neighbour at distance zero. It is a silent drop, and it
+    // is invisible to every determinism check because a deterministically wrong graph is
+    // still deterministic.
+    for params in parameter_sets() {
+        for metric in kernels() {
+            for rows in [2_usize, 3, 17, 96, 250] {
+                let index = build(fixture(rows, 8, 0xC0FFEE), &metric, params).expect("builds");
+                let seen = reachable_at_layer_zero(&index);
+                let stranded: Vec<usize> = (0..index.rows()).filter(|row| !seen[*row]).collect();
+                assert!(
+                    stranded.is_empty(),
+                    "{metric:?} {params:?} rows={rows}: {} of {rows} rows are unreachable \
+                     from the entry point {:?}: {stranded:?}",
+                    stranded.len(),
+                    index.entry()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn asymmetric_adjacency_is_explained_by_the_degree_bound() {
+    // Links are proposed in both directions, so an edge `a -> b` without `b -> a` can only
+    // come from `b`'s merge truncating at its degree bound. Anything else is a lost edge.
+    //
+    // The retained set is deliberately *not* asserted to be uniformly nearer than the
+    // dropped edge. The connectivity repair may hold a far neighbour on purpose — that is
+    // the whole point of a protected edge, and connectivity beats purity.
+    for params in parameter_sets() {
+        for metric in kernels() {
+            let index = build(fixture(96, 8, 0xBEEF), &metric, params).expect("builds");
+            for_each_layer(&index, |row, layer, neighbors| {
+                for neighbor in neighbors {
+                    let back = index.neighbors(neighbor.row, layer);
+                    if back.iter().any(|entry| entry.row == row) {
+                        continue;
+                    }
+                    let bound = if layer == 0 { params.m0() } else { params.m() };
+                    assert_eq!(
+                        back.len(),
+                        bound,
+                        "{metric:?} {params:?}: {row} -> {} at layer {layer} has no return \
+                         edge, but {}'s adjacency is not full",
+                        neighbor.row,
+                        neighbor.row
+                    );
+                }
+            });
+        }
+    }
+}

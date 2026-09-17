@@ -19,10 +19,18 @@
 //!
 //! # The entry-point rule, pinned
 //!
-//! At any moment the entry point is **the minimum row index among the nodes committed at
-//! the current maximum level**. Standard HNSW leaves the tie-break to insertion order,
-//! which is exactly the kind of hidden state determinism cannot tolerate; pinning it to
-//! the row index makes the entry point a function of the committed set alone.
+//! The entry point is **the minimum row index among the nodes at the maximum level**.
+//! Standard HNSW leaves the tie-break to insertion order, which is exactly the kind of
+//! hidden state determinism cannot tolerate; pinning it to the row index makes the entry
+//! point a function of the level assignment alone.
+//!
+//! Because levels are themselves a pure function of the row index, the entry point is
+//! known **before any link exists** and the builder fixes it before its first round. That
+//! ordering is load-bearing rather than incidental: a builder that discovered its entry
+//! point as it went would have to start from an empty snapshot, and every node proposed
+//! against an empty snapshot links to nothing and can never be reached afterwards.
+
+use std::collections::BTreeSet;
 
 use crate::error::{HnswError, Result};
 use crate::params::Params;
@@ -207,11 +215,10 @@ impl Graph {
         self.max_level
     }
 
-    /// Promote `row` to the entry point at `level`.
+    /// Install `row` as the entry point at `level`.
     ///
-    /// Called only when `level` strictly exceeds the current maximum, so the first row to
-    /// attain a new maximum wins and the tie-break is "minimum row", as the module docs
-    /// require.
+    /// Called once, before the first round, with the minimum row at the maximum level —
+    /// both computable from the level assignment alone, as the module docs require.
     pub(crate) fn promote_entry(&mut self, row: usize, level: u32) {
         self.entry = Some(row);
         self.max_level = level;
@@ -246,6 +253,63 @@ impl Graph {
             self.layers[node][layer as usize] = merged;
             start = end;
         }
+    }
+
+    /// The rows a walk from `entry` can arrive at, following adjacency at `layer`.
+    ///
+    /// Search reaches a node only by following an *inbound* edge from a node it has already
+    /// reached, so this is exactly the set of rows the beam can ever return.
+    pub(crate) fn reachable_from(&self, entry: usize, layer: u32) -> Vec<bool> {
+        let mut seen = vec![false; self.node_count()];
+        seen[entry] = true;
+        let mut frontier = vec![entry];
+        while let Some(row) = frontier.pop() {
+            for neighbor in &self.layers[row][layer as usize] {
+                if !seen[neighbor.row] {
+                    seen[neighbor.row] = true;
+                    frontier.push(neighbor.row);
+                }
+            }
+        }
+        seen
+    }
+
+    /// Give `node` an inbound edge from `host` at `layer`, evicting if the bound is met.
+    ///
+    /// Returns `false` when every entry in `host`'s adjacency is protected, so the caller
+    /// must pick a different host. An already-present edge is a no-op and succeeds.
+    ///
+    /// Eviction takes the farthest **unprotected** entry, which keeps the degree bound
+    /// exact and keeps every edge a previous repair depended on.
+    pub(crate) fn link_protected(
+        &mut self,
+        host: usize,
+        layer: u32,
+        neighbor: Ranked,
+        bound: usize,
+        protected: &BTreeSet<usize>,
+    ) -> bool {
+        let list = &mut self.layers[host][layer as usize];
+        if list.iter().any(|entry| entry.row == neighbor.row) {
+            return true;
+        }
+        list.push(neighbor);
+        list.sort_unstable();
+        if list.len() > bound {
+            let Some(victim) = list
+                .iter()
+                .rposition(|entry| entry.row != neighbor.row && !protected.contains(&entry.row))
+            else {
+                let restored = list
+                    .iter()
+                    .position(|entry| entry.row == neighbor.row)
+                    .expect("the edge was just inserted");
+                list.remove(restored);
+                return false;
+            };
+            list.remove(victim);
+        }
+        true
     }
 
     /// Encode the graph into its canonical byte image.
