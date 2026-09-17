@@ -1574,7 +1574,19 @@ pub fn parse_shapes_with_config(
         .map_err(|errors| errors.join("\n"))?;
     let doc_prefixes = crate::text_ingest::extract_prefixes(shapes_ttl);
 
-    crate::shapes::from_dataset_with_config(&shapes_dataset, &doc_prefixes, box_role_vocab)
+    // `base` and `doc_prefixes` are handed on rather than consumed and dropped:
+    // this is the only seam that ever sees them, and both decided what the source
+    // text means (the base resolved its relative IRI references; the prefix map is
+    // baked into every SHACL-AF query body below). A `Shapes` that could not report
+    // them would force any consumer needing its identity to accept that identity as
+    // an argument, which makes it a caller's claim instead of a fact about the parse.
+    crate::shapes::from_dataset_with_base(
+        &shapes_dataset,
+        base,
+        &doc_prefixes,
+        box_role_vocab,
+        None,
+    )
 }
 
 /// Validate data (N-Triples) against shapes (Turtle), returning a [`ValidationReport`].

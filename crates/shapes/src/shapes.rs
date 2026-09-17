@@ -23,6 +23,7 @@ use crate::components::{ComponentRegistry, severity_from_term};
 use crate::data::{GraphFilter, native_quads};
 use crate::expression::NodeExpr;
 use crate::model::{BoxRoleVocab, rdf, rdfs, sh};
+use crate::provenance::ParseProvenance;
 use crate::report::Severity;
 use crate::term::{NamedNode, Term};
 
@@ -434,6 +435,18 @@ pub struct Shapes {
     /// The original frozen shapes dataset, retained so validation can expose it
     /// as a named graph to SHACL-SPARQL paths.
     pub(crate) shapes_dataset: Arc<RdfDataset>,
+    /// The caller-supplied inputs this parse ran with, recorded by the parser
+    /// that consumed them.
+    ///
+    /// Not public, and readable outside the crate only through
+    /// [`Shapes::provenance`], because an identity a caller can assign is a claim
+    /// rather than a fact about the parse — see [`ParseProvenance`] for the
+    /// forgery that prevents. `pub(crate)` rather than fully private for the same
+    /// reason [`Self::shapes_dataset`] is: in-crate construction uses functional
+    /// update from [`Shapes::default`], which requires every field to be nameable
+    /// at the construction site. The visibility is identical from outside the
+    /// crate, where `Shapes` has been unconstructible by struct literal all along.
+    pub(crate) parse_provenance: ParseProvenance,
 }
 
 impl Shapes {
@@ -451,6 +464,19 @@ impl Shapes {
     pub const fn dataset(&self) -> &Arc<RdfDataset> {
         &self.shapes_dataset
     }
+
+    /// The caller-supplied inputs these shapes were parsed with.
+    ///
+    /// Paired with [`Self::dataset`] this is everything needed to re-derive the
+    /// shapes: the dataset is the RDF, the provenance is the configuration that
+    /// decided what the RDF means. A consumer that serializes a `Shapes` reads
+    /// its identity from here rather than accepting it as an argument, so the
+    /// recorded identity is the parse that happened and not the one the caller
+    /// remembers — see [`ParseProvenance`].
+    #[must_use]
+    pub const fn provenance(&self) -> &ParseProvenance {
+        &self.parse_provenance
+    }
 }
 
 impl Default for Shapes {
@@ -465,6 +491,7 @@ impl Default for Shapes {
             shapes_dataset: ::purrdf::RdfDatasetBuilder::new()
                 .freeze()
                 .expect("empty shapes dataset"),
+            parse_provenance: ParseProvenance::default(),
         }
     }
 }
@@ -536,8 +563,39 @@ pub fn from_dataset_with_config_and_graph(
     box_role_vocab: Option<BoxRoleVocab>,
     shapes_graph: Option<String>,
 ) -> Result<Shapes, String> {
+    from_dataset_with_base(dataset, None, doc_prefixes, box_role_vocab, shapes_graph)
+}
+
+/// [`from_dataset_with_config_and_graph`] plus the base the source document's
+/// relative IRI references were resolved against, recorded into the parsed
+/// [`Shapes::provenance`].
+///
+/// A dataset is already resolved — by the time the IR exists every relative
+/// reference has become an absolute IRI — so the base changes nothing about THIS
+/// parse. It is threaded anyway because it is the one parse input that only the
+/// text-level entry point ([`crate::engine::parse_shapes`]) ever sees: dropping it
+/// here would make a shapes graph that resolved `<PersonShape>` against
+/// `https://example.org/` indistinguishable from one that resolved it against
+/// anything else, and nothing downstream could recover which.
+///
+/// Kept `pub(crate)` rather than published as a sixth public overload: callers who
+/// hold a dataset do not have a base to give (they never parsed text), and adding
+/// a parameter they can only answer `None` to invites a fabricated one.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on any unsupported SHACL construct or missing
+/// structural data — see [`from_dataset`].
+pub(crate) fn from_dataset_with_base(
+    dataset: &Arc<RdfDataset>,
+    base: Option<&str>,
+    doc_prefixes: &[(String, String)],
+    box_role_vocab: Option<BoxRoleVocab>,
+    shapes_graph: Option<String>,
+) -> Result<Shapes, String> {
     let mut parser = Parser::new(
         dataset.as_ref(),
+        base.map(ToOwned::to_owned),
         doc_prefixes,
         box_role_vocab,
         Arc::clone(dataset),
@@ -570,6 +628,10 @@ pub(crate) struct Parser<'s> {
     /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
     /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
     in_flight: FastSet<InFlight>,
+    /// The base the source document's relative IRI references were resolved
+    /// against, carried only so [`Shapes::provenance`] can report it; `None` when
+    /// the caller supplied none or entered with an already-resolved dataset.
+    base: Option<String>,
     /// The shapes document's `@prefix` map (prefix → namespace), used as the
     /// fallback PREFIX header for SHACL-AF `sh:select` queries.
     doc_prefixes: Vec<(String, String)>,
@@ -730,6 +792,7 @@ pub(crate) fn build_prefix_header(
 impl<'s> Parser<'s> {
     fn new(
         data: &'s RdfDataset,
+        base: Option<String>,
         doc_prefixes: &[(String, String)],
         box_role_vocab: Option<BoxRoleVocab>,
         shapes_dataset: Arc<RdfDataset>,
@@ -738,6 +801,7 @@ impl<'s> Parser<'s> {
         Self {
             data,
             in_flight: FastSet::default(),
+            base,
             doc_prefixes: doc_prefixes.to_vec(),
             box_role_vocab,
             component_registry: ComponentRegistry::default(),
@@ -902,6 +966,16 @@ impl<'s> Parser<'s> {
                 .collect(),
             shapes_graph: self.shapes_graph.clone(),
             shapes_dataset: Arc::clone(&self.shapes_dataset),
+            // Recorded HERE, at the only site that has all four values in hand,
+            // so the identity a `Shapes` reports is the one its parse used. The
+            // prefix map goes out in the parser's own order — the fact, not a
+            // normalization of it.
+            parse_provenance: ParseProvenance::new(
+                self.base.clone(),
+                self.doc_prefixes.clone(),
+                self.box_role_vocab.clone(),
+                self.shapes_graph.clone(),
+            ),
         })
     }
 
@@ -2820,7 +2894,14 @@ mod tests {
     /// `ex:expr` object as a node expression.
     fn parse_expr(ttl: &str) -> Result<NodeExpr, String> {
         let dataset = load_store(ttl);
-        let mut parser = Parser::new(dataset.as_ref(), &[], None, Arc::clone(&dataset), None);
+        let mut parser = Parser::new(
+            dataset.as_ref(),
+            None,
+            &[],
+            None,
+            Arc::clone(&dataset),
+            None,
+        );
         let root = Term::NamedNode(NamedNode::from("http://example.org/ns#root"));
         let expr_obj = parser
             .first_object_of(&root, "http://example.org/ns#expr")
