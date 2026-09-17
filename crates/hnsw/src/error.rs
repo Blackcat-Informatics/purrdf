@@ -93,6 +93,46 @@ pub enum HnswError {
         /// Bytes the target can address.
         maximum: u64,
     },
+
+    /// A PURREMB artifact held no derived index naming this profile.
+    MissingIndexGuard {
+        /// What was searched and what was expected.
+        description: String,
+    },
+
+    /// A PURREMB artifact held more than one derived index naming this profile.
+    ///
+    /// Two HNSW guards in one artifact cannot be told apart by a query that names the
+    /// profile alone, and choosing one silently would answer from an index the caller did
+    /// not name, so the ambiguity is refused rather than resolved.
+    AmbiguousIndexGuard {
+        /// How many matching guards were found.
+        count: usize,
+    },
+
+    /// A guard claims this profile but its contents disagree with the profile spec.
+    GuardProfile {
+        /// Which field disagrees and how.
+        description: String,
+    },
+
+    /// The index payload is detached or absent, so it cannot be verified or searched.
+    PayloadUnavailable {
+        /// Why the bytes could not be obtained.
+        description: String,
+    },
+
+    /// The inline payload does not match the guard's committed SHA-256 and length.
+    PayloadCommitment {
+        /// What the guard committed and what the bytes actually are.
+        description: String,
+    },
+
+    /// A PURREMB container operation failed.
+    Embedding {
+        /// The container error, rendered.
+        description: String,
+    },
 }
 
 impl fmt::Display for HnswError {
@@ -142,11 +182,46 @@ impl fmt::Display for HnswError {
                 "the index would need {required} bytes, which exceeds the {maximum} \
                  addressable on this target"
             ),
+            Self::MissingIndexGuard { description } => {
+                write!(f, "no HNSW derived index: {description}")
+            }
+            Self::AmbiguousIndexGuard { count } => write!(
+                f,
+                "the artifact holds {count} HNSW derived indexes; a query that names the \
+                 profile alone cannot choose one without answering from an index the caller \
+                 did not name"
+            ),
+            Self::GuardProfile { description } => {
+                write!(
+                    f,
+                    "the HNSW guard disagrees with its profile: {description}"
+                )
+            }
+            Self::PayloadUnavailable { description } => {
+                write!(f, "the HNSW payload is unavailable: {description}")
+            }
+            Self::PayloadCommitment { description } => {
+                write!(f, "the HNSW payload commitment fails: {description}")
+            }
+            Self::Embedding { description } => {
+                write!(
+                    f,
+                    "the PURREMB container refused the HNSW index: {description}"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for HnswError {}
+
+impl From<purrdf_core::EmbeddingError> for HnswError {
+    fn from(error: purrdf_core::EmbeddingError) -> Self {
+        Self::Embedding {
+            description: error.to_string(),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -184,6 +259,22 @@ mod tests {
             HnswError::AddressSpaceExceeded {
                 required: 10,
                 maximum: 5,
+            },
+            HnswError::MissingIndexGuard {
+                description: "no guard names the profile".to_owned(),
+            },
+            HnswError::AmbiguousIndexGuard { count: 2 },
+            HnswError::GuardProfile {
+                description: "parameter encoding differs".to_owned(),
+            },
+            HnswError::PayloadUnavailable {
+                description: "the payload is detached".to_owned(),
+            },
+            HnswError::PayloadCommitment {
+                description: "the length differs".to_owned(),
+            },
+            HnswError::Embedding {
+                description: "structure refused".to_owned(),
             },
         ];
         let mut seen = std::collections::HashSet::new();

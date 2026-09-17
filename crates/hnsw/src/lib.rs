@@ -53,8 +53,11 @@ mod search;
 
 pub mod determinism;
 pub mod error;
+pub mod guard;
 pub mod level;
 pub mod params;
+pub mod profile;
+pub mod relation;
 
 pub use error::{HnswError, Result};
 pub use graph::VectorMatrix;
@@ -154,6 +157,26 @@ impl HnswIndex {
         let cache = DistanceCache::new();
         let mut visited = Visited::new(self.matrix.rows());
         self.search_with(query_row, k, &cache, &mut visited)
+    }
+
+    /// The `k` nearest rows to `query_row`, together with the number of candidate
+    /// distance evaluations the search performed.
+    ///
+    /// This is [`HnswIndex::search_rows`] with the work it cost made observable: one unit
+    /// per `Kernel::distance` call, counted through the search's memo, so a candidate whose
+    /// distance was already computed is not charged twice. The count is what a
+    /// property-function cursor reports through `PfCursor::take_work` — the rows a search
+    /// returns are `k`, and `k` says nothing about the size of the graph they were selected
+    /// from.
+    ///
+    /// # Errors
+    ///
+    /// As [`HnswIndex::search_rows`].
+    pub fn search_rows_work(&self, query_row: usize, k: usize) -> Result<(Vec<Ranked>, u64)> {
+        let cache = DistanceCache::new();
+        let mut visited = Visited::new(self.matrix.rows());
+        let ranked = self.search_with(query_row, k, &cache, &mut visited)?;
+        Ok((ranked, cache.evaluations()))
     }
 
     /// The `k` nearest rows to each of `query_rows`, one result per query in input order.

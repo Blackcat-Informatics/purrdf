@@ -72,6 +72,21 @@ impl Visited {
     }
 }
 
+/// The memoized state of one [`DistanceCache`]: the stored distances and how many
+/// were actually evaluated.
+#[derive(Debug, Default)]
+struct CacheState {
+    /// `(min(a, b), max(a, b)) -> distance`.
+    entries: BTreeMap<(usize, usize), f64>,
+    /// Kernel evaluations that actually ran, as opposed to cache hits.
+    ///
+    /// Incremented where the kernel is invoked and nowhere else, so it is exactly the
+    /// quantity a work-accounting caller wants: `d(a, b)` computed once counts once,
+    /// and a cache hit counts zero. A concurrent duplicate (two workers racing the same
+    /// pair) is two real evaluations and is counted twice, which is the honest number.
+    evaluations: u64,
+}
+
 /// A memoized `(row_a, row_b) -> distance` map shared by one build round.
 ///
 /// A `BTreeMap` under a mutex rather than a hash map: the key is an integer pair, the map
@@ -81,7 +96,7 @@ impl Visited {
 /// both computations produce the same bits.
 #[derive(Debug, Default)]
 pub(crate) struct DistanceCache {
-    entries: Mutex<BTreeMap<(usize, usize), f64>>,
+    state: Mutex<CacheState>,
 }
 
 impl DistanceCache {
@@ -92,19 +107,34 @@ impl DistanceCache {
 
     /// A stored distance, keyed by the unordered pair.
     fn get(&self, a: usize, b: usize) -> Option<f64> {
-        self.entries
+        self.state
             .lock()
             .expect("distance cache lock is never poisoned")
+            .entries
             .get(&ordered(a, b))
             .copied()
     }
 
-    /// Record a distance.
+    /// Record a distance and charge it as one evaluation.
     fn insert(&self, a: usize, b: usize, distance: f64) {
-        self.entries
+        let mut state = self
+            .state
+            .lock()
+            .expect("distance cache lock is never poisoned");
+        state.entries.insert(ordered(a, b), distance);
+        state.evaluations = state.evaluations.saturating_add(1);
+    }
+
+    /// The number of kernel evaluations performed through this cache.
+    ///
+    /// A cache hit does not increment it: the value was not evaluated again, merely
+    /// recalled. Callers that want a delta (a reused cache across queries) subtract two
+    /// reads; callers that drained a fresh cache read it directly.
+    pub(crate) fn evaluations(&self) -> u64 {
+        self.state
             .lock()
             .expect("distance cache lock is never poisoned")
-            .insert(ordered(a, b), distance);
+            .evaluations
     }
 }
 

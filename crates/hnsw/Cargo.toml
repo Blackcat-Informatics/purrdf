@@ -15,6 +15,11 @@ categories = ["algorithms", "data-structures"]
 [dependencies]
 purrdf-core = { workspace = true }
 purrdf-sparql-eval = { workspace = true }
+# The XSD value space, for the relation's canonical `xsd:double` distances and its
+# `xsd:integer` neighbour count. A zero-dependency foundation crate, wasm-clean, and the
+# same value space the exact kNN relation formats through — so the approximate and exact
+# surfaces emit byte-identical distance literals.
+purrdf-xsd = { workspace = true }
 rayon = { workspace = true }
 
 [lints]
