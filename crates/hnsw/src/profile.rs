@@ -26,7 +26,11 @@
 //! # The approximation contract, stated honestly
 //!
 //! [`LOSS_EVIDENCE`] is the one sentence this profile publishes about its own quality:
-//! *"recall unmeasured on realistic corpora; exact path is the oracle"*. It is not a
+//! *"approximate: recall measured against the exact oracle and pinned per fixture; an offer
+//! of candidates is never a proof of absence"*. It said "recall unmeasured on realistic
+//! corpora" until the corpora were fixed: the figure had been taken over uniform random
+//! vectors, the one input class whose distances concentrate so hard that no index can score
+//! well on it, and the resulting number was a statement about the generator. It is not a
 //! disclaimer appended to documentation — it is carried **in the artifact**, as the
 //! implementation identity's revision bytes, so the guard digest covers it and
 //! [`crate::guard::validate_guard`] refuses a guard whose revision says anything else. A
@@ -106,7 +110,8 @@ pub const IMPLEMENTATION_MEDIA_TYPE: &str =
     "application/vnd.blackcatinformatics.purrdf.hnsw.profile-v1";
 
 /// The approximation evidence string, carried as the implementation identity's revision.
-pub const LOSS_EVIDENCE: &str = "recall unmeasured on realistic corpora; exact path is the oracle";
+pub const LOSS_EVIDENCE: &str = "approximate: recall measured against the exact oracle and pinned per fixture; an offer \
+     of candidates is never a proof of absence";
 
 /// The parameter block's tag for `M`.
 pub const PARAM_M: u16 = 1;

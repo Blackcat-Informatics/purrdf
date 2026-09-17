@@ -48,21 +48,44 @@ use crate::{HnswIndex, IMPLEMENTATION_ID, INDEX_MEDIA_TYPE, Params, profile};
 // The guard contract
 // ---------------------------------------------------------------------------
 
-/// The guard contract this crate emits for `params`.
+/// The PURREMB use role an index over `effective` occupies.
 ///
-/// The `use_role` is [`IndexUseRole::Generic`]: an HNSW graph over the full effective
-/// space is neither a coarse-prefix retriever nor a reranker in PURREMB's taxonomy, and
-/// inventing a more specific role would be a claim about a query plan this profile does
-/// not make. The certified-metadata binding is absent: this profile names no RDF metadata
-/// document, and a default is exactly what the workspace forbids.
+/// The role is **read off the artifact**, not chosen. PURREMB defines
+/// [`IndexUseRole::CoarsePrefixRetrieval`] as "coarse retrieval over a shorter effective
+/// prefix", and an index built over a projection whose effective dimension is shorter than
+/// the matrix it projects is exactly that, whatever the profile would prefer to call itself.
+/// Only an index over the whole stored width is [`IndexUseRole::Generic`].
+///
+/// Getting this from the data matters because the role is a claim a consumer acts on: a
+/// planner that reads `Generic` may treat the offer as final, while `CoarsePrefixRetrieval`
+/// says the answer was decided on a truncation of the vectors and invites a full-width
+/// rerank. Declaring `Generic` over a prefix understates the loss and is a false statement
+/// about the artifact, not a conservative one.
+///
+/// [`IndexUseRole::FullPrefixReranking`] is never emitted here: this profile retrieves, it
+/// does not rerank, and claiming the role would be a claim about a query plan it does not
+/// execute.
 #[must_use]
-pub fn guard_contract(params: Params) -> IndexGuardContract {
+pub fn use_role(effective: &EffectiveMatrixView<'_>) -> IndexUseRole {
+    if effective.projection().effective_dimension() < effective.matrix().stored_dimension() {
+        IndexUseRole::CoarsePrefixRetrieval
+    } else {
+        IndexUseRole::Generic
+    }
+}
+
+/// The guard contract this crate emits for `params` under `role`.
+///
+/// The certified-metadata binding is absent: this profile names no RDF metadata document,
+/// and a default is exactly what the workspace forbids.
+#[must_use]
+pub fn guard_contract(params: Params, role: IndexUseRole) -> IndexGuardContract {
     IndexGuardContract {
         implementation: profile::implementation(),
         parameter_encoding: profile::PARAMETER_ENCODING.to_owned(),
         parameters: profile::parameters(params),
         loss: profile::loss_contract(),
-        use_role: IndexUseRole::Generic,
+        use_role: role,
         payload_media_type: INDEX_MEDIA_TYPE.to_owned(),
         certified_metadata_binding: None,
     }
@@ -78,8 +101,12 @@ pub fn guard_contract(params: Params) -> IndexGuardContract {
 ///
 /// [`HnswError`] wrapping any [`purrdf_core::EmbeddingError`] — an empty payload, a
 /// non-deterministic inline payload, or a guard whose contract is malformed.
-pub fn derived_index(coordinates: IndexCoordinates, index: &HnswIndex) -> Result<DerivedIndex> {
-    let guard = guard_contract(index.params());
+pub fn derived_index(
+    coordinates: IndexCoordinates,
+    index: &HnswIndex,
+    role: IndexUseRole,
+) -> Result<DerivedIndex> {
+    let guard = guard_contract(index.params(), role);
     Ok(DerivedIndex::new(
         coordinates,
         IndexPayloadStorage::Inline(index.canonical_image()),
@@ -330,6 +357,12 @@ pub fn check_coordinates(
     if guard.prefix_dimension() != projection.effective_dimension() {
         return Err(mismatch("prefix dimension"));
     }
+    // The role is checked, not merely carried. A guard declaring a general-purpose index
+    // over a truncated projection understates its own loss, and a consumer that reads the
+    // role to decide whether a rerank is owed would act on the wrong answer.
+    if declared_use_role(guard)? != use_role(effective) {
+        return Err(mismatch("use role"));
+    }
     Ok(())
 }
 
@@ -537,6 +570,31 @@ fn required_utf8<'a>(entries: &[TlvEntryRef<'a>], tag: u16, what: &str) -> Resul
     }
     core::str::from_utf8(entry.value)
         .map_err(|_| profile_failure(format!("{what} is not valid UTF-8")))
+}
+
+/// The use role a guard declares, read from its canonical block.
+///
+/// Tag 6, a little-endian `u32` over PURREMB's role codes. An unrecognised code is refused
+/// rather than mapped to a default: a role this profile does not understand is not a role it
+/// may assume is harmless.
+fn declared_use_role(guard: &IndexGuardView<'_>) -> Result<IndexUseRole> {
+    let entries = guard_entries(guard)?;
+    let entry = required(&entries, 6, "the use role")?;
+    if entry.wire_type != TlvWireType::U32 {
+        return Err(profile_failure("the use role is not a u32"));
+    }
+    let bytes: [u8; 4] = entry
+        .value
+        .try_into()
+        .map_err(|_| profile_failure("the use role is not four bytes"))?;
+    match u32::from_le_bytes(bytes) {
+        1 => Ok(IndexUseRole::Generic),
+        2 => Ok(IndexUseRole::CoarsePrefixRetrieval),
+        3 => Ok(IndexUseRole::FullPrefixReranking),
+        other => Err(profile_failure(format!(
+            "the use role is {other}, which PURREMB does not define"
+        ))),
+    }
 }
 
 /// One entry by tag, if present.

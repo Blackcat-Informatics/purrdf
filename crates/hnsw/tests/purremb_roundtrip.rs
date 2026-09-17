@@ -17,7 +17,7 @@
 #[path = "support/purremb.rs"]
 mod purremb;
 
-use purrdf_core::{EmbeddingView, verify_embedding};
+use purrdf_core::{EmbeddingView, IndexUseRole, verify_embedding};
 use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, relation::HnswSpace};
 use purrdf_sparql_eval::{KnnGuard, PropertyFunction};
 
@@ -183,5 +183,68 @@ fn verify_rebuild_is_true_for_fresh_and_false_for_tampered() {
         )
         .expect("boolean"),
         "the same bytes under other parameters are not the rebuild"
+    );
+}
+
+#[test]
+fn the_declared_use_role_is_read_off_the_projection() {
+    // PURREMB defines role 2 as "coarse retrieval over a shorter effective prefix". An index
+    // over a truncated projection IS that, whatever the profile would prefer to call itself,
+    // and declaring a general-purpose role over a prefix understates the artifact's loss to
+    // every consumer that reads the role to decide whether a rerank is owed.
+    let full = purremb::Fixture::with_prefix(48, 8, 8, params());
+    assert_eq!(
+        full.use_role,
+        IndexUseRole::Generic,
+        "an index over the whole stored width is general purpose"
+    );
+
+    let coarse = purremb::Fixture::with_prefix(48, 8, 4, params());
+    assert_eq!(
+        coarse.use_role,
+        IndexUseRole::CoarsePrefixRetrieval,
+        "an index over half the stored width is coarse-prefix retrieval"
+    );
+
+    // Both artifacts must still verify, select and load: the role is a description, not a
+    // restriction, and a prefix artifact is an ordinary artifact.
+    for fixture in [&full, &coarse] {
+        let mut view = EmbeddingView::from_bytes(&fixture.bytes).expect("the artifact opens");
+        verify_embedding(&mut view).expect("the artifact verifies");
+        let selected = guard::select(&view).expect("exactly one HNSW guard");
+        guard::validate_guard(&selected).expect("the profile validates");
+        let effective = view
+            .effective_matrix(fixture.target_set, fixture.vector_space)
+            .expect("readable")
+            .expect("present");
+        guard::check_coordinates(
+            &selected,
+            fixture.target_set,
+            fixture.vector_space,
+            &effective,
+        )
+        .expect("the coordinates, prefix and role all agree with the artifact");
+    }
+}
+
+#[test]
+fn a_search_over_a_coarse_prefix_still_answers() {
+    // The role says the answer was decided on a truncation. It does not say the index stops
+    // working, and an artifact that declared the honest role but could no longer be searched
+    // would have traded one false statement for a worse one.
+    let fixture = purremb::Fixture::with_prefix(48, 8, 4, params());
+    let guard_value = KnnGuard::new(48, 48).expect("valid");
+    let space = HnswSpace::from_artifact(
+        &fixture.bytes,
+        fixture.target_set,
+        fixture.vector_space,
+        fixture.bindings(),
+        guard_value,
+    )
+    .expect("a coarse-prefix artifact yields a space");
+    assert_eq!(
+        space.dimension(),
+        4,
+        "the space searches the declared prefix, not the stored width"
     );
 }

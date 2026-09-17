@@ -64,6 +64,8 @@ pub struct Fixture {
     pub terms: Vec<TermValue>,
     /// The target id of each row, in row order.
     pub row_targets: Vec<TargetId>,
+    /// The PURREMB role this artifact's projection puts the index in.
+    pub use_role: purrdf_core::IndexUseRole,
 }
 
 impl Fixture {
@@ -71,8 +73,23 @@ impl Fixture {
     /// matrix, build HNSW over it, recommit the artifact with the guard.
     #[must_use]
     pub fn new(rows: usize, dims: usize, params: Params) -> Self {
+        Self::with_prefix(rows, dims, dims, params)
+    }
+
+    /// The same fixture whose declared effective prefix is `prefix` of `dims` stored
+    /// coordinates.
+    ///
+    /// When `prefix < dims` the artifact puts any index built over it in PURREMB's
+    /// coarse-prefix-retrieval role: the graph decided its answer on a truncation of the
+    /// vectors the artifact stores. Equal values are the ordinary full-width case.
+    #[must_use]
+    pub fn with_prefix(rows: usize, dims: usize, prefix: usize, params: Params) -> Self {
         assert!(rows > 0 && dims > 0, "the fixture shape is nonempty");
-        let context = context(rows, dims);
+        assert!(
+            prefix > 0 && prefix <= dims,
+            "a prefix fits inside the width"
+        );
+        let context = context(rows, dims, prefix);
         let without_index = build(&context, Vec::new());
 
         let mut view = EmbeddingView::from_bytes(&without_index).expect("the base artifact opens");
@@ -89,7 +106,9 @@ impl Fixture {
         let index = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)
             .expect("the HNSW fixture builds");
         let image = index.canonical_image();
-        let derived = guard::derived_index(coordinates, &index).expect("the derived index folds");
+        let role = guard::use_role(&effective);
+        let derived =
+            guard::derived_index(coordinates, &index, role).expect("the derived index folds");
         let bytes = build(&context, vec![derived.clone()]);
 
         let mut committed = EmbeddingView::from_bytes(&bytes).expect("the indexed artifact opens");
@@ -115,6 +134,7 @@ impl Fixture {
             vector_space,
             terms,
             row_targets,
+            use_role: role,
         }
     }
 
@@ -128,8 +148,8 @@ impl Fixture {
             params,
         )
         .expect("the second HNSW fixture builds");
-        let second =
-            guard::derived_index(self.coordinates, &index).expect("the second index folds");
+        let second = guard::derived_index(self.coordinates, &index, self.use_role)
+            .expect("the second index folds");
         build(&self.context, vec![self.derived.clone(), second])
     }
 
@@ -156,7 +176,7 @@ impl Fixture {
 }
 
 /// Build a fixture context with `rows` targets and `dims` dimensions.
-fn context(rows: usize, dims: usize) -> Context {
+fn context(rows: usize, dims: usize, prefix: usize) -> Context {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _source_bytes) =
         CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
@@ -190,10 +210,26 @@ fn context(rows: usize, dims: usize) -> Context {
         truncation: AppliedStage::NotApplied,
         dtype: VectorDtype::F32,
         metric: DistanceMetric::SquaredEuclidean,
-        dimensionality: DimensionalityPolicy::Fixed(EffectivePrefix {
-            dimension: u32::try_from(dims).expect("dims fit u32"),
-            postprocessing: PrefixPostprocessing::None,
-        }),
+        // A shorter effective prefix is only well-formed alongside the stored-dimension
+        // projection it truncates -- that pair IS the Matryoshka policy, and PURREMB refuses
+        // a lone short prefix outright. Equal values are the ordinary fixed case.
+        dimensionality: if prefix < dims {
+            DimensionalityPolicy::Matryoshka(vec![
+                EffectivePrefix {
+                    dimension: u32::try_from(prefix).expect("the prefix fits u32"),
+                    postprocessing: PrefixPostprocessing::None,
+                },
+                EffectivePrefix {
+                    dimension: u32::try_from(dims).expect("dims fit u32"),
+                    postprocessing: PrefixPostprocessing::None,
+                },
+            ])
+        } else {
+            DimensionalityPolicy::Fixed(EffectivePrefix {
+                dimension: u32::try_from(dims).expect("dims fit u32"),
+                postprocessing: PrefixPostprocessing::None,
+            })
+        },
         extensions: Vec::new(),
     };
     let family = contract.derive().expect("family derives");
