@@ -264,7 +264,7 @@ fn every_row_is_reachable_from_the_entry_point_at_layer_zero() {
     for params in parameter_sets() {
         for metric in kernels() {
             for rows in [2_usize, 3, 17, 96, 250] {
-                let index = build(fixture(rows, 8, 0xC0FFEE), &metric, params).expect("builds");
+                let index = build(fixture(rows, 8, 0x00C0_FFEE), &metric, params).expect("builds");
                 let seen = reachable_at_layer_zero(&index);
                 let stranded: Vec<usize> = (0..index.rows()).filter(|row| !seen[*row]).collect();
                 assert!(
