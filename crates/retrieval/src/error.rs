@@ -9,7 +9,13 @@
 //! different build must be refused loudly, never silently reinterpreted under
 //! the current layout.
 
-/// A failure to validate an IRI or to encode/decode a canonical [`Plan`].
+/// A failure to plan a request, validate an IRI, or encode/decode a canonical
+/// [`Plan`].
+///
+/// The planning variants are refusals with a named dimension — no producer
+/// reaches the request, a request term is malformed, a stratum has no finite
+/// depth, or a registered relation's declaration refused to be read — rather
+/// than a plausible plan built over a fallback.
 ///
 /// [`Plan`]: crate::Plan
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +31,48 @@ pub enum PlanError {
         found: u16,
         /// The version this build writes and understands.
         expected: u16,
+    },
+
+    /// No registered producer accepts any term of the request.
+    ///
+    /// A request that reaches nothing is refused rather than answered by an
+    /// empty plan: an empty plan is indistinguishable from a registry that
+    /// needs no producers, and the caller asked for an answer.
+    #[error("no registered producer accepts any term of the request")]
+    NoApplicableProducers,
+
+    /// A request term is malformed and cannot be planned.
+    #[error("invalid request term: {reason}")]
+    InvalidRequestTerm {
+        /// The offending term, carried whole so the caller can name it. Boxed so
+        /// recording it does not inflate every `Result<_, PlanError>`.
+        term: Box<crate::request::RequestTerm>,
+        /// Why the term cannot be planned.
+        reason: String,
+    },
+
+    /// A stratum has no finite depth and no statistic supplies one.
+    ///
+    /// Raised when every selected producer in the stratum declares a genuinely
+    /// unbounded row count ([`u64::MAX`](u64::MAX)) and statistics report no
+    /// cardinality to bound it. Recording `u32::MAX` would claim a bound no
+    /// producer declared, so the plan is refused instead.
+    #[error("no cardinality is available for {predicate}")]
+    StatisticsUnavailable {
+        /// The stratum whose depth could not be bounded. Boxed so recording it
+        /// does not inflate every `Result<_, PlanError>`.
+        predicate: Box<crate::iri::Iri>,
+    },
+
+    /// A registered relation's declaration could not be read while planning.
+    ///
+    /// Every declaration read is panic-contained by the seam, so this reports a
+    /// host relation whose own declaration panicked — a loud refusal rather than
+    /// a producer silently dropped from the plan.
+    #[error("registry declaration failed while planning: {message}")]
+    RegistryDeclaration {
+        /// The contained declaration failure, rendered.
+        message: String,
     },
 
     /// The canonical encoding ended before a complete value was read.

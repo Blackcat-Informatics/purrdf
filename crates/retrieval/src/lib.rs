@@ -22,12 +22,13 @@
 //! fuse(streams, profile)              -> one ordered answer
 //! ```
 //!
-//! This build ships the first stage's value — [`Plan`] — together with the
-//! typed request lattice ([`RetrievalRequest`], [`RequestTerm`]), the plan's
-//! canonical identity ([`PlanId`]), and the fourth stage's engine: the verified
-//! ranked-stream protocol ([`RankedStream`]) and the exact fixed-point
-//! fusion ([`fuse`], [`FusionStream`], [`FusionProfile`]). Planning, compiling
-//! and executing are the remaining stages.
+//! This build ships the first stage — [`plan`], the pure planner — together
+//! with the stage's value ([`Plan`]), the typed request lattice
+//! ([`RetrievalRequest`], [`RequestTerm`]), the statistics input planning
+//! consults ([`Statistics`]), the plan's canonical identity ([`PlanId`]), and
+//! the fourth stage's engine: the verified ranked-stream protocol
+//! ([`RankedStream`]) and the exact fixed-point fusion ([`fuse`], [`FusionStream`],
+//! [`FusionProfile`]). Compiling and executing are the remaining stages.
 //!
 //! # Fusion is a law, not a knob
 //!
@@ -76,9 +77,11 @@ mod fusion_stream;
 mod id;
 mod iri;
 mod plan;
+mod planner;
 mod ranked_stream;
 mod reciprocal_rank;
 mod request;
+mod statistics;
 
 pub use error::{FusionError, PlanError};
 pub use fuse::{FusionResult, fuse};
@@ -92,9 +95,11 @@ pub use iri::{Iri, Term, Weight};
 pub use plan::{
     Plan, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry, StatisticsSnapshot,
 };
+pub use planner::plan;
 pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
 pub use reciprocal_rank::contribution;
 pub use request::{Metric, RequestTerm, RetrievalRequest};
+pub use statistics::Statistics;
 
 // The exact fixed-point type stratum weights and fused scores are expressed in,
 // and the fixed-point scale itself. Re-exported so a caller building a plan or

@@ -17,6 +17,14 @@ This crate currently ships the plan value itself:
 
 * `RetrievalRequest` / `RequestTerm` — the typed term lattice a request is
   expressed in (lexical, vector, spatial, entity seed).
+* `plan(request, registry, statistics)` — the pure planner. It matches request
+  terms to producers by a lookup over the producers' declared capabilities,
+  records selected and rejected producers with reasons, derives per-stratum
+  depths from the registry's own row-bound declarations capped by statistics,
+  and records the statistics snapshot and both registry identities. It opens no
+  store, no file and no clock.
+* `Statistics` — the caller-supplied cardinality/selectivity input planning
+  consults. There is no built-in provider.
 * `Plan` — pure, inspectable, editable and serializable data: the request
   terms, per-producer bindings, selected/rejected producers with reasons,
   per-stratum depths and weights, the statistics snapshot it was planned
