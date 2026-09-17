@@ -17,10 +17,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use super::{
-    AstReader, AstWriter, MAX_DEPTH, TAGS_ARG_KEY, TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT,
-    TAGS_CUSTOM_FN_KIND, TAGS_FN_CALL, TAGS_NODE_EXPR, TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY,
-    TAGS_RULE_SCHEDULE, TAGS_SEVERITY, TAGS_SHAPE_ARG, TAGS_TARGET, TAGS_TERM, decode_ast,
-    encode_ast,
+    AstReader, AstWriter, MAX_DEPTH, MAX_SPECULATIVE_ELEMENTS, TAGS_ARG_KEY,
+    TAGS_COMPONENT_VALIDATOR, TAGS_CONSTRAINT, TAGS_CUSTOM_FN_KIND, TAGS_FN_CALL, TAGS_NODE_EXPR,
+    TAGS_NODE_KIND, TAGS_PATH, TAGS_RULE_BODY, TAGS_RULE_SCHEDULE, TAGS_SEVERITY, TAGS_SHAPE_ARG,
+    TAGS_TARGET, TAGS_TERM, decode_ast, encode_ast, speculative_capacity, write_varint,
 };
 use crate::expression::{
     ArgKey, CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg, sparql_ns_lowering,
@@ -1619,6 +1619,69 @@ fn an_impossible_sequence_length_is_refused_but_an_honest_one_is_not() {
         decode_ast(&bytes).expect("decodes").node_shapes.len(),
         512,
         "a large but honest sequence must load",
+    );
+}
+
+/// A count the bytes DO permit is still not a licence to reserve memory for it.
+///
+/// [`AstReader::count`] bounds a declared count by the bytes that follow, which is
+/// a bound in the wrong unit: an element encodes in as little as one byte but
+/// occupies `size_of` the decoded value in memory, so a modest artifact can
+/// honestly declare a sequence whose unclamped reservation is orders of magnitude
+/// larger than the artifact itself. [`speculative_capacity`] is what closes that
+/// gap, and this fixes it in place.
+///
+/// The valid neighbour matters as much as the refusal: the clamp caps the
+/// SPECULATION, not the capacity, so a sequence longer than the clamp that the
+/// stream genuinely carries must still decode in full. A clamp that truncated
+/// would be a silent drop wearing the costume of a security bound.
+#[test]
+fn an_oversized_sequence_count_does_not_reserve_for_itself() {
+    // The reservation rule itself: honest small counts are reserved exactly, and
+    // nothing above the ceiling is reserved eagerly.
+    assert_eq!(speculative_capacity(0), 0);
+    assert_eq!(speculative_capacity(7), 7);
+    assert_eq!(
+        speculative_capacity(MAX_SPECULATIVE_ELEMENTS),
+        MAX_SPECULATIVE_ELEMENTS
+    );
+    assert_eq!(
+        speculative_capacity(usize::MAX),
+        MAX_SPECULATIVE_ELEMENTS,
+        "a declared count must never become the reservation it asks for",
+    );
+
+    // INVALID: a ~100 KB product whose top-level `node_shapes` count is 100_000.
+    // `count()` accepts it — 100_000 elements really could be spelled in the
+    // 100_000 bytes that follow — so the only thing standing between this byte
+    // string and a `Vec<Shape>` reservation of 100_000 * size_of::<Shape>() is
+    // the clamp. The elements are `0xff`, which is no `Term` tag this build
+    // knows, so the very first one refuses.
+    const HOSTILE: usize = 100_000;
+    assert!(
+        HOSTILE * size_of::<Shape>() > 16 * 1024 * 1024,
+        "the fixture must describe a reservation large enough to be worth refusing",
+    );
+    let mut bytes = vec![0u8]; // field 1: an empty declaration table.
+    let mut count = Vec::new();
+    write_varint(&mut count, HOSTILE as u64);
+    bytes.extend_from_slice(&count); // field 3: the node-shape count.
+    bytes.resize(bytes.len() + HOSTILE, 0xff);
+    let error = decode_ast(&bytes).expect_err("an unreadable element must refuse");
+    assert_eq!(
+        error.dimension(),
+        ProductDimension::UnsupportedCapability,
+        "0xff is not a Term tag this build implements, got {error}",
+    );
+
+    // VALID: a sequence LONGER than the clamp that the bytes really do carry.
+    let honest = MAX_SPECULATIVE_ELEMENTS + 1;
+    let shapes = shapes_of((0..honest).map(|i| leaf_shape(&format!("S{i}"))).collect());
+    let bytes = encode_ast(&shapes).expect("the fixture encodes");
+    assert_eq!(
+        decode_ast(&bytes).expect("decodes").node_shapes.len(),
+        honest,
+        "the clamp caps the reservation, never the sequence",
     );
 }
 

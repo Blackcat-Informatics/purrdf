@@ -212,6 +212,71 @@ use super::error::{ProductDimension, ShapesProductError};
 /// rather than strictness.
 pub(crate) const MAX_DEPTH: u32 = 128;
 
+/// How many elements a declared sequence count may pre-allocate *speculatively*.
+///
+/// [`AstReader::count`] already refuses a count larger than the bytes that follow
+/// it, and that bound is necessary — without it a two-byte varint could name four
+/// billion elements and the reader would try to reserve room for all of them
+/// before discovering the stream ends. It is **not sufficient**, because it bounds
+/// the count in ELEMENTS by a number of BYTES, and the two are not the same unit.
+/// A sequence element's minimum *encoding* is one byte; its minimum *footprint* is
+/// `size_of` the decoded value, and for the widest element in this format
+/// (`Shape`) that is well over a hundred bytes. So a well-formed 1 MiB artifact
+/// may honestly declare a one-million-element sequence, and an unclamped
+/// `Vec::with_capacity` would answer that declaration with a multi-hundred-megabyte
+/// reservation — from an artifact a hundredth that size — before a single element
+/// is read and found to be a lie. That is amplification, and it is exactly the
+/// shape of denial of service a memo format must not hand an attacker.
+///
+/// The clamp separates the two jobs a capacity does. Pre-sizing exists to spare a
+/// HONEST sequence its geometric doubling, and the sequences an authored shapes
+/// graph produces are small — a shape's constraint list, a path's alternatives, a
+/// call's arguments, all single- to low-double digits, with the top-level node
+/// shape list the only one that plausibly reaches thousands. 4096 clears every one
+/// of those with orders of magnitude to spare, so no real product is ever clamped
+/// and no real product pays a reallocation this constant could have avoided.
+/// Past it the `Vec` still grows to whatever the stream genuinely contains — the
+/// clamp caps the SPECULATION, never the capacity, so a sequence that really does
+/// hold a million elements still decodes, paying the doubling that a count nobody
+/// has corroborated yet does not get to skip.
+const MAX_SPECULATIVE_ELEMENTS: usize = 4096;
+
+/// The capacity a declared element `count` is allowed to reserve before a single
+/// element has been read — `count` itself, clamped by [`MAX_SPECULATIVE_ELEMENTS`].
+///
+/// The ONE place a sequence length turns into memory, so the clamp is stated once
+/// and every sequence in the format inherits it.
+const fn speculative_capacity(count: usize) -> usize {
+    if count < MAX_SPECULATIVE_ELEMENTS {
+        count
+    } else {
+        MAX_SPECULATIVE_ELEMENTS
+    }
+}
+
+/// The capacity [`AstWriter`] starts its output buffer at.
+///
+/// Unlike [`MAX_SPECULATIVE_ELEMENTS`] this guards nothing — the writer's input is
+/// a `Shapes` this process already holds, so there is no hostile length to defend
+/// against, only a buffer that would otherwise start at zero and double its way up
+/// to the section's size, copying everything written so far on each step. Nothing
+/// in the format decides the number: it is one allocator page, below the section
+/// any shapes graph with a handful of shapes in it produces.
+///
+/// **It is a trade, not a free win, and the bench prints both halves.** Measured
+/// over `benches/support/product.rs`, whose AST section is 8,733 bytes: growing
+/// from zero costs 10 allocations and 20,959 bytes of allocator traffic; starting
+/// at one page costs 3 allocations and 28,672. Seven fewer trips through the
+/// allocator, and roughly half the bytes memcpy'd between buffers, in exchange for
+/// reserving room the smallest graphs will not fill. The count is what the restore
+/// path is judged on, so the count is what this optimizes; a reader who later
+/// decides transient traffic matters more should move this number, not the code
+/// around it.
+///
+/// A writer that began at any other capacity emits identical bytes, which is what
+/// the determinism fixture's pinned length asserts.
+const WRITE_BUFFER_HINT: usize = 4096;
+
 /// The number of [`Term`] tags.
 const TAGS_TERM: u8 = 4;
 /// The number of [`Severity`] tags.
@@ -365,9 +430,14 @@ struct AstWriter {
 
 impl AstWriter {
     /// A writer over an empty buffer with the given declaration index.
+    ///
+    /// The buffer starts at [`WRITE_BUFFER_HINT`]. That is a reservation, not a
+    /// limit and not a format fact: the writer appends exactly the same bytes in
+    /// exactly the same order whatever capacity it began with, which is why the
+    /// determinism fixture's pinned artifact length is unmoved by it.
     fn new(fn_index: BTreeMap<String, u64>) -> Self {
         Self {
-            out: Vec::new(),
+            out: Vec::with_capacity(WRITE_BUFFER_HINT),
             depth: 0,
             fn_index,
         }
@@ -1406,12 +1476,15 @@ impl<'a> AstReader<'a> {
     }
 
     /// Read `count` elements with `read`.
+    ///
+    /// The reservation is clamped to [`MAX_SPECULATIVE_ELEMENTS`]; a longer honest
+    /// sequence still decodes in full, growing as it is read.
     fn seq<T, F>(&mut self, mut read: F) -> Result<Vec<T>, ShapesProductError>
     where
         F: FnMut(&mut Self) -> Result<T, ShapesProductError>,
     {
         let count = self.count()?;
-        let mut out = Vec::with_capacity(count);
+        let mut out = Vec::with_capacity(speculative_capacity(count));
         for _ in 0..count {
             out.push(read(self)?);
         }
@@ -1449,8 +1522,15 @@ impl<'a> AstReader<'a> {
             (Some(language), None) => {
                 Literal::new_language_tagged_literal_unchecked(lexical, language)
             }
+            // The datatype string is MOVED into the term, never copied alongside
+            // it: a typed literal's datatype is the one just read, so the
+            // agreement check below has nothing to compare and the clone it would
+            // have needed is one heap allocation per literal in the shape tree.
             (None, None) => {
-                Literal::new_typed_literal(lexical, NamedNode::new_unchecked(datatype.clone()))
+                return Ok(Literal::new_typed_literal(
+                    lexical,
+                    NamedNode::new_unchecked(datatype),
+                ));
             }
             (None, Some(_)) => {
                 return Err(malformed(
@@ -2358,7 +2438,7 @@ pub(crate) fn decode_ast(bytes: &[u8]) -> Result<AstParts, ShapesProductError> {
     //    existing handle by index instead of recursing into a definition that
     //    reaches back.
     let declarations = reader.count()?;
-    let mut functions = Vec::with_capacity(declarations);
+    let mut functions = Vec::with_capacity(speculative_capacity(declarations));
     for _ in 0..declarations {
         let iri = reader.named_node()?;
         let kind = reader.custom_fn_kind()?;
