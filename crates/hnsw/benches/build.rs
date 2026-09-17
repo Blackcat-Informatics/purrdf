@@ -24,9 +24,13 @@
 //!
 //! Build cost is expected to grow superlinearly with row count: each insertion's search
 //! visits more of an already-larger graph, so the per-row cost rises as the corpus does.
-//! The 10^6-row point is therefore not part of the default run: it executes **on demand**,
-//! via `PURRDF_HNSW_BENCH_1M=1`, and a host that cannot afford the memory or the time
-//! omits it. The default set is 5,000 / 50,000 / 200,000.
+//!
+//! **Every declared scale runs by default, including 10^6.** A default that skipped the one
+//! scale the offer is about is how a missing measurement gets reported as a completed run.
+//! That has a real cost: 10^6 rows at 4,096 `f64` components is about 30.5 GiB resident for
+//! the matrix alone, before the graph, so a plain run of this harness needs a host that can
+//! hold it. `PURRDF_HNSW_BENCH_SCALES` narrows the run for a smoke test on a host that
+//! cannot; it can only take scales away, never add one.
 //!
 //! ```text
 //! cargo bench -p purrdf-hnsw --bench build                     # 5k / 50k / 200k / 1M
@@ -51,14 +55,18 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use purrdf_core::DistanceMetric;
-use purrdf_hnsw::level::splitmix64;
+
+#[path = "../tests/support/corpus.rs"]
+mod corpus;
+
+use corpus::CorpusShape;
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 
 /// Every row in the harness indexes this many dimensions, the width this index targets.
 const DIMS: usize = 4_096;
 
-/// The admission scales, in ascending order. The default run measures all but 10^6, which
-/// `PURRDF_HNSW_BENCH_1M=1` enables (see the module docs).
+/// The admission scales, in ascending order. Every one of them runs by default; see the
+/// module docs for what that costs and how to narrow it.
 const SCALES: [usize; 4] = [5_000, 50_000, 200_000, 1_000_000];
 
 /// The index identity every scale is built under.
@@ -74,26 +82,6 @@ const EF_SEARCH: usize = 64;
 
 /// The seed of the fixture stream.
 const SEED: u64 = 0x484e_5357_5f42_5549;
-
-/// A uniform family in `[-1, 1)` produced by the fixed splitmix64 stream.
-///
-/// Exact zero is displaced so the corpus is also well-formed under a norm-dividing kernel,
-/// matching the crate's own generator. Generation is outside the timed region: this is a
-/// build-cost harness, not a corpus-generation harness.
-fn matrix(rows: usize, dims: usize) -> VectorMatrix {
-    let elements = rows
-        .checked_mul(dims)
-        .expect("the fixture shape fits usize");
-    let mut state = SEED;
-    let mut data = Vec::with_capacity(elements);
-    for _ in 0..elements {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
-    }
-    VectorMatrix::new(rows, dims, data).expect("the generated matrix is finite and rectangular")
-}
 
 /// FNV-1a over the canonical payload bytes: six lines, fixed constants, no state.
 ///
@@ -112,8 +100,8 @@ const fn fnv1a_64(bytes: &[u8]) -> u64 {
 
 /// The scales this run measures.
 ///
-/// Every admission scale by default; the 10^6-row point is then filtered out unless
-/// `PURRDF_HNSW_BENCH_1M=1`. `PURRDF_HNSW_BENCH_SCALES` narrows the run to an explicit
+/// Every admission scale, with no exception and no opt-in.
+/// `PURRDF_HNSW_BENCH_SCALES` narrows the run to an explicit
 /// comma-separated list (e.g. `5000,50000`) for a quick smoke of the harness itself; it
 /// never widens the default set, so a plain `cargo bench` still visits every scale.
 fn scales() -> Vec<usize> {
@@ -189,4 +177,14 @@ fn main() {
         "Totals are single samples from a shared host; treat them as the disclosed build \
          cost, not as an acceptance threshold."
     );
+}
+
+/// The corpus every scale is built over.
+///
+/// The SAME generator `benches/recall.rs` scores against, deliberately: this crate's central
+/// finding is that the distribution decides the recall, so a build-cost harness drawing from
+/// a different distribution than the recall harness would be timing a different question.
+fn matrix(rows: usize, dims: usize) -> VectorMatrix {
+    corpus::embedding_like(CorpusShape::embedding_like(rows, dims), SEED)
+        .expect("the generated corpus is finite and rectangular")
 }

@@ -142,8 +142,9 @@ fn the_artifact_binds_the_approximate_loss_contract_and_evidence() {
     // covers it, and the adapter verifies it at bind time.
     assert_eq!(
         profile::LOSS_EVIDENCE,
-        "approximate: recall measured against the exact oracle and pinned per fixture; an \
-         offer of candidates is never a proof of absence"
+        "approximate: recall measured against the exact oracle on synthetic corpora up to \
+         50,000 rows, and UNMEASURED at the 10^6 scale this index exists for; an offer of \
+         candidates is never a proof of absence"
     );
     assert_eq!(
         profile::implementation().revision.as_deref(),

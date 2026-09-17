@@ -10,7 +10,10 @@
 //! graphs on every target.
 
 use purrdf_core::DistanceMetric;
-use purrdf_hnsw::corpus::{self, CorpusShape};
+#[path = "support/corpus.rs"]
+mod corpus;
+
+use corpus::CorpusShape;
 use purrdf_hnsw::level::{level_cap, level_from_index};
 use purrdf_hnsw::{HnswIndex, Params, Ranked, VectorMatrix, build};
 

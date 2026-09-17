@@ -46,7 +46,10 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use purrdf_core::DistanceMetric;
-use purrdf_hnsw::corpus::{self, CorpusShape};
+#[path = "../tests/support/corpus.rs"]
+mod corpus;
+
+use corpus::CorpusShape;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
@@ -151,7 +154,7 @@ const BUCKETS: [&str; 6] = ["0..k", "k..2k", "2k..4k", "4k..8k", "8k..16k", ">=1
 /// `embedding-like` is the subject: low intrinsic dimension carried into the full width, a
 /// decaying spectrum so leading coordinates dominate, power-law cluster sizes, and cluster
 /// tightness fixed at an intended cosine rather than an absolute noise amplitude. See
-/// `purrdf_hnsw::corpus` for why each of those is load-bearing.
+/// the shared corpus harness for why each of those is load-bearing.
 const FAMILIES: [&str; 2] = ["uniform", "embedding-like"];
 
 /// The scales this run reports.

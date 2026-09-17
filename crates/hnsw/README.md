@@ -64,10 +64,9 @@ means:
   function of the corpus, the parameters and the algorithm. Held-out queries, the
   case where the answer is not already a stored row, are pinned separately. This
   is the sentence the artifact itself carries as its approximation evidence.
-* **What is not measured is scale.** No figure above a few thousand rows has been
-  observed for this implementation. The regime that motivates an ANN index at all
-  is 10^6 rows, and this crate has no measurement there — that is a gap in the
-  evidence, not a property of the index.
+* **Measured to 50,000 rows; unmeasured at 10^6.** See the table below. The regime
+  that motivates an ANN index at all is a million rows, and this crate has no
+  measurement there — that is a gap in the evidence, not a property of the index.
 * **The exact path stays the oracle.** `purrdf-sparql-eval`'s kNN relation is
   not replaced or modified. An HNSW result is an **offer of candidates** and
   never a certification that no nearer row exists; an empty result is never a
@@ -82,10 +81,50 @@ means:
 
 ## Build cost
 
+### Measured admission evidence
+
+Recall and per-query work are **deterministic** — pure functions of the corpus, the
+parameters and the algorithm — so they are reported as measurements. Wall-clock is a
+single-host sample, disclosed and never a threshold.
+
+Recall against the exact scan, 50,000 rows × 4,096 dimensions, `k = 10`:
+
+| corpus | `ef` | recall@10 | rows visited / query |
+|---|---|---|---|
+| embedding-like | 16 | 0.9344 | 362 of 50,000 |
+| embedding-like | 32 | 0.9828 | 539 |
+| embedding-like | 128 | **0.9984** | **1,093 (2.2%)** |
+| uniform (control) | 128 | 0.5656 | 3,577 |
+| uniform (control) | 512 | 0.8047 | 9,853 |
+
+The uniform row is a control, not a target: independent coordinates make distances
+concentrate, so no index scores well there and the figure describes the generator. The gap
+between the two columns at the same `ef` is the evidence that the corpus, not the index,
+decides a recall number.
+
+Build cost, same shape, single-host samples:
+
+| rows | build | payload image |
+|---|---|---|
+| 5,000 | 2.7 s | 2.7 MiB |
+| 50,000 | 135.2 s | 26.8 MiB |
+| 200,000 | 501.2 s | 107.2 MiB |
+| 1,000,000 | **not measured** | — |
+
+**The million-row point has not been observed.** On the curve above it extrapolates to
+roughly fifty minutes and about 33 GiB resident, but an extrapolation is not a measurement
+and this contract does not present it as one. That is the honest state of the evidence: the
+index is measured where it has been measured, and the regime that motivates an ANN index at
+all is one order of magnitude beyond it.
+
 Building at 4,096 dimensions is expensive and is disclosed rather than tuned
 away. `cargo bench -p purrdf-hnsw --bench build` times the shipped build path
-at 5,000, 50,000 and 200,000 rows, with 1,000,000 rows behind
-`PURRDF_HNSW_BENCH_1M=1`; every number it prints is a wall-clock sample from
+at 5,000, 50,000, 200,000 and 1,000,000 rows — every scale, with no opt-in,
+because a default that skips the one scale the offer is about reports a missing
+measurement as a completed run. The million-row rung needs about 30.5 GiB
+resident for the matrix alone; `PURRDF_HNSW_BENCH_SCALES=5000,50000` narrows the
+run on a host that cannot hold it, and can only take scales away. Every number
+it prints is a wall-clock sample from
 whatever host runs it, reported for disclosure and never as an acceptance
 threshold. The cost that is deterministic and hardware-independent is distance
 evaluations: `CacheState::evaluations` (`crates/hnsw/src/search.rs`) counts

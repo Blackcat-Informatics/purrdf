@@ -59,7 +59,6 @@ mod graph;
 mod search;
 mod select;
 
-pub mod corpus;
 pub mod determinism;
 pub mod error;
 pub mod guard;

@@ -15,7 +15,10 @@
 //! the corpus distribution, which may not.
 
 use purrdf_core::DistanceMetric;
-use purrdf_hnsw::corpus::{self, CorpusShape};
+#[path = "support/corpus.rs"]
+mod corpus;
+
+use corpus::CorpusShape;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, Params, Ranked, VectorMatrix};
 use purrdf_sparql_eval::knn::{Kernel, best, norm};
@@ -24,7 +27,7 @@ const METRIC: DistanceMetric = DistanceMetric::SquaredEuclidean;
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
 
 fn params() -> Params {
-    Params::new(16, 32, 64, 64).expect("valid")
+    Params::new(16, 32, 64, 16).expect("valid")
 }
 
 /// A structured corpus: the only kind on which a recall figure means anything.
@@ -161,7 +164,15 @@ fn held_out_recall_is_measured_rather_than_assumed() {
     // Pinned as an exact count, not a floor: recall is a pure function of the corpus, the
     // parameters and the algorithm, so an exact equality catches an improvement as well as a
     // regression, and this repository asserts no thresholds anywhere.
-    let matrix = corpus(512, 64);
+    //
+    // The REGIME is chosen so the number carries information. An earlier version of this test
+    // pinned 640/640 -- recall 1.000 -- at 512 rows with `ef_search = 64` over a graph with 32
+    // layer-0 edges per node, where the beam holds an eighth of the corpus and the search is
+    // effectively exhaustive. Perfect recall there is forced by the parameters rather than
+    // earned by the graph, so it demonstrated that the index is EXACT on a toy, not that it is
+    // a good APPROXIMATION. At 4,096 rows with `ef_search = 16` the beam holds well under one
+    // percent and recall is genuinely below one, so a graph that got worse would move it.
+    let matrix = corpus(4096, 64);
     let index = HnswIndex::build(matrix.clone(), &METRIC, params()).expect("builds");
     let queries = held_out(&matrix, 64, 0x5EED_5EED);
     let k = 10;
@@ -180,7 +191,7 @@ fn held_out_recall_is_measured_rather_than_assumed() {
 
     assert_eq!(
         (hits, offered_total),
-        (640, 640),
+        (604, 640),
         "held-out recall over {} queries at k={k} moved; recall is deterministic, so this \
          is a real behaviour change rather than a tolerance to widen",
         queries.len()

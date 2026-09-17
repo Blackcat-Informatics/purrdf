@@ -26,11 +26,23 @@
 //! # The approximation contract, stated honestly
 //!
 //! [`LOSS_EVIDENCE`] is the one sentence this profile publishes about its own quality:
-//! *"approximate: recall measured against the exact oracle and pinned per fixture; an offer
-//! of candidates is never a proof of absence"*. It said "recall unmeasured on realistic
-//! corpora" until the corpora were fixed: the figure had been taken over uniform random
-//! vectors, the one input class whose distances concentrate so hard that no index can score
-//! well on it, and the resulting number was a statement about the generator. It is not a
+//! the sentence quoted on `LOSS_EVIDENCE` below.
+//!
+//! Both of its halves are load-bearing and the second is the one that is easy to lose. An
+//! earlier draft said only that recall was MEASURED, which is true and is the favourable
+//! half. A declared approximation is required to name "the
+//! exact strength of the evidence", and a sentence reporting that evidence exists without
+//! reporting its strength is an overclaim by omission -- the worse kind here, because this
+//! sentence travels IN THE ARTIFACT as the identity's revision bytes and is covered by the
+//! guard digest. A third party binding this guard would bind the favourable half and have no
+//! way to see what the repository says elsewhere.
+//!
+//! What changed and what did not: the original "recall unmeasured on realistic corpora" was
+//! written against uniform-random fixtures, the one input class whose distances concentrate
+//! so hard that no index can score well on it, so that figure described the generator rather
+//! than the index. Fixing the corpora earned the first clause. It did not earn silence about
+//! scale: the measurement reaches 50,000 rows, and the regime this index exists for is one
+//! order of magnitude beyond it. It is not a
 //! disclaimer appended to documentation — it is carried **in the artifact**, as the
 //! implementation identity's revision bytes, so the guard digest covers it and
 //! [`crate::guard::validate_guard`] refuses a guard whose revision says anything else. A
@@ -110,8 +122,9 @@ pub const IMPLEMENTATION_MEDIA_TYPE: &str =
     "application/vnd.blackcatinformatics.purrdf.hnsw.profile-v1";
 
 /// The approximation evidence string, carried as the implementation identity's revision.
-pub const LOSS_EVIDENCE: &str = "approximate: recall measured against the exact oracle and pinned per fixture; an offer \
-     of candidates is never a proof of absence";
+pub const LOSS_EVIDENCE: &str = "approximate: recall measured against the exact oracle on \
+     synthetic corpora up to 50,000 rows, and UNMEASURED at the 10^6 scale this index exists \
+     for; an offer of candidates is never a proof of absence";
 
 /// The parameter block's tag for `M`.
 pub const PARAM_M: u16 = 1;
