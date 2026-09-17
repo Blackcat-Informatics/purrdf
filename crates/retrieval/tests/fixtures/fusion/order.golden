@@ -1,0 +1,16 @@
+row alpha score=0.024590163933 witness=0.000000000000
+  http://example.org/stratum/text rank=1 score=0.016393442622
+  http://example.org/stratum/vector rank=1 score=0.008196721311
+row beta score=0.020227392913 witness=0.000000000000
+  http://example.org/stratum/geo rank=1 score=0.004098360655
+  http://example.org/stratum/text rank=2 score=0.016129032258
+row gamma score=0.015873015873 witness=0.000000000000
+  http://example.org/stratum/text rank=3 score=0.015873015873
+row delta score=0.008064516129 witness=0.000000000000
+  http://example.org/stratum/vector rank=2 score=0.008064516129
+row epsilon score=0.004032258064 witness=0.000000000000
+  http://example.org/stratum/geo rank=2 score=0.004032258064
+status http://example.org/stratum/geo Exhausted { rows_emitted: 2 }
+status http://example.org/stratum/text Exhausted { rows_emitted: 3 }
+status http://example.org/stratum/vector Exhausted { rows_emitted: 2 }
+profile 949116fc920b8a84991b385ba6a854e5c73258a6f96a9f90a30781fad5dadaa3

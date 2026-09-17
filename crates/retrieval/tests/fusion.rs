@@ -1,0 +1,879 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The fusion contract: verified-protocol NRA over exact fixed point.
+//!
+//! Every test drives the public surface. Mock producers are scripted row by row
+//! so a protocol violation can be produced deliberately; the oracle recomputes
+//! the fused order from first principles and must agree with the engine.
+
+use std::collections::{BTreeMap, VecDeque};
+use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Wake, Waker};
+
+use pretty_assertions::assert_eq;
+use purrdf_retrieval::{
+    Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, PlanId, ProducerReceipt,
+    ProducerStatus, ProtocolError, RECIP_K, RankedStream, Term, contribution,
+};
+
+const K: u32 = 60;
+
+fn iri(text: &str) -> Iri {
+    Iri::parse(text).expect("fixture IRIs are valid")
+}
+
+fn stratum(text: &str) -> Iri {
+    iri(&format!("http://example.org/stratum/{text}"))
+}
+
+fn plan_id(tag: &str) -> PlanId {
+    PlanId::from_canonical(tag.as_bytes())
+}
+
+fn profile(weights: &[(&str, Fixed)], k: u32, max_contributions: u32) -> FusionProfile {
+    let map: BTreeMap<Iri, Fixed> = weights
+        .iter()
+        .map(|(name, weight)| (stratum(name), *weight))
+        .collect();
+    FusionProfile::new(map, k, max_contributions).expect("fixture profile is valid")
+}
+
+/// A minimal single-threaded executor. The mock streams never actually pend, so
+/// a waking no-op is sufficient; the real system is runtime-agnostic by design.
+fn block_on<F: Future>(future: F) -> F::Output {
+    struct ParkWaker(std::thread::Thread);
+    impl Wake for ParkWaker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::park(),
+        }
+    }
+}
+
+/// One scripted step of a mock producer.
+enum Step {
+    Row(u64, Fixed, Term),
+    Fail(ProtocolError),
+}
+
+/// A producer whose rows and failures are pre-scripted.
+struct MockStream {
+    steps: VecDeque<Step>,
+    receipt: ProducerReceipt,
+    rows_emitted: u64,
+    drop_counter: Arc<AtomicUsize>,
+}
+
+impl Drop for MockStream {
+    fn drop(&mut self) {
+        self.drop_counter.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl MockStream {
+    fn new(steps: Vec<Step>, receipt: ProducerReceipt) -> Self {
+        Self {
+            steps: steps.into(),
+            receipt,
+            rows_emitted: 0,
+            drop_counter: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn tracked(steps: Vec<Step>, receipt: ProducerReceipt, counter: Arc<AtomicUsize>) -> Self {
+        Self {
+            steps: steps.into(),
+            receipt,
+            rows_emitted: 0,
+            drop_counter: counter,
+        }
+    }
+}
+
+// The trait's methods are `async`; the mock's bodies are synchronous because
+// its rows are pre-scripted. The `async` keyword is required to implement the
+// trait, not a signal that this body awaits.
+#[allow(clippy::unused_async_trait_impl)]
+impl RankedStream for MockStream {
+    type Item = Term;
+
+    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
+        match self.steps.pop_front() {
+            Some(Step::Row(rank, score, item)) => {
+                self.rows_emitted += 1;
+                Ok(Some((rank, score, item)))
+            }
+            Some(Step::Fail(error)) => Err(error),
+            None => Ok(None),
+        }
+    }
+
+    async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
+        Ok(self.receipt.clone())
+    }
+}
+
+/// A well-formed row at `rank` for `weight` under `k`.
+fn row(rank: u64, weight: Fixed, k: u32, item: &str) -> Step {
+    Step::Row(
+        rank,
+        contribution(weight, rank, k).expect("fixture contribution fits"),
+        Term::new(item),
+    )
+}
+
+fn exhausted(rows: u64) -> ProducerReceipt {
+    ProducerReceipt::Exhausted { rows_emitted: rows }
+}
+
+async fn run_fuse(streams: Vec<(Iri, MockStream)>, profile: &FusionProfile) -> FusionResult<Term> {
+    purrdf_retrieval::fuse::<MockStream, Term>(streams, profile)
+        .await
+        .expect("fusion succeeds")
+}
+
+// 1. An item in two strata sums both contributions exactly.
+#[test]
+fn cross_stratum_sum_is_the_checked_sum() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let c1 = contribution(Fixed::ONE, 1, K).expect("fits");
+    let c2 = contribution(Fixed::ONE, 1, K).expect("fits");
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].entity, Term::new("a"));
+    assert_eq!(
+        result.rows[0].score,
+        c1.checked_add(c2).expect("fits"),
+        "fused score must be the checked sum of both contributions"
+    );
+    assert_eq!(result.rows[0].contributions.len(), 2);
+}
+
+// 2. Output is ordered by fused score descending.
+#[test]
+fn output_is_score_descending() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::ONE, K, "a"),
+                    row(2, Fixed::ONE, K, "b"),
+                    row(3, Fixed::ONE, K, "c"),
+                ],
+                exhausted(3),
+            ),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "d"), row(2, Fixed::ONE, K, "e")],
+                exhausted(2),
+            ),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(result.rows.len(), 5);
+    for window in result.rows.windows(2) {
+        assert!(
+            window[0].score >= window[1].score,
+            "scores must not rise: {:?} then {:?}",
+            window[0],
+            window[1]
+        );
+    }
+}
+
+// 3. Equal-score candidates are ordered by the declared tie-break.
+#[test]
+fn equal_scores_use_the_declared_tie_break() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(result.rows.len(), 2);
+    assert_eq!(result.rows[0].score, result.rows[1].score);
+    assert_eq!(
+        result.rows[0].entity,
+        Term::new("a"),
+        "equal scores must fall back to canonical term order"
+    );
+    assert_eq!(result.rows[1].entity, Term::new("b"));
+}
+
+// 4. A checked addition that leaves the range is a loud overflow.
+#[test]
+fn checked_addition_overflow_is_refused() {
+    let huge = Fixed::from_raw(i128::MAX);
+    // max_contributions == 1 keeps the admitted ceiling equal to the single
+    // weight, so the profile constructs; three contributions then overflow.
+    let profile = profile(&[("text", huge), ("vector", huge), ("geo", huge)], 1, 1);
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(vec![row(1, huge, 1, "a")], exhausted(1)),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(vec![row(1, huge, 1, "a")], exhausted(1)),
+        ),
+        (
+            stratum("geo"),
+            MockStream::new(vec![row(1, huge, 1, "a")], exhausted(1)),
+        ),
+    ];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams, &profile,
+    ));
+    assert!(
+        matches!(result, Err(FusionError::Overflow)),
+        "expected FusionError::Overflow, got {result:?}"
+    );
+}
+
+// 5. Byte-identical golden output on re-run.
+#[test]
+fn golden_output_is_byte_identical() {
+    let result = block_on(golden_fusion());
+    let rendered = render(&result);
+    let expected =
+        std::fs::read_to_string(golden_path()).expect("the golden fixture is checked in");
+    assert_eq!(
+        rendered,
+        expected,
+        "fused rendering drifted from the golden; if the change is intended, update {}",
+        golden_path().display()
+    );
+}
+
+fn golden_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fusion/order.golden")
+}
+
+async fn golden_fusion() -> FusionResult<Term> {
+    let profile = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::from_raw(500_000_000_000)),
+            ("geo", Fixed::from_raw(250_000_000_000)),
+        ],
+        K,
+        8,
+    );
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::ONE, K, "alpha"),
+                    row(2, Fixed::ONE, K, "beta"),
+                    row(3, Fixed::ONE, K, "gamma"),
+                ],
+                exhausted(3),
+            ),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::from_raw(500_000_000_000), K, "alpha"),
+                    row(2, Fixed::from_raw(500_000_000_000), K, "delta"),
+                ],
+                exhausted(2),
+            ),
+        ),
+        (
+            stratum("geo"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::from_raw(250_000_000_000), K, "beta"),
+                    row(2, Fixed::from_raw(250_000_000_000), K, "epsilon"),
+                ],
+                exhausted(2),
+            ),
+        ),
+    ];
+    run_fuse(streams, &profile).await
+}
+
+/// Render a fusion result as deterministic text: rows by rank, then statuses by
+/// stratum, then the profile identity. Nothing here depends on a `HashMap`.
+fn render(result: &FusionResult<Term>) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for row in &result.rows {
+        let _ = writeln!(
+            out,
+            "row {} score={} witness={}",
+            row.entity.as_str(),
+            row.score.to_decimal_lexical(),
+            row.threshold_witness.to_decimal_lexical()
+        );
+        for (stratum, rank, score) in &row.contributions {
+            let _ = writeln!(
+                out,
+                "  {} rank={rank} score={}",
+                stratum.as_str(),
+                score.to_decimal_lexical()
+            );
+        }
+    }
+    for (stratum, status) in &result.trailer.statuses {
+        let _ = writeln!(out, "status {} {status:?}", stratum.as_str());
+    }
+    let _ = writeln!(out, "profile {}", result.trailer.profile_id.to_hex());
+    out
+}
+
+// 6. The engine agrees with a simple eager oracle over small streams.
+#[test]
+fn differential_against_eager_oracle() {
+    let profile = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::from_raw(700_000_000_000)),
+            ("geo", Fixed::from_raw(300_000_000_000)),
+        ],
+        K,
+        8,
+    );
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::ONE, K, "a"),
+                    row(2, Fixed::ONE, K, "b"),
+                    row(3, Fixed::ONE, K, "c"),
+                ],
+                exhausted(3),
+            ),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::from_raw(700_000_000_000), K, "b"),
+                    row(2, Fixed::from_raw(700_000_000_000), K, "d"),
+                ],
+                exhausted(2),
+            ),
+        ),
+        (
+            stratum("geo"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::from_raw(300_000_000_000), K, "c"),
+                    row(2, Fixed::from_raw(300_000_000_000), K, "e"),
+                ],
+                exhausted(2),
+            ),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+
+    // Eager oracle: sum the profile's contribution for every (item, weight,
+    // rank), then order by score descending, best rank ascending, term ascending.
+    let mut expected: BTreeMap<&str, (Fixed, u64)> = BTreeMap::new();
+    let scripted: [(&str, Fixed, u64); 7] = [
+        ("a", Fixed::ONE, 1),
+        ("b", Fixed::ONE, 2),
+        ("c", Fixed::ONE, 3),
+        ("b", Fixed::from_raw(700_000_000_000), 1),
+        ("d", Fixed::from_raw(700_000_000_000), 2),
+        ("c", Fixed::from_raw(300_000_000_000), 1),
+        ("e", Fixed::from_raw(300_000_000_000), 2),
+    ];
+    for (item, weight, rank) in scripted {
+        let value = contribution(weight, rank, K).expect("fits");
+        let entry = expected.entry(item).or_insert((Fixed::ZERO, u64::MAX));
+        entry.0 = entry.0.checked_add(value).expect("fits");
+        entry.1 = entry.1.min(rank);
+    }
+    let mut oracle: Vec<(&str, Fixed, u64)> = expected
+        .into_iter()
+        .map(|(item, (score, rank))| (item, score, rank))
+        .collect();
+    oracle.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then(left.2.cmp(&right.2))
+            .then(left.0.cmp(right.0))
+    });
+
+    assert_eq!(result.rows.len(), oracle.len());
+    for (row, (item, score, rank)) in result.rows.iter().zip(&oracle) {
+        assert_eq!(row.entity, Term::new(*item));
+        assert_eq!(row.score, *score);
+        let best = row
+            .contributions
+            .iter()
+            .map(|(_, rank, _)| *rank)
+            .min()
+            .expect("a row has at least one contribution");
+        assert_eq!(best, *rank);
+    }
+}
+
+// 7. Every protocol violation is a typed error, never a plausible order.
+#[test]
+fn protocol_violations_are_typed() {
+    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    let weight = Fixed::ONE;
+
+    let out_of_order = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![row(1, weight, K, "a"), row(1, weight, K, "b")],
+            exhausted(2),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        out_of_order,
+        &profile,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::OutOfOrderRanks { expected: 2, got: 1 })
+        ),
+        "expected OutOfOrderRanks, got {result:?}"
+    );
+
+    let non_contiguous = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![row(1, weight, K, "a"), row(3, weight, K, "c")],
+            exhausted(2),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        non_contiguous,
+        &profile,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::NonContiguousRanks { gap: 1 })
+        ),
+        "expected NonContiguousRanks, got {result:?}"
+    );
+
+    let duplicate = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![row(1, weight, K, "a"), row(2, weight, K, "a")],
+            exhausted(2),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        duplicate, &profile,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(&**error, ProtocolError::DuplicateItem { item } if item == "a")
+        ),
+        "expected DuplicateItem, got {result:?}"
+    );
+
+    let error_after_rows = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, weight, K, "a"),
+                Step::Fail(ProtocolError::ErrorAfterRows { rows_before: 1 }),
+            ],
+            exhausted(0),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        error_after_rows,
+        &profile,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ErrorAfterRows { rows_before: 1 })
+        ),
+        "expected ErrorAfterRows, got {result:?}"
+    );
+
+    let never_ending = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, weight, K, "a"),
+                Step::Fail(ProtocolError::NeverEndingSource),
+            ],
+            exhausted(0),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        never_ending,
+        &profile,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::NeverEndingSource)
+        ),
+        "expected NeverEndingSource, got {result:?}"
+    );
+
+    let mismatch = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![Step::Row(1, Fixed::from_raw(1), Term::new("a"))],
+            exhausted(1),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        mismatch, &profile,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ContributionMismatch { .. })
+        ),
+        "expected ContributionMismatch, got {result:?}"
+    );
+}
+
+// 8. Dropping a live fusion drops every stream; receipts cannot be forged.
+#[test]
+fn drop_cancellation_and_receipts() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let text_counter = Arc::new(AtomicUsize::new(0));
+    let vector_counter = Arc::new(AtomicUsize::new(0));
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::tracked(
+                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                exhausted(2),
+                Arc::clone(&text_counter),
+            ),
+        ),
+        (
+            stratum("vector"),
+            MockStream::tracked(
+                vec![row(1, Fixed::ONE, K, "c")],
+                exhausted(1),
+                Arc::clone(&vector_counter),
+            ),
+        ),
+    ];
+    let mut fusion = FusionStream::new(streams, profile.clone());
+    let first = block_on(fusion.next())
+        .expect("next succeeds")
+        .expect("a row");
+    assert_eq!(first.entity, Term::new("a"));
+    drop(fusion);
+    assert_eq!(
+        text_counter.load(Ordering::SeqCst),
+        1,
+        "dropping the fusion must drop its text stream"
+    );
+    assert_eq!(
+        vector_counter.load(Ordering::SeqCst),
+        1,
+        "dropping the fusion must drop its vector stream"
+    );
+
+    // A receipt that under-reports the emitted rows is refused.
+    let forged = vec![(
+        stratum("text"),
+        MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(9)),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(forged, &profile));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ForgedReceipt { declared: 9, actual: 1 })
+        ),
+        "expected ForgedReceipt, got {result:?}"
+    );
+}
+
+// 9. The trailer carries each producer's own status.
+#[test]
+fn trailer_preserves_each_producer_status() {
+    let profile = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::ONE),
+            ("geo", Fixed::ONE),
+            ("embedding", Fixed::ONE),
+        ],
+        K,
+        4,
+    );
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "b")],
+                ProducerReceipt::CeilingReached {
+                    bound: Fixed::from_raw(5),
+                },
+            ),
+        ),
+        (
+            stratum("geo"),
+            MockStream::new(
+                Vec::new(),
+                ProducerReceipt::ExecutionFailed {
+                    reason: "no index".to_owned(),
+                },
+            ),
+        ),
+        (
+            stratum("embedding"),
+            MockStream::new(Vec::new(), ProducerReceipt::TermsRejected),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+    let statuses = &result.trailer.statuses;
+    assert_eq!(statuses.len(), 4);
+    assert_eq!(
+        statuses.get(&stratum("text")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 1 })
+    );
+    assert_eq!(
+        statuses.get(&stratum("vector")),
+        Some(&ProducerStatus::CeilingReached {
+            bound: Fixed::from_raw(5)
+        })
+    );
+    assert_eq!(
+        statuses.get(&stratum("geo")),
+        Some(&ProducerStatus::ExecutionFailed {
+            reason: "no index".to_owned()
+        })
+    );
+    assert_eq!(
+        statuses.get(&stratum("embedding")),
+        Some(&ProducerStatus::TermsRejected)
+    );
+}
+
+// 9b. The trailer names the pinned plan when one is attached.
+#[test]
+fn trailer_names_the_pinned_plan() {
+    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    let pinned = plan_id("fusion-plan");
+    let streams = vec![(
+        stratum("text"),
+        MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+    )];
+    let mut fusion = FusionStream::new(streams, profile.clone()).with_plan_id(pinned);
+    while block_on(fusion.next()).expect("fusion succeeds").is_some() {}
+    let trailer = block_on(fusion.trailer()).expect("trailer succeeds");
+    assert_eq!(trailer.plan_id, Some(pinned));
+    assert_eq!(trailer.profile_id, profile.id());
+}
+
+// 9c. Certification can fire before exhaustion, and it records the threshold.
+//
+// Candidate `a` is seen in every active stream, so its score is final; the
+// remaining heads cannot overtake it, so it is emitted while both streams still
+// hold rows, and the witness names the threshold that certified it.
+#[test]
+fn threshold_witness_is_recorded_before_exhaustion() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "x")],
+                exhausted(2),
+            ),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "y")],
+                exhausted(2),
+            ),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(result.rows.len(), 3);
+    assert_eq!(result.rows[0].entity, Term::new("a"));
+    let tail = contribution(Fixed::ONE, 2, K).expect("fits");
+    assert_eq!(
+        result.rows[0].threshold_witness,
+        tail.checked_add(tail).expect("fits"),
+        "the witness must be the live threshold at certification"
+    );
+    assert!(
+        result.rows[0].threshold_witness > Fixed::ZERO,
+        "certification happened while streams still held rows"
+    );
+}
+
+// 10. A row's contributions sum exactly to its fused score.
+#[test]
+fn contributions_sum_to_the_fused_score() {
+    let profile = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::from_raw(700_000_000_000)),
+        ],
+        K,
+        4,
+    );
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")],
+                exhausted(2),
+            ),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(
+                vec![row(1, Fixed::from_raw(700_000_000_000), K, "b")],
+                exhausted(1),
+            ),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(result.rows.len(), 2, "a and b are the two fused candidates");
+    for fused in &result.rows {
+        let mut sum = Fixed::ZERO;
+        for (_, _, score) in &fused.contributions {
+            sum = sum.checked_add(*score).expect("fits");
+        }
+        assert_eq!(sum, fused.score, "contributions must sum to the score");
+    }
+}
+
+// 11. Profile construction refuses invalid parameters, and identity tracks
+//     every field.
+#[test]
+fn profile_construction_is_validated() {
+    let weights = |weight: Fixed| {
+        let mut map = BTreeMap::new();
+        map.insert(stratum("text"), weight);
+        map
+    };
+
+    assert!(matches!(
+        FusionProfile::new(weights(Fixed::ONE), 0, 1),
+        Err(FusionError::InvalidK { k: 0 })
+    ));
+    assert!(matches!(
+        FusionProfile::new(weights(Fixed::ONE), K, 0),
+        Err(FusionError::InvalidMaxContributions { max: 0 })
+    ));
+    assert!(matches!(
+        FusionProfile::new(BTreeMap::new(), K, 1),
+        Err(FusionError::EmptyWeights)
+    ));
+    assert!(matches!(
+        FusionProfile::new(weights(Fixed::ZERO), K, 1),
+        Err(FusionError::NonPositiveWeight { .. })
+    ));
+    assert!(matches!(
+        FusionProfile::new(weights(Fixed::from_raw(-1)), K, 1),
+        Err(FusionError::NonPositiveWeight { .. })
+    ));
+    assert!(matches!(
+        FusionProfile::new(weights(Fixed::from_raw(i128::MAX)), K, 2),
+        Err(FusionError::Overflow)
+    ));
+
+    let baseline = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 8);
+    let same = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 8);
+    assert_eq!(baseline.id(), same.id(), "identical profiles share an id");
+    assert_eq!(
+        FusionProfile::from_canonical_bytes(&baseline.canonical_bytes()).expect("round-trips"),
+        baseline
+    );
+
+    let different_k = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K + 1, 8);
+    let different_weight = profile(
+        &[("text", Fixed::ONE), ("vector", Fixed::from_raw(2))],
+        K,
+        8,
+    );
+    let different_max = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 9);
+    assert_ne!(baseline.id(), different_k.id());
+    assert_ne!(baseline.id(), different_weight.id());
+    assert_ne!(baseline.id(), different_max.id());
+}
+
+// 12. Canonical profile bytes and fused output are target-independent.
+//
+// The bytes are asserted against a fixed digest captured on this target; the
+// same construction on wasm32-unknown-unknown is proven to compile and to
+// produce byte-identical input by the pure-field encoding. The fused rendering
+// is checked against the same golden the native test uses.
+#[test]
+fn native_and_wasm_share_canonical_bytes_and_output() {
+    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    assert_eq!(
+        profile.canonical_bytes(),
+        profile.canonical_bytes(),
+        "canonical bytes are a pure function of the fields"
+    );
+    assert_eq!(
+        profile.canonical_bytes(),
+        FusionProfile::from_canonical_bytes(&profile.canonical_bytes())
+            .expect("round-trips")
+            .canonical_bytes(),
+        "decode must reproduce the same bytes"
+    );
+
+    let result = block_on(golden_fusion());
+    let expected =
+        std::fs::read_to_string(golden_path()).expect("the golden fixture is checked in");
+    assert_eq!(render(&result), expected);
+    assert_eq!(RECIP_K, 60);
+}

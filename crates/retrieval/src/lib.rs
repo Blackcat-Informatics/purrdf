@@ -23,9 +23,20 @@
 //! ```
 //!
 //! This build ships the first stage's value — [`Plan`] — together with the
-//! typed request lattice ([`RetrievalRequest`], [`RequestTerm`]) and the plan's
-//! canonical identity ([`PlanId`]). The later stages consume these types; they
-//! are not implemented here yet.
+//! typed request lattice ([`RetrievalRequest`], [`RequestTerm`]), the plan's
+//! canonical identity ([`PlanId`]), and the fourth stage's engine: the verified
+//! ranked-stream protocol ([`RankedStream`]) and the exact fixed-point
+//! fusion ([`fuse`], [`FusionStream`], [`FusionProfile`]). Planning, compiling
+//! and executing are the remaining stages.
+//!
+//! # Fusion is a law, not a knob
+//!
+//! A [`FusionProfile`] fixes the decay rule and its smoothing constant, every
+//! stratum's weight, the total tie-break and the admitted contribution ceiling.
+//! It is content-addressed, so an answer names exactly which law produced it.
+//! Contributions are exact [`Fixed`] values computed with checked arithmetic;
+//! an intermediate that does not fit is a loud [`FusionError::Overflow`], never
+//! a wrapped score masquerading as an order.
 //!
 //! # A composition outside the kernel
 //!
@@ -58,23 +69,39 @@
 
 mod canonical;
 mod error;
+mod fixed;
+mod fuse;
+mod fusion_profile;
+mod fusion_stream;
 mod id;
 mod iri;
 mod plan;
+mod ranked_stream;
+mod reciprocal_rank;
 mod request;
 
-pub use error::PlanError;
-pub use id::{PLAN_ID_BYTES, PLAN_ID_DOMAIN, PLAN_VERSION, PlanId};
+pub use error::{FusionError, PlanError};
+pub use fuse::{FusionResult, fuse};
+pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
+pub use fusion_stream::{CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus};
+pub use id::{
+    FUSION_PROFILE_ID_BYTES, FUSION_PROFILE_ID_DOMAIN, FUSION_PROFILE_VERSION, FusionProfileId,
+    PLAN_ID_BYTES, PLAN_ID_DOMAIN, PLAN_VERSION, PlanId,
+};
 pub use iri::{Iri, Term, Weight};
 pub use plan::{
     Plan, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry, StatisticsSnapshot,
 };
+pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
+pub use reciprocal_rank::contribution;
 pub use request::{Metric, RequestTerm, RetrievalRequest};
 
-// The exact fixed-point type stratum weights are expressed in. Re-exported so a
-// caller building a plan can name the values it puts in `Plan::stratum_weights`
-// without depending on `purrdf-text` directly.
-pub use purrdf_text::{Fixed, SCALE_DIGITS};
+// The exact fixed-point type stratum weights and fused scores are expressed in,
+// and the fixed-point scale itself. Re-exported so a caller building a plan or
+// a fusion profile can name those values without depending on `purrdf-text`
+// directly.
+pub use fixed::{Fixed, RECIP_K};
+pub use purrdf_text::SCALE_DIGITS;
 // The registry instance identity a plan records. Re-exported for the same
 // reason: `Plan::registry_instance_id` is a value a caller compares against a
 // live Registry.

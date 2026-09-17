@@ -73,3 +73,70 @@ impl fmt::Display for PlanId {
         f.write_str(&self.to_hex())
     }
 }
+
+/// The canonical fusion-profile layout this build writes and understands.
+///
+/// A profile's encoded form begins with this value. As with a plan, a decoder
+/// that reads any other version refuses rather than reinterpret the bytes under
+/// a layout they were not written for.
+pub const FUSION_PROFILE_VERSION: u16 = 1;
+
+/// The domain-separation prefix mixed into every [`FusionProfileId`].
+///
+/// Namespaced apart from [`PLAN_ID_DOMAIN`] so the same canonical bytes hashed
+/// for a plan and for a fusion profile never produce the same identity.
+pub const FUSION_PROFILE_ID_DOMAIN: &str = "purrdf:fusion-profile:v1";
+
+/// The length of a [`FusionProfileId`] digest in bytes.
+pub const FUSION_PROFILE_ID_BYTES: usize = 32;
+
+/// A fusion profile's content identity: a domain-separated BLAKE3 digest over
+/// its canonical bytes.
+///
+/// Identity is what makes a profile a law rather than a knob. Two answers fused
+/// under profiles with different `K`, different weights, a different decay rule
+/// or a different tie-break are answers to different questions, and the digest
+/// is how a report names which law was in force.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FusionProfileId([u8; FUSION_PROFILE_ID_BYTES]);
+
+impl FusionProfileId {
+    /// Digest canonical fusion-profile `bytes` under the fusion-profile domain.
+    #[must_use]
+    pub fn from_canonical(bytes: &[u8]) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(FUSION_PROFILE_ID_DOMAIN.as_bytes());
+        hasher.update(&[0u8]);
+        hasher.update(bytes);
+        Self(*hasher.finalize().as_bytes())
+    }
+
+    /// The raw 32 digest bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; FUSION_PROFILE_ID_BYTES] {
+        &self.0
+    }
+
+    /// The lowercase-hex rendering of the digest (64 characters).
+    #[must_use]
+    pub fn to_hex(&self) -> String {
+        let mut out = String::with_capacity(FUSION_PROFILE_ID_BYTES * 2);
+        for byte in &self.0 {
+            use fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+        }
+        out
+    }
+}
+
+impl fmt::Debug for FusionProfileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FusionProfileId({})", self.to_hex())
+    }
+}
+
+impl fmt::Display for FusionProfileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_hex())
+    }
+}
