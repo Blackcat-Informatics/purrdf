@@ -18,7 +18,7 @@
 //! ```text
 //! plan(request, registry, statistics) -> Plan
 //! compile(Plan, environment)          -> per-stratum SPARQL units
-//! execute(units, registry)            -> per-stratum ranked streams
+//! execute(units, registry, dataset)   -> per-stratum ranked streams
 //! fuse(streams, profile)              -> one ordered answer
 //! ```
 //!
@@ -29,7 +29,8 @@
 //! admission waist ([`AdmissionEnvironment`], [`AdmissionError`]) that emits the
 //! per-stratum SPARQL units a caller can run directly ([`CompiledRetrieval`],
 //! [`StratumUnit`]). [`execute`] runs those units independently through
-//! `purrdf-sparql-eval`, isolating a stratum's failure in its own
+//! `purrdf-sparql-eval` against the caller's own dataset, isolating a stratum's
+//! failure in its own
 //! [`ProducerStatus`] ([`ExecutionResult`], [`StratumStream`],
 //! [`RankedStreamImpl`]). Finally [`fuse`] is the exact fixed-point fusion over
 //! the verified ranked-stream protocol ([`RankedStream`], [`FusionStream`],

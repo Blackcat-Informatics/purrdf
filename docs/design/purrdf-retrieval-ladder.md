@@ -34,10 +34,10 @@ Retrieval is four composed stages:
 ```text
 plan(request, registry, statistics) -> Plan
 compile(Plan)                       -> SPARQL query
-execute(query)                      -> per-stratum ranked streams
+execute(query, dataset)             -> per-stratum ranked streams
 fuse(streams, profile)              -> one ordered answer
 
-search(s) = fuse(execute(compile(plan(s, registry, statistics))), profile)
+search(s, d) = fuse(execute(compile(plan(s, registry, statistics)), d), profile)
 ```
 
 Only `execute` runs a query, and every higher-level entry point is

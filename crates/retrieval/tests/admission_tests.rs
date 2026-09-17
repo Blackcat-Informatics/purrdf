@@ -26,6 +26,8 @@ use purrdf_sparql_eval::{
     TermKind, TermPattern, TermPlacement, Volatility,
 };
 
+mod common;
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -722,7 +724,8 @@ fn one_stratum_failure_others_continue() {
     let failing = compiled.units[1].stratum.clone();
     compiled.units[1].sparql = "THIS IS NOT SPARQL".to_owned();
 
-    let result = block_on(execute(&compiled, &registry)).expect("execution starts");
+    let result = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
+        .expect("execution starts");
     match result.statuses.get(&failing) {
         Some(ProducerStatus::ExecutionFailed { .. }) => {}
         other => panic!("the failing stratum is ExecutionFailed, got {other:?}"),
@@ -756,10 +759,20 @@ fn pinned_plan_replay_reproduces_candidate_set_and_ranks() {
         statistics: &stats,
     };
     let first = rows_by_stratum(
-        block_on(execute(&compile(&plan, &env).expect("admits"), &registry)).expect("runs"),
+        block_on(execute(
+            &compile(&plan, &env).expect("admits"),
+            &registry,
+            &*common::empty_dataset(),
+        ))
+        .expect("runs"),
     );
     let second = rows_by_stratum(
-        block_on(execute(&compile(&plan, &env).expect("admits"), &registry)).expect("runs"),
+        block_on(execute(
+            &compile(&plan, &env).expect("admits"),
+            &registry,
+            &*common::empty_dataset(),
+        ))
+        .expect("runs"),
     );
     assert_eq!(first, second, "same plan and registry replay identically");
     assert!(!first.is_empty());
@@ -792,7 +805,8 @@ fn execute_refuses_a_different_registry_instance() {
     };
     let compiled = compile(&plan, &env).expect("admits");
     let other = fixture_registry();
-    let error = block_on(execute(&compiled, &other)).expect_err("a foreign registry is refused");
+    let error = block_on(execute(&compiled, &other, &*common::empty_dataset()))
+        .expect_err("a foreign registry is refused");
     assert!(matches!(
         error,
         purrdf_retrieval::ExecutionError::RegistryMismatch { .. }

@@ -73,7 +73,12 @@ impl From<ProducerReceipt> for ProducerStatus {
 /// was certified, so a reader can replay the certification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusedRow {
-    /// The candidate, in its canonical term lexical.
+    /// The candidate, in its canonical term lexical — `<http://example.org/doc>`,
+    /// `"lex"@en`, `<<( s p o )>>`.
+    ///
+    /// That is the same spelling
+    /// [`RequestTerm::EntitySeed`](crate::RequestTerm::EntitySeed) takes, so a
+    /// fused row can be handed straight back as the seed of a follow-up request.
     pub entity: Term,
     /// The exact fused score.
     pub score: Fixed,

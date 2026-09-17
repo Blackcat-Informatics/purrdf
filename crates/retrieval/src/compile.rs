@@ -103,8 +103,13 @@ pub struct CompiledRetrieval {
     pub registry_fingerprint: String,
 }
 
-/// The variable every branch projects its candidate under.
-const CANDIDATE_VAR: &str = "?candidate";
+/// The name of the variable every branch projects its candidate under, without
+/// the `?` sigil.
+///
+/// Spelled once, because [`execute`](crate::execute) reads the emitted unit's
+/// solutions back by exactly this name: two constants that could drift would let
+/// the executor look for a column the compiler stopped writing.
+pub(crate) const CANDIDATE_NAME: &str = "candidate";
 
 /// Admit `plan` against `env` and emit its per-stratum SPARQL units.
 ///
@@ -172,7 +177,7 @@ fn emit_unit(
         branches.push(emit_branch(plan, binding, descriptors, depth)?);
     }
     Ok(format!(
-        "SELECT {CANDIDATE_VAR} WHERE {{\n  {}\n}}\nLIMIT {depth}",
+        "SELECT ?{CANDIDATE_NAME} WHERE {{\n  {}\n}}\nLIMIT {depth}",
         branches.join("\n  UNION\n  ")
     ))
 }
@@ -232,7 +237,7 @@ fn emit_branch(
         String::new()
     };
     Ok(format!(
-        "{{ SELECT (?c{candidate} AS {CANDIDATE_VAR}) WHERE {{ ( {subject_text} ) <{}> ( {object_text} ) }}{limit} }}",
+        "{{ SELECT (?c{candidate} AS ?{CANDIDATE_NAME}) WHERE {{ ( {subject_text} ) <{}> ( {object_text} ) }}{limit} }}",
         binding.producer
     ))
 }

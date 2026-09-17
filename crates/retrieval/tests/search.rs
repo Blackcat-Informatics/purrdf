@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
-use purrdf_core::TermValue;
+use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, ExecutionError, Fixed, FusionError, FusionProfile, Iri,
     Metric, PlanError, ProducerReceipt, ProtocolError, RankedStream, RankedStreamImpl, RequestTerm,
@@ -29,6 +29,8 @@ use purrdf_sparql_eval::{
     PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
     TermKind, TermPattern, TermPlacement, Volatility,
 };
+
+mod common;
 
 const K: u32 = 60;
 
@@ -363,12 +365,13 @@ async fn manual_composition(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry,
     stats: &MockStatistics,
+    dataset: &RdfDataset,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
 ) -> SearchResult {
     let planned = plan(request, registry, stats).expect("the fixture request plans");
     let compiled = compile(&planned, env).expect("a fresh plan is admitted");
-    let execution = execute(&compiled, registry)
+    let execution = execute(&compiled, registry, dataset)
         .await
         .expect("the fixture registry executes");
 
@@ -448,11 +451,14 @@ fn search_equals_manual_composition() {
     let env = fixture_env(&registry, &stats);
     let profile = fixture_profile();
     let request = mixed_request();
+    let dataset = common::empty_dataset();
 
-    let direct = block_on(search(&request, &registry, &stats, &env, &profile))
-        .expect("the composed search answers");
+    let direct = block_on(search(
+        &request, &registry, &stats, &*dataset, &env, &profile,
+    ))
+    .expect("the composed search answers");
     let manual = block_on(manual_composition(
-        &request, &registry, &stats, &env, &profile,
+        &request, &registry, &stats, &dataset, &env, &profile,
     ));
 
     assert_eq!(
@@ -479,6 +485,7 @@ fn plan_error_propagates() {
         &RetrievalRequest::new(),
         &registry,
         &stats,
+        &*common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -507,6 +514,7 @@ fn admission_error_propagates() {
         &mixed_request(),
         &planned_against,
         &stats,
+        &*common::empty_dataset(),
         &env,
         &profile,
     ))
@@ -553,8 +561,15 @@ fn fusion_error_propagates() {
     )
     .expect("the narrow profile is valid");
 
-    let error = block_on(search(&mixed_request(), &registry, &stats, &env, &narrow))
-        .expect_err("a profile missing a stratum is refused at fusion");
+    let error = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &narrow,
+    ))
+    .expect_err("a profile missing a stratum is refused at fusion");
     match error {
         SearchError::FusionError(FusionError::UnknownStratum { stratum }) => {
             // `compile` orders units by stratum IRI, so `stratum/graph` is the
@@ -581,8 +596,15 @@ fn end_to_end_search_returns_expected_results() {
     let profile = fixture_profile();
     let request = mixed_request();
 
-    let result = block_on(search(&request, &registry, &stats, &env, &profile))
-        .expect("the fixture search answers");
+    let result = block_on(search(
+        &request,
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+    ))
+    .expect("the fixture search answers");
     let expected_plan = plan(&request, &registry, &stats).expect("the request plans");
 
     assert_eq!(result.plan_id, expected_plan.id());

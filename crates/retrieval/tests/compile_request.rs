@@ -33,6 +33,8 @@ use purrdf_sparql_eval::{
     Volatility,
 };
 
+mod common;
+
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 
 // ---------------------------------------------------------------------------
@@ -510,7 +512,8 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
         compiled.units[0].sparql
     );
 
-    let execution = block_on(execute(&compiled, &registry)).expect("the unit runs");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
     let rows = execution
         .streams
         .into_iter()
@@ -555,7 +558,8 @@ fn depth_zero_is_an_honest_empty_stratum_and_depth_one_emits_one_row() {
             compiled.units[0].sparql
         );
 
-        let execution = block_on(execute(&compiled, &registry)).expect("the unit runs");
+        let execution = block_on(execute(&compiled, &registry, &*common::empty_dataset()))
+            .expect("the unit runs");
         assert_eq!(
             execution.statuses[&iri(&ex("stratum/text"))],
             ProducerStatus::Exhausted {

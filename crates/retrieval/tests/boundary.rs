@@ -46,6 +46,8 @@ use purrdf_sparql_eval::{
     RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
+mod common;
+
 const K: u32 = 60;
 
 // ---------------------------------------------------------------------------
@@ -463,7 +465,8 @@ fn stop_at_execute_unbounded_unfused() {
     };
     let compiled = compile(&planned, &env).expect("admits");
 
-    let execution = block_on(execute(&compiled, &registry)).expect("the units run");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
     assert_eq!(execution.streams.len(), 1);
 
     let mut stream = execution
@@ -698,7 +701,8 @@ fn unfused_unbounded_stream() {
         statistics: &stats,
     };
     let compiled = compile(&planned, &env).expect("admits");
-    let execution = block_on(execute(&compiled, &registry)).expect("the units run");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
 
     let mut stream = execution
         .streams
@@ -787,8 +791,15 @@ fn reporting_names_plan_and_profile() {
     let request = RetrievalRequest::from_terms(vec![lexical_term()]);
 
     let expected_plan = plan(&request, &registry, &stats).expect("plans");
-    let result = block_on(search(&request, &registry, &stats, &env, &profile))
-        .expect("the composed search answers");
+    let result = block_on(search(
+        &request,
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+    ))
+    .expect("the composed search answers");
 
     // A reproducible answer is a pair of identities: the pinned plan and the
     // fusion law in force, both named by the answer.

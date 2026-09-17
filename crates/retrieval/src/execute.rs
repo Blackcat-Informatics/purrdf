@@ -4,20 +4,30 @@
 //! The executor: each admitted unit runs independently through the evaluator.
 //!
 //! [`execute`] is the only stage that runs a query. It runs one unit per stratum
-//! through `purrdf-sparql-eval` over an empty default graph, with the caller's
-//! registry injected: the relations are row sources reached from predicate
-//! position, so their rows do not depend on any stored data, and the query text is
-//! exactly the admitted emission. A unit that fails to parse or evaluate becomes
-//! that stratum's [`ProducerStatus::ExecutionFailed`] while every other stratum
-//! streams on — the isolation requirement a single monolithic query could not
-//! meet.
+//! through `purrdf-sparql-eval` against **the caller's dataset**, with the
+//! caller's registry injected, and the query text is exactly the admitted
+//! emission. A unit that fails to parse or evaluate becomes that stratum's
+//! [`ProducerStatus::ExecutionFailed`] while every other stratum streams on — the
+//! isolation requirement a single monolithic query could not meet.
+//!
+//! # The dataset is the caller's, and it is read
+//!
+//! A unit is ordinary SPARQL: its ranked relations are reached from predicate
+//! position, but every other pattern in it is matched against the stored data
+//! like any other query. The dataset is therefore a parameter, taken by reference
+//! and never built here — a retrieval layer that searched a graph of its own
+//! choosing would answer about data nobody asked about. `execute` is generic over
+//! [`DatasetView`] rather than taking a trait object because the view has
+//! associated types and is not object-safe; the evaluator entry point it calls is
+//! generic for the same reason.
 //!
 //! # Ranks are the evaluator's emission order
 //!
 //! Each successful unit's solution rows become candidates in emission order, with
 //! **1-based** ranks. The evaluator preserves a relation's declared emission
 //! order, so the candidate set and per-stratum ranks are a pure function of the
-//! plan and the registry — a pinned plan replays identically.
+//! plan, the registry and the dataset — a pinned plan replays identically against
+//! the same data.
 //!
 //! # A raw stream, not yet a fusion stream
 //!
@@ -29,14 +39,15 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
+use purrdf_core::{DatasetView, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions, RegistryId};
 
-use crate::compile::CompiledRetrieval;
+use crate::compile::{CANDIDATE_NAME, CompiledRetrieval};
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
 use crate::ranked_stream::{ProducerReceipt, ProtocolError};
+use crate::render::candidate_lexical;
 
 /// One stratum's ranked rows, tagged with the pinned plan they descend from.
 #[derive(Debug)]
@@ -165,13 +176,13 @@ impl RankedStreamImpl {
     }
 }
 
-/// Run every compiled unit independently through `purrdf-sparql-eval`.
+/// Run every compiled unit independently through `purrdf-sparql-eval` against
+/// `dataset`.
 ///
-/// Each unit is evaluated over an empty default graph with `registry` injected as
-/// the property-function registry; the relations are row sources, so no dataset is
-/// needed. A unit that fails is recorded as that stratum's
-/// [`ProducerStatus::ExecutionFailed`] and contributes no stream, while every
-/// other unit runs to completion.
+/// Each unit is evaluated over the caller's `dataset` with `registry` injected as
+/// the property-function registry. A unit that fails is recorded as that
+/// stratum's [`ProducerStatus::ExecutionFailed`] and contributes no stream, while
+/// every other unit runs to completion.
 ///
 /// # Errors
 ///
@@ -181,10 +192,21 @@ impl RankedStreamImpl {
 // The executor drives a synchronous evaluator and returns materialized streams;
 // the `async` shape is its stage contract, not a pending future. A caller composes
 // it with the asynchronous fusion stage.
-#[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
-pub async fn execute(
+//
+// `future_not_send`: the dataset is a caller-chosen type parameter, so the
+// returned future's `Send`-ness is the caller's to establish. Requiring it here
+// would force every caller's view — and its statistics and environment, through
+// `search` — to be `Send` for a future that is awaited in one task and never
+// crosses a thread boundary. `search` carries the same reasoning.
+#[allow(
+    clippy::unused_async,
+    clippy::unused_async_trait_impl,
+    clippy::future_not_send
+)]
+pub async fn execute<D: DatasetView + Sync>(
     compiled: &CompiledRetrieval,
     registry: &PropertyFunctionRegistry,
+    dataset: &D,
 ) -> Result<ExecutionResult, ExecutionError> {
     if compiled.registry_id != registry.instance_id() {
         return Err(ExecutionError::RegistryMismatch {
@@ -192,12 +214,6 @@ pub async fn execute(
             got: registry.instance_id(),
         });
     }
-
-    // An empty default graph: relations are row sources, so the stored data is
-    // irrelevant and the query text is exactly what the plan produced.
-    let dataset = RdfDatasetBuilder::new()
-        .freeze()
-        .expect("an empty default graph is structurally valid");
 
     let engine = NativeSparqlEngine::new();
     let mut streams = Vec::with_capacity(compiled.units.len());
@@ -214,7 +230,7 @@ pub async fn execute(
             continue;
         }
         let outcome = engine.query_with_options_view(
-            &*dataset,
+            dataset,
             SparqlRequest {
                 query: &unit.sparql,
                 base_iri: None,
@@ -226,29 +242,30 @@ pub async fn execute(
             },
         );
         match outcome {
-            Ok(SparqlResult::Solutions { rows, .. }) => {
-                let ranked: Vec<(u64, Term)> = rows
-                    .iter()
-                    .filter_map(|row| row.iter().find_map(Option::as_ref))
-                    .enumerate()
-                    .map(|(index, value)| {
-                        (
-                            u64::try_from(index + 1).unwrap_or(u64::MAX),
-                            term_candidate(value),
-                        )
-                    })
-                    .collect();
-                let rows_emitted = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
-                streams.push(StratumStream {
-                    stratum: unit.stratum.clone(),
-                    plan_id: compiled.plan_id,
-                    stream: RankedStreamImpl::new(ranked),
-                });
-                statuses.insert(
-                    unit.stratum.clone(),
-                    ProducerStatus::Exhausted { rows_emitted },
-                );
-            }
+            Ok(SparqlResult::Solutions {
+                variables, rows, ..
+            }) => match rank_candidates(&variables, &rows) {
+                Ok(ranked) => {
+                    let rows_emitted = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
+                    streams.push(StratumStream {
+                        stratum: unit.stratum.clone(),
+                        plan_id: compiled.plan_id,
+                        stream: RankedStreamImpl::new(ranked),
+                    });
+                    statuses.insert(
+                        unit.stratum.clone(),
+                        ProducerStatus::Exhausted { rows_emitted },
+                    );
+                }
+                Err(reason) => {
+                    statuses.insert(
+                        unit.stratum.clone(),
+                        ProducerStatus::ExecutionFailed {
+                            reason: format!("stratum {}: {reason}", unit.stratum),
+                        },
+                    );
+                }
+            },
             Ok(_) => {
                 statuses.insert(
                     unit.stratum.clone(),
@@ -271,21 +288,170 @@ pub async fn execute(
     Ok(ExecutionResult { streams, statuses })
 }
 
-/// A candidate's canonical term text: the hex of the evaluator value's injective
-/// canonical byte encoding.
+/// Read a unit's projected candidate column into ranked `(rank, candidate)` rows.
 ///
-/// The composition layer mints no vocabulary and parses no RDF, so it does not
-/// re-render a term as Turtle or N-Triples. Hexing
-/// [`TermValue::to_canonical_bytes`] yields a deterministic, injective, target-
-/// independent name for exactly the value the evaluator produced, and distinct
-/// values can never share one.
-fn term_candidate(value: &TermValue) -> Term {
-    use core::fmt::Write as _;
-
-    let bytes = value.to_canonical_bytes();
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
+/// # The column is found by name
+///
+/// A unit projects exactly one variable, `?candidate`, so the column is located
+/// by that name. Reading a row's first *bound* cell instead would make the
+/// candidate depend on projection order, and a unit that projected anything
+/// alongside the candidate would silently rank the wrong term.
+///
+/// # No row is ever dropped
+///
+/// A rank is a position in the stratum's answer, so discarding a row renumbers
+/// every row after it: the stratum would report a shorter, differently-ranked
+/// list that still looked complete. An unbound cell and an unrenderable value are
+/// therefore both refusals of the whole unit, returned as the reason the caller
+/// records as this stratum's [`ProducerStatus::ExecutionFailed`].
+fn rank_candidates(
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+) -> Result<Vec<(u64, Term)>, String> {
+    let column = variables
+        .iter()
+        .position(|name| name == CANDIDATE_NAME)
+        .ok_or_else(|| {
+            format!("the unit's solutions project no ?{CANDIDATE_NAME} column: {variables:?}")
+        })?;
+    let mut ranked = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        let rank = u64::try_from(index + 1).unwrap_or(u64::MAX);
+        let value = row.get(column).and_then(Option::as_ref).ok_or_else(|| {
+            format!("the projected ?{CANDIDATE_NAME} column is unbound in row {rank}")
+        })?;
+        ranked.push((rank, term_candidate(value)));
     }
-    Term::new(out)
+    Ok(ranked)
+}
+
+/// A candidate's canonical term lexical — exactly the spelling a caller uses for
+/// a seed.
+///
+/// [`candidate_lexical`] writes `<http://example.org/doc>`, `"lex"@en` or the RDF 1.2
+/// triple term `<<( s p o )>>`: deterministic, injective, target-independent, and
+/// invertible by the decoder that lives beside it. A candidate is therefore
+/// spelled exactly as [`RequestTerm::EntitySeed`](crate::RequestTerm::EntitySeed)
+/// spells a seed, so a row this layer returns can be fed straight back in as the
+/// seed of a follow-up request.
+///
+/// A blank node is named `_:label` rather than refused. Its label is
+/// dataset-local, so it cannot seed a *later* request — but that is refused at
+/// placement, where a caller actually tries it, and the decoder reads `_:label`
+/// back either way. Refusing here would discard every other row in the stratum
+/// over one answer the layer merely declined to write down.
+fn term_candidate(value: &TermValue) -> Term {
+    Term::new(candidate_lexical(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_core::TermValue;
+
+    use super::{rank_candidates, term_candidate};
+    use crate::compile::CANDIDATE_NAME;
+    use crate::render::decode_term;
+
+    fn variables() -> Vec<String> {
+        vec![CANDIDATE_NAME.to_owned()]
+    }
+
+    #[test]
+    fn a_candidate_is_the_canonical_lexical_and_decodes_back_to_its_value() {
+        for value in [
+            TermValue::iri("http://example.org/doc"),
+            TermValue::simple_literal("quick brown fox"),
+            TermValue::typed_literal("3", "http://www.w3.org/2001/XMLSchema#integer"),
+            TermValue::Triple {
+                s: Box::new(TermValue::iri("http://example.org/s")),
+                p: Box::new(TermValue::iri("http://example.org/p")),
+                o: Box::new(TermValue::simple_literal("o")),
+            },
+        ] {
+            let candidate = term_candidate(&value);
+            assert_eq!(
+                decode_term(candidate.as_str()),
+                Ok(value),
+                "the candidate {} reads back as the value it names",
+                candidate.as_str()
+            );
+        }
+        assert_eq!(
+            term_candidate(&TermValue::iri("http://example.org/doc")).as_str(),
+            "<http://example.org/doc>",
+            "an IRI candidate is legible, not an encoding of one"
+        );
+    }
+
+    /// A blank node is a perfectly ordinary answer. It cannot seed a *later*
+    /// request, because its label is dataset-local — but that is refused at
+    /// placement, where a caller actually tries it. Refusing it here would throw
+    /// away every other row in the stratum over one answer this layer merely
+    /// declined to write down, which is the silent-drop bug wearing strictness.
+    #[test]
+    fn a_blank_candidate_is_named_and_does_not_take_its_stratum_down() {
+        let ranked = rank_candidates(
+            &variables(),
+            &[
+                vec![Some(TermValue::iri("http://example.org/doc"))],
+                vec![Some(TermValue::blank("b0"))],
+                vec![Some(TermValue::iri("http://example.org/other"))],
+            ],
+        )
+        .expect("a blank node among the answers is still an answer");
+
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|(_, term)| term.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "<http://example.org/doc>",
+                "_:b0",
+                "<http://example.org/other>"
+            ],
+            "the blank node is named in place, and its neighbours keep their ranks"
+        );
+        assert_eq!(
+            ranked.iter().map(|(rank, _)| *rank).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "ranks stay 1-based and contiguous, so no row was dropped"
+        );
+        assert_eq!(
+            decode_term("_:b0"),
+            Ok(TermValue::blank("b0")),
+            "and the decoder reads the label back, so nothing is lost"
+        );
+    }
+
+    #[test]
+    fn the_candidate_column_is_read_by_name_not_by_first_binding() {
+        // A row whose earlier column is bound and whose candidate column is not
+        // is a refusal, never the earlier column's term promoted into the rank.
+        let variables = vec!["other".to_owned(), CANDIDATE_NAME.to_owned()];
+        let rows = vec![vec![Some(TermValue::iri("http://example.org/other")), None]];
+        let reason = rank_candidates(&variables, &rows)
+            .expect_err("an unbound candidate column is a refusal");
+        assert!(reason.contains("unbound"), "{reason}");
+
+        // Bound in the candidate column, it is that column that ranks.
+        let rows = vec![vec![
+            Some(TermValue::iri("http://example.org/other")),
+            Some(TermValue::iri("http://example.org/doc")),
+        ]];
+        assert_eq!(
+            rank_candidates(&variables, &rows).expect("the candidate column ranks"),
+            vec![(
+                1,
+                crate::iri::Term::new("<http://example.org/doc>".to_owned())
+            )]
+        );
+    }
+
+    #[test]
+    fn a_unit_that_projects_no_candidate_column_is_refused() {
+        let reason = rank_candidates(&["other".to_owned()], &[vec![None]])
+            .expect_err("a unit with no candidate column cannot be ranked");
+        assert!(reason.contains(CANDIDATE_NAME), "{reason}");
+    }
 }

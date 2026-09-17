@@ -35,6 +35,7 @@
 //! caller that must distinguish "answered with nothing" from "could not answer"
 //! stops at `execute` and reads those statuses directly.
 
+use purrdf_core::DatasetView;
 use purrdf_sparql_eval::PropertyFunctionRegistry;
 use purrdf_text::Fixed;
 
@@ -110,8 +111,12 @@ pub enum SearchError {
 ///
 /// 1. [`plan(request, registry, statistics)`](crate::plan) — the pure planner;
 /// 2. [`compile(&plan, env)`](crate::compile) — semantic admission and emission;
-/// 3. [`execute(&compiled, registry)`](crate::execute) — one run per stratum;
+/// 3. [`execute(&compiled, registry, dataset)`](crate::execute) — one run per
+///    stratum, against the caller's data;
 /// 4. [`fuse(streams, profile)`](crate::fuse) — the verified fixed-point fusion.
+///
+/// The parameters read request → data → policy: what is being asked, what it is
+/// asked of, and the law the answer is composed under.
 ///
 /// The executor's `(rank, candidate)` streams are bridged to the fusion protocol
 /// by attaching each row's reciprocal-rank contribution, computed from exactly
@@ -129,15 +134,17 @@ pub enum SearchError {
 // `Sync` statistics provider and environment into every caller. The
 // `RankedStream` trait carries the same reasoning for its own futures.
 #[allow(clippy::future_not_send)]
-pub async fn search<S>(
+pub async fn search<S, D>(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry,
     statistics: &S,
+    dataset: &D,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
 ) -> Result<SearchResult, SearchError>
 where
     S: Statistics,
+    D: DatasetView + Sync,
 {
     // 1. Plan. A pure function of the request, the registry and the statistics.
     let plan = plan(request, registry, statistics).map_err(SearchError::PlanError)?;
@@ -145,9 +152,9 @@ where
     // 2. Compile. Admission against the live environment, then emission.
     let compiled = compile(&plan, env).map_err(SearchError::AdmissionError)?;
 
-    // 3. Execute. Each stratum runs independently; a failed stratum is a status,
-    //    not a stream.
-    let execution = execute(&compiled, registry)
+    // 3. Execute. Each stratum runs independently against the caller's dataset; a
+    //    failed stratum is a status, not a stream.
+    let execution = execute(&compiled, registry, dataset)
         .await
         .map_err(SearchError::ExecutionError)?;
 

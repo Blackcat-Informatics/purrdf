@@ -110,6 +110,58 @@ pub(crate) fn sparql_term(value: &TermValue) -> Result<String, RenderError> {
     Ok(out)
 }
 
+/// Write `value` as the canonical term lexical naming a **result**.
+///
+/// This is [`sparql_term`]'s reading for the other direction of travel, and the
+/// two differ in exactly one term kind. A blank node in an argument position is
+/// a non-distinguished variable — free, not ground — so [`sparql_term`] refuses
+/// it, because emitting one would silently unbind a position the caller proved
+/// bound. Naming a row the evaluator already produced carries no such hazard: a
+/// blank node is an ordinary answer, and `_:label` is its ordinary spelling.
+///
+/// Refusing it here instead would discard every other row in the same stratum
+/// over one answer the layer simply declined to write down — and the label is
+/// not lost, because [`decode_term`] reads `_:label` back. What a blank node
+/// genuinely cannot do is seed a *later* request, since its label is
+/// dataset-local; that is refused where it happens, at placement, rather than
+/// pre-emptively here.
+pub(crate) fn candidate_lexical(value: &TermValue) -> String {
+    if let TermValue::Blank { label, .. } = value {
+        return format!("_:{label}");
+    }
+    let mut out = String::new();
+    // Every non-blank arm is infallible, and a blank nested inside a triple term
+    // is written by the same rule rather than refused.
+    if write_term(value, &mut out).is_err() {
+        out.clear();
+        write_candidate(value, &mut out);
+    }
+    out
+}
+
+/// Append `value`'s result-naming form to `out`, spelling blank nodes.
+fn write_candidate(value: &TermValue, out: &mut String) {
+    match value {
+        TermValue::Blank { label, .. } => {
+            out.push_str("_:");
+            out.push_str(label);
+        }
+        TermValue::Triple { s, p, o } => {
+            out.push_str("<<( ");
+            write_candidate(s, out);
+            out.push(' ');
+            write_candidate(p, out);
+            out.push(' ');
+            write_candidate(o, out);
+            out.push_str(" )>>");
+        }
+        other => {
+            // Infallible for IRIs and literals: `write_term` only refuses blanks.
+            let _ = write_term(other, out);
+        }
+    }
+}
+
 /// Append `value`'s SPARQL constant form to `out`.
 fn write_term(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
     match value {
