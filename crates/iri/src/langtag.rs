@@ -68,16 +68,19 @@
 //! [`Profile`] names the acceptance language a judgement is made against.
 //! [`Profile::Rfc5646`] is the ABNF verbatim and is what the profile-free
 //! entry points ([`parse`], [`is_well_formed`]) use. The alternatives are
-//! [`Profile::Rfc5646PrivateUseRelaxed`], which lifts exactly one bound, and
-//! [`Profile::ConcreteSyntaxLangtag`], which swaps the whole production for the
-//! `LANGTAG` terminal that the RDF concrete syntaxes actually specify — see
-//! each variant for what it widens and why. Adding a profile is adding a
-//! documented widening in *this* module, which is the point: a caller that
-//! needs "RFC 5646 but…" names a profile here rather than growing a fourth
+//! [`Profile::Rfc5646PrivateUseRelaxed`], which lifts exactly one bound;
+//! [`Profile::ConcreteSyntaxLangtagBounded`], which swaps the production for
+//! the `LANGTAG` terminal the RDF concrete syntaxes specify while keeping the
+//! §2.1 eight-character subtag ceiling outside private use; and
+//! [`Profile::ConcreteSyntaxLangtag`], the same terminal with no length bound
+//! at all — see each variant for what it widens and why. Adding a profile is
+//! adding a documented widening in *this* module, which is the point: a caller
+//! that needs "RFC 5646 but…" names a profile here rather than growing a fifth
 //! private copy of the grammar somewhere else in the workspace.
 //!
 //! The variants are totally ordered by acceptance —
 //! [`Profile::Rfc5646`] ⊂ [`Profile::Rfc5646PrivateUseRelaxed`] ⊂
+//! [`Profile::ConcreteSyntaxLangtagBounded`] ⊂
 //! [`Profile::ConcreteSyntaxLangtag`] — and a tag a narrower profile accepts
 //! [`parse_with`]s to the *same* [`LanguageTag`] under every wider one, so
 //! widening never costs a caller its decomposition.
@@ -200,12 +203,13 @@ const MARKER_PREFIX_WIDTH: usize = SINGLETON_LENGTH + 1;
 /// for profile in [
 ///     Profile::Rfc5646,
 ///     Profile::Rfc5646PrivateUseRelaxed,
+///     Profile::ConcreteSyntaxLangtagBounded,
 ///     Profile::ConcreteSyntaxLangtag,
 /// ] {
 ///     assert!(is_well_formed_with("de-CH-x-phonebk", profile));
 /// }
 ///
-/// // Over the §2.1 private-use ceiling: the widening starts at the middle one.
+/// // Over the §2.1 private-use ceiling: the widening starts at the second one.
 /// assert!(!is_well_formed_with("x-gmeow-norwegiannynorsk", Profile::Rfc5646));
 /// assert!(is_well_formed_with(
 ///     "x-gmeow-norwegiannynorsk",
@@ -215,11 +219,22 @@ const MARKER_PREFIX_WIDTH: usize = SINGLETON_LENGTH + 1;
 /// // No RFC 5646 reading at all — `jura` is 4ALPHA, and `variant` admits four
 /// // characters only when the first is a DIGIT. Only the terminal takes it.
 /// assert!(!is_well_formed_with("en-fr-jura", Profile::Rfc5646PrivateUseRelaxed));
-/// assert!(is_well_formed_with("en-fr-jura", Profile::ConcreteSyntaxLangtag));
+/// assert!(is_well_formed_with(
+///     "en-fr-jura",
+///     Profile::ConcreteSyntaxLangtagBounded
+/// ));
+///
+/// // The length bound is what separates the two terminal profiles.
+/// assert!(!is_well_formed_with(
+///     "cantbethislong",
+///     Profile::ConcreteSyntaxLangtagBounded
+/// ));
+/// assert!(is_well_formed_with("cantbethislong", Profile::ConcreteSyntaxLangtag));
 ///
 /// // The declaration order IS the acceptance order.
 /// assert!(Profile::Rfc5646 < Profile::Rfc5646PrivateUseRelaxed);
-/// assert!(Profile::Rfc5646PrivateUseRelaxed < Profile::ConcreteSyntaxLangtag);
+/// assert!(Profile::Rfc5646PrivateUseRelaxed < Profile::ConcreteSyntaxLangtagBounded);
+/// assert!(Profile::ConcreteSyntaxLangtagBounded < Profile::ConcreteSyntaxLangtag);
 /// assert_eq!(Profile::default(), Profile::Rfc5646);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -310,8 +325,80 @@ pub enum Profile {
     /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
     /// ```
     Rfc5646PrivateUseRelaxed,
+    /// The `LANGTAG` **terminal** of the RDF concrete syntaxes, keeping the
+    /// §2.1 eight-character subtag ceiling everywhere except private use.
+    ///
+    /// This is the profile an **ingesting RDF codec** holds a language tag to,
+    /// and every codec in the workspace holds it to this one. It is the union
+    /// of two rules that the concrete syntaxes and RFC 5646 each contribute one
+    /// of, and neither rule is a lenience knob:
+    ///
+    /// * the terminal
+    ///   `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*` decides the *shape* —
+    ///   a non-empty all-ALPHA first subtag, then non-empty alphanumeric ones,
+    ///   with no production structure, so `en-fr-jura` and `fr-be-fbcl` are
+    ///   accepted where §2.1 has no reading for them;
+    /// * the §2.1 `1*8` bound decides the *length* of every subtag that is not
+    ///   a private-use one, so a bare fourteen-character primary subtag is
+    ///   refused.
+    ///
+    /// Private-use subtags keep the [`Self::Rfc5646PrivateUseRelaxed`]
+    /// widening: once a standalone `x`/`X` subtag has been seen, nothing that
+    /// follows is capped.
+    ///
+    /// # Why it exists
+    ///
+    /// Because a codec reads back what a codec wrote. A dataset parsed from one
+    /// syntax is serialized into another with the language tag copied
+    /// verbatim, so if two codecs draw their acceptance language differently
+    /// the workspace writes files it cannot read — which is what a single
+    /// profile shared by all of them prevents. It has to be *this* one because
+    /// both bounds are load-bearing at once: approved W3C corpora carry
+    /// `"ab"@en-fr-jura` and `"septante"@fr-be-fbcl` in `text/turtle`
+    /// documents, which only the terminal takes, while the N-Triples
+    /// negative-syntax corpus requires `@cantbethislong` — a bare
+    /// fourteen-character subtag — to be refused, which only the length bound
+    /// does. Neither rule can be dropped, and applying them to different
+    /// codecs is what opens the gap.
+    ///
+    /// A caller deciding whether a tag is fit to publish, index or match wants
+    /// [`Self::Rfc5646`] instead; a caller that must accept the terminal with
+    /// no length bound whatsoever wants [`Self::ConcreteSyntaxLangtag`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagError, Profile, TagForm, parse_with};
+    ///
+    /// // Terminal-only tags, which §2.1 has no reading for, are taken.
+    /// for tag in ["en-fr-jura", "fr-be-fbcl"] {
+    ///     let parsed = parse_with(tag, Profile::ConcreteSyntaxLangtagBounded)?;
+    ///     assert_eq!(parsed.form(), TagForm::ConcreteSyntaxOnly);
+    /// }
+    ///
+    /// // Private use keeps the relaxation, at any length.
+    /// assert!(parse_with("x-gmeow-norwegiannynorsk", Profile::ConcreteSyntaxLangtagBounded).is_ok());
+    /// assert!(parse_with("en-x-cantbethislong", Profile::ConcreteSyntaxLangtagBounded).is_ok());
+    ///
+    /// // Outside private use the §2.1 ceiling still bites…
+    /// assert_eq!(
+    ///     parse_with("cantbethislong", Profile::ConcreteSyntaxLangtagBounded),
+    ///     Err(LanguageTagError::SubtagLengthOverEight)
+    /// );
+    /// // …with the neighbour one character either side of it, so the bound is
+    /// // pinned rather than merely present.
+    /// assert!(parse_with("abcdefghi", Profile::ConcreteSyntaxLangtagBounded).is_err());
+    /// assert!(parse_with("abcdefgh", Profile::ConcreteSyntaxLangtagBounded).is_ok());
+    ///
+    /// // Still a grammar: the terminal's own refusals are unchanged.
+    /// for refused in ["1", "-", "9-9", "en-", "123-456", "en-ü"] {
+    ///     assert!(parse_with(refused, Profile::ConcreteSyntaxLangtagBounded).is_err());
+    /// }
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
+    ConcreteSyntaxLangtagBounded,
     /// The `LANGTAG` **terminal** of the RDF concrete syntaxes, rather than the
-    /// RFC 5646 `Language-Tag` production.
+    /// RFC 5646 `Language-Tag` production, with no length bound on any subtag.
     ///
     /// # What it accepts
     ///
@@ -340,21 +427,22 @@ pub enum Profile {
     ///
     /// # Why it exists
     ///
-    /// The concrete syntaxes' terminal is deliberately looser than RFC 5646,
-    /// and the W3C's own approved corpora rely on that looseness: the ShEx
-    /// validation vectors carry `"ab"@en-fr-jura` and `"septante"@fr-be-fbcl`
-    /// in `text/turtle` documents, so a parser that held Turtle to §2.1 would
-    /// fail to read approved tests. Tags published by downstream projects push
-    /// the same way — a private-use family of the form `x-<project>-<language
-    /// name>` routinely exceeds the eight-character private-use cap
-    /// (`x-gmeow-norwegiannynorsk` is sixteen), and those literals are numerous
-    /// enough that refusing them would break a real consumer.
+    /// It is the terminal as the concrete syntaxes literally spell it, with
+    /// nothing of RFC 5646 added back. That makes it the right answer to
+    /// exactly one question — "would a conformant Turtle, TriG, N-Triples or
+    /// N-Quads *lexer* have produced this `LANGTAG` token?" — which is what a
+    /// grammar-level tool (a linter reporting where a document diverges from
+    /// §2.1, a fuzzer's oracle, a test that must not pre-judge the corpus)
+    /// needs to ask.
     ///
-    /// So this profile is what an *ingesting parser* holds a language tag to:
-    /// the contract the document's own grammar states. A caller deciding
-    /// whether a tag is fit to publish, index or match wants
-    /// [`Self::Rfc5646`] instead — this one deliberately does not answer that
-    /// question.
+    /// It is deliberately **not** what this workspace's codecs use: the
+    /// N-Triples negative-syntax corpus requires a bare fourteen-character
+    /// subtag to be refused, and this profile caps nothing, so a codec on this
+    /// profile would accept a document the suite says is invalid. Codecs use
+    /// [`Self::ConcreteSyntaxLangtagBounded`], which is this terminal plus the
+    /// §2.1 length bound outside private use. A caller deciding whether a tag
+    /// is fit to publish, index or match wants [`Self::Rfc5646`] instead —
+    /// neither terminal profile answers that question.
     ///
     /// # Decomposition
     ///
@@ -428,9 +516,11 @@ pub enum TagForm {
     /// One of the 26 closed `grandfathered` tags, matched as a unit.
     Grandfathered,
     /// No RFC 5646 alternative matched, but the concrete syntaxes' `LANGTAG`
-    /// terminal did. Reachable only under [`Profile::ConcreteSyntaxLangtag`],
-    /// and the one form with no decomposable sections to report — the terminal
-    /// names none. `en-fr-jura` is this.
+    /// terminal did. Reachable only under the two terminal profiles
+    /// ([`Profile::ConcreteSyntaxLangtagBounded`],
+    /// [`Profile::ConcreteSyntaxLangtag`]), and the one form with no
+    /// decomposable sections to report — the terminal names none. `en-fr-jura`
+    /// is this.
     ConcreteSyntaxOnly,
 }
 
@@ -489,14 +579,15 @@ pub enum LanguageTagError {
     /// `en-Lat1`, `en-ü`).
     UnconsumedSubtag,
     /// The first subtag of the `LANGTAG` terminal was not one or more ASCII
-    /// letters (`1`, `9-9`, `123-456`). Reachable only under
-    /// [`Profile::ConcreteSyntaxLangtag`]; the RFC 5646 profiles refuse the
+    /// letters (`1`, `9-9`, `123-456`). Reachable only under the two terminal
+    /// profiles ([`Profile::ConcreteSyntaxLangtagBounded`],
+    /// [`Profile::ConcreteSyntaxLangtag`]); the RFC 5646 profiles refuse the
     /// same inputs under [`Self::LanguageProductionUnmatched`], whose message
-    /// would name a production this profile does not apply.
+    /// would name a production those profiles do not apply.
     TerminalPrimaryNotAlpha,
     /// A `LANGTAG` subtag after the first held a character outside
-    /// `[a-zA-Z0-9]` (`en-ü`, `en-a!`). Reachable only under
-    /// [`Profile::ConcreteSyntaxLangtag`], for the same reason as
+    /// `[a-zA-Z0-9]` (`en-ü`, `en-a!`). Reachable only under the two terminal
+    /// profiles, for the same reason as
     /// [`Self::TerminalPrimaryNotAlpha`].
     TerminalSubtagNotAlphanum,
 }
@@ -670,8 +761,8 @@ impl Sections {
 /// property of the parser rather than a convention: a `LanguageTag` can only be
 /// produced by [`parse_with`], and for one input string every profile that
 /// accepts it yields the *same* record (the wider profiles only ever lift a
-/// bound, and [`Profile::ConcreteSyntaxLangtag`] returns the narrower profile's
-/// reading verbatim whenever one exists). So equal strings imply equal records,
+/// bound, and the terminal profiles return the narrower profile's reading
+/// verbatim whenever one exists). So equal strings imply equal records,
 /// which is exactly what makes the [`Borrow<str>`] impl below lawful — a
 /// `HashMap` or `BTreeMap` keyed by a tag can be probed with a plain `&str`.
 ///
@@ -1802,7 +1893,7 @@ pub fn canonical_case(tag: &str) -> Result<String, LanguageTagError> {
 /// Rewrites `tag` in §2.1.1 canonical case, accepting whatever `profile` does.
 ///
 /// [`canonical_case`] is this with [`Profile::Rfc5646`], and describes the rule.
-/// A tag accepted only by [`Profile::ConcreteSyntaxLangtag`] has no RFC 5646
+/// A tag accepted only by a terminal profile has no RFC 5646
 /// reading and therefore no sections; §2.1.1's rule is positional, so it still
 /// applies, and it is applied exactly as written.
 ///
@@ -1933,8 +2024,11 @@ pub fn parse(tag: &str) -> Result<LanguageTag<'_>, LanguageTagError> {
 /// A typed [`LanguageTagError`] naming the production that refused; see that
 /// type for the failure map.
 pub fn parse_with(tag: &str, profile: Profile) -> Result<LanguageTag<'_>, LanguageTagError> {
-    if matches!(profile, Profile::ConcreteSyntaxLangtag) {
-        return parse_concrete_syntax_langtag(tag);
+    if matches!(
+        profile,
+        Profile::ConcreteSyntaxLangtagBounded | Profile::ConcreteSyntaxLangtag
+    ) {
+        return parse_concrete_syntax_langtag(tag, profile);
     }
 
     // `grandfathered` first: it is a closed set of literals, most of which the
@@ -1988,7 +2082,8 @@ pub fn parse_with(tag: &str, profile: Profile) -> Result<LanguageTag<'_>, Langua
     ))
 }
 
-/// [`Profile::ConcreteSyntaxLangtag`]: the `LANGTAG` terminal rather than the
+/// The two terminal profiles ([`Profile::ConcreteSyntaxLangtagBounded`],
+/// [`Profile::ConcreteSyntaxLangtag`]): the `LANGTAG` terminal rather than the
 /// RFC 5646 production.
 ///
 /// The RFC 5646 reading is tried FIRST, and not as an optimisation: the
@@ -2000,11 +2095,25 @@ pub fn parse_with(tag: &str, profile: Profile) -> Result<LanguageTag<'_>, Langua
 /// the decomposition a caller would have got from the narrower profile. Only a
 /// tag with no such reading falls through to the terminal, where there is
 /// nothing to decompose.
-fn parse_concrete_syntax_langtag(tag: &str) -> Result<LanguageTag<'_>, LanguageTagError> {
+///
+/// The bounded profile then re-applies the §2.1 length envelope to that
+/// fall-through, and in that order: the terminal's own refusals are about
+/// *shape*, and naming the shape is more use to a reader than naming a length
+/// for a subtag that was never admissible at any length (`123456789` is refused
+/// for not being ALPHA, not for being nine characters). A tag that took the
+/// RFC 5646 reading above needs no envelope check, having already passed the
+/// same one inside [`parse_with`].
+fn parse_concrete_syntax_langtag(
+    tag: &str,
+    profile: Profile,
+) -> Result<LanguageTag<'_>, LanguageTagError> {
     if let Ok(parsed) = parse_with(tag, Profile::Rfc5646PrivateUseRelaxed) {
         return Ok(parsed);
     }
     check_langtag_terminal(tag)?;
+    if matches!(profile, Profile::ConcreteSyntaxLangtagBounded) {
+        check_subtag_envelope(tag, profile)?;
+    }
     Ok(LanguageTag::whole(tag, TagForm::ConcreteSyntaxOnly, None))
 }
 
@@ -2154,7 +2263,7 @@ fn canonical_case_holds(tag: &str) -> bool {
 /// distinction is one containing a multi-byte character, which no production
 /// admits anyway.
 ///
-/// Under [`Profile::Rfc5646PrivateUseRelaxed`] the ceiling stops applying at
+/// Under every profile but [`Profile::Rfc5646`] the ceiling stops applying at
 /// the first standalone `x`/`X` subtag, because every subtag from there on is
 /// a `privateuse` subtag and nothing else can be: `singleton` carves `x` out,
 /// and no other production admits a one-character subtag. The zero-length
@@ -2166,7 +2275,9 @@ fn canonical_case_holds(tag: &str) -> bool {
 fn check_subtag_envelope(tag: &str, profile: Profile) -> Result<(), LanguageTagError> {
     let relaxed = matches!(
         profile,
-        Profile::Rfc5646PrivateUseRelaxed | Profile::ConcreteSyntaxLangtag
+        Profile::Rfc5646PrivateUseRelaxed
+            | Profile::ConcreteSyntaxLangtagBounded
+            | Profile::ConcreteSyntaxLangtag
     );
     let mut ceiling_applies = true;
     for subtag in tag.split('-') {
@@ -2449,10 +2560,13 @@ fn is_private_use_marker(text: &str) -> bool {
 fn is_private_use_subtag(text: &str, profile: Profile) -> bool {
     let ceiling = match profile {
         Profile::Rfc5646 => SUBTAG_CEILING,
-        // `ConcreteSyntaxLangtag` re-enters through the relaxed profile rather
-        // than reaching here, but it caps no subtag either, so it answers with
-        // the relaxed profile and stays correct if that routing ever changes.
-        Profile::Rfc5646PrivateUseRelaxed | Profile::ConcreteSyntaxLangtag => usize::MAX,
+        // The terminal profiles re-enter through the relaxed profile rather
+        // than reaching here, but neither caps a private-use subtag either, so
+        // they answer with the relaxed profile and stay correct if that routing
+        // ever changes.
+        Profile::Rfc5646PrivateUseRelaxed
+        | Profile::ConcreteSyntaxLangtagBounded
+        | Profile::ConcreteSyntaxLangtag => usize::MAX,
     };
     (1..=ceiling).contains(&text.len()) && all_alphanum(text)
 }

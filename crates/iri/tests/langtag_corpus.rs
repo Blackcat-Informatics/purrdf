@@ -175,9 +175,11 @@ fn abnf_boundaries_with_accepted_neighbors() {
         ),
         (
             // `["-" extlang]` hangs off the `2*3ALPHA` alternative of
-            // `language` only, not off `4ALPHA` or `5*8ALPHA`.
-            "abcd-efg",
-            "abcd-Latn",
+            // `language` only, not off `4ALPHA` or `5*8ALPHA`. Step the primary
+            // subtag one character past `2*3ALPHA` and the following 3ALPHA
+            // subtag stops being an `extlang`; a 4ALPHA `script` still follows.
+            "qrst-vwx",
+            "qrst-Vwxy",
             "a 4ALPHA primary language admits no extlang",
         ),
         ("en-Lat1", "en-Latn", "script is exactly 4 letters"),
@@ -225,48 +227,51 @@ fn abnf_boundaries_with_accepted_neighbors() {
 /// The four cases below are chosen to pin that one comparison from both sides
 /// and at both ends of the range it guards:
 ///
-/// * `abcd-Latn` — a 4ALPHA language really does continue, just into `script`
+/// * `qrst-Vwxy` — a 4ALPHA language really does continue, just into `script`
 ///   rather than `extlang`; without this the "refuse after 4ALPHA" case could be
 ///   satisfied by refusing everything after a 4ALPHA language.
-/// * `AaBbCcDd-x-y-any-x` — the 5*8ALPHA end of the range, at its maximum
-///   length, still carrying a full `privateuse` section whose last subtag is the
-///   one-character `x` that only `privateuse` admits. Mixed case throughout,
-///   because case is insignificant to the judgement.
-/// * `abcd-abc` — the refusal: three letters after a 4ALPHA language satisfy no
+/// * `QqRrSsTt-x-q-qrs8-x` — the 5*8ALPHA end of the range, at its maximum
+///   length, still carrying a full `privateuse` section. That section walks its
+///   own `1*8alphanum` bound from the minimum (`q`) through a subtag that spends
+///   the `alphanum` alternative (`qrs8`) to the one-character `x` that only
+///   `privateuse` admits. Mixed case in the language subtag, because case is
+///   insignificant to the judgement.
+/// * `qrst-vwx` — the refusal: three letters after a 4ALPHA language satisfy no
 ///   production (`script` is 4ALPHA, `region` is 2ALPHA or 3DIGIT, `variant` is
 ///   5*8alphanum or DIGIT 3alphanum), so the subtag is left over.
-/// * `ab-abc` — the neighbour that proves the refusal above is about the
-///   *primary language's length* and not about three-letter subtags in general.
+/// * `qrs-vwx` — the neighbour that proves the refusal above is about the
+///   *primary language's length* and not about three-letter subtags in general:
+///   one character is taken off the primary subtag and nothing else changes.
 #[test]
 fn extlang_attaches_only_to_the_two_to_three_letter_language_alternative() {
     // 4ALPHA language: no `extlang`, but `script` still follows.
-    let reserved = parse("abcd-Latn").expect("`4ALPHA` language plus `script`");
-    assert_eq!(reserved.primary_language(), Some("abcd"));
+    let reserved = parse("qrst-Vwxy").expect("`4ALPHA` language plus `script`");
+    assert_eq!(reserved.primary_language(), Some("qrst"));
     assert_eq!(reserved.extended_language(), None);
-    assert_eq!(reserved.script(), Some("Latn"));
+    assert_eq!(reserved.script(), Some("Vwxy"));
 
     // 5*8ALPHA language at its ceiling: no `extlang`, but `privateuse` follows,
     // and its final subtag is the one-character `x` no other production admits.
-    let registered = parse("AaBbCcDd-x-y-any-x").expect("`5*8ALPHA` language plus `privateuse`");
-    assert_eq!(registered.primary_language(), Some("AaBbCcDd"));
+    let registered = parse("QqRrSsTt-x-q-qrs8-x").expect("`5*8ALPHA` language plus `privateuse`");
+    assert_eq!(registered.primary_language(), Some("QqRrSsTt"));
     assert_eq!(registered.extended_language(), None);
-    assert_eq!(registered.private_use(), Some("x-y-any-x"));
+    assert_eq!(registered.private_use(), Some("x-q-qrs8-x"));
     assert_eq!(
         registered.private_use_subtags().collect::<Vec<_>>(),
-        ["y", "any", "x"]
+        ["q", "qrs8", "x"]
     );
 
     // The refusal: 3ALPHA after a 4ALPHA language is not an `extlang`.
     assert_eq!(
-        parse("abcd-abc"),
+        parse("qrst-vwx"),
         Err(LanguageTagError::UnconsumedSubtag),
         "`[\"-\" extlang]` hangs off `2*3ALPHA` only"
     );
 
-    // The neighbour: the same 3ALPHA subtag after a 2ALPHA language IS one.
-    let extended = parse("ab-abc").expect("`2*3ALPHA` language plus `extlang`");
-    assert_eq!(extended.primary_language(), Some("ab"));
-    assert_eq!(extended.extended_language(), Some("abc"));
+    // The neighbour: the same 3ALPHA subtag after a 3ALPHA language IS one.
+    let extended = parse("qrs-vwx").expect("`2*3ALPHA` language plus `extlang`");
+    assert_eq!(extended.primary_language(), Some("qrs"));
+    assert_eq!(extended.extended_language(), Some("vwx"));
 }
 
 /// Three refusals this corpus asserts elsewhere without the accepted neighbour
@@ -472,6 +477,85 @@ fn the_terminal_profile_keeps_published_tags_readable() {
         assert!(
             is_well_formed_with(neighbour, Profile::ConcreteSyntaxLangtag),
             "{neighbour:?} must stay accepted"
+        );
+    }
+}
+
+/// [`Profile::ConcreteSyntaxLangtagBounded`] is the union of two bounds, and
+/// this is the table that says so: the `LANGTAG` terminal decides the *shape*,
+/// the §2.1 `1*8` ceiling decides the *length* of every subtag that is not a
+/// private-use one.
+///
+/// It is the profile every RDF codec in this workspace holds a language tag to,
+/// so the table is read in both directions. An over-refusal here means the
+/// workspace writes a file it cannot read back; an over-acceptance here means a
+/// W3C negative-syntax test passes something it says is invalid. Each row
+/// therefore names which of the two bounds it sits on.
+#[test]
+fn the_bounded_terminal_profile_is_the_terminal_plus_the_length_ceiling() {
+    // (tag, accepted?, which bound decides it)
+    let table: &[(&str, bool, &str)] = &[
+        // Shape: no §2.1 reading, but a `LANGTAG` terminal, so taken.
+        ("en-fr-jura", true, "terminal, 2-2-4 subtags"),
+        ("fr-be-fbcl", true, "terminal, 2-2-4 subtags"),
+        // Length, outside private use: a bare 14-character primary subtag.
+        ("cantbethislong", false, "§2.1 ceiling, 14 > 8"),
+        // …and its neighbours either side of the bound, so the refusal above is
+        // about the length and not about the tag.
+        ("abcdefghi", false, "§2.1 ceiling, 9 > 8"),
+        ("abcdefgh", true, "§2.1 ceiling, 8 is inside it"),
+        // Length, inside private use: the relaxation the workspace's own
+        // artifacts and a downstream project's literals both depend on.
+        ("x-purrdf-afrikaans", true, "private use, 9 uncapped"),
+        ("x-gmeow-norwegiannynorsk", true, "private use, 16 uncapped"),
+        ("x-gmeow-westernfrisian", true, "private use, 14 uncapped"),
+        ("en-x-cantbethislong", true, "private use, 14 uncapped"),
+        // Ordinary tags, which every profile takes.
+        ("en-US", true, "§2.1 langtag"),
+        ("zh-Hans-CN", true, "§2.1 langtag"),
+        ("i-enochian", true, "§2.2.8 grandfathered"),
+        ("de-CH-x-phonebk", true, "§2.1 langtag plus privateuse"),
+        // Shape: not a `LANGTAG` terminal at all, at any length.
+        ("1", false, "terminal, primary subtag not ALPHA"),
+        ("-", false, "terminal, empty subtag"),
+        ("9-9", false, "terminal, primary subtag not ALPHA"),
+        ("en-", false, "terminal, empty trailing subtag"),
+        ("123-456", false, "terminal, primary subtag not ALPHA"),
+        ("", false, "terminal, empty subtag"),
+        ("en-ü", false, "terminal, subtag not alphanumeric"),
+    ];
+    for (tag, accepted, bound) in table {
+        assert_eq!(
+            is_well_formed_with(tag, Profile::ConcreteSyntaxLangtagBounded),
+            *accepted,
+            "{tag:?} under the bounded terminal ({bound})"
+        );
+    }
+
+    // The length bound is the ONLY thing separating this profile from the
+    // unbounded terminal, and the ordering is the ⊂ relation.
+    assert!(is_well_formed_with(
+        "cantbethislong",
+        Profile::ConcreteSyntaxLangtag
+    ));
+    assert!(Profile::Rfc5646PrivateUseRelaxed < Profile::ConcreteSyntaxLangtagBounded);
+    assert!(Profile::ConcreteSyntaxLangtagBounded < Profile::ConcreteSyntaxLangtag);
+
+    // ⊂ is asserted over the corpus, not merely declared: everything the
+    // relaxed profile takes, the bounded terminal takes, with the same
+    // decomposition.
+    for tag in APPENDIX_A_WELL_FORMED
+        .iter()
+        .chain(GRANDFATHERED)
+        .chain(["x-purrdf-afrikaans", "x-gmeow-norwegiannynorsk"].iter())
+    {
+        let Ok(relaxed) = parse_with(tag, Profile::Rfc5646PrivateUseRelaxed) else {
+            continue;
+        };
+        assert_eq!(
+            parse_with(tag, Profile::ConcreteSyntaxLangtagBounded),
+            Ok(relaxed),
+            "{tag:?} must keep its decomposition under the wider profile"
         );
     }
 }

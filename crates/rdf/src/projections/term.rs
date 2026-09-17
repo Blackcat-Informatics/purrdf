@@ -389,8 +389,8 @@ impl ProjectionTerm {
     }
 }
 
-/// The language-tag half of a projected literal's identity: the RFC 5646
-/// `Language-Tag` production, decided by [`purrdf_iri::langtag`].
+/// The language-tag half of a projected literal's identity, decided by
+/// [`purrdf_iri::langtag`].
 ///
 /// The predicate this replaced was a third private dialect — a 1-character
 /// primary subtag and any number of ≤8-character alphanumeric subtags after it,
@@ -399,17 +399,19 @@ impl ProjectionTerm {
 /// persisted and re-read by other tools, so admitting a non-tag there is a
 /// durable lie about the literal's identity, not a transient parse laxity.
 ///
-/// The profile is [`langtag::Profile::Rfc5646PrivateUseRelaxed`], matching the
-/// two native codecs, because a projection is built from whatever dataset was
-/// ingested: the `@x-purrdf-…` tags this workspace's own fixtures carry must
-/// survive being projected, and refusing them here would make a dataset that
-/// parses un-projectable.
+/// The profile is [`langtag::Profile::ConcreteSyntaxLangtagBounded`], the one
+/// acceptance language every native codec names, because a projection is built
+/// from whatever dataset was ingested: the `@x-purrdf-…` tags this workspace's
+/// own fixtures carry and the `@en-fr-jura` of the approved shexTest vectors
+/// must both survive being projected. A narrower profile here would make a
+/// dataset that parses un-projectable, which is the same over-refusal as a
+/// codec that cannot read back what a codec wrote.
 ///
 /// The [`ProjectionError::term`] shape is unchanged, and the module's
 /// [`langtag::LanguageTagError`] `Display` is appended so the message names the
 /// production that refused rather than only the tag.
 fn validate_language_tag(tag: &str) -> Result<(), ProjectionError> {
-    langtag::parse_with(tag, langtag::Profile::Rfc5646PrivateUseRelaxed)
+    langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded)
         .map(|_| ())
         .map_err(|error| ProjectionError::term(format!("invalid language tag {tag:?}: {error}")))
 }
@@ -451,17 +453,21 @@ mod tests {
 
     /// A REFUSAL IS A CLAIM TOO.
     ///
-    /// The predicate this validator used to apply was a private dialect that
-    /// admitted a 1-character primary subtag and unbounded runs of short
-    /// alphanumeric subtags, so `e`, `a-DE` and `en-US-abc` were persisted into
-    /// projection artifacts as if they were language tags. Both halves are
-    /// asserted: the refused column is what it wrongly took, the accepted
-    /// column is the neighbouring *well-formed* tag at the same site, which
-    /// must still validate. Note the tags here are lowercase because
+    /// The predicate this validator used to apply was a private dialect with no
+    /// grammar behind it, so `not a tag` — a string with a SPACE in it — was
+    /// persisted into projection artifacts as if it were a language tag, while
+    /// the `x-purrdf-…` tags the workspace really writes were not.
+    ///
+    /// It now names the codecs' profile, and that is the point: a projection is
+    /// built from whatever dataset was ingested, so anything a codec accepts
+    /// must project. Both halves are asserted, and the accept half is the
+    /// load-bearing one — refusing here makes a dataset that parses
+    /// un-projectable, which is the same over-refusal as a codec that cannot
+    /// read back what a codec wrote. Note the tags here are lowercase because
     /// `validate_inner` separately requires canonical lowercase — that check is
     /// unrelated to well-formedness and is deliberately left alone.
     #[test]
-    fn language_tags_refused_by_rfc5646_have_an_accepted_neighbour() {
+    fn language_tags_refused_by_the_codec_profile_have_an_accepted_neighbour() {
         fn literal(language: &str) -> ProjectionTerm {
             ProjectionTerm::Literal {
                 lexical: "v".to_owned(),
@@ -471,17 +477,18 @@ mod tests {
             }
         }
 
-        // (wrongly accepted before, the neighbour that must still validate)
+        // (refused, the neighbour one edit away that must still validate)
         let pairs: &[(&str, &str)] = &[
-            ("e", "en"),
-            ("a-de", "ab-de"),
-            ("en-us-abc", "en-us-abcde"),
-            ("en-lat1", "en-latn"),
-            ("de-419-de", "de-de"),
+            // Not a `LANGTAG` terminal at all.
             ("not a tag", "und"),
-            // The private-use widening lifts the LENGTH bound and nothing else.
-            ("en-x", "en-x-a"),
+            ("1", "en"),
+            ("9-9", "en-9"),
+            ("en-", "en"),
             ("x-purrdf-afri!", "x-purrdf-afri"),
+            // Over the §2.1 length ceiling, which applies outside private use.
+            ("cantbethislong", "cantbeth"),
+            ("abcdefghi", "abcdefgh"),
+            ("en-abcdefghi-x-a", "en-abcdefgh-x-a"),
         ];
         for (refused, accepted) in pairs {
             let error = literal(refused)
@@ -497,17 +504,30 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{accepted:?} must validate: {}", e.message()));
         }
 
-        // A projection is built from whatever dataset was ingested, so the
-        // private-use tags this workspace's corpora carry must survive it.
+        // A projection is built from whatever dataset was ingested, so
+        // everything the codecs accept must survive it.
         for accepted in [
+            // Well-formed RFC 5646.
             "en",
             "en-us",
             "zh-hans-cn",
             "i-enochian",
+            "de-ch-x-phonebk",
+            // Private use past the §2.1 cap.
             "x-purrdf-english",
             "x-purrdf-afrikaans",
             "x-purrdf-norwegiannynorsk",
-            "de-ch-x-phonebk",
+            "x-gmeow-norwegiannynorsk",
+            // Terminal-only tags, which approved W3C vectors carry and which a
+            // projection of such a dataset must therefore hold.
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "e",
+            "a-de",
+            "en-us-abc",
+            "en-lat1",
+            "de-419-de",
+            "en-x",
         ] {
             literal(accepted)
                 .validate(limits())

@@ -43,7 +43,7 @@ it.
 | `authority.rs` | [RFC 3986 §3.2.2](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.2) IPv6address / IPvFuture and [§3.2.3](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.2.3) generic port syntax; RFC 3987 §2.2 imports both productions | Exact grammar boundaries and lexical preservation through public IRI/base APIs. |
 | `iri_suite.rs` | CURIE / prefixed-name expansion + `rdf-tests`-style IRIREF handling | First-party edge cases layered on the RFC grammar. |
 | `proptest.rs` | Property-based round-trip / idempotence invariants over the RFC 3986/3987 grammar | Generative, not a fixed corpus. |
-| `langtag_corpus.rs` | **RFC 5646 Appendix A** worked examples (well-formed, and the invalid set split along the §2.2.9 well-formed/valid line), the closed **§2.2.8** grandfathered list, and boundary vectors derived from the **§2.1** ABNF | `Language-Tag` well-formedness corpus; every refusal is paired with an accepted neighbor. Every vector here is either a string the RFC itself prints (Appendix A, the §2.2.8 list) or one derived by naming a §2.1 production and stepping one character or one repetition across its bound; no vector was taken from, checked against, or suggested by any implementation's test corpus. |
+| `langtag_corpus.rs` | **RFC 5646 Appendix A** worked examples (well-formed, and the invalid set split along the §2.2.9 well-formed/valid line), the closed **§2.2.8** grandfathered list, and boundary vectors derived from the **§2.1** ABNF | `Language-Tag` well-formedness corpus; every refusal is paired with an accepted neighbor. Every vector here is either a string the RFC itself prints (Appendix A, the §2.2.8 list) or one derived by naming a §2.1 production and stepping one character or one repetition across its bound; no vector is taken from, checked against, or suggested by any implementation's test corpus. See the clean-room note below for the three that once were. |
 | `langtag_differential.rs` + `langtag_differential_vectors.txt` | **Inputs**: generated independently by a systematic sweep over the **RFC 5646 §2.1** ABNF (each of the seven `langtag` sections swept across its admissible shapes, its length/character boundaries and impostors just outside them — as a reduced full cartesian product, as one axis at full breadth in three contexts, and as every adjacent axis pair), plus the closed **§2.2.8** grandfathered list and the **Appendix A** worked examples with case variants, plus structural inputs (empty, hyphen placement, over-length subtags, non-ASCII, C0 controls). **Verdicts**: labelled once by `oxilangtag` 0.1.6 (`LanguageTag::parse(..).is_ok()`) run as a one-time external oracle over those inputs. | Frozen differential acceptance table (3935 vectors) that makes the "same accepted language as the replaced dependency" claim **falsifiable**. See the fidelity note below on what was and was not taken from upstream. |
 
 ## Fidelity statement
@@ -79,6 +79,26 @@ stated exactly:
 
 A disagreement between that table and `purrdf_iri::langtag` is a **parser**
 defect, and is fixed in the parser.
+
+## The clean-room note on `langtag_corpus.rs`
+
+The row above claims that no vector in `langtag_corpus.rs` came from an
+implementation's test corpus. That claim was **false when first written**: an
+audit found three strings there — a `4ALPHA`-language-plus-`script` vector, its
+`4ALPHA`-language-plus-3ALPHA refusal, and a maximum-length `5*8ALPHA` language
+carrying a `privateuse` section — byte-identical to vectors in the test suite of
+the crate that was replaced, one of them carried across with its rationale
+comment. None appears anywhere in RFC 5646, so none could have been derived the
+way the row describes.
+
+All three were replaced with vectors constructed by the stated method: name the
+§2.1 production, name the bound, and step one character across it. The rules
+they pin are unchanged — the `4ALPHA` reserved-language branch, the `5*8ALPHA`
+registered-language branch, that `["-" extlang]` hangs off `2*3ALPHA` only, and
+the accepted/refused neighbour pairing — because the rules were never the
+problem; the strings were. The row is written in the present tense for that
+reason: it describes what the file contains, and this note records that it has
+not always been true of it.
 
 Generic port syntax is `*DIGIT`: it imposes no integer-width or transport range
 limit. The previous negative vector `http://h:99999/` was an incorrect

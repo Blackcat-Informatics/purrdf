@@ -1036,20 +1036,21 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
 /// survived ingestion depended on which syntax it arrived in. Both codecs now
 /// ask the same module the same question.
 ///
-/// The profile is [`langtag::Profile::Rfc5646PrivateUseRelaxed`], matching
-/// `validate_language_tag` in
-/// [`text_parse`](crate::native_codecs::text_parse), because the RDF/XML
-/// serializer writes whatever `@lang` a dataset carries into `xml:lang` — a
-/// dataset read from `@x-purrdf-afrikaans` N-Triples must round-trip through
-/// RDF/XML. A narrower profile here would re-open the cross-codec divergence
-/// this replacement exists to close, pointing the other way.
+/// The profile is [`langtag::Profile::ConcreteSyntaxLangtagBounded`], the one
+/// acceptance language every codec in this crate names — the text parsers in
+/// `text_parse` and the term projection in `projections::term` name the same
+/// one. It has to be shared, because the RDF/XML serializer writes whatever
+/// `@lang` a dataset carries into `xml:lang` verbatim: a dataset read from
+/// `@x-purrdf-afrikaans` N-Triples, or from `@fr-be-fbcl` Turtle, must
+/// round-trip through RDF/XML. Any other profile here re-opens the cross-codec
+/// divergence this replacement exists to close, pointing one way or the other.
 ///
 /// The failure reports the module's
 /// [`langtag::LanguageTagError::diagnostic_code`], so the user learns which
 /// production refused. RDF/XML parse diagnostics carry no line/column (the XML
 /// reader does not surface one), which this does not change.
 fn validate_language_tag(language: &str) -> Result<(), RdfDiagnostic> {
-    match langtag::parse_with(language, langtag::Profile::Rfc5646PrivateUseRelaxed) {
+    match langtag::parse_with(language, langtag::Profile::ConcreteSyntaxLangtagBounded) {
         Ok(_) => Ok(()),
         Err(error) => Err(RdfDiagnostic::error(
             error.diagnostic_code(),
@@ -1833,27 +1834,30 @@ mod tests {
     ///
     /// Both halves are asserted, because tightening is exactly where
     /// over-refusal hides: the refused column is what the old predicate wrongly
-    /// took, and the accepted column is the neighbouring *well-formed* tag at
-    /// the same site, which must still parse. A change that only proved the
-    /// refusal would be the mirror bug.
+    /// took, and the accepted column is the neighbouring tag at the same site,
+    /// which must still parse. A change that only proved the refusal would be
+    /// the mirror bug — and this codec is on the round-trip path for every
+    /// dataset the text codecs read, so an over-refusal here makes a document
+    /// that parses un-serializable.
     #[test]
     fn xml_lang_refuses_non_tags_and_still_takes_their_valid_neighbours() {
-        // (wrongly accepted before, the neighbour that must still be taken)
+        // (refused, the neighbour one edit away that must still be taken)
         let pairs: &[(&str, &str)] = &[
-            // No grammar at all: a bare digit run is not a `language`.
+            // No grammar at all: a bare digit run is not a `LANGTAG` primary
+            // subtag, which must be one or more ASCII letters.
             ("1", "en"),
             ("9-9", "en-US"),
             ("123-456", "zh-Hans-CN"),
-            // No length bound at all.
+            ("-", "en"),
+            ("en-", "en"),
+            // No length bound at all: the §2.1 ceiling applies outside private
+            // use, and `abcdefgh` one character inside it proves that is what
+            // refused the neighbour above.
             ("abcdefghijklmnop", "abcdefgh"),
             ("en-abcdefghijklmnop", "en-abcdefgh"),
-            // Shapes the other two codecs already refused, so the divergence
-            // closes in both directions.
-            ("e", "en"),
-            ("en-US-abc", "en-US-abcde"),
-            // The private-use widening is bounded: the marker still needs a
-            // subtag, and the relaxation only lifts the LENGTH bound.
-            ("en-x", "en-x-a"),
+            // …and it stops AT the private-use marker, not before it.
+            ("en-abcdefghi-x-a", "en-abcdefgh-x-a"),
+            // Every subtag after the first is `alphanum`, at any length.
             ("x-purrdf-afri!", "x-purrdf-afrikaans"),
         ];
         for (refused, accepted) in pairs {
@@ -1875,17 +1879,31 @@ mod tests {
             );
         }
 
-        // The tags this workspace's own artifacts carry must round-trip through
-        // RDF/XML, which is why this site uses the private-use-relaxed profile.
+        // Everything the text codecs accept must round-trip through RDF/XML,
+        // which is why this site names the same profile they do. A tag missing
+        // from this list is a dataset that parses and cannot be serialized.
         for accepted in [
+            // Well-formed RFC 5646.
             "en",
             "en-US",
             "zh-Hans-CN",
             "de-CH-x-phonebk",
+            "i-enochian",
+            // Private use past the §2.1 cap: this workspace's own artifacts and
+            // a downstream project's published family.
             "x-purrdf-english",
             "x-purrdf-afrikaans",
             "x-purrdf-norwegiannynorsk",
-            "i-enochian",
+            "x-gmeow-norwegiannynorsk",
+            // Terminal-only tags. The first two are carried by approved W3C
+            // ShEx validation vectors and reach this codec whenever such a
+            // dataset is serialized to RDF/XML.
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "e",
+            "en-US-abc",
+            "de-419-DE",
+            "en-x",
         ] {
             assert!(
                 parse_rdfxml_to_dataset(&lang_document(accepted), &mut scope(None)).is_ok(),
