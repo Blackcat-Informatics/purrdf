@@ -49,6 +49,12 @@
 //!    that *looks* clustered in its source and is indistinguishable from uniform in its
 //!    output.
 //!
+//! The unit tests measure `d_eff` from the generated vectors, but by the **diagonal** of
+//! the covariance rather than its spectrum -- see `effective_dimension` in the test module.
+//! For an axis-aligned generator like this one the two agree closely; the distinction is
+//! recorded because the tests would otherwise read as verifying the spectral claim for any
+//! corpus, which they do not.
+//!
 //! # Determinism
 //!
 //! Everything derives from `splitmix64` over a caller-supplied seed: no RNG crate, no
@@ -320,10 +326,19 @@ pub fn extreme_but_finite(rows: usize, dims: usize, seed: u64) -> Result<VectorM
 mod tests {
     use super::*;
 
-    /// The inverse participation ratio of a corpus's per-coordinate variance.
+    /// The inverse participation ratio of a corpus's per-coordinate variances.
     ///
-    /// This is the quantity the module docs claim to control, computed from the generated
-    /// vectors rather than from the parameters that produced them.
+    /// Computed from the generated vectors rather than from the parameters that produced
+    /// them, so it measures the corpus rather than restating the generator.
+    ///
+    /// **This is the DIAGONAL proxy, not the spectral quantity.** The module docs define
+    /// `d_eff` over the covariance *spectrum*; this folds the diagonal of the covariance,
+    /// and the two coincide only when the covariance is near-diagonal. For this generator
+    /// that holds well enough to be fair -- the structure is axis-aligned by construction,
+    /// since the spectrum is imposed by scaling ambient coordinate `j` -- but row
+    /// normalization does couple coordinates, so the agreement is an approximation and not
+    /// an identity. A reader should not take a bound on this number as a verified bound on
+    /// the spectral `d_eff` in general.
     fn effective_dimension(matrix: &VectorMatrix) -> f64 {
         let (rows, dims) = (matrix.rows(), matrix.dims());
         let mut variance = vec![0.0_f64; dims];
@@ -403,6 +418,18 @@ mod tests {
 
         let uniform_eff = effective_dimension(&uniform);
         let shaped_eff = effective_dimension(&shaped);
+
+        // The absolute half of the claim, which a ratio alone does not make: i.i.d.
+        // coordinates have equal variances, so their inverse participation ratio is the
+        // width itself, up to sampling noise in the variance estimates: measured 255.66
+        // against a nominal 256 here. The bound is deliberately loose against that, so it
+        // cannot flake on sampling noise while still catching a real collapse. Without it a
+        // regression that dropped uniform_eff from ~256 to 40 would still satisfy the ratio
+        // below, and this test's name would be asserting something nothing checked.
+        assert!(
+            uniform_eff > dims as f64 * 0.5,
+            "a uniform corpus must score near its nominal width {dims}; got {uniform_eff}"
+        );
         assert!(
             uniform_eff > shaped_eff * 4.0,
             "uniform d_eff {uniform_eff} should dwarf the shaped corpus's {shaped_eff}"
