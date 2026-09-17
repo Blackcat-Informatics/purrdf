@@ -158,6 +158,46 @@ fn mean_centroid_cosine(structured: &Structured) -> f64 {
     total / matrix.rows() as f64
 }
 
+/// The achieved cosine at one width, averaged over [`SEEDS`].
+///
+/// The projection and the centroids are drawn ONCE per corpus, so a single corpus's achieved
+/// cosine carries a bias shared by all of its rows. Averaging over seeds averages that draw;
+/// averaging over rows does not touch it. This is the quantity a width-invariance claim has to
+/// be made about, and making it about a single draw instead is how a bound came to sit below
+/// its own noise floor.
+fn mean_cosine_over_seeds(dims: usize) -> f64 {
+    let total: f64 = SEEDS
+        .into_iter()
+        .map(|seed| {
+            let structured =
+                embedding_like_structured(tightness_shape(dims, 0.75), seed).expect("generates");
+            mean_centroid_cosine(&structured)
+        })
+        .sum();
+    total / SEEDS.len() as f64
+}
+
+/// The LATENT control's achieved cosine at one width, averaged over [`SEEDS`].
+///
+/// Averaged for the same reason the real generator's is: a width-invariance claim about a
+/// single draw is a claim about that draw. The control would have passed on one seed here, but
+/// passing by luck is exactly what this file stopped accepting.
+fn mean_latent_cosine_over_seeds(dims: usize) -> f64 {
+    let total: f64 = SEEDS
+        .into_iter()
+        .map(|seed| {
+            let structured = corpus::latent_fixed_amplitude(
+                tightness_shape(dims, 0.75),
+                FIXED_AMPLITUDE_SIGMA,
+                seed,
+            )
+            .expect("generates");
+            mean_centroid_cosine(&structured)
+        })
+        .sum();
+    total / SEEDS.len() as f64
+}
+
 /// A measured cosine as an exact integer at six decimals.
 ///
 /// Pinned rather than bounded, on this repository's rule that a difference is a real defect
@@ -240,19 +280,37 @@ fn the_intended_cluster_cosine_is_the_cosine_the_corpus_achieves() {
     );
 }
 
-/// The widths the two WIDTH-INVARIANT families are held across.
+/// The widths the WIDTH-INVARIANT families are held across.
 ///
-/// A factor of sixteen, which is wide enough that a width-dependent parameterisation has
-/// nowhere to hide: see `ambient_fixed_amplitude_noise_really_is_width_dependent`, which
-/// measures what this range does to the alternative.
+/// A factor of SIXTY-FOUR, from a width twice the latent dimension up to the width this index
+/// targets. An earlier version of this list started at 256 and carried a paragraph explaining
+/// that narrower widths "distort the structure" -- a story that measurement refutes: averaged
+/// over [`SEEDS`], `d = 64` and `d = 1024` are indistinguishable. What actually excluded the
+/// narrow widths was a single-seed measurement compared against a bound below its own scatter.
+/// With the projection draw averaged out (see [`mean_cosine_over_seeds`]) the whole range is
+/// invariant and the whole range is tested.
+const WIDTHS: [usize; 6] = [64, 128, 256, 512, 1024, 4096];
+
+/// The seeds every width-invariance figure is averaged over.
 ///
-/// It starts at 256 rather than lower because the real generator's achieved cosine does move a
-/// little at narrow widths -- 0.729 at 128 against 0.752 at 256, a span of 22,669 that exceeds
-/// [`WIDTH_SPAN_BOUND`]. That is a real property and not a failure to hide: the latent space is
-/// 32 dimensions, and an ambient width only a factor of four above it cannot carry the
-/// structure without distortion. The claim this file makes is invariance across the widths an
-/// embedding index actually runs at, and that is the claim these widths test.
-const WIDTHS: [usize; 3] = [256, 1024, 4096];
+/// NOT a sampling nicety -- it is what makes the invariance bound mean anything. The achieved
+/// cosine of one corpus is a draw: the projection and the centroids are sampled ONCE per corpus
+/// and bias every row in it identically, so the statistic has a per-corpus spread that more rows
+/// cannot reduce (measured flat at 512, 2,048 and 8,192 rows). At one seed that spread is about
+/// 26,700 at six decimals -- larger than the 20,000 bound this file used to hold widths to, so
+/// the invariance assertion was comparing a number against a tolerance below its own noise
+/// floor and could not have told invariance from luck. Averaging the draw is the fix; averaging
+/// the rows is not.
+const SEEDS: [u64; 8] = [
+    0xC051_5EED,
+    0x0000_0001,
+    0x5EED_0002,
+    0xBEEF_0003,
+    0xFACE_0004,
+    0x1234_0005,
+    0xABCD_0006,
+    0x9E37_0007,
+];
 
 /// The widths the AMBIENT control is measured across.
 ///
@@ -273,13 +331,21 @@ const AMBIENT_WIDTHS: [usize; 4] = [64, 256, 1024, 4096];
 /// fixtures.
 const FIXED_AMPLITUDE_SIGMA: f64 = 0.110_24;
 
-/// The largest span, at six decimals, the achieved cosine may show across [`WIDTHS`].
+/// The largest span, at six decimals, a width-invariant family may show.
 ///
-/// Used in BOTH directions by THREE tests, which is what makes it a bracket rather than a
-/// ceiling: the real generator must come in under it, the latent fixed-amplitude control must
-/// also come in under it, and the ambient fixed-amplitude control must EXCEED it. Each of the
-/// three fails if the bound moves far enough in its direction.
-const WIDTH_SPAN_BOUND: i64 = 20_000;
+/// Set ABOVE the statistic's measured residual scatter rather than below it, which is the whole
+/// difference between a bound that tests something and one that fits three numbers. The
+/// seed-averaged figures span far less than this across a sixty-fourfold range of widths; a
+/// single-seed figure would not, and the previous value of 20,000 sat under a one-corpus spread
+/// of about 26,700.
+///
+/// Used in BOTH directions by FOUR tests, which is what makes it a bracket rather than a
+/// ceiling. Under it: the real generator across [`WIDTHS`], and the latent fixed-amplitude
+/// control. Over it: the ambient fixed-amplitude control, and both sweeps of
+/// `the_latent_variants_tightness_moves_with_everything_except_the_thing_you_want`, which vary
+/// `intrinsic` and `sigma` at a FIXED width and must move the cosine further than any width
+/// ever does. Each of the four fails if the bound moves far enough in its direction.
+const WIDTH_SPAN_BOUND: i64 = 40_000;
 
 /// The variance of one [`Stream::unit`] draw: uniform on `[-1, 1)`, so `1/3`.
 ///
@@ -382,8 +448,10 @@ fn ambient_fixed_amplitude_noise_really_is_width_dependent() {
         })
         .collect();
 
-    // Measured: 0.700 at 256, 0.443 at 1,024, 0.239 at 4,096 -- the achieved tightness falls
-    // by two thirds across the range, which is the whole defect.
+    // Measured: 0.892 at 64, 0.700 at 256, 0.443 at 1,024, 0.239 at 4,096 -- the achieved
+    // tightness falls by 73% across the range, which is the whole defect. One seed suffices
+    // here, unlike the invariance tests: this family's width effect is two orders of magnitude
+    // above the per-corpus scatter, so no averaging is needed to see it.
     assert_eq!(
         achieved,
         vec![892_018, 700_236, 442_590, 239_452],
@@ -462,24 +530,16 @@ fn latent_fixed_amplitude_noise_is_width_invariant_and_still_not_what_we_want() 
     // matters. That is the actual case for `rho`, and it is measured here rather than argued.
     let achieved: Vec<i64> = WIDTHS
         .into_iter()
-        .map(|dims| {
-            let structured = corpus::latent_fixed_amplitude(
-                tightness_shape(dims, 0.75),
-                FIXED_AMPLITUDE_SIGMA,
-                0x1A7E_015E,
-            )
-            .expect("generates");
-            pinned(mean_centroid_cosine(&structured))
-        })
+        .map(|dims| pinned(mean_latent_cosine_over_seeds(dims)))
         .collect();
 
-    // Measured 0.938 / 0.938 / 0.942 -- against the ambient control's 0.700 / 0.443 / 0.239 at
-    // the IDENTICAL amplitude. One number, two spaces, opposite behaviour: the ambient span is
-    // 460,784 and this one is 3,870, a factor of 119. That contrast is the finding, and it is
-    // why the amplitude is a shared constant rather than a literal written into each test.
+    // Against the ambient control's 0.892 / 0.700 / 0.443 / 0.239 at the IDENTICAL amplitude.
+    // One number, two spaces, opposite behaviour: the ambient span is 652,566 and this one is
+    // 3,399, a factor of 192. That contrast is the finding, and it is why the amplitude is a
+    // shared constant rather than a literal written into each test.
     assert_eq!(
         achieved,
-        vec![938_395, 937_913, 941_783],
+        vec![939_804, 938_800, 940_512, 942_199, 941_572, 940_840],
         "the latent variant's tightness moved"
     );
 
@@ -509,6 +569,11 @@ fn the_latent_variants_tightness_moves_with_everything_except_the_thing_you_want
     //
     // Two sweeps, each holding everything else fixed. Under the shipped parameterisation both
     // of these would be flat at the intended cosine by construction -- that is what `rho` buys.
+    //
+    // One seed per rung, unlike the width-invariance tests: those assert a span is SMALL and so
+    // must out-resolve the per-corpus scatter of about 26,700, while these assert a span is
+    // LARGE, and 185,144 and 483,406 clear that scatter by 7x and 18x. A claim of no-difference
+    // needs the noise floor beaten; a claim of difference this size does not.
     let by_intrinsic: Vec<i64> = [8, 32, 128]
         .into_iter()
         .map(|intrinsic| {
@@ -577,19 +642,16 @@ fn cluster_tightness_is_the_same_at_every_width() {
     // above. Neither is asserted here.
     //
     // The failure is invisible to a test taken at ONE width, which is what every geometry
-    // test in this file was. Three widths spanning a factor of sixteen, one intended cosine.
+    // test in this file was. Six widths spanning a factor of sixty-four, one intended cosine,
+    // each figure averaged over the per-corpus projection draw rather than taken from one of them.
     let achieved: Vec<i64> = WIDTHS
         .into_iter()
-        .map(|dims| {
-            let structured = embedding_like_structured(tightness_shape(dims, 0.75), 0xC051_5EED)
-                .expect("generates");
-            pinned(mean_centroid_cosine(&structured))
-        })
+        .map(|dims| pinned(mean_cosine_over_seeds(dims)))
         .collect();
 
     assert_eq!(
         achieved,
-        vec![751_847, 742_942, 743_679],
+        vec![739_687, 737_256, 743_098, 748_541, 746_404, 743_885],
         "the achieved within-cluster cosine moved at one or more widths"
     );
 
@@ -606,7 +668,7 @@ fn cluster_tightness_is_the_same_at_every_width() {
     assert!(
         high - low < WIDTH_SPAN_BOUND,
         "the achieved cosine must not track the width: it spans {low}..{high} at six \
-         decimals across a 16x range of widths, which is the width-dependence this \
+         decimals across a 64x range of widths, which is the width-dependence this \
          parameterisation exists to avoid"
     );
 }
