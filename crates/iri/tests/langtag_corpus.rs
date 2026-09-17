@@ -670,3 +670,50 @@ fn grouped_sections_are_reported_rather_than_left_to_the_caller() {
     assert_eq!(plain.extensions_by_singleton().count(), 0);
     assert_eq!(plain.private_use_subtags().count(), 0);
 }
+
+/// Normalization must not invent structure the grammar did not find.
+///
+/// §2.1.1 assigns case per production: lower for the language, upper for a
+/// region, title for a script. A `ConcreteSyntaxOnly` tag matched the concrete
+/// syntaxes' `LANGTAG` terminal and no RFC 5646 alternative, so it has no
+/// region and no script — casing it by subtag *position* would rewrite
+/// `en-fr-jura` to `en-FR-Jura`, asserting a decomposition the parser
+/// explicitly failed to find. These tags appear in approved W3C corpora, so
+/// that rewrite would corrupt real data.
+///
+/// Both directions are asserted: the terminal-only tags come back untouched,
+/// and tags the same profile *can* decompose still normalize.
+#[test]
+fn canonical_case_leaves_terminal_only_tags_alone() {
+    for tag in ["en-fr-jura", "fr-be-fbcl", "EN-FR-JURA", "cantbethislong"] {
+        let parsed = parse_with(tag, Profile::ConcreteSyntaxLangtag).expect("terminal accepts it");
+        assert_eq!(
+            parsed.form(),
+            TagForm::ConcreteSyntaxOnly,
+            "{tag:?} should have no RFC 5646 reading"
+        );
+        assert_eq!(
+            canonical_case_with(tag, Profile::ConcreteSyntaxLangtag).as_deref(),
+            Ok(tag),
+            "{tag:?} has no productions to case by and must come back unchanged"
+        );
+        assert!(
+            parsed.is_canonical_case(),
+            "{tag:?} is its own fixed point, so it is already canonical"
+        );
+    }
+
+    // The neighbour that must still normalize: same profile, but this one has a
+    // §2.1 reading, so the region and script rules do apply.
+    for (input, expected) in [
+        ("EN-us", "en-US"),
+        ("ZH-hant-cn", "zh-Hant-CN"),
+        ("X-GMEOW-CHINESE-LATN", "x-gmeow-chinese-latn"),
+    ] {
+        assert_eq!(
+            canonical_case_with(input, Profile::ConcreteSyntaxLangtag).as_deref(),
+            Ok(expected),
+            "{input:?} decomposes, so §2.1.1 still applies"
+        );
+    }
+}

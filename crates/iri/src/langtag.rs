@@ -1077,8 +1077,36 @@ impl<'a> LanguageTag<'a> {
     /// assert_eq!(parse("X-GMEOW-CHINESE-LATN")?.canonical_case(), "x-gmeow-chinese-latn");
     /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
     /// ```
+    ///
+    /// A [`TagForm::ConcreteSyntaxOnly`] tag is returned unchanged. §2.1.1
+    /// assigns case *per production* — lower for the language, upper for a
+    /// region, title for a script — and the terminal names no productions, so
+    /// there is nothing to assign case by. Casing it positionally would read
+    /// structure into the tag that the grammar never found:
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{Profile, canonical_case_with, parse_with};
+    ///
+    /// // `en-fr-jura` has no §2.1 reading: `jura` is four letters, and a variant
+    /// // may be four characters only when the first is a digit. So it has no
+    /// // region and no script, and is handed back byte-for-byte rather than
+    /// // rewritten to `en-FR-Jura`.
+    /// let tag = parse_with("en-fr-jura", Profile::ConcreteSyntaxLangtag)?;
+    /// assert_eq!(tag.canonical_case(), "en-fr-jura");
+    /// assert!(tag.is_canonical_case());
+    ///
+    /// // A tag the same profile *can* decompose still normalizes.
+    /// assert_eq!(
+    ///     canonical_case_with("ZH-hant-cn", Profile::ConcreteSyntaxLangtag)?,
+    ///     "zh-Hant-CN"
+    /// );
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn canonical_case(&self) -> String {
+        if matches!(self.form, TagForm::ConcreteSyntaxOnly) {
+            return self.tag.to_owned();
+        }
         let mut canonical = String::with_capacity(self.tag.len());
         write_canonical_case(self.tag, &mut canonical);
         canonical
@@ -1108,7 +1136,7 @@ impl<'a> LanguageTag<'a> {
     /// ```
     #[must_use]
     pub fn is_canonical_case(&self) -> bool {
-        canonical_case_holds(self.tag)
+        matches!(self.form, TagForm::ConcreteSyntaxOnly) || canonical_case_holds(self.tag)
     }
 
     /// This tag as an owning [`LanguageTagBuf`], copying the input once.
@@ -1539,6 +1567,9 @@ impl LanguageTagBuf {
     /// ```
     #[must_use]
     pub fn into_canonical_case(self) -> Self {
+        if matches!(self.form, TagForm::ConcreteSyntaxOnly) {
+            return self;
+        }
         let mut canonical = String::with_capacity(self.tag.len());
         write_canonical_case(&self.tag, &mut canonical);
         Self {
@@ -1796,14 +1827,16 @@ pub fn canonical_case(tag: &str) -> Result<String, LanguageTagError> {
 ///     "x-purrdf-english"
 /// );
 ///
-/// // §2.1.1 is positional, not production-driven, so it applies to a
-/// // terminal-only tag too — and applies exactly as written: `FR` is uppercased
-/// // because it is a two-character subtag that is neither first nor after a
-/// // singleton, and `Jura` is title-cased because it is four characters, even
-/// // though this tag has no `region` and no `script` to speak of.
+/// // A terminal-only tag has no productions to assign case by, so it is handed
+/// // back unchanged rather than cased as if it had a region and a script.
 /// assert_eq!(
-///     canonical_case_with("EN-FR-JURA", Profile::ConcreteSyntaxLangtag)?,
-///     "en-FR-Jura"
+///     canonical_case_with("en-fr-jura", Profile::ConcreteSyntaxLangtag)?,
+///     "en-fr-jura"
+/// );
+/// // The same profile still normalizes a tag it *can* decompose.
+/// assert_eq!(
+///     canonical_case_with("EN-us", Profile::ConcreteSyntaxLangtag)?,
+///     "en-US"
 /// );
 /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
 /// ```
