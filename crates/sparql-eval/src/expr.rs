@@ -9079,11 +9079,11 @@ mod tests {
 
     #[test]
     fn str_lang_agrees_with_the_profile_the_query_parser_already_enforces() {
-        // The asymmetry this fixes: a tag written as a literal `@tag` in query
+        // The asymmetry this forbids: a tag written as a literal `@tag` in query
         // text is refused by the parser, and a tag routed through a CONSTRUCT
-        // template is refused by the dataset builder, but STRLANG built one at
-        // runtime into a scratch arena that neither gate can see. One profile,
-        // one accept set, whichever door the tag comes through.
+        // template is refused by the dataset builder, while STRLANG builds one at
+        // runtime into a scratch arena that neither of those gates can see. One
+        // profile, one accept set, whichever door the tag comes through.
         let ds = empty_ds();
         for tag in ACCEPTED_TAGS.iter().chain(REFUSED_TAGS) {
             let bound = str_lang(&ds, "x", tag).is_some();

@@ -351,13 +351,17 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // Subject ground but absent from the dataset, object variable: only the
         // zero-length reflexive pair (subject bound to itself) can ever match.
         (Endpoint::BoundAbsent(sval), Endpoint::Free { .. }) => {
-            if path_is_reflexive(path)
-                // A ground endpoint absent from the data comes from query text,
-                // which the parser held to this same profile; a term the
-                // interner refuses names no node, so it reaches nothing, not
-                // even itself.
-                && let Some(term) = ctx.scratch.intern_checked(dataset, sval)
-            {
+            if path_is_reflexive(path) {
+                // The PLAIN door, deliberately. SPARQL 1.1 §18.5.1 makes the
+                // zero-length pair `(x, x)` a solution for a ground `x` whether
+                // or not `x` occurs in the graph, so this row is REQUIRED — and
+                // there is no binding to give up short of deleting the whole
+                // row, which no refusal in this crate is allowed to cost. A path
+                // endpoint is an algebra ground term, gated before it arrives:
+                // query text by the SPARQL parser, a hand-built `Query` by
+                // `purrdf_sparql_algebra`'s algebra validator on this same
+                // profile. See `ScratchInterner::intern`.
+                let term = ctx.scratch.intern(dataset, sval);
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
@@ -377,9 +381,8 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // Object ground but absent from the dataset, subject variable: symmetric
         // to the subject-absent case above.
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
-            if path_is_reflexive(path)
-                && let Some(term) = ctx.scratch.intern_checked(dataset, oval)
-            {
+            if path_is_reflexive(path) {
+                let term = ctx.scratch.intern(dataset, oval);
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }

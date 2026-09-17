@@ -160,14 +160,25 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
         let mut row = smallvec::smallvec![None; width];
         for (i, cell) in binding.iter().enumerate() {
             if let Some(ground) = cell {
-                // A `VALUES` ground term comes from query text, which the
-                // SPARQL parser already held to this very profile, so the
-                // refusal branch is unreachable here — and if a future front end
-                // ever widened the parser, an unbound cell is what §17.2 asks
-                // for, not a term no results writer could spell.
-                row[i] = ctx
-                    .scratch
-                    .intern_checked(ctx.dataset, ground_term_to_value(ground));
+                // The PLAIN door, deliberately: an unbound cell here is not the
+                // §17.2 unbound RESULT, it is `UNDEF`, which is compatible with
+                // every solution — so degrading a term to `None` would delete a
+                // constraint and answer with MORE rows, silently. A `VALUES`
+                // cell is an algebra ground term, never an extension-computed
+                // value, and every way one arrives is gated upstream: query text
+                // by the SPARQL parser, a hand-built `Query` by
+                // `purrdf_sparql_algebra`'s algebra validator (which
+                // `PreparedQuery::rewritten` runs, and which refuses an
+                // "invalid language tag in query algebra" on this same profile),
+                // a `SparqlRequest` pre-binding by `crate::substitute`'s ingress
+                // — the one door the validator cannot see, because substitution
+                // happens after admission — and a SEP-0007 Values-Insertion row
+                // by the fact that its cells are already-admitted solution terms
+                // being put back. See `ScratchInterner::intern`.
+                row[i] = Some(
+                    ctx.scratch
+                        .intern(ctx.dataset, ground_term_to_value(ground)),
+                );
             }
         }
         rows.push(row);

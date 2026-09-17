@@ -264,10 +264,10 @@ fn refused_stems() -> impl Iterator<Item = &'static str> {
 /// is a ShExJ schema with **no** ShExC spelling: `to_shexc` writes `[@~ - @~]` and
 /// `parse_shexc` refuses it with "expected language tag exclusion".
 ///
-/// That is a real round-trip break, and it is **not** this gate's: it predates
-/// this branch (neither `shexc.rs` nor `parser.rs` is touched here), the string
-/// involved is not an ungrammatical language tag, and the gap is in the ShEx
-/// spec's own ShExC grammar rather than in any profile. Refusing an empty
+/// That is a real round-trip break, and it is **not** the language-tag gate's:
+/// it lives entirely in `shexc.rs` and `parser.rs`, which the gate does not
+/// reach, the string involved is not an ungrammatical language tag, and the gap
+/// is in the ShEx spec's own ShExC grammar rather than in any profile. Refusing an empty
 /// exclusion stem at ingress would close it, but an empty stem is legal ShExJ, so
 /// that refusal would be the over-refusal mirror — it is the maintainer's call,
 /// not this test's. What this test does is refuse to launder it: the skip is

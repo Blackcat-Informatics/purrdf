@@ -482,8 +482,9 @@ fn a_null_element_produces_a_row_with_an_unbound_column() {
 ///
 /// So this is the row-preservation claim for the reachable half of the seam. The
 /// unreachable half — a member that parses but that the INTERNER refuses — is
-/// pinned in `cdt_unfold`'s own unit tests, because `bind` is where a refusal
-/// used to answer `false` and drop the row.
+/// pinned in `cdt_unfold`'s own unit tests, because `bind` is the one place
+/// where answering `false` to a refusal would drop the row instead of unbinding
+/// the target.
 ///
 /// `abcdefgh`, one character shorter, is the accept half: it is a tag the
 /// grammar admits, so the map is well formed and expands to two rows.

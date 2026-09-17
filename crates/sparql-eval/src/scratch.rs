@@ -205,7 +205,11 @@ fn hash_value(value: &TermValue) -> u64 {
 /// re-judging it cannot change the verdict, and [`ScratchInterner::intern_checked`]
 /// therefore costs the internal callers nothing but a scan. Only a value minted
 /// outside the kernel — which is to say, by an extension — can fail it.
-const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
+///
+/// `crate::substitute` names this same constant at the pre-binding ingress, so a
+/// caller-supplied focus node is judged on the profile the query parser would
+/// have judged the same term written in the query text on.
+pub(crate) const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
     purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
 
 /// Whether every language tag `value` carries is one the RDF concrete syntaxes
@@ -281,6 +285,31 @@ impl ScratchInterner {
     /// `crate::property_fn_eval`, `crate::modifier::eval_custom_aggregate`, and
     /// the composite-datatype lifters `crate::cdt_fn` / `crate::cdt_unfold` /
     /// `crate::list_fn`) all go through that door.
+    ///
+    /// # The algebra's own ground terms stay on this door
+    ///
+    /// A `VALUES` cell (`crate::modifier::eval_values`) and a zero-length path
+    /// endpoint (`crate::path`) are `purrdf_sparql_algebra::GroundTerm`s, not
+    /// extension-computed values, and they intern here on purpose — twice over.
+    ///
+    /// They are gated before they arrive, on this same profile every time:
+    /// query text by the SPARQL parser; a hand-built
+    /// `purrdf_sparql_algebra::Query` by that crate's algebra validator, which
+    /// [`crate::PreparedQuery::rewritten`] runs and which refuses an "invalid
+    /// language tag in query algebra"; a `SparqlRequest` pre-binding by
+    /// `crate::substitute`'s ingress, which REFUSES with a diagnostic rather
+    /// than passing the value on — and which has to, because substitution
+    /// rewrites an ALREADY-admitted plan, so the algebra validator never sees
+    /// its `VALUES` cell; and a SEP-0007 Values-Insertion row by the fact that
+    /// its cells are already-admitted solution terms being put back.
+    ///
+    /// And at those two positions a [`None`] would not be §17.2's unbound
+    /// result. An unbound `VALUES` cell is `UNDEF`, compatible with everything,
+    /// so it deletes the pre-binding's constraint and returns MORE rows; an
+    /// unbound path endpoint has no binding to give up at all, only the whole
+    /// zero-length row §18.5.1 requires. A refusal may cost a binding — never a
+    /// constraint and never a row — so where it could only cost one of those,
+    /// the gate belongs upstream and this door stays plain.
     ///
     /// [`RdfDataset`]: purrdf_core::RdfDataset
     pub fn intern<D: DatasetView>(&mut self, dataset: &D, value: TermValue) -> SolutionTerm<D::Id> {

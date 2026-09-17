@@ -22,9 +22,11 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
+use purrdf_core::{
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
+};
 use purrdf_sparql_eval::{
-    Arity, NativeSparqlEngine, QueryOptions, UserFunctionRegistry, Volatility,
+    Arity, NativeSparqlEngine, QueryOptions, ShaclPrebinding, UserFunctionRegistry, Volatility,
 };
 
 /// The fixture namespace (AGENTS.md: fixtures live under `example.org`).
@@ -206,6 +208,219 @@ fn the_seam_verdict_is_the_grammars_verdict() {
             tagged_by_a_native_function(tag).is_some(),
             grammar,
             "the seam and the grammar must agree about {tag:?}"
+        );
+    }
+}
+
+/// The OTHER caller-supplied `TermValue` ingress:
+/// `SparqlRequest::substitutions`, the SHACL focus-node pre-binding. It is
+/// public API, it carries an unconstrained `Option<String>` language, and it
+/// reaches the algebra through `substitute::literal_from_value` — which is why
+/// the gate there refuses with a diagnostic rather than degrading the value.
+///
+/// Two tagged literals on the same predicate, so a pre-binding of `?v` is a real
+/// constraint whose loss is VISIBLE as extra rows rather than as a missing one.
+fn two_tagged_objects() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let s1 = b.intern_iri(&format!("{EX}s1"));
+    let s2 = b.intern_iri(&format!("{EX}s2"));
+    let p = b.intern_iri(&format!("{EX}p"));
+    let purr = b.intern_literal(RdfLiteral::language_tagged("purr", "en"));
+    let meow = b.intern_literal(RdfLiteral::language_tagged("meow", "en"));
+    b.push_quad(s1, p, purr, None);
+    b.push_quad(s2, p, meow, None);
+    b.freeze().expect("freeze the fixture")
+}
+
+/// Run `SELECT ?s ?v WHERE { ?s ?p ?v }` with `?v` pre-bound to `"purr"@<tag>`,
+/// returning the row count or the refusal's diagnostic code.
+fn prebind_purr_tagged(tag: &str) -> Result<usize, String> {
+    prebind_purr_tagged_via(tag, ShaclPrebinding::None)
+}
+
+/// [`prebind_purr_tagged`] over either pre-binding rewrite.
+///
+/// `apply_shacl_prebinding` is the SHACL `$this` door, and it needs no gate of
+/// its own: it calls `apply_substitutions` first and then routes every value
+/// through `ground_term_from_value` a second time to build the expression-position
+/// constant, so both of its uses of a caller's `TermValue` pass the one ingress.
+/// Driving it here proves that rather than asserting it.
+fn prebind_purr_tagged_via(tag: &str, prebinding: ShaclPrebinding) -> Result<usize, String> {
+    let dataset = two_tagged_objects();
+    let substitutions = [(
+        "v".to_owned(),
+        TermValue::Literal {
+            lexical_form: "purr".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            language: Some(tag.to_owned()),
+            direction: None,
+        },
+    )];
+    let result = NativeSparqlEngine::new().query_with_options_view(
+        &*dataset,
+        SparqlRequest {
+            query: "SELECT ?s ?v WHERE { ?s ?p ?v }",
+            base_iri: None,
+            substitutions: &substitutions,
+        },
+        QueryOptions {
+            prebinding,
+            ..QueryOptions::EMPTY
+        },
+    );
+    match result {
+        Ok(SparqlResult::Solutions { rows, .. }) => Ok(rows.len()),
+        Ok(other) => panic!("expected solutions, got {other:?}"),
+        Err(diagnostic) => Err(diagnostic.code),
+    }
+}
+
+/// A pre-binding that cannot be made into a term is REPORTED. It must never
+/// become an `UNDEF` `VALUES` cell, because that is compatible with everything:
+/// the constraint would vanish and the query would answer with the whole
+/// relation — more rows than the caller asked for, silently.
+#[test]
+fn an_ungrammatical_pre_binding_is_refused_not_silently_widened() {
+    assert_eq!(
+        prebind_purr_tagged("en"),
+        Ok(1),
+        "a grammatical tag that matches constrains the answer to one row"
+    );
+    assert_eq!(
+        prebind_purr_tagged("fr"),
+        Ok(0),
+        "a grammatical tag that matches nothing still constrains — to no rows"
+    );
+    for tag in REFUSED {
+        assert_eq!(
+            prebind_purr_tagged(tag),
+            Err("native-sparql-subst-langtag".to_owned()),
+            "the pre-binding {tag:?} must be refused by code, never widen the answer"
+        );
+    }
+}
+
+/// The same three cases through the SHACL `$this` door, which shares the ingress.
+#[test]
+fn the_shacl_pre_binding_door_shares_the_ingress() {
+    assert_eq!(
+        prebind_purr_tagged_via("en", ShaclPrebinding::Applied),
+        Ok(1),
+        "a grammatical focus value constrains to one row"
+    );
+    assert_eq!(
+        prebind_purr_tagged_via("fr", ShaclPrebinding::Applied),
+        Ok(0),
+        "a grammatical focus value that matches nothing still constrains"
+    );
+    for tag in REFUSED {
+        assert_eq!(
+            prebind_purr_tagged_via(tag, ShaclPrebinding::Applied),
+            Err("native-sparql-subst-langtag".to_owned()),
+            "the SHACL focus value {tag:?} must be refused by the same code"
+        );
+    }
+}
+
+/// A zero-length path over a ground endpoint that is ABSENT from the data still
+/// yields its reflexive row (SPARQL 1.1 §18.5.1: `(x, x)` is a solution for a
+/// ground `x` whether or not `x` occurs in the graph). The endpoint is interned
+/// unconditionally for exactly this reason — at that position the only thing a
+/// refusal could cost is the whole row, and no refusal in this crate costs a row.
+#[test]
+fn a_zero_length_path_over_an_absent_tagged_endpoint_keeps_its_row() {
+    let dataset = two_tagged_objects();
+    let query = format!("SELECT ?s WHERE {{ ?s <{EX}p>* \"absent\"@en }}");
+    let result = NativeSparqlEngine::new()
+        .query_with_options_view(
+            &*dataset,
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        )
+        .expect("the query evaluates");
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("expected solutions");
+    };
+    assert_eq!(rows.len(), 1, "the zero-length identity row survives");
+    assert_eq!(
+        rows[0][0],
+        Some(TermValue::Literal {
+            lexical_form: "absent".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            language: Some("en".to_owned()),
+            direction: None,
+        }),
+        "?s is bound to the absent endpoint itself"
+    );
+}
+
+/// The third ingress for an algebra ground term, and the reason `eval_values`
+/// and `eval_path` may keep interning on the plain door: a `Query` a host built
+/// in Rust — bypassing the SPARQL parser entirely — is judged by
+/// `purrdf_sparql_algebra`'s algebra validator at admission, on the same
+/// profile, BEFORE any of it can reach a solution row.
+///
+/// The accept half is driven with it, because an admission gate that refused
+/// `en` would take every property path down with it.
+#[test]
+fn a_hand_built_algebra_is_judged_at_admission() {
+    use purrdf_sparql_algebra::{
+        GraphPattern, Literal, NamedNode, PropertyPathExpression, Query, QueryDataset, TermPattern,
+        Variable,
+    };
+
+    let admit = |tag: &str| {
+        let subject = Variable::new("s".to_owned());
+        let query = Query::Select {
+            pattern: GraphPattern::Project {
+                inner: Box::new(GraphPattern::Path {
+                    subject: TermPattern::Variable(subject.clone()),
+                    path: PropertyPathExpression::ZeroOrMore(Box::new(
+                        PropertyPathExpression::NamedNode(
+                            NamedNode::new(format!("{EX}p")).expect("a valid predicate IRI"),
+                        ),
+                    )),
+                    object: TermPattern::Literal(Literal::new_lang("absent", tag, None)),
+                }),
+                variables: vec![subject],
+            },
+            dataset: QueryDataset::default(),
+            base_iri: None,
+            version: None,
+        };
+        purrdf_sparql_eval::PreparedQuery::rewritten(query, QueryOptions::EMPTY)
+            .map(|_| ())
+            .map_err(|diagnostic| diagnostic.code)
+    };
+
+    for tag in ACCEPTED {
+        assert_eq!(admit(tag), Ok(()), "{tag} must still be admitted");
+    }
+    for tag in REFUSED {
+        assert_eq!(
+            admit(tag),
+            Err("native-sparql-algebra".to_owned()),
+            "{tag:?} must be refused at admission, before it can reach a row"
+        );
+    }
+}
+
+/// The mirror half: every tag real data carries must still pre-bind, and a
+/// pre-binding that matches nothing must still narrow to zero rows rather than
+/// erroring. Over-refusal here would break every host passing a focus node.
+#[test]
+fn every_tag_real_data_carries_still_pre_binds() {
+    for tag in ACCEPTED {
+        let rows = prebind_purr_tagged(tag)
+            .unwrap_or_else(|code| panic!("{tag} must be admitted as a pre-binding, got {code}"));
+        assert_eq!(
+            rows,
+            usize::from(*tag == "en"),
+            "{tag} must constrain: one row when it matches the data, none when it does not"
         );
     }
 }

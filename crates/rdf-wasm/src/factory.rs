@@ -369,10 +369,10 @@ mod tests {
         assert_eq!(lit.direction(), "rtl");
     }
 
-    /// The parity gap this closes: the C ABI (`purrdf-rdf-capi`'s
-    /// `view_to_value`) and Python (`Literal.__new__`) both refuse a non-tag at
-    /// the constructor; this factory used to hand one back and let a later
-    /// `freeze()` carry the blame.
+    /// Three-binding parity, at the constructor: the C ABI (`purrdf-rdf-capi`'s
+    /// `view_to_value`), Python (`Literal.__new__`) and this factory all refuse
+    /// a non-tag where the caller spells it, rather than admitting it and
+    /// letting a later `freeze()` carry the blame.
     ///
     /// The accept half is the load-bearing one — a JS caller building
     /// `@x-purrdf-afrikaans` or `@en-fr-jura` terms must be unaffected — so both

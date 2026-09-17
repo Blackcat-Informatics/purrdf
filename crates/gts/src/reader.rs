@@ -859,13 +859,14 @@ impl Folder<'_, '_, '_> {
                 None => None,
             };
             // Same reasoning as the tag arm above, and the same failure shape. A
-            // value outside the closed `ltr`/`rtl` space was previously dropped
-            // in silence, which is worse than it looks: the term keeps its
-            // lexical form and its language, so an `rdf:dirLangString` quietly
-            // becomes an `rdf:langString` and the graph asserts a literal the
-            // container does not contain. The writer filters direction before
-            // emitting it, so a value here can only have come from a foreign
-            // container — precisely the case a diagnostic is for.
+            // value outside the closed `ltr`/`rtl` space cannot be carried
+            // through, and dropping it without saying so is worse than it looks:
+            // the term keeps its lexical form and its language, so an
+            // `rdf:dirLangString` quietly becomes an `rdf:langString` and the
+            // graph asserts a literal the container does not contain — hence the
+            // diagnostic. The writer filters direction before emitting it, so a
+            // value here can only have come from a foreign container, which is
+            // precisely the case a diagnostic is for.
             let direction = match map_get(entries, "dir").and_then(as_text) {
                 Some(value) if matches!(value, "ltr" | "rtl") => Some(value.to_string()),
                 Some(value) => {
