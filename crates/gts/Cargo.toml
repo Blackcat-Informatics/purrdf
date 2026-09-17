@@ -27,6 +27,14 @@ workspace = true
 # This edge is acyclic — `purrdf-events` depends on nothing — so it never risks
 # a cycle and keeps `make wasm` green.
 purrdf-events = { workspace = true }
+# The workspace's ONE owner of BCP 47 language tags. A container's `"l"` field is
+# untrusted bytes that the fold view renders straight into an N-Quads token, so
+# the reader has to ask the same grammar, on the same profile, that every RDF
+# codec and the IR kernel already ask. The edge is safe where a `purrdf-core`
+# edge would not be: `purrdf-iri` is a true leaf with ZERO runtime dependencies
+# (its `[lib]` note states the contract) and is already wasm32-clean, so it drags
+# nothing in and `make wasm` stays green.
+purrdf-iri = { workspace = true }
 # Fixed-key (no runtime RNG seeding) hasher for the segment-decode / event-bridge
 # dedup maps — mirrors the workspace's `FastHasher` policy (`crates/rdf-core/src/hash.rs`);
 # wasm-clean since `getrandom` is absent on wasm32 and `default-features = false` here.

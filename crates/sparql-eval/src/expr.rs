@@ -32,7 +32,8 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue, ViewTermId,
+    BlankScope, DatasetView, GraphMatch, RdfLiteral, RdfTextDirection, TermRef, TermValue,
+    ViewTermId,
 };
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern, PurrdfFn, Variable};
 use purrdf_xsd::{
@@ -65,12 +66,12 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match expr {
         // ---- atoms ---------------------------------------------------------
-        Expression::NamedNode(n) => Ok(Some(const_atom(ctx, expr, || {
+        Expression::NamedNode(n) => Ok(const_atom(ctx, expr, || {
             TermValue::Iri(n.as_str().to_owned())
-        }))),
-        Expression::Literal(l) => Ok(Some(const_atom(ctx, expr, || {
+        })),
+        Expression::Literal(l) => Ok(const_atom(ctx, expr, || {
             crate::convert::literal_to_value(l)
-        }))),
+        })),
         Expression::Variable(v) => Ok(lookup(v, row, schema)),
         Expression::Bound(v) => Ok(Some(bool_term(ctx, lookup(v, row, schema).is_some()))),
 
@@ -376,22 +377,48 @@ fn lookup<I: ViewTermId>(
 }
 
 /// Intern a value to a solution term (promoting to an existing dataset id).
+///
+/// [`None`] when the value carries a language tag the grammar refuses — see
+/// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked). Every
+/// caller here is inside an expression, so the mapping is the one §17.2 already
+/// states and `eval_str_lang` already performs: the expression is unbound.
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
+) -> Option<SolutionTerm<D::Id>> {
+    ctx.scratch.intern_checked(ctx.dataset, value)
+}
+
+/// Intern an IRI. Infallible: an IRI carries no language tag.
+fn iri_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, iri: String) -> SolutionTerm<D::Id> {
+    ctx.scratch.intern_iri(ctx.dataset, iri)
+}
+
+/// Intern a typed (no-language) literal. Infallible: [`typed`] builds the value
+/// with `language: None`, so there is no tag to judge.
+fn typed_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    lexical: &str,
+    datatype: &str,
 ) -> SolutionTerm<D::Id> {
-    ctx.scratch.intern(ctx.dataset, value)
+    ctx.scratch
+        .intern_datatyped(ctx.dataset, lexical.to_owned(), datatype.to_owned())
 }
 
 /// Intern a constant atom (`NamedNode`/`Literal`), memoized per query by the
 /// node's AST address (see [`EvalCtx::const_atom_cache`]). `build` — which owns
 /// the `TermValue` allocation — runs only on a cache miss, so a FILTER/BIND over
 /// N rows pays the `to_owned()` + intern probe once, not N times.
+///
+/// The memoized answer is the WHOLE answer, refusal included: the SPARQL parser
+/// holds a `LANGTAG` written in query text to the same profile the interner does
+/// (`crate::scratch`'s `LANGTAG_PROFILE`), so an atom's verdict is fixed for the
+/// life of the query and caching it cannot go stale.
 fn const_atom<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     expr: &Expression,
     build: impl FnOnce() -> TermValue,
-) -> SolutionTerm<D::Id> {
+) -> Option<SolutionTerm<D::Id>> {
     // Address-keyed memoization is unsound over a per-row substituted-EXISTS
     // temporary (see `EvalCtx::in_substituted_exists`): the node's address can
     // be a dropped-and-reused allocation from an earlier outer row, so a hit
@@ -426,7 +453,7 @@ fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, b: bool) -> Soluti
     if let Some(term) = ctx.cached_bool_terms[slot] {
         return term;
     }
-    let term = intern(ctx, typed(if b { "true" } else { "false" }, XSD_BOOLEAN));
+    let term = typed_term(ctx, if b { "true" } else { "false" }, XSD_BOOLEAN);
     ctx.cached_bool_terms[slot] = Some(term);
     term
 }
@@ -436,7 +463,7 @@ fn string_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     lexical: &str,
 ) -> SolutionTerm<D::Id> {
-    intern(ctx, typed(lexical, XSD_STRING))
+    typed_term(ctx, lexical, XSD_STRING)
 }
 
 /// Intern an `xsd:integer` literal.
@@ -444,7 +471,7 @@ fn integer_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: i64,
 ) -> SolutionTerm<D::Id> {
-    intern(ctx, typed(&value.to_string(), XSD_INTEGER))
+    typed_term(ctx, &value.to_string(), XSD_INTEGER)
 }
 
 /// Build a typed (no-language) literal value.
@@ -3110,9 +3137,7 @@ fn eval_function<D: DatasetView + Sync>(
             Some(_) => Ok(Some(bool_term(ctx, false))),
         },
         Function::Datatype => match arg(&vals, 0) {
-            Some(TermValue::Literal { datatype, .. }) => {
-                Ok(Some(intern(ctx, TermValue::Iri(datatype.clone()))))
-            }
+            Some(TermValue::Literal { datatype, .. }) => Ok(Some(iri_term(ctx, datatype.clone()))),
             _ => Ok(None),
         },
 
@@ -3141,10 +3166,10 @@ fn eval_function<D: DatasetView + Sync>(
 
         // ---- term constructors --------------------------------------------
         Function::Iri | Function::Uri => match arg(&vals, 0) {
-            Some(TermValue::Iri(iri)) => Ok(Some(intern(ctx, TermValue::Iri(iri.clone())))),
+            Some(TermValue::Iri(iri)) => Ok(Some(iri_term(ctx, iri.clone()))),
             Some(TermValue::Literal { lexical_form, .. }) => {
                 match resolve_against_base(ctx.base_iri.as_deref(), lexical_form) {
-                    Some(resolved) => Ok(Some(intern(ctx, TermValue::Iri(resolved)))),
+                    Some(resolved) => Ok(Some(iri_term(ctx, resolved))),
                     // Relative reference with no base to resolve against — a SPARQL
                     // expression error (unbound), not a silent identity pass-through.
                     None => Ok(None),
@@ -3231,32 +3256,26 @@ fn eval_function<D: DatasetView + Sync>(
         },
         Function::Timezone => match arg(&vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => match dt.timezone_minutes() {
-                Some(off_min) => Ok(Some(intern(
+                Some(off_min) => Ok(Some(typed_term(
                     ctx,
-                    typed(
-                        &format_daytime_duration(off_min),
-                        "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
-                    ),
+                    &format_daytime_duration(off_min),
+                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
                 ))),
                 None => Ok(None), // SPARQL §17.4.5.7: no timezone → error
             },
             Some(XsdValue::Date(d)) => match d.timezone_minutes() {
-                Some(off_min) => Ok(Some(intern(
+                Some(off_min) => Ok(Some(typed_term(
                     ctx,
-                    typed(
-                        &format_daytime_duration(off_min),
-                        "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
-                    ),
+                    &format_daytime_duration(off_min),
+                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
                 ))),
                 None => Ok(None),
             },
             Some(XsdValue::Time(t)) => match t.timezone_minutes() {
-                Some(off_min) => Ok(Some(intern(
+                Some(off_min) => Ok(Some(typed_term(
                     ctx,
-                    typed(
-                        &format_daytime_duration(off_min),
-                        "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
-                    ),
+                    &format_daytime_duration(off_min),
+                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
                 ))),
                 None => Ok(None),
             },
@@ -3407,7 +3426,7 @@ fn eval_function<D: DatasetView + Sync>(
         Function::Uuid => {
             let (uuid_iri, _) = make_uuid(ctx);
             let iri_val = format!("urn:uuid:{uuid_iri}");
-            Ok(Some(intern(ctx, TermValue::Iri(iri_val))))
+            Ok(Some(iri_term(ctx, iri_val)))
         }
         Function::StrUuid => {
             let (uuid_str, _) = make_uuid(ctx);
@@ -3447,7 +3466,7 @@ fn eval_function<D: DatasetView + Sync>(
             // nothing, so this falls through exactly as an absent registry used to.
             if let Some(func) = ctx.user_functions.resolve(iri.as_str()) {
                 let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
-                return Ok(result.map(|value| intern(ctx, value)));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             // A caller-injected native (host-Rust closure) function, resolved from
             // the same registry's second table. Checked after the SPARQL-bodied
@@ -3457,7 +3476,7 @@ fn eval_function<D: DatasetView + Sync>(
             // datatype IRI.
             if let Some(native) = ctx.user_functions.resolve_native(iri.as_str()) {
                 let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
-                return Ok(result.map(|value| intern(ctx, value)));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2
             // SPARQL Extensions §7.3's "SPARQL engines SHOULD register a function for
@@ -3469,7 +3488,7 @@ fn eval_function<D: DatasetView + Sync>(
             // ordering, not a precedence rule.
             if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri.as_str()) {
                 let result = crate::user_fn::eval_expr_function(expr_fn, iri.as_str(), &vals, ctx)?;
-                return Ok(result.map(|value| intern(ctx, value)));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
@@ -4061,7 +4080,7 @@ fn map_string<D: DatasetView + Sync>(
     f: impl Fn(&str) -> String,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match string_arg(vals, 0) {
-        Some((s, lang)) => Ok(Some(make_string(ctx, f(&s), lang))),
+        Some((s, lang)) => Ok(make_string(ctx, f(&s), lang)),
         None => Ok(None),
     }
 }
@@ -4072,7 +4091,7 @@ fn make_string<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     lexical: String,
     lang: Option<String>,
-) -> SolutionTerm<D::Id> {
+) -> Option<SolutionTerm<D::Id>> {
     match lang {
         Some(l) => intern(
             ctx,
@@ -4083,7 +4102,7 @@ fn make_string<D: DatasetView + Sync>(
                 direction: None,
             },
         ),
-        None => string_term(ctx, &lexical),
+        None => Some(string_term(ctx, &lexical)),
     }
 }
 
@@ -4095,7 +4114,7 @@ fn make_string_dir<D: DatasetView + Sync>(
     lexical: String,
     lang: Option<String>,
     dir: Option<RdfTextDirection>,
-) -> SolutionTerm<D::Id> {
+) -> Option<SolutionTerm<D::Id>> {
     match (lang, dir) {
         (Some(l), Some(d)) => intern(
             ctx,
@@ -4107,7 +4126,7 @@ fn make_string_dir<D: DatasetView + Sync>(
             },
         ),
         (Some(l), None) => make_string(ctx, lexical, Some(l)),
-        (None, _) => string_term(ctx, &lexical),
+        (None, _) => Some(string_term(ctx, &lexical)),
     }
 }
 
@@ -4133,7 +4152,7 @@ fn eval_concat<D: DatasetView + Sync>(
         }
     }
     match common {
-        Some((lang, dir)) if consistent => Ok(Some(make_string_dir(ctx, out, lang, dir))),
+        Some((lang, dir)) if consistent => Ok(make_string_dir(ctx, out, lang, dir)),
         _ => Ok(Some(string_term(ctx, &out))),
     }
 }
@@ -4166,7 +4185,7 @@ fn eval_substr<D: DatasetView + Sync>(
         .unwrap_or(&[])
         .iter()
         .collect();
-    Ok(Some(make_string(ctx, slice, lang)))
+    Ok(make_string(ctx, slice, lang))
 }
 
 /// SPARQL 1.1 §17.4.1.1 "argument compatibility": whether a string operand
@@ -4213,7 +4232,7 @@ fn eval_str_before_after<D: DatasetView + Sync>(
         // No match → empty (typed xsd:string, no language).
         None => return Ok(Some(string_term(ctx, ""))),
     };
-    Ok(Some(make_string(ctx, result, lang)))
+    Ok(make_string(ctx, result, lang))
 }
 
 /// `REPLACE(str, pattern, replacement[, flags])` via the regex engine.
@@ -4240,7 +4259,7 @@ fn eval_replace<D: DatasetView + Sync>(
         Ok(replaced) => replaced.into_owned(),
         Err(_) => return Ok(None),
     };
-    Ok(Some(make_string(ctx, replaced, lang)))
+    Ok(make_string(ctx, replaced, lang))
 }
 
 /// The compiled pattern for `(pattern, flags)`, from the per-query cache.
@@ -4305,7 +4324,51 @@ fn build_regex(pattern: &str, flags: &str) -> Option<purrdf_core::xsd_regex::Com
     purrdf_core::xsd_regex::compile(pattern, flags).ok()
 }
 
+/// The language-tag grammar every runtime tag constructor in this module is
+/// held to, and it is the SAME profile the SPARQL parser holds a literal `@tag`
+/// written in query text to (`purrdf_sparql_algebra`'s `LANGTAG_PROFILE`), the
+/// RDF codec readers hold a parsed tag to, and `RdfLiteral::validate_components`
+/// holds a tag entering an `RdfDataset` to.
+///
+/// One profile across all four doors is the point. `STRLANG`/`STRLANGDIR` build
+/// a tag at RUNTIME out of a computed string, so the parser's gate cannot see
+/// them, and the term they build is interned into the evaluator's bump arena
+/// ([`crate::scratch::ScratchInterner`]) rather than an `RdfDatasetBuilder`, so
+/// the IR kernel's gate cannot see them either. Without this call a `SELECT`
+/// would serialize `"x"@en us` — which no SPARQL-results reader can parse back —
+/// while the identical tag in a `CONSTRUCT` template was refused, because that
+/// path does route through the validated dataset builder.
+const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
+    purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
+
+/// Is `lang` a language tag the workspace's one grammar accepts?
+///
+/// # Case
+///
+/// Called on the tag **as the query wrote it**, before `to_ascii_lowercase`.
+/// That is not a coin-flip: under [`LANGTAG_PROFILE`] every production is
+/// defined over case-insensitive character classes (`ALPHA` is `[a-zA-Z]`, the
+/// terminal's later subtags are `[a-zA-Z0-9]`) and the only other rule is a
+/// subtag LENGTH bound, which ASCII case-folding cannot change. So the accept
+/// set is identical either side of the fold and `en-US` passes; gating first
+/// merely lets a refusal quote what the user typed. `the_gate_is_case_blind`
+/// proves the two orders agree over the whole valid corpus.
+fn well_formed_langtag(lang: &str) -> bool {
+    purrdf_iri::langtag::is_well_formed_with(lang, LANGTAG_PROFILE)
+}
+
 /// `STRLANG(lexical, lang)`.
+///
+/// # Failure mode
+///
+/// A malformed language tag leaves the expression **unbound** (`Ok(None)`), not
+/// a hard `Err`. SPARQL 1.1 §17.4.2.5 makes `STRLANG` "an error" when its
+/// arguments are not as required, and §17.2's evaluation rules turn an
+/// expression error into an unbound result — a dropped `FILTER` row or an
+/// unbound `BIND` — rather than an aborted query. That is also this function's
+/// own established convention for every other refusal it already makes: a
+/// non-`xsd:string` lexical argument and an empty tag both `return Ok(None)`
+/// here, and `build_regex`'s contract above spells the same reasoning out.
 fn eval_str_lang<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -4319,12 +4382,20 @@ fn eval_str_lang<D: DatasetView + Sync>(
     if lang.is_empty() {
         return Ok(None); // an empty language tag is not a valid rdf:langString
     }
-    Ok(Some(make_string(ctx, lex, Some(lang.to_ascii_lowercase()))))
+    if !well_formed_langtag(&lang) {
+        return Ok(None); // not a language tag at all — see `well_formed_langtag`
+    }
+    Ok(make_string(ctx, lex, Some(lang.to_ascii_lowercase())))
 }
 
 /// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
 /// constructor. An empty `dir` yields a plain `rdf:langString`; `ltr`/`rtl`
 /// (case-insensitive) yield an `rdf:dirLangString`; any other direction errors.
+///
+/// The language half is held to [`LANGTAG_PROFILE`] exactly as [`eval_str_lang`]
+/// holds it, and refuses the same way — unbound, not a query abort. A direction
+/// does not make a non-tag into a tag: `"en us"--ltr` is as unreadable as
+/// `"en us"` on its own.
 fn eval_str_lang_dir<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -4339,6 +4410,9 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
     if lang.is_empty() {
         return Ok(None); // a directional language string needs a language
     }
+    if !well_formed_langtag(&lang) {
+        return Ok(None); // not a language tag at all — see `well_formed_langtag`
+    }
     // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
     // else, including an empty string, is a type error (unbound).
     let direction = match dir.as_str() {
@@ -4346,7 +4420,7 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
         "rtl" => RdfTextDirection::Rtl,
         _ => return Ok(None),
     };
-    Ok(Some(intern(
+    Ok(intern(
         ctx,
         TermValue::Literal {
             lexical_form: lex,
@@ -4354,10 +4428,44 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
             language: Some(lang.to_ascii_lowercase()),
             direction: Some(direction),
         },
-    )))
+    ))
 }
 
 /// `STRDT(lexical, datatypeIri)`.
+///
+/// # Failure mode
+///
+/// Identical to [`eval_str_lang`]'s and for the same reason: SPARQL 1.1 §17.2
+/// turns an expression error into an **unbound** result, not an aborted query,
+/// and §17.4.2.4 makes an out-of-domain argument an error. Every refusal below
+/// is therefore `Ok(None)`, matching the two `return Ok(None)` arms this
+/// function already had for a non-`xsd:string` lexical form and a non-IRI
+/// datatype argument.
+///
+/// # Shape
+///
+/// `STRDT` names the datatype but supplies no language tag and no base
+/// direction, so the literal it is about to mint is exactly the components
+/// `(datatype, None, None)` — and some datatypes have no such literal.
+/// `rdf:langString` is the standing example: RDF 1.2 Concepts §3.3 says a
+/// literal with that datatype *has* a language tag, so `STRDT("x",
+/// rdf:langString)` describes a term that is not an RDF literal at all.
+///
+/// The rule is not restated here. [`RdfLiteral::validate_components`] is the
+/// kernel's single decision on whether a datatype/language/direction triple is
+/// a literal, and it is the same call the `RdfDatasetBuilder` makes on the
+/// CONSTRUCT path — which is why, before this gate, `CONSTRUCT` refused
+/// `STRDT("x", rdf:langString)` with `rdf-ir-literal-shape` while the identical
+/// `SELECT` printed `"x"^^rdf:langString` into TSV that PurRDF's own N-Triples
+/// reader then rejects. Asking the kernel rather than transcribing its list
+/// also means the set of tag-requiring datatypes is defined in exactly one
+/// place: widen it there and `STRDT` follows.
+///
+/// This gate is deliberately narrow. `STRDT` is a general-purpose constructor;
+/// it still mints `xsd:integer`, `xsd:string`, and wholly unknown datatype IRIs
+/// with any lexical form, because `validate_components` judges literal SHAPE
+/// and never datatype lexical validity (`STRDT("x", xsd:integer)` is an
+/// ill-typed literal, which RDF and SPARQL both permit as a term).
 fn eval_str_dt<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -4370,7 +4478,11 @@ fn eval_str_dt<D: DatasetView + Sync>(
     let Some(TermValue::Iri(dt)) = arg(vals, 1) else {
         return Ok(None);
     };
-    Ok(Some(intern(ctx, typed(&lex, dt))))
+    // No tag, no direction: ask the kernel whether that shape is a literal.
+    if RdfLiteral::validate_components(dt, None, None).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(typed_term(ctx, &lex, dt)))
 }
 
 /// `TRIPLE(s, p, o)` — RDF 1.2 triple-term constructor.
@@ -4394,7 +4506,7 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
         p: Box::new(p.clone()),
         o: Box::new(o.clone()),
     };
-    Ok(Some(intern(ctx, triple)))
+    Ok(intern(ctx, triple))
 }
 
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
@@ -4406,7 +4518,7 @@ fn triple_part<D: DatasetView + Sync>(
     match arg(vals, 0) {
         Some(TermValue::Triple { s, p, o }) => {
             let part = pick((**s).clone(), (**p).clone(), (**o).clone());
-            Ok(Some(intern(ctx, part)))
+            Ok(intern(ctx, part))
         }
         _ => Ok(None),
     }
@@ -4426,7 +4538,7 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     v: &XsdValue,
 ) -> SolutionTerm<D::Id> {
-    intern(ctx, xsd_literal_value(v))
+    typed_term(ctx, &v.canonical_lexical(), v.datatype().iri())
 }
 
 /// [`xsd_to_term`]'s value-only half: the canonical typed-literal [`TermValue`] for a
@@ -4524,13 +4636,8 @@ fn mint_bnode<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> SolutionTerm<D
     ctx.bnode_counter += 1;
     let label =
         crate::eval::minted_label(ctx.bnode_mint_prefix.as_deref(), "bnode", ctx.bnode_counter);
-    intern(
-        ctx,
-        TermValue::Blank {
-            label,
-            scope: BlankScope::DEFAULT,
-        },
-    )
+    ctx.scratch
+        .intern_blank(ctx.dataset, label, BlankScope::DEFAULT)
 }
 
 /// Resolve `reference` for the `IRI()`/`URI()` built-in (SPARQL 1.1 §17.4.2.6):
@@ -8707,5 +8814,325 @@ mod tests {
             ":d has no :q triple of its own, so the doubly-negated form must be \
              empty — the pre-fix classifier wrongly admitted :d"
         );
+    }
+
+    /// Tags the `LANGTAG` grammar refuses. Before the gate every one of these
+    /// reached a serializer verbatim — `"x"@en us` in TSV, `"xml:lang":"en us"`
+    /// in JSON — output no SPARQL-results reader can parse back.
+    ///
+    /// # What each entry actually exercises
+    ///
+    /// Read this before trusting the corpus as evidence about
+    /// [`LANGTAG_PROFILE`] itself, because only part of it is:
+    ///
+    /// * `"en us"`, `"-"` and `"!!!"` contain characters the SPARQL **tokenizer**
+    ///   cannot put inside a `LANGTAG` token at all, so on the parser side of
+    ///   `str_lang_agrees_with_the_profile_the_query_parser_already_enforces`
+    ///   they never reach a profile — they are evidence that STRLANG refuses
+    ///   what the concrete syntax cannot even spell, not evidence about which
+    ///   profile either door uses.
+    /// * `"1"`, `"9-9"`, `"123-456"` and `"en-"` are well-formed token shapes
+    ///   that the profile — not the tokenizer — rejects, so these genuinely
+    ///   test the grammar on both sides.
+    /// * `"abcdefghi"` is the one entry that separates
+    ///   [`Profile::ConcreteSyntaxLangtagBounded`](purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded)
+    ///   from its unbounded sibling `ConcreteSyntaxLangtag`. The two profiles
+    ///   differ ONLY by RFC 5646 §2.1's eight-character ceiling on non-private
+    ///   subtags, so without a nine-character subtag here every verdict in the
+    ///   corpus would be identical under either profile and the agreement test
+    ///   could not see the eval gate drift toward permissiveness. `abcdefgh`
+    ///   (eight) is accepted; this is the first refused length.
+    const REFUSED_TAGS: &[&str] = &[
+        "en us",
+        "1",
+        "9-9",
+        "123-456",
+        "en-",
+        "-",
+        "!!!",
+        "abcdefghi",
+    ];
+
+    /// Tags that MUST still bind. The over-refusal half: three of these
+    /// (`i-enochian`, the two `x-` private-use tags) and the two
+    /// terminal-only shapes (`en-fr-jura`, `fr-be-fbcl`) are exactly what a
+    /// profile chosen one notch too strict would silently start dropping.
+    ///
+    /// `en-x-cantbethislong` is the mirror of `"abcdefghi"` above: the §2.1
+    /// ceiling that refuses a nine-character `language` subtag **lifts** after
+    /// the `x` private-use marker, so this pins the exact shape of the bound
+    /// rather than just its existence. Without it, a gate that clamped every
+    /// subtag to eight characters would still pass the whole corpus while
+    /// silently dropping PurRDF's own `x-`-tagged artifacts.
+    const ACCEPTED_TAGS: &[&str] = &[
+        "en",
+        "en-US",
+        "zh-Hans-CN",
+        "de-CH-x-phonebk",
+        "i-enochian",
+        "x-purrdf-afrikaans",
+        "x-gmeow-english",
+        "en-fr-jura",
+        "fr-be-fbcl",
+        "en-x-cantbethislong",
+    ];
+
+    /// `STRLANG(lexical, tag)` as a whole [`TermValue`], or `None` when the
+    /// expression is unbound (a SPARQL expression error).
+    fn str_lang(ds: &RdfDataset, lexical: &str, tag: &str) -> Option<TermValue> {
+        let mut ctx = EvalCtx::new(ds);
+        let schema = VarSchema::new();
+        let expr = Expression::FunctionCall(Function::StrLang, vec![lit(lexical), lit(tag)]);
+        let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
+        Some(value_of(&ctx, term))
+    }
+
+    /// `STRLANGDIR(lexical, tag, dir)` as a whole [`TermValue`], or `None`.
+    fn str_lang_dir(ds: &RdfDataset, lexical: &str, tag: &str, dir: &str) -> Option<TermValue> {
+        let mut ctx = EvalCtx::new(ds);
+        let schema = VarSchema::new();
+        let expr =
+            Expression::FunctionCall(Function::StrLangDir, vec![lit(lexical), lit(tag), lit(dir)]);
+        let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
+        Some(value_of(&ctx, term))
+    }
+
+    /// The language tag of a literal `TermValue`, for assertions.
+    fn tag_of(value: &TermValue) -> Option<&str> {
+        match value {
+            TermValue::Literal { language, .. } => language.as_deref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn str_lang_refuses_a_tag_the_grammar_refuses() {
+        let ds = empty_ds();
+        for tag in REFUSED_TAGS {
+            assert_eq!(
+                str_lang(&ds, "x", tag),
+                None,
+                "STRLANG(\"x\", {tag:?}) must be a SPARQL expression error (unbound), \
+                 not a literal a serializer then writes out unreadably"
+            );
+        }
+    }
+
+    #[test]
+    fn str_lang_still_binds_every_tag_the_grammar_takes() {
+        let ds = empty_ds();
+        for tag in ACCEPTED_TAGS {
+            let value = str_lang(&ds, "x", tag)
+                .unwrap_or_else(|| panic!("STRLANG(\"x\", {tag:?}) must still bind"));
+            assert_eq!(
+                tag_of(&value),
+                Some(tag.to_ascii_lowercase().as_str()),
+                "the gate must not change which tag STRLANG produces, only \
+                 whether it produces one"
+            );
+        }
+    }
+
+    #[test]
+    fn str_lang_dir_refuses_a_tag_the_grammar_refuses() {
+        let ds = empty_ds();
+        for tag in REFUSED_TAGS {
+            // A base direction does not rescue a non-tag: `"x"@en us--ltr` is as
+            // unreadable as `"x"@en us`, and that is what this emitted before.
+            assert_eq!(
+                str_lang_dir(&ds, "x", tag, "ltr"),
+                None,
+                "STRLANGDIR(\"x\", {tag:?}, \"ltr\") must be unbound"
+            );
+        }
+    }
+
+    #[test]
+    fn str_lang_dir_still_binds_every_tag_the_grammar_takes() {
+        let ds = empty_ds();
+        for tag in ACCEPTED_TAGS {
+            for dir in ["ltr", "rtl"] {
+                let value = str_lang_dir(&ds, "x", tag, dir).unwrap_or_else(|| {
+                    panic!("STRLANGDIR(\"x\", {tag:?}, {dir:?}) must still bind")
+                });
+                assert_eq!(tag_of(&value), Some(tag.to_ascii_lowercase().as_str()));
+            }
+        }
+    }
+
+    #[test]
+    fn the_gate_is_case_blind_so_it_may_run_before_the_fold() {
+        // `well_formed_langtag` judges the tag AS WRITTEN and `eval_str_lang`
+        // lowercases afterwards. That ordering is only safe because the profile's
+        // productions are case-insensitive character classes plus a length bound,
+        // none of which ASCII folding can move. Prove it over both corpora rather
+        // than assert it in a comment: `en-US` is the case that would break.
+        for tag in ACCEPTED_TAGS.iter().chain(REFUSED_TAGS) {
+            assert_eq!(
+                well_formed_langtag(tag),
+                well_formed_langtag(&tag.to_ascii_lowercase()),
+                "gating before vs after `to_ascii_lowercase` must accept the same \
+                 set, else the order of the two lines would be load-bearing ({tag:?})"
+            );
+        }
+        assert!(well_formed_langtag("en-US"));
+        assert!(well_formed_langtag("en-us"));
+    }
+
+    /// `STRDT(lexical, <dt>)` as a whole [`TermValue`], or `None` when the
+    /// expression is unbound (a SPARQL expression error).
+    fn str_dt(ds: &RdfDataset, lexical: &str, dt: &str) -> Option<TermValue> {
+        let mut ctx = EvalCtx::new(ds);
+        let schema = VarSchema::new();
+        let expr = Expression::FunctionCall(Function::StrDt, vec![lit(lexical), iri(dt)]);
+        let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
+        Some(value_of(&ctx, term))
+    }
+
+    /// The datatypes that have no untagged literal: naming one in `STRDT`
+    /// describes a term RDF 1.2 Concepts §3.3 does not define.
+    const TAG_REQUIRING_DATATYPES: &[&str] = &[RDF_LANG_STRING, RDF_DIR_LANG_STRING];
+
+    /// Datatypes `STRDT` must keep minting. The over-refusal half: `STRDT` is a
+    /// general-purpose constructor, so tightening it for the language-string
+    /// datatypes must not touch anything else — including an ill-typed lexical
+    /// form (`"x"^^xsd:integer`, a perfectly legal RDF term) and a datatype IRI
+    /// the engine has never heard of.
+    const STR_DT_SURVIVORS: &[(&str, &str)] = &[
+        ("x", "http://www.w3.org/2001/XMLSchema#integer"),
+        ("x", "http://www.w3.org/2001/XMLSchema#string"),
+        ("1", "http://www.w3.org/2001/XMLSchema#int"),
+        ("x", "http://example.org/custom"),
+        ("x", "http://www.w3.org/1999/02/22-rdf-syntax-ns#HTML"),
+        ("true", "http://www.w3.org/2001/XMLSchema#boolean"),
+        ("2026-09-17", "http://www.w3.org/2001/XMLSchema#date"),
+    ];
+
+    #[test]
+    fn str_dt_refuses_a_datatype_with_no_untagged_literal() {
+        let ds = empty_ds();
+        for dt in TAG_REQUIRING_DATATYPES {
+            assert_eq!(
+                str_dt(&ds, "x", dt),
+                None,
+                "STRDT(\"x\", <{dt}>) supplies no language tag, so it names a term \
+                 that is not an RDF literal; it must be a SPARQL expression error \
+                 (unbound), not a literal a serializer then writes into TSV that \
+                 PurRDF's own N-Triples reader refuses"
+            );
+        }
+    }
+
+    #[test]
+    fn str_dt_still_mints_every_other_datatype() {
+        let ds = empty_ds();
+        for (lexical, dt) in STR_DT_SURVIVORS {
+            let value = str_dt(&ds, lexical, dt)
+                .unwrap_or_else(|| panic!("STRDT({lexical:?}, <{dt}>) must still bind"));
+            assert_eq!(
+                value,
+                TermValue::Literal {
+                    lexical_form: (*lexical).to_owned(),
+                    datatype: (*dt).to_owned(),
+                    language: None,
+                    direction: None,
+                },
+                "the gate must not change which literal STRDT produces, only \
+                 whether it produces one"
+            );
+        }
+    }
+
+    #[test]
+    fn str_dt_defers_to_the_kernels_one_literal_shape_rule() {
+        // The point of the gate is that `sparql-eval` holds no second copy of
+        // "which datatypes require a tag". Pin that: STRDT binds for a datatype
+        // exactly when `RdfLiteral::validate_components` — the same call the
+        // CONSTRUCT path's dataset builder makes — accepts the `(dt, no tag, no
+        // direction)` shape STRDT is about to mint. Widen the kernel's set and
+        // this test keeps passing; transcribe a private list here and it breaks.
+        let ds = empty_ds();
+        let survivors = STR_DT_SURVIVORS.iter().map(|(_, dt)| *dt);
+        for dt in TAG_REQUIRING_DATATYPES.iter().copied().chain(survivors) {
+            assert_eq!(
+                str_dt(&ds, "x", dt).is_some(),
+                RdfLiteral::validate_components(dt, None, None).is_ok(),
+                "STRDT and the IR kernel must agree about <{dt}>"
+            );
+        }
+    }
+
+    #[test]
+    fn str_dt_and_construct_agree_about_the_language_string_datatypes() {
+        // The asymmetry this closes, stated as the two doors themselves: a
+        // CONSTRUCT template routes the term through `RdfDatasetBuilder`, which
+        // refuses it with `rdf-ir-literal-shape`, while SELECT interned it into
+        // the evaluator's scratch arena that the builder never sees. Build the
+        // literal the old SELECT path produced and confirm the builder — not a
+        // re-statement of its rule — is what rejects it.
+        for dt in TAG_REQUIRING_DATATYPES {
+            let error = RdfLiteral::validate_components(dt, None, None)
+                .expect_err("the kernel must refuse a language-string datatype with no tag");
+            assert_eq!(error, "a language-string datatype requires a language tag");
+        }
+    }
+
+    #[test]
+    fn str_lang_agrees_with_the_profile_the_query_parser_already_enforces() {
+        // The asymmetry this forbids: a tag written as a literal `@tag` in query
+        // text is refused by the parser, and a tag routed through a CONSTRUCT
+        // template is refused by the dataset builder, while STRLANG builds one at
+        // runtime into a scratch arena that neither of those gates can see. One
+        // profile, one accept set, whichever door the tag comes through.
+        let ds = empty_ds();
+        for tag in ACCEPTED_TAGS.iter().chain(REFUSED_TAGS) {
+            let bound = str_lang(&ds, "x", tag).is_some();
+            assert_eq!(
+                bound,
+                purrdf_sparql_algebra::SparqlParser::new()
+                    .parse_query(&format!("SELECT * WHERE {{ BIND(\"x\"@{tag} AS ?v) }}"))
+                    .is_ok(),
+                "STRLANG and the concrete-syntax `@{tag}` must agree"
+            );
+        }
+    }
+
+    #[test]
+    fn the_corpus_can_actually_see_the_two_gates_drift_apart() {
+        // `str_lang_agrees_with_the_profile_the_query_parser_already_enforces`
+        // is only worth its name if the corpus contains a tag the candidate
+        // profiles DISAGREE about; otherwise swapping `LANGTAG_PROFILE` for a
+        // laxer one leaves every verdict unchanged and the agreement test green
+        // while the two doors have silently parted. `ConcreteSyntaxLangtagBounded`
+        // and `ConcreteSyntaxLangtag` differ ONLY by RFC 5646 §2.1's
+        // eight-character ceiling outside private use, so the discriminator has
+        // to be an over-long non-private subtag. Assert one is present rather
+        // than trusting a reader to notice.
+        use purrdf_iri::langtag::{Profile, is_well_formed_with};
+        assert!(
+            ACCEPTED_TAGS
+                .iter()
+                .chain(REFUSED_TAGS)
+                .any(
+                    |tag| is_well_formed_with(tag, Profile::ConcreteSyntaxLangtagBounded)
+                        != is_well_formed_with(tag, Profile::ConcreteSyntaxLangtag)
+                ),
+            "the corpus must contain a tag the bounded and unbounded profiles \
+             judge differently, or the agreement test cannot detect drift \
+             toward permissiveness"
+        );
+        // Name the discriminator so a later edit that drops it fails here with
+        // the reason rather than only weakening the `any` above: refused by both
+        // gates today, and refused only because of the length bound.
+        assert!(!well_formed_langtag("abcdefghi"));
+        assert!(is_well_formed_with(
+            "abcdefghi",
+            Profile::ConcreteSyntaxLangtag
+        ));
+        assert!(well_formed_langtag("abcdefgh"), "eight is still fine");
+        // …and the mirror: the ceiling lifts after the `x` private-use marker,
+        // so a nine-character PRIVATE subtag must still be accepted. This is the
+        // over-refusal half of the same bound.
+        assert!(well_formed_langtag("en-x-cantbethislong"));
     }
 }

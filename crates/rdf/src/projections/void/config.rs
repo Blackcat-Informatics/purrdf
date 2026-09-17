@@ -7,7 +7,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::native_codecs::NativeRdfFormat;
 
-use super::super::{ProjectionDirection, ProjectionError, ProjectionLimits, validate_absolute_iri};
+use super::super::{
+    ProjectionDirection, ProjectionError, ProjectionLimits, validate_absolute_iri,
+    validate_language_tag,
+};
 
 /// Exact source graph selected for one VoID input role.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -450,20 +453,33 @@ impl VoidStaticValue {
 
     /// Construct a language-tagged literal.
     ///
+    /// The tag is judged by `validate_language_tag` — the same helper, on the
+    /// same profile, that this module tree's [`ProjectionTerm`] builder holds a
+    /// tag lifted out of the ingested dataset to. That is the point: the two
+    /// feed the SAME projection artifact, and a caller-config tag that no codec
+    /// could have produced is a durable lie about a literal's identity once the
+    /// artifact is persisted and re-read. It also puts this constructor in line
+    /// with its own siblings, [`Self::iri`] and [`Self::typed_literal`], which
+    /// already validate rather than merely checking for emptiness.
+    ///
+    /// Reached by `serde` as well as by Rust: `VoidStaticValue`'s
+    /// [`Deserialize`] impl funnels the `language-literal` arm of a caller's
+    /// configuration document straight through here, so a malformed tag in a
+    /// config file is refused where it is written.
+    ///
+    /// [`ProjectionTerm`]: super::super::ProjectionTerm
+    ///
     /// # Errors
     ///
-    /// Rejects an empty language tag.
+    /// Rejects any language tag the grammar does not accept, the empty tag
+    /// included.
     pub fn language_literal(
         lexical: impl Into<String>,
         language: impl Into<String>,
         direction: Option<ProjectionDirection>,
     ) -> Result<Self, ProjectionError> {
         let language = language.into();
-        if language.is_empty() {
-            return Err(ProjectionError::configuration(
-                "VoID static literal language must not be empty",
-            ));
-        }
+        validate_language_tag(&language)?;
         Ok(Self::LanguageLiteral {
             lexical: lexical.into(),
             language,
@@ -1092,4 +1108,71 @@ fn validate_bound(value: usize, field: &str) -> Result<(), ProjectionError> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both halves of `VoidStaticValue::language_literal`'s gate, through BOTH
+    /// of its doors — the Rust constructor and the serde one a caller's config
+    /// document arrives by.
+    ///
+    /// The accept list is the load-bearing half. A VoID projection is published
+    /// alongside the dataset it describes, so a static statement must be able to
+    /// carry any tag that dataset's literals carry: `x-purrdf-afrikaans` and
+    /// `x-gmeow-english` are tags this workspace's own artifacts hold, and
+    /// `en-fr-jura` / `fr-be-fbcl` are tags approved W3C corpora hold. Refusing
+    /// one of those would make a describable dataset undescribable.
+    #[test]
+    fn a_static_language_literal_is_held_to_the_codec_language_grammar() {
+        for tag in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "abcdefgh",
+            "en-x-cantbethislong",
+        ] {
+            VoidStaticValue::language_literal("v", tag, None)
+                .unwrap_or_else(|e| panic!("{tag:?} must still configure: {}", e.message()));
+
+            let json = format!(r#"{{"kind":"language-literal","lexical":"v","language":"{tag}"}}"#);
+            serde_json::from_str::<VoidStaticValue>(&json)
+                .unwrap_or_else(|e| panic!("{tag:?} must still deserialize: {e}"));
+        }
+
+        for tag in [
+            "en us",
+            "1",
+            "9-9",
+            "123-456",
+            "en-",
+            "-",
+            "!!!",
+            "abcdefghi",
+            "",
+        ] {
+            let error = VoidStaticValue::language_literal("v", tag, None)
+                .expect_err("a non-tag must not become a configured literal");
+            assert!(
+                error.message().contains("invalid language tag"),
+                "{tag:?}: {}",
+                error.message()
+            );
+
+            let json = format!(r#"{{"kind":"language-literal","lexical":"v","language":"{tag}"}}"#);
+            let error = serde_json::from_str::<VoidStaticValue>(&json)
+                .expect_err("the serde door must refuse exactly what the Rust door refuses");
+            assert!(
+                error.to_string().contains("invalid language tag"),
+                "{tag:?}: {error}"
+            );
+        }
+    }
 }

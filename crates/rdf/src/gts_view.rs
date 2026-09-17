@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3};
+use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3, language_tag_refusal};
 
 use crate::RdfDiagnostic;
 use crate::gts_resolve::ensure_terms_terminate;
@@ -210,6 +210,41 @@ enum ScopeKey {
     Named(usize),
 }
 
+/// Refuse a caller-assembled graph whose language tags the RDF concrete-syntax
+/// grammar cannot read.
+///
+/// The reader gates `"l"` at its single decode point, so a graph off the wire
+/// cannot reach here carrying an unreadable tag. A graph a caller assembled can:
+/// `Graph.terms` and `Term::lang` are both `pub`, so building one field by field
+/// bypasses the reader entirely. That is the same door the Python `from_parts`
+/// constructor opens, and the reason it is gated there — this is its Rust twin,
+/// and leaving one open while closing the other would mean the language a fold
+/// view can render depends on which binding assembled it.
+///
+/// It refuses at construction for exactly the reason the self-reaching-term check
+/// above does: every renderer built on [`GtsFoldView::nq_token`] would otherwise
+/// emit `"x"@en us`, a token no parser reads, and catching it once here beats a
+/// guard inside each renderer. `with_config` already returns `Result`, so this
+/// costs no caller a signature change.
+fn ensure_language_tags_readable(graph: &Graph) -> Result<(), RdfDiagnostic> {
+    for (tid, term) in graph.terms.iter().enumerate() {
+        let Some(tag) = term.lang.as_deref() else {
+            continue;
+        };
+        if let Some(code) = language_tag_refusal(tag) {
+            return Err(RdfDiagnostic::error(
+                "gts-unreadable-language-tag",
+                format!(
+                    "GTS term {tid} carries a language tag the RDF concrete-syntax grammar \
+                     refuses ({code}): {tag:?} — every rendering of this term would emit a \
+                     token no parser reads, so the view refuses to exist"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl GtsFoldView {
     /// A view with no consumer vocabulary: the retag map stays empty (no
     /// namespace scanning is fabricated) and CURIE compaction uses only the
@@ -220,7 +255,9 @@ impl GtsFoldView {
     /// # Errors
     ///
     /// Returns `gts-self-reaching-term` when the graph's term table lets a term
-    /// resolve through itself — see [`GtsFoldView::with_config`].
+    /// resolve through itself, and `gts-unreadable-language-tag` when a term
+    /// carries a language tag the RDF concrete-syntax grammar refuses — see
+    /// [`GtsFoldView::with_config`].
     pub fn new(graph: Graph) -> Result<Self, RdfDiagnostic> {
         Self::with_config(graph, GtsFoldViewConfig::default())
     }
@@ -239,8 +276,16 @@ impl GtsFoldView {
     /// back an object whose every renderer is a process kill. This is the fold-time
     /// refusal GTS-SPEC §7.3 permits, applied once at construction rather than as a
     /// guard inside every walk.
+    ///
+    /// Returns `gts-unreadable-language-tag` when a term's `lang` is a tag the RDF
+    /// concrete-syntax grammar refuses. The reasoning is the same shape: the reader
+    /// gates the wire format's `"l"` field, so a graph off the wire cannot carry
+    /// one, but `Graph.terms` and `Term::lang` are `pub` and a caller can assemble
+    /// one field by field. Left standing, every renderer built on
+    /// [`GtsFoldView::nq_token`] would emit a token no parser reads.
     pub fn with_config(graph: Graph, config: GtsFoldViewConfig) -> Result<Self, RdfDiagnostic> {
         ensure_terms_terminate(&graph)?;
+        ensure_language_tags_readable(&graph)?;
         let mut view = Self {
             graph,
             iri_index: BTreeMap::new(),

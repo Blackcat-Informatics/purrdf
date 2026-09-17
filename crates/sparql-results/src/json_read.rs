@@ -370,6 +370,13 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
         "literal" | "typed-literal" => {
             let v = binding_value(obj)?;
             let language = obj_get(obj, "xml:lang").and_then(Json::as_str);
+            // A tag arriving in a DOCUMENT is parsed input, held to the same
+            // grammar as every other parsed tag in the workspace. Refusing here
+            // is what stops a federated `SERVICE` response from laundering an
+            // unserializable tag through this reader and back out a writer.
+            if let Some(detail) = language.and_then(crate::error::language_tag_refusal) {
+                return Err(fmt(&detail));
+            }
             // `its:dir` (the ITS — Internationalization Tag Set — namespace
             // convention) is the spelling the SPARQL 1.2 Query Results
             // specification uses for RDF 1.2 base direction — see
@@ -1364,5 +1371,79 @@ mod tests {
             matches!(result.unwrap_err(), Error::Format(_)),
             "error must be Error::Format"
         );
+    }
+
+    /// Tags the `LANGTAG` grammar refuses, and the neighbouring ones it must
+    /// still take. Shared with the XML reader's twin and with the
+    /// `STRLANG`/`STRLANGDIR` gate in `purrdf-sparql-eval` — one accept set,
+    /// whichever door a tag arrives through.
+    const REFUSED_TAGS: &[&str] = &["en us", "1", "9-9", "123-456", "en-", "-", "!!!"];
+    const ACCEPTED_TAGS: &[&str] = &[
+        "en",
+        "en-US",
+        "zh-Hans-CN",
+        "de-CH-x-phonebk",
+        "i-enochian",
+        "x-purrdf-afrikaans",
+        "x-gmeow-english",
+        "en-fr-jura",
+        "fr-be-fbcl",
+    ];
+
+    fn srj_with_lang(tag: &str) -> Vec<u8> {
+        format!(
+            "{{\"head\":{{\"vars\":[\"l\"]}},\"results\":{{\"bindings\":\
+             [{{\"l\":{{\"type\":\"literal\",\"value\":\"x\",\"xml:lang\":\"{tag}\"}}}}]}}}}"
+        )
+        .into_bytes()
+    }
+
+    /// A results DOCUMENT is parsed input. A federated `SERVICE` response is
+    /// how a hostile or sloppy endpoint's tag gets in, and before this gate it
+    /// was copied verbatim into a `TermValue` and written straight back out.
+    #[test]
+    fn a_refused_language_tag_in_a_document_is_refused_with_its_diagnostic_code() {
+        for tag in REFUSED_TAGS {
+            let error = from_json(&srj_with_lang(tag))
+                .expect_err("a tag the grammar refuses must not decode");
+            let Error::Format(message) = &error else {
+                panic!("expected Error::Format for {tag:?}, got {error:?}");
+            };
+            assert!(
+                message.starts_with("SPARQL-JSON: invalid language tag "),
+                "the refusal must name the format and the tag: {message}"
+            );
+            assert!(
+                message.contains(&format!("`{tag}`")),
+                "the refusal must quote the offending tag verbatim, since this \
+                 crate's error carries no position: {message}"
+            );
+            assert!(
+                message.contains("(langtag-"),
+                "the refusal must surface the grammar's own diagnostic code, not \
+                 collapse to a generic sentence: {message}"
+            );
+        }
+    }
+
+    /// The over-refusal half. `i-enochian`, the two `x-` private-use tags and
+    /// the two terminal-only shapes are exactly what a profile chosen one notch
+    /// too strict would start silently rejecting on ingress.
+    #[test]
+    fn every_well_formed_language_tag_still_reads_back() {
+        for tag in ACCEPTED_TAGS {
+            let parsed = from_json(&srj_with_lang(tag))
+                .unwrap_or_else(|e| panic!("{tag:?} must still parse: {e}"));
+            assert_eq!(
+                parsed.rows[0][0],
+                Some(TermValue::Literal {
+                    lexical_form: "x".to_owned(),
+                    datatype: RDF_LANGSTRING.to_owned(),
+                    language: Some((*tag).to_owned()),
+                    direction: None,
+                }),
+                "the gate must not alter the tag it lets through ({tag:?})"
+            );
+        }
     }
 }

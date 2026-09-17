@@ -48,3 +48,45 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// The language-tag grammar a tag read out of a results DOCUMENT is held to.
+///
+/// The same [`purrdf_iri::langtag::Profile`] the RDF codec readers, the SPARQL
+/// parser and `RdfLiteral::validate_components` all name, because a results
+/// document is parsed input like any other and the grammar has one owner.
+const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
+    purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
+
+/// Judge an `xml:lang` read out of a results document, returning the refusal
+/// prose when the grammar rejects it and [`None`] when it accepts.
+///
+/// # Why the readers need this at all
+///
+/// [`crate::from_json`] and [`crate::from_xml`] are public API, and they are how
+/// a federated `SERVICE` response enters the engine. A tag that arrives from a
+/// hostile or merely sloppy endpoint is otherwise copied verbatim into a
+/// [`purrdf_core::TermValue`] and written straight back out — `"x"@en us` in
+/// TSV, `"xml:lang":"en us"` in JSON — which no reader, including this crate's
+/// own, can parse back. Validating on ingress is what the RDF codec readers
+/// already do for exactly the same input class.
+///
+/// # What the message carries
+///
+/// The grammar's own [`diagnostic_code`](purrdf_iri::langtag::LanguageTagError::diagnostic_code)
+/// and [`message`](purrdf_iri::langtag::LanguageTagError::message), in the
+/// `(code: prose)` shape the CSVW and codec refusals already use, plus the
+/// offending tag verbatim. There is no position to preserve: this crate's
+/// [`Error`] is a `String` payload with no location field, and neither reader's
+/// intermediate tree records source offsets, so the quoted tag IS the locating
+/// information available. The caller prefixes its own format name.
+pub(crate) fn language_tag_refusal(lang: &str) -> Option<String> {
+    purrdf_iri::langtag::parse_with(lang, LANGTAG_PROFILE)
+        .err()
+        .map(|error| {
+            format!(
+                "invalid language tag `{lang}` ({}: {})",
+                error.diagnostic_code(),
+                error.message()
+            )
+        })
+}
