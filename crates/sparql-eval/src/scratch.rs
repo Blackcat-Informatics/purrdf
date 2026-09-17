@@ -297,9 +297,14 @@ impl ScratchInterner {
     /// `PropertyFunction`'s rows (`crate::property_fn_eval`), and a
     /// `CustomAggregate`'s result (`crate::modifier::eval_custom_aggregate`) —
     /// and none of those traits constrains the language string at all. So do the
-    /// composite-datatype lifters (`crate::cdt_fn`, `crate::cdt_unfold`,
-    /// `crate::list_fn`), whose members are RDF terms parsed back out of a
-    /// literal's LEXICAL FORM rather than terms the kernel ever admitted.
+    /// composite-datatype lifters `crate::cdt_fn` and `crate::cdt_unfold`, whose
+    /// members are RDF terms parsed back out of a literal's LEXICAL FORM rather
+    /// than terms the kernel ever admitted.
+    ///
+    /// `crate::list_fn` goes through this door too, but for uniformity rather
+    /// than need: it walks an `rdf:List` in the dataset, so its members ARE
+    /// kernel-admitted and the judgement there is vacuous. Its own `intern` says
+    /// so rather than borrowing the lifters' justification.
     ///
     /// A value carrying a tag `LANGTAG_PROFILE` refuses is **not interned**: the
     /// arena is untouched, no id is minted, and no scratch bytes are charged.

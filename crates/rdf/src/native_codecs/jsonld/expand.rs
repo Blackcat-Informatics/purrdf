@@ -1537,14 +1537,37 @@ fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
 /// production refused. JSON-LD decode diagnostics carry no line/column or JSON
 /// pointer (the `serde_json` value tree this walks has discarded both by the
 /// time expansion runs), which this does not change.
-fn validate_language_tag(tag: &str) -> Result<(), RdfDiagnostic> {
+/// # Why it is `pub(super)`, and what `what` is for
+///
+/// The funnel argument above covers every tag that becomes a LITERAL's tag. It
+/// does not cover a tag that is only ever written back out: a `@context`'s
+/// `@language` — default or per-term — is serialized into every compacted
+/// document by [`super::carrier`], so an unjudged one makes this codec emit
+/// `{"@context":{"@language":"en us"}}`, bytes whose own `@language` member no
+/// reader in this workspace will take back the moment a bare string uses it.
+/// [`super::context::compiler`] therefore calls this same function at the two
+/// context entry points, and `what` names the position so the two callers'
+/// messages differ while the grammar and the diagnostic code do not. There is
+/// deliberately no second copy of the profile inside the codec.
+fn validate_language_tag_at(tag: &str, what: &str) -> Result<(), RdfDiagnostic> {
     match langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded) {
         Ok(_) => Ok(()),
         Err(error) => Err(RdfDiagnostic::error(
             error.diagnostic_code(),
-            format!("JSON-LD: invalid language tag {tag:?}: {error}"),
+            format!("JSON-LD: invalid {what} {tag:?}: {error}"),
         )),
     }
+}
+
+/// [`validate_language_tag_at`] at a value's own `@language`.
+fn validate_language_tag(tag: &str) -> Result<(), RdfDiagnostic> {
+    validate_language_tag_at(tag, "language tag")
+}
+
+/// [`validate_language_tag_at`] for [`super::context::compiler`], whose two
+/// `@language` entry points name their own positions.
+pub(super) fn validate_context_language_tag(tag: &str, what: &str) -> Result<(), RdfDiagnostic> {
+    validate_language_tag_at(tag, what)
 }
 
 fn lower_literal(literal: &Literal) -> Result<RdfTerm, RdfDiagnostic> {

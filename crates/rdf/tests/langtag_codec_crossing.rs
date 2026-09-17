@@ -39,6 +39,7 @@
 //! up in a user's data. So every refusal below is paired with the neighbour
 //! that must still be accepted.
 
+use purrdf_rdf::native_codecs::jsonld::CompiledJsonLdContext;
 use purrdf_rdf::{NativeRdfFormat, SerializeGraph, parse_dataset, serialize_dataset};
 
 /// The subject and predicate every fixture in this file uses.
@@ -505,6 +506,70 @@ fn every_jsonld_language_site_is_gated_both_ways() {
                 error.code,
                 error.message
             );
+        }
+    }
+}
+
+/// A compaction `@context` is OUTPUT, so its `@language` is judged even when no
+/// value ever uses it.
+///
+/// The escape the value-side funnel cannot see: `CompiledJsonLdContext` is a
+/// public entrance taking a caller's own context, and `carrier.rs` serializes
+/// `canonical_context()` into **every** compacted document. So a context whose
+/// `@language` is never applied to a bare string never reaches `lower_literal`,
+/// the only place the value side asks the grammar — and purrdf writes
+/// `{"@context":{"@language":"en us"}}`, a document whose own context is
+/// unreadable the moment anything uses it. Both the default `@language` and a
+/// term definition's are on that path, so both are driven.
+///
+/// The accept half is the load-bearing one, as always: a compaction context
+/// tagged `x-purrdf-afrikaans` or `i-enochian` must still compile.
+#[test]
+fn a_compaction_context_language_is_gated_both_ways() {
+    for tag in TREE_MUST_SURVIVE {
+        for (site, context) in [
+            ("@context @language", format!("{{\"@language\":\"{tag}\"}}")),
+            (
+                "term @language",
+                format!("{{\"p\":{{\"@id\":\"{PREDICATE}\",\"@language\":\"{tag}\"}}}}"),
+            ),
+        ] {
+            CompiledJsonLdContext::compile_json(context.as_bytes(), None).unwrap_or_else(|error| {
+                panic!("{site}: {tag:?} must still compile, got {}", error.message)
+            });
+        }
+    }
+
+    for (refused, neighbour) in TREE_MUST_REFUSE {
+        for (site, context) in [
+            (
+                "@context @language",
+                format!("{{\"@language\":\"{refused}\"}}"),
+            ),
+            (
+                "term @language",
+                format!("{{\"p\":{{\"@id\":\"{PREDICATE}\",\"@language\":\"{refused}\"}}}}"),
+            ),
+        ] {
+            let Err(error) = CompiledJsonLdContext::compile_json(context.as_bytes(), None) else {
+                panic!("{site}: {refused:?} must be refused — it would be written back out");
+            };
+            assert!(
+                error.code.starts_with("langtag-"),
+                "{site}: {refused:?} must be refused by the langtag grammar, got code {:?} ({})",
+                error.code,
+                error.message
+            );
+        }
+
+        // The neighbour one edit away still compiles, at both sites.
+        for context in [
+            format!("{{\"@language\":\"{neighbour}\"}}"),
+            format!("{{\"p\":{{\"@id\":\"{PREDICATE}\",\"@language\":\"{neighbour}\"}}}}"),
+        ] {
+            CompiledJsonLdContext::compile_json(context.as_bytes(), None).unwrap_or_else(|error| {
+                panic!("{neighbour:?} must stay accepted, got {}", error.message)
+            });
         }
     }
 }

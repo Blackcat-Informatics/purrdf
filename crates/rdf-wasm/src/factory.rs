@@ -86,7 +86,8 @@ impl DataFactory {
         Term::from_inner(TermInner::Blank(label))
     }
 
-    /// `literal(value, language?)` → a plain (`xsd:string`) or language-tagged literal.
+    /// `literal(value, language?)` → a plain (`xsd:string`) or language-tagged literal,
+    /// **judged**. This is the JS door: `DataFactory.prototype.literal`.
     ///
     /// The RDF/JS spec's unified `literal(value, languageOrDatatype)` — where the second
     /// argument may be a string *or* a `NamedNode` — is presented by the TypeScript
@@ -94,6 +95,13 @@ impl DataFactory {
     /// (A `#[wasm_bindgen]`-exported type cannot be recovered from an untyped `JsValue`
     /// in Rust, so the polymorphism lives one layer out, in JS.) For base-direction
     /// literals (RDF 1.2) use [`DataFactory::directional_literal`].
+    ///
+    /// Its Rust name is not `literal`, and that is the point: `literal` is the
+    /// published infallible Rust signature (see [`DataFactory::literal`]), which
+    /// `purrdf-wasm` shipped in `rust-v2.0.2` and may not change. JS never sees a
+    /// Rust name — `js_name = literal` is the whole binding — so the refusal can
+    /// be added to the JS surface, which is where the parity gap was, without
+    /// touching the Rust surface, which is where the semver guarantee is.
     ///
     /// # Errors
     ///
@@ -106,7 +114,11 @@ impl DataFactory {
     /// a `Dataset` freeze or a serializer refuses it, at a call site that never
     /// saw the string.
     #[wasm_bindgen(js_name = literal)]
-    pub fn literal(&self, value: String, language: Option<String>) -> Result<Term, JsError> {
+    pub fn checked_literal(
+        &self,
+        value: String,
+        language: Option<String>,
+    ) -> Result<Term, JsError> {
         let literal = match language {
             Some(language) => RdfLiteral::language_tagged(value, language),
             None => RdfLiteral::simple(value),
@@ -222,6 +234,43 @@ impl DataFactory {
     }
 }
 
+/// The Rust-only door. Not `#[wasm_bindgen]`-exported, so it adds nothing to the
+/// JS surface — but it is `pub` on a `crate-type = ["cdylib", "rlib"]` crate that
+/// `lib.rs` re-exports, so it is real published Rust API and carries the ordinary
+/// semver guarantee.
+impl DataFactory {
+    /// `literal(value, language?)` → a plain (`xsd:string`) or language-tagged
+    /// literal, built from `value` and `language` exactly as given.
+    ///
+    /// # This door does not ask the grammar
+    ///
+    /// `literal` does **not** judge `language`: `f.literal("x".into(), Some("en
+    /// us".into()))` hands back a `Term` carrying that tag, and it will be refused
+    /// later — by a `Dataset` freeze or by whatever serializer eventually meets it
+    /// — at a call site that never saw the string. That is the same category as
+    /// the infallible constructor [`RdfLiteral::language_tagged`] it wraps: the
+    /// caller wrote the tag, so the caller owns it.
+    ///
+    /// It stays that way because this signature is published: `purrdf-wasm`
+    /// `rust-v2.0.2` shipped `fn literal(&self, String, Option<String>) -> Term`,
+    /// and no version bump is on the table. Turning it fallible would break every
+    /// Rust caller that has one.
+    ///
+    /// For the judged door use [`DataFactory::checked_literal`], which is also
+    /// what JS's `DataFactory.prototype.literal` is bound to — the JS surface is
+    /// where the parity gap with the C ABI and the Python binding was, and JS
+    /// never sees a Rust signature, so it gets the refusal while this one keeps
+    /// its shape.
+    #[must_use]
+    pub fn literal(&self, value: String, language: Option<String>) -> Term {
+        let literal = match language {
+            Some(language) => RdfLiteral::language_tagged(value, language),
+            None => RdfLiteral::simple(value),
+        };
+        Term::literal(literal)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,18 +300,50 @@ mod tests {
     #[test]
     fn plain_and_language_literals() {
         let f = DataFactory::new();
-        let plain = f
-            .literal("hello".to_owned(), None)
-            .expect("no tag to judge");
+        let plain = f.literal("hello".to_owned(), None);
         assert_eq!(plain.term_type(), "Literal");
         assert_eq!(plain.value(), "hello");
         assert_eq!(plain.language(), "");
         assert_eq!(plain.datatype().unwrap().value(), XSD_STRING);
 
-        let lang = f
-            .literal("hello".to_owned(), Some("en".to_owned()))
-            .expect("`en` is a language tag");
+        let lang = f.literal("hello".to_owned(), Some("en".to_owned()));
         assert_eq!(lang.language(), "en");
+
+        // The judged door agrees with the plain one on everything it admits.
+        let checked = f
+            .checked_literal("hello".to_owned(), Some("en".to_owned()))
+            .expect("`en` is a language tag");
+        assert!(checked.equals(&lang));
+        assert!(
+            f.checked_literal("hello".to_owned(), None)
+                .expect("no tag to judge")
+                .equals(&plain)
+        );
+    }
+
+    /// The published Rust signature, pinned.
+    ///
+    /// `purrdf-wasm` `rust-v2.0.2` shipped `literal` as infallible — it is `pub`
+    /// on an `rlib`, re-exported by `lib.rs`, so a Rust caller holds
+    /// `let t: Term = f.literal(v, lang);` and no version bump is permitted. This
+    /// test fails to COMPILE if the return type ever becomes a `Result` again,
+    /// which is the only way to catch it: a fallible `literal` would still pass
+    /// every behavioural assertion in this file.
+    #[test]
+    fn the_rust_literal_door_is_infallible_and_does_not_ask_the_grammar() {
+        let f = DataFactory::new();
+        let _: Term = f.literal("v".to_owned(), Some("en".to_owned()));
+
+        // And it admits what it is handed, tag or not: the caller wrote the tag,
+        // so the caller owns it, exactly as `RdfLiteral::language_tagged` does.
+        let ungrammatical: Term = f.literal("v".to_owned(), Some("en us".to_owned()));
+        assert_eq!(ungrammatical.term_type(), "Literal");
+        assert_eq!(ungrammatical.language(), "en us");
+        // The judged door, on the identical arguments, refuses it.
+        assert!(
+            validate_literal(&RdfLiteral::language_tagged("v", "en us")).is_err(),
+            "the two doors must disagree here — that is what makes them two doors"
+        );
     }
 
     #[test]
@@ -314,7 +395,8 @@ mod tests {
             "en-x-cantbethislong",
         ] {
             assert!(
-                f.literal("v".to_owned(), Some((*tag).to_owned())).is_ok(),
+                f.checked_literal("v".to_owned(), Some((*tag).to_owned()))
+                    .is_ok(),
                 "{tag} is a tag real data carries and must still build a Literal"
             );
             assert!(
@@ -357,7 +439,7 @@ mod tests {
 
         // An absent tag is not a malformed one: the plain-literal door is
         // untouched.
-        assert!(f.literal("v".to_owned(), None).is_ok());
+        assert!(f.checked_literal("v".to_owned(), None).is_ok());
     }
 
     #[test]
