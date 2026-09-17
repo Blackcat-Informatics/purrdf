@@ -128,13 +128,33 @@
 //! reaching for, and the refusal names both:
 //!
 //! * **shards, per-language segments, a partitioned index** — anything whose
-//!   scores are already comparable — merge inside ONE producer, which owns that
-//!   comparability;
+//!   scores are already comparable, with no weight meant to stand between them —
+//!   merge inside ONE producer, which owns that comparability;
 //! * **different scoring laws** — one stratum each, where the weighted sum across
 //!   strata is the design rather than an accident. Taking this exit for shards
 //!   would distort the score rather than merge it, because each stratum is a
 //!   summand: a candidate held by two shards-as-strata would collect two
 //!   contributions where the host meant one family's worth.
+//!
+//! The first exit takes **two** things, not one: comparable scores, *and* a
+//! weighting that can ride inside the score. Sharing a law buys only the first,
+//! and this is the case the rule is most often read past. Two classes over one
+//! embedding space — a heading class and a body class — share a law in every
+//! sense, but if the host means one to **outweigh** the other and the shared
+//! score is a *bounded* metric (a cosine distance in `[0, 2]`, lower-better), the
+//! merge cannot carry the weight. Sorting merged by `d / w`, a heading beats a
+//! body hit only past a similarity edge of `(1 - s_c)(1 - w_h / w_c)`: at a
+//! weight ratio of one half that is `0.45` against a body similarity of `0.1` but
+//! `0.0005` against `0.999` and exactly zero against a perfect match. The edge
+//! vanishes precisely where the top-k contest is decided and is largest for the
+//! worst matches, so the weighting is both backwards and silently lost — an
+//! unweighted merge still returns a plausible ranking. Such a pair takes the
+//! **second** exit despite the shared law, because a [`FusionProfile`] weight
+//! acts in rank space — and rank space is what a stratum is. An unbounded score
+//! needs none of this: BM25F's field weights are natively a multiplicative weight
+//! the score carries at every magnitude, so that case merges inside one producer
+//! as the first exit says. The question to ask over a shared law is therefore:
+//! *do you want these two weighted differently, and is the score bounded?*
 //!
 //! # It mints no vocabulary
 //!

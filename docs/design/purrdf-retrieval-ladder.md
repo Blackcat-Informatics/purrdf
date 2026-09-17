@@ -216,6 +216,41 @@ list — a weight applied to ranks preserves its declared ratio at rank 1,
 where contests are decided, instead of decaying to nothing as matches
 approach perfection the way a multiplier on a bounded distance does.
 
+That last clause decides a configuration question, so it is stated as a
+rule rather than left as an aside. One stratum carries one producer, and
+the refusal at registration names two exits: producers whose scores are
+already comparable merge inside one producer; producers that score by
+different laws take a stratum each. **The first exit requires two things,
+not one: comparable scores, *and* that the host's intended weighting can
+ride inside the score.** Sharing a law buys only the first.
+
+Two classes over one embedding space — headings and bodies — share a law
+exactly, but if one is meant to outweigh the other and the shared score
+is a bounded metric (a cosine distance in `[0, 2]`, lower-better), a
+merge sorted by `d / w` gives the favoured class an edge of only
+`(1 - s)(1 - w_low/w_high)`: `0.45` against a match at similarity `0.1`,
+`0.0005` against one at `0.999`, and zero against a perfect match. The
+weighting is largest where it matters least and vanishes where the top-k
+contest is decided, so the merge silently drops it — and an unweighted
+merge still returns a plausible ranking, which is why nothing looks
+broken.
+
+The margin is only half the result, and the other half is why this is
+structural rather than a tuning problem. It is also **distribution-free**:
+for a weighted threshold `s'`, the expected number of competitors
+outranking a hit is `n · (1 − F(s'))` — *linear in corpus size* — so no
+fixed weight ratio survives corpus growth, even away from the boundary
+where the margin argument bites hardest. No choice of weight inside a
+bounded score is a fix; the weight has to leave the score.
+
+So such a pair takes **a stratum each**, where the fusion weight acts in
+rank space — and rank space is what a stratum is. An unbounded score
+carries a multiplicative weight at every magnitude (BM25F's field weights
+are natively this), so that configuration belongs at the first exit. The
+question a host can act on while reading the refusal is therefore: *do
+you want these two weighted differently, and is the score bounded? Then
+separate strata.*
+
 ## 6. Producer status survives fusion — the only place it can die
 
 Every producer's stream already names its own completeness: which
@@ -245,24 +280,40 @@ would then assert a completeness the fusion never established. The
 trailer reports the state each producer is in; it does not put producers
 into a state so that it has something to report.
 
-## 7. Fused is top-k by construction; unfused streams without bound
+## 7. Fused is top-k by construction; unfused carries no cross-stratum accounting
 
 The two rungs differ in kind, and the difference is algebraic rather than
-an implementation budget.
+an implementation budget. The discriminator is the **absence versus
+presence of cross-stratum accounting**, and not a difference in how
+results are produced.
 
-Unfused enumeration is unbounded: each producer emits in its own rank
-order, no cross-producer state exists, and the answer is N independent
-streams of any length under the evaluator's ordinary windowed execution.
+Unfused enumeration is **materialized per stratum**. `execute` calls the
+evaluator's `query_with_options_view`, receives a fully materialized
+`SparqlResult::Solutions`, converts it to a `Vec<(u64, Term)>` and hands
+back a `VecDeque` behind `RankedStreamImpl`. There is no windowed or
+incremental execution to rest a claim on: the evaluator exposes no
+cursor, stream or iterator surface at all, and is materialized at every
+operator. So the unfused rung is bounded by what a stratum's own result
+costs, not by the consumer's depth — a consumer that reads one row has
+already paid for all of them. What the rung *does* give is that no
+cross-stratum accounting exists: with no summation, per-stream properties
+compose, each producer emits in its own rank order, and N streams are N
+independent facts with N receipts. That, and not unboundedness, is the
+property the rung is for. (Making enumeration incremental is separate,
+larger work; this paragraph records what ships.)
 
 Fused enumeration is inherently top-k, because §5 sums across strata: no
 item can be emitted until it is known not to reappear in another
 stratum's stream and raise its total. Contributions fall monotonically
 with rank, so a threshold over the stream heads bounds how deep the
-fusion must look to certify its next emission — top-k terminates with
-memory proportional to the frontier. *Complete* fused enumeration, by
-contrast, would need to remember everything already emitted, and this
-surface does not offer it as though it were free. A caller who wants to
-walk everything wants the unfused rung, which is built for exactly that.
+fusion must look to certify its next emission — certification is bounded,
+and the frontier is the memory. *Complete* fused enumeration stays
+excluded for its own reason, which survives any change to how streams are
+produced: complete enumeration may not discard, so it must retain, and
+retention is linear wherever it is put — emitted-set, frontier or spill.
+This surface does not offer it as though it were free. A caller who wants
+to walk everything wants the unfused rung, whose cost is one stratum's
+materialized result.
 
 ## 8. `plan` is a pure function, and a plan knows what it assumed
 

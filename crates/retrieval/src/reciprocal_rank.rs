@@ -608,6 +608,45 @@ mod tests {
         assert!(contribution(Fixed::ONE, 0, 60).is_err());
     }
 
+    /// The precision floor a caller choosing a weight is warned about, measured
+    /// rather than asserted: a contribution is an integer count of raw units, so
+    /// a weight near the raw unit loses a visible share of *every* contribution
+    /// before anything is summed. At `w_raw = 1000` and `K = 60` the rank-1 value
+    /// is `1000 / 61 = 16.39…` and both rules emit exactly 16 raw units. The same
+    /// division at the whole-number weight `10^12` keeps eleven digits more,
+    /// which is the two anchors [`FusionProfile::new`](crate::FusionProfile::new)
+    /// quotes for the relation `(K + rank) / w_raw`.
+    #[test]
+    fn a_weight_near_the_raw_unit_truncates_a_measurable_share_of_each_contribution() {
+        let small = Fixed::from_raw(1_000);
+        let emitted = weighted(small, 1, 60).into_raw();
+        assert_eq!(emitted, 16, "1000 / 61 = 16.39… truncates to 16 raw units");
+        assert_eq!(
+            value(small, 1, 60).into_raw(),
+            emitted,
+            "the truncated rule lands on the same 16 at this weight"
+        );
+
+        // The shortfall exactly, in thousandths of a raw unit, so the ~2.4% the
+        // docs quote is a measurement and not a rounding: 1000·1000/61 = 16393
+        // thousandths wanted, 16000 emitted, 393 lost.
+        let wanted_thousandths = 1_000_i128 * 1_000 / 61;
+        assert_eq!(wanted_thousandths, 16_393);
+        assert_eq!(wanted_thousandths - emitted * 1_000, 393);
+
+        // And the loss is bounded by one raw unit, which is the `(K + rank) /
+        // w_raw` relation: the emitted value is the floor of the exact quotient.
+        assert!(emitted * 61 <= 1_000 && (emitted + 1) * 61 > 1_000);
+
+        // The other anchor. A whole-number weight keeps the same one-unit loss
+        // against a contribution ten orders of magnitude larger.
+        let whole = Fixed::from_raw(SCALE);
+        let whole_emitted = weighted(whole, 1, 60).into_raw();
+        assert_eq!(whole_emitted, 16_393_442_622);
+        assert_eq!(whole_emitted, SCALE / 61);
+        assert!(whole_emitted * 61 <= SCALE && (whole_emitted + 1) * 61 > SCALE);
+    }
+
     /// A negative weight truncates toward zero under the weighted rule, the same
     /// direction every other rounding in the layer takes.
     #[test]

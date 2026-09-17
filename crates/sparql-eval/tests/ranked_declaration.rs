@@ -352,6 +352,45 @@ fn the_stratum_refusal_names_the_stratum_both_producers_and_both_exits() {
 }
 
 #[test]
+fn the_stratum_refusal_names_the_shared_law_that_still_needs_two_strata() {
+    // The third configuration, and the one a two-way "do they share a law" test
+    // routes to the wrong exit. Two producers over one embedding space — a
+    // heading class and a body class — share a law in every sense, so the merge
+    // exit reads as the obvious repair. But if the host means one class to
+    // outweigh the other and the score is a bounded metric, the merge cannot
+    // carry that weight: the required similarity edge (1 - s)(1 - w_low/w_high)
+    // is largest for the worst matches and decays to zero exactly as matches
+    // approach perfect, which is where the top-k contest is decided. The loss is
+    // silent — an unweighted merge still returns a plausible ranking — so the
+    // message must name the case rather than leave it to be inferred.
+    let message = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(EX_REL, relation(), declaration());
+        registry.register_ranked(EX_OTHER, relation(), declaration());
+    });
+    assert!(
+        message.contains("TWO things, not one"),
+        "the first exit takes comparable scores AND a weighting the score can carry: {message}"
+    );
+    assert!(
+        message.contains("weighted differently, and is the score bounded"),
+        "the question a host can answer while reading the message: {message}"
+    );
+    assert!(
+        message.contains("(1 - s)(1 - w_low/w_high)"),
+        "the margin that vanishes at the top of the list: {message}"
+    );
+    assert!(
+        message.contains("rank space is what a stratum is"),
+        "where such a weight can act instead: {message}"
+    );
+    assert!(
+        message.contains("Only an unbounded score"),
+        "the score that does carry a differential weight through a merge: {message}"
+    );
+}
+
+#[test]
 fn a_refused_stratum_leaves_the_registry_exactly_as_it_was() {
     // The discipline the duplicate-IRI refusal keeps: validation precedes every
     // write, so a host that catches the panic is not left with a half-registered

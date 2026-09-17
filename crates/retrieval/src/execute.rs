@@ -45,7 +45,9 @@
 //! depends on the fusion profile's weights and smoothing constant, which are
 //! deliberately not a plan input, so the contribution is attached at `fuse` time.
 //! Keeping the executor profile-free is what lets the unfused rung be consumed
-//! without bound.
+//! with no fusion law in the path at all. It is not what makes it cheap: a
+//! stratum's rows are materialized by the evaluator before the first one is
+//! read, so that rung costs what the stratum's own result costs.
 //!
 //! Attaching it is not left to the caller to re-derive: a stream here is carried
 //! into the fusion protocol by

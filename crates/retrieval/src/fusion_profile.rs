@@ -296,6 +296,63 @@ impl FusionProfile {
     /// has been switched off. Build the whole map with one constructor, and
     /// prefer the one that takes the number a reader means.
     ///
+    /// # A weight here acts in rank space, which is what a bounded score cannot
+    ///
+    /// A weight declared here multiplies a contribution derived from a **rank**,
+    /// never from a producer's own score, and that is the property it is worth
+    /// declaring. A stratum weighted twice its neighbour contributes twice as
+    /// much at rank 1 and still twice as much at rank 1000: the declared ratio
+    /// holds at every magnitude.
+    ///
+    /// A weight folded into a *bounded* score does not behave that way, and the
+    /// difference decides a configuration question one layer below. Merging two
+    /// producers into one takes two things, not one — comparable scores, and a
+    /// weighting the score itself can carry — and a shared scoring law buys only
+    /// the first. Two producers over one embedding space (a heading class and a
+    /// body class) share a law in every sense, so the registry's
+    /// one-stratum-one-producer refusal reads as an invitation to merge them. If
+    /// the host also means one class to **outweigh** the other and the score is a
+    /// cosine distance in `[0, 2]` (lower-better), that merge cannot carry the
+    /// weight: sorting merged by `d / w`, the favoured class wins only past a
+    /// similarity edge of `(1 - s)(1 - w_low/w_high)`, which at a weight ratio of
+    /// one half is `0.45` against a match at similarity `0.1`, `0.0005` against
+    /// one at `0.999`, and exactly zero against a perfect match — largest for the
+    /// worst matches and vanishing where the top-k contest is decided. The margin
+    /// is not the only half of it: for a weighted threshold `s'` the expected
+    /// number of competitors outranking a hit is `n · (1 - F(s'))`, linear in
+    /// corpus size, so no fixed weight ratio survives corpus growth even away
+    /// from the boundary. Such a pair belongs in **two strata weighted here**,
+    /// despite the shared law. An unbounded score — BM25F's field weights are
+    /// natively one — carries a differential weight through a merge and needs no
+    /// second stratum for it.
+    ///
+    /// # Fusion precision degrades as a weight approaches the raw unit
+    ///
+    /// A weight near `Fixed::from_raw(1)` is legal, and sometimes exactly what a
+    /// caller means; what it costs is resolution, paid per contribution rather
+    /// than once at the end. A contribution is an integer count of raw units
+    /// truncated toward zero, and at rank `r` it is about `w_raw / (K + r)` of
+    /// them, so the truncation discards at most one unit out of that many. The
+    /// relative loss is therefore about
+    ///
+    /// ```text
+    /// (K + rank) / w_raw
+    /// ```
+    ///
+    /// — a floor set by the weight's **raw magnitude**, not by its ratio to its
+    /// neighbours, and the one quantity in this layer that reads a weight
+    /// absolutely. Two anchors, both at `K = 60` and rank 1: a weight of 1000 raw
+    /// units makes `1000 / 61 = 16.39…`, emitted as exactly **16** raw units, so
+    /// about 2.4% of every contribution is gone before anything is summed; the
+    /// whole-number weight `Fixed::from_integer(1)` (`10^12` raw) makes
+    /// `16393442622.95…`, emitted as `16393442622`, losing about `6 · 10^-11`
+    /// relative.
+    ///
+    /// Nothing refuses a small weight and nothing should. Scaling the entire
+    /// weight vector up raises this floor out of sight while preserving every
+    /// ratio, every fused order and every tie-break — the same scaling the type's
+    /// own documentation reads for depth.
+    ///
     /// # Errors
     ///
     /// * [`FusionError::InvalidK`] when `k == 0`.

@@ -415,13 +415,14 @@ where
 /// [`execute`] deliberately carries no contribution. A contribution depends on
 /// the fusion profile's weights and smoothing constant, the profile is
 /// deliberately not a planning input, and keeping the executor profile-free is
-/// what lets the unfused rung be consumed without bound. [`fuse`] nonetheless
+/// what lets the unfused rung be consumed with no fusion law in the path.
+/// [`fuse`] nonetheless
 /// requires `(rank, contribution, item)`. This adapter is that conversion, and
 /// it is the *only* place the crate performs it.
 ///
 /// It is public because §4 of the design record makes every stage boundary a
-/// place to both stop and start. A caller that stops at `execute` — to enumerate
-/// without bound, or to combine the streams its own way — and later decides to
+/// place to both stop and start. A caller that stops at `execute` — to walk a
+/// stratum's rows itself, or to combine the streams its own way — and later decides to
 /// fuse after all must not have to re-derive `w * recip(K + rank)`: two
 /// derivations of one law drift, silently, in the direction of a plausible
 /// order. So the derivation is exported rather than duplicated, and `search` is

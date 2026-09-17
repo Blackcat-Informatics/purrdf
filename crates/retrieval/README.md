@@ -87,12 +87,29 @@ concatenated: the second producer's best row would surface below the whole of th
 first's output and decay as though it had lost to rows it never competed with. So
 the configuration is refused where it is committed, in `register_ranked`, and the
 refusal names the two ways to express it instead. Producers whose scores are
-already comparable — shards, per-language segments, a partitioned index — merge
-inside **one** producer, which owns that comparability. Producers that score by
-different laws take **a stratum each**, where the weighted sum across strata is
-the design. The first exit is not interchangeable with the second: each stratum
-is a summand, so shards recast as strata would give a candidate they both hold
-two contributions where the host meant one family's worth.
+already comparable — shards, per-language segments, a partitioned index — and
+between which no weight is meant to stand, merge inside **one** producer, which
+owns that comparability. Producers that score by different laws take **a stratum
+each**, where the weighted sum across strata is the design. The first exit is not
+interchangeable with the second: each stratum is a summand, so shards recast as
+strata would give a candidate they both hold two contributions where the host
+meant one family's worth.
+
+The first exit takes **two** things, not one: comparable scores, *and* a
+weighting that can ride inside the score. Sharing a law buys only the first. Two
+classes over one embedding space — headings and bodies, say — share a law
+exactly, but if one is meant to **outweigh** the other and the shared score is a
+*bounded* metric (a cosine distance in `[0, 2]`, lower-better), the merge cannot
+carry the weight: sorting merged by `d / w`, the favoured class wins only past a
+similarity edge of `(1 - s)(1 - w_low/w_high)`, which at a weight ratio of one
+half is `0.45` against a match at similarity `0.1` and `0.0005` against one at
+`0.999` — largest for the worst matches, and zero for a perfect one, which is
+where the top-k contest is decided. That pair takes **a stratum each** despite
+the shared law, because such a weight can act only in rank space, and rank space
+is what a stratum is. An unbounded score — BM25F's field weights are natively one
+— does carry a differential weight through a merge, and belongs at the first
+exit. So the question to ask over a shared law is: *do you want these two
+weighted differently, and is the score bounded?*
 
 A profile's weights are read as **ratios only**, so the constructor that built
 them matters and nothing can refuse the wrong one: `Fixed::ONE` and

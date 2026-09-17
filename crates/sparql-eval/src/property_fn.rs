@@ -999,7 +999,9 @@ impl PropertyFunctionRegistry {
     ///   position filled with a constant cannot also be the projected candidate.
     /// * `decl.stratum` is already claimed by another registered producer — one
     ///   stratum carries one producer; see [`assert_stratum_unclaimed`] for the
-    ///   argument and for the two ways a host splits such a configuration.
+    ///   argument, for the two exits a host splits such a configuration through,
+    ///   and for the configuration that shares a scoring law and still belongs at
+    ///   the second one.
     ///
     /// A declaration that cannot be rendered is host misconfiguration, and like a
     /// duplicate registration it is caught where it is committed rather than at
@@ -1202,9 +1204,9 @@ impl PropertyFunctionRegistry {
 /// concatenation case is the empty set between two exits, and the message names
 /// **both** of them:
 ///
-/// * **same scoring law** — shards, per-language segments, a partitioned index —
-///   merge inside ONE producer, which owns the comparability its own scores already
-///   have;
+/// * **same scoring law, and no weighting the score cannot itself carry** —
+///   shards, per-language segments, a partitioned index — merge inside ONE
+///   producer, which owns the comparability its own scores already have;
 /// * **different scoring laws** — separate strata, where the fusion sum across them
 ///   is the design rather than an accident.
 ///
@@ -1213,6 +1215,41 @@ impl PropertyFunctionRegistry {
 /// surfacing in two shards-recast-as-strata collects two contributions where the
 /// host meant one family's worth — a quiet score distortion recommended by the
 /// refusal itself.
+///
+/// # The first exit takes two things, not one
+///
+/// "Do they share a scoring law" is the wrong test on its own, because it routes a
+/// third configuration to the wrong exit. The first exit requires **both** that the
+/// two producers' scores are comparable **and** that whatever weighting the host
+/// intends between them can ride *inside* the score. Two producers over one
+/// embedding space — a heading class and a body class, say — satisfy the first and
+/// can fail the second: same formula, same space, directly comparable scores, but if
+/// the host means one class to **outweigh** the other and the shared score is a
+/// *bounded* metric (a cosine distance in `[0, 2]`, lower-better), the merge cannot
+/// carry that weight.
+///
+/// Merging and sorting by `d / w`, a heading beats a body hit iff
+/// `d_h / w_h < d_c / w_c`, which rearranges to a required similarity edge of
+/// `(1 - s_c)(1 - w_h / w_c)`. At `w_h / w_c = 0.5` that edge is `0.45` against a
+/// body similarity of `0.1`, `0.05` against `0.9`, `0.0005` against `0.999`, and
+/// exactly zero against a perfect match. It **decays to zero as matches approach
+/// perfect** — which is where the top-k contest is decided — and is largest for the
+/// worst matches, so weighting a bounded score penalises bad matches hardest, which
+/// is backwards. An unbounded score is untouched by this: BM25F's field weights are
+/// natively a multiplicative weight the score carries at every magnitude, so that
+/// case really does belong at the first exit.
+///
+/// Nor is the margin the whole of it. For a weighted threshold `s'`, the expected
+/// number of competitors outranking a hit is `n · (1 - F(s'))` — **linear in corpus
+/// size** — so no fixed weight ratio survives corpus growth even away from the
+/// boundary. The conclusion is structural rather than a tuning problem.
+///
+/// The failure is silent if the message does not say so: a host takes the first exit
+/// in good faith, loses its class weighting, and an unweighted merge still returns a
+/// plausible ranking. So the message asks the question a host can answer while
+/// reading it — *do you want these two weighted differently, and is the score
+/// bounded?* — and routes that answer to **separate strata** despite the shared law,
+/// where the weight acts in rank space, which is what a stratum is.
 ///
 /// # Why scanning the side table keeps its iteration order unobservable
 ///
@@ -1242,11 +1279,19 @@ fn assert_stratum_unclaimed(
         "ranked declaration for <{iri}> claims stratum <{}>, which the registered producer \
          <{holder}> already serves; one stratum carries one producer, because a rank is \
          meaningful only inside the list that assigned it and two lists concatenated rank the \
-         second producer's best row below every row of the first. If the two share a scoring \
-         law — shards, per-language segments, a partitioned index, anything whose scores are \
-         already comparable — merge them inside ONE producer, which owns that comparability. \
-         If they score by different laws, give each its own stratum, where the fusion sum \
-         across strata is the design rather than an accident",
+         second producer's best row below every row of the first. Merging takes TWO things, \
+         not one: scores that are already comparable, AND a weighting that can ride inside the \
+         score. Shards, per-language segments, a partitioned index with no weight standing \
+         between them have both — merge them inside ONE producer, which owns that \
+         comparability. If they score by different laws, give each its own stratum, where the \
+         fusion sum across strata is the design rather than an accident. Ask the second \
+         question even when the law is shared: do you want these two weighted differently, and \
+         is the score bounded (a cosine distance in [0,2], say)? Then separate strata as well \
+         — weighting a bounded score buys an edge of only (1 - s)(1 - w_low/w_high), largest \
+         for the worst matches and zero for a perfect one, which is exactly where the top-k \
+         contest is decided, so such a weight can act only in rank space, and rank space is \
+         what a stratum is. Only an unbounded score — BM25F-style field weights — carries a \
+         differential weight through a merge",
         decl.stratum
     );
 }

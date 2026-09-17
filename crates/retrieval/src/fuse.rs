@@ -12,16 +12,20 @@
 //! # `k` is a parameter because fused enumeration is top-k
 //!
 //! §7 of the design record fixes the asymmetry between the two rungs. Unfused
-//! enumeration is unbounded — each producer emits in its own rank order, no
-//! cross-producer state exists, and a caller can walk a whole stream. Fused
-//! enumeration cannot be: §5 sums contributions across strata, so no candidate
+//! enumeration carries no cross-stratum accounting — each producer emits in its
+//! own rank order over its own materialized result, no cross-producer state
+//! exists, and a caller can walk a whole stream for what that stratum's result
+//! already cost. Fused enumeration cannot work that way: §5 sums contributions
+//! across strata, so no candidate
 //! may be emitted until it is known not to reappear in another stratum and raise
 //! its total, and the threshold over the stream heads is what bounds how deep
 //! fusion must look to certify its next row. That bound is what makes memory
 //! proportional to the frontier rather than to the input.
 //!
 //! *Complete* fused enumeration would need to remember everything already
-//! emitted, and this surface does not offer it as though it were free. So `k` is
+//! emitted — complete enumeration may not discard, so it must retain, and
+//! retention is linear wherever it is put — and this surface does not offer it
+//! as though it were free. So `k` is
 //! a required argument rather than a default: a caller states how many rows it
 //! wants, and a caller that wants to walk everything wants the unfused rung,
 //! which is built for exactly that.

@@ -43,8 +43,10 @@
 //! that filled the depth left the second contributing nothing while the trailer
 //! reported a clean exhaustion. Ranks are comparable only within the list that
 //! assigned them, which is exactly why the merge belongs either inside one
-//! producer (same scoring law) or across strata in the fusion sum (different
-//! scoring laws), and never in a concatenation here.
+//! producer (same scoring law, no weight between the two) or across strata in the
+//! fusion sum (different scoring laws — or one law whose bounded score cannot
+//! carry the weight the host means between two classes), and never in a
+//! concatenation here.
 //!
 //! # The request is in the text
 //!

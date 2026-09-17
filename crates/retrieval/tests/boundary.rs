@@ -7,7 +7,8 @@
 //! supported place to **stop**: a caller that wants only the plan calls `plan`
 //! and stops; one that wants the query text calls through `compile` and runs it
 //! through the evaluator directly; one that wants per-producer ranked streams
-//! calls through `execute` and enumerates them without bound. Every boundary is
+//! calls through `execute` and enumerates them with no threshold in the path.
+//! Every boundary is
 //! equally a place to **start**: a hand-built [`Plan`] is admitted on exactly the
 //! terms the planner's own output is, hand-written SPARQL runs through the
 //! evaluator with no composition type in the path, and hand-built ranked streams
@@ -16,10 +17,12 @@
 //! The two rungs differ in kind. Fusion is top-k by construction — it certifies
 //! a row only when a threshold over the live stream heads proves nothing can
 //! overtake it — so its frontier holds the candidates the strata still disagree
-//! about, and not the input. The unfused streams are unbounded: N producers emit in
-//! their own rank order and nothing applies a threshold. A completeness claim is
-//! available only from the terminal trailer; a prefix reader holds evidence the
-//! answer is incomplete.
+//! about, and not the input. The unfused rung carries no cross-stratum
+//! accounting: N producers emit in their own rank order, nothing applies a
+//! threshold, and each stratum's rows are materialized by the evaluator before
+//! the first one is read — so that rung costs what a stratum's own result costs,
+//! not what the consumer reads. A completeness claim is available only from the
+//! terminal trailer; a prefix reader holds evidence the answer is incomplete.
 //!
 //! These are tests of the seams, not of the stages' semantics (those live
 //! elsewhere): every fixture is `example.org`, every mock is a plain
@@ -466,7 +469,7 @@ fn stop_at_compile_run_directly() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn stop_at_execute_unbounded_unfused() {
+fn stop_at_execute_consumes_unfused_streams_with_no_fusion_in_the_path() {
     let registry = single_registry(&ex("stratum/hand"), &ex("pf/hand"), 9, 5);
     let stats = single_statistics(&ex("stratum/hand"), 9);
     let request = RetrievalRequest::from_terms(vec![lexical_term()]);
@@ -971,11 +974,16 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Unfused streams are unbounded
+// 8. The unfused rung applies no threshold to its materialized rows
 // ---------------------------------------------------------------------------
 
+/// What this proves is the *absence of a threshold*, not unboundedness. The
+/// stratum's rows are materialized by the evaluator before the first one is
+/// read, so pulling all of them measures the rung's lack of cross-stratum
+/// accounting — every row is consumable in contiguous rank order, down to a
+/// clean receipt — and says nothing about how large a result could be.
 #[test]
-fn unfused_unbounded_stream() {
+fn unfused_rung_applies_no_threshold_to_its_rows() {
     const ROWS: usize = 4096;
     let registry = single_registry(&ex("stratum/deep"), &ex("pf/deep"), ROWS as u64, ROWS);
     let stats = single_statistics(&ex("stratum/deep"), ROWS as u64);
@@ -996,8 +1004,9 @@ fn unfused_unbounded_stream() {
         .next()
         .expect("the stratum streamed");
 
-    // The unfused rung has no threshold: every row the producer emits is
-    // immediately consumable, however deep the enumeration goes.
+    // The unfused rung has no threshold: every row the producer emitted is
+    // immediately consumable, in contiguous rank order, to the end of the
+    // stratum's own materialized result.
     let mut pulled = 0usize;
     let mut last_rank = 0u64;
     while let Some((rank, _term)) = block_on(stream.stream.next()).expect("the stream pulls") {
