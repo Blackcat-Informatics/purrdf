@@ -41,12 +41,21 @@
 //!
 //! Naming ANY pair flips the closure to mandatory, because at that point the operator has
 //! asserted that the imports matter and a half-resolved closure is a different shapes graph.
+//!
+//! # `--shapes-graph` lives here too, for the same reason
+//!
+//! [`resolve_shapes_graph`] is the second thing `validate --shapes` and `shacl pack` must
+//! agree on: both read a `--shapes-graph IRI` argument and both have to resolve it against
+//! the SAME base their shapes document parses under, or a product packed with one answer and
+//! a document validated with the other would expose `$shapesGraph` under two different IRIs
+//! for what is supposed to be one shapes graph. Living beside [`fold_shapes_imports`] is what
+//! keeps that agreement from being re-derived per caller the way the import fold used to be.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use purrdf_core::RdfDataset;
-use purrdf_iri::BaseIri;
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 
 use crate::error::CliError;
@@ -274,4 +283,70 @@ fn resolve_shapes_import_pairs(specs: &[String]) -> Result<Vec<ShapesImportPair<
         });
     }
     Ok(pairs)
+}
+
+/// Resolve a `--shapes-graph` value against the shapes document's base.
+///
+/// `--shapes-graph` names the graph the shapes document is exposed under to SHACL-SPARQL
+/// paths, overriding a `sh:shapesGraph` that document declares. That declaration is an IRI
+/// *inside* the shapes document, so it resolves against the shapes document's base — and the
+/// flag that overrides it has to resolve against the SAME base, or the two would disagree
+/// about what a relative reference names. `validate --shapes` and `shacl pack` share this one
+/// function for exactly that reason: each derives its own document base independently (a
+/// validation run and a pack run read the document on separate occasions), but both spend it
+/// on `--shapes-graph` through this single derivation, which is what keeps the flag and the
+/// document agreeing about what a relative IRI denotes no matter which command resolved it.
+///
+/// An ABSOLUTE value is carried lexical-verbatim — [`BaseScope::resolve`]'s own contract — so
+/// an already-absolute invocation is byte-for-byte what it always was. A RELATIVE one resolves
+/// against `base`, so `--shapes-graph sg` names exactly what `sh:shapesGraph <sg>` written in
+/// the shapes document names. A relative one with nothing in scope is refused: see
+/// [`shapes_graph_refusal`].
+pub(crate) fn resolve_shapes_graph(
+    raw: Option<&str>,
+    base: Option<&str>,
+) -> Result<Option<String>, CliError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let scope = match base {
+        // A derived retrieval IRI is produced by its own parse, so a failure here is not
+        // reachable from the command line; it is still reported rather than unwrapped,
+        // because an unreachable panic in a CLI is a crash report.
+        Some(base) => BaseScope::rooted(
+            BaseIri::parse(base).map_err(|error| {
+                CliError::Usage(format!(
+                    "the shapes graph's base `{base}` is not a usable base IRI: {error}"
+                ))
+            })?,
+            BaseOrigin::Caller,
+        ),
+        None => BaseScope::empty(),
+    };
+    scope
+        .resolve(raw)
+        .map(|iri| Some(iri.as_str().to_owned()))
+        .map_err(|error| shapes_graph_refusal(raw, &error))
+}
+
+/// The refusal for a `--shapes-graph` that names no graph.
+///
+/// It carries the shared [`purrdf_iri::IriError::diagnostic_code`] so it groups with every
+/// other IRI failure in this toolkit, and it does NOT carry the library's own remedy for a
+/// missing base: that one names `@base` and `xml:base`, which are DOCUMENT directives, and a
+/// `--shapes-graph` value is argv text that no document can reach. Naming a fix the operator
+/// cannot apply is worse than naming none — this is the same refusal shape `describe --iri`
+/// carries, for the same reason.
+fn shapes_graph_refusal(raw: &str, error: &purrdf_iri::IriError) -> CliError {
+    let code = error.diagnostic_code();
+    if code == "iri-relative-no-base" {
+        return CliError::Usage(format!(
+            "--shapes-graph `{raw}`: {code}: a relative IRI reference has no base in scope, so \
+             it names no graph to expose the shapes under. This is a command-line value, so no \
+             `@base` you write in a document resolves it: give --shapes a PATH, whose `file://` \
+             retrieval IRI this flag resolves against exactly as a `sh:shapesGraph` inside that \
+             document would, or write the graph name in absolute form"
+        ));
+    }
+    CliError::Usage(format!("--shapes-graph `{raw}`: {code}: {error}"))
 }

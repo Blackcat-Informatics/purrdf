@@ -1184,6 +1184,24 @@ pub(crate) enum ShaclCommand {
         /// `--import` validates it alone.
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
+        /// RECORD the shapes graph as exposed under this IRI to SHACL-SPARQL paths,
+        /// overriding a `sh:shapesGraph` the shapes document declares. PurRDF mints no
+        /// vocabulary IRIs, so there is no default: without this flag and without a
+        /// `sh:shapesGraph` declaration the product simply records no shapes graph, and
+        /// `GRAPH $shapesGraph { … }` in a `sh:select` body binds no rows, exactly as it
+        /// would restoring `validate --shapes` with neither. A relative value resolves
+        /// against the shapes document's own base — the same base `--shapes-graph` resolves
+        /// against on `validate --shapes`, and the same base a `sh:shapesGraph` declared in
+        /// the document itself would resolve against — and is refused when the shapes
+        /// graph's base cannot be derived (`--shapes -`).
+        ///
+        /// This is the ONE way to make a packed product and `validate --shapes
+        /// --shapes-graph IRI` reach the identical verdict over a shapes graph whose
+        /// SHACL-SPARQL bodies read `$shapesGraph`: the product's identity binds the IRI it
+        /// was packed with, and `validate --shapes-product` restores exactly that binding —
+        /// it has no `--shapes-graph` of its own to disagree with it.
+        #[arg(long = "shapes-graph", value_name = "IRI")]
+        shapes_graph: Option<String>,
         /// Product path `OUT`, or `-` for stdout.
         #[arg(long, value_name = "OUT", required = true)]
         out: String,

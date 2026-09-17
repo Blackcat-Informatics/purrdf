@@ -72,6 +72,17 @@ use crate::{sink, source};
 /// lane that derived a different base would produce a product whose `<PersonShape>`
 /// denotes a different IRI than the one the operator wrote.
 ///
+/// `shapes_graph` is `--shapes-graph`, resolved against that SAME base through
+/// [`crate::shapes_source::resolve_shapes_graph`] — the identical function
+/// `validate --shapes --shapes-graph` calls — and recorded into the product's identity. A
+/// product packed with `--shapes-graph IRI` and a document validated with
+/// `--shapes --shapes-graph IRI` therefore expose `$shapesGraph` under the same absolute
+/// IRI and reach the byte-identical report: before this parameter existed, `shacl pack` had
+/// no way to record ANY `--shapes-graph` override, so a shapes graph whose SHACL-SPARQL
+/// bodies read `GRAPH $shapesGraph { … }` validated one answer through `--shapes` and a
+/// different one through a restored product, with no flag on `shacl pack` able to close the
+/// gap.
+///
 /// The document is Turtle. That is not a restriction this lane invents for its own
 /// convenience — it is the one syntax that carries a `@prefix`/`PREFIX` map recoverable
 /// from source text, which is the fallback prefix environment every SHACL-AF
@@ -99,15 +110,17 @@ use crate::{sink, source};
 /// # Errors
 ///
 /// [`CliError::Usage`] when `--shapes -` is given (stdin has no retrieval IRI to derive
-/// a base from, so a relative reference in it would silently resolve to nothing), or when an
-/// `--import` pair is malformed, resolves nothing the shapes graph imports, or is never
-/// reached by the import closure; [`CliError::Runtime`] when a document cannot be read, is
-/// not UTF-8, does not parse, an `owl:imports` no pair resolves, or the shapes graph declares
-/// a capability the product format cannot carry.
+/// a base from, so a relative reference in it would silently resolve to nothing), when a
+/// relative `--shapes-graph` has no base to resolve against, or when an `--import` pair is
+/// malformed, resolves nothing the shapes graph imports, or is never reached by the import
+/// closure; [`CliError::Runtime`] when a document cannot be read, is not UTF-8, does not
+/// parse, an `owl:imports` no pair resolves, or the shapes graph declares a capability the
+/// product format cannot carry.
 pub(crate) fn pack(
     shapes: &str,
     base: Option<&str>,
     imports: &[String],
+    shapes_graph: Option<&str>,
     out: &str,
 ) -> Result<(), CliError> {
     let effective_base = source::effective_base(shapes, NativeRdfFormat::Turtle, base)?;
@@ -119,6 +132,12 @@ pub(crate) fn pack(
              give --shapes a PATH, or name the base with --base"
         )));
     }
+    // Resolved against the SAME base the document parses under, and before either document
+    // is read — a `--shapes-graph` that names no graph is a malformed request and should fail
+    // against the command line rather than after the shapes graph has been folded, exactly
+    // the ordering `validate --shapes` decides in.
+    let shapes_graph =
+        crate::shapes_source::resolve_shapes_graph(shapes_graph, effective_base.as_deref())?;
 
     let root = crate::shapes_source::read_shapes_document(
         shapes,
@@ -128,14 +147,11 @@ pub(crate) fn pack(
     )?;
     let folded = crate::shapes_source::fold_shapes_imports(root, imports)?;
 
-    // `shapes_graph` is `None`: `shacl pack` has no `--shapes-graph` flag of its own, so the
-    // product records whatever `sh:shapesGraph` the shapes graph itself declares, exactly as
-    // it always has.
     let product = purrdf_validate::pack_shapes_product_from_dataset(
         &folded.dataset,
         &folded.prefixes,
         effective_base.as_deref(),
-        None,
+        shapes_graph,
     )
     .map_err(|refusal| refusal_error(&format!("--shapes {shapes}"), &refusal))?;
 

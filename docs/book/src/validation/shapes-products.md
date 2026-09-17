@@ -96,6 +96,34 @@ The Python, C-ABI and WebAssembly bindings call a lower-level, text-only pack
 entry point that has no `--import` table at all, and refuse rather than fold
 — see [What a product carries, and what it does not](#what-a-product-carries-and-what-it-does-not).
 
+### `--shapes-graph` is resolved and recorded at pack time, the same way `validate --shapes` resolves it
+
+SHACL-SPARQL exposes the shapes graph itself as a named graph — a `sh:select`
+body may read `GRAPH $shapesGraph { … }` — and `--shapes-graph IRI` names what
+that graph is called, overriding a `sh:shapesGraph` the document declares:
+
+```bash
+purrdf shacl pack \
+  --shapes shapes.ttl \
+  --shapes-graph https://example.org/shapes \
+  --out shapes.purrshp
+```
+
+A relative value resolves against the SAME base the shapes document parses
+under — the one `--base` names, or the document's own `file://` retrieval
+IRI — which is the identical derivation `validate --shapes --shapes-graph`
+spends the flag on. That agreement is the whole point: a product packed with
+`--shapes-graph IRI` and a document validated with
+`--shapes --shapes-graph IRI` expose `$shapesGraph` under the same absolute
+IRI and reach the byte-identical report. Before this flag existed, `shacl
+pack` had no way to record ANY override at all, so a shapes graph whose
+SHACL-SPARQL bodies depend on `$shapesGraph` validated one answer through
+`--shapes` and a different one through a restored product, with nothing on
+the command line able to close the gap.
+
+Omitting `--shapes-graph` packs exactly as it always has: the product records
+whatever `sh:shapesGraph` the shapes graph itself declares, or none at all.
+
 The writer is **byte-deterministic**. No wall clock, no randomness and no
 hash-iteration order reach it, so two runs over the same document, base and
 import table produce identical bytes and a content-addressed cache key over a
@@ -209,7 +237,7 @@ here:
 | Flag | Why it is refused | Where it belongs |
 | --- | --- | --- |
 | `--shapes-from` | names the syntax a shapes document is read as, and a product is not a document | not applicable |
-| `--shapes-graph` | the product records its own `sh:shapesGraph` IRI | pass it to `purrdf shacl pack` |
+| `--shapes-graph` | the product records its own `sh:shapesGraph` IRI | pass `--shapes-graph IRI` to `purrdf shacl pack` and re-pack |
 | `--import` | the `owl:imports` closure is folded at pack time | pass `--import IRI=FILE` to `purrdf shacl pack` |
 
 Everything describing the **data** graph stays live: `--from`, `--base`,
@@ -372,7 +400,7 @@ is printed; in Python the exception's `.dimension` is `None`; in JavaScript
 
 | Command | Does | Exit `0` | Exit `1` | Exit `2` |
 | --- | --- | --- | --- | --- |
-| `purrdf shacl pack --shapes FILE --out OUT [--base IRI]` | parse, prepare, write the product | product written | the shapes did not parse, or the graph declares something a product cannot carry | bad flags, or `--shapes -` |
+| `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE]` | parse, prepare, write the product | product written | the shapes did not parse, or the graph declares something a product cannot carry | bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
 | `purrdf shacl verify [IN]` | corroborate the carried dataset against the claimed identity | prints the identity digest | refused, with `shacl dimension <label>` on stderr | bad flags |
 | `purrdf shacl explain [IN]` | print what the product says it was compiled from | prints the `key value` rendering | the bytes are not a well-formed product | bad flags |
 | `purrdf validate --shapes-product FILE [IN]` | restore and validate | validation ran | product refused | bad flags, or a parse flag passed against a product |

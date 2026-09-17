@@ -483,8 +483,15 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 shapes,
                 base,
                 import,
+                shapes_graph,
                 out,
-            } => shacl::pack(shapes, base.as_deref(), import, out),
+            } => shacl::pack(
+                shapes,
+                base.as_deref(),
+                import,
+                shapes_graph.as_deref(),
+                out,
+            ),
             ShaclCommand::Verify { input } => shacl::verify(input),
             ShaclCommand::Explain { input } => shacl::explain(input),
         }

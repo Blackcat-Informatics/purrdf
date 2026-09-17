@@ -12,7 +12,10 @@
 //! * a CORRUPT product is refused with its DIMENSION on stderr as a `shacl dimension
 //!   <label>` line, and the neighbouring UNMODIFIED product still succeeds;
 //! * the shapes-PARSE flags are refused by name against `--shapes-product` rather than
-//!   accepted and ignored.
+//!   accepted and ignored;
+//! * `shacl pack --shapes-graph` records the same absolute IRI `validate --shapes
+//!   --shapes-graph` resolves, so a SHACL-SPARQL body reading `$shapesGraph` reaches the
+//!   byte-identical verdict through either lane.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -545,5 +548,212 @@ fn the_shapes_parse_flags_are_refused_against_a_product() {
             data_path
         ])),
         0
+    );
+}
+
+// ── `shacl pack --shapes-graph` and SHACL-SPARQL's `$shapesGraph` ──────────────────
+//
+// `--shapes-graph IRI` can be given to `validate --shapes` but, until now, had no
+// equivalent on `shacl pack`: every product's identity carried `shapes_graph: None` no
+// matter what the operator wanted `$shapesGraph` bound to, so a SHACL-SPARQL body reading
+// `GRAPH $shapesGraph { … }` decided one verdict through `--shapes --shapes-graph` and a
+// DIFFERENT one through the packed product, with no flag able to close the gap. These
+// tests pin the two lanes to the same answer.
+
+/// A shapes graph whose SPARQL constraint fires — for every targeted focus node — exactly
+/// when `$shapesGraph` is BOUND to a graph containing this document's own triples. This is
+/// the fixture that makes the two lanes' divergence expressible at all: with no way to
+/// bind `$shapesGraph` on the pack lane, `FILTER bound($shapesGraph)` was always false
+/// through a restored product, no matter what `validate --shapes --shapes-graph` decided
+/// over the identical document.
+const SHAPES_GRAPH_SHAPES: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "ex:PersonShape a sh:NodeShape ;\n",
+    "  sh:targetClass ex:Person ;\n",
+    "  sh:sparql ex:Constraint .\n",
+    "ex:Constraint\n",
+    "  sh:message \"the shapes graph is exposed as $shapesGraph\" ;\n",
+    "  sh:select \"\"\"\n",
+    "    SELECT $this\n",
+    "    WHERE {\n",
+    "        FILTER bound($shapesGraph)\n",
+    "        GRAPH $shapesGraph {\n",
+    "            ex:PersonShape a <http://www.w3.org/ns/shacl#NodeShape> .\n",
+    "        }\n",
+    "    }\n",
+    "  \"\"\" .\n",
+);
+
+/// One `ex:Person`, targeted by `ex:PersonShape` regardless of `$shapesGraph`.
+const SHAPES_GRAPH_DATA: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:alice a ex:Person .\n",
+);
+
+const SHAPES_GRAPH_IRI: &str = "http://example.org/sg";
+
+/// THE FALSIFIABLE CORE: `shacl pack --shapes-graph` records the same absolute IRI
+/// `validate --shapes --shapes-graph` resolves and binds, so packing with the flag and
+/// validating the document with the same flag reach the byte-identical report. Before
+/// `shacl pack` had a `--shapes-graph` flag at all, this test could not even be attempted:
+/// there was no way to ask the pack lane to bind `$shapesGraph` to anything, so a
+/// product's SPARQL constraint could never fire the way `validate --shapes --shapes-graph`
+/// fires it.
+#[test]
+fn packing_with_shapes_graph_agrees_byte_for_byte_with_validating_the_document_with_shapes_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", SHAPES_GRAPH_DATA);
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--shapes-graph",
+        SHAPES_GRAPH_IRI,
+        "--out",
+        product_path,
+    ]);
+    assert_eq!(
+        code(&packed),
+        0,
+        "pack with --shapes-graph failed: {}",
+        stderr(&packed)
+    );
+
+    let via_product = run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        "--format",
+        "sarif",
+        &data,
+    ]);
+    let via_document = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--shapes-graph",
+        SHAPES_GRAPH_IRI,
+        "--format",
+        "sarif",
+        &data,
+    ]);
+    assert_eq!(code(&via_product), 0, "{}", stderr(&via_product));
+    assert_eq!(code(&via_document), 0, "{}", stderr(&via_document));
+    assert_eq!(
+        stdout(&via_product),
+        stdout(&via_document),
+        "a product packed with --shapes-graph and a document validated with the same \
+         --shapes-graph must reach the byte-identical report"
+    );
+    for out in [&via_product, &via_document] {
+        assert!(
+            stderr(out).contains("shacl conforms false\n")
+                && stderr(out).contains("shacl results 1\n"),
+            "the SPARQL constraint must actually see $shapesGraph bound and fire, not \
+             silently see it unbound: {}",
+            stderr(out)
+        );
+    }
+
+    // Without the flag on EITHER lane, $shapesGraph is unbound and the constraint never
+    // fires — that verdict must still be reachable by NOT asking for the graph.
+    let via_document_unbound = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(
+        code(&via_document_unbound),
+        0,
+        "{}",
+        stderr(&via_document_unbound)
+    );
+    assert!(
+        stderr(&via_document_unbound).contains("shacl conforms true\n")
+            && stderr(&via_document_unbound).contains("shacl results 0\n"),
+        "with no --shapes-graph at all, $shapesGraph is unbound and the constraint does not \
+         fire: {}",
+        stderr(&via_document_unbound)
+    );
+}
+
+/// `shacl explain` on a product packed WITH `--shapes-graph` prints the `shapes-graph`
+/// identity row as PRESENT, carrying exactly the IRI it was packed with — the identity row
+/// that no shipped tool could ever populate before this flag existed.
+#[test]
+fn explain_reports_the_shapes_graph_pack_recorded() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+
+    assert_eq!(
+        code(&run(&[
+            "shacl",
+            "pack",
+            "--shapes",
+            &shapes,
+            "--shapes-graph",
+            SHAPES_GRAPH_IRI,
+            "--out",
+            product_path,
+        ])),
+        0
+    );
+
+    let explained = run(&["shacl", "explain", product_path]);
+    assert_eq!(code(&explained), 0, "{}", stderr(&explained));
+    let text = stdout(&explained);
+    assert!(
+        text.contains(&format!(
+            "\nidentity shapes-graph \"(present) {SHAPES_GRAPH_IRI}\"\n"
+        )),
+        "explain reports the recorded shapes-graph IRI as present: {text:?}"
+    );
+    assert!(
+        text.contains(&format!("\nparse-shapes-graph {SHAPES_GRAPH_IRI}\n")),
+        "explain reports the recorded shapes-graph IRI in its parse inputs too: {text:?}"
+    );
+}
+
+/// THE NEIGHBOURING VALID CASE: a shapes graph packed with NO `--shapes-graph` at all
+/// packs exactly as it always did — the flag existing must not change the no-flag path.
+/// `explain` still reports the row absent, and the restored report is unchanged from what
+/// it was before this flag existed.
+#[test]
+fn accepts_pack_without_shapes_graph_neighbour() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES_GRAPH_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", SHAPES_GRAPH_DATA);
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+
+    let explained = run(&["shacl", "explain", product_path]);
+    assert_eq!(code(&explained), 0, "{}", stderr(&explained));
+    let text = stdout(&explained);
+    assert!(
+        text.contains("\nidentity shapes-graph \"(absent)\"\n"),
+        "with no --shapes-graph flag, the identity row stays absent: {text:?}"
+    );
+    assert!(
+        text.contains("\nparse-shapes-graph none\n"),
+        "with no shapes-graph recorded, the parse-inputs line says so explicitly: {text:?}"
+    );
+
+    // $shapesGraph is unbound, so the constraint never fires — the same verdict a document
+    // with no sh:shapesGraph declaration and no --shapes-graph flag has always reached.
+    let via_product = run(&["validate", "--shapes-product", product_path, &data]);
+    assert_eq!(code(&via_product), 0, "{}", stderr(&via_product));
+    assert!(
+        stderr(&via_product).contains("shacl conforms true\n")
+            && stderr(&via_product).contains("shacl results 0\n"),
+        "no --shapes-graph at pack time still restores a validator with $shapesGraph \
+         unbound: {}",
+        stderr(&via_product)
     );
 }
