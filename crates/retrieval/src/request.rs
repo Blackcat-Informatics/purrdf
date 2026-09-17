@@ -3,12 +3,20 @@
 
 //! The typed retrieval request.
 //!
-//! The producers this layer composes consume different modalities: lexical
-//! terms for a BM25 relation, embedding vectors for a nearest-neighbour
-//! relation, geometries for a spatial one. A request is therefore a list of
-//! typed terms, and a producer declares which shapes it accepts as serializable
-//! data (`purrdf_sparql_eval::TermPattern`). Matching is a lookup over those
+//! The producers this layer composes consume different modalities: a needle for
+//! a BM25 relation, a seed term for a nearest-neighbour relation, a geometry for
+//! a spatial one. A request is therefore a list of typed terms, and a producer
+//! declares which shapes it accepts as serializable data
+//! (`purrdf_sparql_eval::TermPattern`). Matching is a lookup over those
 //! declarations, never inference.
+//!
+//! A term shape being expressible here is not a claim that some producer
+//! accepts it. [`RequestTerm::Vector`] is the standing example and says so on
+//! its own documentation. [`RequestTerm::Spatial`] is a second: the spatial
+//! relation this workspace ships computes a **set** — it sorts and deduplicates
+//! its pairs and carries neither a score nor a rank — so it composes as a
+//! constraint on candidates rather than as a stratum of a fused ranking, and it
+//! is not declared ranked here.
 
 use purrdf_text::Fixed;
 use serde::{Deserialize, Serialize};
@@ -51,6 +59,28 @@ pub enum RequestTerm {
         predicate: Option<Iri>,
     },
     /// A vector (embedding) term.
+    ///
+    /// # No producer in this workspace accepts this shape yet
+    ///
+    /// The nearest-neighbour producer this repository ships
+    /// (`purrdf_sparql_eval::EmbeddingKnnRelation`) searches *from a term it
+    /// already holds a vector for*: it takes a seed term and looks its row up in
+    /// its own space. Its accepted request shape is therefore [`Self::EntitySeed`],
+    /// not this arm, and this arm waits for a producer that takes the components
+    /// themselves.
+    ///
+    /// It is deliberately **not** aliased to `EntitySeed` in the meantime. A
+    /// seed lookup and a literal embedding query are different modalities: one
+    /// names an RDF term the space must already hold and answers "what is near
+    /// this thing", the other carries the coordinates and answers "what is near
+    /// this point", and a space can serve either without serving both. They need
+    /// different capability declarations — different accepted patterns,
+    /// different placements, different failure when the space cannot answer — so
+    /// folding them together would let a request for one be silently answered by
+    /// the other, which is precisely the class of wrong answer the declaration
+    /// machinery exists to make impossible. An embedding also has no SPARQL
+    /// constant form, so a producer declaring a value placement for this arm is
+    /// refused at placement rather than emitted as a call that drops it.
     Vector {
         /// The query embedding.
         embedding: Vec<f32>,

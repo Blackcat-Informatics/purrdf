@@ -206,7 +206,7 @@ fn make_producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunct
     })
 }
 
-/// A single always-applicable producer under its own stratum.
+/// A single catch-all producer under its own stratum.
 fn single_registry(
     stratum_iri: &str,
     producer_iri: &str,

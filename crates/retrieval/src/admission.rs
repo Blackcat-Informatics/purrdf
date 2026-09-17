@@ -16,8 +16,8 @@
 //! and serde already own that — or that the emitted text parses. Admission checks
 //! the plan against what the registry **declared**:
 //!
-//! * every always-applicable producer (one declaring an unconstrained
-//!   [`TermKind::Any`] pattern) is present and bound to every request term;
+//! * every producer the registry declares **mandatory** is present, is bound to
+//!   the stratum the registry ranks it under, and receives every request term;
 //! * every stratum depth respects the registry's declared row bound;
 //! * every stratum weight keys a declared stratum and is strictly positive under
 //!   §5 of the design record;
@@ -28,15 +28,40 @@
 //!   durable content fingerprint first, then the live instance identity) and
 //!   against the statistics revision the environment reports.
 //!
+//! # Mandatory is read, never inferred
+//!
 //! Admission adds no coverage policy of its own. Whether a producer is mandatory
-//! is registry policy, declared through the same capability a planner reads; this
-//! module enforces exactly what was declared and nothing more.
+//! is registry policy, declared as
+//! [`RankedDeclaration::mandatory`](purrdf_sparql_eval::RankedDeclaration::mandatory)
+//! through the same capability a planner reads; this module enforces exactly
+//! what was declared and nothing more. In particular it is not derived from a
+//! producer's declared patterns: a permissive producer that happens to accept
+//! every request shape is **not** thereby made un-droppable, and a plan that
+//! binds such a producer to a subset of the request — or drops it entirely — is
+//! admitted, because the registry never said it had to be there.
+//!
+//! Declaring a producer mandatory is therefore a claim with teeth, and it bites
+//! in two distinguishable ways:
+//!
+//! * the producer is **not in the plan at all** — never planned, refused at
+//!   placement, or edited out — which is
+//!   [`MissingMandatoryProducer`](AdmissionError::MissingMandatoryProducer);
+//! * the producer is present but the planner could bind it to only *some* of the
+//!   request's terms, because its declared patterns accept only some of the
+//!   request's shapes, which is
+//!   [`InsufficientBindings`](AdmissionError::InsufficientBindings), naming how
+//!   many terms were required and how many arrived.
+//!
+//! Both are refusals of a registry misconfiguration: the host declared that
+//! every request must be served by a producer that cannot serve this one. They
+//! are loud, typed and name the producer, which is the only useful thing to do
+//! with a coverage promise that the request has just falsified. A producer the
+//! registry does **not** declare mandatory and that placement refuses is simply
+//! dropped from the plan, with its reason recorded in the plan's decisions.
 
 use std::collections::BTreeMap;
 
-use purrdf_sparql_eval::{
-    PfDescriptor, PropertyFunctionRegistry, RegistryId, TermKind, TermPattern,
-};
+use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, RegistryId};
 use purrdf_text::Fixed;
 
 use crate::id::PLAN_VERSION;
@@ -79,22 +104,23 @@ impl core::fmt::Debug for AdmissionEnvironment<'_> {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AdmissionError {
-    /// An always-applicable producer the registry declares is absent from the
-    /// plan entirely.
+    /// A producer the registry declares mandatory is absent from the plan
+    /// entirely — never planned, refused at placement, or edited out.
     ///
     /// The producer IRI is boxed because [`Iri`] carries five parsed spans and is
     /// large; boxing keeps `Result<_, AdmissionError>` cheap to move, the same
     /// discipline [`PlanError`](crate::PlanError) applies to its boxed terms.
-    #[error("the registry's always-applicable producer {producer} is absent from the plan")]
+    #[error("the registry's mandatory producer {producer} is absent from the plan")]
     MissingMandatoryProducer {
         /// The registered producer IRI that must be present.
         producer: Box<Iri>,
     },
 
-    /// An always-applicable producer is present but was not bound to every
-    /// request term the registry declares it must receive.
+    /// A producer the registry declares mandatory is present but was not bound
+    /// to every request term, because its declared patterns accept only some of
+    /// the request's shapes.
     #[error(
-        "producer {producer} accepts the whole request but is bound to {provided} of {required} term(s)"
+        "the registry's mandatory producer {producer} must receive every request term but is bound to {provided} of {required}"
     )]
     InsufficientBindings {
         /// The registered producer IRI that was under-bound.
@@ -252,21 +278,6 @@ pub(crate) struct AdmittedRegistry {
     pub(crate) instance_id: RegistryId,
 }
 
-/// Whether a declared term pattern accepts any request term at all.
-///
-/// This is the registry's own "always-applicable" marker: an unconstrained
-/// [`TermKind::Any`] pattern with no datatype, language or predicate constraint
-/// matches every request term, so a producer declaring one must always be reached.
-/// The definition is deliberately syntactic over the declaration — admission never
-/// infers applicability from a producer's name or from what other producers do.
-#[must_use]
-pub(crate) fn always_applicable(pattern: &TermPattern) -> bool {
-    pattern.kind == TermKind::Any
-        && pattern.datatype.is_none()
-        && pattern.language.is_none()
-        && pattern.predicate.is_none()
-}
-
 /// The stratum a ranked descriptor emits under, if it is ranked.
 ///
 /// A relation registered without a ranked declaration declares nothing, and
@@ -381,19 +392,23 @@ pub(crate) fn admit_plan(
                 .entry(stratum.clone())
                 .and_modify(|current| *current = (*current).max(bound))
                 .or_insert(bound);
-            if descriptor.ranked.as_ref().is_some_and(|declaration| {
-                declaration
-                    .accepted_terms
-                    .iter()
-                    .any(|accepted| always_applicable(&accepted.pattern))
-            }) {
+            // Read, not derived: the host's own `mandatory` flag and nothing
+            // else. A producer whose patterns happen to accept everything is
+            // still droppable unless the registry said otherwise.
+            if descriptor
+                .ranked
+                .as_ref()
+                .is_some_and(|declaration| declaration.mandatory)
+            {
                 mandatory.push((descriptor.iri.clone(), stratum));
             }
         }
         descriptors.insert(descriptor.iri.clone(), descriptor);
     }
 
-    // 6. Always-applicable producers are present and receive every request term.
+    // 6. Producers the registry declares mandatory are present, agree on their
+    //    stratum, and receive every request term. A shortfall here is a registry
+    //    misconfiguration made visible, never a silently narrowed answer.
     for (producer, stratum) in &mandatory {
         let producer_iri = registry_iri(producer)?;
         let binding = plan

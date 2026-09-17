@@ -382,7 +382,7 @@ fn text_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
     )])
 }
 
-/// A single always-applicable producer, value rendered at position 1.
+/// A single catch-all producer, value rendered at position 1.
 fn any_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
     registry_of(vec![(
         "any",

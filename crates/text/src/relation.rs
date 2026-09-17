@@ -41,9 +41,11 @@
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::{DatasetView, TermValue};
+use purrdf_core::{DatasetView, Iri, TermValue};
 use purrdf_sparql_eval::{
-    EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, Volatility,
+    AcceptedTerm, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+    RankOrdering, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
+    Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -524,6 +526,122 @@ impl TextSearchRelation {
     #[must_use]
     pub fn index(&self) -> &TextIndex {
         &self.index
+    }
+
+    /// The flattened argument position of `?doc`, the document's subject.
+    pub const DOC: usize = SEARCH_DOC;
+    /// The flattened argument position of the needle. Always an input.
+    pub const NEEDLE: usize = SEARCH_NEEDLE;
+    /// The flattened argument position of `?score`, the exact BM25 score.
+    pub const SCORE: usize = SEARCH_SCORE;
+    /// The flattened argument position of `?rank`, the per-partition rank.
+    pub const RANK: usize = SEARCH_RANK;
+    /// The flattened argument position of `?lang`, the document's language tag.
+    pub const LANG: usize = SEARCH_LANG;
+    /// The flattened argument position of `?matched`, the count of distinct
+    /// needle terms the document holds.
+    pub const MATCHED: usize = SEARCH_MATCHED;
+
+    /// The ranked-retrieval declaration this relation can honestly make, for a
+    /// **caller-supplied** stratum.
+    ///
+    /// A [`RankedDeclaration`] is configuration a host supplies at
+    /// [`register_ranked`](purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked),
+    /// not a property of this type — the same relation is a ranked producer in
+    /// one host and an ordinary row source in another. What this method adds is
+    /// only that a host does not have to hand-write the argument indices: the
+    /// positions come from [`Self::DOC`] and [`Self::NEEDLE`], which are this
+    /// relation's own, so a declaration cannot drift from the row shape.
+    ///
+    /// Nothing is minted. `stratum` is the caller's IRI; `predicate` is the
+    /// caller's IRI, or `None` to accept a lexical request term whatever
+    /// predicate it names. The returned value is plain data with public fields,
+    /// so a host that wants a different ordering claim, a `mandatory` producer,
+    /// or its own extra accepted alternatives edits it before registering.
+    ///
+    /// # What it declares, and why
+    ///
+    /// * **Candidate at [`Self::DOC`]** — the document subject is the term a
+    ///   consumer fuses and joins on; every other position is about the row.
+    /// * **One accepted alternative: a literal request term**, with its value
+    ///   rendered into [`Self::NEEDLE`]. That is the only position this relation
+    ///   requires bound, and a needle is the only thing it can be asked for.
+    /// * **No datatype on that placement.** This relation reads `xsd:string`,
+    ///   `rdf:langString` and `rdf:dirLangString`, and an absent datatype is
+    ///   what lets a *language-tagged* request term render as `"needle"@tag`
+    ///   with its tag intact — a placement that declared a datatype would make a
+    ///   tagged needle unrenderable, because a literal is typed or tagged and
+    ///   never both.
+    /// * **No `Language` placement**, so `?lang` stays free. Declaring one would
+    ///   refuse every untagged request term, which is the larger population;
+    ///   a host that wants a tag to *select* a partition writes its own
+    ///   alternative, with a [`TermPattern`] naming that language and a
+    ///   [`RequestFacet::Language`] placement at [`Self::LANG`].
+    /// * **No depth placement.** This relation takes no `k` argument; a consumer
+    ///   bounds it with `LIMIT`, which is what "bounded by the consumer's row
+    ///   ceiling" means in [`RankedDeclaration::depth_placement`].
+    /// * **[`RankOrdering::StrictlyDescending`] and [`DuplicatePolicy::Unique`]**
+    ///   — true within one partition, where rows are ordered by score with a
+    ///   total tie-break on document number, and where a subject occurs at most
+    ///   once. Which is exactly why a multi-partition index is refused below.
+    ///
+    /// # Errors
+    ///
+    /// [`TextError::Config`] when the index holds **more than one partition**.
+    /// A partition is a `(graph, language)` pair and ranks are computed within
+    /// one, so a multi-partition index emits rows partition-major: the answer
+    /// opens with one rank-1 row per partition, the positions a consumer would
+    /// fuse are not a ranking of anything, and one subject can appear in two
+    /// partitions and so twice in one stream. Neither available
+    /// [`RankOrdering`] describes that, so this method declines to make a claim
+    /// rather than making a false one. It is not a limit on the relation —
+    /// [`TextSearchRelation`] answers a multi-partition index perfectly well
+    /// from query text — only on what can be declared about its *rank* column.
+    ///
+    /// The fix is the one the type's own documentation already gives: build the
+    /// index over a single partition, with
+    /// [`GraphSelector::Named`](crate::GraphSelector::Named) or
+    /// [`GraphSelector::Default`](crate::GraphSelector::Default) over a corpus
+    /// in one language.
+    pub fn ranked_declaration(
+        &self,
+        stratum: Iri,
+        predicate: Option<String>,
+    ) -> Result<RankedDeclaration, TextError> {
+        let partitions = self.index.partition_count();
+        if partitions > 1 {
+            return Err(TextError::config(format!(
+                "this index holds {partitions} partitions, and a rank is computed within one \
+                 partition: the rows of a multi-partition answer are emitted partition-major, so \
+                 they open with {partitions} rows of rank 1 and one subject may appear in more \
+                 than one of them. No ranked ordering can be declared over that, and declaring \
+                 one anyway would hand a consumer positions it would fuse as though they were a \
+                 ranking. Build the index over a single partition — GraphSelector::Named or \
+                 GraphSelector::Default over a corpus in one language — or write the declaration \
+                 by hand with the claim the host can actually stand behind."
+            )));
+        }
+        Ok(RankedDeclaration {
+            stratum,
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern {
+                    kind: TermKind::Literal,
+                    datatype: None,
+                    language: None,
+                    predicate,
+                },
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: Self::NEEDLE,
+                    datatype: None,
+                }],
+            }],
+            depth_placement: None,
+            candidate_position: Self::DOC,
+            ordering: RankOrdering::StrictlyDescending,
+            duplicates: DuplicatePolicy::Unique,
+            mandatory: false,
+        })
     }
 }
 
@@ -1266,13 +1384,17 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 
     use super::{
-        OCCURRENCE_MODE, RDF_DIR_LANG_STRING, SEARCH_MODE, TermOccurrenceRelation,
-        TextSearchRelation, XSD_DECIMAL, XSD_INTEGER, verify_binding,
+        OCCURRENCE_MODE, RDF_DIR_LANG_STRING, SEARCH_DOC, SEARCH_LANG, SEARCH_MATCHED, SEARCH_MODE,
+        SEARCH_NEEDLE, SEARCH_RANK, SEARCH_SCORE, TermOccurrenceRelation, TextSearchRelation,
+        XSD_DECIMAL, XSD_INTEGER, verify_binding,
     };
     use crate::error::TextError;
     use crate::index::{GraphSelector, TextIndex, TextIndexConfig};
     use purrdf_core::binding_pattern::BindingPattern;
-    use purrdf_sparql_eval::{EvalError, PfArgs, PfRow, PropertyFunction};
+    use purrdf_sparql_eval::{
+        EvalError, PfArgs, PfRow, PropertyFunction, RequestFacet, TermKind, TermPattern,
+        TermPlacement,
+    };
 
     /// The one predicate every fixture indexes.
     const NOTE: &str = "https://example.org/note";
@@ -1435,6 +1557,102 @@ mod tests {
         (0..(1_usize << arity))
             .map(|bits| BindingPattern::from_bools((0..arity).map(|at| bits & (1 << at) != 0)))
             .collect()
+    }
+
+    // ── the ranked declaration ──────────────────────────────────────────────
+
+    /// The declaration a host registers this relation with, over a single
+    /// partition: positions come from the relation's own constants, the needle
+    /// is the accepted term, and nothing is minted.
+    #[test]
+    fn a_single_partition_index_declares_its_ranked_capability() {
+        let relation = TextSearchRelation::new(golden());
+        assert_eq!(relation.index().partition_count(), 1);
+
+        let stratum = purrdf_core::parse_iri("https://example.org/stratum/text")
+            .expect("the fixture stratum is a valid IRI");
+        let declaration = relation
+            .ranked_declaration(stratum.clone(), Some(NOTE.to_owned()))
+            .expect("a single-partition index has one ranked order");
+
+        assert_eq!(declaration.stratum, stratum, "the stratum is the caller's");
+        assert_eq!(declaration.candidate_position, TextSearchRelation::DOC);
+        assert!(
+            declaration.depth_placement.is_none(),
+            "this relation takes no k argument; a consumer bounds it with LIMIT"
+        );
+        assert!(
+            !declaration.mandatory,
+            "coverage policy is the host's, and the helper claims none"
+        );
+        assert_eq!(declaration.accepted_terms.len(), 1);
+        let accepted = &declaration.accepted_terms[0];
+        assert_eq!(
+            accepted.pattern,
+            TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: None,
+                predicate: Some(NOTE.to_owned()),
+            },
+            "a needle is a literal, and the predicate is the caller's"
+        );
+        assert_eq!(
+            accepted.placements,
+            vec![TermPlacement {
+                facet: RequestFacet::Value,
+                position: TextSearchRelation::NEEDLE,
+                datatype: None,
+            }],
+            "the needle renders into the one position this relation requires bound, \
+             with no datatype so a language-tagged needle keeps its tag"
+        );
+
+        // The positions are the relation's own, not a second spelling of them.
+        assert_eq!(TextSearchRelation::DOC, SEARCH_DOC);
+        assert_eq!(TextSearchRelation::NEEDLE, SEARCH_NEEDLE);
+        assert_eq!(TextSearchRelation::SCORE, SEARCH_SCORE);
+        assert_eq!(TextSearchRelation::RANK, SEARCH_RANK);
+        assert_eq!(TextSearchRelation::LANG, SEARCH_LANG);
+        assert_eq!(TextSearchRelation::MATCHED, SEARCH_MATCHED);
+    }
+
+    /// A multi-partition index emits partition-major, so its positions are not a
+    /// ranking and one subject can appear twice. The helper declines to claim
+    /// otherwise — and the refusal is narrow: an empty index and a one-partition
+    /// index both still declare.
+    #[test]
+    fn a_multi_partition_index_declares_nothing_but_its_neighbours_still_do() {
+        let stratum = purrdf_core::parse_iri("https://example.org/stratum/text")
+            .expect("the fixture stratum is a valid IRI");
+
+        let spread = TextSearchRelation::new(spread_subject());
+        assert!(spread.index().partition_count() > 1);
+        let error = spread
+            .ranked_declaration(stratum.clone(), None)
+            .expect_err("three partitions have no one ranked order");
+        match error {
+            TextError::Config(message) => {
+                assert!(message.contains("rank is computed within one"), "{message}");
+                assert!(message.contains("GraphSelector"), "{message}");
+            }
+            other => panic!("expected a configuration refusal, got {other:?}"),
+        }
+
+        // The neighbouring valid cases, both of which have exactly one ranked
+        // order and must not have been caught by the tightening above.
+        let empty = TextSearchRelation::new(Arc::new(index_of(&[])));
+        assert_eq!(empty.index().partition_count(), 0);
+        assert!(
+            empty.ranked_declaration(stratum.clone(), None).is_ok(),
+            "an empty index ranks nothing, which is one ranked order"
+        );
+        assert!(
+            TextSearchRelation::new(golden())
+                .ranked_declaration(stratum, None)
+                .is_ok(),
+            "and a one-partition index still declares"
+        );
     }
 
     // ── the declared shape ──────────────────────────────────────────────────

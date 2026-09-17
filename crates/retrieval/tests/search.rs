@@ -203,8 +203,8 @@ fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> 
     })
 }
 
-/// The fixture registry: an always-applicable producer, a literal producer, an
-/// IRI-seed producer, and one unranked producer.
+/// The fixture registry: a catch-all producer the host declares mandatory, a
+/// literal producer, an IRI-seed producer, and one unranked producer.
 fn fixture_registry() -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
     let literal_pattern = TermPattern {

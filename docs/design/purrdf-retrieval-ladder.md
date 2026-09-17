@@ -5,15 +5,18 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # PurRDF retrieval composition: plan, compile, execute, fuse
 
-PurRDF already answers ranked retrieval three ways: exact BM25 rows from
-`purrdf-text`, kNN rows from the evaluator's `knn` module over PURREMB
-artifacts, and the `geof:` family from `purrdf-geo` — each a relation
-reached through the property-function seam, each returning its own ranked
-list under caller-supplied IRIs. What does not exist yet is the layer that
-turns "one request" into "one answer" across all of them: something has to
-decide which producers a request reaches, run them, and combine their
-lists into a single ordered result without destroying what each producer
-knew about its own answer.
+PurRDF already answers ranked retrieval two ways: exact BM25 rows from
+`purrdf-text` and kNN rows from the evaluator's `knn` module over PURREMB
+artifacts — each a relation reached through the property-function seam,
+each returning its own ranked list under caller-supplied IRIs. The
+`geof:` family from `purrdf-geo` is reached the same way but is not a
+third: it computes a **set**, with a deterministic ordering and neither a
+score nor a rank, so it composes as a constraint on candidates rather
+than as a stratum of a fused ranking. What does not exist yet is the
+layer that turns "one request" into "one answer" across the ranked ones:
+something has to decide which producers a request reaches, run them, and
+combine their lists into a single ordered result without destroying what
+each producer knew about its own answer.
 
 This document records the design for that layer before any of it is code,
 in the same spirit as the other design records here: the decisions a
@@ -74,7 +77,7 @@ admissible. The failure that matters is semantic: delete a producer from
 an edited plan and the result still compiles to a perfectly well-formed
 query that silently answers less than the registry promised. Admission
 therefore checks the plan against the registry's declared invariants —
-producers the registry marks as always-applicable are present and receive
+producers the registry **declares** mandatory are present and receive
 what the registry says they must receive, per-stratum depths respect
 declared bounds, weights refer to declared strata and are valid under §5
 — and refuses with the exact violated dimension rather than executing a

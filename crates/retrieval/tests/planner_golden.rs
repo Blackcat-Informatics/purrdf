@@ -126,7 +126,7 @@ fn relation(rows: u64) -> Arc<dyn PropertyFunction> {
     })
 }
 
-/// The mixed registry: one always-applicable (`Any`) producer, one
+/// The mixed registry: one catch-all (`Any`) producer, one
 /// literal-only producer, one IRI-only producer, one quoted-triple producer
 /// that no request term can reach, and one unranked producer.
 fn mixed_registry() -> PropertyFunctionRegistry {
@@ -459,8 +459,12 @@ fn language_and_predicate_constraints_are_enforced() {
 // 3. Producer selection
 // ---------------------------------------------------------------------------
 
+/// Breadth of a pattern, not mandatory-ness: an unconstrained pattern matches
+/// every term, so the planner binds every term to it. Whether the producer may
+/// be dropped is a separate fact the registry declares, and admission reads it
+/// from there rather than deriving it from this breadth.
 #[test]
-fn always_applicable_producer_receives_every_term() {
+fn an_unconstrained_producer_is_bound_to_every_term() {
     let plan = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
     assert_eq!(
         binding(&plan, &ex("pf/any"))

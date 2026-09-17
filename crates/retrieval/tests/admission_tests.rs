@@ -18,7 +18,8 @@ use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, Fixed, Iri, Metric, Plan,
-    ProducerStatus, RequestTerm, RetrievalRequest, Statistics, Term, Weight, compile, execute,
+    ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, Statistics,
+    Term, Weight, compile, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -197,8 +198,8 @@ fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> 
     })
 }
 
-/// The fixture registry: an always-applicable producer, a literal producer, an
-/// IRI-seed producer, and one unranked producer.
+/// The fixture registry: a catch-all producer the host declares mandatory, a
+/// literal producer, an IRI-seed producer, and one unranked producer.
 fn fixture_registry() -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
     let literal_pattern = TermPattern {
@@ -236,7 +237,7 @@ fn fixture_registry() -> PropertyFunctionRegistry {
     registry
 }
 
-/// A registry whose declarations differ from the fixture's: the always-applicable
+/// A registry whose declarations differ from the fixture's: the catch-all
 /// producer declares a different row bound, so the content fingerprint moves.
 fn registry_with_different_declaration() -> PropertyFunctionRegistry {
     let mut registry = fixture_registry();
@@ -358,7 +359,7 @@ fn admission_accepts_fresh_plan() {
         .units
         .iter()
         .find(|unit| unit.stratum == iri(&ex("stratum/universal")))
-        .expect("the always-applicable stratum emits a unit");
+        .expect("the mandatory producer's stratum emits a unit");
     assert!(universal.sparql.contains(&ex("pf/any")));
     // The seed producer receives the seed itself as a rendered constant, which is
     // what "the request is in the text" means.
@@ -380,7 +381,7 @@ fn admission_accepts_fresh_plan() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Deleted / missing always-applicable producers
+// 2. Deleted / missing mandatory producers
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -465,7 +466,7 @@ fn admission_rejects_missing_mandatory() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Under-bound always-applicable producers
+// 3. Under-bound mandatory producers
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -789,7 +790,7 @@ fn pinned_plan_replay_reproduces_candidate_set_and_ranks() {
     let universal = first
         .get(&iri(&ex("stratum/universal")))
         .expect("the universal stratum streamed");
-    assert_eq!(universal.len(), 3, "the always-applicable producer's rows");
+    assert_eq!(universal.len(), 3, "the mandatory producer's rows");
     assert_eq!(universal[0].0, 1);
     assert_eq!(universal[2].0, 3);
 }
@@ -829,4 +830,270 @@ fn compiled_retrieval_carries_both_identities() {
         compiled.registry_fingerprint,
         plan.registry_content_fingerprint
     );
+}
+
+// ---------------------------------------------------------------------------
+// 9. `mandatory` is a declaration, not an inference
+//
+// Admission reads the registry's own `mandatory` flag and nothing else. These
+// three tests are pairs: the same plan, the same edit, the same request, run
+// against two registries that differ only in that flag. Each pins the refusal
+// AND its valid neighbour, because a coverage rule that is derived rather than
+// declared fails silently in exactly one direction — it refuses plans that were
+// always legitimate, and every test still passes.
+// ---------------------------------------------------------------------------
+
+/// A declaration with an explicit accepted-term list, so a test can control
+/// what places and what does not.
+fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> RankedDeclaration {
+    RankedDeclaration {
+        stratum: kernel_iri(stratum),
+        accepted_terms: accepted,
+        depth_placement: None,
+        candidate_position: 0,
+        ordering: RankOrdering::StrictlyDescending,
+        duplicates: DuplicatePolicy::Unique,
+        mandatory,
+    }
+}
+
+/// One accepted alternative that renders the term's value at position 1.
+fn renders_value() -> Vec<AcceptedTerm> {
+    vec![AcceptedTerm {
+        pattern: TermPattern::of_kind(TermKind::Any),
+        placements: vec![TermPlacement {
+            facet: RequestFacet::Value,
+            position: 1,
+            datatype: None,
+        }],
+    }]
+}
+
+/// One accepted alternative that accepts every shape and renders nothing: the
+/// permissive catch-all. Its argument stays a free variable, which is what "I
+/// take the whole request without needing it written out" is.
+fn renders_nothing() -> Vec<AcceptedTerm> {
+    vec![AcceptedTerm {
+        pattern: TermPattern::of_kind(TermKind::Any),
+        placements: Vec::new(),
+    }]
+}
+
+/// `pf/catch-all` — permissive, always placeable — beside a literal-only
+/// producer in its own stratum, so dropping the catch-all still leaves a unit
+/// to emit.
+fn catch_all_registry(mandatory: bool) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/catch-all"),
+        producer(200, "catch/", 3),
+        declaration(&ex("stratum/catch"), renders_nothing(), mandatory),
+    );
+    registry.register_ranked(
+        ex("pf/literal"),
+        producer(100, "text/", 2),
+        ranked(
+            &ex("stratum/text"),
+            vec![TermPattern::of_kind(TermKind::Literal)],
+            false,
+        ),
+    );
+    registry
+}
+
+/// `pf/renders` places a request term's value, so a vector term — which has no
+/// SPARQL constant form — makes it unplaceable. `pf/free` shares its stratum and
+/// places nothing, so the plan stays viable and the first producer's own fate is
+/// readable rather than collapsed into `NoApplicableProducers`.
+fn unplaceable_registry(mandatory: bool) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/renders"),
+        producer(30, "renders/", 2),
+        declaration(&ex("stratum/render"), renders_value(), mandatory),
+    );
+    registry.register_ranked(
+        ex("pf/free"),
+        producer(30, "free/", 2),
+        declaration(&ex("stratum/render"), renders_nothing(), false),
+    );
+    registry
+}
+
+/// A registry whose literal-only producer is declared mandatory by the host: it
+/// accepts a lexical term and nothing else, so it can serve a whole request only
+/// when the whole request is lexical.
+fn literal_only_registry(mandatory: bool) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/literal"),
+        producer(100, "text/", 2),
+        declaration(
+            &ex("stratum/text"),
+            vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(TermKind::Literal),
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: 1,
+                    datatype: None,
+                }],
+            }],
+            mandatory,
+        ),
+    );
+    registry
+}
+
+/// Narrow the catch-all's binding to the request's first term only, and admit.
+fn admit_narrowed(registry: &PropertyFunctionRegistry) -> Result<(), AdmissionError> {
+    let stats = statistics("r1");
+    let mut plan =
+        purrdf_retrieval::plan(&mixed_request(), registry, &stats).expect("the request plans");
+    let binding = plan
+        .producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == ex("pf/catch-all"))
+        .expect("the catch-all is bound to the whole request");
+    assert_eq!(
+        binding.request_terms.len(),
+        3,
+        "the planner binds a permissive producer to every term it accepts"
+    );
+    binding.request_terms.truncate(1);
+    let env = AdmissionEnvironment {
+        registry,
+        statistics: &stats,
+    };
+    compile(&plan, &env).map(|_| ())
+}
+
+#[test]
+fn narrowing_a_producer_is_refused_only_when_the_registry_declared_it_mandatory() {
+    // The valid neighbour, and the whole point of the change: a permissive
+    // producer the registry did not declare mandatory may legitimately be bound
+    // to a SUBSET of the request. A rule that derived "mandatory" from the
+    // producer's own patterns made this plan impossible to admit, which is a
+    // refusal of something that was never wrong.
+    admit_narrowed(&catch_all_registry(false))
+        .expect("a producer the registry did not declare mandatory may be narrowed");
+
+    // The same edit, against a registry that did declare it: refused, loudly,
+    // naming the shortfall.
+    let error = admit_narrowed(&catch_all_registry(true))
+        .expect_err("a mandatory producer must receive every request term");
+    assert_eq!(error.dimension(), "insufficient_bindings");
+    match error {
+        AdmissionError::InsufficientBindings {
+            producer,
+            required,
+            provided,
+        } => {
+            assert_eq!(producer.as_str(), ex("pf/catch-all"));
+            assert_eq!(required, 3);
+            assert_eq!(provided, 1);
+        }
+        other => panic!("expected InsufficientBindings, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_mandatory() {
+    let request = RetrievalRequest::from_terms(vec![vector_term()]);
+
+    // Not declared mandatory: the planner records why it could not be invoked
+    // and drops it, and the plan is admitted on the strength of what remains.
+    let registry = unplaceable_registry(false);
+    let stats = statistics("r1");
+    let plan = purrdf_retrieval::plan(&request, &registry, &stats).expect("the request plans");
+    assert!(
+        plan.producer_decisions
+            .contains(&ProducerDecision::Rejected {
+                producer: ex("pf/renders"),
+                reason: RejectionReason::UnsatisfiedConstraint,
+            }),
+        "the rejection is recorded with its own reason: {:?}",
+        plan.producer_decisions
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let compiled = compile(&plan, &env).expect("a dropped optional producer is not a refusal");
+    assert_eq!(
+        compiled.units.len(),
+        1,
+        "the surviving producer still emits"
+    );
+    assert!(compiled.units[0].sparql.contains(&ex("pf/free")));
+    assert!(
+        !compiled.units[0].sparql.contains(&ex("pf/renders")),
+        "and the dropped producer is not in the text: {}",
+        compiled.units[0].sparql
+    );
+
+    // Declared mandatory: the very same plan is refused, because the registry
+    // promised that producer would serve every request and this one cannot
+    // reach it.
+    let registry = unplaceable_registry(true);
+    let plan = purrdf_retrieval::plan(&request, &registry, &stats).expect("the request plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let error = compile(&plan, &env).expect_err("a mandatory producer cannot be dropped");
+    assert_eq!(error.dimension(), "missing_mandatory_producer");
+    match error {
+        AdmissionError::MissingMandatoryProducer { producer } => {
+            assert_eq!(producer.as_str(), ex("pf/renders"));
+        }
+        other => panic!("expected MissingMandatoryProducer, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_mandatory_producer_is_refused_for_a_request_shape_it_does_not_accept() {
+    let stats = statistics("r1");
+
+    // A host may declare a narrow producer mandatory. That is a claim about
+    // every request, so a request carrying shapes the producer does not accept
+    // falsifies it — and the falsification is a named refusal at the waist, not
+    // an answer that quietly covers one term of three.
+    let registry = literal_only_registry(true);
+    let plan = purrdf_retrieval::plan(&mixed_request(), &registry, &stats)
+        .expect("the lexical term still reaches the producer, so the request plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let error =
+        compile(&plan, &env).expect_err("a mandatory producer must serve the whole request");
+    match error {
+        AdmissionError::InsufficientBindings {
+            producer,
+            required,
+            provided,
+        } => {
+            assert_eq!(producer.as_str(), ex("pf/literal"));
+            assert_eq!(required, 3, "the request carries three terms");
+            assert_eq!(provided, 1, "only the lexical one matches a declared shape");
+        }
+        other => panic!("expected InsufficientBindings, got {other:?}"),
+    }
+
+    // The neighbouring valid case: a request the producer does accept in full is
+    // admitted by the same mandatory registry.
+    let lexical_only = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let plan =
+        purrdf_retrieval::plan(&lexical_only, &registry, &stats).expect("a lexical request plans");
+    compile(&plan, &env).expect("a request the mandatory producer serves in full is admitted");
+
+    // And the same three-term request is admitted where the host did not make
+    // that claim, so the refusal above is the declaration's, not the shape's.
+    let optional = literal_only_registry(false);
+    let plan = purrdf_retrieval::plan(&mixed_request(), &optional, &stats).expect("plans");
+    let env = AdmissionEnvironment {
+        registry: &optional,
+        statistics: &stats,
+    };
+    compile(&plan, &env).expect("an optional producer may cover part of a request");
 }
