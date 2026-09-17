@@ -573,21 +573,25 @@ pub fn from_dataset_with_config_and_graph(
 ///
 /// A dataset is already resolved — by the time the IR exists every relative
 /// reference has become an absolute IRI — so the base changes nothing about THIS
-/// parse. It is threaded anyway because it is the one parse input that only the
-/// text-level entry point ([`crate::engine::parse_shapes`]) ever sees: dropping it
-/// here would make a shapes graph that resolved `<PersonShape>` against
-/// `https://example.org/` indistinguishable from one that resolved it against
-/// anything else, and nothing downstream could recover which.
+/// parse. It is threaded anyway because it is the one parse input that only a
+/// caller who read the SOURCE TEXT itself can supply: dropping it here would make
+/// a shapes graph that resolved `<PersonShape>` against `https://example.org/`
+/// indistinguishable from one that resolved it against anything else, and nothing
+/// downstream could recover which.
 ///
-/// Kept `pub(crate)` rather than published as a sixth public overload: callers who
-/// hold a dataset do not have a base to give (they never parsed text), and adding
-/// a parameter they can only answer `None` to invites a fabricated one.
+/// Published rather than `pub(crate)`, because a caller who first materializes a
+/// dataset from text it read itself — folding an `owl:imports` closure at the
+/// dataset level, say, the way `purrdf-validate`'s prepared-shapes-product writer
+/// does — DOES hold a real base at that point, and a parameter it could only
+/// answer `None` to would be the fabricated default this crate refuses to invent
+/// everywhere else. A caller with no base to give still has every narrower
+/// overload above, each of which spends `None` on this parameter for it.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` on any unsupported SHACL construct or missing
 /// structural data — see [`from_dataset`].
-pub(crate) fn from_dataset_with_base(
+pub fn from_dataset_with_base(
     dataset: &Arc<RdfDataset>,
     base: Option<&str>,
     doc_prefixes: &[(String, String)],

@@ -1145,17 +1145,20 @@ pub(crate) enum PackCommand {
 /// back what one says it was compiled from.
 #[derive(Subcommand, Debug)]
 pub(crate) enum ShaclCommand {
-    /// Parse a Turtle shapes graph, prepare it, and write the prepared product.
+    /// Parse a Turtle shapes graph, fold its `owl:imports` closure, prepare the result, and
+    /// write the prepared product.
     ///
-    /// The product carries the compiled model AND the shapes dataset it was derived from,
-    /// both under the container's per-section SHA-256 and whole-container digest, plus the
-    /// binding of every input it was compiled against: the base, the prefix map, the
-    /// `sh:shapesGraph` IRI, the vocabulary configuration, the function/aggregate/property
-    /// registries and the class catalog. Restoring it under different ones is REFUSED, not
-    /// silently executed against a shapes graph nobody asked about.
+    /// The product carries the compiled model AND the shapes dataset it was derived from —
+    /// the ROOT graph merged with every document `--import` resolved — both under the
+    /// container's per-section SHA-256 and whole-container digest, plus the binding of every
+    /// input it was compiled against: the base, the prefix map, the `sh:shapesGraph` IRI, the
+    /// vocabulary configuration, the function/aggregate/property registries and the class
+    /// catalog. Restoring it under different ones is REFUSED, not silently executed against a
+    /// shapes graph nobody asked about.
     ///
-    /// Byte-deterministic: two runs over the same document and base produce identical
-    /// bytes — no hash-iteration order, no wall clock and no randomness reach the writer.
+    /// Byte-deterministic: two runs over the same document, base and import table produce
+    /// identical bytes — no hash-iteration order, no wall clock and no randomness reach the
+    /// writer.
     Pack {
         /// The Turtle shapes graph `FILE`. Turtle because it is the one syntax carrying a
         /// `@prefix`/`PREFIX` map recoverable from source text, which is the fallback
@@ -1169,6 +1172,18 @@ pub(crate) enum ShaclCommand {
         /// `validate --shapes` parses it under.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
+        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document: the ontology
+        /// IRI the shapes document imports, then the file that is it. Repeatable, and
+        /// followed transitively — an imported document's own `owl:imports` are resolved
+        /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
+        /// import is only ever the document the operator named. Naming any pair makes the
+        /// closure MANDATORY: an `owl:imports` no pair resolves is then refused by name
+        /// rather than folded in as an empty graph, and a pair the closure never reaches is
+        /// refused as unused. With no `--import` at all the imports are reported on stderr
+        /// and the shapes graph packs alone, exactly as `validate --shapes` with no
+        /// `--import` validates it alone.
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
         /// Product path `OUT`, or `-` for stdout.
         #[arg(long, value_name = "OUT", required = true)]
         out: String,

@@ -96,6 +96,7 @@ mod query;
 mod reason;
 mod report;
 mod shacl;
+mod shapes_source;
 mod shex;
 mod sink;
 mod source;
@@ -478,7 +479,12 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         }
         .map(|()| CliOutcome::Complete),
         Command::Shacl { command } => match command {
-            ShaclCommand::Pack { shapes, base, out } => shacl::pack(shapes, base.as_deref(), out),
+            ShaclCommand::Pack {
+                shapes,
+                base,
+                import,
+                out,
+            } => shacl::pack(shapes, base.as_deref(), import, out),
             ShaclCommand::Verify { input } => shacl::verify(input),
             ShaclCommand::Explain { input } => shacl::explain(input),
         }

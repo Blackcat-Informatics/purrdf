@@ -57,13 +57,13 @@
 //! [`certify_shapes_product`]: purrdf_validate::certify_shapes_product
 
 use purrdf::shapes::product::ShapesProductError;
-use purrdf_rdf::NativeRdfFormat;
+use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 
 use crate::error::CliError;
 use crate::{sink, source};
 
-/// Run `shacl pack`: parse the shapes document at `shapes`, prepare it, and write the
-/// prepared product to `out`.
+/// Run `shacl pack`: read the shapes document at `shapes`, fold its `owl:imports` closure
+/// against `imports`, prepare the result, and write the prepared product to `out`.
 ///
 /// `base` overrides the base IRI the shapes document's relative IRI references resolve
 /// against; omitted, the document's own RFC-8089 `file://` retrieval IRI is derived,
@@ -79,13 +79,37 @@ use crate::{sink, source};
 /// provenance. A product packed from a syntax with no such map would restore SHACL-AF
 /// query bodies that resolve differently than the ones the shapes graph declared.
 ///
+/// # This lane and `validate --shapes` share ONE seam
+///
+/// The read and the import fold are [`crate::shapes_source::read_shapes_document`] and
+/// [`crate::shapes_source::fold_shapes_imports`] — the identical functions
+/// `validate --shapes --import` calls — rather than a second copy of the same walk. That is
+/// what makes `purrdf shacl pack --import IRI=FILE … | purrdf validate --shapes-product …`
+/// and `purrdf validate --shapes … --import IRI=FILE …` agree by construction: there is
+/// exactly one implementation of "what does folding this closure mean", so the two commands
+/// cannot silently diverge on it the way they used to, when this lane parsed raw text with no
+/// import table at all and dropped an unresolved `owl:imports` with nothing printed.
+///
+/// A shapes graph naming no `--import` at all is not refused for it: every unresolved
+/// `owl:imports` is reported on stderr as a `shacl warning` line and the product is packed
+/// from the shapes graph alone — see [`crate::shapes_source`]'s module documentation for why
+/// that asymmetry is deliberate. Naming any `--import` pair makes the closure mandatory: an
+/// `owl:imports` no pair resolves, or a pair the closure never reaches, is then a usage error.
+///
 /// # Errors
 ///
 /// [`CliError::Usage`] when `--shapes -` is given (stdin has no retrieval IRI to derive
-/// a base from, so a relative reference in it would silently resolve to nothing);
-/// [`CliError::Runtime`] when the document cannot be read, is not UTF-8, does not parse,
-/// or declares a capability the product format cannot carry.
-pub(crate) fn pack(shapes: &str, base: Option<&str>, out: &str) -> Result<(), CliError> {
+/// a base from, so a relative reference in it would silently resolve to nothing), or when an
+/// `--import` pair is malformed, resolves nothing the shapes graph imports, or is never
+/// reached by the import closure; [`CliError::Runtime`] when a document cannot be read, is
+/// not UTF-8, does not parse, an `owl:imports` no pair resolves, or the shapes graph declares
+/// a capability the product format cannot carry.
+pub(crate) fn pack(
+    shapes: &str,
+    base: Option<&str>,
+    imports: &[String],
+    out: &str,
+) -> Result<(), CliError> {
     let effective_base = source::effective_base(shapes, NativeRdfFormat::Turtle, base)?;
     if effective_base.is_none() {
         return Err(CliError::Usage(format!(
@@ -96,13 +120,24 @@ pub(crate) fn pack(shapes: &str, base: Option<&str>, out: &str) -> Result<(), Cl
         )));
     }
 
-    let bytes = source::read_bytes(shapes)?;
-    let text = String::from_utf8(bytes).map_err(|error| {
-        CliError::Runtime(format!("--shapes {shapes}: not UTF-8 text: {error}"))
-    })?;
+    let root = crate::shapes_source::read_shapes_document(
+        shapes,
+        SourceFormat::Native(NativeRdfFormat::Turtle),
+        effective_base.as_deref(),
+        "--shapes",
+    )?;
+    let folded = crate::shapes_source::fold_shapes_imports(root, imports)?;
 
-    let product = purrdf_validate::pack_shapes_product(&text, effective_base.as_deref())
-        .map_err(|refusal| refusal_error(&format!("--shapes {shapes}"), &refusal))?;
+    // `shapes_graph` is `None`: `shacl pack` has no `--shapes-graph` flag of its own, so the
+    // product records whatever `sh:shapesGraph` the shapes graph itself declares, exactly as
+    // it always has.
+    let product = purrdf_validate::pack_shapes_product_from_dataset(
+        &folded.dataset,
+        &folded.prefixes,
+        effective_base.as_deref(),
+        None,
+    )
+    .map_err(|refusal| refusal_error(&format!("--shapes {shapes}"), &refusal))?;
 
     let written = product.len();
     sink::write_out(out, &product)?;

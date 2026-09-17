@@ -60,10 +60,46 @@ Turtle is the accepted shapes syntax because it is the one syntax carrying a
 fallback prefix environment every SHACL-AF `sh:select` body resolves against.
 The product records it.
 
+### `owl:imports` is folded at pack time, the same way `validate --shapes` folds it
+
+`shacl pack` accepts the identical `--import IRI=FILE` table
+`validate --shapes` does, resolves the same transitive closure, and packs the
+merged graph — see [`owl:imports` in a shapes graph](shacl.md#owlimports-in-a-shapes-graph)
+for the closure semantics, which are shared code, not a parallel
+re-implementation:
+
+```bash
+purrdf shacl pack \
+  --shapes root.ttl \
+  --import https://example.org/lib=lib.ttl \
+  --out shapes.purrshp
+```
+
+Naming **no** `--import` at all is not a refusal: each unresolved
+`owl:imports` is reported on stderr as a `shacl warning` line and the product
+is packed from the root graph alone — a shapes document may legitimately carry
+an ontology header whose imports are irrelevant to its shapes. Naming **any**
+pair makes the closure mandatory, exactly as it does for `validate --shapes`:
+an `owl:imports` no pair resolves is refused by name, and a pair the closure
+never reaches is refused as unused.
+
+This did not always hold. `shacl pack` used to read the shapes document
+through a route with no import table and no diagnostic channel at all, so an
+unresolved `owl:imports` was dropped with nothing printed, and the resulting
+product carried FEWER shapes than the document it was packed from — a decided,
+well-formed, wrong verdict every time it was restored. Packing with `--import`
+and validating the document with the same `--import` now reach the
+byte-identical report, by construction: the two commands read and fold the
+closure through the same function.
+
+The Python, C-ABI and WebAssembly bindings call a lower-level, text-only pack
+entry point that has no `--import` table at all, and refuse rather than fold
+— see [What a product carries, and what it does not](#what-a-product-carries-and-what-it-does-not).
+
 The writer is **byte-deterministic**. No wall clock, no randomness and no
-hash-iteration order reach it, so two runs over the same document and base
-produce identical bytes and a content-addressed cache key over a product is
-stable.
+hash-iteration order reach it, so two runs over the same document, base and
+import table produce identical bytes and a content-addressed cache key over a
+product is stable.
 
 From Rust:
 
@@ -119,11 +155,20 @@ reifier bindings, statement annotations, and `rdf:dirLangString` literals whose
 base direction is part of their identity (`"x"@en--ltr` and `"x"@en--rtl` are
 two distinct terms).
 
-One capability is refused at pack time rather than lost at restore: a shapes
-graph declaring a `sh:SPARQLFunction` is refused on `unsupported-capability`,
-because only the SHACL 1.2 expression-bodied declarations survive a restore and
-a product carrying one would resolve every call site of that function to nothing
-and validate green.
+Two capabilities are refused at pack time rather than lost at restore, both on
+`unsupported-capability`:
+
+- a shapes graph declaring a `sh:SPARQLFunction`, because only the SHACL 1.2
+  expression-bodied declarations survive a restore and a product carrying one
+  would resolve every call site of that function to nothing and validate
+  green;
+- an `owl:imports` this pack call has no way to resolve — but ONLY through the
+  Python, C-ABI and WebAssembly bindings' lower-level, text-only entry point,
+  which carries no `--import` table and no place to print a warning. The CLI's
+  `purrdf shacl pack --import` is different: it folds the closure or reports
+  each unresolved import on stderr exactly as `validate --shapes` does, and
+  only refuses when an `--import` pair itself is unusable — see
+  [`owl:imports` in a shapes graph](shacl.md#owlimports-in-a-shapes-graph).
 
 ## Shipping a product
 
@@ -165,7 +210,7 @@ here:
 | --- | --- | --- |
 | `--shapes-from` | names the syntax a shapes document is read as, and a product is not a document | not applicable |
 | `--shapes-graph` | the product records its own `sh:shapesGraph` IRI | pass it to `purrdf shacl pack` |
-| `--import` | the `owl:imports` closure is folded at pack time | fold it when you run `purrdf shacl pack` |
+| `--import` | the `owl:imports` closure is folded at pack time | pass `--import IRI=FILE` to `purrdf shacl pack` |
 
 Everything describing the **data** graph stays live: `--from`, `--base`,
 `--format`, the governor flags (`--fuel`, `--deadline`,
