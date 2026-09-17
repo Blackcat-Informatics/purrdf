@@ -1491,6 +1491,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-hnsw"
+version = "2.0.2"
+dependencies = [
+ "purrdf-core",
+ "purrdf-sparql-eval",
+ "rayon",
+]
+
+[[package]]
 name = "purrdf-iri"
 version = "2.0.2"
 dependencies = [

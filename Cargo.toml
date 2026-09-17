@@ -12,6 +12,7 @@ members = [
     "crates/entail",
     "crates/geo",
     "crates/gts",
+    "crates/hnsw",
     "crates/iri",
     "crates/json",
     "crates/markdown",

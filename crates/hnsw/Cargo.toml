@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-hnsw"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic HNSW approximate nearest neighbor index for PurRDF"
+keywords = ["hnsw", "ann", "vector", "search", "deterministic"]
+categories = ["algorithms", "data-structures"]
+
+[dependencies]
+purrdf-core = { workspace = true }
+purrdf-sparql-eval = { workspace = true }
+rayon = { workspace = true }
+
+[lints]
+workspace = true
