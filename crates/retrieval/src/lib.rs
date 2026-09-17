@@ -61,7 +61,12 @@
 //! # Fusion is a law, not a knob
 //!
 //! A [`FusionProfile`] fixes the decay rule and its smoothing constant, every
-//! stratum's weight, the total tie-break and the admitted contribution ceiling.
+//! stratum's weight and the total tie-break; the admitted contribution count
+//! and the score ceiling follow from the weights, because a candidate may
+//! surface at most once per stratum. Weights are read as ratios and never as
+//! absolute quantities, so a map built with two different [`Fixed`]
+//! constructors is a silent factor-of-`10^12` error that refuses nothing — see
+//! [`FusionProfile::new`] before writing one.
 //! It is content-addressed, so an answer names exactly which law produced it.
 //! Contributions are exact [`Fixed`] values computed with checked arithmetic;
 //! an intermediate that does not fit is a loud [`FusionError::Overflow`], never

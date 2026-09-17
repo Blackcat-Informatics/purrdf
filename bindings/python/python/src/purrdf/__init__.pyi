@@ -1916,9 +1916,17 @@ class retrieval:
     ) -> dict[str, builtins.object]: ...
     # Run the whole ladder and return one fused answer.
     #
-    # `weights` maps a stratum IRI to its weight in raw fixed-point units. `k`,
-    # `max_contributions` and `top_k` are required: the fusion law is the
-    # caller's and fused enumeration is top-k by construction.
+    # `weights` maps a stratum IRI to its weight in raw fixed-point units, where
+    # `SCALE` (that is, `10 ** SCALE_DIGITS`) is one whole unit. A weight of one
+    # is `SCALE`, never the literal `1`, which is one raw unit. Weights are read
+    # only as ratios, so a dict mixing the two spellings is a silent
+    # factor-of-`SCALE` error: it runs, refuses nothing, and ranks as though the
+    # smaller stratum were absent. Write every weight the same way.
+    #
+    # `k` and `top_k` are required: the fusion law is the caller's and fused
+    # enumeration is top-k by construction. How many contributions a candidate
+    # may receive is not a parameter — it is the number of weighted strata,
+    # because a candidate surfaces at most once in each.
     @staticmethod
     def search(
         data: str,
@@ -1928,7 +1936,6 @@ class retrieval:
         weights: dict[str, int],
         statistics: dict[str, builtins.object],
         k: int,
-        max_contributions: int,
         top_k: int,
         data_format: str = "turtle",
         base: str | None = None,

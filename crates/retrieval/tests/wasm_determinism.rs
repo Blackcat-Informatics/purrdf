@@ -171,8 +171,8 @@ fn scripted(candidates: [&str; 3]) -> ScriptedStream {
     ScriptedStream { steps, emitted: 0 }
 }
 
-/// Both strata at unit weight, `K = 60`, two contributions admitted per
-/// candidate — one per stratum.
+/// Both strata at unit weight and `K = 60`, which admits two contributions per
+/// candidate — one per stratum, derived from the two weights.
 fn profile() -> FusionProfile {
     FusionProfile::new(
         BTreeMap::from([
@@ -180,7 +180,6 @@ fn profile() -> FusionProfile {
             (iri(STRATUM_TWO), Fixed::ONE),
         ]),
         K,
-        2,
     )
     .expect("the fixture profile is valid")
 }

@@ -49,7 +49,6 @@
 //!     weights={"https://example.org/stratum/lexical": retrieval.SCALE},
 //!     statistics={"source": "host-statistics", "revision": "r1"},
 //!     k=60,
-//!     max_contributions=1,
 //!     top_k=10,
 //! )
 //! assert answer["rows"][0]["entity"] == "<https://example.org/a>"
@@ -66,12 +65,20 @@
 //! be an approximation of a number the fusion law computed exactly, so neither
 //! is accepted or produced.
 //!
+//! Raw units are the whole convention on this side of the boundary, so a weight
+//! of **one** is `retrieval.SCALE`, not the Python literal `1` — which is one
+//! raw unit, `10 ** -SCALE_DIGITS`. A fusion reads weights only as ratios, so a
+//! `weights` dict mixing the two spellings is a factor-of-`10 ** SCALE_DIGITS`
+//! error that runs, refuses nothing, and returns a plausible ranking in which
+//! the smaller stratum has effectively been switched off. Write every weight in
+//! the same spelling: `n * retrieval.SCALE` for a weight of `n`.
+//!
 //! # Nothing is defaulted, because PurRDF mints nothing
 //!
 //! Producers, strata, weights and the statistics provider's own identity are all
 //! caller-supplied. There is no default producer IRI, no default stratum, no
-//! default weight, and no invented statistics revision: `k`, `max_contributions`
-//! and `top_k` are required keywords for the same reason.
+//! default weight, and no invented statistics revision: `k` and `top_k` are
+//! required keywords for the same reason.
 //!
 //! # The ranked producer a Python host configures
 //!
@@ -323,13 +330,11 @@ fn build_registry(
     Ok(registry)
 }
 
-/// Build the fusion law from the host's weights, smoothing constant and
-/// contribution ceiling.
-fn build_profile(
-    weights: &[(String, i128)],
-    k: u32,
-    max_contributions: u32,
-) -> Result<FusionProfile, String> {
+/// Build the fusion law from the host's weights and smoothing constant.
+///
+/// How many contributions a candidate may receive is not an argument: it is the
+/// number of weighted strata, because a candidate surfaces at most once in each.
+fn build_profile(weights: &[(String, i128)], k: u32) -> Result<FusionProfile, String> {
     let mut declared = BTreeMap::new();
     for (stratum, raw) in weights {
         declared.insert(
@@ -337,7 +342,7 @@ fn build_profile(
             Fixed::from_raw(*raw),
         );
     }
-    FusionProfile::new(declared, k, max_contributions).map_err(|e| e.to_string())
+    FusionProfile::new(declared, k).map_err(|e| e.to_string())
 }
 
 /// Plan the call's request against a registry built from its producers.
@@ -1023,9 +1028,14 @@ fn compile<'py>(
 /// `"unweighted_strata"` the profile declined to score, and the `"plan_id"` /
 /// `"profile_id"` pair that names exactly which plan and which law produced it.
 ///
-/// `k`, `max_contributions` and `top_k` are required: fused enumeration is
-/// top-k by construction and the fusion law is the caller's, so none of the
-/// three has a value this binding could supply on the host's behalf.
+/// `weights` maps a stratum IRI to its weight in raw fixed-point units, where
+/// `retrieval.SCALE` is one whole unit; see this module's own documentation for
+/// why every weight in one dict must be written in the same spelling.
+///
+/// `k` and `top_k` are required: fused enumeration is top-k by construction and
+/// the fusion law is the caller's, so neither has a value this binding could
+/// supply on the host's behalf. How many contributions a candidate may receive
+/// is *not* a parameter — it is the number of weighted strata.
 #[pyfunction]
 #[pyo3(signature = (
     data,
@@ -1035,7 +1045,6 @@ fn compile<'py>(
     weights,
     statistics,
     k,
-    max_contributions,
     top_k,
     data_format="turtle",
     base=None,
@@ -1052,7 +1061,6 @@ fn search<'py>(
     weights: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
     k: u32,
-    max_contributions: u32,
     top_k: usize,
     data_format: &str,
     base: Option<&str>,
@@ -1063,7 +1071,7 @@ fn search<'py>(
     // execute and fuse. The answer dict is built after the GIL is reacquired.
     let result = py
         .detach(|| {
-            let profile = build_profile(&declared, k, max_contributions)?;
+            let profile = build_profile(&declared, k)?;
             run_search(&call, &profile, TopK::new(top_k))
         })
         .map_err(PyValueError::new_err)?;
@@ -1150,7 +1158,7 @@ mod tests {
                 producer(TITLE_PRODUCER, TITLE_STRATUM, TITLE),
             ],
         );
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM, TITLE_STRATUM]), 60, 2)
+        let profile = build_profile(&unit_weights(&[TEXT_STRATUM, TITLE_STRATUM]), 60)
             .expect("the fixture profile is valid");
         let result = run_search(&call, &profile, TopK::new(10)).expect("the producers answer");
 
@@ -1200,7 +1208,7 @@ mod tests {
             ],
             vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
         );
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), 60, 1)
+        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), 60)
             .expect("the fixture profile is valid");
         let result = run_search(&call, &profile, TopK::new(10)).expect("the producer answers");
 
@@ -1312,7 +1320,7 @@ mod tests {
             vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
         );
         call.data = TAGGED.to_owned();
-        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), 60, 1)
+        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), 60)
             .expect("the fixture profile is valid");
         let result = run_search(&call, &profile, TopK::new(10)).expect("one partition answers");
         assert_eq!(result.rows.len(), 2, "both documents hold the needle");
@@ -1322,7 +1330,7 @@ mod tests {
     /// the fusion law rather than silently ordering nothing.
     #[test]
     fn weights_are_exact_and_a_non_positive_one_is_refused() {
-        let profile = build_profile(&[(TEXT_STRATUM.to_owned(), SCALE / 2)], 60, 1)
+        let profile = build_profile(&[(TEXT_STRATUM.to_owned(), SCALE / 2)], 60)
             .expect("half a unit is a valid weight");
         assert_eq!(
             profile
@@ -1332,7 +1340,7 @@ mod tests {
             Some("0.500000000000")
         );
         assert!(
-            build_profile(&[(TEXT_STRATUM.to_owned(), 0)], 60, 1).is_err(),
+            build_profile(&[(TEXT_STRATUM.to_owned(), 0)], 60).is_err(),
             "a zero weight is not a weight"
         );
     }

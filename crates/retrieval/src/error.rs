@@ -125,8 +125,11 @@ pub enum PlanError {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FusionError {
-    /// A fixed-point addition left the representable range. A wrapped sum would
-    /// be a wrong order presented as a right one, so it is refused.
+    /// A checked arithmetic step left the range it is computed in: a
+    /// fixed-point addition, the profile's derived ceiling
+    /// (`max_weight × stratum count`), or a stratum count too large for the
+    /// `u32` the canonical profile encoding writes. A wrapped value would be a
+    /// wrong order presented as a right one, so it is refused.
     #[error("fusion overflowed the fixed-point range")]
     Overflow,
 
@@ -160,13 +163,6 @@ pub enum FusionError {
         stratum: String,
         /// The rejected weight.
         weight: purrdf_text::Fixed,
-    },
-
-    /// The declared maximum contribution count was zero.
-    #[error("fusion profile maximum contributions must be at least 1, got {max}")]
-    InvalidMaxContributions {
-        /// The rejected value.
-        max: u32,
     },
 
     /// A stream emitted under a stratum the profile declares no weight for.
@@ -204,19 +200,37 @@ pub enum FusionError {
     #[error("malformed fusion profile: {0}")]
     MalformedProfile(String),
 
-    /// A candidate received more contributions than the profile admits.
+    /// A candidate received more contributions than there are strata.
+    ///
+    /// This is an **invariant violation, not a policy refusal**. A profile's
+    /// contribution maximum is its stratum count
+    /// ([`FusionProfile::max_contributions`](crate::FusionProfile::max_contributions)),
+    /// derived rather than declared, and a candidate may surface at most once
+    /// per stratum — so reaching `max + 1` means one of two things happened:
+    /// a stream emitted the same candidate twice under a stratum whose
+    /// per-stream uniqueness check did not see it, or the stream set handed to
+    /// [`FusionStream::new`](crate::FusionStream::new) tagged two streams with
+    /// the same stratum. [`fuse`](crate::fuse) refuses the second before a row
+    /// is read ([`DuplicateStratum`](Self::DuplicateStratum)), so this arrives
+    /// only from a hand-built fusion.
+    ///
+    /// It is not something a corpus can provoke. A candidate that surfaces in
+    /// *every* stratum is the fusion working, not a bound being crossed, and
+    /// this error can never name it.
     ///
     /// Checked immediately after the contribution that crossed the bound is
-    /// recorded, so `count` is exactly `max + 1`, never a later, larger tally.
+    /// recorded, so `count` is exactly `max + 1`, never a later, larger tally,
+    /// and the offending candidate is named because "some candidate" is not a
+    /// report anybody can act on.
     #[error(
-        "candidate {item} received {count} contributions, exceeding the fusion profile's declared maximum of {max}"
+        "candidate {item} received {count} contributions across {max} strata; a candidate may surface at most once per stratum"
     )]
     MaxContributionsExceeded {
         /// The candidate that exceeded the bound, as its canonical term text.
         item: String,
         /// The contribution count reached.
         count: u32,
-        /// The profile's declared maximum contribution count.
+        /// The profile's stratum count, which is its contribution maximum.
         max: u32,
     },
 

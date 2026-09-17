@@ -13,4 +13,4 @@ row epsilon score=0.004032258064 witness=0.000000000000
 status http://example.org/stratum/geo Exhausted { rows_emitted: 2 }
 status http://example.org/stratum/text Exhausted { rows_emitted: 3 }
 status http://example.org/stratum/vector Exhausted { rows_emitted: 2 }
-profile 949116fc920b8a84991b385ba6a854e5c73258a6f96a9f90a30781fad5dadaa3
+profile ee0748eceaf64e8a9d8874e24339af3d8b261458067591bf5a2b73b99fa05f2d

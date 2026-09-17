@@ -16,8 +16,8 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DecayRule, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream, Iri,
-    PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankedStream, SCALE_DIGITS,
-    Term, TopK, contribution, contribution_under,
+    PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankedStream, Term, TopK,
+    contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -42,12 +42,16 @@ fn plan_id(tag: &str) -> PlanId {
     PlanId::from_canonical(tag.as_bytes())
 }
 
-fn profile(weights: &[(&str, Fixed)], k: u32, max_contributions: u32) -> FusionProfile {
+/// A fixture profile over the named strata.
+///
+/// There is no contribution-maximum argument to pass: the profile derives it
+/// from `weights`, because a candidate may surface at most once per stratum.
+fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
     let map: BTreeMap<Iri, Fixed> = weights
         .iter()
         .map(|(name, weight)| (stratum(name), *weight))
         .collect();
-    FusionProfile::new(map, k, max_contributions).expect("fixture profile is valid")
+    FusionProfile::new(map, k).expect("fixture profile is valid")
 }
 
 /// A minimal single-threaded executor. The mock streams never actually pend, so
@@ -177,7 +181,7 @@ async fn run_fuse(streams: Vec<(Iri, MockStream)>, profile: &FusionProfile) -> F
 // 1. An item in two strata sums both contributions exactly.
 #[test]
 fn cross_stratum_sum_is_the_checked_sum() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let c1 = contribution(Fixed::ONE, 1, K).expect("fits");
     let c2 = contribution(Fixed::ONE, 1, K).expect("fits");
     let streams = vec![
@@ -204,7 +208,7 @@ fn cross_stratum_sum_is_the_checked_sum() {
 // 2. Output is ordered by fused score descending.
 #[test]
 fn output_is_score_descending() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let streams = vec![
         (
             stratum("text"),
@@ -240,7 +244,7 @@ fn output_is_score_descending() {
 // 3. Equal-score candidates are ordered by the declared tie-break.
 #[test]
 fn equal_scores_use_the_declared_tie_break() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let streams = vec![
         (
             stratum("text"),
@@ -271,33 +275,66 @@ fn equal_scores_use_the_declared_tie_break() {
 // head of every stream regardless of candidate identity: three heads at
 // `weight * reciprocal(1 + 1) = weight / 2` each, with `weight == i128::MAX`,
 // sum past the fixed-point range on the third addition.
+//
+// The profile weights *one* stratum, and the three streams are all tagged with
+// it, so the admitted ceiling is one whole `i128::MAX` and the profile itself
+// constructs. That shape is the reason this drives `FusionStream` directly:
+// `fuse` refuses a repeated stratum before a row is read. A profile weighting
+// three strata could not reach here at all — its own ceiling would be
+// `3 * i128::MAX` and construction would refuse it, which is the derived
+// ceiling doing exactly its job.
 #[test]
 fn checked_addition_overflow_is_refused() {
     let huge = Fixed::from_raw(i128::MAX);
-    // max_contributions == 1 keeps the admitted ceiling equal to the single
-    // weight per stratum, so the profile constructs without itself overflowing.
-    let profile = profile(&[("text", huge), ("vector", huge), ("geo", huge)], 1, 1);
+    let profile = profile(&[("only", huge)], 1);
+    let only = stratum("only");
     let streams = vec![
         (
-            stratum("text"),
+            only.clone(),
             MockStream::new(vec![row(1, huge, 1, "a")], exhausted(1)),
         ),
         (
-            stratum("vector"),
+            only.clone(),
             MockStream::new(vec![row(1, huge, 1, "b")], exhausted(1)),
         ),
         (
-            stratum("geo"),
+            only,
             MockStream::new(vec![row(1, huge, 1, "c")], exhausted(1)),
         ),
     ];
-    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        streams, &profile, TOP_K,
-    ));
+    let mut fusion = FusionStream::new(streams, profile);
+    let result = block_on(fusion.next());
     assert!(
         matches!(result, Err(FusionError::Overflow)),
         "expected FusionError::Overflow, got {result:?}"
     );
+}
+
+// 4b. The valid neighbour of 4: the same three heads at a weight the profile's
+//     own ceiling admits sum without complaint. The refusal above is about the
+//     fixed-point range, not about three streams or about summing.
+#[test]
+fn a_checked_addition_inside_the_range_is_not_refused() {
+    let large = Fixed::from_raw(i128::MAX / 4);
+    let profile = profile(&[("only", large)], 1);
+    let only = stratum("only");
+    let streams = vec![
+        (
+            only.clone(),
+            MockStream::new(vec![row(1, large, 1, "a")], exhausted(1)),
+        ),
+        (
+            only.clone(),
+            MockStream::new(vec![row(1, large, 1, "b")], exhausted(1)),
+        ),
+        (
+            only,
+            MockStream::new(vec![row(1, large, 1, "c")], exhausted(1)),
+        ),
+    ];
+    let mut fusion = FusionStream::new(streams, profile);
+    let row = block_on(fusion.next()).expect("three heads at a quarter of the range still sum");
+    assert!(row.is_some(), "the fusion certifies a row rather than none");
 }
 
 // 5. Byte-identical golden output on re-run.
@@ -327,7 +364,6 @@ async fn golden_fusion() -> FusionResult<Term> {
             ("geo", Fixed::from_raw(250_000_000_000)),
         ],
         K,
-        8,
     );
     let streams = vec![
         (
@@ -404,7 +440,6 @@ fn differential_against_eager_oracle() {
             ("geo", Fixed::from_raw(300_000_000_000)),
         ],
         K,
-        8,
     );
     let streams = vec![
         (
@@ -488,7 +523,7 @@ fn differential_against_eager_oracle() {
 // 7. Every protocol violation is a typed error, never a plausible order.
 #[test]
 fn protocol_violations_are_typed() {
-    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE)], K);
     let weight = Fixed::ONE;
 
     let out_of_order = vec![(
@@ -623,7 +658,7 @@ fn protocol_violations_are_typed() {
 // 8. Dropping a live fusion drops every stream; receipts cannot be forged.
 #[test]
 fn drop_cancellation_and_receipts() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let text_counter = Arc::new(AtomicUsize::new(0));
     let vector_counter = Arc::new(AtomicUsize::new(0));
     let streams = vec![
@@ -690,7 +725,6 @@ fn trailer_preserves_each_producer_status() {
             ("embedding", Fixed::ONE),
         ],
         K,
-        4,
     );
     let streams = vec![
         (
@@ -748,7 +782,7 @@ fn trailer_preserves_each_producer_status() {
 // 9b. The trailer names the pinned plan when one is attached.
 #[test]
 fn trailer_names_the_pinned_plan() {
-    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE)], K);
     let pinned = plan_id("fusion-plan");
     let streams = vec![(
         stratum("text"),
@@ -768,7 +802,7 @@ fn trailer_names_the_pinned_plan() {
 // hold rows, and the witness names the threshold that certified it.
 #[test]
 fn threshold_witness_is_recorded_before_exhaustion() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let streams = vec![
         (
             stratum("text"),
@@ -809,7 +843,6 @@ fn contributions_sum_to_the_fused_score() {
             ("vector", Fixed::from_raw(700_000_000_000)),
         ],
         K,
-        4,
     );
     let streams = vec![
         (
@@ -849,48 +882,115 @@ fn profile_construction_is_validated() {
     };
 
     assert!(matches!(
-        FusionProfile::new(weights(Fixed::ONE), 0, 1),
+        FusionProfile::new(weights(Fixed::ONE), 0),
         Err(FusionError::InvalidK { k: 0 })
     ));
     assert!(matches!(
-        FusionProfile::new(weights(Fixed::ONE), K, 0),
-        Err(FusionError::InvalidMaxContributions { max: 0 })
-    ));
-    assert!(matches!(
-        FusionProfile::new(BTreeMap::new(), K, 1),
+        FusionProfile::new(BTreeMap::new(), K),
         Err(FusionError::EmptyWeights)
     ));
     assert!(matches!(
-        FusionProfile::new(weights(Fixed::ZERO), K, 1),
+        FusionProfile::new(weights(Fixed::ZERO), K),
         Err(FusionError::NonPositiveWeight { .. })
     ));
     assert!(matches!(
-        FusionProfile::new(weights(Fixed::from_raw(-1)), K, 1),
+        FusionProfile::new(weights(Fixed::from_raw(-1)), K),
         Err(FusionError::NonPositiveWeight { .. })
     ));
+    // The ceiling is `max_weight * strata`, so two strata at the top of the
+    // range is the smallest profile whose own ceiling does not fit. The valid
+    // neighbour is directly below: one stratum at the same weight has a ceiling
+    // of exactly `i128::MAX` and constructs.
     assert!(matches!(
-        FusionProfile::new(weights(Fixed::from_raw(i128::MAX)), K, 2),
+        FusionProfile::new(
+            BTreeMap::from([
+                (stratum("text"), Fixed::from_raw(i128::MAX)),
+                (stratum("vector"), Fixed::from_raw(i128::MAX)),
+            ]),
+            K
+        ),
         Err(FusionError::Overflow)
     ));
+    let at_the_top =
+        FusionProfile::new(weights(Fixed::from_raw(i128::MAX)), K).expect("one stratum still fits");
+    assert_eq!(at_the_top.ceiling(), Fixed::from_raw(i128::MAX));
 
-    let baseline = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 8);
-    let same = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 8);
+    // The contribution maximum is the stratum count, not an argument, and the
+    // ceiling is that count times the largest weight.
+    let baseline = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let same = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    assert_eq!(baseline.max_contributions(), 2, "two weights, two strata");
+    assert_eq!(
+        baseline.ceiling(),
+        Fixed::ONE.checked_add(Fixed::ONE).expect("fits"),
+        "the ceiling is max_weight * strata"
+    );
     assert_eq!(baseline.id(), same.id(), "identical profiles share an id");
     assert_eq!(
         FusionProfile::from_canonical_bytes(&baseline.canonical_bytes()).expect("round-trips"),
         baseline
     );
 
-    let different_k = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K + 1, 8);
-    let different_weight = profile(
-        &[("text", Fixed::ONE), ("vector", Fixed::from_raw(2))],
+    let different_k = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K + 1);
+    let different_weight = profile(&[("text", Fixed::ONE), ("vector", Fixed::from_raw(2))], K);
+    // A third stratum raises the derived contribution maximum, and the identity
+    // records it: the field is still in the canonical bytes even though it is
+    // no longer supplied.
+    let more_strata = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::ONE),
+            ("geo", Fixed::ONE),
+        ],
         K,
-        8,
     );
-    let different_max = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 9);
+    assert_eq!(more_strata.max_contributions(), 3);
     assert_ne!(baseline.id(), different_k.id());
     assert_ne!(baseline.id(), different_weight.id());
-    assert_ne!(baseline.id(), different_max.id());
+    assert_ne!(baseline.id(), more_strata.id());
+}
+
+// 11b. The derived contribution maximum is in the canonical bytes, and the
+//      decoder refuses bytes that disagree with their own stratum count.
+//
+// The field is redundant with the weight count it follows, which is exactly why
+// it must be checked: decoding a profile whose declared maximum was not its
+// stratum count would return a value whose own `canonical_bytes` are not the
+// bytes it came from, and therefore a different identity than the one the
+// caller handed over.
+#[test]
+fn a_declared_contribution_maximum_must_match_the_stratum_count() {
+    let two = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let bytes = two.canonical_bytes();
+    assert_eq!(
+        FusionProfile::from_canonical_bytes(&bytes).expect("its own bytes decode"),
+        two,
+        "the valid neighbour: bytes stating the stratum count round-trip"
+    );
+
+    // The maximum is the `u32` immediately after the tie-break tag, which is
+    // the fourth byte from the end (scale u32, rounding u8, item encoding u8).
+    let offset = bytes.len() - 4 - 1 - 1 - 4;
+    for forged in [1_u32, 3, 8] {
+        let mut tampered = bytes.clone();
+        tampered[offset..offset + 4].copy_from_slice(&forged.to_le_bytes());
+        assert_eq!(
+            u32::from_le_bytes(
+                bytes[offset..offset + 4]
+                    .try_into()
+                    .expect("four bytes are four bytes")
+            ),
+            2,
+            "the field this test rewrites is the contribution maximum"
+        );
+        assert!(
+            matches!(
+                FusionProfile::from_canonical_bytes(&tampered),
+                Err(FusionError::MalformedProfile(_))
+            ),
+            "a declared maximum of {forged} over two strata must be refused"
+        );
+    }
 }
 
 // 12. Canonical profile bytes and fused output are target-independent.
@@ -901,7 +1001,7 @@ fn profile_construction_is_validated() {
 // is checked against the same golden the native test uses.
 #[test]
 fn native_and_wasm_share_canonical_bytes_and_output() {
-    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE)], K);
     assert_eq!(
         profile.canonical_bytes(),
         profile.canonical_bytes(),
@@ -922,21 +1022,22 @@ fn native_and_wasm_share_canonical_bytes_and_output() {
     assert_eq!(RECIP_K, 60);
 }
 
-// 13. A candidate that receives more contributions than the profile admits is
-//     a named refusal naming the offending candidate, the count reached and
-//     the declared limit — never a silently accepted count the profile
-//     declared inadmissible, and never the generic `Overflow`.
+// 13. A candidate contributed to more times than there are strata is an
+//     invariant violation, and it is reported as one: the offending candidate
+//     by name, the count reached, and the stratum count it passed — never a
+//     silent extra contribution, and never the generic `Overflow`.
+//
+//     This is no longer something a corpus can cause. The bound is the
+//     profile's stratum count and a candidate surfaces at most once per
+//     stratum, so reaching `strata + 1` means a stream set repeated a stratum
+//     (below) or a stream emitted one candidate twice (`ProtocolError`'s
+//     `DuplicateItem`, test 20). `fuse` refuses a repeated stratum before a row
+//     is read, so this drives `FusionStream` directly — which is the honest way
+//     to reach an invariant violation that no conforming input produces.
 #[test]
-fn contribution_count_exceeding_max_is_refused() {
-    let profile = profile(
-        &[
-            ("text", Fixed::ONE),
-            ("vector", Fixed::ONE),
-            ("geo", Fixed::ONE),
-        ],
-        K,
-        2,
-    );
+fn a_candidate_contributed_to_more_times_than_there_are_strata_is_refused() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    assert_eq!(profile.max_contributions(), 2, "two strata, two weights");
     let streams = vec![
         (
             stratum("text"),
@@ -946,14 +1047,24 @@ fn contribution_count_exceeding_max_is_refused() {
             stratum("vector"),
             MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
         ),
+        // The third stream repeats a stratum the profile weights once. Each
+        // stream keeps its own per-stream uniqueness set, so nothing below this
+        // level can see that `a` is about to be counted a third time.
         (
-            stratum("geo"),
+            stratum("vector"),
             MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
         ),
     ];
-    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        streams, &profile, TOP_K,
-    ));
+    let mut fusion = FusionStream::new(streams, profile);
+    let result = block_on(async {
+        loop {
+            match fusion.next().await {
+                Ok(Some(_)) => (),
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(error),
+            }
+        }
+    });
     assert!(
         matches!(
             &result,
@@ -964,54 +1075,79 @@ fn contribution_count_exceeding_max_is_refused() {
     );
 }
 
-// 14. Valid neighbour of 13: receiving exactly the declared maximum still
-//     succeeds, and the fused score is still the checked sum of every
-//     contribution — the count bound must clip nothing a legitimate answer
-//     needs.
+// 14. Valid neighbour of 13, and the case the bound used to refuse: a candidate
+//     that surfaces in *every* stratum is the fusion working. Three strata,
+//     three streams, one candidate in all three — no refusal, and the fused
+//     score is still the checked sum of every contribution.
+//
+//     This is exactly the shape a caller who had guessed a contribution maximum
+//     below the stratum count would have lost, and lost only once some document
+//     happened to rank in one stratum more than the guess allowed.
 #[test]
-fn contribution_count_at_max_succeeds() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 2);
-    let c1 = contribution(Fixed::ONE, 1, K).expect("fits");
-    let c2 = contribution(Fixed::ONE, 1, K).expect("fits");
+fn a_candidate_in_every_stratum_fuses_rather_than_refusing() {
+    let profile = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::ONE),
+            ("geo", Fixed::ONE),
+        ],
+        K,
+    );
+    assert_eq!(
+        profile.max_contributions(),
+        3,
+        "three strata, three weights"
+    );
     let streams = vec![
         (
             stratum("text"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "doc-everywhere")], exhausted(1)),
         ),
         (
             stratum("vector"),
-            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "doc-everywhere")], exhausted(1)),
+        ),
+        (
+            stratum("geo"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "doc-everywhere")], exhausted(1)),
         ),
     ];
     let result = block_on(run_fuse(streams, &profile));
     assert_eq!(result.rows.len(), 1);
-    assert_eq!(result.rows[0].entity, Term::new("a"));
-    assert_eq!(result.rows[0].contributions.len(), 2);
+    assert_eq!(result.rows[0].entity, Term::new("doc-everywhere"));
+    assert_eq!(result.rows[0].contributions.len(), 3);
+
+    let per_stratum = contribution(Fixed::ONE, 1, K).expect("fits");
+    let mut expected = Fixed::ZERO;
+    for _ in 0..3 {
+        expected = expected.checked_add(per_stratum).expect("fits");
+    }
     assert_eq!(
-        result.rows[0].score,
-        c1.checked_add(c2).expect("fits"),
-        "exactly max_contributions contributions must still sum exactly"
+        result.rows[0].score, expected,
+        "one contribution per stratum must still sum exactly"
     );
 }
 
-// 15. `ceiling() == max_weight * max_contributions`, but every reciprocal-rank
+// 15. `ceiling() == max_weight * strata`, but every reciprocal-rank
 //     contribution is *strictly* below its stratum's weight: `K >= 1`
 //     (`InvalidK`) and `rank >= 1` (`InvalidRank`) force
 //     `reciprocal(K + rank) <= 1/2`. So the true achievable maximum under a
 //     valid contribution count is exactly half the declared ceiling, never the
 //     ceiling itself. This fixture drives every stratum to that true maximum —
 //     equal max weight, `K = 1`, `rank = 1`, one contribution per stratum,
-//     exactly `max_contributions` strata — and proves the fused score lands,
+//     one contribution per stratum — and proves the fused score lands,
 //     exactly, at `ceiling() / 2`. This is the valid neighbour of the ceiling
 //     check: even the most aggressive legitimate load the current decay rule
 //     can produce must still succeed, with real headroom to spare.
 #[test]
 fn maximal_legitimate_score_stays_below_the_ceiling() {
-    let weight = Fixed::from_raw(2_000_000_000_000); // 2.0, an even raw value
+    // Two. `Fixed::from_integer` takes the number a reader means; the
+    // neighbouring `Fixed::from_raw(2)` would be two raw units, `2 * 10^-12`.
+    let weight = Fixed::from_integer(2).expect("two is representable");
     let k = 1;
     let names = ["s0", "s1", "s2", "s3"];
     let weights: Vec<(&str, Fixed)> = names.iter().copied().map(|name| (name, weight)).collect();
-    let profile = profile(&weights, k, 4);
+    let profile = profile(&weights, k);
 
     let streams: Vec<(Iri, MockStream)> = names
         .iter()
@@ -1049,18 +1185,21 @@ fn maximal_legitimate_score_stays_below_the_ceiling() {
 //     today's sole decay rule: test 15 proves a valid contribution count can
 //     reach at most `ceiling() / 2`. The one configuration whose raw
 //     arithmetic *would* land exactly at `ceiling()` — two equal-weight,
-//     rank-1, `K = 1` contributions under a profile whose `max_contributions`
-//     is 1 — is also the one configuration that already violates the
-//     contribution count, so the count check fires first and
+//     rank-1, `K = 1` contributions under a profile that weights one stratum,
+//     and therefore admits one contribution — is also the one configuration
+//     that already violates the contribution count, so the count check fires
+//     first and
 //     `CeilingExceeded` is never observed for it. This drives `FusionStream`
 //     directly (bypassing `fuse`'s duplicate-stratum guard) because reaching
 //     it needs two streams sharing one stratum tag, which `fuse` itself
 //     refuses before fusion ever begins.
 #[test]
 fn ceiling_boundary_is_gated_by_the_contribution_count_check() {
-    let weight = Fixed::from_raw(2_000_000_000_000); // 2.0, an even raw value
+    // Two. `Fixed::from_integer` takes the number a reader means; the
+    // neighbouring `Fixed::from_raw(2)` would be two raw units, `2 * 10^-12`.
+    let weight = Fixed::from_integer(2).expect("two is representable");
     let k = 1;
-    let profile = profile(&[("dup", weight)], k, 1);
+    let profile = profile(&[("dup", weight)], k);
     let dup = stratum("dup");
     let streams = vec![
         (
@@ -1142,7 +1281,7 @@ fn five_candidates() -> Vec<(Iri, MockStream)> {
 
 #[test]
 fn fuse_returns_at_most_k_rows_in_the_declared_order() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
 
     let whole = block_on(run_fuse(five_candidates(), &profile));
     assert_eq!(whole.rows.len(), 5, "the fixture holds five candidates");
@@ -1184,7 +1323,7 @@ fn a_bound_larger_than_the_answer_returns_everything_and_refuses_nothing() {
     // The valid neighbour of the bound above, and the one this repository treats
     // as exactly as severe: asking for more rows than exist is not an error, not
     // a truncation, and not an empty answer. It is every row there was.
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let generous = block_on(async {
         purrdf_retrieval::fuse::<MockStream, Term>(
             five_candidates(),
@@ -1215,7 +1354,7 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     // under the bound, and must not be: a bound that stopped the reading leaves
     // the text stratum incomplete, and a trailer that said `Exhausted` anyway
     // would be asserting completeness the fusion never established.
-    let profile = profile(&[("text", Fixed::ONE), ("geo", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("geo", Fixed::ONE)], K);
     let streams = || {
         vec![
             (
@@ -1319,7 +1458,7 @@ fn a_bounded_stop_closes_a_stream_instead_of_draining_it() {
     // top-k exists for would be gone — with the rows returned looking exactly
     // the same either way, which is why this is counted rather than eyeballed.
     const ROWS: u64 = 500;
-    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE)], K);
     let pulls = Arc::new(AtomicUsize::new(0));
     let steps = (1..=ROWS)
         .map(|rank| row(rank, Fixed::ONE, K, &format!("item-{rank:04}")))
@@ -1383,7 +1522,7 @@ fn a_bounded_stop_closes_a_stream_instead_of_draining_it() {
 //     refusal rather than an answer filed under one of them.
 #[test]
 fn the_trailer_names_a_plan_only_when_every_stream_names_the_same_one() {
-    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
     let first = plan_id("first-plan");
     let second = plan_id("second-plan");
     let streams = |left: Option<PlanId>, right: Option<PlanId>| {
@@ -1441,7 +1580,7 @@ fn the_trailer_names_a_plan_only_when_every_stream_names_the_same_one() {
 //     a producer cannot use the first to hide rows it emitted.
 #[test]
 fn a_producer_that_declined_its_terms_is_not_a_producer_that_found_nothing() {
-    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    let profile = profile(&[("text", Fixed::ONE)], K);
 
     // The producer was handed terms it does not serve and says so. It emits no
     // rows, and the trailer keeps the reason it emitted none.
@@ -1540,7 +1679,6 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
     let profile = profile(
         &[("dense", Fixed::ONE), ("sparse", ZERO_CONTRIBUTING_WEIGHT)],
         K,
-        2,
     );
     let dense_contribution = contribution(Fixed::ONE, 1, K).expect("fits");
 
@@ -1613,7 +1751,6 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
     let profile = profile(
         &[("dense", Fixed::ONE), ("sparse", ZERO_CONTRIBUTING_WEIGHT)],
         K,
-        2,
     );
     let pulls = Arc::new(AtomicUsize::new(0));
     let streams = vec![
@@ -1664,7 +1801,7 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
 // so the refusal below is one condition with one name however it is caught.
 #[test]
 fn a_same_stream_duplicate_still_in_the_frontier_is_refused() {
-    let profile = profile(&[("dense", Fixed::ONE), ("sparse", Fixed::ONE)], K, 2);
+    let profile = profile(&[("dense", Fixed::ONE), ("sparse", Fixed::ONE)], K);
     // `a` cannot be emitted before the duplicate is read: the sparse stream is
     // open and has not named it, so it is not final and stays in the frontier.
     let streams = vec![
@@ -1758,17 +1895,25 @@ fn hand_spelled_profile_bytes(strata: &[(&str, i128)], k: u32, max_contributions
 
 #[test]
 fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
-    let existing = profile(
-        &[("text", Fixed::ONE), ("vector", Fixed::from_raw(500))],
-        K,
-        8,
-    );
+    let existing = profile(&[("text", Fixed::ONE), ("vector", Fixed::from_raw(500))], K);
+    // The contribution maximum is spelled out as two, which is what the two
+    // strata above derive. This is also the identity-stability claim: the
+    // encoder below is written by hand from the documented layout and is
+    // unchanged, so these are byte-for-byte the bytes a caller who used to pass
+    // `weights.len()` explicitly already had. Only a caller who passed
+    // something else — this fixture passed eight, a bound nothing could reach —
+    // moves, and moves onto the identity the field always meant.
     let expected =
-        hand_spelled_profile_bytes(&[("text", 1_000_000_000_000), ("vector", 500)], K, 8);
+        hand_spelled_profile_bytes(&[("text", 1_000_000_000_000), ("vector", 500)], K, 2);
     assert_eq!(
         existing.canonical_bytes(),
         expected,
         "adding a decay variant must not move the encoding of the first one"
+    );
+    assert_eq!(
+        existing.max_contributions(),
+        u32::try_from(existing.weights().len()).expect("two strata"),
+        "the encoded maximum is exactly the stratum count"
     );
     assert_eq!(
         existing.id(),
@@ -1777,8 +1922,8 @@ fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
     );
     assert_eq!(
         existing.id().to_hex(),
-        "f2c94415651aaa0353a242643c707cc27f1db97c95bb87155bbb908ae067633d",
-        "the digest of an already-issued profile is frozen"
+        "c7c47d73ddb4a430142c86a73acd2eedc32b514c38ccefb8627995e6dadb0a6e",
+        "the digest of a profile that names its stratum count is frozen"
     );
     assert_eq!(
         existing.decay(),
@@ -1806,15 +1951,14 @@ fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
 #[test]
 fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
     let weights: BTreeMap<Iri, Fixed> = BTreeMap::from([(stratum("text"), Fixed::ONE)]);
-    let truncated =
-        FusionProfile::with_decay(weights.clone(), DecayRule::ReciprocalRank { k: K }, 8)
-            .expect("valid");
-    let folded = FusionProfile::with_decay(weights, DecayRule::WeightedReciprocalRank { k: K }, 8)
+    let truncated = FusionProfile::with_decay(weights.clone(), DecayRule::ReciprocalRank { k: K })
+        .expect("valid");
+    let folded = FusionProfile::with_decay(weights, DecayRule::WeightedReciprocalRank { k: K })
         .expect("valid");
 
     assert_eq!(
         truncated.canonical_bytes(),
-        profile(&[("text", Fixed::ONE)], K, 8).canonical_bytes(),
+        profile(&[("text", Fixed::ONE)], K).canonical_bytes(),
         "`new` is `with_decay` under the first rule"
     );
     assert_ne!(
@@ -1841,10 +1985,10 @@ fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
 
 /// The weight the deep fixtures run at: two hundred, which under the weighted
 /// rule buys a monotone range above fourteen million ranks.
-const DEEP_WEIGHT_UNITS: i128 = 200;
+const DEEP_WEIGHT_UNITS: i64 = 200;
 
 fn deep_weight() -> Fixed {
-    Fixed::from_raw(DEEP_WEIGHT_UNITS * 10_i128.pow(SCALE_DIGITS))
+    Fixed::from_integer(DEEP_WEIGHT_UNITS).expect("two hundred is representable")
 }
 
 #[test]
@@ -1852,7 +1996,6 @@ fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
     let folded = FusionProfile::with_decay(
         BTreeMap::from([(stratum("text"), deep_weight())]),
         DecayRule::WeightedReciprocalRank { k: 1 },
-        1,
     )
     .expect("a strictly positive weight is a valid profile");
     let bound = folded
@@ -1885,7 +2028,6 @@ fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
     let truncated = FusionProfile::with_decay(
         BTreeMap::from([(stratum("text"), deep_weight())]),
         DecayRule::ReciprocalRank { k: 1 },
-        1,
     )
     .expect("valid");
     let shallow = truncated

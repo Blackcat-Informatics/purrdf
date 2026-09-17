@@ -270,12 +270,7 @@ fn fixture(total: u64, pulls: &Arc<AtomicUsize>) -> (FusionProfile, Vec<(Iri, La
         .iter()
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(
-        weights,
-        K,
-        u32::try_from(STRATA.len()).expect("three strata"),
-    )
-    .expect("the fixture profile is valid");
+    let profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
     let streams = STRATA
         .iter()
         .enumerate()

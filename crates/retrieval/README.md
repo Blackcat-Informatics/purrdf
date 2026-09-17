@@ -79,6 +79,14 @@ Nothing here mints a vocabulary. Producers, strata and weights are
 caller-supplied configuration; the fixtures use `example.org`. There is no
 default registry and no built-in producer.
 
+A profile's weights are read as **ratios only**, so the constructor that built
+them matters and nothing can refuse the wrong one: `Fixed::ONE` and
+`Fixed::from_integer(1)` are the number one, while `Fixed::from_raw(1)` is one
+raw unit of `10^-12`. A weight map mixing the two spellings runs, refuses
+nothing, and ranks as though the smaller stratum were absent. How many
+contributions a candidate may receive is not a knob at all — it is the number of
+strata the profile weights, because a candidate surfaces at most once in each.
+
 ## Run it
 
 The whole ladder, end to end, over real data and two real ranked producers:

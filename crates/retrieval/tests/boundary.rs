@@ -267,18 +267,19 @@ fn single_statistics(stratum_iri: &str, cardinality: u64) -> MockStatistics {
 
 /// A profile weighting exactly one stratum.
 fn single_profile(stratum_iri: &str) -> FusionProfile {
-    FusionProfile::new(BTreeMap::from([(iri(stratum_iri), Fixed::ONE)]), K, 4)
+    FusionProfile::new(BTreeMap::from([(iri(stratum_iri), Fixed::ONE)]), K)
         .expect("the fixture profile is valid")
 }
 
-/// A profile weighting the named strata unit-for-unit with room for every one of
-/// them to contribute to a candidate.
-fn profile(weights: &[(&str, Fixed)], k: u32, max_contributions: u32) -> FusionProfile {
+/// A profile weighting the named strata, which is also what leaves room for
+/// every one of them to contribute to a candidate: the contribution maximum is
+/// the stratum count.
+fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
     let map: BTreeMap<Iri, Fixed> = weights
         .iter()
         .map(|(name, weight)| (stratum(name), *weight))
         .collect();
-    FusionProfile::new(map, k, max_contributions).expect("fixture profile is valid")
+    FusionProfile::new(map, k).expect("fixture profile is valid")
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +602,7 @@ fn start_at_execute_evaluator_only() {
 
 #[test]
 fn start_at_fuse_hand_built_streams() {
-    let profile = profile(&[("s1", Fixed::ONE), ("s2", Fixed::ONE)], K, 4);
+    let profile = profile(&[("s1", Fixed::ONE), ("s2", Fixed::ONE)], K);
     let streams = vec![
         (
             stratum("s1"),
@@ -713,8 +714,8 @@ impl RankedStream for LazyStream {
 
 /// The three-stratum profile and streams the frontier fixtures share.
 ///
-/// `max_contributions` is three, one per stratum, because every candidate is
-/// eventually seen by all three.
+/// The contribution maximum is three, one per stratum, because every candidate
+/// is eventually seen by all three.
 fn frontier_fixture(
     total: u64,
     pulls: &Arc<AtomicUsize>,
@@ -723,7 +724,7 @@ fn frontier_fixture(
         .iter()
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(weights, K, 3).expect("the fixture profile is valid");
+    let profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
     let streams = FRONTIER_STRATA
         .iter()
         .enumerate()
@@ -891,7 +892,7 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
     // Two strata, so a candidate takes at most two contributions.
-    let tie_profile = FusionProfile::new(weights, K, 2).expect("the fixture profile is valid");
+    let tie_profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
     let streams: Vec<(Iri, LazyStream)> = TIE_STRATA
         .iter()
         .enumerate()
@@ -1015,7 +1016,7 @@ fn unfused_unbounded_stream() {
 
 #[test]
 fn prefix_reader_incomplete_evidence() {
-    let profile = profile(&[("s1", Fixed::ONE), ("s2", Fixed::ONE)], K, 4);
+    let profile = profile(&[("s1", Fixed::ONE), ("s2", Fixed::ONE)], K);
     let streams = vec![
         (
             stratum("s1"),
@@ -1307,7 +1308,7 @@ fn encoding_and_fusion_are_deterministic_in_one_process() {
 
     // The fusion profile's canonical encoding is a pure function of its fields
     // the same way.
-    let profile = profile(&[("eq1", Fixed::ONE), ("eq2", Fixed::ONE)], K, 4);
+    let profile = profile(&[("eq1", Fixed::ONE), ("eq2", Fixed::ONE)], K);
     let profile_bytes = profile.canonical_bytes();
     assert_eq!(profile_bytes, profile.canonical_bytes());
     assert_eq!(
@@ -1352,7 +1353,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     // own: the weight and the smoothing constant are read from the profile by
     // the adapter, so it cannot attach a contribution the profile did not
     // authorize.
-    let profile = profile(&[("resume", Fixed::ONE)], K, 4);
+    let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut streams = Vec::new();
     for stream in execution.streams {
         let adapter = RankedStreamAdapter::new(stream.stream, &profile, &stream.stratum)
@@ -1387,7 +1388,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
 
     // A stratum the profile does not weight has no contribution to make, and the
     // bridge says so by refusing to be built rather than by inventing one.
-    let elsewhere = crate::profile(&[("elsewhere", Fixed::ONE)], K, 4);
+    let elsewhere = crate::profile(&[("elsewhere", Fixed::ONE)], K);
     assert!(
         RankedStreamAdapter::new(
             RankedStreamImpl::new(vec![(1, Term::new("a"))]),
@@ -1436,7 +1437,6 @@ fn a_stream_that_names_another_plan_is_refused_rather_than_fused() {
     let profile = profile(
         &[("splice/left", Fixed::ONE), ("splice/right", Fixed::ONE)],
         K,
-        4,
     );
     let (left_plan, left_stratum, left) = executed_stream("splice/left", &profile);
     let (right_plan, right_stratum, right) = executed_stream("splice/right", &profile);
@@ -1509,7 +1509,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // Ranks are 1-based. `execute` never emits a zero, but the bridge is public
     // and a caller can hand it a stream it built itself, so the violation must
     // come back as the protocol error fusion would raise for the same row.
-    let profile = profile(&[("resume", Fixed::ONE)], K, 4);
+    let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(vec![(0, Term::new("a"))]),
         &profile,

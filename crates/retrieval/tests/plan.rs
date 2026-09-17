@@ -21,11 +21,21 @@ fn stratum() -> Iri {
     iri("http://example.org/stratum/a")
 }
 
+/// A whole-number stratum weight.
+///
+/// `Fixed::from_integer` takes the number a reader means; `Fixed::from_raw`
+/// takes raw units of `10^-12`, so `Weight::from_raw(2)` would be `2 * 10^-12`
+/// rather than two. Weights are only ever compared with each other, so mixing
+/// the two constructors in one map is an error nothing refuses.
+fn unit_weight(units: i64) -> Weight {
+    Weight::new(Fixed::from_integer(units).expect("a small integer is representable"))
+}
+
 fn baseline() -> Plan {
     let mut stratum_depths = HashMap::new();
     stratum_depths.insert(stratum(), 10);
     let mut stratum_weights = HashMap::new();
-    stratum_weights.insert(stratum(), Weight::from_raw(1_000_000_000_000));
+    stratum_weights.insert(stratum(), Weight::new(Fixed::ONE));
 
     Plan {
         version: Plan::VERSION,
@@ -325,9 +335,9 @@ fn the_digest_separates_every_interval_field() {
 fn canonical_bytes_are_stable_across_map_order() {
     let mut plan = baseline();
     plan.stratum_weights
-        .insert(iri("http://example.org/stratum/z"), Weight::from_raw(2));
+        .insert(iri("http://example.org/stratum/z"), unit_weight(2));
     plan.stratum_weights
-        .insert(iri("http://example.org/stratum/m"), Weight::from_raw(3));
+        .insert(iri("http://example.org/stratum/m"), unit_weight(3));
     let mut shuffled = plan.clone();
     shuffled.stratum_weights.clear();
     for key in [
@@ -395,9 +405,7 @@ fn digest_is_sensitive_to_every_field() {
     assert_ne!(changed.id(), base_id, "stratum depth");
 
     let mut changed = base.clone();
-    changed
-        .stratum_weights
-        .insert(stratum(), Weight::from_raw(2_000_000_000_000));
+    changed.stratum_weights.insert(stratum(), unit_weight(2));
     assert_ne!(changed.id(), base_id, "stratum weight");
 
     let mut changed = base.clone();

@@ -86,7 +86,6 @@ def test_one_request_fuses_two_producers_into_one_ranking() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
-        max_contributions=2,
         top_k=10,
     )
 
@@ -115,7 +114,6 @@ def test_every_producer_reports_its_own_terminal_status() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
-        max_contributions=2,
         top_k=10,
     )
     statuses = answer["statuses"]
@@ -134,7 +132,6 @@ def test_a_term_no_producer_accepts_is_named_not_dropped() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
-        max_contributions=1,
         top_k=10,
     )
     assert answer["unserved_terms"] == [
@@ -152,7 +149,6 @@ def test_scores_are_exact_decimals_that_sum_to_their_provenance() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
-        max_contributions=2,
         top_k=10,
     )
     from decimal import Decimal
@@ -182,7 +178,6 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
         [_lexical("quick fox", NOTE)],
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
-        max_contributions=1,
         top_k=10,
         **kwargs,
     )
@@ -195,7 +190,6 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
         [_lexical("quick fox", NOTE)],
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=10,
-        max_contributions=1,
         top_k=10,
         **kwargs,
     )
@@ -207,7 +201,6 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
         [_lexical("quick fox", NOTE)],
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
-        max_contributions=1,
         top_k=10,
         **kwargs,
     )
@@ -318,7 +311,6 @@ def test_a_float_weight_is_refused_and_an_exact_one_is_not() -> None:
         "text_producers": NOTE_ONLY,
         "statistics": STATISTICS,
         "k": 60,
-        "max_contributions": 1,
         "top_k": 10,
     }
     with pytest.raises(TypeError, match="raw fixed-point units"):

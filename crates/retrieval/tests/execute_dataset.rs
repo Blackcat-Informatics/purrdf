@@ -234,7 +234,6 @@ fn fixture_profile() -> FusionProfile {
             .map(|stratum| (iri(&ex(stratum)), Fixed::ONE))
             .collect(),
         K,
-        4,
     )
     .expect("the fixture profile is valid")
 }

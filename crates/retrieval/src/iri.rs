@@ -191,6 +191,19 @@ impl Term {
     }
 }
 
+impl fmt::Display for Term {
+    /// The term's canonical text, verbatim — exactly [`Term::as_str`].
+    ///
+    /// A fused row is printed the moment anybody looks at one, and `{:?}`
+    /// renders the newtype (`Term("<http://example.org/a>")`) rather than the
+    /// canonical lexical the field carries. Nothing is quoted, escaped or
+    /// abbreviated here: the caller supplied the canonical form and this hands
+    /// it back unchanged.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 impl From<String> for Term {
     fn from(value: String) -> Self {
         Self(value)
@@ -228,5 +241,38 @@ pub(crate) mod fixed_option {
         deserializer: D,
     ) -> Result<Option<Fixed>, D::Error> {
         Ok(Option::<i128>::deserialize(deserializer)?.map(Fixed::from_raw))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Iri, Term};
+
+    /// Both printable value types render their text and nothing else, so a row
+    /// printed in a host's log carries the canonical form the caller supplied
+    /// rather than the newtype wrapped around it.
+    #[test]
+    fn display_is_exactly_the_underlying_text() {
+        let term = Term::new("<http://example.org/doc-alpha>");
+        assert_eq!(term.to_string(), term.as_str());
+        assert_eq!(term.to_string(), "<http://example.org/doc-alpha>");
+        assert_ne!(
+            format!("{term:?}"),
+            term.to_string(),
+            "`Debug` is the newtype spelling, which is what makes `Display` worth having"
+        );
+
+        let iri = Iri::parse("http://example.org/stratum/text").expect("a valid IRI");
+        assert_eq!(iri.to_string(), iri.as_str());
+        assert_eq!(iri.to_string(), "http://example.org/stratum/text");
+    }
+
+    /// A term that is not an IRI at all prints unchanged: this layer parses no
+    /// RDF and quotes, escapes and abbreviates nothing.
+    #[test]
+    fn display_neither_quotes_nor_escapes() {
+        for text in ["doc-alpha", "\"a literal\"@en", "_:b0", "a b\tc"] {
+            assert_eq!(Term::new(text).to_string(), text);
+        }
     }
 }

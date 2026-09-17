@@ -19,8 +19,8 @@ use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
     Metric, Plan, PlanOrigin, ProducerDecision, ProducerStatus, RankedStreamImpl, RejectionReason,
-    RequestTerm, RetrievalRequest, SCALE_DIGITS, Statistics, Term, UnservedReason, UnservedTerm,
-    Weight, compile, contribution, execute,
+    RequestTerm, RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, Weight, compile,
+    contribution, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -629,11 +629,15 @@ const MONOTONE_K: u32 = 1;
 /// perfectly legitimate weight — `FusionProfile::new` asks only that a weight be
 /// strictly positive — which is exactly the point: nothing about the profile
 /// itself is malformed, and only the coupling with the depth is.
+///
+/// `Fixed::from_raw(1_000)` is deliberate here and is *not* the constructor a
+/// whole-number weight wants: raw units are `10^-12` each, so this is `10^-9`,
+/// which is the sub-unit weight this fixture is about. A weight meaning the
+/// number one is `Fixed::ONE` or `Fixed::from_integer(1)`.
 fn shallow_profile() -> FusionProfile {
     FusionProfile::new(
         BTreeMap::from([(iri(&ex("stratum/universal")), Fixed::from_raw(1_000))]),
         MONOTONE_K,
-        1,
     )
     .expect("a strictly positive weight is a valid profile")
 }
@@ -779,7 +783,7 @@ const REQUIRED_DEPTH: u32 = 14_000_000;
 /// The weight that buys it. `(14e6 / 1e6)^2 = 196`, so two hundred clears the
 /// requirement with room; the assertion below checks the bound rather than
 /// trusting the arithmetic in this comment.
-const DEEP_WEIGHT_UNITS: i128 = 200;
+const DEEP_WEIGHT_UNITS: i64 = 200;
 
 /// A registry whose one ranked producer declares enough rows for the deep plan.
 ///
@@ -805,10 +809,9 @@ fn deep_profile() -> FusionProfile {
     FusionProfile::with_decay(
         BTreeMap::from([(
             iri(&ex("stratum/universal")),
-            Fixed::from_raw(DEEP_WEIGHT_UNITS * 10_i128.pow(SCALE_DIGITS)),
+            Fixed::from_integer(DEEP_WEIGHT_UNITS).expect("two hundred is representable"),
         )]),
         DecayRule::WeightedReciprocalRank { k: 1 },
-        1,
     )
     .expect("a strictly positive weight is a valid profile")
 }
@@ -847,10 +850,9 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     let truncated = FusionProfile::with_decay(
         BTreeMap::from([(
             stratum,
-            Fixed::from_raw(DEEP_WEIGHT_UNITS * 10_i128.pow(SCALE_DIGITS)),
+            Fixed::from_integer(DEEP_WEIGHT_UNITS).expect("two hundred is representable"),
         )]),
         DecayRule::ReciprocalRank { k: 1 },
-        1,
     )
     .expect("valid");
     let shallow_env = AdmissionEnvironment {

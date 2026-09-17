@@ -316,17 +316,26 @@ fn request() -> RetrievalRequest {
     ])
 }
 
-/// Unit weights for both strata, `K` smoothing, and room for one candidate to
-/// surface in both.
+/// Unit weights for both strata and `K` smoothing.
 ///
 /// Equal weights are what make the printed provenance readable: every difference
 /// in the fused order comes from the ranks the two producers assigned, and none
 /// of it from the law preferring a modality.
+///
+/// [`Fixed::ONE`] is the number one. The neighbouring constructor
+/// `Fixed::from_raw(1)` is one raw unit — `10^-12` — and since a fusion reads
+/// weights only as ratios, a map that mixed the two would run, refuse nothing,
+/// and rank as though this stratum did not exist. Build a weight map with one
+/// constructor.
+///
+/// How many contributions a candidate may receive is not a parameter: it is the
+/// number of strata declared here, because a candidate surfaces at most once in
+/// each.
 fn profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
     weights.insert(iri(TEXT_STRATUM), Fixed::ONE);
     weights.insert(iri(KNN_STRATUM), Fixed::ONE);
-    FusionProfile::new(weights, K, 2).expect("the host's profile is valid")
+    FusionProfile::new(weights, K).expect("the host's profile is valid")
 }
 
 /// A statistics provider that reports nothing.
@@ -402,10 +411,12 @@ fn report(result: &SearchResult) {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        // `Term` prints as its canonical lexical, which is what a row is about;
+        // `{:?}` would print the newtype around it.
         println!(
             "  {}. {}  score {}  [{provenance}]",
             position + 1,
-            row.entity.as_str(),
+            row.entity,
             row.score.to_decimal_lexical()
         );
     }

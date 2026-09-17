@@ -288,13 +288,14 @@ fn statistics(revision: &str) -> MockStatistics {
 }
 
 /// The fixture fusion profile: unit weight for each of the fixture's three
-/// strata, smoothing `K`, and room for a candidate to surface in every stratum.
+/// strata and smoothing `K`. Three weights is also what gives a candidate room
+/// to surface in every stratum — the contribution maximum is the stratum count.
 fn fixture_profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
     weights.insert(iri(&ex("stratum/universal")), Fixed::ONE);
     weights.insert(iri(&ex("stratum/text")), Fixed::ONE);
     weights.insert(iri(&ex("stratum/graph")), Fixed::ONE);
-    FusionProfile::new(weights, K, 4).expect("the fixture profile is valid")
+    FusionProfile::new(weights, K).expect("the fixture profile is valid")
 }
 
 fn fixture_env<'a>(
@@ -553,7 +554,6 @@ fn fusion_error_propagates() {
     let disjoint = FusionProfile::new(
         BTreeMap::from([(iri(&ex("stratum/elsewhere")), Fixed::ONE)]),
         K,
-        4,
     )
     .expect("the disjoint profile is valid");
 
@@ -586,13 +586,14 @@ fn search_holds_the_plan_to_the_profile_it_is_about_to_fuse_under() {
     // so it re-forms the admission environment around that law. The caller's own
     // environment names no profile here, and the refusal still arrives: a
     // per-stratum depth of a hundred outruns what a weight of `10^-9` can order.
+    // `Fixed::from_raw(1_000)` is one thousand raw units of `10^-12`, which is
+    // the sub-unit weight this fixture needs; a weight of *one* is `Fixed::ONE`.
     let registry = fixture_registry();
     let stats = statistics("r1");
     let env = fixture_env(&registry, &stats);
     let shallow = FusionProfile::new(
         BTreeMap::from([(iri(&ex("stratum/text")), Fixed::from_raw(1_000))]),
         1,
-        4,
     )
     .expect("a strictly positive weight is a valid profile");
 
@@ -659,12 +660,8 @@ fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
     let env = fixture_env(&registry, &stats);
     // Weights one of the three strata the plan reaches. The other two ran and
     // produced rows; they have no weight, so they have no contribution.
-    let narrow = FusionProfile::new(
-        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
-        K,
-        4,
-    )
-    .expect("the narrow profile is valid");
+    let narrow = FusionProfile::new(BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]), K)
+        .expect("the narrow profile is valid");
 
     let result = block_on(search(
         &mixed_request(),
@@ -888,7 +885,7 @@ fn profile_with_the_failing_stratum() -> FusionProfile {
     weights.insert(iri(&ex("stratum/text")), Fixed::ONE);
     weights.insert(iri(&ex("stratum/graph")), Fixed::ONE);
     weights.insert(iri(&ex("stratum/broken")), Fixed::ONE);
-    FusionProfile::new(weights, K, 4).expect("the fixture profile is valid")
+    FusionProfile::new(weights, K).expect("the fixture profile is valid")
 }
 
 fn statistics_with_the_failing_stratum() -> MockStatistics {
@@ -1013,12 +1010,8 @@ fn literal_only_registry() -> PropertyFunctionRegistry {
 }
 
 fn text_only_profile() -> FusionProfile {
-    FusionProfile::new(
-        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
-        K,
-        4,
-    )
-    .expect("the fixture profile is valid")
+    FusionProfile::new(BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]), K)
+        .expect("the fixture profile is valid")
 }
 
 #[test]
@@ -1241,7 +1234,6 @@ fn an_answer_names_its_plan_even_when_no_stream_reached_the_fusion() {
     let profile = FusionProfile::new(
         BTreeMap::from([(iri(&ex("stratum/broken")), Fixed::ONE)]),
         K,
-        4,
     )
     .expect("the fixture profile is valid");
     let request = mixed_request();

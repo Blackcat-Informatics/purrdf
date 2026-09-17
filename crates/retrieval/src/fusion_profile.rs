@@ -4,8 +4,9 @@
 //! The fusion profile: the identity-bearing law a fusion runs under.
 //!
 //! A profile is not a bag of knobs. It fixes the decay rule and its smoothing
-//! constant, every stratum's weight, the declared total tie-break, and the
-//! admitted maximum number of contributions a candidate may receive. Two
+//! constant, every stratum's weight, and the declared total tie-break; the
+//! maximum number of contributions a candidate may receive follows from the
+//! weights, because a candidate may surface at most once per stratum. Two
 //! answers fused under profiles differing in any of those are answers to
 //! different questions, so the profile is content-addressed: its identity is a
 //! domain-separated BLAKE3 digest over a canonical, versioned, length-framed
@@ -134,9 +135,30 @@ impl TieBreak {
 /// A validated fusion law.
 ///
 /// Construction refuses every unusable configuration: `K = 0`, an empty or
-/// non-positive weight map, a zero contribution ceiling, and a maximum admitted
-/// fused score that leaves the fixed-point range. Once constructed, the profile
-/// is immutable and its [`FusionProfile::id`] names it.
+/// non-positive weight map, and a maximum admitted fused score that leaves the
+/// fixed-point range. Once constructed, the profile is immutable and its
+/// [`FusionProfile::id`] names it.
+///
+/// # The contribution maximum is derived, never declared
+///
+/// A candidate may surface at most **once per stratum** — that is the ranked
+/// streams' own per-stream uniqueness, enforced row by row — so the largest
+/// number of contributions any candidate can legitimately receive is exactly
+/// the number of strata the profile weights. That is what
+/// [`max_contributions`](Self::max_contributions) reports, and it is computed
+/// from `weights` rather than taken from the caller.
+///
+/// It was once a parameter, and the parameter had exactly one usable value. A
+/// value above the stratum count named a bound nothing could reach. A value
+/// below it bought a refusal that depended on the *corpus* rather than on the
+/// request: the same profile served every query until some document happened to
+/// surface in one stratum more than the caller guessed, and then the whole
+/// fusion failed. A caller cannot predict that, because it is not a property of
+/// anything the caller wrote.
+///
+/// The value is still part of the profile's canonical bytes and therefore of
+/// its identity, so a profile that used to pass its stratum count explicitly
+/// hashes to exactly the identity it always did.
 ///
 /// # Weight, scale and depth are one coupled quantity
 ///
@@ -228,8 +250,14 @@ pub struct FusionProfile {
     weights: BTreeMap<Iri, Fixed>,
     /// The declared total tie-break.
     tie_break: TieBreak,
-    /// The maximum number of contributions one candidate may receive. This is
-    /// the number of strata the profile admits a candidate may surface in.
+    /// The maximum number of contributions one candidate may receive: the
+    /// number of strata this profile weights, since a candidate may surface at
+    /// most once in each.
+    ///
+    /// Derived at construction from `weights`, and — unlike [`Self::ceiling`]
+    /// and [`Self::monotone_depths`] — still written into the canonical bytes,
+    /// because it is the bound the fusion engine is held to and an identity
+    /// that did not record it would not say what law an answer ran under.
     max_contributions: u32,
     /// The largest fused score the profile admits, derived at construction and
     /// checked against the fixed-point ceiling.
@@ -246,23 +274,38 @@ pub struct FusionProfile {
 }
 
 impl FusionProfile {
-    /// Build a profile from explicit weights, smoothing constant and maximum
-    /// contribution count, with the canonical tie-break.
+    /// Build a profile from explicit weights and smoothing constant, with the
+    /// canonical tie-break.
+    ///
+    /// # `weights` is read as ratios only — mind which constructor made them
+    ///
+    /// Nothing here reads a weight as an absolute quantity. A fusion compares
+    /// weights with each other and with nothing else, so multiplying every
+    /// stratum's weight by the same factor leaves every fused score's *order*,
+    /// every tie-break and every identity-bearing decision untouched. That is
+    /// the useful property this type's own documentation reads in reverse to
+    /// buy ordered depth, and it is also the hazard.
+    ///
+    /// [`Fixed`] has two constructors that read almost the same and differ by
+    /// `10^SCALE_DIGITS`: [`Fixed::from_integer(1)`](Fixed::from_integer) is the
+    /// number one, and [`Fixed::from_raw(1)`](Fixed::from_raw) is one raw unit,
+    /// which is `10^-12`. Mixing them inside one weight map is a ratio error of
+    /// a *trillion* that this constructor cannot see and will not refuse: every
+    /// weight is strictly positive, the ceiling still fits, the fusion still
+    /// runs, and the answer is a plausible-looking ranking in which one stratum
+    /// has been switched off. Build the whole map with one constructor, and
+    /// prefer the one that takes the number a reader means.
     ///
     /// # Errors
     ///
     /// * [`FusionError::InvalidK`] when `k == 0`.
-    /// * [`FusionError::InvalidMaxContributions`] when `max_contributions == 0`.
     /// * [`FusionError::EmptyWeights`] when no stratum is declared.
     /// * [`FusionError::NonPositiveWeight`] for any weight `<= 0`.
     /// * [`FusionError::Overflow`] when the admitted maximum fused score does
-    ///   not fit the fixed-point range.
-    pub fn new(
-        weights: BTreeMap<Iri, Fixed>,
-        k: u32,
-        max_contributions: u32,
-    ) -> Result<Self, FusionError> {
-        Self::with_decay(weights, DecayRule::ReciprocalRank { k }, max_contributions)
+    ///   not fit the fixed-point range, or the stratum count does not fit the
+    ///   `u32` the canonical encoding writes.
+    pub fn new(weights: BTreeMap<Iri, Fixed>, k: u32) -> Result<Self, FusionError> {
+        Self::with_decay(weights, DecayRule::ReciprocalRank { k })
     }
 
     /// Build a profile that names its decay rule explicitly.
@@ -278,20 +321,15 @@ impl FusionProfile {
     ///
     /// # Errors
     ///
-    /// The same refusals [`new`](Self::new) makes.
+    /// The same refusals [`new`](Self::new) makes, and its `weights` paragraph
+    /// applies here unchanged.
     pub fn with_decay(
         weights: BTreeMap<Iri, Fixed>,
         decay: DecayRule,
-        max_contributions: u32,
     ) -> Result<Self, FusionError> {
         let k = decay.k();
         if k == 0 {
             return Err(FusionError::InvalidK { k });
-        }
-        if max_contributions == 0 {
-            return Err(FusionError::InvalidMaxContributions {
-                max: max_contributions,
-            });
         }
         if weights.is_empty() {
             return Err(FusionError::EmptyWeights);
@@ -305,6 +343,10 @@ impl FusionProfile {
             }
         }
 
+        // One contribution per stratum is the most any candidate can receive,
+        // so the stratum count *is* the bound. The empty map is already refused
+        // above, so this is at least one.
+        let max_contributions = u32::try_from(weights.len()).map_err(|_| FusionError::Overflow)?;
         let ceiling = Self::compute_ceiling(&weights, max_contributions)?;
         // Derived once, here, rather than on every admission: a profile is
         // immutable and is routinely reused across many searches, and the search
@@ -341,13 +383,21 @@ impl FusionProfile {
         self.tie_break
     }
 
-    /// The maximum number of contributions one candidate may receive.
+    /// The maximum number of contributions one candidate may receive: the
+    /// number of strata this profile weights.
+    ///
+    /// This is a fact about the profile, not a policy a caller chose — see the
+    /// type's own documentation for why it is derived. A candidate that
+    /// receives more than this has not crossed a budget; some stream or stream
+    /// set broke its uniqueness, which is
+    /// [`FusionError::MaxContributionsExceeded`](crate::FusionError::MaxContributionsExceeded).
     #[must_use]
     pub const fn max_contributions(&self) -> u32 {
         self.max_contributions
     }
 
-    /// The admitted maximum fused score.
+    /// The admitted maximum fused score: the largest weight times the number of
+    /// strata, which is the true bound on a candidate's sum.
     #[must_use]
     pub const fn ceiling(&self) -> Fixed {
         self.ceiling
@@ -390,6 +440,12 @@ impl FusionProfile {
     /// The encoding is a pure function of the fields: weights are sorted by
     /// stratum and every integer is little-endian, so the bytes are identical on
     /// every target.
+    ///
+    /// The contribution maximum is written even though it is derived from the
+    /// weight count already encoded above it. That is deliberate: it is the
+    /// bound the engine enforces, the layout predates its derivation, and
+    /// keeping it means a profile that used to declare its stratum count
+    /// explicitly still hashes to the identity it was issued under.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut writer = Writer::new();
@@ -417,7 +473,8 @@ impl FusionProfile {
     ///
     /// [`FusionError::MalformedProfile`] when the encoding is truncated, carries
     /// an unknown tag or invalid UTF-8, holds an invalid IRI, has trailing
-    /// bytes, or begins with a version this build does not write.
+    /// bytes, states a contribution maximum that is not its own stratum count,
+    /// or begins with a version this build does not write.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, FusionError> {
         let mut reader = Reader::new(bytes);
         let version = reader
@@ -469,6 +526,18 @@ impl FusionProfile {
         let max_contributions = reader
             .u32()
             .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        // The field is derived from the weight count at construction, so bytes
+        // that disagree with their own stratum count describe a profile this
+        // build cannot build. Decoding them anyway would hand back a value
+        // whose canonical bytes are not the bytes it was decoded from.
+        let declared_strata = u32::try_from(weights.len())
+            .map_err(|_| FusionError::MalformedProfile("too many strata".to_owned()))?;
+        if max_contributions != declared_strata {
+            return Err(FusionError::MalformedProfile(format!(
+                "profile states a contribution maximum of {max_contributions} over \
+                 {declared_strata} strata; a candidate may surface at most once per stratum"
+            )));
+        }
         let scale = reader
             .u32()
             .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
@@ -497,7 +566,7 @@ impl FusionProfile {
             .finish()
             .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
 
-        Self::with_decay(weights, decay, max_contributions)
+        Self::with_decay(weights, decay)
     }
 
     /// The profile's content identity.
@@ -507,7 +576,11 @@ impl FusionProfile {
     }
 
     /// The largest score the profile admits: the largest weight, times the
-    /// maximum contribution count, checked against the fixed-point ceiling.
+    /// number of strata, checked against the fixed-point ceiling.
+    ///
+    /// This is the true bound rather than a declared one. A candidate receives
+    /// at most one contribution per stratum and each is at most that stratum's
+    /// own weight, so no legitimate sum can pass `max_weight × strata`.
     fn compute_ceiling(
         weights: &BTreeMap<Iri, Fixed>,
         max_contributions: u32,

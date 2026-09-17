@@ -171,8 +171,10 @@ impl<T> fmt::Debug for FusionResult<T> {
 /// weight; [`FusionError::PlanIdMismatch`] when two streams name different
 /// pinned plans; [`FusionError::Protocol`] when a stream violates the input
 /// protocol; [`FusionError::Overflow`] when a checked sum leaves the fixed-point
-/// range; [`FusionError::MaxContributionsExceeded`] when a candidate's
-/// contribution count leaves the profile's declared bound; and
+/// range; [`FusionError::MaxContributionsExceeded`] when a candidate is
+/// contributed to more times than there are strata, which this entry point's
+/// own duplicate-stratum refusal makes unreachable from a conforming stream;
+/// and
 /// [`FusionError::CeilingExceeded`] when a candidate's accumulated score
 /// leaves the profile's declared ceiling.
 pub async fn fuse<S, T>(

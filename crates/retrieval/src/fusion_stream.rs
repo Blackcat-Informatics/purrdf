@@ -330,8 +330,10 @@ impl<S: RankedStream> FusionStream<S> {
     ///
     /// [`FusionError::Overflow`] when a checked sum leaves the fixed-point
     /// range; [`FusionError::Protocol`] when a stream violates the input
-    /// protocol; [`FusionError::MaxContributionsExceeded`] when a candidate's
-    /// contribution count leaves the profile's declared bound; and
+    /// protocol; [`FusionError::MaxContributionsExceeded`] when a candidate is
+    /// contributed to more times than there are strata — an invariant
+    /// violation, reachable only from a hand-built stream set that repeats a
+    /// stratum; and
     /// [`FusionError::CeilingExceeded`] when a candidate's accumulated score
     /// leaves the profile's declared ceiling.
     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
@@ -781,8 +783,8 @@ impl<S: RankedStream> FusionStream<S> {
     /// # Errors
     ///
     /// [`FusionError::Overflow`] when the checked sum leaves the fixed-point
-    /// range, [`FusionError::MaxContributionsExceeded`] when the candidate's
-    /// contribution count leaves the profile's declared bound,
+    /// range, [`FusionError::MaxContributionsExceeded`] when the candidate has
+    /// been contributed to once more than there are strata,
     /// [`FusionError::CeilingExceeded`] when its accumulated score leaves the
     /// profile's declared ceiling, and [`ProtocolError::DuplicateItem`] when
     /// this stream would contribute to one frontier candidate twice.
@@ -817,7 +819,10 @@ impl<S: RankedStream> FusionStream<S> {
         //
         // Both bounds are checked against the profile's own accessors, never
         // recomputed, so a future change to either derivation cannot drift
-        // enforcement away from what the profile declares.
+        // enforcement away from what the profile declares. The contribution
+        // bound is the profile's stratum count, so crossing it is not a budget
+        // a corpus spent — it says a stream named this candidate twice, or two
+        // streams were handed the same stratum tag.
         let existing = self.frontier.get(&head.item);
         let lower_bound = existing
             .map_or(Fixed::ZERO, |state| state.lower_bound)

@@ -487,7 +487,7 @@ mod tests {
         let stratum = retrieval::Iri::parse(STRATUM).expect("the fixture stratum IRI is valid");
         let mut weights = BTreeMap::new();
         weights.insert(stratum.clone(), retrieval::Fixed::ONE);
-        let profile = retrieval::FusionProfile::new(weights, 60, 1)
+        let profile = retrieval::FusionProfile::new(weights, 60)
             .expect("the fixture fusion profile is valid");
 
         let request =

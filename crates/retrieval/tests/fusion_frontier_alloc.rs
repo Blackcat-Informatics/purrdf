@@ -237,19 +237,20 @@ impl RankedStream for LazyStream {
 
 /// The fixture profile and its three streams, each `total` rows long.
 ///
-/// `max_contributions` is three — one per stratum — so the profile's declared
-/// bound is exactly the number of contributions a candidate can accumulate.
+/// The profile's contribution maximum is three — one per stratum — because it
+/// weights three strata; that is exactly the number of contributions a
+/// candidate here can accumulate.
 fn fixture(total: u64, pulls: &Arc<AtomicUsize>) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
     let weights: BTreeMap<Iri, Fixed> = STRATA
         .iter()
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(
-        weights,
-        K,
+    let profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
+    assert_eq!(
+        profile.max_contributions(),
         u32::try_from(STRATA.len()).expect("three strata"),
-    )
-    .expect("the fixture profile is valid");
+        "the contribution maximum is the stratum count, derived rather than declared"
+    );
     let streams = STRATA
         .iter()
         .enumerate()
@@ -385,7 +386,7 @@ fn the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length() {
 
     // Fourth, the claim. The streams are a thousand times longer in the second
     // run and the peak does not follow: the frontier is bounded by the profile's
-    // `max_contributions` x strata over the disagreement window, and the
+    // stratum count over the disagreement window, and the
     // duplicate-detection sets are bounded by the rows pulled — neither by the
     // rows available.
     assert_eq!(

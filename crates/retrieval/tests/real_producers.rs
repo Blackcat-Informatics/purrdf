@@ -328,13 +328,14 @@ impl Statistics for NoStatistics {
     }
 }
 
-/// Unit weights for both strata, `K` smoothing, and room for a candidate to
-/// surface in both.
+/// Unit weights for both strata and `K` smoothing. Two weighted strata is what
+/// gives a candidate room to surface in both: the contribution maximum is the
+/// stratum count, not a separate parameter.
 fn profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
     weights.insert(iri(TEXT_STRATUM), Fixed::ONE);
     weights.insert(iri(KNN_STRATUM), Fixed::ONE);
-    FusionProfile::new(weights, K, 2).expect("the fixture profile is valid")
+    FusionProfile::new(weights, K).expect("the fixture profile is valid")
 }
 
 // ---------------------------------------------------------------------------
