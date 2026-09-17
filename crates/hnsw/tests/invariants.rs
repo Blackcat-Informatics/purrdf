@@ -10,6 +10,7 @@
 //! graphs on every target.
 
 use purrdf_core::DistanceMetric;
+use purrdf_hnsw::corpus::{self, CorpusShape};
 use purrdf_hnsw::level::{level_cap, level_from_index};
 use purrdf_hnsw::{HnswIndex, Params, Ranked, VectorMatrix, build};
 
@@ -257,26 +258,91 @@ fn reachable_at_layer_zero(index: &HnswIndex) -> Vec<bool> {
 
 #[test]
 fn every_row_is_reachable_from_the_entry_point_at_layer_zero() {
-    // A row the entry cannot reach can never be returned — not by a neighbour query, and
-    // not even as its own nearest neighbour at distance zero. It is a silent drop, and it
-    // is invisible to every determinism check because a deterministically wrong graph is
-    // still deterministic.
+    // A row the entry cannot reach can never be returned -- not by a neighbour query, and
+    // not even as its own nearest neighbour at distance zero. It is a silent drop, and it is
+    // invisible to every determinism check because a deterministically wrong graph is still
+    // deterministic.
+    //
+    // The corpus families matter as much as the sizes. Uniform i.i.d. vectors are the
+    // EASIEST case for reachability: with no cluster structure, a node's nearest neighbours
+    // point in every direction and the graph is naturally well connected. Stranding is a
+    // clustering phenomenon -- nearest-M truncation inside a tight cluster produces edges
+    // that never leave it -- so an invariant tested only on uniform data is testing where
+    // the defect cannot appear. These run over the structured generator and over two
+    // deliberately adversarial geometries as well.
     for params in parameter_sets() {
         for metric in kernels() {
             for rows in [2_usize, 3, 17, 96, 250] {
-                let index = build(fixture(rows, 8, 0x00C0_FFEE), &metric, params).expect("builds");
-                let seen = reachable_at_layer_zero(&index);
-                let stranded: Vec<usize> = (0..index.rows()).filter(|row| !seen[*row]).collect();
-                assert!(
-                    stranded.is_empty(),
-                    "{metric:?} {params:?} rows={rows}: {} of {rows} rows are unreachable \
-                     from the entry point {:?}: {stranded:?}",
-                    stranded.len(),
-                    index.entry()
+                assert_reachable(
+                    &fixture(rows, 8, 0x00C0_FFEE),
+                    &metric,
+                    params,
+                    &format!("uniform-{rows}x8"),
                 );
             }
+            // Cluster structure, which is where truncation strands rows.
+            assert_reachable(
+                &corpus::embedding_like(CorpusShape::embedding_like(250, 16), 0xC1_0057)
+                    .expect("generates"),
+                &metric,
+                params,
+                "embedding-like-250x16",
+            );
+            // Locally dense and globally disconnected: a greedy descent that enters the
+            // wrong manifold has no downhill path to the right one.
+            assert_reachable(
+                &corpus::separated_manifolds(240, 24, 6, 0x5EA4_A7ED).expect("generates"),
+                &metric,
+                params,
+                "separated-manifolds-240x24",
+            );
+            // Signed zeros and huge-but-finite magnitudes, which stress the comparator
+            // rather than the geometry.
+            assert_reachable(
+                &corpus::extreme_but_finite(160, 12, 0xE547_3E4E).expect("generates"),
+                &metric,
+                params,
+                "extreme-160x12",
+            );
         }
     }
+}
+
+#[test]
+fn reachability_holds_at_the_scale_the_crate_claims() {
+    // The size the crate's own evidence quotes. Kept to one parameter set and one kernel so
+    // the conformance lane stays affordable; the cross-product above covers the variety.
+    let params = Params::new(16, 32, 64, 16).expect("wide");
+    for rows in [1_000_usize, 5_000] {
+        assert_reachable(
+            &fixture(rows, 8, 0x00C0_FFEE),
+            &DistanceMetric::SquaredEuclidean,
+            params,
+            &format!("uniform-{rows}x8"),
+        );
+    }
+    assert_reachable(
+        &corpus::embedding_like(CorpusShape::embedding_like(2_000, 16), 0x5CA1_AB1E)
+            .expect("generates"),
+        &DistanceMetric::SquaredEuclidean,
+        params,
+        "embedding-like-2000x16",
+    );
+}
+
+/// Build `matrix` and assert every row is reachable from the entry point at layer 0.
+fn assert_reachable(matrix: &VectorMatrix, metric: &DistanceMetric, params: Params, name: &str) {
+    let index = build(matrix.clone(), metric, params).expect("builds");
+    let seen = reachable_at_layer_zero(&index);
+    let stranded: Vec<usize> = (0..index.rows()).filter(|row| !seen[*row]).collect();
+    assert!(
+        stranded.is_empty(),
+        "{metric:?} {params:?} {name}: {} of {} rows are unreachable from entry {:?}: {:?}",
+        stranded.len(),
+        index.rows(),
+        index.entry(),
+        &stranded[..stranded.len().min(12)]
+    );
 }
 
 #[test]

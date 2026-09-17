@@ -16,9 +16,12 @@ release set; the release set is defined once in `scripts/release-crates.sh`.
 ### Added
 
 - The deterministic HNSW index: splitmix64 levels over the stable row index, a
-  round-structured build (`max(1, isqrt(n))` rows per round, frozen-snapshot
-  proposals, canonical `(distance, row)` merge), and a canonical little-endian
-  payload image whose bytes are identical across rayon worker counts and across
+  round-structured build (entry point fixed before any link exists and excluded
+  from every batch; batches doubling from one row and capped at 2048;
+  frozen-snapshot proposals; canonical `(distance, row)` merge), neighbour
+  selection by the relative-neighbourhood condition, a serial pass that leaves
+  every row reachable from the entry point, and a canonical little-endian payload
+  image whose bytes are identical across rayon worker counts and across
   `wasm32-unknown-unknown`.
 - The fail-closed validation matrix for `M`, `M0`, `ef_construction` and
   `ef_search`; there are no defaults and no query-time override, because the

@@ -1051,7 +1051,8 @@ def native_suites() -> list[SuiteResult]:
             ["cargo", "test", "-p", "purrdf-hnsw", "--locked",
              "--test", "conformance", "--test", "invariants",
              "--test", "oracle_contract", "--test", "sparql_e2e",
-             "--test", "purremb_roundtrip", "--test", "adversarial_payload"],
+             "--test", "purremb_roundtrip", "--test", "adversarial_payload",
+             "--test", "vector_query", "--test", "determinism"],
             detail=(
                 "the approximate half of the retrieval pair, graded against the exact "
                 "path as its oracle: every offered row compared to the exact scan's "

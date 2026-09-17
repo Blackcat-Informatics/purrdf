@@ -6,6 +6,42 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+### Added
+
+- **hnsw:** A new publishable crate, `purrdf-hnsw`: a deterministic HNSW
+  approximate nearest-neighbour index over a PURREMB embedding matrix, registered
+  on the evaluator's property-function seam under a caller-supplied predicate IRI.
+  Levels come from a splitmix64 hash of the stable row index rather than from an
+  RNG, the build is round-structured against a frozen snapshot, and the canonical
+  byte image is identical across rayon worker counts and across
+  `wasm32-unknown-unknown`. It joins the release set as the 24th crate.
+- **purrdf:** The umbrella re-exports the new crate as `purrdf::hnsw`, on the same
+  seam `purrdf::geo` and `purrdf::text` use, so a consumer can name `HnswIndex`,
+  `HnswSpace`, `Params` and the relation while depending on `purrdf` alone.
+- **sparql-eval:** `knn::Kernel::distance_bounded` with `knn::Bound` and
+  `knn::Bounded`. Squared-euclidean partial sums are non-decreasing, so a caller
+  that only needs to know whether a distance clears a threshold can stop early.
+  It shares one fold with `Kernel::distance`, so the two cannot drift, and a
+  candidate that is not abandoned is scored bit-for-bit as before.
+- **sparql-eval:** `knn::Scalar`, a stored scalar that widens to binary64 exactly.
+  PURREMB stores matrices at either width, and widening `f32` at load costs twice
+  the resident memory while changing no arithmetic; the kernels now accept either
+  width and widen per component inside the fold.
+
+### Changed
+
+- **sparql-eval:** `knn::Kernel::distance` and `knn::norm` are generic over
+  `knn::Scalar`. This is **source-breaking for inference-dependent callers**: an
+  expression whose operand type the compiler previously inferred may now need an
+  annotation (`norm::<f64>(&[])` where `norm(&[])` sufficed). Every operand type
+  that worked before still works, and no numeric result changes -- widening is
+  exact and the accumulation order is unchanged. Classified as additive plus
+  source-breaking rather than behaviour-breaking; it warrants a MINOR bump under
+  this suite's rule, not a MAJOR one, because no existing call can compile to a
+  different answer.
+
 ## [2.0.2] - 2026-09-14
 
 ### Bug Fixes

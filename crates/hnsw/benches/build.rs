@@ -29,9 +29,8 @@
 //! omits it. The default set is 5,000 / 50,000 / 200,000.
 //!
 //! ```text
-//! cargo bench -p purrdf-hnsw --bench build                     # 5k / 50k / 200k
-//! PURRDF_HNSW_BENCH_1M=1 cargo bench -p purrdf-hnsw --bench build   # adds 1M
-//! PURRDF_HNSW_BENCH_SCALES=5000 cargo bench -p purrdf-hnsw --bench build
+//! cargo bench -p purrdf-hnsw --bench build                     # 5k / 50k / 200k / 1M
+//! PURRDF_HNSW_BENCH_SCALES=5000 cargo bench -p purrdf-hnsw --bench build   # smoke only
 //! ```
 //!
 //! The vectors of each scale are dropped before the next scale is generated, so the peak
@@ -111,15 +110,6 @@ const fn fnv1a_64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Whether the 10^6-row scale is admitted on this host.
-///
-/// Off by default, because both build cost and memory grow with row count.
-/// `PURRDF_HNSW_BENCH_1M=1` enables it on a host that can afford both; it is the one scale
-/// excluded from the default run and from every gate.
-fn includes_one_million() -> bool {
-    std::env::var("PURRDF_HNSW_BENCH_1M").is_ok_and(|value| value == "1")
-}
-
 /// The scales this run measures.
 ///
 /// Every admission scale by default; the 10^6-row point is then filtered out unless
@@ -163,15 +153,11 @@ fn main() {
     );
     println!("{}", "-".repeat(68));
 
-    let include_1m = includes_one_million();
+    // Every declared scale runs. A point that is not measured is a point this harness does
+    // not claim, and a default that silently skips the one scale the offer is about is how a
+    // missing measurement gets reported as a completed run. `PURRDF_HNSW_BENCH_SCALES`
+    // narrows the run for a smoke test; it cannot widen one.
     for scale in scales() {
-        if scale >= 1_000_000 && !include_1m {
-            println!(
-                "{scale:>10}  {:>12}  {:>12}  {:>10}  {:>16}",
-                "skipped", "set PURRDF_HNSW_BENCH_1M=1", "-", "-"
-            );
-            continue;
-        }
         let generate = Instant::now();
         let vectors = matrix(scale, DIMS);
         let generate = generate.elapsed();

@@ -154,6 +154,38 @@ const BUCKETS: [&str; 6] = ["0..k", "k..2k", "2k..4k", "4k..8k", "8k..16k", ">=1
 /// `purrdf_hnsw::corpus` for why each of those is load-bearing.
 const FAMILIES: [&str; 2] = ["uniform", "embedding-like"];
 
+/// The scales this run reports.
+///
+/// [`LADDER`] by default -- every declared rung runs, because a point that is not measured
+/// is a point this harness does not claim. `PURRDF_HNSW_BENCH_SCALES` narrows the run to the
+/// named row counts for a smoke test on a host that cannot hold the top rung: the million-row
+/// rung alone is about 33 GiB of `f64` before the graph and the oracle rankings. The knob can
+/// only take rungs AWAY, never add one, which is the same rule `benches/build.rs` follows --
+/// a knob that can widen a run is a knob that can hide a default that was never wide enough.
+fn ladder() -> Vec<(usize, usize)> {
+    let Ok(raw) = std::env::var("PURRDF_HNSW_BENCH_SCALES") else {
+        return LADDER.to_vec();
+    };
+    let wanted: Vec<usize> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<usize>()
+                .unwrap_or_else(|_| panic!("PURRDF_HNSW_BENCH_SCALES: {part:?} is not a row count"))
+        })
+        .collect();
+    let chosen: Vec<(usize, usize)> = LADDER
+        .into_iter()
+        .filter(|(rows, _)| wanted.contains(rows))
+        .collect();
+    assert!(
+        !chosen.is_empty(),
+        "PURRDF_HNSW_BENCH_SCALES named no rung of the declared ladder {LADDER:?}"
+    );
+    chosen
+}
+
 /// Build the named family at `rows x dims`.
 fn family(name: &str, rows: usize, dims: usize) -> VectorMatrix {
     match name {
@@ -177,7 +209,7 @@ fn main() {
     );
     println!();
 
-    for (rows, dims) in LADDER {
+    for (rows, dims) in ladder() {
         for name in FAMILIES {
             report(name, rows, dims);
         }

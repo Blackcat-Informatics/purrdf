@@ -60,8 +60,9 @@ impossible. The build here cuts the dependency with finitely many **rounds**,
 each a pure function of the graph that existed before it:
 
 1. **Freeze.** The graph from the previous round is the sole snapshot every
-   proposal in this round may read. Round 1's snapshot is empty: its batch is
-   the bootstrap seed and links to nothing.
+   proposal in this round may read. The entry point is computed from the level
+   assignment **before any link exists** and is excluded from every batch, so the
+   snapshot is never empty and no round needs a bootstrap special case.
 2. **Propose (parallel).** Each node in the batch runs the standard insertion
    search against the snapshot only — greedy descent above the node's level
    when the snapshot has layers there, then an `ef_construction` beam at each
@@ -73,16 +74,38 @@ each a pure function of the graph that existed before it:
    the per-layer degree bound (`M0` at layer 0, `M` above). A set union
    followed by a total sort is order-free, so the merge cannot observe which
    worker produced which proposal.
-4. **Commit.** The entry point becomes the minimum row index at the current
-   maximum level.
+4. **Commit.** The merged adjacency replaces the frozen one. The entry point does
+   not move: it was fixed before the first round and is the minimum row index at
+   the maximum level, a function of the level assignment alone.
+5. **Repair (serial).** The degree bound in step 3 can drop a node's last
+   *inbound* edge, and out-edges do not make a row findable — a beam arrives only
+   by following an inbound edge. A final serial pass gives every unreachable row
+   an inbound edge from the nearest already-reachable node it points at, and
+   protects that edge from later eviction. Protected edges are never removed and
+   every pass converts at least one row, so the repair terminates in at most `n`
+   passes.
 
-The loop is a `for` over a finite partition: `ceil(n / B)` rounds with
-`B = max(1, isqrt(n))` (an integer rule of the profile, not a caller
-parameter). There is no `while pending` and no level-based re-queue, so
-termination is structural and a node is proposed exactly once. The
-within-round isolation is load-bearing: `batch = 1` is a plain serial insertion
-and is asserted to produce a **different** canonical digest, which is what makes
-the round structure testable rather than merely claimed.
+The loop walks a finite partition of the rows, so termination is structural and a
+node is proposed exactly once. There is no `while pending` and no level-based
+re-queue.
+
+The batch schedule is **an integer rule of the profile, not a caller parameter**,
+and it is part of artifact identity: a different schedule is a different canonical
+image. It starts at a single row and doubles, capped at `MAX_ROUND = 2048`.
+
+Both halves of that rule are load-bearing, and each fixes a distinct way the graph
+can lose rows. Rows within one round cannot link to each other — they all read the
+same frozen snapshot — so a round is a window of mutual invisibility. Starting at
+one keeps the early graph dense in links; a flat schedule of `isqrt(n)` rows would
+instead leave an entire first batch reading an empty or near-empty snapshot, and
+every row in it would end the build with no edges at all, unreachable forever.
+Capping the doubling bounds the window at the other end: uncapped, the final round
+is half the corpus, and half the corpus mutually invisible is a graph whose recall
+collapses at scale.
+
+The within-round isolation is load-bearing and is asserted rather than claimed:
+`batch = 1` is a plain serial insertion and produces a **different** canonical
+digest.
 
 ### 1.3 Why rayon does not break it
 
@@ -125,7 +148,8 @@ algorithm name.
 The guard's `IndexLossContract` is approximate and non-transforming:
 `transforms_vectors = false`, with no `loss_encoding` and no `loss_parameters`,
 because an HNSW graph stores no vectors at all. The evidence string is exactly
-`recall unmeasured on realistic corpora; exact path is the oracle`;
+`approximate: recall measured against the exact oracle and pinned per fixture; an
+offer of candidates is never a proof of absence`;
 `guard::validate_guard` refuses a guard whose revision says anything else, so a
 host cannot bind an HNSW index without binding that statement.
 
@@ -309,9 +333,16 @@ These are decisions, not omissions:
 * **No predicate-filtered traversal.** No consumer exists yet, and a filter
   parameter would design against an absent caller; filter pushdown needs
   algebra/evaluator work outside this crate.
-* **No prefix-dimension routing or exact rerank.** That would change the
-  distance law, and the profile binds `IndexCoordinates.prefix_dimension` to the
-  full dimension.
+* **No full-width rerank after a prefix retrieval.** The PURREMB use role IS read
+  off the projection — an index over a projection shorter than the matrix it
+  projects declares `CoarsePrefixRetrieval`, and one over the whole stored width
+  declares `Generic` — and `IndexCoordinates.prefix_dimension` is bound to the
+  projection's own effective dimension rather than to the full width. What is
+  absent is the second stage: this profile retrieves and does not rerank, so the
+  distances it emits are the prefix's own, exactly as the exact sibling emits them
+  over the same projection. A caller wanting a full-width rerank composes it.
+  Routing over a prefix does **not** change the distance law: it changes which
+  candidates are evaluated, and they are evaluated with the same kernels.
 * **No domain-salted level hashing.** The row index pins the level; level
   collisions across distinct vector spaces are harmless because each graph is a
   per-artifact build.

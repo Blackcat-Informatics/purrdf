@@ -27,10 +27,21 @@ replaced with a fixed rule:
   (`purrdf_hnsw::level`). The row index is the PURREMB target-set row order,
   ascending `TargetId`, so a rebuild over the same artifact reproduces the same
   levels.
-* **The build is round-structured.** Rows are processed in batches of
-  `max(1, isqrt(n))`; each round proposes against a frozen snapshot of the graph
-  and the proposals are merged canonically, sorted by the shared rank order and
-  truncated to the degree bound. The graph does not depend on insertion order.
+* **The build is round-structured.** The entry point is computed from the level
+  assignment before any link exists and excluded from every batch, so no round
+  reads an empty snapshot. Batches start at one row and double, capped at 2048;
+  each round proposes against a frozen snapshot and the proposals are merged
+  canonically, sorted by the shared rank order and truncated to the degree bound.
+  The schedule is part of artifact identity, not a caller parameter.
+* **Every row stays reachable.** The degree bound can drop a node's last inbound
+  edge, and out-edges do not make a row findable, so a final serial pass gives
+  every unreachable row an inbound edge and protects it from later eviction. A row
+  nothing points at could never be returned — not even as its own nearest
+  neighbour at distance zero — and a graph that strands rows is still perfectly
+  deterministic, so no digest could catch it.
+* **Neighbours are selected for diversity**, by the relative-neighbourhood
+  condition rather than by keeping the nearest `M`. Nearest-`M` truncation spends
+  every edge in one direction and leaves the graph unnavigable.
 * **Distances** come from the exact path's kernels, consumed from
   `purrdf_sparql_eval::knn::{Kernel, Ranked}` rather than re-implemented.
 * **The digest** committed by a guard is a hand-rolled FNV-1a fold of the
@@ -46,10 +57,17 @@ inline-sequentially on wasm, so that build is slower but not different.
 This is an **approximate** index, and the crate is explicit about what that
 means:
 
-* **Recall is unmeasured on realistic corpora.** No recall percentage is
-  promised. The conformance harness measures recall@k against the exact path on
-  deterministic fixtures and reports it; that evidence is what an admission
-  decision uses, not a claim in this file.
+* **Recall is measured against the exact path, and pinned.** The conformance
+  harness compares every offered row to the exact scan over a deterministic
+  fixture family and pins the hit count as an **exact equality** — 96 regimes of
+  `(fixture, parameters, k)` — rather than as a floor, because recall is a pure
+  function of the corpus, the parameters and the algorithm. Held-out queries, the
+  case where the answer is not already a stored row, are pinned separately. This
+  is the sentence the artifact itself carries as its approximation evidence.
+* **What is not measured is scale.** No figure above a few thousand rows has been
+  observed for this implementation. The regime that motivates an ANN index at all
+  is 10^6 rows, and this crate has no measurement there — that is a gap in the
+  evidence, not a property of the index.
 * **The exact path stays the oracle.** `purrdf-sparql-eval`'s kNN relation is
   not replaced or modified. An HNSW result is an **offer of candidates** and
   never a certification that no nearer row exists; an empty result is never a
