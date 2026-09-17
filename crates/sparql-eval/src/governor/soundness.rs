@@ -1037,6 +1037,38 @@ impl CapPushdown {
 ///
 /// `root_ceiling` of `None` yields an empty pushdown and does no work beyond the walk,
 /// which is the ungoverned, `LIMIT`-free case.
+///
+/// # A restricting `Slice` re-seeds the descent
+///
+/// "A node further down cannot re-acquire a licence its ancestor lost" is true of every
+/// node **except** one, and the exception is not a weakening of the rule — it is a
+/// different rule, resting on a hypothesis nothing above can invalidate.
+///
+/// Let `S = Slice { inner, start, length: Some(len) }` stand anywhere in the plan. `S`'s
+/// output is `inner[start..][..len]`, so it is a pure function of the first `start + len`
+/// rows of `inner`'s output sequence, and of nothing else. Evaluating `inner` under a
+/// ceiling yields a **prefix** of the sequence it would otherwise have produced (that is
+/// the pushdown's own contract, and [`ChildEdge::SLICED`] proves a slice of a prefix is a
+/// prefix of the slice); a prefix at least `start + len` long — or a complete but shorter
+/// one — therefore gives `S` the identical output, row for row. `S`'s own rows being
+/// unchanged, every operator above `S` is handed exactly what it was handed before, so
+/// nothing about the context above `S` enters the argument. The hypothesis is entirely
+/// local to `S`.
+///
+/// So when the descent arrives at such an `S` carrying no ceiling — because a `UNION`, a
+/// `JOIN`, an `ORDER BY` or a lapsed certificate broke the chain above it — the walk
+/// starts a fresh descent there, at [`SpineContext::ROOT`] and the `u64::MAX` carrier, and
+/// `S`'s own arithmetic below turns that into `start + len` for its child. That is
+/// literally the same descent [`crate::eval::install_local_slice_pushdown`] performs when
+/// it meets `S` with no pushdown installed at all; re-seeding here is what makes the
+/// answer independent of whether some **other** slice happened to install one first.
+///
+/// `length: None` is deliberately excluded. A bare `OFFSET` bounds nothing — `start + k`
+/// rows are needed for `k` output rows and `k` is unbounded — so there is no number to
+/// re-seed with, and the walk keeps the `None` it arrived with.
+///
+/// A ceiling that did survive the descent is never replaced: it is the tighter of the two
+/// (it already passed through this node's `min` with `len`) and it is equally sound.
 pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) -> CapPushdown {
     let mut out = DetHashMap::default();
     let Some(root_ceiling) = root_ceiling else {
@@ -1047,6 +1079,24 @@ pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) 
         // The licence is checked at the node the ceiling would be *applied* to, so a node
         // whose own certificate has lapsed keeps no ceiling even if its parent had one.
         let ceiling = ceiling.filter(|_| context.admits_cap_pushdown());
+        // The re-seed, per this function's header: a restricting `Slice` needs only a
+        // bounded prefix of its own subtree whatever stands above it, so it begins a fresh
+        // descent rather than inheriting the broken chain. The carrier is `u64::MAX` and
+        // the context is the root one, which is exactly the pair a local install starts
+        // from — the arithmetic immediately below turns them into `start + len`.
+        let (context, ceiling) = if ceiling.is_none()
+            && matches!(
+                node,
+                GraphPattern::Slice {
+                    inner: _,
+                    start: _,
+                    length: Some(_)
+                }
+            ) {
+            (SpineContext::ROOT, Some(u64::MAX))
+        } else {
+            (context, ceiling)
+        };
         // `u64::MAX` is the "no ceiling" carrier the descent starts from when the caller
         // has only a `LIMIT` to contribute, so it is not recorded: an entry saying "stop
         // after more rows than can exist" would cost a hash probe per node to answer a
@@ -3113,6 +3163,219 @@ mod tests {
         assert_eq!(
             sorted_pushdown.ceiling_at(std::ptr::from_ref(sorted_call) as usize),
             None
+        );
+    }
+
+    /// The multi-producer stratum shape: an outer `Slice` over a `Project` over a `UNION`
+    /// of sub-`SELECT`s, each bounded by its own `Slice`.
+    ///
+    /// `branch` builds one arm's slice, so a test can vary `start`/`length` per arm.
+    fn union_of_bounded_branches(
+        outer: Option<usize>,
+        left: GraphPattern,
+        right: GraphPattern,
+    ) -> GraphPattern {
+        let union = GraphPattern::Union {
+            left: boxed(left),
+            right: boxed(right),
+        };
+        let project = GraphPattern::Project {
+            inner: boxed(union),
+            variables: vec![Variable::new("s")],
+        };
+        match outer {
+            None => project,
+            Some(length) => GraphPattern::Slice {
+                inner: boxed(project),
+                start: 0,
+                length: Some(length),
+            },
+        }
+    }
+
+    /// One `UNION` arm: `{ SELECT ?s WHERE { <leaf> } OFFSET start LIMIT length }`.
+    fn bounded_branch(leaf: GraphPattern, start: usize, length: Option<usize>) -> GraphPattern {
+        GraphPattern::Slice {
+            inner: boxed(GraphPattern::Project {
+                inner: boxed(leaf),
+                variables: vec![Variable::new("s")],
+            }),
+            start,
+            length,
+        }
+    }
+
+    /// The leaf under a branch built by [`bounded_branch`].
+    fn branch_leaf(branch: &GraphPattern) -> &GraphPattern {
+        let GraphPattern::Slice {
+            inner,
+            start: _,
+            length: _,
+        } = branch
+        else {
+            panic!("a bounded branch is a Slice");
+        };
+        let GraphPattern::Project {
+            inner,
+            variables: _,
+        } = inner.as_ref()
+        else {
+            panic!("a bounded branch's Slice wraps a Project");
+        };
+        inner
+    }
+
+    /// The two arms of the `UNION` inside a plan built by [`union_of_bounded_branches`].
+    fn union_arms(plan: &GraphPattern) -> (&GraphPattern, &GraphPattern) {
+        let mut node = plan;
+        loop {
+            if let GraphPattern::Union { left, right } = node {
+                return (left, right);
+            }
+            let mut child = None;
+            visit_classified_children(node, &mut |candidate, _edge| {
+                child = Some(candidate);
+                true
+            });
+            node = child.expect("the spine reaches the Union before a leaf");
+        }
+    }
+
+    #[test]
+    fn a_branch_slice_re_seeds_the_ceiling_the_union_broke() {
+        // A `UNION` propagates no ceiling to either arm — it interleaves two sequences, so
+        // no prefix of one arm bounds the parent's first `k`. Before the re-seed that
+        // `None` reached the whole of both subtrees and each arm's OWN `LIMIT` was never
+        // consulted, so a producer under a two-arm stratum ranked its entire input to
+        // return the handful of rows its branch could use.
+        let plan = union_of_bounded_branches(
+            Some(4),
+            bounded_branch(bgp(), 0, Some(4)),
+            bounded_branch(other_bgp(), 0, Some(4)),
+        );
+        let pushdown = plan_cap_pushdown(&plan, Some(u64::MAX));
+        let (left, right) = union_arms(&plan);
+        for (arm, side) in [(left, "left"), (right, "right")] {
+            assert_eq!(
+                pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(arm)) as usize),
+                Some(4),
+                "the {side} arm's own LIMIT 4 must reach its leaf"
+            );
+        }
+
+        // The re-seed does not depend on a slice standing above: the same two arms with no
+        // outer `LIMIT` at all get the same ceilings, which is what the evaluator's lazy
+        // per-slice install already produced for them.
+        let unbounded = union_of_bounded_branches(
+            None,
+            bounded_branch(bgp(), 0, Some(4)),
+            bounded_branch(other_bgp(), 0, Some(4)),
+        );
+        let unbounded_pushdown = plan_cap_pushdown(&unbounded, Some(u64::MAX));
+        let (unbounded_left, unbounded_right) = union_arms(&unbounded);
+        for (arm, side) in [(unbounded_left, "left"), (unbounded_right, "right")] {
+            assert_eq!(
+                unbounded_pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(arm)) as usize),
+                Some(4),
+                "the {side} arm's LIMIT 4 stands on its own, with nothing above it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_re_seeded_branch_pays_its_own_offset_and_a_bare_offset_re_seeds_nothing() {
+        // `OFFSET 3 LIMIT 4` needs seven rows of its child and says so: the re-seed enters
+        // the node's own arithmetic rather than bypassing it, so an offset is never lost.
+        // The other arm is `OFFSET 3` with no `LIMIT`, which bounds nothing — `k` output
+        // rows need `3 + k` input rows for unbounded `k` — so it keeps the `None` the
+        // `UNION` handed it. That is the conservative answer: no ceiling is slow, never
+        // wrong.
+        let plan = union_of_bounded_branches(
+            Some(4),
+            bounded_branch(bgp(), 3, Some(4)),
+            bounded_branch(other_bgp(), 3, None),
+        );
+        let pushdown = plan_cap_pushdown(&plan, Some(u64::MAX));
+        let (offset_limited, offset_only) = union_arms(&plan);
+        assert_eq!(
+            pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(offset_limited)) as usize),
+            Some(7),
+            "OFFSET 3 LIMIT 4 needs its first seven input rows, not its first four"
+        );
+        assert_eq!(
+            pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(offset_only)) as usize),
+            None,
+            "a bare OFFSET bounds nothing, so there is no number to re-seed with"
+        );
+    }
+
+    #[test]
+    fn a_surviving_ceiling_is_never_replaced_by_the_re_seed() {
+        // The re-seed fires only where the descent arrived with nothing. On the single
+        // spine the chain is intact, so the outer `LIMIT 2` — tighter than the inner
+        // `LIMIT 9` — is what reaches the leaf, exactly as it did before.
+        let plan = GraphPattern::Slice {
+            inner: boxed(GraphPattern::Project {
+                inner: boxed(bounded_branch(bgp(), 0, Some(9))),
+                variables: vec![Variable::new("s")],
+            }),
+            start: 0,
+            length: Some(2),
+        };
+        let pushdown = plan_cap_pushdown(&plan, Some(u64::MAX));
+        let mut leaf = &plan;
+        while !matches!(leaf, GraphPattern::Bgp { patterns: _ }) {
+            let mut child = None;
+            visit_classified_children(leaf, &mut |candidate, _edge| {
+                child = Some(candidate);
+                true
+            });
+            leaf = child.expect("the spine reaches the Bgp");
+        }
+        assert_eq!(
+            pushdown.ceiling_at(std::ptr::from_ref(leaf) as usize),
+            Some(2),
+            "min(2, 9) is the surviving ceiling; a re-seed here would loosen it to 9"
+        );
+    }
+
+    #[test]
+    fn a_branch_slice_under_a_sort_still_re_seeds_below_itself() {
+        // `ORDER BY` needs its whole input, so it pushes no ceiling — and the slice below
+        // it re-seeds anyway. That is sound for the reason the header gives: the sort is
+        // handed the slice's rows, and those rows are identical whether or not the slice's
+        // own subtree stopped at `start + len`. The licence is not re-acquired for the
+        // sort; it is minted afresh for the slice.
+        let plan = GraphPattern::Slice {
+            inner: boxed(GraphPattern::OrderBy {
+                inner: boxed(bounded_branch(bgp(), 0, Some(5))),
+                expression: vec![OrderExpression::Asc(Expression::Variable(Variable::new(
+                    "s",
+                )))],
+            }),
+            start: 0,
+            length: Some(2),
+        };
+        let pushdown = plan_cap_pushdown(&plan, Some(u64::MAX));
+        let GraphPattern::Slice {
+            inner,
+            start: _,
+            length: _,
+        } = &plan
+        else {
+            panic!("the fixture root is a Slice");
+        };
+        let GraphPattern::OrderBy {
+            inner: sorted,
+            expression: _,
+        } = inner.as_ref()
+        else {
+            panic!("the fixture's second node is an OrderBy");
+        };
+        assert_eq!(
+            pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(sorted)) as usize),
+            Some(5),
+            "the inner LIMIT 5 is the only bound below a sort, and it is a real one"
         );
     }
 

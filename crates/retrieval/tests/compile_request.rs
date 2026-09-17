@@ -1031,3 +1031,66 @@ fn the_branch_limit_reaches_the_relation_as_the_observed_ceiling() {
         "the branch LIMIT is observed to reach the relation as its row ceiling"
     );
 }
+
+#[test]
+fn every_branch_limit_of_a_multi_producer_stratum_reaches_its_relation() {
+    // The same claim at the arity the union exists for. A stratum with two producers
+    // emits a `UNION`, and a `UNION` propagates no row bound to either arm — it
+    // interleaves two sequences, so no prefix of one arm bounds the whole's first rows.
+    // What the arms have is each their OWN `LIMIT`, which is a sound bound on that arm's
+    // subtree whatever stands above it; before it was consulted, the outer `LIMIT` had
+    // already claimed the pushdown and every relation in a multi-producer stratum was
+    // asked to rank its whole input in order to return the three rows its branch could
+    // use. The single-producer case above never showed it, because a single-producer
+    // stratum emits no `UNION` at all.
+    let (registry, logs) = registry_of(vec![
+        (
+            "first",
+            Spec::new(
+                "shared",
+                vec![alternative(
+                    TermPattern::of_kind(TermKind::Literal),
+                    value_at(1),
+                )],
+            )
+            .rows(10, 3),
+        ),
+        (
+            "second",
+            Spec::new(
+                "shared",
+                vec![alternative(
+                    TermPattern::of_kind(TermKind::Literal),
+                    value_at(1),
+                )],
+            )
+            .rows(10, 3),
+        ),
+    ]);
+    let stats = statistics(&[("shared", 2)]);
+    let sparql = compile_one(&registry, &stats, vec![lexical("needle", None)]);
+    assert_eq!(
+        sparql.matches("LIMIT 2").count(),
+        3,
+        "two branch bounds plus the unit's own: {sparql}"
+    );
+
+    let rows = run_query(&sparql, &registry);
+    assert_eq!(
+        rows.len(),
+        2,
+        "the answer is the unit's own bound; only the licence below it is at issue"
+    );
+    for producer in ["pf/first", "pf/second"] {
+        let calls = logs[&ex(producer)]
+            .lock()
+            .expect("the fixture log is never poisoned")
+            .clone();
+        assert_eq!(calls.len(), 1, "{producer} is invoked once");
+        assert_eq!(
+            calls[0].ceiling,
+            Some(2),
+            "{producer}'s own branch LIMIT must reach it as its row ceiling"
+        );
+    }
+}

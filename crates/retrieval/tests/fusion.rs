@@ -1498,3 +1498,216 @@ fn a_producer_that_declined_its_terms_is_not_a_producer_that_found_nothing() {
         "expected ForgedReceipt, got {result:?}"
     );
 }
+
+// 18. Finality is membership, not arithmetic: a live stream of contribution
+//     zero can still name a candidate, and a sum cannot see it.
+//
+// `U(x) == L(x)` was standing in for "no stream that could still name `x` is
+// open". The two agree whenever every live head contributes something, which is
+// why this never showed up under ordinary weights — but a head of exactly zero
+// adds nothing to `U(x)`, so an open stream reads as an exhausted one. The
+// candidate is emitted, removed from the frontier, and then re-entered by the
+// stream that was still holding it, to be emitted a SECOND time carrying only
+// that stream's contribution.
+//
+// A contribution of zero is a legal profile, not a contrivance: the profile
+// admits any weight strictly above zero, and the contribution truncates toward
+// zero at the declared scale, so a weight of one raw unit yields exactly zero at
+// every rank.
+
+/// A weight that is legal (strictly positive) and contributes exactly zero.
+const ZERO_CONTRIBUTING_WEIGHT: Fixed = Fixed::from_raw(1);
+
+#[test]
+fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
+    // The fixture is only a fixture if the weight really does contribute
+    // nothing, so that is asserted rather than assumed.
+    assert_eq!(
+        contribution(ZERO_CONTRIBUTING_WEIGHT, 1, K).expect("fits"),
+        Fixed::ZERO,
+        "one raw unit of weight truncates to nothing at the declared scale"
+    );
+    assert_eq!(
+        contribution(ZERO_CONTRIBUTING_WEIGHT, 2, K).expect("fits"),
+        Fixed::ZERO
+    );
+    assert!(
+        ZERO_CONTRIBUTING_WEIGHT > Fixed::ZERO,
+        "and the profile admits it, so this is a configuration a caller can write"
+    );
+
+    let profile = profile(
+        &[("dense", Fixed::ONE), ("sparse", ZERO_CONTRIBUTING_WEIGHT)],
+        K,
+        2,
+    );
+    let dense_contribution = contribution(Fixed::ONE, 1, K).expect("fits");
+
+    // `a` is the dense stratum's only row, and the sparse stratum names it at
+    // rank two — after a row the fusion has not read yet. At the moment `a`
+    // enters the frontier the sparse stream is open and has not seen it, so `a`
+    // is NOT final; its upper bound says otherwise only because the sparse head
+    // contributes zero.
+    let streams = vec![
+        (
+            stratum("dense"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+        (
+            stratum("sparse"),
+            MockStream::new(
+                vec![
+                    row(1, ZERO_CONTRIBUTING_WEIGHT, K, "z"),
+                    row(2, ZERO_CONTRIBUTING_WEIGHT, K, "a"),
+                ],
+                exhausted(2),
+            ),
+        ),
+    ];
+    let result = block_on(run_fuse(streams, &profile));
+
+    let entities: Vec<&str> = result
+        .rows
+        .iter()
+        .map(|fused| fused.entity.as_str())
+        .collect();
+    assert_eq!(
+        entities,
+        vec!["a", "z"],
+        "two candidates were named, so two rows are the whole answer — `a` \
+         emitted twice would be the same candidate with two different scores"
+    );
+
+    let fused_a = &result.rows[0];
+    assert_eq!(
+        fused_a.score, dense_contribution,
+        "`a`'s score is the dense contribution plus the sparse zero"
+    );
+    assert_eq!(
+        fused_a.contributions.len(),
+        2,
+        "and it is certified with BOTH strata counted, including the one whose \
+         contribution is zero but whose rank is real"
+    );
+    assert_eq!(
+        fused_a.contributions[0],
+        (stratum("dense"), 1, dense_contribution)
+    );
+    assert_eq!(
+        fused_a.contributions[1],
+        (stratum("sparse"), 2, Fixed::ZERO)
+    );
+}
+
+// 19. The neighbouring valid case: the structural test must not make
+//     certification lazier where the arithmetic one was right.
+//
+// Over-refusal here would be latency rather than a wrong answer, and it would be
+// invisible — every assertion about the rows would still pass while the fusion
+// drained streams it had no need to read. So this counts pulls. A stratum that
+// contributes zero and is ALREADY exhausted must cost exactly nothing: the
+// candidate certifies on the same pull it certified on before.
+#[test]
+fn an_exhausted_zero_contribution_stream_delays_no_certification() {
+    let profile = profile(
+        &[("dense", Fixed::ONE), ("sparse", ZERO_CONTRIBUTING_WEIGHT)],
+        K,
+        2,
+    );
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let streams = vec![
+        (
+            stratum("dense"),
+            MockStream::counted(
+                vec![
+                    row(1, Fixed::ONE, K, "a"),
+                    row(2, Fixed::ONE, K, "b"),
+                    row(3, Fixed::ONE, K, "c"),
+                ],
+                exhausted(3),
+                Arc::clone(&pulls),
+            ),
+        ),
+        (stratum("sparse"), MockStream::new(Vec::new(), exhausted(0))),
+    ];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams,
+        &profile,
+        TopK::new(1),
+    ))
+    .expect("fusion succeeds");
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].entity, Term::new("a"));
+    // Two pulls, and that is the bound the algorithm justifies: rank one, which
+    // is the answer, plus exactly one lookahead row to drop the threshold below
+    // it. The exhausted sparse stratum adds nothing to either. A finality test
+    // that demanded a contribution from every stream regardless of whether it
+    // was still open would have read all three dense rows instead.
+    assert_eq!(
+        pulls.load(Ordering::SeqCst),
+        2,
+        "an exhausted stratum is not an open one, and must not be awaited"
+    );
+}
+
+// 20. A same-stream duplicate whose earlier occurrence is still in the frontier
+//     is refused, once, under one name.
+//
+// Two paths could notice it and they must not become two answers. `fetch`'s
+// per-stream `seen_items` is the broader and earlier of the two — it holds every
+// item the stream has ever emitted, so it refuses a repeat whether or not the
+// first is still un-emitted, and it refuses it at the row boundary. `pull`'s
+// `seen_streams` insert is the same claim restated where the finality test reads
+// it, and raises the same `ProtocolError::DuplicateItem` carrying the same item,
+// so the refusal below is one condition with one name however it is caught.
+#[test]
+fn a_same_stream_duplicate_still_in_the_frontier_is_refused() {
+    let profile = profile(&[("dense", Fixed::ONE), ("sparse", Fixed::ONE)], K, 2);
+    // `a` cannot be emitted before the duplicate is read: the sparse stream is
+    // open and has not named it, so it is not final and stays in the frontier.
+    let streams = vec![
+        (
+            stratum("dense"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
+                exhausted(2),
+            ),
+        ),
+        (
+            stratum("sparse"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "q")], exhausted(1)),
+        ),
+    ];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams, &profile, TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(&**error, ProtocolError::DuplicateItem { item } if item == "a")
+        ),
+        "expected DuplicateItem for `a`, got {result:?}"
+    );
+
+    // The neighbour that must NOT be refused: the same item named once by each
+    // of the two streams is the whole point of fusing them, not a duplicate.
+    let shared = vec![
+        (
+            stratum("dense"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+        (
+            stratum("sparse"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        ),
+    ];
+    let fused = block_on(run_fuse(shared, &profile));
+    assert_eq!(fused.rows.len(), 1);
+    assert_eq!(
+        fused.rows[0].contributions.len(),
+        2,
+        "one candidate, two strata, no duplicate"
+    );
+}

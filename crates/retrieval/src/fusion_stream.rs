@@ -10,10 +10,17 @@
 //! contributions seen so far and its upper bound `U(x)` adds the current head of
 //! every stream that has not yet contributed to `x`. Fusion pulls greedily from
 //! the highest-contribution head, maintains the threshold `T` over all heads,
-//! and emits a candidate only when its score is final (`U(x) == L(x)`) and it
-//! provably outranks every other candidate and every not-yet-seen item. Emitted
-//! candidates are removed, so the frontier holds only the un-emitted candidates
-//! and never grows with how long the streams are.
+//! and emits a candidate only when its score is final — no stream that could
+//! still name it is open — and it provably outranks every other candidate and
+//! every not-yet-seen item. Emitted candidates are removed, so the frontier
+//! holds only the un-emitted candidates and never grows with how long the
+//! streams are.
+//!
+//! Finality is a membership question and is asked as one
+//! ([`FusionStream::is_final`]); `U(x)` compares candidates and is asked
+//! nothing else. The two are not interchangeable: a live head of contribution
+//! zero leaves `U(x)` equal to `L(x)` while the stream carrying it can still
+//! name `x`.
 //!
 //! The frontier is not the whole of what a fusion holds, and saying otherwise
 //! would overstate it. Per-stream duplicate detection
@@ -27,7 +34,7 @@
 //! row, because it asked for them one at a time.
 
 use core::fmt;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map};
 
 use purrdf_text::Fixed;
 
@@ -581,8 +588,53 @@ impl<S: RankedStream> FusionStream<S> {
         Ok(threshold)
     }
 
+    /// Whether `state`'s score is final: no stream that could still name it is
+    /// open.
+    ///
+    /// Membership, not arithmetic. `U(x) == L(x)` was standing in for this
+    /// question and cannot answer it: a live head whose contribution is
+    /// [`Fixed::ZERO`] adds nothing to the sum, so an open stream that has not
+    /// yet reached `x` is indistinguishable from an exhausted one. Certifying
+    /// on that sum emits `x`, removes it from the frontier, and lets the stream
+    /// that was still open put it back carrying only its later contribution —
+    /// the same candidate emitted twice, the second time with a wrong, small
+    /// score and a best rank drawn from one stratum instead of all of them.
+    ///
+    /// A zero contribution is not hypothetical. The profile admits any weight
+    /// strictly above zero, and
+    /// [`contribution`](crate::reciprocal_rank::contribution) truncates toward
+    /// zero at the declared scale, so a weight small enough that
+    /// `w · trunc(S / (K + r))` falls below one unit of the scale contributes
+    /// exactly zero at every rank — a legal profile, and a stream whose every
+    /// row is live evidence that adds nothing to any sum.
+    ///
+    /// The structural test is strictly the stronger one: no open stream implies
+    /// every absent contribution is zero, so everything this admits `U == L`
+    /// admitted too. The two differ on exactly the candidates the arithmetic
+    /// was wrong about, which is why no ordinary fusion certifies a row later
+    /// than it did — where every live head contributes something, `U(x) > L(x)`
+    /// held for precisely the candidates this rejects.
+    ///
+    /// What it does cost is the degenerate profile itself: a stratum that
+    /// contributes zero at every rank has to be read to its end before any
+    /// candidate it might still name can certify, because every one of its rows
+    /// can still change a best rank and a provenance list even though none can
+    /// change a score. That is the price of a weight the caller declared and the
+    /// scale cannot represent, and it is paid in pulls rather than in wrong
+    /// answers.
+    fn is_final(&self, state: &CandidateState) -> bool {
+        self.heads
+            .iter()
+            .enumerate()
+            .all(|(index, head)| head.is_none() || state.seen_streams.contains(&index))
+    }
+
     /// `U(x)`: `L(x)` plus the current head of every stream that has not yet
     /// contributed to `x`.
+    ///
+    /// This is a *comparison* quantity — the most `x` could still become — and
+    /// is asked nothing else. Whether `x` is done is [`Self::is_final`]'s
+    /// question, and a sum cannot answer it.
     fn upper_bound(&self, state: &CandidateState) -> Result<Fixed, FusionError> {
         let mut bound = state.lower_bound;
         for (index, head) in self.heads.iter().enumerate() {
@@ -621,8 +673,8 @@ impl<S: RankedStream> FusionStream<S> {
 
     /// Whether `other` could still be ordered ahead of the finalized `state`.
     ///
-    /// `state` is known final (`U == L`), so the question is only what `other`
-    /// can still become. Three cases, and only the third is subtle:
+    /// `state` is known final ([`Self::is_final`]), so the question is only what
+    /// `other` can still become. Three cases, and only the third is subtle:
     ///
     /// * `U(other) > L(state)` — `other` may still outscore it. Blocked.
     /// * `U(other) < L(state)` — `other` can never catch it. Free.
@@ -632,6 +684,12 @@ impl<S: RankedStream> FusionStream<S> {
     ///   final its best rank can still improve — a later stream may report it at
     ///   a better rank — so it could win a tie it cannot yet be compared on, and
     ///   the conservative answer is to wait.
+    ///
+    /// "Is `other` itself final" is the structural test, for the same reason the
+    /// emission gate uses it: a stream still able to name `other` at a better
+    /// rank is exactly the stream that would change the tie-break, and a zero
+    /// contribution hides it from `U(other)` while changing the rank all the
+    /// same.
     ///
     /// The third case is what keeps the frontier bounded: without it a pair of
     /// finalized, exactly-tied candidates blocks on itself forever.
@@ -647,7 +705,7 @@ impl<S: RankedStream> FusionStream<S> {
             core::cmp::Ordering::Greater => true,
             core::cmp::Ordering::Less => false,
             core::cmp::Ordering::Equal => {
-                if other_upper == other.lower_bound {
+                if self.is_final(other) {
                     Self::is_better(other_id, other, id, state)
                 } else {
                     true
@@ -658,9 +716,9 @@ impl<S: RankedStream> FusionStream<S> {
 
     /// The best candidate that is safe to emit, if any.
     ///
-    /// A candidate is emittable when its score is final (`U(x) == L(x)`), it is
-    /// above the threshold, and no other candidate could still be ordered ahead
-    /// of it. Once every stream is exhausted the threshold is zero and all
+    /// A candidate is emittable when its score is final ([`Self::is_final`]), it
+    /// is above the threshold, and no other candidate could still be ordered
+    /// ahead of it. Once every stream is exhausted the threshold is zero and all
     /// remaining candidates are ordered by the declared tie-break instead.
     ///
     /// # Ties are broken here, not only among the already-emittable
@@ -684,7 +742,7 @@ impl<S: RankedStream> FusionStream<S> {
         let active = self.heads.iter().any(Option::is_some);
         let mut best: Option<CandidateId> = None;
         for (id, state) in &self.frontier {
-            if self.upper_bound(state)? != state.lower_bound {
+            if !self.is_final(state) {
                 continue;
             }
             if active {
@@ -724,9 +782,25 @@ impl<S: RankedStream> FusionStream<S> {
     ///
     /// [`FusionError::Overflow`] when the checked sum leaves the fixed-point
     /// range, [`FusionError::MaxContributionsExceeded`] when the candidate's
-    /// contribution count leaves the profile's declared bound, and
+    /// contribution count leaves the profile's declared bound,
     /// [`FusionError::CeilingExceeded`] when its accumulated score leaves the
-    /// profile's declared ceiling.
+    /// profile's declared ceiling, and [`ProtocolError::DuplicateItem`] when
+    /// this stream would contribute to one frontier candidate twice.
+    ///
+    /// # One duplicate condition, one error value
+    ///
+    /// [`Self::fetch`] is the author of the per-stream uniqueness refusal, and
+    /// it is strictly the broader one: `seen_items[index]` holds every item this
+    /// stream has emitted *ever*, so it refuses a repeat whether or not the
+    /// earlier occurrence is still in the frontier, and it refuses it at the row
+    /// boundary before this function is reached. The check below is the same
+    /// claim restated where `seen_streams` is relied upon — it is what makes
+    /// "`index` is in `seen_streams`" mean "this stream has contributed, once"
+    /// at the point [`Self::is_final`] reads it, rather than an invariant
+    /// maintained at a distance. It raises the same
+    /// [`ProtocolError::DuplicateItem`] carrying the same item, so a protocol
+    /// violation has one name however it is caught, and it costs one `BTreeSet`
+    /// operation, not two: the insert's own return value is the test.
     async fn pull(&mut self, index: usize) -> Result<(), FusionError> {
         let Some(head) = self.heads[index].take() else {
             return Ok(());
@@ -766,15 +840,34 @@ impl<S: RankedStream> FusionStream<S> {
             });
         }
 
-        let entry = self
-            .frontier
-            .entry(head.item)
-            .or_insert_with(CandidateState::new);
-        entry.lower_bound = lower_bound;
-        entry
-            .contributions
-            .push((stratum, head.rank, head.contribution));
-        entry.seen_streams.insert(index);
+        match self.frontier.entry(head.item) {
+            btree_map::Entry::Vacant(vacant) => {
+                // A candidate nobody has contributed to yet cannot collide, so
+                // the insert's answer here is `true` by construction.
+                let state = vacant.insert(CandidateState::new());
+                state.lower_bound = lower_bound;
+                state
+                    .contributions
+                    .push((stratum, head.rank, head.contribution));
+                state.seen_streams.insert(index);
+            }
+            btree_map::Entry::Occupied(mut occupied) => {
+                if !occupied.get_mut().seen_streams.insert(index) {
+                    // Refused before anything is written, so the frontier is
+                    // left exactly as it was found — the same discipline the
+                    // two profile bounds above keep.
+                    return Err(ProtocolError::DuplicateItem {
+                        item: occupied.key().as_str().to_owned(),
+                    }
+                    .into());
+                }
+                let state = occupied.get_mut();
+                state.lower_bound = lower_bound;
+                state
+                    .contributions
+                    .push((stratum, head.rank, head.contribution));
+            }
+        }
 
         self.heads[index] = self.fetch(index).await?;
         Ok(())
