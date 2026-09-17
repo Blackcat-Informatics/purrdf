@@ -58,9 +58,12 @@
 //!      `d = 4096`: members of the same nominal tightness end up nearly orthogonal to their
 //!      centroid as the width grows.
 //!    * Added in the **latent** space, tightness does NOT track the width — the latent
-//!      dimension is fixed, so there is no `d` to grow. What is lost instead is control: the
-//!      achieved cosine is an emergent 0.94 that no caller asked for, and it moves with
-//!      `intrinsic` and `σ` rather than with the one number the caller cares about.
+//!      dimension is fixed, so there is no `d` to grow. What is lost instead is control: at
+//!      the same amplitude the achieved cosine is an emergent 0.94 that no caller asked for,
+//!      and it moves with the two parameters a caller is not trying to set — 0.99 → 0.94 →
+//!      0.80 as `intrinsic` widens 8 → 32 → 128, and 0.99 → 0.94 → 0.50 as `σ` grows
+//!      0.05 → 0.11 → 0.5. Both sweeps move it further than any width ever did, so the
+//!      amplitude would have to be retuned for every corpus shape.
 //!
 //!    So width-invariance alone is not the argument for this parameterisation, and it would
 //!    be dishonest to present it as one. The argument is that `ρ` is the achieved cosine, at

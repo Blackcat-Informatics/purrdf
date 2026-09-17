@@ -240,12 +240,28 @@ fn the_intended_cluster_cosine_is_the_cosine_the_corpus_achieves() {
     );
 }
 
-/// The widths the two tightness tests span, and the bound they hold the span to.
+/// The widths the two WIDTH-INVARIANT families are held across.
 ///
 /// A factor of sixteen, which is wide enough that a width-dependent parameterisation has
-/// nowhere to hide: see `the_rejected_parameterisation_really_is_width_dependent`, which
+/// nowhere to hide: see `ambient_fixed_amplitude_noise_really_is_width_dependent`, which
 /// measures what this range does to the alternative.
+///
+/// It starts at 256 rather than lower because the real generator's achieved cosine does move a
+/// little at narrow widths -- 0.729 at 128 against 0.752 at 256, a span of 22,669 that exceeds
+/// [`WIDTH_SPAN_BOUND`]. That is a real property and not a failure to hide: the latent space is
+/// 32 dimensions, and an ambient width only a factor of four above it cannot carry the
+/// structure without distortion. The claim this file makes is invariance across the widths an
+/// embedding index actually runs at, and that is the claim these widths test.
 const WIDTHS: [usize; 3] = [256, 1024, 4096];
+
+/// The widths the AMBIENT control is measured across.
+///
+/// Its own list, reaching down to 64, because the narrow end is where the trap is baited: an
+/// amplitude is tuned there, looks tight, and the corpus is then generated wide. A doc that
+/// quotes the narrow-width figure needs a test that pins it, or it is another unheld anchor.
+/// The control has no invariance to satisfy, so it is free to span a range the real generator
+/// is not asked to.
+const AMBIENT_WIDTHS: [usize; 4] = [64, 256, 1024, 4096];
 
 /// The one noise amplitude both fixed-amplitude controls use.
 ///
@@ -259,18 +275,35 @@ const FIXED_AMPLITUDE_SIGMA: f64 = 0.110_24;
 
 /// The largest span, at six decimals, the achieved cosine may show across [`WIDTHS`].
 ///
-/// Used in BOTH directions, which is what makes it a bracket rather than a ceiling: the real
-/// generator must come in under it, and the ambient fixed-amplitude control must exceed it.
+/// Used in BOTH directions by THREE tests, which is what makes it a bracket rather than a
+/// ceiling: the real generator must come in under it, the latent fixed-amplitude control must
+/// also come in under it, and the ambient fixed-amplitude control must EXCEED it. Each of the
+/// three fails if the bound moves far enough in its direction.
 const WIDTH_SPAN_BOUND: i64 = 20_000;
 
 /// The variance of one [`Stream::unit`] draw: uniform on `[-1, 1)`, so `1/3`.
 ///
 /// Load-bearing, and the reason a textbook formula cannot simply be quoted here. The closed
 /// form for fixed-amplitude noise assumes a UNIT-variance draw; this harness draws uniform,
-/// whose variance is a third of that. Ignoring the difference understates the achieved cosine
-/// by exactly `sqrt(3)`, which is where a "1.7x" discrepancy between formula and measurement
-/// comes from -- not from anything the generator does to the vector afterwards.
+/// whose variance is a third of that.
+///
+/// Ignoring the difference understates the achieved cosine by a factor that RISES with
+/// `d*sigma^2` and approaches `sqrt(3)` only asymptotically -- measured 1.19 at `d = 64` and
+/// 1.70 at `d = 4096`, never reaching 1.732 at any width this harness uses. Saying it is
+/// "exactly sqrt(3)" would be a tidier sentence and a false one; the ratio is pinned across
+/// the range by `ambient_fixed_amplitude_noise_really_is_width_dependent` rather than
+/// described here.
 const UNIT_DRAW_VARIANCE: f64 = 1.0 / 3.0;
+
+/// The textbook closed form, WITHOUT the variance correction: `1 / sqrt(1 + d*sigma^2)`.
+///
+/// Present so the size of the correction is measured rather than described. This is the form a
+/// reader would reach for straight out of a reference, and the one the module doc used to
+/// quote; keeping it beside the corrected model is what lets the gap between them be pinned.
+fn naive_cosine_model(dims: usize, sigma: f64) -> f64 {
+    let d = dims as f64;
+    1.0 / d.mul_add(sigma * sigma, 1.0).sqrt()
+}
 
 /// The expected member-to-centroid cosine under AMBIENT fixed-amplitude noise.
 ///
@@ -338,7 +371,7 @@ fn ambient_fixed_amplitude_noise_really_is_width_dependent() {
     // The amplitude is tuned so this form produces tight clusters at a NARROW width -- the
     // tuning the module doc names as the trap, because it is what an author would naturally
     // do while developing against small fixtures.
-    let achieved: Vec<i64> = WIDTHS
+    let achieved: Vec<i64> = AMBIENT_WIDTHS
         .into_iter()
         .map(|dims| {
             pinned(mean_centroid_cosine(&fixed_amplitude(
@@ -353,7 +386,7 @@ fn ambient_fixed_amplitude_noise_really_is_width_dependent() {
     // by two thirds across the range, which is the whole defect.
     assert_eq!(
         achieved,
-        vec![700_236, 442_590, 239_452],
+        vec![892_018, 700_236, 442_590, 239_452],
         "the rejected parameterisation's measured width-dependence moved"
     );
 
@@ -368,10 +401,8 @@ fn ambient_fixed_amplitude_noise_really_is_width_dependent() {
 
     // The model, checked against the measurement rather than quoted beside it. Agreement to
     // better than one percent at every width is what licenses the module doc's closed form --
-    // and it holds only once the uniform draw's variance is accounted for. Without that term
-    // the model reads 0.493 / 0.273 / 0.140 and is wrong by up to sqrt(3), which is the whole
-    // of the discrepancy and is not a fact about the generator's projection or spectrum.
-    for (dims, got) in WIDTHS.into_iter().zip(&achieved) {
+    // and it holds only once the uniform draw's variance is accounted for.
+    for (dims, got) in AMBIENT_WIDTHS.into_iter().zip(&achieved) {
         let modelled = ambient_cosine_model(dims, FIXED_AMPLITUDE_SIGMA);
         let measured = *got as f64 / 1e6;
         assert!(
@@ -381,8 +412,34 @@ fn ambient_fixed_amplitude_noise_really_is_width_dependent() {
         );
     }
 
+    // What the variance term is WORTH, pinned at each width rather than asserted as a single
+    // factor. The naive form understates by a ratio that RISES with `d*sigma^2` and approaches
+    // sqrt(3) = 1.7320 only in the limit; it is nowhere equal to it. An earlier version of this
+    // comment said the discrepancy "is exactly sqrt(3)", which is tidier, stronger, and wrong
+    // at every width -- the failure mode this file exists to make impossible.
+    let ratios: Vec<i64> = AMBIENT_WIDTHS
+        .into_iter()
+        .zip(&achieved)
+        .map(|(dims, got)| {
+            pinned(*got as f64 / 1e6 / naive_cosine_model(dims, FIXED_AMPLITUDE_SIGMA))
+        })
+        .collect();
+    assert_eq!(
+        ratios,
+        vec![1_189_359, 1_419_793, 1_622_835, 1_706_305],
+        "the naive-to-measured ratio moved"
+    );
+    assert!(
+        ratios.windows(2).all(|pair| pair[0] < pair[1]),
+        "the correction must grow with the width: {ratios:?}"
+    );
+    assert!(
+        ratios.iter().all(|ratio| *ratio < 1_732_050),
+        "and must stay below sqrt(3), which is its asymptote and not its value: {ratios:?}"
+    );
+
     let span =
-        achieved.iter().max().expect("three widths") - achieved.iter().min().expect("three widths");
+        achieved.iter().max().expect("four widths") - achieved.iter().min().expect("four widths");
     assert!(
         span > WIDTH_SPAN_BOUND,
         "the rejected form must FAIL the invariance bound this file holds the real \
@@ -440,6 +497,73 @@ fn latent_fixed_amplitude_noise_is_width_invariant_and_still_not_what_we_want() 
         (emergent - 0.75).abs() > 0.1,
         "this control exists to show the achieved cosine is NOT a number anyone chose; if it \
          has drifted to match the intended 0.75 it no longer demonstrates that: {emergent}"
+    );
+}
+
+#[test]
+fn the_latent_variants_tightness_moves_with_everything_except_the_thing_you_want() {
+    // The other half of "it loses control", and the half that was prose until now. Showing the
+    // achieved cosine is not 0.75 shows it is not the intended value; it does NOT show that the
+    // value MOVES with the parameters, which is the actual complaint and the reason the
+    // amplitude would have to be retuned for every corpus shape.
+    //
+    // Two sweeps, each holding everything else fixed. Under the shipped parameterisation both
+    // of these would be flat at the intended cosine by construction -- that is what `rho` buys.
+    let by_intrinsic: Vec<i64> = [8, 32, 128]
+        .into_iter()
+        .map(|intrinsic| {
+            let mut shape = tightness_shape(1024, 0.75);
+            shape.intrinsic = intrinsic;
+            pinned(mean_centroid_cosine(
+                &corpus::latent_fixed_amplitude(shape, FIXED_AMPLITUDE_SIGMA, 0x1A7E_015E)
+                    .expect("generates"),
+            ))
+        })
+        .collect();
+
+    let by_sigma: Vec<i64> = [0.05, FIXED_AMPLITUDE_SIGMA, 0.5]
+        .into_iter()
+        .map(|sigma| {
+            pinned(mean_centroid_cosine(
+                &corpus::latent_fixed_amplitude(tightness_shape(1024, 0.75), sigma, 0x1A7E_015E)
+                    .expect("generates"),
+            ))
+        })
+        .collect();
+
+    assert_eq!(
+        by_intrinsic,
+        vec![985_939, 937_913, 800_795],
+        "the intrinsic sweep moved"
+    );
+    assert_eq!(
+        by_sigma,
+        vec![986_284, 937_913, 502_878],
+        "the sigma sweep moved"
+    );
+
+    // The claim itself: a wider latent space and a larger amplitude each loosen the clusters,
+    // and neither is the quantity the caller wanted to set.
+    assert!(
+        by_intrinsic.windows(2).all(|pair| pair[0] > pair[1]),
+        "tightness must fall as the latent space widens: {by_intrinsic:?}"
+    );
+    assert!(
+        by_sigma.windows(2).all(|pair| pair[0] > pair[1]),
+        "and as the amplitude grows: {by_sigma:?}"
+    );
+
+    // Not merely moving, but moving FAR -- further than the width ever moved it, which is the
+    // comparison that makes the point: this parameterisation is insensitive to the thing it
+    // should track and sensitive to two things it should not.
+    let intrinsic_span = by_intrinsic.iter().max().expect("three rungs")
+        - by_intrinsic.iter().min().expect("three rungs");
+    let sigma_span =
+        by_sigma.iter().max().expect("three rungs") - by_sigma.iter().min().expect("three rungs");
+    assert!(
+        intrinsic_span > WIDTH_SPAN_BOUND && sigma_span > WIDTH_SPAN_BOUND,
+        "both sweeps must move the achieved cosine further than the width bound this file \
+         holds the real generator to: intrinsic {intrinsic_span}, sigma {sigma_span}"
     );
 }
 
