@@ -10,7 +10,7 @@ use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
     ProducerDecision, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
-    StatisticsSnapshot, Term, Weight,
+    StatisticsSnapshot, Term, UnservedReason, UnservedTerm, Weight,
 };
 
 fn iri(text: &str) -> Iri {
@@ -62,6 +62,23 @@ fn baseline() -> Plan {
             ProducerDecision::Rejected {
                 producer: "http://example.org/pf/knn".to_owned(),
                 reason: RejectionReason::NoAcceptedTerm,
+            },
+        ],
+        // The baseline binds only term 0, so the other three reached nothing —
+        // one of them because something accepted its shape and was then
+        // rejected, which is a different fact from nothing accepting it at all.
+        unserved_terms: vec![
+            UnservedTerm {
+                request_term: 1,
+                reason: UnservedReason::NoProducerAccepts,
+            },
+            UnservedTerm {
+                request_term: 2,
+                reason: UnservedReason::EveryAcceptingProducerRejected,
+            },
+            UnservedTerm {
+                request_term: 3,
+                reason: UnservedReason::NoProducerAccepts,
             },
         ],
         stratum_depths,
@@ -233,6 +250,14 @@ fn digest_is_sensitive_to_every_field() {
     assert_ne!(changed.id(), base_id, "producer decision");
 
     let mut changed = base.clone();
+    changed.unserved_terms[0].reason = UnservedReason::Unbound;
+    assert_ne!(changed.id(), base_id, "unserved term reason");
+
+    let mut changed = base.clone();
+    changed.unserved_terms.truncate(2);
+    assert_ne!(changed.id(), base_id, "unserved term list");
+
+    let mut changed = base.clone();
     changed.stratum_depths.insert(stratum(), 11);
     assert_ne!(changed.id(), base_id, "stratum depth");
 
@@ -257,6 +282,83 @@ fn digest_is_sensitive_to_every_field() {
     let mut changed = base.clone();
     changed.registry_content_fingerprint = "other-fingerprint".to_owned();
     assert_ne!(changed.id(), base_id, "registry content fingerprint");
+}
+
+/// The evidence a plan supports is read off the plan in hand, so a recorded
+/// list that has drifted from the bindings cannot make the answer lie in either
+/// direction.
+#[test]
+fn unserved_evidence_reports_what_this_plan_supports_not_what_it_recorded() {
+    // The ordinary case: the recorded list and the bindings agree, so the
+    // evidence is the recorded list with its recorded reasons.
+    let plan = baseline();
+    assert_eq!(
+        plan.unserved_evidence(),
+        vec![
+            UnservedTerm {
+                request_term: 1,
+                reason: UnservedReason::NoProducerAccepts,
+            },
+            UnservedTerm {
+                request_term: 2,
+                reason: UnservedReason::EveryAcceptingProducerRejected,
+            },
+            UnservedTerm {
+                request_term: 3,
+                reason: UnservedReason::NoProducerAccepts,
+            },
+        ],
+        "an unedited plan reports exactly the terms it recorded, ascending"
+    );
+
+    // A term the plan does bind is not reported unserved, whatever a stale or
+    // forged list claims: the plan itself falsifies the alarm.
+    let mut stale = baseline();
+    stale.unserved_terms.push(UnservedTerm {
+        request_term: 0,
+        reason: UnservedReason::NoProducerAccepts,
+    });
+    assert!(
+        stale
+            .unserved_evidence()
+            .iter()
+            .all(|entry| entry.request_term != 0),
+        "term 0 is bound, so no list entry can report it as unanswered"
+    );
+
+    // And a term stranded by an edit is reported even though the list never
+    // mentioned it — the quiet omission this evidence exists to prevent.
+    let mut narrowed = baseline();
+    narrowed.unserved_terms.clear();
+    assert_eq!(
+        narrowed.unserved_evidence(),
+        vec![
+            UnservedTerm {
+                request_term: 1,
+                reason: UnservedReason::Unbound,
+            },
+            UnservedTerm {
+                request_term: 2,
+                reason: UnservedReason::Unbound,
+            },
+            UnservedTerm {
+                request_term: 3,
+                reason: UnservedReason::Unbound,
+            },
+        ],
+        "a term no binding carries is named, with no reason claimed for it"
+    );
+
+    // The valid neighbour: a plan whose bindings cover every term reports
+    // nothing at all.
+    let mut complete = baseline();
+    complete.unserved_terms.clear();
+    complete.producer_bindings[0].request_terms = vec![0, 1, 2, 3];
+    assert!(
+        complete.unserved_evidence().is_empty(),
+        "a request every term of which reached a producer has no evidence to report, got {:?}",
+        complete.unserved_evidence()
+    );
 }
 
 #[test]

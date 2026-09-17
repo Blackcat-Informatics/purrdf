@@ -19,7 +19,7 @@
 //! plan(request, registry, statistics) -> Plan
 //! compile(Plan, environment)          -> per-stratum SPARQL units
 //! execute(units, registry, dataset)   -> per-stratum ranked streams
-//! fuse(streams, profile)              -> one ordered answer
+//! fuse(streams, profile, k)           -> the top k of one ordered answer
 //! ```
 //!
 //! This build ships all four stages. [`plan`] is the pure planner, with the
@@ -34,13 +34,28 @@
 //! [`ProducerStatus`] ([`ExecutionResult`], [`StratumStream`],
 //! [`RankedStreamImpl`]). Finally [`fuse`] is the exact fixed-point fusion over
 //! the verified ranked-stream protocol ([`RankedStream`], [`FusionStream`],
-//! [`FusionProfile`]).
+//! [`FusionProfile`]), bounded by the caller's [`TopK`] because fused
+//! enumeration is top-k by construction.
 //!
 //! [`search`] is those four stages run as one — `fuse ∘ execute ∘ compile ∘
 //! plan` — returning a [`SearchResult`] that names both the pinned plan and the
 //! fusion profile. It adds no policy of its own: a caller that wants to stop
 //! between stages calls the stage functions directly, and [`SearchError`] carries
-//! whichever stage refused.
+//! whichever stage refused. A caller that stopped at [`execute`] and later wants
+//! to fuse resumes through the same exported bridge `search` itself uses,
+//! [`RankedStreamAdapter`], so the two compositions cannot drift.
+//!
+//! # Nothing is lost between the stages
+//!
+//! Each stage knows something the next one structurally cannot, and the answer
+//! carries all of it rather than whatever survived to the end. Every applicable
+//! producer's own status is in the [`FusionTrailer`] — the strata fusion
+//! verified, and the strata that never became a stream because their unit failed
+//! or the profile declares no weight for them. Every request term that reached
+//! no producer is in [`SearchResult::unserved_terms`] with a typed
+//! [`UnservedReason`], because statuses answer per producer and a caller asks
+//! per term. Completeness is asserted only by the trailer, which exists only
+//! once every stream has reached its terminal receipt.
 //!
 //! # Fusion is a law, not a knob
 //!
@@ -107,7 +122,7 @@ pub use admission::{AdmissionEnvironment, AdmissionError};
 pub use compile::{CompiledRetrieval, StratumUnit, compile};
 pub use error::{FusionError, PlanError};
 pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, execute};
-pub use fuse::{FusionResult, fuse};
+pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
 pub use fusion_stream::{CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus};
 pub use id::{
@@ -117,13 +132,13 @@ pub use id::{
 pub use iri::{Iri, Term, Weight};
 pub use plan::{
     Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
-    StatisticsSnapshot,
+    StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
 pub use planner::plan;
 pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
 pub use reciprocal_rank::contribution;
 pub use request::{Metric, RequestTerm, RetrievalRequest};
-pub use search::{SearchError, SearchResult, search};
+pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
 pub use statistics::Statistics;
 
 // The exact fixed-point type stratum weights and fused scores are expressed in,

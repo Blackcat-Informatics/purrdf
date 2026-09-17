@@ -20,9 +20,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, ExecutionError, Fixed, FusionError, FusionProfile, Iri,
-    Metric, PlanError, ProducerReceipt, ProtocolError, RankedStream, RankedStreamImpl, RequestTerm,
-    RetrievalRequest, SearchError, SearchResult, Statistics, Term, compile, contribution, execute,
-    fuse, plan, search,
+    Metric, PlanError, ProducerStatus, RankedStreamAdapter, RequestTerm, RetrievalRequest,
+    SearchError, SearchResult, Statistics, Term, TopK, UnservedReason, UnservedTerm, compile,
+    execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -33,6 +33,14 @@ use purrdf_sparql_eval::{
 mod common;
 
 const K: u32 = 60;
+
+/// The row bound these fixtures search under.
+///
+/// Fused enumeration is top-k by construction, so every search states a bound.
+/// This one is well above what the mocks can yield, so nothing below is decided
+/// by the bound; `the_bound_is_the_bound_and_a_larger_one_refuses_nothing` is
+/// where the bound's own behaviour is pinned.
+const TOP_K: TopK = TopK::new(1024);
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -323,41 +331,18 @@ fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 // ---------------------------------------------------------------------------
-// The manual bridge, so the composition can be driven by hand
+// The hand-composed pipeline, assembled from the exported seam
 // ---------------------------------------------------------------------------
-
-/// The test's own copy of the production bridge: the executor's materialized
-/// `(rank, candidate)` rows plus the profile's reciprocal-rank contribution. The
-/// differential test needs an adapter it can name, and re-deriving it here is
-/// what makes the identity check honest — the composed answer must match the
-/// hand-composed one even though each uses its own bridge.
-struct Bridge {
-    inner: RankedStreamImpl,
-    weight: Fixed,
-    k: u32,
-}
-
-impl RankedStream for Bridge {
-    type Item = Term;
-
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
-        let Some((rank, item)) = self.inner.next().await? else {
-            return Ok(None);
-        };
-        Ok(Some((
-            rank,
-            contribution(self.weight, rank, self.k).expect("valid profile and 1-based rank"),
-            item,
-        )))
-    }
-
-    async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
-        self.inner.receipt().await
-    }
-}
 
 /// Drive `fuse ∘ execute ∘ compile ∘ plan` by hand and assemble the same
 /// [`SearchResult`] `search` would.
+///
+/// Everything a caller cannot reasonably re-derive is taken from the crate's own
+/// exports: [`RankedStreamAdapter`] bridges each executed stream to the fusion
+/// protocol, and [`purrdf_retrieval::FusionTrailer::completed_with`] carries the
+/// executor's statuses into the terminal report. Re-deriving either here would
+/// make this test compare `search` against a copy of itself — the drift a seam
+/// exists to prevent — instead of against the pipeline a caller can write.
 // The manual composition mirrors `search`, including its single-task,
 // runtime-agnostic future; see the same allow on `search` itself.
 #[allow(clippy::future_not_send)]
@@ -368,6 +353,7 @@ async fn manual_composition(
     dataset: &RdfDataset,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
+    top_k: TopK,
 ) -> SearchResult {
     let planned = plan(request, registry, stats).expect("the fixture request plans");
     let compiled = compile(&planned, env).expect("a fresh plan is admitted");
@@ -375,35 +361,26 @@ async fn manual_composition(
         .await
         .expect("the fixture registry executes");
 
-    let streams = execution
-        .streams
-        .into_iter()
-        .map(|stream| {
-            let weight = profile
-                .weight(&stream.stratum)
-                .expect("the fixture profile weights every stratum");
-            (
-                stream.stratum,
-                Bridge {
-                    inner: stream.stream,
-                    weight,
-                    k: profile.k_parameter(),
-                },
-            )
-        })
-        .collect();
+    let mut streams = Vec::new();
+    let mut unweighted_strata = Vec::new();
+    for stream in execution.streams {
+        match RankedStreamAdapter::new(stream.stream, profile, &stream.stratum) {
+            Some(adapter) => streams.push((stream.stratum, adapter)),
+            None => unweighted_strata.push(stream.stratum),
+        }
+    }
+    unweighted_strata.sort();
 
-    let fused = fuse::<Bridge, Term>(streams, profile)
+    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, top_k)
         .await
         .expect("the surviving streams fuse");
     SearchResult {
         rows: fused.rows,
-        trailer: fused.trailer,
+        trailer: fused.trailer.completed_with(execution.statuses),
+        unserved_terms: planned.unserved_evidence(),
         plan_id: planned.id(),
         profile_id: profile.id(),
-        // The fixture profile weights all three strata, so nothing is set aside;
-        // the `expect` in the bridge above is what asserts that.
-        unweighted_strata: Vec::new(),
+        unweighted_strata,
     }
 }
 
@@ -438,6 +415,13 @@ fn render(result: &SearchResult) -> String {
     for stratum in &result.unweighted_strata {
         let _ = writeln!(out, "unweighted {}", stratum.as_str());
     }
+    for unserved in &result.unserved_terms {
+        let _ = writeln!(
+            out,
+            "unserved term={} {:?}",
+            unserved.request_term, unserved.reason
+        );
+    }
     let _ = writeln!(
         out,
         "trailer-profile {}",
@@ -460,11 +444,11 @@ fn search_equals_manual_composition() {
     let dataset = common::empty_dataset();
 
     let direct = block_on(search(
-        &request, &registry, &stats, &*dataset, &env, &profile,
+        &request, &registry, &stats, &*dataset, &env, &profile, TOP_K,
     ))
     .expect("the composed search answers");
     let manual = block_on(manual_composition(
-        &request, &registry, &stats, &dataset, &env, &profile,
+        &request, &registry, &stats, &dataset, &env, &profile, TOP_K,
     ));
 
     assert_eq!(
@@ -494,6 +478,7 @@ fn plan_error_propagates() {
         &*common::empty_dataset(),
         &env,
         &profile,
+        TOP_K,
     ))
     .expect_err("an empty request does not plan");
     assert!(
@@ -523,6 +508,7 @@ fn admission_error_propagates() {
         &*common::empty_dataset(),
         &env,
         &profile,
+        TOP_K,
     ))
     .expect_err("a different live registry instance is refused at admission");
     assert!(
@@ -575,6 +561,7 @@ fn fusion_error_propagates() {
         &*common::empty_dataset(),
         &env,
         &disjoint,
+        TOP_K,
     ))
     .expect_err("a profile that weights none of the executed strata is refused");
     match error {
@@ -622,6 +609,7 @@ fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
         &*common::empty_dataset(),
         &env,
         &narrow,
+        TOP_K,
     ))
     .expect("the weighted stratum still answers");
 
@@ -644,11 +632,19 @@ fn a_profile_that_weights_some_strata_answers_from_those_and_names_the_rest() {
             );
         }
     }
+    // Every stratum that ran has a status, including the two the profile did not
+    // weight: they answered, and "the profile did not score this" is not the
+    // same fact as "this could not answer". The fusion verified one of them; the
+    // executor's own report carries the other two into the trailer.
     assert_eq!(
         result.trailer.statuses.len(),
-        1,
-        "only the fused stratum has a fusion status"
+        3,
+        "an unweighted stratum still ran, and the trailer says how it ended"
     );
+    assert!(matches!(
+        result.trailer.statuses.get(&iri(&ex("stratum/universal"))),
+        Some(ProducerStatus::Exhausted { rows_emitted: 3 })
+    ));
 }
 
 #[test]
@@ -668,6 +664,7 @@ fn a_profile_that_weights_every_stratum_sets_nothing_aside() {
         &*common::empty_dataset(),
         &env,
         &profile,
+        TOP_K,
     ))
     .expect("the fixture search answers");
     assert!(
@@ -697,6 +694,7 @@ fn end_to_end_search_returns_expected_results() {
         &*common::empty_dataset(),
         &env,
         &profile,
+        TOP_K,
     ))
     .expect("the fixture search answers");
     let expected_plan = plan(&request, &registry, &stats).expect("the request plans");
@@ -735,14 +733,367 @@ fn end_to_end_search_returns_expected_results() {
     assert_eq!(result.trailer.statuses.len(), 3);
     assert!(matches!(
         result.trailer.statuses.get(&iri(&ex("stratum/universal"))),
-        Some(purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: 3 })
+        Some(ProducerStatus::Exhausted { rows_emitted: 3 })
     ));
     assert!(matches!(
         result.trailer.statuses.get(&iri(&ex("stratum/text"))),
-        Some(purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: 2 })
+        Some(ProducerStatus::Exhausted { rows_emitted: 2 })
     ));
     assert!(matches!(
         result.trailer.statuses.get(&iri(&ex("stratum/graph"))),
-        Some(purrdf_retrieval::ProducerStatus::Exhausted { rows_emitted: 1 })
+        Some(ProducerStatus::Exhausted { rows_emitted: 1 })
     ));
+}
+
+// ---------------------------------------------------------------------------
+// 4. A stratum that could not answer is named beside the ones that did
+//
+// §6 of the design record: a fused answer carries the status of every producer
+// that contributed AND of every applicable producer that could not, never
+// reduced to one aggregate flag. Fusion is where that information can die,
+// because a failed stratum has no stream to fuse — so the answer is where it
+// must be found.
+// ---------------------------------------------------------------------------
+
+/// A ranked producer that cannot run at all: it refuses to open a cursor.
+///
+/// This is the stratum-level failure the executor isolates — every other
+/// stratum still runs — and the status a caller must not have to go back to
+/// `execute` to discover.
+struct FailingProducer {
+    arity: PfArity,
+    mode: BindingPattern,
+}
+
+impl PropertyFunction for FailingProducer {
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        self.arity
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        std::slice::from_ref(&self.mode)
+    }
+
+    fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+        10
+    }
+
+    fn open(
+        &self,
+        _args: &PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        Err(EvalError::data("the fixture index is unavailable"))
+    }
+}
+
+/// The fixture registry plus one producer whose stratum cannot run.
+fn registry_with_a_failing_stratum() -> PropertyFunctionRegistry {
+    let mut registry = fixture_registry();
+    let arity = PfArity::new(1, 1);
+    registry.register_ranked(
+        ex("pf/broken"),
+        Arc::new(FailingProducer {
+            arity,
+            mode: arity.all_free_mode(),
+        }),
+        ranked(
+            &ex("stratum/broken"),
+            vec![TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: Some("en".to_owned()),
+                predicate: Some(ex("body")),
+            }],
+            false,
+        ),
+    );
+    registry
+}
+
+/// The fixture profile, plus a weight for the stratum that cannot run: the
+/// profile declares it applicable, which is what makes its silence a fact about
+/// the producer rather than about the law.
+fn profile_with_the_failing_stratum() -> FusionProfile {
+    let mut weights = BTreeMap::new();
+    weights.insert(iri(&ex("stratum/universal")), Fixed::ONE);
+    weights.insert(iri(&ex("stratum/text")), Fixed::ONE);
+    weights.insert(iri(&ex("stratum/graph")), Fixed::ONE);
+    weights.insert(iri(&ex("stratum/broken")), Fixed::ONE);
+    FusionProfile::new(weights, K, 4).expect("the fixture profile is valid")
+}
+
+fn statistics_with_the_failing_stratum() -> MockStatistics {
+    let mut stats = statistics("r1");
+    stats.cardinalities.insert(iri(&ex("stratum/broken")), 10);
+    stats
+}
+
+#[test]
+fn a_stratum_that_could_not_answer_is_named_in_the_trailer_beside_those_that_did() {
+    let registry = registry_with_a_failing_stratum();
+    let stats = statistics_with_the_failing_stratum();
+    let env = fixture_env(&registry, &stats);
+    let profile = profile_with_the_failing_stratum();
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("the strata that can answer still answer");
+
+    // Per producer, typed, never a flag: three succeeded and one could not, and
+    // the answer says which is which.
+    assert_eq!(
+        result.trailer.statuses.len(),
+        4,
+        "every stratum the plan reached has its own status: {:?}",
+        result.trailer.statuses
+    );
+    match result.trailer.statuses.get(&iri(&ex("stratum/broken"))) {
+        Some(ProducerStatus::ExecutionFailed { reason }) => assert!(
+            reason.contains("unavailable"),
+            "the producer's own reason is carried verbatim: {reason}"
+        ),
+        other => panic!("expected the failed stratum's own status, got {other:?}"),
+    }
+    for stratum in ["stratum/universal", "stratum/text", "stratum/graph"] {
+        assert!(
+            matches!(
+                result.trailer.statuses.get(&iri(&ex(stratum))),
+                Some(ProducerStatus::Exhausted { .. })
+            ),
+            "{stratum} answered and says so: {:?}",
+            result.trailer.statuses.get(&iri(&ex(stratum)))
+        );
+    }
+    assert!(
+        !result.rows.is_empty(),
+        "the strata that could answer still produced the answer"
+    );
+    assert!(
+        result
+            .rows
+            .iter()
+            .flat_map(|row| &row.contributions)
+            .all(|(stratum, _, _)| *stratum != iri(&ex("stratum/broken"))),
+        "and the stratum that could not answer contributed no rows"
+    );
+}
+
+#[test]
+fn every_contributor_is_named_when_none_fail() {
+    // The neighbouring valid case: with nothing failing, the same report names
+    // every stratum as having answered. "Three answered" and "three answered and
+    // a fourth could not" are different answers, read from the same place.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = fixture_profile();
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("the fixture search answers");
+
+    assert_eq!(result.trailer.statuses.len(), 3);
+    assert!(
+        result
+            .trailer
+            .statuses
+            .values()
+            .all(|status| matches!(status, ProducerStatus::Exhausted { .. })),
+        "every contributor answered: {:?}",
+        result.trailer.statuses
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. A request term that reached no producer
+// ---------------------------------------------------------------------------
+
+/// A registry with one literal producer and nothing else, so a vector term in
+/// the same request reaches no declaration at all.
+fn literal_only_registry() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/literal"),
+        producer(100, "text/", 2),
+        ranked(
+            &ex("stratum/text"),
+            vec![TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: Some("en".to_owned()),
+                predicate: Some(ex("body")),
+            }],
+            false,
+        ),
+    );
+    registry
+}
+
+fn text_only_profile() -> FusionProfile {
+    FusionProfile::new(
+        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::ONE)]),
+        K,
+        4,
+    )
+    .expect("the fixture profile is valid")
+}
+
+#[test]
+fn a_term_that_reached_no_producer_is_visible_in_the_plan_and_in_the_answer() {
+    let registry = literal_only_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = text_only_profile();
+    // The lexical term reaches the one producer; the vector term reaches
+    // nothing, because no declaration in this registry accepts that shape.
+    let request = RetrievalRequest::from_terms(vec![lexical_term(), vector_term()]);
+
+    let planned = plan(&request, &registry, &stats).expect("the lexical term plans");
+    assert_eq!(
+        planned.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 1,
+            reason: UnservedReason::NoProducerAccepts,
+        }],
+        "the plan records the term nothing accepted"
+    );
+
+    let result = block_on(search(
+        &request,
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("the served term still answers");
+
+    assert_eq!(
+        result.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 1,
+            reason: UnservedReason::NoProducerAccepts,
+        }],
+        "and the answer carries it, typed, rather than omitting it quietly"
+    );
+    // The valid neighbour, in the same answer: the term that DID reach a
+    // producer is not reported, and its rows are the answer.
+    assert!(
+        result
+            .unserved_terms
+            .iter()
+            .all(|entry| entry.request_term != 0),
+        "a term that reached a producer is never reported unserved"
+    );
+    assert_eq!(
+        result.rows.len(),
+        2,
+        "the literal producer's two rows are the answer"
+    );
+}
+
+#[test]
+fn a_request_every_term_of_which_reached_a_producer_reports_nothing_unserved() {
+    // The neighbouring valid case at the answer: the mixed request reaches a
+    // producer for each of its three terms, so the evidence is empty. An empty
+    // list is a claim too — it says every term was answered by something.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = fixture_profile();
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("the fixture search answers");
+    assert!(
+        result.unserved_terms.is_empty(),
+        "every term reached a producer, got {:?}",
+        result.unserved_terms
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 6. The bound
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = fixture_profile();
+    let request = mixed_request();
+
+    let run = |top_k| {
+        block_on(search(
+            &request,
+            &registry,
+            &stats,
+            &*common::empty_dataset(),
+            &env,
+            &profile,
+            top_k,
+        ))
+        .expect("the fixture search answers")
+    };
+
+    let whole = run(TOP_K);
+    assert_eq!(whole.rows.len(), 6, "six distinct candidates rank");
+
+    let bounded = run(TopK::new(3));
+    assert_eq!(bounded.rows.len(), 3, "at most k rows");
+    assert_eq!(
+        bounded.rows,
+        whole.rows[..3].to_vec(),
+        "and they are the top of the same declared order"
+    );
+    for pair in bounded.rows.windows(2) {
+        assert!(pair[0].score >= pair[1].score, "score descending");
+    }
+
+    // Over-refusal is as severe as a wrong answer: a bound above what ranked is
+    // answered with everything that ranked, not with an error and not with a
+    // truncation.
+    let generous = run(TopK::new(1_000));
+    assert_eq!(generous.rows, whole.rows);
+
+    // And the bound moves the rows, never the report: every stratum still
+    // reaches its own terminal status under the smallest bound there is.
+    let none = run(TopK::new(0));
+    assert!(
+        none.rows.is_empty(),
+        "a bound of zero certifies no rows, got {:?}",
+        none.rows
+    );
+    assert_eq!(
+        none.trailer, whole.trailer,
+        "the trailer is the completeness claim, and the rows never were"
+    );
 }

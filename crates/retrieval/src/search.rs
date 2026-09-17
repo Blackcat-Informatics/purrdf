@@ -20,20 +20,48 @@
 //!
 //! Every stage's semantics live in its own module: the planner is pure, admission
 //! is the narrow waist, execution isolates a stratum's failure, and fusion is the
-//! verified fixed-point law. `search` adds no policy of its own. The only value it
+//! verified fixed-point law. `search` adds no policy of its own. The value it
 //! contributes is the **bridge** from the executor's `(rank, candidate)` rows to
 //! the fusion protocol: a ranked stream must carry the profile's reciprocal-rank
 //! contribution, and the profile is deliberately not a planning input, so the
 //! contribution is attached here — from the exact profile in force, never
 //! recomputed by a producer.
 //!
-//! # Failed strata are not fused
+//! That bridge is [`RankedStreamAdapter`], and it is public. A seam is a place
+//! to stop *and* a place to start, so the piece a caller needs in order to
+//! resume from `execute` cannot be the one piece it has to re-derive: an adapter
+//! written by hand would re-derive the contribution arithmetic, and two
+//! derivations of one law drift. The composition-identity tests assemble the
+//! pipeline from this exported adapter for exactly that reason — what they
+//! compare `search` against is the pipeline a caller can actually write.
 //!
-//! [`execute`] reports a stratum that failed as a status rather than a stream.
-//! Fusion consumes streams, so a failed stratum contributes no rows and no
-//! trailer entry; its own status remains in [`ExecutionResult::statuses`]. A
-//! caller that must distinguish "answered with nothing" from "could not answer"
-//! stops at `execute` and reads those statuses directly.
+//! # A failed stratum is named in the answer, not left behind at `execute`
+//!
+//! [`execute`] reports a stratum that failed as a status rather than a stream,
+//! and fusion consumes streams, so a failed stratum contributes no rows and no
+//! fusion trailer entry of its own. That is where the status could die, and §6
+//! of the design record says it may not: a fused answer carries the status of
+//! every producer that contributed **and of every applicable producer that could
+//! not**, never reduced to one aggregate flag.
+//!
+//! So `search` completes the fused trailer with [`ExecutionResult::statuses`]
+//! through [`FusionTrailer::completed_with`] — the strata fusion verified keep
+//! their verified status, and the strata fusion never saw (failed, or not
+//! weighted) are added by name. "Two strata answered and a third could not" and
+//! "two answered" are therefore different answers, readable from one place.
+//!
+//! The trailer property survives that: it is assembled from a value that exists
+//! only once every stream has reached its terminal receipt, so nothing readable
+//! mid-stream gained a completeness claim.
+//!
+//! # A term that reached no producer is in the answer too
+//!
+//! Statuses are per producer, and a caller asks per term. A request can carry a
+//! modality this registry has no producer for, so the answer names every request
+//! term that reached nothing in [`SearchResult::unserved_terms`], typed, derived
+//! from the plan that actually ran ([`Plan::unserved_evidence`](crate::Plan::unserved_evidence)). An
+//! armed-but-unserved modality is visible as exactly that, never as a term that
+//! quietly produced no rows.
 //!
 //! # A stratum the profile does not weight
 //!
@@ -77,33 +105,56 @@ use purrdf_text::Fixed;
 use crate::admission::{AdmissionEnvironment, AdmissionError};
 use crate::compile::compile;
 use crate::error::{FusionError, PlanError};
-use crate::execute::{ExecutionError, RankedStreamImpl, execute};
-use crate::fuse::fuse;
+use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute};
+use crate::fuse::{TopK, fuse};
 use crate::fusion_profile::FusionProfile;
 use crate::fusion_stream::{FusedRow, FusionTrailer};
 use crate::id::{FusionProfileId, PlanId};
 use crate::iri::{Iri, Term};
+use crate::plan::UnservedTerm;
 use crate::planner::plan;
 use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
 use crate::reciprocal_rank::contribution;
 use crate::request::RetrievalRequest;
 use crate::statistics::Statistics;
 
-/// The complete answer to a search: the fused rows, the terminal trailer, and
-/// both identities that name exactly which plan and which fusion law produced
-/// them.
+/// The answer to a search: the top-k fused rows, the terminal trailer, the
+/// per-term evidence, and both identities that name exactly which plan and which
+/// fusion law produced them.
 ///
-/// The rows are ordered by the profile's declared total tie-break; the trailer
-/// carries every contributing producer's own status. `plan_id` names the pinned
-/// plan the streams descend from and `profile_id` names the law they were fused
+/// The rows are ordered by the profile's declared total tie-break and bounded by
+/// the caller's [`TopK`]; the trailer carries every applicable producer's own
+/// status, whether it contributed or could not. `plan_id` names the pinned plan
+/// the streams descend from and `profile_id` names the law they were fused
 /// under, so two answers are comparable only when both agree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchResult {
-    /// The fused rows, in the profile's declared final order.
+    /// The fused rows, in the profile's declared final order, at most the
+    /// caller's [`TopK`].
+    ///
+    /// A top-k answer is not a claim that nothing else ranked: reaching the
+    /// bound and exhausting the frontier return the same shape. Completeness
+    /// belongs to the producers and is in [`Self::trailer`].
     pub rows: Vec<FusedRow>,
-    /// The terminal report: every contributing producer's status and the
-    /// profile identity.
+    /// The terminal report: every applicable producer's own status, keyed by
+    /// stratum, and the profile identity.
+    ///
+    /// Every stratum the plan reached has an entry — the ones fusion verified
+    /// from the rows it pulled, and the ones fusion never saw (a stratum whose
+    /// unit failed, or one the profile declares no weight for) carried over from
+    /// [`ExecutionResult::statuses`]. Nothing is reduced to an aggregate flag,
+    /// so "answered with nothing" and "could not answer" stay distinguishable.
     pub trailer: FusionTrailer,
+    /// Every request term that reached no producer at all, ascending by index.
+    ///
+    /// Derived from the plan that actually ran
+    /// ([`Plan::unserved_evidence`](crate::Plan::unserved_evidence)), so
+    /// it reports the terms this answer's own bindings leave unanswered. Empty
+    /// for the ordinary case where every term reached something. A modality the
+    /// request lattice can express but this registry has no producer for shows
+    /// up here as [`UnservedReason::NoProducerAccepts`](crate::UnservedReason),
+    /// rather than as a term that silently contributed no rows.
+    pub unserved_terms: Vec<UnservedTerm>,
     /// The canonical identity of the plan the answer descends from.
     pub plan_id: PlanId,
     /// The identity of the fusion profile the answer was fused under.
@@ -163,20 +214,25 @@ pub enum SearchError {
 /// 2. [`compile(&plan, env)`](crate::compile) — semantic admission and emission;
 /// 3. [`execute(&compiled, registry, dataset)`](crate::execute) — one run per
 ///    stratum, against the caller's data;
-/// 4. [`fuse(streams, profile)`](crate::fuse) — the verified fixed-point fusion.
+/// 4. [`fuse(streams, profile, top_k)`](crate::fuse) — the verified fixed-point
+///    fusion, bounded by the caller's `top_k`.
 ///
-/// The parameters read request → data → policy: what is being asked, what it is
-/// asked of, and the law the answer is composed under.
+/// The parameters read request → data → policy → bound: what is being asked,
+/// what it is asked of, the law the answer is composed under, and how much of
+/// the answer is wanted. `top_k` is required rather than defaulted because fused
+/// enumeration is top-k by construction; see [`TopK`] and §7 of the design
+/// record.
 ///
 /// The executor's `(rank, candidate)` streams are bridged to the fusion protocol
-/// by attaching each row's reciprocal-rank contribution, computed from exactly
-/// the profile in force. Nothing else is added: `search` is the composition and
-/// nothing more.
+/// by [`RankedStreamAdapter`], which attaches each row's reciprocal-rank
+/// contribution computed from exactly the profile in force. Nothing else is
+/// added: `search` is the composition and nothing more.
 ///
 /// A stratum `profile` declares no weight for is fused out of the answer and
 /// named in [`SearchResult::unweighted_strata`]; the strata the profile does
 /// weight still answer. See this module's header for why that is a report rather
-/// than a refusal.
+/// than a refusal. Its own execution status is still in the trailer, because it
+/// ran.
 ///
 /// # Errors
 ///
@@ -200,6 +256,7 @@ pub async fn search<S, D>(
     dataset: &D,
     env: &AdmissionEnvironment<'_>,
     profile: &FusionProfile,
+    top_k: TopK,
 ) -> Result<SearchResult, SearchError>
 where
     S: Statistics,
@@ -222,18 +279,20 @@ where
     //    fusion re-verifies; a stratum the profile does not weight has no
     //    contribution to make, so it is set aside by name rather than taking the
     //    whole request down with it. See this module's header.
-    let mut streams: Vec<(Iri, RankedStreamAdapter)> = Vec::with_capacity(execution.streams.len());
+    let ExecutionResult {
+        streams: executed,
+        statuses,
+    } = execution;
+    let mut streams: Vec<(Iri, RankedStreamAdapter)> = Vec::with_capacity(executed.len());
     let mut unweighted_strata: Vec<Iri> = Vec::new();
-    for stratum_stream in execution.streams {
+    for stratum_stream in executed {
         let stratum = stratum_stream.stratum.clone();
-        let Some(weight) = profile.weight(&stratum) else {
+        let Some(adapter) = RankedStreamAdapter::new(stratum_stream.stream, profile, &stratum)
+        else {
             unweighted_strata.push(stratum);
             continue;
         };
-        streams.push((
-            stratum,
-            RankedStreamAdapter::new(stratum_stream.stream, weight, profile.k_parameter()),
-        ));
+        streams.push((stratum, adapter));
     }
     // `execute` yields its streams in the compiler's stratum order, but the
     // report is sorted rather than inherited: it is part of the answer, and an
@@ -252,27 +311,57 @@ where
     }
 
     // 5. Fuse. `Term` is the item type: the executor's candidate terms.
-    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile)
+    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, top_k)
         .await
         .map_err(SearchError::FusionError)?;
 
+    // 6. Complete the terminal report. Fusion verified the strata it was handed;
+    //    the executor holds the rest — a stratum whose unit failed and a stratum
+    //    the profile does not weight both ran without ever becoming a stream.
+    //    They are applicable producers that could not contribute, and §6 says
+    //    the answer carries them beside the ones that did.
+    let trailer = fused.trailer.completed_with(statuses);
+
     Ok(SearchResult {
         rows: fused.rows,
-        trailer: fused.trailer,
+        trailer,
+        unserved_terms: plan.unserved_evidence(),
         plan_id: plan.id(),
         profile_id: profile.id(),
         unweighted_strata,
     })
 }
 
-/// Bridges the executor's materialized `(rank, candidate)` stream to the ranked
-/// fusion protocol.
+/// The bridge from [`execute`]'s `(rank, candidate)` stream to the ranked fusion
+/// protocol: the one piece a caller resuming at `execute` would otherwise have
+/// to write itself.
 ///
-/// The executor deliberately carries no contribution — the profile is not a plan
-/// input — so this adapter attaches the profile's reciprocal-rank value for each
-/// rank as it is pulled. Fusion recomputes that value and refuses a mismatch, so
-/// the adapter cannot smuggle in a contribution the profile did not authorize.
-struct RankedStreamAdapter {
+/// [`execute`] deliberately carries no contribution. A contribution depends on
+/// the fusion profile's weights and smoothing constant, the profile is
+/// deliberately not a planning input, and keeping the executor profile-free is
+/// what lets the unfused rung be consumed without bound. [`fuse`] nonetheless
+/// requires `(rank, contribution, item)`. This adapter is that conversion, and
+/// it is the *only* place the crate performs it.
+///
+/// It is public because §4 of the design record makes every stage boundary a
+/// place to both stop and start. A caller that stops at `execute` — to enumerate
+/// without bound, or to combine the streams its own way — and later decides to
+/// fuse after all must not have to re-derive `w * recip(K + rank)`: two
+/// derivations of one law drift, silently, in the direction of a plausible
+/// order. So the derivation is exported rather than duplicated, and `search` is
+/// defined in terms of the same exported value a caller composes with.
+///
+/// ```text
+/// search(request, …, profile, k)
+///   ==  fuse(execute(compile(plan(…))) bridged by RankedStreamAdapter, profile, k)
+/// ```
+///
+/// The adapter cannot smuggle in a number the profile did not authorize: fusion
+/// recomputes every contribution from the profile and refuses a mismatch with
+/// [`ProtocolError::ContributionMismatch`]. Its terminal receipt is the
+/// executor's own, passed through unchanged.
+#[derive(Debug)]
+pub struct RankedStreamAdapter {
     /// The executor's rows, in rank order.
     inner: RankedStreamImpl,
     /// The profile's weight for this stream's stratum.
@@ -282,9 +371,26 @@ struct RankedStreamAdapter {
 }
 
 impl RankedStreamAdapter {
-    /// Bridge `inner` using the profile's `weight` and smoothing constant `k`.
-    fn new(inner: RankedStreamImpl, weight: Fixed, k: u32) -> Self {
-        Self { inner, weight, k }
+    /// Bridge `stream` for `stratum` under `profile`, or `None` when `profile`
+    /// declares no weight for that stratum.
+    ///
+    /// The weight is read from the profile here rather than taken as an
+    /// argument, so a caller cannot attach a weight the profile does not
+    /// declare — the contribution is a function of the law in force and of
+    /// nothing else.
+    ///
+    /// `None` is the honest answer for an unweighted stratum rather than an
+    /// error: a weight is exactly "how much does this count", and a profile that
+    /// says nothing about a stratum has not said the request is malformed. The
+    /// caller decides what to do with the stream it cannot fuse — [`search`]
+    /// names it in [`SearchResult::unweighted_strata`] and fuses the rest.
+    #[must_use]
+    pub fn new(stream: RankedStreamImpl, profile: &FusionProfile, stratum: &Iri) -> Option<Self> {
+        Some(Self {
+            inner: stream,
+            weight: profile.weight(stratum)?,
+            k: profile.k_parameter(),
+        })
     }
 }
 
@@ -295,10 +401,22 @@ impl RankedStream for RankedStreamAdapter {
         let Some((rank, item)) = self.inner.next().await? else {
             return Ok(None);
         };
-        // A validated profile fixes `k >= 1` and the executor emits 1-based
-        // ranks, so `weight * recip(k + rank)` is one checked division and a
-        // product strictly below `weight`; it cannot leave the fixed-point
-        // range. Fusion re-verifies the value regardless.
+        // Ranks are 1-based, and a contribution at rank zero is undefined rather
+        // than large. `execute` never emits one, but this adapter is public and a
+        // caller can hand it a stream it built itself, so the violation is
+        // reported as the protocol error fusion would raise for the same row —
+        // one layer earlier, by the code that noticed it.
+        if rank == 0 {
+            return Err(ProtocolError::OutOfOrderRanks {
+                expected: 1,
+                got: rank,
+            });
+        }
+        // With `rank >= 1` checked above and `k >= 1` fixed by the validated
+        // profile this adapter read its weight from, `weight * recip(k + rank)`
+        // is one checked division and a product strictly below `weight`; it
+        // cannot leave the fixed-point range. Fusion re-verifies the value
+        // regardless.
         let value = contribution(self.weight, rank, self.k)
             .expect("a validated profile and a 1-based rank cannot overflow");
         Ok(Some((rank, value, item)))

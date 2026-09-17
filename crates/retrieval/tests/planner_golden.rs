@@ -14,7 +14,7 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     Iri, Metric, Plan, PlanError, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
-    plan,
+    UnservedReason, UnservedTerm, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -452,6 +452,151 @@ fn language_and_predicate_constraints_are_enforced() {
             .expect("Any selected")
             .request_terms,
         vec![0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2b. Per-term evidence: a term that reached nothing says so
+//
+// The decisions above are per producer. A caller asks per term, and the request
+// lattice deliberately carries modalities ahead of the producers that answer
+// them, so "this registry has nobody for that" has to be visible as exactly that
+// rather than as a term that quietly produced no rows.
+// ---------------------------------------------------------------------------
+
+/// A registry that accepts a lexical `en`/`body` term and nothing else, so a
+/// vector term in the same request reaches no declaration at all.
+fn literal_only_registry() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/literal"),
+        relation(100),
+        ranked(
+            &ex("stratum/text"),
+            vec![TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: Some("en".to_owned()),
+                predicate: Some(ex("body")),
+            }],
+            false,
+        ),
+    );
+    registry
+}
+
+/// The same registry plus a catch-all whose declaration demands that every term
+/// it accepts be rendered into an argument position. A query embedding has no
+/// SPARQL constant form, so the catch-all cannot be invoked for this request and
+/// is rejected at placement — leaving the vector term accepted by something and
+/// served by nothing.
+fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
+    let mut registry = literal_only_registry();
+    registry.register_ranked(
+        ex("pf/any"),
+        relation(200),
+        RankedDeclaration {
+            stratum: kernel_iri(&ex("stratum/universal")),
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(TermKind::Any),
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: 1,
+                    datatype: None,
+                }],
+            }],
+            depth_placement: None,
+            candidate_position: 0,
+            ordering: RankOrdering::StrictlyDescending,
+            duplicates: DuplicatePolicy::Unique,
+            mandatory: false,
+        },
+    );
+    registry
+}
+
+fn lexical_and_vector_request() -> RetrievalRequest {
+    RetrievalRequest::from_terms(vec![lexical_term(), vector_term()])
+}
+
+#[test]
+fn a_term_no_declaration_accepts_is_recorded_as_unserved() {
+    let plan = plan(
+        &lexical_and_vector_request(),
+        &literal_only_registry(),
+        &fixture_statistics(),
+    )
+    .expect("the lexical term still reaches a producer, so the request plans");
+
+    assert_eq!(
+        plan.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 1,
+            reason: UnservedReason::NoProducerAccepts,
+        }],
+        "the vector term reached no declaration, and the plan says so by index"
+    );
+    assert_eq!(
+        plan.unserved_evidence(),
+        plan.unserved_terms,
+        "the evidence this plan supports is the record it made"
+    );
+    // The valid neighbour, in the same plan: the term that DID reach a producer
+    // is served and is not reported.
+    assert_eq!(
+        binding(&plan, &ex("pf/literal"))
+            .expect("the literal producer takes the lexical term")
+            .request_terms,
+        vec![0],
+        "term 0 reached a producer"
+    );
+    assert!(
+        plan.unserved_terms
+            .iter()
+            .all(|entry| entry.request_term != 0),
+        "a term that reached a producer is never reported unserved"
+    );
+}
+
+#[test]
+fn a_term_every_acceptor_of_which_was_rejected_is_recorded_as_such() {
+    let plan = plan(
+        &lexical_and_vector_request(),
+        &accepting_but_uninvocable_registry(),
+        &fixture_statistics(),
+    )
+    .expect("the lexical term still reaches an invocable producer");
+
+    assert_eq!(
+        reason(&plan, &ex("pf/any")),
+        Some(RejectionReason::UnsatisfiedConstraint),
+        "the catch-all accepted the vector term but cannot be invoked for it"
+    );
+    assert_eq!(
+        plan.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 1,
+            reason: UnservedReason::EveryAcceptingProducerRejected,
+        }],
+        "something accepted the shape and was then rejected, which is not the \
+         same fact as nothing accepting it"
+    );
+}
+
+#[test]
+fn a_request_every_term_of_which_is_served_records_nothing() {
+    // The neighbouring valid case: the mixed request reaches a producer for each
+    // of its three terms, so there is no per-term evidence to report at all.
+    let plan = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
+    assert!(
+        plan.unserved_terms.is_empty(),
+        "every term reached a producer, got {:?}",
+        plan.unserved_terms
+    );
+    assert!(
+        plan.unserved_evidence().is_empty(),
+        "and the evidence it supports is empty too, got {:?}",
+        plan.unserved_evidence()
     );
 }
 

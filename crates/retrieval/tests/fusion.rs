@@ -16,10 +16,18 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, PlanId, ProducerReceipt,
-    ProducerStatus, ProtocolError, RECIP_K, RankedStream, Term, contribution,
+    ProducerStatus, ProtocolError, RECIP_K, RankedStream, Term, TopK, contribution,
 };
 
 const K: u32 = 60;
+
+/// The row bound these fixtures fuse under.
+///
+/// Fused enumeration is top-k by construction, so every fusion states a bound.
+/// These scripted streams hold a handful of rows between them and this is far
+/// above all of them, which is the point: except where a test is *about* the
+/// bound, the bound must not be what decides the answer.
+const TOP_K: TopK = TopK::new(1024);
 
 fn iri(text: &str) -> Iri {
     Iri::parse(text).expect("fixture IRIs are valid")
@@ -139,7 +147,7 @@ fn exhausted(rows: u64) -> ProducerReceipt {
 }
 
 async fn run_fuse(streams: Vec<(Iri, MockStream)>, profile: &FusionProfile) -> FusionResult<Term> {
-    purrdf_retrieval::fuse::<MockStream, Term>(streams, profile)
+    purrdf_retrieval::fuse::<MockStream, Term>(streams, profile, TOP_K)
         .await
         .expect("fusion succeeds")
 }
@@ -262,7 +270,7 @@ fn checked_addition_overflow_is_refused() {
         ),
     ];
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        streams, &profile,
+        streams, &profile, TOP_K,
     ));
     assert!(
         matches!(result, Err(FusionError::Overflow)),
@@ -471,6 +479,7 @@ fn protocol_violations_are_typed() {
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         out_of_order,
         &profile,
+        TOP_K,
     ));
     assert!(
         matches!(
@@ -491,6 +500,7 @@ fn protocol_violations_are_typed() {
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         non_contiguous,
         &profile,
+        TOP_K,
     ));
     assert!(
         matches!(
@@ -509,7 +519,7 @@ fn protocol_violations_are_typed() {
         ),
     )];
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        duplicate, &profile,
+        duplicate, &profile, TOP_K,
     ));
     assert!(
         matches!(
@@ -533,6 +543,7 @@ fn protocol_violations_are_typed() {
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         error_after_rows,
         &profile,
+        TOP_K,
     ));
     assert!(
         matches!(
@@ -556,6 +567,7 @@ fn protocol_violations_are_typed() {
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         never_ending,
         &profile,
+        TOP_K,
     ));
     assert!(
         matches!(
@@ -574,7 +586,7 @@ fn protocol_violations_are_typed() {
         ),
     )];
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        mismatch, &profile,
+        mismatch, &profile, TOP_K,
     ));
     assert!(
         matches!(
@@ -632,7 +644,9 @@ fn drop_cancellation_and_receipts() {
         stratum("text"),
         MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(9)),
     )];
-    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(forged, &profile));
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        forged, &profile, TOP_K,
+    ));
     assert!(
         matches!(
             &result,
@@ -916,7 +930,7 @@ fn contribution_count_exceeding_max_is_refused() {
         ),
     ];
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        streams, &profile,
+        streams, &profile, TOP_K,
     ));
     assert!(
         matches!(
@@ -1067,4 +1081,186 @@ fn ceiling_boundary_is_gated_by_the_contribution_count_check() {
         ),
         "expected MaxContributionsExceeded {{ item: \"a\", count: 2, max: 1 }}, got {result:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 14. `k` is the bound, and the trailer is the claim
+//
+// Fused enumeration is top-k by construction (§7): summing across strata means
+// no candidate may be emitted until it is known not to reappear and raise its
+// total, so the surface offers a bound rather than complete enumeration. These
+// fixtures pin both halves of that — the bound holds, and a bound that exceeds
+// what the streams hold refuses nothing.
+// ---------------------------------------------------------------------------
+
+/// Five distinct candidates across two strata, scripted fresh on each call
+/// because fusing consumes them.
+fn five_candidates() -> Vec<(Iri, MockStream)> {
+    vec![
+        (
+            stratum("text"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::ONE, K, "a"),
+                    row(2, Fixed::ONE, K, "b"),
+                    row(3, Fixed::ONE, K, "c"),
+                ],
+                exhausted(3),
+            ),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "d"), row(2, Fixed::ONE, K, "e")],
+                exhausted(2),
+            ),
+        ),
+    ]
+}
+
+#[test]
+fn fuse_returns_at_most_k_rows_in_the_declared_order() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+
+    let whole = block_on(run_fuse(five_candidates(), &profile));
+    assert_eq!(whole.rows.len(), 5, "the fixture holds five candidates");
+
+    let bounded = block_on(async {
+        purrdf_retrieval::fuse::<MockStream, Term>(five_candidates(), &profile, TopK::new(2))
+            .await
+            .expect("a bounded fusion succeeds")
+    });
+    assert_eq!(bounded.rows.len(), 2, "the bound is a bound");
+    assert_eq!(
+        bounded.rows,
+        whole.rows[..2].to_vec(),
+        "the bounded rows are the top of the same order, not a different order"
+    );
+    for window in bounded.rows.windows(2) {
+        assert!(
+            window[0].score >= window[1].score,
+            "score descending, the profile's declared order"
+        );
+    }
+    // The declared total tie-break decides equal scores: best rank ascending,
+    // then canonical term ascending. Both heads are rank 1 under equal weights,
+    // so the first row is the byte-smaller term.
+    assert_eq!(bounded.rows[0].score, bounded.rows[1].score);
+    assert!(
+        bounded.rows[0].entity.as_str() < bounded.rows[1].entity.as_str(),
+        "equal scores and equal best ranks break on canonical term order: {:?}",
+        bounded
+            .rows
+            .iter()
+            .map(|row| row.entity.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_bound_larger_than_the_answer_returns_everything_and_refuses_nothing() {
+    // The valid neighbour of the bound above, and the one this repository treats
+    // as exactly as severe: asking for more rows than exist is not an error, not
+    // a truncation, and not an empty answer. It is every row there was.
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let generous = block_on(async {
+        purrdf_retrieval::fuse::<MockStream, Term>(
+            five_candidates(),
+            &profile,
+            TopK::new(1_000_000),
+        )
+        .await
+        .expect("a bound above the frontier is not a refusal")
+    });
+    assert_eq!(
+        generous.rows.len(),
+        5,
+        "every candidate the streams held is in the answer"
+    );
+    assert_eq!(
+        generous.rows,
+        block_on(run_fuse(five_candidates(), &profile)).rows,
+        "and it is the same answer, in the same order"
+    );
+    assert_eq!(generous.trailer.statuses.len(), 2);
+}
+
+#[test]
+fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
+    // One stratum answers, one could not. The rows a consumer holds change with
+    // the bound; the terminal report does not, because the trailer drives every
+    // producer to its own receipt whatever the bound stopped reading.
+    let profile = profile(&[("text", Fixed::ONE), ("geo", Fixed::ONE)], K, 4);
+    let streams = || {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(
+                    vec![
+                        row(1, Fixed::ONE, K, "a"),
+                        row(2, Fixed::ONE, K, "b"),
+                        row(3, Fixed::ONE, K, "c"),
+                    ],
+                    exhausted(3),
+                ),
+            ),
+            (
+                stratum("geo"),
+                MockStream::new(
+                    Vec::new(),
+                    ProducerReceipt::ExecutionFailed {
+                        reason: "no index".to_owned(),
+                    },
+                ),
+            ),
+        ]
+    };
+
+    let expected_statuses = BTreeMap::from([
+        (
+            stratum("text"),
+            ProducerStatus::Exhausted { rows_emitted: 3 },
+        ),
+        (
+            stratum("geo"),
+            ProducerStatus::ExecutionFailed {
+                reason: "no index".to_owned(),
+            },
+        ),
+    ]);
+
+    // A prefix: one row of three, and the report is already whole.
+    let prefix = block_on(async {
+        purrdf_retrieval::fuse::<MockStream, Term>(streams(), &profile, TopK::new(1))
+            .await
+            .expect("a bounded fusion succeeds")
+    });
+    assert_eq!(prefix.rows.len(), 1, "the consumer holds one row of three");
+    assert_eq!(
+        prefix.trailer.statuses, expected_statuses,
+        "and the trailer still names every producer, including the one that could not answer"
+    );
+
+    // No rows at all. An empty answer is not "the search found nothing": the
+    // trailer says what every producer did, and one of them failed.
+    let none = block_on(async {
+        purrdf_retrieval::fuse::<MockStream, Term>(streams(), &profile, TopK::new(0))
+            .await
+            .expect("a bound of zero is a request, not a refusal")
+    });
+    assert!(
+        none.rows.is_empty(),
+        "a bound of zero certifies no rows, got {:?}",
+        none.rows
+    );
+    assert_eq!(
+        none.trailer.statuses, expected_statuses,
+        "zero rows read, and the completeness claim is unchanged — it was never in the rows"
+    );
+
+    // Every row. Same report again: the row count carried no claim in either
+    // direction.
+    let whole = block_on(run_fuse(streams(), &profile));
+    assert_eq!(whole.rows.len(), 3);
+    assert_eq!(whole.trailer.statuses, expected_statuses);
 }

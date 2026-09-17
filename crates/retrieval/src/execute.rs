@@ -36,6 +36,12 @@
 //! deliberately not a plan input, so the contribution is attached at `fuse` time.
 //! Keeping the executor profile-free is what lets the unfused rung be consumed
 //! without bound.
+//!
+//! Attaching it is not left to the caller to re-derive: a stream here is carried
+//! into the fusion protocol by
+//! [`RankedStreamAdapter`](crate::RankedStreamAdapter), the same exported bridge
+//! [`search`](crate::search) composes with. Stopping here and resuming later is
+//! one supported path, not a private one.
 
 use std::collections::{HashMap, VecDeque};
 

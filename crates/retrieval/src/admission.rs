@@ -27,6 +27,9 @@
 //! * every producer the plan binds is bound to a stratum the plan records a
 //!   depth for, so a compiler that emits one unit per depth entry cannot skip a
 //!   bound producer;
+//! * every request term the plan records as unserved addresses the plan's own
+//!   request, is recorded once, and is not also bound to a producer — a plan
+//!   that both serves a term and reports it unanswered contradicts itself;
 //! * the plan was planned against the registry the environment now supplies (the
 //!   durable content fingerprint first, then the live instance identity for a
 //!   plan that never left this process) and against the statistics revision the
@@ -88,7 +91,7 @@
 //! registry does **not** declare mandatory and that placement refuses is simply
 //! dropped from the plan, with its reason recorded in the plan's decisions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, RegistryId};
 use purrdf_text::Fixed;
@@ -577,6 +580,53 @@ pub(crate) fn admit_plan(
                     ),
                 });
             }
+        }
+    }
+
+    // Every recorded unserved term must address the plan's own request, and no
+    // two entries may name one term. The list is per-term evidence a caller
+    // reads back as "nothing answered this", so an index that names no term of
+    // this request, or two entries disagreeing about one term, is a defect in
+    // the value rather than a policy question.
+    //
+    // What is deliberately NOT enforced here is the converse — that every term
+    // the bindings leave unserved appears in the list. Narrowing a producer the
+    // registry does not declare mandatory is a legitimate edit (see this
+    // module's header), and it strands terms without touching the recorded list;
+    // refusing that would refuse the edit the waist explicitly admits. The
+    // stranded term is not lost either: `Plan::unserved_evidence` derives it
+    // from the bindings in hand, so the answer reports it regardless of what the
+    // list says.
+    let mut seen_unserved: BTreeSet<u32> = BTreeSet::new();
+    for entry in &plan.unserved_terms {
+        if entry.request_term as usize >= plan.request_terms.len() {
+            return Err(AdmissionError::MalformedPlan {
+                reason: format!(
+                    "the plan records request term {} as unserved, but it carries {} term(s)",
+                    entry.request_term,
+                    plan.request_terms.len()
+                ),
+            });
+        }
+        if !seen_unserved.insert(entry.request_term) {
+            return Err(AdmissionError::MalformedPlan {
+                reason: format!(
+                    "the plan records request term {} as unserved more than once",
+                    entry.request_term
+                ),
+            });
+        }
+        if plan
+            .producer_bindings
+            .iter()
+            .any(|binding| binding.request_terms.contains(&entry.request_term))
+        {
+            return Err(AdmissionError::MalformedPlan {
+                reason: format!(
+                    "the plan records request term {} as unserved, but binds it to a producer",
+                    entry.request_term
+                ),
+            });
         }
     }
 

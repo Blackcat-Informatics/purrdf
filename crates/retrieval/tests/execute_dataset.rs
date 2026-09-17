@@ -23,7 +23,7 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CompiledRetrieval, Fixed, FusionProfile, Iri, ProducerStatus,
-    RequestTerm, RetrievalRequest, Statistics, Term, compile, execute, plan, search,
+    RequestTerm, RetrievalRequest, Statistics, Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -32,6 +32,10 @@ use purrdf_sparql_eval::{
 };
 
 const K: u32 = 60;
+
+/// The row bound these fixtures search under. Fused enumeration is top-k by
+/// construction, so the bound is stated; it is far above what the mocks yield.
+const TOP_K: TopK = TopK::new(1024);
 
 /// The two strata the fixture registry declares, in the IRI order `compile`
 /// emits their units in.
@@ -412,6 +416,7 @@ fn a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request() {
         &*dataset,
         &env,
         &profile,
+        TOP_K,
     ))
     .expect("the fixture search answers");
     let candidate = first
@@ -438,7 +443,7 @@ fn a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request() {
     );
 
     let second = block_on(search(
-        &follow_up, &registry, &stats, &*dataset, &env, &profile,
+        &follow_up, &registry, &stats, &*dataset, &env, &profile, TOP_K,
     ))
     .expect("the follow-up search answers");
     assert!(

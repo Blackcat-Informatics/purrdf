@@ -19,7 +19,7 @@ use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, Fixed, Iri, Metric, Plan, PlanOrigin,
     ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, Statistics,
-    Term, Weight, compile, execute,
+    Term, UnservedReason, UnservedTerm, Weight, compile, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -1538,4 +1538,137 @@ fn a_mandatory_producer_is_refused_for_a_request_shape_it_does_not_accept() {
         statistics: &stats,
     };
     compile(&plan, &env).expect("an optional producer may cover part of a request");
+}
+
+// ---------------------------------------------------------------------------
+// A plan that contradicts itself about which terms went unanswered
+//
+// The recorded unserved list is evidence a caller reads back as "nothing
+// answered this". A plan is editable, so the list is untrusted like every other
+// field, and the waist refuses the contradictions no legitimate edit produces —
+// while admitting the one a legitimate edit does.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_plan_that_both_binds_a_term_and_reports_it_unanswered_is_refused() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+
+    let mut plan = fresh_plan(&registry, &stats);
+    assert!(
+        plan.unserved_terms.is_empty(),
+        "the fixture request reaches a producer for every term"
+    );
+    assert!(
+        plan.producer_bindings
+            .iter()
+            .any(|binding| binding.request_terms.contains(&0)),
+        "term 0 is bound"
+    );
+    plan.unserved_terms.push(UnservedTerm {
+        request_term: 0,
+        reason: UnservedReason::NoProducerAccepts,
+    });
+
+    let error = compile(&plan, &env).expect_err("a plan cannot both serve a term and report it");
+    assert_eq!(error.dimension(), "malformed_plan");
+    match error {
+        AdmissionError::MalformedPlan { reason } => assert!(
+            reason.contains("unserved") && reason.contains("binds"),
+            "the refusal names the contradiction: {reason}"
+        ),
+        other => panic!("expected MalformedPlan, got {other:?}"),
+    }
+
+    // An index that names no term of this request is the other way the value can
+    // be wrong, and it is refused on the same dimension.
+    let mut plan = fresh_plan(&registry, &stats);
+    plan.unserved_terms.push(UnservedTerm {
+        request_term: 99,
+        reason: UnservedReason::NoProducerAccepts,
+    });
+    assert!(
+        matches!(
+            compile(&plan, &env),
+            Err(AdmissionError::MalformedPlan { .. })
+        ),
+        "an out-of-range index addresses nothing"
+    );
+
+    // Recorded twice, disagreeing with itself about one term. The catch-all
+    // registry declares nothing mandatory, so narrowing it is admissible and the
+    // only thing left to refuse is the duplicate.
+    let optional = catch_all_registry(false);
+    let env = AdmissionEnvironment {
+        registry: &optional,
+        statistics: &stats,
+    };
+    let mut plan = purrdf_retrieval::plan(&mixed_request(), &optional, &stats).expect("plans");
+    for binding in &mut plan.producer_bindings {
+        binding.request_terms.retain(|index| *index == 0);
+    }
+    for reason in [
+        UnservedReason::NoProducerAccepts,
+        UnservedReason::EveryAcceptingProducerRejected,
+    ] {
+        plan.unserved_terms.push(UnservedTerm {
+            request_term: 1,
+            reason,
+        });
+    }
+    let error = compile(&plan, &env).expect_err("one term cannot have two reasons");
+    assert_eq!(error.dimension(), "malformed_plan");
+    match error {
+        AdmissionError::MalformedPlan { reason } => assert!(
+            reason.contains("more than once"),
+            "the refusal names the duplicate: {reason}"
+        ),
+        other => panic!("expected MalformedPlan, got {other:?}"),
+    }
+}
+
+#[test]
+fn narrowing_a_producer_leaves_the_plan_admissible_and_the_term_reported() {
+    // The valid neighbour, and the reason the converse is NOT enforced: an edit
+    // that narrows a producer the registry does not declare mandatory is
+    // admitted, even though it strands terms the recorded list never mentions.
+    // Refusing that would refuse the edit the waist explicitly allows — and the
+    // stranded terms are not lost either, because the evidence is derived from
+    // the bindings in hand.
+    let registry = catch_all_registry(false);
+    let stats = statistics("r1");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+
+    let mut plan = purrdf_retrieval::plan(&mixed_request(), &registry, &stats).expect("plans");
+    assert!(
+        plan.unserved_terms.is_empty(),
+        "the catch-all reaches every term, so the planner recorded nothing"
+    );
+    for binding in &mut plan.producer_bindings {
+        binding.request_terms.retain(|index| *index == 0);
+    }
+
+    compile(&plan, &env)
+        .expect("narrowing a producer the registry did not require stays admissible");
+    assert_eq!(
+        plan.unserved_evidence(),
+        vec![
+            UnservedTerm {
+                request_term: 1,
+                reason: UnservedReason::Unbound,
+            },
+            UnservedTerm {
+                request_term: 2,
+                reason: UnservedReason::Unbound,
+            },
+        ],
+        "and the terms the edit stranded are reported from the bindings in hand"
+    );
 }

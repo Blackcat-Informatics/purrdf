@@ -47,6 +47,20 @@
 //! facet it could not write. If that leaves nothing bound, the request reaches
 //! nothing and [`PlanError::NoApplicableProducers`] is the answer.
 //!
+//! # A term that reaches nothing says so
+//!
+//! Both passes above decide per **producer**, and a caller asks per **term**. A
+//! request can name a modality this registry has no producer for — the request
+//! lattice deliberately carries shapes ahead of the producers that answer them —
+//! and a plan that merely omitted such a term would be indistinguishable from
+//! one that served it and found nothing. So every term no binding carries is
+//! recorded in [`Plan::unserved_terms`](crate::Plan::unserved_terms) with a
+//! typed [`UnservedReason`](crate::UnservedReason): nothing accepted its shape,
+//! or something did and every acceptor was then rejected. The request is still
+//! planned — the terms that *do* reach a producer are answered — because
+//! refusing the whole request over one unserved term would discard every answer
+//! the others can give.
+//!
 //! A producer the registry declares **mandatory** is not exempt. If placement
 //! refuses one, the plan records the rejection and
 //! [`compile`](crate::compile) refuses the plan with
@@ -74,7 +88,7 @@ use crate::iri::{Iri, Weight};
 use crate::matching::{pattern_matches, place};
 use crate::plan::{
     Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
-    StatisticsSnapshot,
+    StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
 use crate::request::{RequestTerm, RetrievalRequest};
 use crate::statistics::Statistics;
@@ -93,7 +107,8 @@ const UNIT_WEIGHT_RAW: i128 = Fixed::ONE.into_raw();
 /// The returned [`Plan`] records, as pure data: the request terms, one binding
 /// per selected producer (the stratum and which request-term indices it
 /// receives), every considered producer's decision — selected or rejected with
-/// a reason — the per-stratum depth derived from the registry's row-bound
+/// a reason — every request term that reached no producer at all with the reason
+/// it did not, the per-stratum depth derived from the registry's row-bound
 /// declarations capped by statistics, the unit weight map, the statistics
 /// snapshot actually consulted, and both registry identities (the ephemeral
 /// instance id and the durable content fingerprint).
@@ -246,6 +261,15 @@ pub fn plan(
         return Err(PlanError::NoApplicableProducers);
     }
 
+    // 5b. Per-TERM evidence, which the per-producer decisions above cannot
+    //     carry. A request term the bindings do not reach went unserved, and the
+    //     two ways that happens are different facts about the registry: nothing
+    //     declared a shape that accepts it at all, or something did and every
+    //     acceptor was then rejected. Recorded for every such term, ascending,
+    //     so an armed-but-unserved modality is visible as exactly that rather
+    //     than as a term that quietly fell out of the plan.
+    let unserved_terms = unserved_terms(&request.terms, &candidates, &bindings);
+
     // 6. Per-stratum depth over the SURVIVING set: a producer dropped in step 5
     //    can lower its stratum's worst-case bound, and recording the wider bound
     //    would license a depth no remaining producer can fill. The bound is the
@@ -284,6 +308,7 @@ pub fn plan(
         request_terms: request.terms.clone(),
         producer_bindings: bindings,
         producer_decisions: decisions,
+        unserved_terms,
         stratum_depths,
         stratum_weights,
         statistics_snapshot,
@@ -366,6 +391,56 @@ fn depth_bounds(candidates: &[Candidate<'_>], statistics: &impl Statistics) -> B
             let bound = capped(declared, &stratum, statistics);
             let depth = u32::try_from(bound).unwrap_or(u32::MAX);
             (stratum, depth)
+        })
+        .collect()
+}
+
+/// Every request term no binding carries, ascending, with the reason it went
+/// unserved.
+///
+/// The two reasons are read off the passes that produced them and are not
+/// interchangeable. A term no [`Outcome::Matched`] candidate lists was never
+/// accepted by any declaration in the registry — nothing was a candidate for it,
+/// which is [`UnservedReason::NoProducerAccepts`]. A term some candidate did
+/// list, that nonetheless reaches no binding, was accepted and then left with
+/// nothing to answer it when every acceptor was rejected at placement, which is
+/// [`UnservedReason::EveryAcceptingProducerRejected`] and sends the reader to
+/// that producer's own recorded dimension.
+fn unserved_terms(
+    terms: &[RequestTerm],
+    candidates: &[Candidate<'_>],
+    bindings: &[ProducerBinding],
+) -> Vec<UnservedTerm> {
+    let mut accepted = vec![false; terms.len()];
+    for candidate in candidates {
+        let Outcome::Matched { matched, .. } = &candidate.outcome else {
+            continue;
+        };
+        for index in matched {
+            if let Some(slot) = accepted.get_mut(*index as usize) {
+                *slot = true;
+            }
+        }
+    }
+    let mut served = vec![false; terms.len()];
+    for binding in bindings {
+        for index in &binding.request_terms {
+            if let Some(slot) = served.get_mut(*index as usize) {
+                *slot = true;
+            }
+        }
+    }
+    served
+        .iter()
+        .enumerate()
+        .filter(|(_, served)| !**served)
+        .map(|(index, _)| UnservedTerm {
+            request_term: u32::try_from(index).unwrap_or(u32::MAX),
+            reason: if accepted[index] {
+                UnservedReason::EveryAcceptingProducerRejected
+            } else {
+                UnservedReason::NoProducerAccepts
+            },
         })
         .collect()
 }

@@ -54,6 +54,10 @@ const REJECT_NO_ACCEPTED_TERM: u8 = 1;
 const REJECT_DEPTH_EXCEEDED: u8 = 2;
 const REJECT_UNSATISFIED_CONSTRAINT: u8 = 3;
 
+const UNSERVED_NO_PRODUCER_ACCEPTS: u8 = 0;
+const UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED: u8 = 1;
+const UNSERVED_UNBOUND: u8 = 2;
+
 const PRESENT: u8 = 1;
 const ABSENT: u8 = 0;
 
@@ -185,6 +189,55 @@ pub enum ProducerDecision {
     },
 }
 
+/// Why one request term reached no producer at all.
+///
+/// [`RejectionReason`] answers the question per **producer**: this producer was
+/// not selected, and here is the dimension that refused it. That is a different
+/// question from the one a caller asks about its own request, which is per
+/// **term**: I asked for this, did anything answer it? A request whose every
+/// producer is accounted for can still carry a term nothing was ever going to
+/// serve, and a term that reached nothing must be visible as exactly that rather
+/// than as a quiet omission — the request lattice deliberately carries modalities
+/// ahead of the producers that answer them, which is honest only when an
+/// unanswered one says so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UnservedReason {
+    /// No registered producer declares a shape that accepts this term, so
+    /// nothing was ever a candidate for it. This is the armed-but-unserved
+    /// modality: the request lattice can express the term and this registry has
+    /// nobody who takes it.
+    NoProducerAccepts,
+    /// Some producer's declaration accepts this term's shape, but every producer
+    /// that accepted it was rejected before selection — because it could not be
+    /// invoked, or because it declares no ranked capability at all. The
+    /// producer's own dimension is in
+    /// [`Plan::producer_decisions`](Plan::producer_decisions).
+    EveryAcceptingProducerRejected,
+    /// The plan routes this term to no producer and records no reason of its
+    /// own for that.
+    ///
+    /// The planner always records one of the reasons above, so this is reached
+    /// only by a plan that was hand-built or edited — legitimately, since
+    /// narrowing a producer the registry does not declare mandatory is allowed.
+    /// The term is still named rather than dropped: the evidence a caller reads
+    /// says what the plan it actually ran supports, never what an earlier
+    /// version of that plan said.
+    Unbound,
+}
+
+/// One request term that reached no producer, and why.
+///
+/// `request_term` indexes [`Plan::request_terms`], which is the request in the
+/// caller's own order, so a caller reads the evidence straight back onto the
+/// term it wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct UnservedTerm {
+    /// The index into [`Plan::request_terms`] of the term nothing served.
+    pub request_term: u32,
+    /// Why nothing served it.
+    pub reason: UnservedReason,
+}
+
 /// One entry of a statistics snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatisticsEntry {
@@ -237,6 +290,18 @@ pub struct Plan {
     pub producer_bindings: Vec<ProducerBinding>,
     /// Every producer considered, selected or rejected, with reasons.
     pub producer_decisions: Vec<ProducerDecision>,
+    /// Every request term that reached no producer, ascending by index.
+    ///
+    /// The planner records one entry per term no binding carries, with the
+    /// reason that term went unserved. It is not derivable from
+    /// [`Self::producer_bindings`] alone: "nothing accepts this shape" and
+    /// "something accepts it but every acceptor was rejected" are different
+    /// facts about a registry, and only the planner saw both.
+    ///
+    /// Read the evidence through [`Self::unserved_evidence`] rather than from
+    /// this field: an edited plan's bindings and this list can disagree, and the
+    /// accessor reports what the plan in hand actually supports.
+    pub unserved_terms: Vec<UnservedTerm>,
     /// Per-stratum maximum depth, keyed by stratum label.
     pub stratum_depths: HashMap<Iri, u32>,
     /// Per-stratum fusion weight, keyed by stratum label.
@@ -277,6 +342,7 @@ impl PartialEq for Plan {
             && self.request_terms == other.request_terms
             && self.producer_bindings == other.producer_bindings
             && self.producer_decisions == other.producer_decisions
+            && self.unserved_terms == other.unserved_terms
             && self.stratum_depths == other.stratum_depths
             && self.stratum_weights == other.stratum_weights
             && self.statistics_snapshot == other.statistics_snapshot
@@ -308,6 +374,7 @@ impl Plan {
         write_statistics(&mut writer, &self.statistics_snapshot);
         writer.u64(self.registry_instance_id.as_u64());
         writer.string(&self.registry_content_fingerprint);
+        write_unserved_terms(&mut writer, &self.unserved_terms);
         writer.into_bytes()
     }
 
@@ -335,6 +402,7 @@ impl Plan {
         let statistics_snapshot = read_statistics(&mut reader)?;
         let registry_instance_id = RegistryId::from_raw(reader.u64()?);
         let registry_content_fingerprint = reader.string("registry content fingerprint")?;
+        let unserved_terms = read_unserved_terms(&mut reader)?;
         reader.finish()?;
         // Reconstructed from bytes, so the instance id just read is a counter
         // value this process cannot have minted; the plan is held to its
@@ -346,6 +414,7 @@ impl Plan {
             request_terms,
             producer_bindings,
             producer_decisions,
+            unserved_terms,
             stratum_depths,
             stratum_weights,
             statistics_snapshot,
@@ -358,6 +427,53 @@ impl Plan {
     #[must_use]
     pub fn id(&self) -> PlanId {
         PlanId::from_canonical(&self.canonical_bytes())
+    }
+
+    /// The per-term evidence **this** plan supports: every request term no
+    /// binding of it carries, ascending by index, each with the reason the plan
+    /// records for it — or [`UnservedReason::Unbound`] when it records none.
+    ///
+    /// This is the value to report, and [`Self::unserved_terms`] is only one of
+    /// its two inputs. A plan is editable, so its recorded list and its bindings
+    /// can disagree in both directions, and each disagreement has an honest
+    /// reading:
+    ///
+    /// * a term the recorded list names that a binding does serve is **not**
+    ///   reported, because the plan in hand does serve it — reporting it would
+    ///   raise an alarm the plan itself falsifies;
+    /// * a term no binding serves that the recorded list omits **is** reported,
+    ///   as [`UnservedReason::Unbound`], because narrowing a producer is a
+    ///   legitimate edit and the term it stranded is exactly the quiet omission
+    ///   this evidence exists to prevent.
+    ///
+    /// So the answer's evidence is always true of the plan that actually ran,
+    /// and no forged or stale entry can make it claim otherwise.
+    #[must_use]
+    pub fn unserved_evidence(&self) -> Vec<UnservedTerm> {
+        let mut served = vec![false; self.request_terms.len()];
+        for binding in &self.producer_bindings {
+            for index in &binding.request_terms {
+                if let Some(slot) = served.get_mut(*index as usize) {
+                    *slot = true;
+                }
+            }
+        }
+        served
+            .iter()
+            .enumerate()
+            .filter(|(_, served)| !**served)
+            .map(|(index, _)| {
+                let request_term = u32::try_from(index).unwrap_or(u32::MAX);
+                UnservedTerm {
+                    request_term,
+                    reason: self
+                        .unserved_terms
+                        .iter()
+                        .find(|entry| entry.request_term == request_term)
+                        .map_or(UnservedReason::Unbound, |entry| entry.reason),
+                }
+            })
+            .collect()
     }
 }
 
@@ -401,6 +517,52 @@ fn reason_from_tag(tag: u8) -> Result<RejectionReason, PlanError> {
             tag,
         }),
     }
+}
+
+fn unserved_tag(reason: UnservedReason) -> u8 {
+    match reason {
+        UnservedReason::NoProducerAccepts => UNSERVED_NO_PRODUCER_ACCEPTS,
+        UnservedReason::EveryAcceptingProducerRejected => {
+            UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED
+        }
+        UnservedReason::Unbound => UNSERVED_UNBOUND,
+    }
+}
+
+fn unserved_from_tag(tag: u8) -> Result<UnservedReason, PlanError> {
+    match tag {
+        UNSERVED_NO_PRODUCER_ACCEPTS => Ok(UnservedReason::NoProducerAccepts),
+        UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED => {
+            Ok(UnservedReason::EveryAcceptingProducerRejected)
+        }
+        UNSERVED_UNBOUND => Ok(UnservedReason::Unbound),
+        tag => Err(PlanError::InvalidTag {
+            what: "unserved term reason",
+            tag,
+        }),
+    }
+}
+
+fn write_unserved_terms(writer: &mut Writer, terms: &[UnservedTerm]) {
+    writer.u64(terms.len() as u64);
+    for term in terms {
+        writer.u32(term.request_term);
+        writer.u8(unserved_tag(term.reason));
+    }
+}
+
+fn read_unserved_terms(reader: &mut Reader<'_>) -> Result<Vec<UnservedTerm>, PlanError> {
+    let count = reader.count()?;
+    let mut terms = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        let request_term = reader.u32()?;
+        let reason = unserved_from_tag(reader.u8()?)?;
+        terms.push(UnservedTerm {
+            request_term,
+            reason,
+        });
+    }
+    Ok(terms)
 }
 
 fn write_iri(writer: &mut Writer, iri: &Iri) {

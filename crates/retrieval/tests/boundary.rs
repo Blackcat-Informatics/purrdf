@@ -36,9 +36,9 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, Fixed, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanOrigin,
-    ProducerBinding, ProducerReceipt, ProtocolError, RankedStream, RankedStreamImpl, RequestTerm,
-    RetrievalRequest, Statistics, StatisticsSnapshot, Term, Weight, compile, contribution, execute,
-    fuse, plan, search,
+    ProducerBinding, ProducerReceipt, ProtocolError, RankedStream, RankedStreamAdapter,
+    RankedStreamImpl, RequestTerm, RetrievalRequest, Statistics, StatisticsSnapshot, Term, TopK,
+    Weight, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -49,6 +49,14 @@ use purrdf_sparql_eval::{
 mod common;
 
 const K: u32 = 60;
+
+/// The row bound these fixtures fuse under.
+///
+/// Fused enumeration is top-k by construction, so every fusion states a bound.
+/// It is far above what any fixture here yields, so nothing below is decided by
+/// the bound — `fused_top_k_bounded_memory` drives the frontier directly, which
+/// is where the bound's own behaviour belongs.
+const TOP_K: TopK = TopK::new(1024);
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -516,6 +524,8 @@ fn start_at_compile_hand_built_plan() {
             request_terms: vec![0],
         }],
         producer_decisions: Vec::new(),
+        // The one request term is bound below, so nothing went unserved.
+        unserved_terms: Vec::new(),
         stratum_depths,
         stratum_weights,
         statistics_snapshot: StatisticsSnapshot {
@@ -598,7 +608,7 @@ fn start_at_fuse_hand_built_streams() {
         ),
     ];
 
-    let result = block_on(fuse::<ScriptedStream, Term>(streams, &profile))
+    let result = block_on(fuse::<ScriptedStream, Term>(streams, &profile, TOP_K))
         .expect("fusion works with no planning, compilation or execution");
 
     assert_eq!(result.rows.len(), 2);
@@ -801,6 +811,7 @@ fn reporting_names_plan_and_profile() {
         &*common::empty_dataset(),
         &env,
         &profile,
+        TOP_K,
     ))
     .expect("the composed search answers");
 
@@ -898,7 +909,7 @@ async fn equality_fusion(profile: &FusionProfile) -> FusionResult<Term> {
             ScriptedStream::new(vec![row(1, Fixed::ONE, K, "beta")], exhausted(1)),
         ),
     ];
-    fuse::<ScriptedStream, Term>(streams, profile)
+    fuse::<ScriptedStream, Term>(streams, profile, TOP_K)
         .await
         .expect("the fixture streams fuse")
 }
@@ -938,4 +949,111 @@ fn native_wasm_execution_equality() {
     let first = block_on(equality_fusion(&profile));
     let second = block_on(equality_fusion(&profile));
     assert_eq!(render_fusion(&first), render_fusion(&second));
+}
+
+// ---------------------------------------------------------------------------
+// 11. Resuming at `execute` uses the exported bridge, not a hand-written copy
+//
+// A seam is a place to stop AND a place to start. The one thing a caller cannot
+// reasonably re-derive when it resumes is the reciprocal-rank contribution, so
+// the bridge that attaches it is exported rather than left to be rewritten —
+// and being public, it must answer a malformed stream rather than panic on one.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
+    let registry = single_registry(&ex("stratum/resume"), &ex("pf/resume"), 10, 3);
+    let stats = single_statistics(&ex("stratum/resume"), 10);
+    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+    };
+    let planned = plan(&request, &registry, &stats).expect("plans");
+    let compiled = compile(&planned, &env).expect("admits");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+
+    // A caller that stopped at `execute` resumes here, with no arithmetic of its
+    // own: the weight and the smoothing constant are read from the profile by
+    // the adapter, so it cannot attach a contribution the profile did not
+    // authorize.
+    let profile = profile(&[("resume", Fixed::ONE)], K, 4);
+    let mut streams = Vec::new();
+    for stream in execution.streams {
+        let adapter = RankedStreamAdapter::new(stream.stream, &profile, &stream.stratum)
+            .expect("the profile weights the stratum the plan reached");
+        streams.push((stream.stratum, adapter));
+    }
+    let fused = block_on(fuse::<RankedStreamAdapter, Term>(streams, &profile, TOP_K))
+        .expect("the bridged streams fuse");
+
+    assert_eq!(fused.rows.len(), 3, "every executed row reached the fusion");
+    for (index, row) in fused.rows.iter().enumerate() {
+        let rank = u64::try_from(index + 1).expect("the fixture is small");
+        assert_eq!(
+            row.score,
+            contribution(Fixed::ONE, rank, K).expect("fits"),
+            "the bridge attached exactly the profile's contribution for rank {rank}"
+        );
+    }
+    assert_eq!(
+        fused.trailer.statuses.len(),
+        1,
+        "and the producer's own status survived the resumption"
+    );
+
+    // A stratum the profile does not weight has no contribution to make, and the
+    // bridge says so by refusing to be built rather than by inventing one.
+    let elsewhere = crate::profile(&[("elsewhere", Fixed::ONE)], K, 4);
+    assert!(
+        RankedStreamAdapter::new(
+            RankedStreamImpl::new(vec![(1, Term::new("a"))]),
+            &elsewhere,
+            &stratum("resume"),
+        )
+        .is_none(),
+        "no weight, no contribution, no adapter"
+    );
+}
+
+#[test]
+fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
+    // Ranks are 1-based. `execute` never emits a zero, but the bridge is public
+    // and a caller can hand it a stream it built itself, so the violation must
+    // come back as the protocol error fusion would raise for the same row.
+    let profile = profile(&[("resume", Fixed::ONE)], K, 4);
+    let mut adapter = RankedStreamAdapter::new(
+        RankedStreamImpl::new(vec![(0, Term::new("a"))]),
+        &profile,
+        &stratum("resume"),
+    )
+    .expect("the profile weights the stratum");
+    assert!(
+        matches!(
+            block_on(adapter.next()),
+            Err(ProtocolError::OutOfOrderRanks {
+                expected: 1,
+                got: 0
+            })
+        ),
+        "a rank of zero is a protocol violation, reported rather than panicked on"
+    );
+
+    // The valid neighbour: a 1-based rank through the same adapter is an
+    // ordinary row carrying the profile's own contribution.
+    let mut adapter = RankedStreamAdapter::new(
+        RankedStreamImpl::new(vec![(1, Term::new("a"))]),
+        &profile,
+        &stratum("resume"),
+    )
+    .expect("the profile weights the stratum");
+    assert_eq!(
+        block_on(adapter.next()).expect("a 1-based rank is well formed"),
+        Some((
+            1,
+            contribution(Fixed::ONE, 1, K).expect("fits"),
+            Term::new("a")
+        ))
+    );
 }

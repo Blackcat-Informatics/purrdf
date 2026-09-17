@@ -33,6 +33,33 @@ pub type CandidateId = Term;
 /// This mirrors [`ProducerReceipt`] but belongs to the answer: every producer
 /// that contributed — and every applicable one that could not — keeps its own
 /// status, so "all producers answered" and "one could not" stay distinguishable.
+///
+/// # Where each variant comes from
+///
+/// Every variant is the producer's own declaration, converted from the receipt
+/// it returned through [`RankedStream::receipt`] — plus, for the strata that
+/// never became a stream, the executor's report carried in by
+/// [`FusionTrailer::completed_with`].
+///
+/// Two of them this crate's own executor cannot mint, and that is a fact about
+/// the executor rather than about the vocabulary.
+/// [`RankedStreamImpl`](crate::RankedStreamImpl) materializes its rows and is
+/// always drained, so it declares [`Self::Exhausted`]; a unit that cannot run at
+/// all becomes [`Self::ExecutionFailed`]. It never declares
+/// [`Self::CeilingReached`], because it stops at no *score* bound — the row
+/// bound a caller passes to [`fuse`](crate::fuse) belongs to the fusion, not to
+/// a producer. And it never declares [`Self::TermsRejected`], because a producer
+/// that accepts none of the request's terms is rejected at planning
+/// ([`RejectionReason::NoAcceptedTerm`](crate::RejectionReason)) and so compiles
+/// no unit to run: it has no stratum in the answer to report under, and the
+/// per-term fact that nothing served a term is reported per term instead, in
+/// [`Plan::unserved_terms`](crate::Plan::unserved_terms).
+///
+/// Both remain reachable through the public protocol, which is the point of
+/// having them: [`RankedStream`] is implemented by caller-supplied producers,
+/// and a producer that stops at its own declared score bound or declines the
+/// terms it was handed reports exactly these, with the fusion engine validating
+/// the claim against the rows it actually emitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProducerStatus {
     /// The producer emitted every row it had.
@@ -40,7 +67,8 @@ pub enum ProducerStatus {
         /// How many rows it emitted.
         rows_emitted: u64,
     },
-    /// The producer stopped at a declared bound.
+    /// The producer stopped at a declared score bound rather than at
+    /// exhaustion. Declared by the producer itself; see this type's header.
     CeilingReached {
         /// The inclusive bound at which it stopped.
         bound: Fixed,
@@ -50,7 +78,8 @@ pub enum ProducerStatus {
         /// A human-readable reason, carried verbatim.
         reason: String,
     },
-    /// The producer declined the request terms.
+    /// The producer declined the request terms it was handed. Declared by the
+    /// producer itself; see this type's header.
     TermsRejected,
 }
 
@@ -101,6 +130,42 @@ pub struct FusionTrailer {
     pub plan_id: Option<PlanId>,
     /// The fusion profile in force.
     pub profile_id: crate::id::FusionProfileId,
+}
+
+impl FusionTrailer {
+    /// Add the status of every producer that never became a stream, and return
+    /// the completed trailer.
+    ///
+    /// A fusion knows only the streams it was handed, and that is strictly fewer
+    /// producers than a request reaches: a stratum whose unit failed to run has
+    /// no stream to fuse, and one the profile declares no weight for is set
+    /// aside before fusion sees it. Both are "an applicable producer that could
+    /// not contribute", which §6 of the design record says the answer must carry
+    /// alongside the ones that did — so the stage that *does* know them hands
+    /// them here, rather than the answer reducing them to a count of strata that
+    /// happened to fuse.
+    ///
+    /// A status this fusion verified is never replaced. Those were checked
+    /// against the rows actually pulled ([`ProtocolError::ForgedReceipt`]), and
+    /// an unverified report of the same stratum cannot be allowed to overwrite
+    /// one that was; `statuses` fills only the strata the fusion never saw.
+    ///
+    /// The result does not depend on `statuses`' iteration order: its keys are
+    /// distinct and each is inserted only where nothing stands.
+    ///
+    /// This is a terminal operation on a terminal value — the trailer exists
+    /// only after every stream reached its receipt — so nothing here makes a
+    /// status readable mid-stream.
+    #[must_use]
+    pub fn completed_with<I>(mut self, statuses: I) -> Self
+    where
+        I: IntoIterator<Item = (Iri, ProducerStatus)>,
+    {
+        for (stratum, status) in statuses {
+            self.statuses.entry(stratum).or_insert(status);
+        }
+        self
+    }
 }
 
 /// The current head of one stream, already validated and contribution-checked.
@@ -248,7 +313,11 @@ impl<S: RankedStream> FusionStream<S> {
     /// Drain every remaining stream and return the terminal trailer.
     ///
     /// Draining discards rows but forces every producer to its terminal receipt,
-    /// so the trailer's statuses are complete and cannot be forged.
+    /// so the trailer's statuses cover every stream this fusion was handed —
+    /// including the ones a caller's row bound stopped reading — and cannot be
+    /// forged. A producer that never became a stream is not here and cannot be;
+    /// the stage that ran it adds it through
+    /// [`FusionTrailer::completed_with`].
     ///
     /// # Errors
     ///

@@ -87,5 +87,6 @@
     "http://example.org/stratum/text": 1000000000000,
     "http://example.org/stratum/universal": 1000000000000
   },
+  "unserved_terms": [],
   "version": 1
 }

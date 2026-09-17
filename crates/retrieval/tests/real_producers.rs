@@ -38,9 +38,9 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, Fixed, FusionProfile, Iri, ProducerReceipt, ProtocolError, RankedStream,
-    RankedStreamImpl, RequestTerm, RetrievalRequest, SearchResult, Statistics, Term, compile,
-    contribution, execute, fuse, plan, search,
+    AdmissionEnvironment, Fixed, FusionProfile, Iri, RankedStreamAdapter, RequestTerm,
+    RetrievalRequest, SearchResult, Statistics, Term, TopK, compile, contribution, execute, fuse,
+    plan, search,
 };
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PropertyFunctionRegistry, TermKind,
@@ -65,6 +65,10 @@ const KNN_STRATUM: &str = "https://example.org/stratum/neighbour";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// The reciprocal-rank smoothing constant this host fuses under.
 const K: u32 = 60;
+/// The row bound this host asks for. Fused enumeration is top-k by
+/// construction, so the bound is stated rather than defaulted; four documents
+/// are all this corpus holds, so nothing here is decided by it.
+const TOP_K: TopK = TopK::new(16);
 
 fn ex(local: &str) -> String {
     format!("https://example.org/{local}")
@@ -415,6 +419,7 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
         &*data,
         &env,
         &profile,
+        TOP_K,
     ))
     .expect("the real producers answer");
 
@@ -563,35 +568,14 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
 // 3. The composition identity, on the real path
 // ---------------------------------------------------------------------------
 
-/// The test's own bridge from the executor's `(rank, candidate)` rows to the
-/// fusion protocol, re-derived here so the hand-composed answer is genuinely
-/// assembled rather than borrowed from `search`.
-struct Bridge {
-    inner: RankedStreamImpl,
-    weight: Fixed,
-    k: u32,
-}
-
-impl RankedStream for Bridge {
-    type Item = Term;
-
-    async fn next(&mut self) -> Result<Option<(u64, Fixed, Self::Item)>, ProtocolError> {
-        let Some((rank, item)) = self.inner.next().await? else {
-            return Ok(None);
-        };
-        Ok(Some((
-            rank,
-            contribution(self.weight, rank, self.k).expect("valid profile and 1-based rank"),
-            item,
-        )))
-    }
-
-    async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
-        self.inner.receipt().await
-    }
-}
-
 /// Drive `fuse ∘ execute ∘ compile ∘ plan` by hand over the real producers.
+///
+/// The bridge from the executor's `(rank, candidate)` rows to the fusion
+/// protocol is the crate's own exported [`RankedStreamAdapter`], and the
+/// executor's statuses reach the trailer through the exported
+/// `FusionTrailer::completed_with`. That is what makes the identity below worth
+/// asserting: the pipeline this assembles is the one a caller can write, not a
+/// second copy of `search`'s insides that would have to be kept in step by hand.
 // The manual composition mirrors `search`, including its single-task,
 // runtime-agnostic future; see the same allow on `search` itself.
 #[allow(clippy::future_not_send)]
@@ -608,35 +592,26 @@ async fn manual_composition(
         .await
         .expect("both real relations run");
 
-    let streams = execution
-        .streams
-        .into_iter()
-        .map(|stream| {
-            let weight = profile
-                .weight(&stream.stratum)
-                .expect("the profile weights both strata");
-            (
-                stream.stratum,
-                Bridge {
-                    inner: stream.stream,
-                    weight,
-                    k: profile.k_parameter(),
-                },
-            )
-        })
-        .collect();
+    let mut streams = Vec::new();
+    let mut unweighted_strata = Vec::new();
+    for stream in execution.streams {
+        match RankedStreamAdapter::new(stream.stream, profile, &stream.stratum) {
+            Some(adapter) => streams.push((stream.stratum, adapter)),
+            None => unweighted_strata.push(stream.stratum),
+        }
+    }
+    unweighted_strata.sort();
 
-    let fused = fuse::<Bridge, Term>(streams, profile)
+    let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, TOP_K)
         .await
         .expect("the surviving streams fuse");
     SearchResult {
         rows: fused.rows,
-        trailer: fused.trailer,
+        trailer: fused.trailer.completed_with(execution.statuses),
+        unserved_terms: planned.unserved_evidence(),
         plan_id: planned.id(),
         profile_id: profile.id(),
-        // The profile weights both of this fixture's strata, so nothing is set
-        // aside; the `expect` above is what asserts that.
-        unweighted_strata: Vec::new(),
+        unweighted_strata,
     }
 }
 
@@ -658,6 +633,7 @@ fn search_equals_the_hand_composed_pipeline_over_the_real_producers() {
         &*data,
         &env,
         &profile,
+        TOP_K,
     ))
     .expect("the composed search answers");
     let manual = block_on(manual_composition(
