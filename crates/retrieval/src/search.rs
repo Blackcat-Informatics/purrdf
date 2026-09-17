@@ -180,10 +180,14 @@ pub struct SearchResult {
     /// Derived from the plan that actually ran
     /// ([`Plan::unserved_evidence`](crate::Plan::unserved_evidence)), so
     /// it reports the terms this answer's own bindings leave unanswered. Empty
-    /// for the ordinary case where every term reached something. A modality the
-    /// request lattice can express but this registry has no producer for shows
-    /// up here as [`UnservedReason::NoProducerAccepts`](crate::UnservedReason),
-    /// rather than as a term that silently contributed no rows.
+    /// exactly when every term reached a producer **with its content** — a
+    /// producer that renders at least one of its facets into an argument
+    /// position, so the query that ran contains it. A modality the request
+    /// lattice can express but this registry has no producer for shows up here
+    /// as [`UnservedReason::NoProducerAccepts`](crate::UnservedReason); one
+    /// whose only acceptor declared nowhere to put it shows up as
+    /// [`UnservedReason::AcceptedWithoutPlacement`](crate::UnservedReason);
+    /// neither is left as a term that silently contributed no rows.
     pub unserved_terms: Vec<UnservedTerm>,
     /// The canonical identity of the plan the answer descends from.
     ///

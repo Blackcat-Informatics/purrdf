@@ -695,14 +695,19 @@ impl EmbeddingKnnRelation {
     /// shape it accepts is an entity seed — a term the caller already knows —
     /// and `seed` says which kind of term that is, because a space's rows may be
     /// IRIs, literals or triple terms and only the host knows which its queries
-    /// will name. A raw query embedding is a different question with no SPARQL
-    /// constant form; no producer here accepts one.
+    /// will name. A raw query embedding is a different question — "what is near
+    /// this point" rather than "what is near this thing" — and no producer here
+    /// accepts one.
     ///
-    /// [`TermKind::Any`] is available and is a real choice, with one consequence
-    /// worth stating: it accepts every request shape, including one carrying a
-    /// raw embedding, and a value placement cannot render an embedding — so a
-    /// request containing one makes this producer unplaceable and it is dropped
-    /// from the plan entirely, rather than serving the seed terms beside it.
+    /// [`TermKind::Any`] and [`TermKind::Literal`] are available and are real
+    /// choices, with one consequence worth stating: either accepts a request
+    /// term carrying a raw query embedding, whose value placement demands a
+    /// datatype naming the embedding encoding the producer reads. The
+    /// declaration written here supplies none (a seed is rendered from the
+    /// caller's own term, which carries its own), so a request containing an
+    /// embedding makes this producer unplaceable and it is dropped from the plan
+    /// entirely, rather than serving the seed terms beside it. A host that wants
+    /// both questions answered declares two producers.
     ///
     /// # `k` is the per-stratum depth, and it is required
     ///

@@ -2,11 +2,7 @@
   "producer_bindings": [
     {
       "producer": "http://example.org/pf/any",
-      "request_terms": [
-        0,
-        1,
-        2
-      ],
+      "request_terms": [],
       "stratum": "http://example.org/stratum/universal"
     },
     {
@@ -119,6 +115,11 @@
     "http://example.org/stratum/text": 1000000000000,
     "http://example.org/stratum/universal": 1000000000000
   },
-  "unserved_terms": [],
+  "unserved_terms": [
+    {
+      "reason": "AcceptedWithoutPlacement",
+      "request_term": 1
+    }
+  ],
   "version": 1
 }

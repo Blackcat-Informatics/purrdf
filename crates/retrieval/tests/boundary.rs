@@ -87,10 +87,10 @@ fn kernel_iri(text: &str) -> purrdf_core::Iri {
 /// object-side position. The mocks are arity (1,1) and project `?c0`, so the
 /// candidate is position 0 and a rendered facet binds at position 1.
 ///
-/// An unconstrained `TermKind::Any` pattern is the exception: it also accepts a
-/// vector term, whose query embedding has no SPARQL constant form, so it
-/// declares no placement at all. Its argument stays a free variable, which is
-/// exactly what "I take the whole request without needing it written out" is.
+/// An unconstrained `TermKind::Any` pattern is the exception: it declares **no**
+/// placement at all, so it is matched by every request term and receives none of
+/// them. Its argument stays free, and the plan reports every term that reached
+/// only this producer — matching a shape is not the same as receiving it.
 fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
     patterns
         .into_iter()

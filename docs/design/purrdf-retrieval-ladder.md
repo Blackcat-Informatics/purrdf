@@ -103,9 +103,21 @@ which extends the repository's existing discipline — the conformance
 suites already insist the evaluator is the single source of query truth —
 out to a seam a caller can stand on. And the planner is **structurally
 unable to hide a decision**: if a plan's executable content is query
-text and the executor runs only query text, everything the planner chose
-is visible in the emission, and nothing can live between planning and
-execution.
+text and the executor runs only query text, nothing can live between
+planning and execution — the text is the whole of what runs.
+
+That is a claim about the *executable* content, and it is not the same
+as "every decision is legible in the text". One decision is not, and it
+is named rather than left implicit: a producer's declaration may accept
+a request term's shape and place none of it, in which case the producer
+is called with the term absent from its arguments and the emitted text
+carries no trace of the request. Two different requests then compile to
+the same query, which is exactly what that producer asked for. So the
+decision lives in the plan instead, per term: such a term is bound to
+no producer and is reported in the plan's own unserved-term evidence,
+which makes an empty evidence list mean the strong thing — every term
+reached a producer *with its content*. Between the text and that list,
+nothing the planner chose is unaccounted for.
 
 SPARQL's reach ends at that rung in both directions. Below: `plan` takes
 free text, which is not a graph pattern, and no one should hand-write a

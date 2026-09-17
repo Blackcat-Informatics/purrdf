@@ -22,26 +22,56 @@
 //!
 //! A request term maps to the RDF term kind its retrieval targets:
 //!
-//! * a lexical term, a spatial term, and the endpoints of a temporal or numeric
-//!   interval target a **literal**;
+//! * a lexical term, a spatial term, a query embedding, and the endpoints of a
+//!   temporal or numeric interval all target a **literal**, because that is what
+//!   each of them is written as;
 //! * an entity seed targets the kind its canonical lexical names (`<…>` an IRI,
-//!   `_:…` a blank node, `"…"` a literal);
-//! * a vector term targets **no** RDF term kind, so only a producer that
-//!   declares [`TermKind::Any`] accepts it.
+//!   `_:…` a blank node, `"…"` a literal).
 //!
 //! A pattern's `datatype` constraint can never match, because no request term
 //! carries a datatype; its `language` constraint matches only a lexical term
 //! with that tag; its `predicate` constraint matches only a lexical, spatial,
 //! temporal or numeric-range term carrying that predicate.
 //!
+//! Those two constraints are how a producer narrows *within* a term kind, and
+//! narrowing is sometimes the point. Several modalities are written as literals,
+//! so an unconstrained `Literal` pattern accepts all of them — a needle, a
+//! geometry, an interval endpoint, a query embedding. A producer that wants only
+//! needles says so with a `language` or `predicate` constraint, neither of which
+//! a geometry-less, predicate-less embedding can satisfy. A producer that
+//! constrains neither has declared that it takes whatever arrives written as a
+//! literal, and what it receives is then decided by whether its placement can
+//! render that term at all.
+//!
+//! # Matching is not receiving: only a placed term is bound
+//!
+//! A declaration can accept a shape and declare no placement for it. That
+//! producer is called for the request and receives none of the term — a
+//! legitimate declaration, and the shape of a producer whose ranking is
+//! request-independent. It is selected like any other, but the term is **not**
+//! bound to it: a binding is the claim that the producer received the term, and
+//! recording one here would make
+//! [`Plan::unserved_terms`](crate::Plan::unserved_terms) report nothing while
+//! the emitted query contains no trace of the request. So a
+//! producer is bound to exactly the terms whose matching alternative places at
+//! least one facet, and a term that reached only placement-free acceptors is
+//! reported as
+//! [`UnservedReason::AcceptedWithoutPlacement`](crate::UnservedReason::AcceptedWithoutPlacement).
+//!
+//! A producer that carries nothing at all is still selected, and its stratum
+//! still emits: this is how a request-independent ranking — a quality prior
+//! fused as its own stratum — takes part in an answer without claiming to have
+//! read the request. What it cannot do is make the request look served.
+//!
 //! # Matching is not enough: a producer must also be *invocable*
 //!
 //! Accepting a term's shape and being able to render that term into an argument
 //! position are two different claims, and a producer can make the first without
-//! the second: a query embedding has no SPARQL constant form, a blank-node seed
-//! is a non-distinguished variable rather than a ground value, and a relation
-//! that can only run with its depth bound cannot be called by one that leaves
-//! the depth free. So after matching, the planner runs the compiler's own
+//! the second: a query embedding and a geometry have no constant form under a
+//! datatype nobody declared, a blank-node seed is a non-distinguished variable
+//! rather than a ground value, and a relation that can only run with its depth
+//! bound cannot be called by one that leaves the depth free. So after matching,
+//! the planner runs the compiler's own
 //! [`place`](crate::matching::place) and records
 //! [`RejectionReason::UnsatisfiedConstraint`] for a producer that cannot be
 //! invoked, rather than binding it and emitting a call that silently drops the
@@ -57,7 +87,8 @@
 //! one that served it and found nothing. So every term no binding carries is
 //! recorded in [`Plan::unserved_terms`](crate::Plan::unserved_terms) with a
 //! typed [`UnservedReason`](crate::UnservedReason): nothing accepted its shape,
-//! or something did and every acceptor was then rejected. The request is still
+//! something accepted it and declared nowhere to put it, or something could have
+//! carried it and every such acceptor was then rejected. The request is still
 //! planned — the terms that *do* reach a producer are answered — because
 //! refusing the whole request over one unserved term would discard every answer
 //! the others can give.
@@ -106,7 +137,7 @@ use purrdf_text::Fixed;
 
 use crate::error::PlanError;
 use crate::iri::{Iri, Weight};
-use crate::matching::{pattern_matches, place};
+use crate::matching::{carries_content, pattern_matches, place};
 use crate::plan::{
     Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
     StatisticsSnapshot, UnservedReason, UnservedTerm,
@@ -195,7 +226,7 @@ pub fn plan(
         // layer's validated, hashable, orderable wrapper.
         let stratum = Iri::from(declaration.stratum.clone());
 
-        let matched: Vec<u32> = request
+        let accepted: Vec<u32> = request
             .terms
             .iter()
             .enumerate()
@@ -208,7 +239,7 @@ pub fn plan(
             .map(|(index, _)| u32::try_from(index).unwrap_or(u32::MAX))
             .collect();
 
-        if matched.is_empty() {
+        if accepted.is_empty() {
             candidates.push(Candidate::rejected(
                 producer,
                 RejectionReason::NoAcceptedTerm,
@@ -216,13 +247,27 @@ pub fn plan(
             continue;
         }
 
+        // Of the terms it accepts, the ones it also declared somewhere to put.
+        // Only these are bound: see this module's header.
+        let carried: Vec<u32> = accepted
+            .iter()
+            .copied()
+            .filter(|index| {
+                request
+                    .terms
+                    .get(*index as usize)
+                    .is_some_and(|term| carries_content(declaration, term))
+            })
+            .collect();
+
         candidates.push(Candidate {
             producer,
             outcome: Outcome::Matched {
                 descriptor,
                 declaration,
                 stratum,
-                matched,
+                accepted,
+                carried,
             },
         });
     }
@@ -241,7 +286,7 @@ pub fn plan(
     let mut decisions: Vec<ProducerDecision> = Vec::with_capacity(candidates.len());
     let mut selected: Vec<(Iri, u64)> = Vec::new();
     for candidate in &candidates {
-        let (descriptor, declaration, stratum, matched) = match &candidate.outcome {
+        let (descriptor, declaration, stratum, carried) = match &candidate.outcome {
             Outcome::Rejected(reason) => {
                 decisions.push(ProducerDecision::Rejected {
                     producer: candidate.producer.clone(),
@@ -253,8 +298,9 @@ pub fn plan(
                 descriptor,
                 declaration,
                 stratum,
-                matched,
-            } => (*descriptor, *declaration, stratum, matched),
+                carried,
+                ..
+            } => (*descriptor, *declaration, stratum, carried),
         };
         let depth = provisional.get(stratum).copied().unwrap_or(u32::MAX);
         if place(
@@ -262,7 +308,7 @@ pub fn plan(
             descriptor,
             declaration,
             &request.terms,
-            matched,
+            carried,
             depth,
         )
         .is_err()
@@ -280,7 +326,7 @@ pub fn plan(
         bindings.push(ProducerBinding {
             producer: candidate.producer.clone(),
             stratum: stratum.clone(),
-            request_terms: matched.clone(),
+            request_terms: carried.clone(),
         });
         selected.push((stratum.clone(), declared_row_bound(descriptor)));
     }
@@ -394,8 +440,13 @@ enum Outcome<'a> {
         declaration: &'a RankedDeclaration,
         /// The stratum it ranks within.
         stratum: Iri,
-        /// The request-term indices it matched, ascending.
-        matched: Vec<u32>,
+        /// The request-term indices whose shape it accepts, ascending. This is
+        /// the set a mandatory declaration's *presence* answers for.
+        accepted: Vec<u32>,
+        /// The subset of [`Self::Matched::accepted`] the matching alternative
+        /// also declares a placement for, ascending — the terms this producer
+        /// actually receives, and therefore the ones it is bound to.
+        carried: Vec<u32>,
     },
 }
 
@@ -407,6 +458,11 @@ enum Outcome<'a> {
 /// the one its stratum finally records. An unbounded stratum with no statistic
 /// has no finite depth here; it is carried as [`u32::MAX`] rather than refused,
 /// because the refusal belongs to the surviving set and is raised there.
+///
+/// The terms read are the **carried** ones, matching what `plan` finally
+/// records. Reading the accepted set instead would let a stratum's provisional
+/// depth be narrowed by a selectivity its final depth is not, which is the one
+/// direction the invariant above forbids.
 fn depth_bounds(
     candidates: &[Candidate<'_>],
     terms: &[RequestTerm],
@@ -418,7 +474,7 @@ fn depth_bounds(
         let Outcome::Matched {
             descriptor,
             stratum,
-            matched,
+            carried,
             ..
         } = &candidate.outcome
         else {
@@ -430,7 +486,7 @@ fn depth_bounds(
         reaching
             .entry(stratum.clone())
             .or_default()
-            .extend(matched.iter().copied());
+            .extend(carried.iter().copied());
     }
     bounds
         .into_iter()
@@ -462,27 +518,50 @@ fn terms_at<'a>(terms: &'a [RequestTerm], indices: Option<&BTreeSet<u32>>) -> Ve
 /// Every request term no binding carries, ascending, with the reason it went
 /// unserved.
 ///
-/// The two reasons are read off the passes that produced them and are not
-/// interchangeable. A term no [`Outcome::Matched`] candidate lists was never
-/// accepted by any declaration in the registry — nothing was a candidate for it,
-/// which is [`UnservedReason::NoProducerAccepts`]. A term some candidate did
-/// list, that nonetheless reaches no binding, was accepted and then left with
-/// nothing to answer it when every acceptor was rejected at placement, which is
-/// [`UnservedReason::EveryAcceptingProducerRejected`] and sends the reader to
-/// that producer's own recorded dimension.
+/// The three reasons are read off the passes that produced them and are not
+/// interchangeable:
+///
+/// * a term no [`Outcome::Matched`] candidate accepts was never accepted by any
+///   declaration in the registry — nothing was a candidate for it, which is
+///   [`UnservedReason::NoProducerAccepts`];
+/// * a term some candidate would have **carried** — its matching alternative
+///   declares a placement for it — that nonetheless reaches no binding was left
+///   with nothing to answer it when every such acceptor was rejected at
+///   placement, which is [`UnservedReason::EveryAcceptingProducerRejected`] and
+///   sends the reader to that producer's own recorded dimension;
+/// * a term every accepting candidate accepts *without* a placement reaches a
+///   producer that was never going to write it down, which is
+///   [`UnservedReason::AcceptedWithoutPlacement`].
+///
+/// The order of the last two is the order of what a caller can act on. "Someone
+/// could have carried this and was rejected" names a producer whose refusal is
+/// recorded and fixable; "everyone who takes this shape declares nowhere to put
+/// it" names a registry with no such producer at all. A term that is both gets
+/// the first, because the first is the narrower fact.
 fn unserved_terms(
     terms: &[RequestTerm],
     candidates: &[Candidate<'_>],
     bindings: &[ProducerBinding],
 ) -> Vec<UnservedTerm> {
     let mut accepted = vec![false; terms.len()];
+    let mut carried = vec![false; terms.len()];
     for candidate in candidates {
-        let Outcome::Matched { matched, .. } = &candidate.outcome else {
+        let Outcome::Matched {
+            accepted: candidate_accepted,
+            carried: candidate_carried,
+            ..
+        } = &candidate.outcome
+        else {
             continue;
         };
-        for index in matched {
-            if let Some(slot) = accepted.get_mut(*index as usize) {
-                *slot = true;
+        for (indices, flags) in [
+            (candidate_accepted, &mut accepted),
+            (candidate_carried, &mut carried),
+        ] {
+            for index in indices {
+                if let Some(slot) = flags.get_mut(*index as usize) {
+                    *slot = true;
+                }
             }
         }
     }
@@ -500,8 +579,10 @@ fn unserved_terms(
         .filter(|(_, served)| !**served)
         .map(|(index, _)| UnservedTerm {
             request_term: u32::try_from(index).unwrap_or(u32::MAX),
-            reason: if accepted[index] {
+            reason: if carried[index] {
                 UnservedReason::EveryAcceptingProducerRejected
+            } else if accepted[index] {
+                UnservedReason::AcceptedWithoutPlacement
             } else {
                 UnservedReason::NoProducerAccepts
             },

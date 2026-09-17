@@ -76,10 +76,10 @@ fn vector_request() -> RetrievalRequest {
 /// object-side position. The mocks are arity (1,1) and project `?c0`, so the
 /// candidate is position 0 and a rendered facet binds at position 1.
 ///
-/// An unconstrained `TermKind::Any` pattern is the exception: it also accepts a
-/// vector term, whose query embedding has no SPARQL constant form, so it
-/// declares no placement at all. Its argument stays a free variable, which is
-/// exactly what "I take the whole request without needing it written out" is.
+/// An unconstrained `TermKind::Any` pattern is the exception: it declares **no**
+/// placement at all, so it is matched by every request term and receives none of
+/// them. Its argument stays free, and the plan reports every term that reached
+/// only this producer — matching a shape is not the same as receiving it.
 fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
     patterns
         .into_iter()
@@ -118,12 +118,65 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
 
 /// A mock relation of arity (1,1) declaring `rows` rows per invocation.
 fn relation(rows: u64) -> Arc<dyn PropertyFunction> {
-    let arity = PfArity::new(1, 1);
+    relation_of_arity(rows, 1)
+}
+
+/// A mock relation of arity `(1, object)` declaring `rows` rows per invocation.
+fn relation_of_arity(rows: u64, object: usize) -> Arc<dyn PropertyFunction> {
+    let arity = PfArity::new(1, object);
     Arc::new(MockProducer {
         arity,
         mode: arity.all_free_mode(),
         rows,
     })
+}
+
+/// `pf/pair`: one producer that genuinely **receives** two request terms, by
+/// accepting two distinguishable shapes and placing each in its own argument
+/// position.
+///
+/// Needed wherever a claim is about the terms a producer holds rather than the
+/// ones it matches. Two terms of the same shape could not both be received — a
+/// placement is declared per shape, so the second would contend for the first's
+/// position — so a multi-term producer is a multi-shape one.
+fn pair_registry() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/pair"),
+        relation_of_arity(200, 2),
+        RankedDeclaration {
+            stratum: kernel_iri(&ex("stratum/pair")),
+            accepted_terms: vec![
+                AcceptedTerm {
+                    pattern: TermPattern::of_kind(TermKind::Literal),
+                    placements: vec![TermPlacement {
+                        facet: RequestFacet::Value,
+                        position: 1,
+                        datatype: None,
+                    }],
+                },
+                AcceptedTerm {
+                    pattern: TermPattern::of_kind(TermKind::Iri),
+                    placements: vec![TermPlacement {
+                        facet: RequestFacet::Value,
+                        position: 2,
+                        datatype: None,
+                    }],
+                },
+            ],
+            depth_placement: None,
+            candidate_position: 0,
+            ordering: RankOrdering::StrictlyDescending,
+            duplicates: DuplicatePolicy::Unique,
+            mandatory: false,
+        },
+    );
+    registry
+}
+
+/// A request of two shapes one producer can hold at once.
+fn lexical_and_seed_request() -> RetrievalRequest {
+    RetrievalRequest::from_terms(vec![lexical_term(), seed_term()])
 }
 
 /// The mixed registry: one catch-all (`Any`) producer, one
@@ -189,6 +242,7 @@ fn fixture_statistics() -> MockStatistics {
     cardinalities.insert(iri(&ex("stratum/universal")), 1000);
     cardinalities.insert(iri(&ex("stratum/text")), 100);
     cardinalities.insert(iri(&ex("stratum/graph")), 50);
+    cardinalities.insert(iri(&ex("stratum/pair")), 1000);
     cardinalities.insert(iri(&ex("body")), 500);
     MockStatistics {
         source: "example-statistics".to_owned(),
@@ -402,17 +456,82 @@ fn lexical_term_matches_a_literal_producer() {
 }
 
 #[test]
-fn vector_term_matches_only_an_any_producer() {
-    let plan = plan(&vector_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
-    let any = binding(&plan, &ex("pf/any")).expect("the Any producer accepts the vector");
-    assert_eq!(any.request_terms, vec![0]);
+fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound() {
+    // The registry's only acceptor of a vector term is the unconstrained
+    // catch-all, and it declares no placement. So the producer is selected — its
+    // pattern does match — and it is bound to NOTHING: an embedding that reached
+    // it reached none of its arguments, and a binding would claim otherwise.
+    //
+    // Asserting the binding alone could never see the difference, because a
+    // producer bound to a term it does not place and one bound to no term emit
+    // the identical text. What separates them is the per-term evidence, which is
+    // what this asserts.
+    let unplaced =
+        plan(&vector_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
+    let any =
+        binding(&unplaced, &ex("pf/any")).expect("the catch-all's pattern matches the vector");
     assert_eq!(
-        reason(&plan, &ex("pf/literal")),
-        Some(RejectionReason::NoAcceptedTerm)
+        any.request_terms,
+        Vec::<u32>::new(),
+        "it writes no part of the embedding, so it serves no term"
     );
     assert_eq!(
-        reason(&plan, &ex("pf/iri")),
+        unplaced.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 0,
+            reason: UnservedReason::AcceptedWithoutPlacement,
+        }],
+        "and the request says so by index rather than looking answered"
+    );
+    assert_eq!(unplaced.unserved_evidence(), unplaced.unserved_terms);
+    assert_eq!(
+        reason(&unplaced, &ex("pf/literal")),
+        Some(RejectionReason::NoAcceptedTerm),
+        "the text producer constrains a language a vector cannot carry"
+    );
+    assert_eq!(
+        reason(&unplaced, &ex("pf/iri")),
         Some(RejectionReason::NoAcceptedTerm)
+    );
+
+    // The neighbouring valid case, and the one that proves the arm is not a
+    // dead end: a producer declaring the datatype its own space reads an
+    // embedding under accepts the vector AND is bound to it. The emitted
+    // constant is pinned in `compile_request.rs`.
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/embedding"),
+        relation(100),
+        RankedDeclaration {
+            stratum: kernel_iri(&ex("stratum/embedding")),
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(TermKind::Literal),
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: 1,
+                    // Named by the host, never minted here.
+                    datatype: Some(ex("embedding")),
+                }],
+            }],
+            depth_placement: None,
+            candidate_position: 0,
+            ordering: RankOrdering::StrictlyDescending,
+            duplicates: DuplicatePolicy::Unique,
+            mandatory: false,
+        },
+    );
+    let served = plan(&vector_request(), &registry, &fixture_statistics())
+        .expect("the vector term reaches a producer that declares its datatype");
+    assert_eq!(
+        binding(&served, &ex("pf/embedding"))
+            .expect("the embedding producer is bound")
+            .request_terms,
+        vec![0]
+    );
+    assert_eq!(
+        served.unserved_terms,
+        Vec::new(),
+        "nothing is unserved: the embedding reached a producer with its content"
     );
 }
 
@@ -445,7 +564,8 @@ fn language_and_predicate_constraints_are_enforced() {
     }]);
     let plan = plan(&request, &mixed_registry(), &fixture_statistics()).expect("plans");
     // The literal producer constrains language `en` and predicate `body`, so it
-    // rejects; only the unconstrained `Any` producer takes the term.
+    // rejects; only the unconstrained `Any` producer matches the term — and it
+    // declares no placement, so it receives none of it.
     assert_eq!(
         reason(&plan, &ex("pf/literal")),
         Some(RejectionReason::NoAcceptedTerm)
@@ -454,7 +574,14 @@ fn language_and_predicate_constraints_are_enforced() {
         binding(&plan, &ex("pf/any"))
             .expect("Any selected")
             .request_terms,
-        vec![0]
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        plan.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 0,
+            reason: UnservedReason::AcceptedWithoutPlacement,
+        }]
     );
 }
 
@@ -588,12 +715,20 @@ fn a_term_every_acceptor_of_which_was_rejected_is_recorded_as_such() {
 
 #[test]
 fn a_request_every_term_of_which_is_served_records_nothing() {
-    // The neighbouring valid case: the mixed request reaches a producer for each
-    // of its three terms, so there is no per-term evidence to report at all.
-    let plan = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
+    // The neighbouring valid case, and the exact meaning of an empty list: every
+    // term reached a producer WITH its content. The needle reaches the literal
+    // producer, which places it; the seed reaches the IRI producer, which places
+    // it. The catch-all matches both and places neither, which adds nothing to
+    // the evidence either way, because the two terms are already carried.
+    let plan = plan(
+        &lexical_and_seed_request(),
+        &mixed_registry(),
+        &fixture_statistics(),
+    )
+    .expect("plans");
     assert!(
         plan.unserved_terms.is_empty(),
-        "every term reached a producer, got {:?}",
+        "every term reached a producer that places it, got {:?}",
         plan.unserved_terms
     );
     assert!(
@@ -601,6 +736,52 @@ fn a_request_every_term_of_which_is_served_records_nothing() {
         "and the evidence it supports is empty too, got {:?}",
         plan.unserved_evidence()
     );
+    for (producer, terms) in [(ex("pf/literal"), vec![0_u32]), (ex("pf/iri"), vec![1])] {
+        assert_eq!(
+            binding(&plan, &producer)
+                .expect("the placing producer is bound")
+                .request_terms,
+            terms,
+            "{producer} holds the term whose content it renders"
+        );
+    }
+}
+
+#[test]
+fn a_producer_that_reads_nothing_of_the_request_still_plans_and_serves_no_term() {
+    // The configuration that makes "matched but not received" worth carrying
+    // rather than refusing at registration: a stratum whose ranking is
+    // request-independent — a quality prior, fused beside the rest — accepts
+    // every shape and reads none of it. Such a producer takes part in the answer
+    // and its stratum emits, and the plan is honest that the request itself
+    // reached nothing.
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/prior"),
+        relation(100),
+        ranked(
+            &ex("stratum/prior"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            false,
+        ),
+    );
+    let plan = plan(&lexical_request(), &registry, &fixture_statistics())
+        .expect("a request-independent producer is still a producer");
+    assert_eq!(
+        binding(&plan, &ex("pf/prior"))
+            .expect("it is selected and its stratum emits")
+            .request_terms,
+        Vec::<u32>::new()
+    );
+    assert_eq!(
+        plan.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 0,
+            reason: UnservedReason::AcceptedWithoutPlacement,
+        }],
+        "and the needle is reported rather than counted as answered"
+    );
+    assert_eq!(plan.stratum_depths[&iri(&ex("stratum/prior"))], 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -803,19 +984,44 @@ fn an_interval_predicate_reaches_the_statistics_snapshot() {
 // 3. Producer selection
 // ---------------------------------------------------------------------------
 
-/// Breadth of a pattern, not mandatory-ness: an unconstrained pattern matches
-/// every term, so the planner binds every term to it. Whether the producer may
-/// be dropped is a separate fact the registry declares, and admission reads it
-/// from there rather than deriving it from this breadth.
+/// Breadth of a pattern decides what a producer *matches*; its placements decide
+/// what it is *bound to*. Both halves are executed here, because a rule that
+/// conflated them would bind a producer to terms it never receives.
+///
+/// Whether the producer may be dropped is a third, separate fact the registry
+/// declares, and admission reads it from there rather than deriving it from
+/// either of these.
 #[test]
-fn an_unconstrained_producer_is_bound_to_every_term() {
-    let plan = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
+fn an_unconstrained_producer_matches_every_term_and_holds_the_ones_it_places() {
+    // Unconstrained and placement-free: matched by all three, bound to none.
+    let matched = plan(&mixed_request(), &mixed_registry(), &fixture_statistics()).expect("plans");
     assert_eq!(
-        binding(&plan, &ex("pf/any"))
+        binding(&matched, &ex("pf/any"))
             .expect("Any producer selected")
             .request_terms,
-        vec![0, 1, 2]
+        Vec::<u32>::new()
     );
+    assert_eq!(
+        reason(&matched, &ex("pf/any")),
+        None,
+        "matching is what selected it; placing nothing is not a rejection"
+    );
+
+    // The other half: a producer whose accepted shapes each carry a placement is
+    // bound to every term it places, which here is the whole request.
+    let held = plan(
+        &lexical_and_seed_request(),
+        &pair_registry(),
+        &fixture_statistics(),
+    )
+    .expect("plans");
+    assert_eq!(
+        binding(&held, &ex("pf/pair"))
+            .expect("the pair producer is selected")
+            .request_terms,
+        vec![0, 1]
+    );
+    assert_eq!(held.unserved_terms, Vec::new());
 }
 
 #[test]
@@ -1057,13 +1263,18 @@ fn a_selectivity_rounds_up_and_never_raises_a_declared_depth() {
 /// ranked list with nothing saying so.
 #[test]
 fn selectivities_across_the_terms_one_stratum_receives_are_summed() {
+    // Over `pf/pair`, which genuinely receives both terms. A selectivity is a
+    // statement about the rows a term matches, so only a term the stratum's
+    // producer actually holds can bound its depth — which is why this is not
+    // asserted over a placement-free catch-all, whose rows no request term
+    // filters at all.
     let reported = selectivity_statistics(vec![
-        (iri(&ex("stratum/universal")), lexical_term(), 300_000),
-        (iri(&ex("stratum/universal")), vector_term(), 400_000),
+        (iri(&ex("stratum/pair")), lexical_term(), 300_000),
+        (iri(&ex("stratum/pair")), seed_term(), 400_000),
     ]);
-    let planned = plan(&mixed_request(), &mixed_registry(), &reported).expect("plans");
+    let planned = plan(&lexical_and_seed_request(), &pair_registry(), &reported).expect("plans");
     assert_eq!(
-        planned.stratum_depths[&iri(&ex("stratum/universal"))],
+        planned.stratum_depths[&iri(&ex("stratum/pair"))],
         140,
         "seven tenths of the 200-row bound, not the three tenths the most selective term names"
     );
@@ -1072,10 +1283,31 @@ fn selectivities_across_the_terms_one_stratum_receives_are_summed() {
             .statistics_snapshot
             .entries
             .iter()
-            .find(|entry| entry.subject == ex("stratum/universal"))
+            .find(|entry| entry.subject == ex("stratum/pair"))
             .and_then(|entry| entry.selectivity_ppm),
         Some(700_000),
         "the recorded aggregate is the one the depth was derived from"
+    );
+}
+
+#[test]
+fn a_selectivity_cannot_narrow_a_stratum_whose_producer_receives_no_term() {
+    // The mirror of the test above, and the reason the terms read are the
+    // carried ones. `pf/any` places nothing, so no request term filters its
+    // rows; a provider that reports a selectivity against its stratum is
+    // describing a filter that is not in the emitted query, and applying it
+    // would bound the stratum below the rows it really answers.
+    let reported = selectivity_statistics(vec![(
+        iri(&ex("stratum/universal")),
+        lexical_term(),
+        250_000,
+    )]);
+    assert_eq!(
+        plan(&lexical_request(), &mixed_registry(), &reported)
+            .expect("plans")
+            .stratum_depths[&iri(&ex("stratum/universal"))],
+        200,
+        "the declared bound, undisturbed"
     );
 }
 

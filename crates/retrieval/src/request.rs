@@ -12,7 +12,9 @@
 //!
 //! A term shape being expressible here is not a claim that some producer
 //! accepts it. [`RequestTerm::Vector`] is the standing example and says so on
-//! its own documentation. [`RequestTerm::Spatial`] is a second: the spatial
+//! its own documentation: it renders, and a producer that declares the datatype
+//! receives it, but no relation in this workspace declares that shape yet.
+//! [`RequestTerm::Spatial`] is a second: the spatial
 //! relation this workspace ships computes a **set** — it sorts and deduplicates
 //! its pairs and carries neither a score nor a rank — so it composes as a
 //! constraint on candidates rather than as a stratum of a fused ranking, and it
@@ -84,6 +86,23 @@ pub enum RequestTerm {
     },
     /// A vector (embedding) term.
     ///
+    /// # It renders, and a producer that declares the datatype receives it
+    ///
+    /// A query embedding has a constant form: the components' exact bit
+    /// patterns, written as one literal by
+    /// [`encode_embedding`](crate::encode_embedding) and read back by
+    /// [`decode_embedding`](crate::decode_embedding). Like a geometry, it is
+    /// written under a datatype the *producer* declares — required, never
+    /// fabricated, because PurRDF mints no vocabulary — and the producer that
+    /// declares it owns the parse. A producer whose value placement declares no
+    /// datatype is refused at placement rather than handed an embedding under a
+    /// datatype this layer invented.
+    ///
+    /// A producer accepting [`TermKind::Literal`](purrdf_sparql_eval::TermKind)
+    /// is therefore reachable by this arm, exactly as it is by a needle, a
+    /// geometry or an interval endpoint: what all of those have in common is the
+    /// RDF term kind they are written as.
+    ///
     /// # No producer in this workspace accepts this shape yet
     ///
     /// The nearest-neighbour producer this repository ships
@@ -102,9 +121,7 @@ pub enum RequestTerm {
     /// different placements, different failure when the space cannot answer — so
     /// folding them together would let a request for one be silently answered by
     /// the other, which is precisely the class of wrong answer the declaration
-    /// machinery exists to make impossible. An embedding also has no SPARQL
-    /// constant form, so a producer declaring a value placement for this arm is
-    /// refused at placement rather than emitted as a call that drops it.
+    /// machinery exists to make impossible.
     Vector {
         /// The query embedding.
         embedding: Vec<f32>,

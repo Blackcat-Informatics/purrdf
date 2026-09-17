@@ -185,9 +185,12 @@
 //! embedding is the only float in the crate ([`RequestTerm::Vector`]), and it
 //! is carried, never computed with: it is compared by
 //! [`f32::to_bits`](f32::to_bits) — a total, reflexive function, which is what
-//! makes `RequestTerm`'s `Eq` genuine — and encoded into a plan's canonical
-//! bytes by the same bit pattern. Storing a float and doing arithmetic on one
-//! are different acts, and only the second is refused.
+//! makes `RequestTerm`'s `Eq` genuine — encoded into a plan's canonical bytes by
+//! the same bit pattern, and written into the emitted query as that bit pattern
+//! in hex ([`encode_embedding`]). All three readings are the one identity, which
+//! is why two plans that are equal compile to one query and two that are not
+//! never do. Storing a float and doing arithmetic on one are different acts, and
+//! only the second is refused.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
@@ -200,6 +203,7 @@
 mod admission;
 mod canonical;
 mod compile;
+mod embedding;
 mod error;
 mod execute;
 mod fixed;
@@ -220,6 +224,7 @@ mod statistics;
 
 pub use admission::{AdmissionEnvironment, AdmissionError};
 pub use compile::{CompiledRetrieval, StratumUnit, compile};
+pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{FusionError, PlanError};
 pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, execute};
 pub use fuse::{FusionResult, TopK, fuse};

@@ -69,6 +69,7 @@ const REJECT_UNSATISFIED_CONSTRAINT: u8 = 3;
 const UNSERVED_NO_PRODUCER_ACCEPTS: u8 = 0;
 const UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED: u8 = 1;
 const UNSERVED_UNBOUND: u8 = 2;
+const UNSERVED_ACCEPTED_WITHOUT_PLACEMENT: u8 = 3;
 
 const PRESENT: u8 = 1;
 const ABSENT: u8 = 0;
@@ -225,6 +226,27 @@ pub enum UnservedReason {
     /// producer's own dimension is in
     /// [`Plan::producer_decisions`](Plan::producer_decisions).
     EveryAcceptingProducerRejected,
+    /// Some producer's declaration accepts this term's shape, and the
+    /// alternative that matched it declares **no placement** — so the producer
+    /// would be invoked with none of the term written into its arguments.
+    ///
+    /// This is the distinction between a producer that *matches* a term and one
+    /// that *receives* it. A declaration is entitled to accept a shape it wants
+    /// matched but not written: such a producer ranks within its stratum without
+    /// reading this term, and it is selected and emitted like any other. What it
+    /// does not do is serve the term, so the term is reported here rather than
+    /// recorded as bound — an empty
+    /// [`Plan::unserved_terms`](Plan::unserved_terms) means every term reached a
+    /// producer *with its content*, and a term whose content reached nothing
+    /// cannot be one of them.
+    ///
+    /// Which producer matched it is in
+    /// [`Plan::producer_decisions`](Plan::producer_decisions) and
+    /// [`Plan::producer_bindings`](Plan::producer_bindings), the same place
+    /// [`Self::EveryAcceptingProducerRejected`] sends a reader for the same
+    /// reason: this value is per term, and naming a producer in it would make
+    /// one term's evidence depend on which of several producers was named.
+    AcceptedWithoutPlacement,
     /// The plan routes this term to no producer and records no reason of its
     /// own for that.
     ///
@@ -309,6 +331,17 @@ pub struct Plan {
     /// [`Self::producer_bindings`] alone: "nothing accepts this shape" and
     /// "something accepts it but every acceptor was rejected" are different
     /// facts about a registry, and only the planner saw both.
+    ///
+    /// # What an empty list means
+    ///
+    /// That every request term reached a producer **with its content**: some
+    /// binding carries the term, and the alternative that matched it renders at
+    /// least one of its facets into an argument position, so the emitted query
+    /// text contains it. A producer that matches a term and declares no
+    /// placement for it is not serving that term — it is being called with the
+    /// term absent from its arguments — and the term appears here as
+    /// [`UnservedReason::AcceptedWithoutPlacement`] rather than in that
+    /// producer's [`ProducerBinding::request_terms`].
     ///
     /// Read the evidence through [`Self::unserved_evidence`] rather than from
     /// this field: an edited plan's bindings and this list can disagree, and the
@@ -557,22 +590,25 @@ fn unserved_tag(reason: UnservedReason) -> u8 {
         UnservedReason::EveryAcceptingProducerRejected => {
             UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED
         }
+        UnservedReason::AcceptedWithoutPlacement => UNSERVED_ACCEPTED_WITHOUT_PLACEMENT,
         UnservedReason::Unbound => UNSERVED_UNBOUND,
     }
 }
 
 /// The unserved-term reason a canonical discriminator byte names.
 ///
-/// Refused rather than defaulted. The three reasons are distinguishable facts
-/// about the registry — nothing accepted the term, everything that accepted it
-/// was then rejected, or the plan was edited — and collapsing one into another
-/// is exactly the loss [`Plan::unserved_terms`] exists to prevent.
+/// Refused rather than defaulted. The four reasons are distinguishable facts
+/// about the registry — nothing accepted the term, something accepted it and
+/// declared nowhere to put it, everything that accepted it was then rejected, or
+/// the plan was edited — and collapsing one into another is exactly the loss
+/// [`Plan::unserved_terms`] exists to prevent.
 fn unserved_from_tag(tag: u8) -> Result<UnservedReason, PlanError> {
     match tag {
         UNSERVED_NO_PRODUCER_ACCEPTS => Ok(UnservedReason::NoProducerAccepts),
         UNSERVED_EVERY_ACCEPTING_PRODUCER_REJECTED => {
             Ok(UnservedReason::EveryAcceptingProducerRejected)
         }
+        UNSERVED_ACCEPTED_WITHOUT_PLACEMENT => Ok(UnservedReason::AcceptedWithoutPlacement),
         UNSERVED_UNBOUND => Ok(UnservedReason::Unbound),
         tag => Err(PlanError::InvalidTag {
             what: "unserved term reason",

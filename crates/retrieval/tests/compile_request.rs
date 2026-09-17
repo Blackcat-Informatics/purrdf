@@ -720,25 +720,140 @@ fn an_untagged_needle_is_refused_where_a_language_position_is_declared() {
     );
 }
 
-#[test]
-fn a_vector_term_is_refused_and_a_seed_is_admitted() {
-    let (registry, _) = any_registry();
-    let stats = statistics(&[("any", 5)]);
+/// The datatype the fixture producer declares for a query embedding.
+///
+/// Named by the *host*: PurRDF mints no vocabulary, so a producer that declares
+/// none has its value placement refused rather than rendered under an invented
+/// one — exactly as a geometry's datatype is required.
+fn embedding_datatype() -> String {
+    ex("embedding")
+}
 
-    let refused = plan(
-        &request(vec![RequestTerm::Vector {
-            embedding: vec![0.25, -1.5, 3.0],
-            metric: Metric::Cosine,
-            index_hint: None,
-        }]),
-        &registry,
-        &stats,
-    );
+/// A producer that reads a query embedding: it accepts a literal (which is what
+/// an embedding is written as) and names the datatype its own space reads one
+/// under.
+fn embedding_registry() -> (PropertyFunctionRegistry, BTreeMap<String, Log>) {
+    registry_of(vec![(
+        "embedding",
+        Spec::new(
+            "embedding",
+            vec![alternative(
+                TermPattern::of_kind(TermKind::Literal),
+                vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: 1,
+                    datatype: Some(embedding_datatype()),
+                }],
+            )],
+        ),
+    )])
+}
+
+fn vector(embedding: Vec<f32>) -> RequestTerm {
+    RequestTerm::Vector {
+        embedding,
+        metric: Metric::Cosine,
+        index_hint: None,
+    }
+}
+
+#[test]
+fn an_untyped_embedding_is_refused_and_a_typed_one_carries_the_vector() {
+    let embedding = vec![0.25_f32, -1.5, 3.0];
+    let stats = statistics(&[("any", 5), ("embedding", 5)]);
+
+    // Refused: the catch-all declares a value placement with no datatype, and
+    // this layer mints none, so there is nothing to write the embedding under.
+    let (untyped, _) = any_registry();
+    let refused = plan(&request(vec![vector(embedding.clone())]), &untyped, &stats);
     assert!(
         matches!(refused, Err(PlanError::NoApplicableProducers)),
-        "an embedding has no SPARQL constant form; got {refused:?}"
+        "a producer that declares no embedding datatype cannot receive one; got {refused:?}"
     );
 
+    // Admitted, and the embedding is IN the emitted text — the whole unit,
+    // verbatim, so nothing about the constant is asserted by substring alone.
+    let (typed, logs) = embedding_registry();
+    let sparql = compile_one(&typed, &stats, vec![vector(embedding.clone())]);
+    let lexical = purrdf_retrieval::encode_embedding(&embedding);
+    assert_eq!(
+        lexical, "3E800000 BFC00000 40400000",
+        "the components' exact bit patterns, in order"
+    );
+    let constant = format!("\"{lexical}\"^^<{}>", embedding_datatype());
+    assert_eq!(
+        sparql,
+        format!(
+            "SELECT ?candidate WHERE {{\n  \
+             {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{}> ( {constant} ) }} \
+             LIMIT 5 }}\n}}\nLIMIT 5",
+            ex("pf/embedding")
+        )
+    );
+
+    // The producer that declared the datatype owns the parse, and it recovers
+    // the vector the caller handed in — bit for bit, which is what makes two
+    // plans with one identity compile to one query.
+    run_query(&sparql, &typed);
+    let calls = logs[&ex("pf/embedding")]
+        .lock()
+        .expect("the fixture log is never poisoned")
+        .clone();
+    assert_eq!(calls.len(), 1, "one invocation for one branch");
+    let Some(TermValue::Literal {
+        lexical_form,
+        datatype,
+        language: None,
+        direction: None,
+    }) = calls[0].args[1].clone()
+    else {
+        panic!(
+            "the embedding arrives as a typed literal, got {:?}",
+            calls[0]
+        );
+    };
+    assert_eq!(datatype, embedding_datatype());
+    let decoded = purrdf_retrieval::decode_embedding(&lexical_form)
+        .expect("the producer reads back what the layer wrote");
+    assert_eq!(
+        decoded
+            .iter()
+            .copied()
+            .map(f32::to_bits)
+            .collect::<Vec<_>>(),
+        embedding
+            .iter()
+            .copied()
+            .map(f32::to_bits)
+            .collect::<Vec<_>>(),
+        "the rendered lexical recovers the exact input vector"
+    );
+}
+
+#[test]
+fn two_different_embeddings_compile_to_different_queries() {
+    // The headline claim, read at the vector arm: the request is in the text, so
+    // two requests that differ compile to two queries. The signed-zero pair is
+    // the case a decimal lexical would have collapsed — two distinct bit
+    // patterns, one decimal spelling — which is why the form is the bits.
+    let (registry, _) = embedding_registry();
+    let stats = statistics(&[("embedding", 5)]);
+    let first = compile_one(&registry, &stats, vec![vector(vec![0.25, -1.5])]);
+    let second = compile_one(&registry, &stats, vec![vector(vec![0.25, 1.5])]);
+    assert_ne!(first, second);
+
+    let positive = compile_one(&registry, &stats, vec![vector(vec![0.0])]);
+    let negative = compile_one(&registry, &stats, vec![vector(vec![-0.0])]);
+    assert_ne!(
+        positive, negative,
+        "two request terms with distinct identities must not compile to one query"
+    );
+}
+
+#[test]
+fn a_seed_is_admitted_as_the_rendered_constant() {
+    let (registry, _) = any_registry();
+    let stats = statistics(&[("any", 5)]);
     let sparql = compile_one(&registry, &stats, vec![seed(&format!("<{}>", ex("s")))]);
     assert!(
         sparql.contains(&format!("<{}>", ex("s"))),

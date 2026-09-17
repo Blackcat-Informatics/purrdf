@@ -18,7 +18,7 @@
 //!
 //! * every producer the registry declares **mandatory** is present, is bound to
 //!   the stratum the registry ranks it under, and receives every request term
-//!   **its own declaration accepts**;
+//!   **its own declaration accepts and places**;
 //! * every stratum carries at most one binding, which is the plan-side face of
 //!   the registry's one-stratum-one-producer rule;
 //! * every stratum depth respects the registry's declared row bound, and — when
@@ -101,6 +101,16 @@
 //! there is no term to have dropped it from, so no coverage claim the request can
 //! falsify, and the producer is simply not part of that request's answer.
 //!
+//! One further narrowing, and it is the same argument read once more. A
+//! declaration can accept a shape and declare no placement for it, which means
+//! the producer is called with none of that term written into its arguments. The
+//! *binding count* is therefore taken over the terms the declaration can
+//! actually **receive** — accepted, and placed somewhere — because a binding is
+//! the claim that the producer got the term, and no honest plan can make that
+//! claim for a term whose content reaches no argument position. Presence still
+//! quantifies over the accepted set: a mandatory producer that accepts something
+//! of the request must be in the plan, even if what it accepts it does not read.
+//!
 //! Declaring a producer mandatory is therefore a claim with teeth, and it bites
 //! in two distinguishable ways:
 //!
@@ -127,7 +137,7 @@ use purrdf_text::Fixed;
 use crate::fusion_profile::FusionProfile;
 use crate::id::PLAN_VERSION;
 use crate::iri::Iri;
-use crate::matching::pattern_matches;
+use crate::matching::{carries_content, pattern_matches};
 use crate::plan::{Plan, PlanOrigin, ProducerBinding};
 use crate::statistics::Statistics;
 
@@ -203,26 +213,28 @@ pub enum AdmissionError {
     },
 
     /// A producer the registry declares mandatory is present but was not bound
-    /// to every request term **its own declaration accepts**.
+    /// to every request term **its own declaration can receive**.
     ///
-    /// The two counts are both about that accepted set, never about the request
+    /// The two counts are both about that received set, never about the request
     /// as a whole: `required` is how many of the plan's request terms the
-    /// producer's declared patterns accept, and `provided` is how many of those
-    /// the plan actually binds it to. A term the producer cannot accept appears
-    /// in neither number, because it was never this producer's to serve — see
-    /// this module's header for why the wider reading refused plans that were
+    /// producer's declared patterns accept *and place into an argument
+    /// position*, and `provided` is how many of those the plan actually binds it
+    /// to. A term the producer cannot accept, or accepts without declaring
+    /// anywhere to put it, appears in neither number — the first was never this
+    /// producer's to serve and the second reaches none of its arguments. See
+    /// this module's header for why the wider readings refused plans that were
     /// always legitimate.
     #[error(
         "the registry's mandatory producer {producer} must receive every request term its \
-         declaration accepts but is bound to {provided} of {required}"
+         declaration places but is bound to {provided} of {required}"
     )]
     InsufficientBindings {
         /// The registered producer IRI that was under-bound.
         producer: Box<Iri>,
         /// How many of the plan's request terms the producer's declaration
-        /// accepts, and which it must therefore receive.
+        /// accepts and places, and which it must therefore receive.
         required: usize,
-        /// How many of those accepted terms it was actually bound to.
+        /// How many of those it was actually bound to.
         provided: usize,
     },
 
@@ -494,6 +506,33 @@ fn accepted_request_terms(plan: &Plan, descriptor: Option<&PfDescriptor>) -> Vec
         .collect()
 }
 
+/// Which of the plan's request terms a producer's declaration can actually
+/// *receive*: accepted, and placed somewhere by the alternative that accepted
+/// them.
+///
+/// This is the set a mandatory producer's binding count is held to, and it is
+/// narrower than [`accepted_request_terms`] by exactly the terms whose matching
+/// alternative declares no placement. Holding a producer to those would demand a
+/// binding no planner can honestly write: the term's content reaches no argument
+/// position, so binding it would claim a service the emitted text does not
+/// perform. A promise cannot extend past what the thing promising can do, which
+/// is the same reasoning that made the promise quantify over accepted shapes
+/// rather than over the whole request.
+///
+/// The rule is [`carries_content`] — the planner's own, called here rather than
+/// restated.
+fn carried_request_terms(plan: &Plan, descriptor: Option<&PfDescriptor>) -> Vec<u32> {
+    let Some(declaration) = descriptor.and_then(|descriptor| descriptor.ranked.as_ref()) else {
+        return Vec::new();
+    };
+    plan.request_terms
+        .iter()
+        .enumerate()
+        .filter(|(_, term)| carries_content(declaration, term))
+        .map(|(index, _)| u32::try_from(index).unwrap_or(u32::MAX))
+        .collect()
+}
+
 /// Parse a registry IRI, mapping a refusal to a malformed-plan error.
 ///
 /// A registry predicate IRI was validated when registered, so this cannot fail in
@@ -643,8 +682,12 @@ pub(crate) fn admit_plan<'a>(
                 ),
             });
         }
-        let required = accepted.len();
-        let provided = accepted
+        // Held to the terms it can receive, not merely to the ones it matches:
+        // an accepted shape with no placement reaches no argument position, so
+        // there is no binding for the plan to be missing.
+        let carried = carried_request_terms(plan, descriptors.get(producer));
+        let required = carried.len();
+        let provided = carried
             .iter()
             .filter(|index| binding.request_terms.contains(index))
             .count();

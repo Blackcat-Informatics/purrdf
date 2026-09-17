@@ -572,6 +572,16 @@ impl TextSearchRelation {
     ///   with its tag intact — a placement that declared a datatype would make a
     ///   tagged needle unrenderable, because a literal is typed or tagged and
     ///   never both.
+    ///
+    ///   The absent datatype also decides what happens to a request term that is
+    ///   written as a literal but is *not* a needle — a query embedding above
+    ///   all. Such a term matches the `Literal` pattern above (that is what it
+    ///   renders as), and its value placement requires a datatype naming the
+    ///   encoding the producer reads. This declaration supplies none, so the
+    ///   producer is refused for that request and dropped from the plan rather
+    ///   than handed an embedding's lexical as a needle to tokenize. A host that
+    ///   also runs an embedding producer declares it separately, with the
+    ///   datatype its own space reads.
     /// * **No `Language` placement**, so `?lang` stays free. Declaring one would
     ///   refuse every untagged request term, which is the larger population;
     ///   a host that wants a tag to *select* a partition writes its own

@@ -21,6 +21,16 @@
 //! [`AcceptedTerm`] so a reader cannot mis-align them, and they are paired here
 //! for the same reason.
 //!
+//! # Matching is not receiving
+//!
+//! An alternative can match a term and declare no placement for it. That is a
+//! producer saying "call me for this request, but write none of it into my
+//! arguments" — a legitimate declaration, and one whose invocation carries no
+//! trace of the term. [`carries_content`] is the third question, asked between
+//! the other two: does the alternative that matched place anything? A term it
+//! does not is not bound to that producer, because binding it would record a
+//! term as served while transporting nothing.
+//!
 //! # The `Value`/`Language` interaction, stated once
 //!
 //! A lexical request term is a needle *and*, sometimes, a language tag. Where
@@ -45,6 +55,7 @@ use purrdf_sparql_eval::{
     PfDescriptor, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
 };
 
+use crate::embedding::encode_embedding;
 use crate::render::{self, RDF_LANG_STRING, XSD_STRING};
 use crate::request::RequestTerm;
 
@@ -199,17 +210,44 @@ pub(crate) fn kind_matches(kind: TermKind, term: &RequestTerm) -> bool {
         return true;
     }
     match term {
-        // An interval's endpoints are literals, the same RDF term kind a needle
-        // and a geometry target, so a literal-accepting producer is reachable by
-        // one.
+        // Every one of these renders as a literal, which is the whole of what a
+        // declared kind classifies: an interval's endpoints, a needle, a
+        // geometry and a query embedding are all written as literals, so a
+        // literal-accepting producer is reachable by any of them. What each one
+        // then *needs* of the placement differs — an embedding and a geometry
+        // need the producer's declared datatype, an interval needs two endpoint
+        // positions rather than one value position — and that is decided at
+        // placement, by the producer's own declaration, not here.
         RequestTerm::Lexical { .. }
         | RequestTerm::Spatial { .. }
         | RequestTerm::Temporal { .. }
-        | RequestTerm::NumericRange { .. } => kind == TermKind::Literal,
+        | RequestTerm::NumericRange { .. }
+        | RequestTerm::Vector { .. } => kind == TermKind::Literal,
         RequestTerm::EntitySeed { entity } => seed_kind(entity.as_str()) == Some(kind),
-        // A vector term targets no RDF term kind; only `Any` accepts it.
-        RequestTerm::Vector { .. } => false,
     }
+}
+
+/// Whether the alternative `term` matches places any facet of it at all.
+///
+/// This is the difference between a producer that *matches* a request term and
+/// one that *receives* it. An [`AcceptedTerm`](purrdf_sparql_eval::AcceptedTerm)
+/// whose `placements` list is empty accepts the shape and renders none of it, so
+/// the emitted call carries no trace of the term: the producer is invoked, but
+/// with the whole request absent from its arguments. Binding such a term would
+/// record it as served while transporting nothing, which is exactly the claim
+/// [`Plan::unserved_terms`](crate::Plan::unserved_terms) exists to keep honest —
+/// so the planner routes it to
+/// [`UnservedReason::AcceptedWithoutPlacement`](crate::UnservedReason::AcceptedWithoutPlacement)
+/// instead.
+///
+/// The alternative consulted is the **first** whose pattern matches, because
+/// that is the one [`place`] will apply. Reading any other would let the two
+/// disagree about whether a term is carried.
+pub(crate) fn carries_content(decl: &RankedDeclaration, term: &RequestTerm) -> bool {
+    decl.accepted_terms
+        .iter()
+        .find(|accepted| pattern_matches(&accepted.pattern, term))
+        .is_some_and(|accepted| !accepted.placements.is_empty())
 }
 
 /// The RDF term kind a canonical seed lexical names, when it names one.
@@ -495,15 +533,26 @@ fn value_facet(
                 reason,
             })
         }
-        RequestTerm::Vector { embedding, .. } => Err(PlacementError::Unrenderable {
-            term_index,
-            facet,
-            reason: format!(
-                "producer {producer} declares a value placement for a {}-dimensional query \
-                 embedding, which has no SPARQL constant form",
-                embedding.len()
-            ),
-        }),
+        RequestTerm::Vector { embedding, .. } => {
+            let datatype = required_datatype(
+                producer,
+                term_index,
+                facet,
+                placement,
+                "PurRDF mints no datatype for a query embedding, so the producer must \
+                 declare the one its own space reads an embedding under — and it owns the \
+                 parse, through `decode_embedding`",
+            )?;
+            Ok(TermValue::Literal {
+                // Exact: the components' bit patterns, so the constant the
+                // producer reads is the vector the caller handed in. See
+                // `crate::embedding` for why a decimal form would not be.
+                lexical_form: encode_embedding(embedding),
+                datatype,
+                language: None,
+                direction: None,
+            })
+        }
         RequestTerm::Temporal { .. } | RequestTerm::NumericRange { .. } => {
             Err(PlacementError::Unrenderable {
                 term_index,
@@ -823,27 +872,70 @@ mod tests {
         );
     }
 
+    /// `example.org/embedding`, named by the *fixture producer*: PurRDF mints no
+    /// datatype for a query embedding, and a producer that declares none has its
+    /// value placement refused rather than rendered under an invented one.
+    fn embedding_datatype() -> String {
+        ex("embedding")
+    }
+
     #[test]
-    fn a_vector_is_unrenderable_but_a_seed_places() {
+    fn an_untyped_embedding_is_refused_but_a_typed_one_places_exactly() {
         let descriptor = descriptor(1, 1, &["ff"]);
-        let decl = declaration(any_accepting(value_at(1)), None);
+        let vector = RequestTerm::Vector {
+            embedding: vec![0.25, -1.5],
+            metric: Metric::Cosine,
+            index_hint: None,
+        };
         let error = place(
             &ex("pf/mock"),
             &descriptor,
-            &decl,
-            &[RequestTerm::Vector {
-                embedding: vec![0.25, -1.5],
-                metric: Metric::Cosine,
-                index_hint: None,
-            }],
+            &declaration(any_accepting(value_at(1)), None),
+            std::slice::from_ref(&vector),
             &[0],
             5,
         )
-        .expect_err("an embedding has no constant form");
-        assert!(
-            matches!(error, PlacementError::Unrenderable { .. }),
-            "got {error:?}"
+        .expect_err("an embedding under no declared datatype is not renderable");
+        match error {
+            PlacementError::Unrenderable { reason, .. } => {
+                assert!(reason.contains("embedding"), "{reason}");
+            }
+            other => panic!("expected Unrenderable, got {other:?}"),
+        }
+
+        // The neighbouring valid case: the producer names the datatype its own
+        // space reads an embedding under, and the components ride exactly.
+        let typed = place(
+            &ex("pf/mock"),
+            &descriptor,
+            &declaration(
+                any_accepting(vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: 1,
+                    datatype: Some(embedding_datatype()),
+                }]),
+                None,
+            ),
+            std::slice::from_ref(&vector),
+            &[0],
+            5,
+        )
+        .expect("a declared datatype makes the embedding renderable");
+        assert_eq!(
+            placed(&typed)[1],
+            format!("\"3E800000 BFC00000\"^^<{}>", embedding_datatype())
         );
+        assert_eq!(
+            crate::embedding::decode_embedding("3E800000 BFC00000"),
+            Ok(vec![0.25, -1.5]),
+            "and the lexical the producer receives recovers the exact vector"
+        );
+    }
+
+    #[test]
+    fn a_seed_places() {
+        let descriptor = descriptor(1, 1, &["ff"]);
+        let decl = declaration(any_accepting(value_at(1)), None);
         let seeded = place(
             &ex("pf/mock"),
             &descriptor,

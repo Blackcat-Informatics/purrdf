@@ -797,6 +797,7 @@ const fn unserved_reason(reason: UnservedReason) -> &'static str {
     match reason {
         UnservedReason::NoProducerAccepts => "no_producer_accepts",
         UnservedReason::EveryAcceptingProducerRejected => "every_accepting_producer_rejected",
+        UnservedReason::AcceptedWithoutPlacement => "accepted_without_placement",
         UnservedReason::Unbound => "unbound",
     }
 }

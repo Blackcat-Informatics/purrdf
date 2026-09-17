@@ -2,9 +2,7 @@
   "producer_bindings": [
     {
       "producer": "http://example.org/pf/any",
-      "request_terms": [
-        0
-      ],
+      "request_terms": [],
       "stratum": "http://example.org/stratum/universal"
     },
     {

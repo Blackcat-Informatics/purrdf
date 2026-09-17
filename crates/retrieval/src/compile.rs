@@ -52,12 +52,21 @@
 //!
 //! Every argument position a producer's declaration places a request facet into
 //! carries that facet as a **constant**; only the positions nothing was placed
-//! into are free `?cN` variables. `search("quick brown fox")` and `search("")`
-//! therefore compile to different queries, which is the whole point of compiling
-//! a request rather than an arity. The placement rule is
+//! into are free `?cN` variables. The placement rule is
 //! [`matching::place`](crate::matching::place) — the same function the planner
 //! ran, so admission re-derives the planner's decision rather than a second
 //! approximation of it.
+//!
+//! So `search("quick brown fox")` and `search("")` compile to different queries
+//! wherever a producer declared a placement for the needle, which is the whole
+//! point of compiling a request rather than an arity. Where a producer declared
+//! **none** — a declaration that accepts the shape and writes no part of it —
+//! the two compile to the same query, because that producer asked to be called
+//! with the request absent from its arguments. That is not a silent loss: such a
+//! term is never bound to the producer, and the plan names it in
+//! [`Plan::unserved_terms`] as
+//! [`UnservedReason::AcceptedWithoutPlacement`](crate::UnservedReason::AcceptedWithoutPlacement).
+//! An empty unserved list therefore does mean the text carries every term.
 //!
 //! # The subject argument list is always parenthesized
 //!

@@ -62,10 +62,10 @@ fn kernel_iri(text: &str) -> purrdf_core::Iri {
 /// object-side position. The mocks are arity (1,1) and project `?c0`, so the
 /// candidate is position 0 and a rendered facet binds at position 1.
 ///
-/// An unconstrained `TermKind::Any` pattern is the exception: it also accepts a
-/// vector term, whose query embedding has no SPARQL constant form, so it
-/// declares no placement at all. Its argument stays a free variable, which is
-/// exactly what "I take the whole request without needing it written out" is.
+/// An unconstrained `TermKind::Any` pattern is the exception: it declares **no**
+/// placement at all, so it is matched by every request term and receives none of
+/// them. Its argument stays free, and the plan reports every term that reached
+/// only this producer — matching a shape is not the same as receiving it.
 fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
     patterns
         .into_iter()
@@ -1071,9 +1071,61 @@ fn a_term_that_reached_no_producer_is_visible_in_the_plan_and_in_the_answer() {
 
 #[test]
 fn a_request_every_term_of_which_reached_a_producer_reports_nothing_unserved() {
-    // The neighbouring valid case at the answer: the mixed request reaches a
-    // producer for each of its three terms, so the evidence is empty. An empty
-    // list is a claim too — it says every term was answered by something.
+    // The neighbouring valid case at the answer. An empty list is a claim too,
+    // and the claim is strong: every term reached a producer *with its content*,
+    // so the emitted text carries all of it. The needle reaches `pf/literal`,
+    // which places it, and the seed reaches `pf/iri`, which places it — and the
+    // catch-all's placement-free acceptance of both adds nothing either way.
+    //
+    // The mixed request is deliberately NOT used here: its vector term reaches
+    // only the placement-free catch-all, so the honest evidence for it is not
+    // empty. `a_request_carrying_a_term_only_a_placement_free_producer_accepts_
+    // reports_it` is that case.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = fixture_profile();
+    let request = RetrievalRequest::from_terms(vec![lexical_term(), seed_term()]);
+
+    let result = block_on(search(
+        &request,
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("the fixture search answers");
+    assert!(
+        result.unserved_terms.is_empty(),
+        "every term reached a producer that places it, got {:?}",
+        result.unserved_terms
+    );
+    // And that claim is checkable against the text: both constants are in it.
+    let compiled = compile(
+        &plan(&request, &registry, &stats).expect("plans"),
+        &fixture_env(&registry, &stats),
+    )
+    .expect("admits");
+    let all: String = compiled
+        .units
+        .iter()
+        .map(|unit| unit.sparql.clone())
+        .collect();
+    assert!(
+        all.contains("\"quick brown fox\"@en") && all.contains(&format!("<{}>", ex("seed"))),
+        "an empty unserved list means the text carries every term: {all}"
+    );
+}
+
+#[test]
+fn a_request_carrying_a_term_only_a_placement_free_producer_accepts_reports_it() {
+    // The other side of the same claim, and the one an empty list would have
+    // been wrong about. The mixed request's vector term is matched by the
+    // catch-all's unconstrained pattern, which declares no placement — so the
+    // catch-all is called with the embedding absent from its arguments, and the
+    // answer reports the term rather than counting it served.
     let registry = fixture_registry();
     let stats = statistics("r1");
     let env = fixture_env(&registry, &stats);
@@ -1088,11 +1140,18 @@ fn a_request_every_term_of_which_reached_a_producer_reports_nothing_unserved() {
         &profile,
         TOP_K,
     ))
-    .expect("the fixture search answers");
+    .expect("the two served terms still answer");
+    assert_eq!(
+        result.unserved_terms,
+        vec![UnservedTerm {
+            request_term: 1,
+            reason: UnservedReason::AcceptedWithoutPlacement,
+        }],
+        "the embedding reached a producer that declared nowhere to put it"
+    );
     assert!(
-        result.unserved_terms.is_empty(),
-        "every term reached a producer, got {:?}",
-        result.unserved_terms
+        !result.rows.is_empty(),
+        "and the terms that WERE placed still answer; this is not a refusal"
     );
 }
 
