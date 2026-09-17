@@ -822,7 +822,7 @@ impl PreparedShapes {
     ///
     /// The borrow is immutable and `Shapes` is immutable, so this hands out no
     /// authority to change a preparation after the fact.
-    /// [`Self::class_catalog`] stays `pub(crate)`: it is a PURE derivation of these
+    /// `class_catalog` stays `pub(crate)`: it is a PURE derivation of these
     /// shapes, so it really is re-derivable by anyone holding this.
     ///
     /// [`ShapesProductView::admit`]: crate::product::ShapesProductView::admit
