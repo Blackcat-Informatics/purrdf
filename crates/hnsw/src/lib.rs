@@ -183,9 +183,32 @@ impl HnswIndex {
     ///
     /// As [`HnswIndex::search_rows`].
     pub fn search_rows_work(&self, query_row: usize, k: usize) -> Result<(Vec<Ranked>, u64)> {
-        let cache = DistanceCache::new();
         let mut visited = Visited::new(self.matrix.rows());
-        let ranked = self.search_with(query_row, k, &cache, &mut visited)?;
+        self.search_rows_work_with(query_row, k, &mut visited)
+    }
+
+    /// [`HnswIndex::search_rows_work`] against caller-owned visited scratch.
+    ///
+    /// `Visited` is a generation-stamped buffer: it is `O(rows)` to allocate once and `O(1)`
+    /// to reset thereafter. Allocating a fresh one per search means zeroing a buffer the
+    /// size of the corpus to visit a beam's worth of it -- four megabytes at a million rows,
+    /// per invocation, to touch a few thousand nodes. A caller that searches repeatedly
+    /// should hold one and pass it back in.
+    ///
+    /// The scratch cannot affect the answer: it records which rows this search has already
+    /// scored, and `begin` invalidates every stamp before the first one is read.
+    ///
+    /// # Errors
+    ///
+    /// As [`HnswIndex::search_rows`].
+    pub(crate) fn search_rows_work_with(
+        &self,
+        query_row: usize,
+        k: usize,
+        visited: &mut Visited,
+    ) -> Result<(Vec<Ranked>, u64)> {
+        let cache = DistanceCache::new();
+        let ranked = self.search_with(query_row, k, &cache, visited)?;
         Ok((ranked, cache.evaluations()))
     }
 

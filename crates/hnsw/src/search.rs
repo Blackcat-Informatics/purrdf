@@ -22,10 +22,10 @@
 //!   distance in a search goes through, so no call site can accidentally rank by a
 //!   differently-computed number.
 
+use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
-use std::sync::Mutex;
 
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
@@ -82,21 +82,30 @@ struct CacheState {
     ///
     /// Incremented where the kernel is invoked and nowhere else, so it is exactly the
     /// quantity a work-accounting caller wants: `d(a, b)` computed once counts once,
-    /// and a cache hit counts zero. A concurrent duplicate (two workers racing the same
-    /// pair) is two real evaluations and is counted twice, which is the honest number.
+    /// and a cache hit counts zero. No cache is shared between threads, so the count is a
+    /// function of the work done and not of how many workers did it.
     evaluations: u64,
 }
 
-/// A memoized `(row_a, row_b) -> distance` map shared by one build round.
+/// A memoized `(row_a, row_b) -> distance` map owned by one proposal or one query.
 ///
-/// A `BTreeMap` under a mutex rather than a hash map: the key is an integer pair, the map
-/// is consulted in a hot loop, and a `BTreeMap` needs no hasher choice at all, which keeps
-/// the determinism argument free of "which `BuildHasher`" entirely. The lock is released
-/// around the distance computation, so a concurrent duplicate is possible and harmless —
-/// both computations produce the same bits.
+/// A `BTreeMap` rather than a hash map: the key is an integer pair, the map is consulted in
+/// a hot loop, and a `BTreeMap` needs no hasher choice at all, which keeps the determinism
+/// argument free of "which `BuildHasher`" entirely.
+///
+/// The cell is a [`RefCell`], not a mutex, because **no cache is ever shared between
+/// threads**. A build round used to hand every rayon worker one cache behind a
+/// `Mutex<BTreeMap<_, _>>` and take that lock twice for every distance — once to look up,
+/// once to insert — which put a single global lock in the innermost loop of the parallel
+/// phase and made the parallel phase contend with itself. The memo is only ever useful
+/// *within* one node's proposal anyway: two nodes in a batch almost never need the same
+/// pair. Each proposal now owns its cache, each query owns its own, and the lock is gone.
+///
+/// Bounding the cache to one proposal also bounds its memory, which a round-wide cache did
+/// not: at a million rows the shared map was free to grow toward the whole pair space.
 #[derive(Debug, Default)]
 pub(crate) struct DistanceCache {
-    state: Mutex<CacheState>,
+    state: RefCell<CacheState>,
 }
 
 impl DistanceCache {
@@ -107,20 +116,12 @@ impl DistanceCache {
 
     /// A stored distance, keyed by the unordered pair.
     fn get(&self, a: usize, b: usize) -> Option<f64> {
-        self.state
-            .lock()
-            .expect("distance cache lock is never poisoned")
-            .entries
-            .get(&ordered(a, b))
-            .copied()
+        self.state.borrow().entries.get(&ordered(a, b)).copied()
     }
 
     /// Record a distance and charge it as one evaluation.
     fn insert(&self, a: usize, b: usize, distance: f64) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("distance cache lock is never poisoned");
+        let mut state = self.state.borrow_mut();
         state.entries.insert(ordered(a, b), distance);
         state.evaluations = state.evaluations.saturating_add(1);
     }
@@ -131,10 +132,7 @@ impl DistanceCache {
     /// recalled. Callers that want a delta (a reused cache across queries) subtract two
     /// reads; callers that drained a fresh cache read it directly.
     pub(crate) fn evaluations(&self) -> u64 {
-        self.state
-            .lock()
-            .expect("distance cache lock is never poisoned")
-            .evaluations
+        self.state.borrow().evaluations
     }
 }
 

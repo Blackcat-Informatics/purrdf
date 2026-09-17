@@ -87,8 +87,6 @@ struct Round<'a> {
     norms: &'a [f64],
     /// The declared identity.
     params: &'a Params,
-    /// The round's distance memo.
-    cache: &'a DistanceCache,
 }
 
 /// Build an index over `matrix` under `kernel` and `params`.
@@ -151,18 +149,14 @@ pub(crate) fn build_with_batch(
         // The entry point is never proposed: it is the node every other row links into.
         let batch_rows: Vec<usize> = (start..end).filter(|row| *row != entry).collect();
         if !batch_rows.is_empty() {
-            let edges = {
-                let cache = DistanceCache::new();
-                let round = Round {
-                    frozen: &graph,
-                    matrix: &matrix,
-                    kernel,
-                    norms: &norms,
-                    params: &params,
-                    cache: &cache,
-                };
-                propose_round(&round, &batch_rows, &levels)?
+            let round = Round {
+                frozen: &graph,
+                matrix: &matrix,
+                kernel,
+                norms: &norms,
+                params: &params,
             };
+            let edges = propose_round(&round, &batch_rows, &levels)?;
             graph.commit(edges, &params);
         }
         start = end;
@@ -383,7 +377,12 @@ fn propose_node(
     let Some(entry) = frozen.entry() else {
         return Ok(Vec::new());
     };
-    let query = Query::new(round.matrix, round.kernel, round.norms, round.cache, node);
+    // One memo per proposal. It is worth having -- a node's beam re-scores rows it has
+    // already seen at the layer above -- and worth bounding: two nodes in a batch almost
+    // never need the same pair, so a shared cache buys little and costs a lock in the
+    // innermost loop of the parallel phase.
+    let cache = DistanceCache::new();
+    let query = Query::new(round.matrix, round.kernel, round.norms, &cache, node);
     let frozen_top = frozen.max_level();
 
     // Greedy descent through the snapshot's layers above this node's own level.
@@ -412,7 +411,7 @@ fn propose_node(
             round.matrix,
             round.kernel,
             round.norms,
-            round.cache,
+            &cache,
         )?;
         // The next (lower) layer starts from the whole beam, as standard HNSW does; the
         // degree bound applies to what is *linked*, not to what seeds the next search.
