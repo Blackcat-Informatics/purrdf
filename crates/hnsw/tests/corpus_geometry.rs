@@ -11,8 +11,8 @@
 mod corpus;
 
 use corpus::{
-    CorpusShape, Stream, cluster_of, cluster_weights, embedding_like, extreme_but_finite,
-    normalize, separated_manifolds,
+    CorpusShape, Stream, Structured, cluster_of, cluster_weights, embedding_like,
+    embedding_like_structured, extreme_but_finite, normalize, separated_manifolds,
 };
 use purrdf_hnsw::VectorMatrix;
 
@@ -134,6 +134,151 @@ fn neighbours_are_separated_rather_than_concentrated() {
     assert!(
         cosine > 0.5,
         "a structured corpus must have genuinely near neighbours; mean = {cosine}"
+    );
+}
+
+/// The mean cosine between each row and the centroid it was actually drawn around.
+///
+/// Both arguments are unit-norm ambient vectors -- the generator renormalises a row and a
+/// centroid through the same map -- so the dot product IS the cosine, with no division to
+/// introduce a second rounding.
+fn mean_centroid_cosine(structured: &Structured) -> f64 {
+    let matrix = &structured.matrix;
+    let total: f64 = (0..matrix.rows())
+        .map(|row| {
+            let centroid = structured.centroids.row(structured.cluster[row]);
+            matrix
+                .row(row)
+                .iter()
+                .zip(centroid)
+                .map(|(x, y)| x * y)
+                .sum::<f64>()
+        })
+        .sum();
+    total / matrix.rows() as f64
+}
+
+/// A measured cosine as an exact integer at six decimals.
+///
+/// Pinned rather than bounded, on this repository's rule that a difference is a real defect
+/// and not a tolerance to widen. The generator is a pure function of its seed over add,
+/// multiply, divide and `sqrt` only, so the sixth decimal is reproducible; the quantity being
+/// pinned moves by tenths when the geometry changes, so the pin is nowhere near its own
+/// rounding boundary.
+fn pinned(cosine: f64) -> i64 {
+    (cosine * 1e6).round() as i64
+}
+
+/// The shape the tightness tests vary, with everything but the cosine held fixed.
+fn tightness_shape(dims: usize, cosine: f64) -> CorpusShape {
+    CorpusShape {
+        rows: 512,
+        dims,
+        intrinsic: 32,
+        clusters: 64,
+        within_cluster_cosine: cosine,
+    }
+}
+
+#[test]
+fn the_intended_cluster_cosine_is_the_cosine_the_corpus_achieves() {
+    // THE central parameter, and until this test existed nothing graded it. The generator's
+    // whole reason to exist is that cluster tightness is specified as an intended COSINE
+    // rather than as an absolute noise amplitude; a corpus whose achieved tightness ignored
+    // that parameter would be formless, every recall number taken over it would be a
+    // statement about the fixture, and the lane would have stayed green. Driving the
+    // parameter from 0.75 to 0.001 moved the nearest-neighbour statistic this file already
+    // measured by 0.13 and crossed none of its assertions.
+    //
+    // Measured against the centroid each row was DRAWN AROUND, which is the relationship the
+    // parameter actually names, and pinned exactly at each rung so the whole curve is held.
+    let intended = [0.05, 0.35, 0.75, 0.95];
+    let achieved: Vec<i64> = intended
+        .into_iter()
+        .map(|cosine| {
+            let structured = embedding_like_structured(tightness_shape(256, cosine), 0xC051_5EED)
+                .expect("generates");
+            pinned(mean_centroid_cosine(&structured))
+        })
+        .collect();
+
+    assert_eq!(
+        achieved,
+        vec![61_455, 351_538, 751_847, 951_277],
+        "the achieved within-cluster cosine moved; it is a pure function of the generator, \
+         so this is a real change in the corpus every recall figure is measured over"
+    );
+
+    // The claim itself, stated as a claim rather than as a pin: the parameter is an INTENDED
+    // cosine, so the corpus must actually achieve it. Every rung lands within 0.012 of what
+    // it asked for; the bound is what separates "honoured" from "correlated with".
+    for (asked, got) in intended.into_iter().zip(&achieved) {
+        let got = *got as f64 / 1e6;
+        assert!(
+            (got - asked).abs() < 0.02,
+            "a corpus asked for an intended cosine of {asked} achieved {got}"
+        );
+    }
+    assert!(
+        achieved.windows(2).all(|pair| pair[0] < pair[1]),
+        "and a higher intended cosine must give a tighter corpus: {achieved:?}"
+    );
+
+    // The ladder above grades the MECHANISM, over shapes this test builds itself. That is not
+    // sufficient, and the difference is the whole finding: the corpus every recall figure in
+    // this crate is measured over comes from `CorpusShape::embedding_like`, whose tightness is
+    // a default this test would never touch. A default quietly moved toward formless would
+    // leave the ladder green and turn every recall number into a statement about the fixture.
+    // So the shipped default is pinned too, by the same measurement.
+    let default = embedding_like_structured(CorpusShape::embedding_like(512, 256), 0xC051_5EED)
+        .expect("generates");
+    assert_eq!(
+        pinned(mean_centroid_cosine(&default)),
+        751_847,
+        "the DEFAULT corpus shape's achieved tightness moved; every recall and build figure \
+         this crate reports is measured over this shape"
+    );
+}
+
+#[test]
+fn cluster_tightness_is_the_same_at_every_width() {
+    // The half of the claim that is about WIDTH, and the reason the parameter is a cosine at
+    // all. The module documents the alternative it rejects: isotropic noise of a fixed
+    // amplitude gives an expected cosine of 1/sqrt(1 + d*sigma^2), so an amplitude tuned to
+    // make tight clusters at d = 64 drives the cosine to about 0.077 at d = 4096 -- members
+    // essentially orthogonal to the centroid they were supposedly drawn around, a corpus that
+    // looks clustered in its source and is indistinguishable from uniform in its output.
+    //
+    // That failure is invisible to a test taken at ONE width, which is what every geometry
+    // test here was. Three widths spanning a factor of sixteen, one intended cosine.
+    let achieved: Vec<i64> = [256, 1024, 4096]
+        .into_iter()
+        .map(|dims| {
+            let structured = embedding_like_structured(tightness_shape(dims, 0.75), 0xC051_5EED)
+                .expect("generates");
+            pinned(mean_centroid_cosine(&structured))
+        })
+        .collect();
+
+    assert_eq!(
+        achieved,
+        vec![751_847, 742_942, 743_679],
+        "the achieved within-cluster cosine moved at one or more widths"
+    );
+
+    // Measured span: 0.0089 across widths 256 to 4,096, against an intended 0.75. The
+    // rejected parameterisation would have fallen to about 0.077 at the top width -- a span
+    // of roughly 0.67 -- so this bound sits two orders of magnitude inside the failure it
+    // exists to catch, and is not a tolerance widened to fit a measurement.
+    let (low, high) = (
+        *achieved.iter().min().expect("three widths"),
+        *achieved.iter().max().expect("three widths"),
+    );
+    assert!(
+        high - low < 20_000,
+        "the achieved cosine must not track the width: it spans {low}..{high} at six \
+         decimals across a 16x range of widths, which is the width-dependence this \
+         parameterisation exists to avoid"
     );
 }
 

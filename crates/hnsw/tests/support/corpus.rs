@@ -244,6 +244,47 @@ pub(crate) fn cluster_weights(clusters: usize) -> (Vec<u64>, u64) {
     (weights, total)
 }
 
+/// Carry one latent point into the ambient space: project, apply the spectrum, renormalise.
+///
+/// Extracted so a ROW and a CENTROID travel the identical path. A cosine is only a statement
+/// about the generated geometry if both of its arguments were mapped the same way; measuring
+/// a row in the ambient space against a centroid in the latent space would compare two
+/// different spaces and report a number about the mismatch.
+fn to_ambient(point: &[f64], projection: &[Vec<f64>], scale: &[f64], dims: usize) -> Vec<f64> {
+    let mut ambient = vec![0.0_f64; dims];
+    for (axis, weight) in point.iter().enumerate() {
+        for (column, target) in ambient.iter_mut().enumerate() {
+            *target = weight.mul_add(projection[axis][column], *target);
+        }
+    }
+    for (column, value) in ambient.iter_mut().enumerate() {
+        *value *= scale[column];
+    }
+    normalize(&mut ambient);
+    ambient
+}
+
+/// A generated corpus together with the latent structure that produced it.
+///
+/// The generator's geometric claims are claims about the RELATIONSHIP between a row and the
+/// centroid it was drawn around, and a caller handed only the matrix cannot check any of them:
+/// the cluster assignment and the centroids are consumed inside the generator and thrown away.
+/// So the lane that grades this generator was reduced to measuring a nearest-neighbour cosine,
+/// which the intended-cosine parameter barely moves -- driving it from 0.75 to 0.001, from
+/// shaped to formless, changed that statistic by 0.13 and crossed no assertion.
+///
+/// This type is what makes the central claim gradeable: the same rows, plus which cluster each
+/// was drawn around, plus every centroid carried into the ambient space through the SAME
+/// projection and spectrum the rows went through.
+pub struct Structured {
+    /// The corpus, identical to what [`embedding_like`] returns for the same arguments.
+    pub matrix: VectorMatrix,
+    /// The cluster each row was drawn around, by row index.
+    pub cluster: Vec<usize>,
+    /// Each cluster's centroid, in the ambient space, one per row.
+    pub centroids: VectorMatrix,
+}
+
 /// Generate a corpus with the geometry described by `shape`.
 ///
 /// # Errors
@@ -256,6 +297,24 @@ pub(crate) fn cluster_weights(clusters: usize) -> (Vec<u64>, u64) {
 /// Panics if `within_cluster_cosine` is not in `[0, 1)`, which is a caller error rather than
 /// a data condition.
 pub fn embedding_like(shape: CorpusShape, seed: u64) -> Result<VectorMatrix> {
+    Ok(embedding_like_structured(shape, seed)?.matrix)
+}
+
+/// [`embedding_like`], keeping the latent structure instead of discarding it.
+///
+/// Byte-identical corpora: the rows are produced by the same draws in the same order, and the
+/// centroids are mapped AFTER the row loop from values the generator already held, so no
+/// additional value is taken from the stream. Every pinned digest and recall golden in this
+/// crate is computed over the output of this function.
+///
+/// # Errors
+///
+/// As [`embedding_like`].
+///
+/// # Panics
+///
+/// As [`embedding_like`].
+pub fn embedding_like_structured(shape: CorpusShape, seed: u64) -> Result<Structured> {
     assert!(
         (0.0..1.0).contains(&shape.within_cluster_cosine),
         "the intended within-cluster cosine must lie in [0, 1)"
@@ -287,6 +346,7 @@ pub fn embedding_like(shape: CorpusShape, seed: u64) -> Result<VectorMatrix> {
     let (weights, weight_total) = cluster_weights(clusters);
 
     let mut data = Vec::with_capacity(rows * dims);
+    let mut membership = Vec::with_capacity(rows);
     for _ in 0..rows {
         let cluster = cluster_of(stream.next_bits(), &weights, weight_total);
         let offset = stream.direction(latent);
@@ -299,20 +359,22 @@ pub fn embedding_like(shape: CorpusShape, seed: u64) -> Result<VectorMatrix> {
         normalize(&mut point);
 
         // Project, apply the spectrum, and renormalise so every row is comparable.
-        let mut ambient = vec![0.0_f64; dims];
-        for (axis, weight) in point.iter().enumerate() {
-            for (column, target) in ambient.iter_mut().enumerate() {
-                *target = weight.mul_add(projection[axis][column], *target);
-            }
-        }
-        for (column, value) in ambient.iter_mut().enumerate() {
-            *value *= scale[column];
-        }
-        normalize(&mut ambient);
-        data.extend_from_slice(&ambient);
+        data.extend_from_slice(&to_ambient(&point, &projection, &scale, dims));
+        membership.push(cluster);
     }
 
-    VectorMatrix::new(rows, dims, data)
+    // The centroids through the identical map. No draw is taken here -- these are values the
+    // generator already holds -- so the corpus is unchanged by the fact that we keep them.
+    let mut centroid_data = Vec::with_capacity(clusters * dims);
+    for centroid in &centroids {
+        centroid_data.extend_from_slice(&to_ambient(centroid, &projection, &scale, dims));
+    }
+
+    Ok(Structured {
+        matrix: VectorMatrix::new(rows, dims, data)?,
+        cluster: membership,
+        centroids: VectorMatrix::new(clusters, dims, centroid_data)?,
+    })
 }
 
 /// A corpus of disjoint low-dimensional manifolds with no overlap between them.
