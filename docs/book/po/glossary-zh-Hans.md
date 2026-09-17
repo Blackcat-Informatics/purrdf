@@ -14,8 +14,8 @@ gloss, and the gate is what keeps ten translators from producing four words
 for one concept. Where this table and §5.4 of
 `docs/design/i18n-zh-assessment.md` differ (row 32), this table supersedes it.
 
-Policy, settled by the house page (<https://blackcatinformatics.ca/zh/> and
-its `/zh/purrdf/` page):
+Policy, settled by the house page (<https://blackcatinformatics.cn> and
+its PurRDF page):
 
 1. Specification names and acronyms stay English: `PurRDF`, `GMEOW`, `GTS`,
    RDF 1.2, SPARQL, SHACL, ShEx, OWL 2 DL, IRI, JSON-LD, Turtle. Every IRI,

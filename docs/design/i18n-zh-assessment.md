@@ -9,8 +9,8 @@ SPDX-License-Identifier: CC-BY-4.0
 **Target:** Simplified Chinese, BCP 47 `zh-Hans`, for mainland-China technology
 and AI developers. Traditional Chinese (`zh-Hant`) is out of scope for 0.14.0
 and is not assessed here.
-**Voice reference:** <https://blackcatinformatics.ca/zh/> (and its
-`/zh/purrdf/` page), cited throughout as "the house page".
+**Voice reference:** <https://blackcatinformatics.cn> (and its
+PurRDF page), cited throughout as "the house page".
 **Method:** every count below was measured with `wc -w`, `grep`, or a short
 Python pass over the tree at the commit this document was written against;
 every gate finding was reproduced by running the gate's own code on Chinese
