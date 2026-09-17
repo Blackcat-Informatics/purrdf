@@ -188,4 +188,25 @@ pub trait RankedStream {
     /// A [`ProtocolError`] when the producer cannot produce a consistent
     /// receipt.
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError>;
+
+    /// The pinned plan these rows descend from, when the stream has one.
+    ///
+    /// This is how a plan's identity reaches the answer: [`execute`] tags each
+    /// stream it returns with the plan its unit was compiled from, and
+    /// [`fuse`](crate::fuse) reads the tag back off the streams it is handed and
+    /// puts it in the [`FusionTrailer`](crate::FusionTrailer). The identity in a
+    /// fused answer is therefore the one that travelled the pipeline, not one
+    /// re-fetched from the plan at the end, and a stream whose tag changed on
+    /// the way is a stream `fuse` refuses to fuse beside its siblings
+    /// ([`FusionError::PlanIdMismatch`](crate::FusionError::PlanIdMismatch)).
+    ///
+    /// The default is `None`, which is the honest answer for a producer that
+    /// descends from no plan at all — a hand-built stream, or one a caller
+    /// assembled outside the ladder. Such a stream still fuses; the fused
+    /// answer simply names no pinned plan, because no single plan produced it.
+    ///
+    /// [`execute`]: crate::execute
+    fn plan_id(&self) -> Option<crate::id::PlanId> {
+        None
+    }
 }

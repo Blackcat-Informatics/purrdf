@@ -183,6 +183,23 @@ pub enum FusionError {
         stratum: String,
     },
 
+    /// The streams of one fusion do not descend from the same pinned plan.
+    ///
+    /// A fused answer names **one** plan, so streams that name two cannot be
+    /// fused under a single trailer: whichever identity the answer carried
+    /// would be right about some of its rows and wrong about the others. The
+    /// refusal is narrow on purpose — streams that all name the same plan fuse,
+    /// and streams that name no plan at all fuse too, producing an answer that
+    /// simply names no plan. Only a disagreement is refused.
+    #[error("fused streams descend from different pinned plans: expected {expected}, got {got:?}")]
+    PlanIdMismatch {
+        /// The plan the fusion's other streams name.
+        expected: crate::id::PlanId,
+        /// The plan this stream names, or `None` when a stream that should have
+        /// named one named nothing.
+        got: Option<crate::id::PlanId>,
+    },
+
     /// A fusion profile's canonical bytes could not be decoded.
     #[error("malformed fusion profile: {0}")]
     MalformedProfile(String),

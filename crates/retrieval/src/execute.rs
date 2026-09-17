@@ -115,6 +115,12 @@ pub enum ExecutionError {
 /// The rows are materialized by the evaluator and drained in order; `next` never
 /// pends, so the stream is usable under any executor. A caller that wants to fuse
 /// the rows wraps them with the fusion profile at `fuse` time.
+///
+/// There is deliberately no bulk accessor beside [`next`](Self::next): reading
+/// the rows one at a time and then taking the [`receipt`](Self::receipt) *is*
+/// the unfused rung, and a second way to get at the same rows would be a second
+/// protocol — one with no receipt at the end of it, and so no way for a caller
+/// to tell a stratum that ended from a stratum it stopped reading.
 #[derive(Debug)]
 pub struct RankedStreamImpl {
     rows: VecDeque<(u64, Term)>,
@@ -171,12 +177,6 @@ impl RankedStreamImpl {
         Ok(ProducerReceipt::Exhausted {
             rows_emitted: self.pulled,
         })
-    }
-
-    /// Consume the stream and return its rows.
-    #[must_use]
-    pub fn into_rows(self) -> Vec<(u64, Term)> {
-        self.rows.into_iter().collect()
     }
 }
 

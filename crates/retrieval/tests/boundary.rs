@@ -36,10 +36,11 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, ExecutionError, ExecutionResult,
-    Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanError,
-    PlanOrigin, ProducerBinding, ProducerReceipt, ProtocolError, RankedStream, RankedStreamAdapter,
-    RankedStreamImpl, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics,
-    StatisticsSnapshot, Term, TopK, Weight, compile, contribution, execute, fuse, plan, search,
+    Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanError, PlanId,
+    PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedStream,
+    RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest, SearchError,
+    SearchResult, Statistics, StatisticsSnapshot, Term, TopK, Weight, compile, contribution,
+    execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -56,8 +57,7 @@ const K: u32 = 60;
 /// Fused enumeration is top-k by construction, so every fusion states a bound.
 /// It is far above what any fixture here yields, so nothing below is decided by
 /// the bound — `fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata`
-/// drives the frontier directly, which is where the bound's own behaviour
-/// belongs.
+/// states a bound of its own, which is where the bound's own behaviour belongs.
 const TOP_K: TopK = TopK::new(1024);
 
 // ---------------------------------------------------------------------------
@@ -749,19 +749,20 @@ fn frontier_fixture(
 fn fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata() {
     // Three million-row streams that disagree about the order of every block;
     // only ten fused rows are asked for.
+    //
+    // This drives `fuse` — the shipped entry point, trailer and all — rather
+    // than the engine underneath it, because the bound is a property of what a
+    // caller can actually call. A `fuse` whose terminal report read each stream
+    // to its end would return the same ten rows while pulling three million, and
+    // a test that stopped at `FusionStream` would report that as a success.
     const ROWS: usize = 10;
     let total = 1_000_000u64;
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = frontier_fixture(total, &pulls);
 
-    let mut fusion = FusionStream::new(streams, profile);
-    let mut top = Vec::new();
-    for _ in 0..ROWS {
-        let row = block_on(fusion.next())
-            .expect("fusion pulls")
-            .expect("a certified row");
-        top.push(row);
-    }
+    let fused = block_on(fuse::<LazyStream, Term>(streams, &profile, TopK::new(ROWS)))
+        .expect("fusion pulls");
+    let top = fused.rows;
     let pulled = pulls.load(Ordering::SeqCst);
 
     // The frontier was genuinely populated, not bypassed: every certified row
@@ -797,9 +798,20 @@ fn fused_top_k_holds_a_bounded_frontier_across_disagreeing_strata() {
         pulled - ROWS
     );
 
-    // Dropped without draining: no producer materialized its full set.
-    drop(fusion);
-    assert_eq!(pulls.load(Ordering::SeqCst), pulled);
+    // And the trailer earned its statuses without reading further. Every
+    // stratum still held rows when the bound was reached, so every one of them
+    // is closed at the contribution it was read down to — the honest claim, and
+    // the only one available for the price of the pulls asserted above.
+    assert_eq!(fused.trailer.statuses.len(), FRONTIER_STRATA.len());
+    for (stratum, status) in &fused.trailer.statuses {
+        let ProducerStatus::CeilingReached { bound } = status else {
+            panic!("{stratum} still held rows, so its status cannot be {status:?}");
+        };
+        assert!(
+            *bound > Fixed::ZERO,
+            "{stratum} was closed at a bound of zero, which names no row"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -899,14 +911,16 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
         })
         .collect();
 
-    let mut fusion = FusionStream::new(streams, tie_profile);
-    let first = block_on(fusion.next())
-        .expect("fusion pulls")
-        .expect("the first tied candidate is certified");
-    let second = block_on(fusion.next())
-        .expect("fusion pulls")
-        .expect("the second tied candidate is certified");
+    let fused = block_on(fuse::<LazyStream, Term>(
+        streams,
+        &tie_profile,
+        TopK::new(2),
+    ))
+    .expect("fusion pulls");
     let pulled = pulls.load(Ordering::SeqCst);
+    let mut rows = fused.rows.into_iter();
+    let first = rows.next().expect("the first tied candidate is certified");
+    let second = rows.next().expect("the second tied candidate is certified");
 
     // Both are emitted, and in the order the declared total tie-break dictates:
     // the scores are equal, and so are the best ranks — each candidate is rank 1
@@ -949,9 +963,10 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
         u64::try_from(TIE_STRATA.len()).expect("two") * TIE_TAIL_ROWS
     );
 
-    // Dropped without draining: the rows behind the tie were never touched.
-    drop(fusion);
+    // The count above is the whole `fuse` call, trailer included: the rows
+    // behind the tie were never touched, not even to write a report about them.
     assert_eq!(pulls.load(Ordering::SeqCst), pulled);
+    assert_eq!(fused.trailer.statuses.len(), TIE_STRATA.len());
 }
 
 // ---------------------------------------------------------------------------
@@ -1341,13 +1356,21 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let mut streams = Vec::new();
     for stream in execution.streams {
         let adapter = RankedStreamAdapter::new(stream.stream, &profile, &stream.stratum)
-            .expect("the profile weights the stratum the plan reached");
+            .expect("the profile weights the stratum the plan reached")
+            // The stream knows the plan its unit was compiled from, and the
+            // bridge carries that on rather than making the caller re-state it.
+            .with_plan_id(stream.plan_id);
         streams.push((stream.stratum, adapter));
     }
     let fused = block_on(fuse::<RankedStreamAdapter, Term>(streams, &profile, TOP_K))
         .expect("the bridged streams fuse");
 
     assert_eq!(fused.rows.len(), 3, "every executed row reached the fusion");
+    assert_eq!(
+        fused.trailer.plan_id,
+        Some(planned.id()),
+        "the pinned plan travelled with the rows into the trailer"
+    );
     for (index, row) in fused.rows.iter().enumerate() {
         let rank = u64::try_from(index + 1).expect("the fixture is small");
         assert_eq!(
@@ -1374,6 +1397,111 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
         .is_none(),
         "no weight, no contribution, no adapter"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 11b. The pinned plan travels with the rows, and a stream that changed plans
+//      on the way is caught by the fusion rather than filed under the wrong one
+// ---------------------------------------------------------------------------
+
+/// Plan, compile and execute one single-stratum fixture, returning the plan it
+/// was pinned to, its stratum, and the bridged stream — **untagged**, so each
+/// test below states for itself which plan the stream claims to descend from.
+fn executed_stream(suffix: &str, profile: &FusionProfile) -> (PlanId, Iri, RankedStreamAdapter) {
+    let stratum_iri = ex(&format!("stratum/{suffix}"));
+    let registry = single_registry(&stratum_iri, &ex(&format!("pf/{suffix}")), 10, 3);
+    let stats = single_statistics(&stratum_iri, 10);
+    let request = RetrievalRequest::from_terms(vec![lexical_term()]);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let planned = plan(&request, &registry, &stats).expect("plans");
+    let compiled = compile(&planned, &env).expect("admits");
+    let execution =
+        block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the units run");
+    let stream = execution
+        .streams
+        .into_iter()
+        .next()
+        .expect("the stratum streamed");
+    let adapter = RankedStreamAdapter::new(stream.stream, profile, &stream.stratum)
+        .expect("the profile weights the stratum the plan reached");
+    (stream.plan_id, stream.stratum, adapter)
+}
+
+#[test]
+fn a_stream_that_names_another_plan_is_refused_rather_than_fused() {
+    let profile = profile(
+        &[("splice/left", Fixed::ONE), ("splice/right", Fixed::ONE)],
+        K,
+        4,
+    );
+    let (left_plan, left_stratum, left) = executed_stream("splice/left", &profile);
+    let (right_plan, right_stratum, right) = executed_stream("splice/right", &profile);
+    assert_ne!(
+        left_plan, right_plan,
+        "two distinct plans, or this fixture tests nothing"
+    );
+
+    // A stream spliced in from another plan. Its rows are perfectly well formed
+    // — it is a real executed stream — so nothing about the rows can catch it.
+    // The identity it carries is what does: one answer cannot descend from two
+    // plans, and naming either one would be right about half the rows.
+    let error = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![
+            (left_stratum, left.with_plan_id(left_plan)),
+            (right_stratum, right.with_plan_id(right_plan)),
+        ],
+        &profile,
+        TOP_K,
+    ))
+    .expect_err("two plans in one fusion is a refusal");
+    assert!(
+        matches!(
+            &error,
+            FusionError::PlanIdMismatch { expected, got: Some(got) }
+                if *expected == left_plan && *got == right_plan
+        ),
+        "expected PlanIdMismatch, got {error:?}"
+    );
+
+    // The neighbour that must still succeed: the same two strata, agreeing on
+    // one plan — which is what the two strata of a single plan actually do.
+    // The answer names it, and the identity in the answer is the one the
+    // streams carried.
+    let (_, left_stratum, left) = executed_stream("splice/left", &profile);
+    let (_, right_stratum, right) = executed_stream("splice/right", &profile);
+    let agreed = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![
+            (left_stratum, left.with_plan_id(left_plan)),
+            (right_stratum, right.with_plan_id(left_plan)),
+        ],
+        &profile,
+        TOP_K,
+    ))
+    .expect("streams that agree on their plan fuse");
+    assert!(!agreed.rows.is_empty(), "the fixture strata rank rows");
+    assert_eq!(agreed.trailer.plan_id, Some(left_plan));
+
+    // And the second neighbour, because the refusal must stay narrow: a stream
+    // built outside the ladder names no plan at all, and fusing it with one that
+    // does is not a disagreement. It fuses, and the answer honestly names no
+    // pinned plan rather than borrowing its neighbour's.
+    let (_, left_stratum, left) = executed_stream("splice/left", &profile);
+    let (_, right_stratum, right) = executed_stream("splice/right", &profile);
+    let mixed = block_on(fuse::<RankedStreamAdapter, Term>(
+        vec![
+            (left_stratum, left.with_plan_id(left_plan)),
+            (right_stratum, right),
+        ],
+        &profile,
+        TOP_K,
+    ))
+    .expect("a stream that descends from no plan is not a disagreement");
+    assert_eq!(mixed.rows, agreed.rows, "and the rows are the same rows");
+    assert_eq!(mixed.trailer.plan_id, None);
 }
 
 #[test]

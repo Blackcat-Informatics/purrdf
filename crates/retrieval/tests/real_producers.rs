@@ -506,10 +506,12 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
         result.trailer.statuses.get(&iri(KNN_STRATUM))
     );
 
-    assert_eq!(
-        result.plan_id,
-        plan(&request, &registry, &statistics).expect("plans").id()
-    );
+    // The identity in the answer came up the pipeline with the rows: both real
+    // streams were tagged with the plan their unit was compiled from, and the
+    // trailer names it because they still agreed at the fusion.
+    let planned = plan(&request, &registry, &statistics).expect("plans");
+    assert_eq!(result.trailer.plan_id, Some(planned.id()));
+    assert_eq!(result.plan_id, planned.id());
     assert_eq!(result.profile_id, profile.id());
 }
 
@@ -598,7 +600,10 @@ async fn manual_composition(
     let mut unweighted_strata = Vec::new();
     for stream in execution.streams {
         match RankedStreamAdapter::new(stream.stream, profile, &stream.stratum) {
-            Some(adapter) => streams.push((stream.stratum, adapter)),
+            // The plan the unit was compiled from travels on with the rows; the
+            // trailer names it, and the answer's identity is read back from
+            // there rather than asked of the plan a second time.
+            Some(adapter) => streams.push((stream.stratum, adapter.with_plan_id(stream.plan_id))),
             None => unweighted_strata.push(stream.stratum),
         }
     }

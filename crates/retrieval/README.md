@@ -68,9 +68,12 @@ The stages:
   run becomes its own `ProducerStatus` while every other stratum streams on.
 * `fuse(streams, profile, k)` / `search(…, k)` — the exact fixed-point
   reciprocal-rank fusion, bounded by the caller's `TopK` because fused
-  enumeration is top-k by construction. The answer carries every applicable
-  producer's own status in its trailer — including those that could not answer —
-  and every request term that reached nothing.
+  enumeration is top-k by construction. The bound stops the reading as well as
+  the returning: a producer still holding rows when it is reached is reported at
+  the contribution it was read down to, never drained to make it declare
+  exhaustion. The answer carries every applicable producer's own status in its
+  trailer — including those that could not answer — and every request term that
+  reached nothing.
 
 Nothing here mints a vocabulary. Producers, strata and weights are
 caller-supplied configuration; the fixtures use `example.org`. There is no
@@ -84,9 +87,12 @@ The whole ladder, end to end, over real data and two real ranked producers:
 cargo run -p purrdf-retrieval --example fused_search
 ```
 
-`examples/fused_search.rs` indexes one small corpus twice — once per indexed
-field — registers each index as its own ranked producer under its own stratum,
-runs `search`, and prints the fused ranking with each row's per-stratum
+`examples/fused_search.rs` indexes one small corpus twice over — once lexically
+with a real BM25 index, once geometrically with a real embedding space over a
+sealed PURREMB artifact — registers each as its own ranked producer under its
+own stratum, and runs `search` over a request that reaches both. The two
+producers rank the same four documents in nearly opposite orders, which is the
+case fusion exists for, and the printed answer gives each row's per-stratum
 provenance, every producer's terminal status, and the one request term nothing
 in that registry accepts. It is documentation that executes.
 

@@ -24,7 +24,8 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, Iri, Metric, Plan, PlanError, ProducerStatus,
-    RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, compile, execute, plan,
+    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, compile,
+    execute, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DepthPlacement, DuplicatePolicy, EvalError, NativeSparqlEngine,
@@ -341,6 +342,17 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
+/// Read an executed stream the way a caller that stopped at `execute` reads it:
+/// one row at a time through the ranked-stream protocol, to exhaustion.
+fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
+    let mut rows = Vec::new();
+    while let Some(row) = block_on(stream.next()).expect("a materialized stream obeys the protocol")
+    {
+        rows.push(row);
+    }
+    rows
+}
+
 /// Run `sparql` through the evaluator with no composition type in the path.
 fn run_query(sparql: &str, registry: &PropertyFunctionRegistry) -> Vec<Vec<Option<TermValue>>> {
     let dataset = RdfDatasetBuilder::new()
@@ -516,13 +528,14 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
 
     let execution =
         block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
-    let rows = execution
-        .streams
-        .into_iter()
-        .next()
-        .expect("the stratum streamed")
-        .stream
-        .into_rows();
+    let rows = drain(
+        execution
+            .streams
+            .into_iter()
+            .next()
+            .expect("the stratum streamed")
+            .stream,
+    );
     assert_eq!(rows.len(), 3, "the depth bounds the rows the stratum emits");
 }
 
@@ -570,13 +583,14 @@ fn depth_zero_is_an_honest_empty_stratum_and_depth_one_emits_one_row() {
             },
             "an empty stratum is exhausted with zero rows, never failed"
         );
-        let rows = execution
-            .streams
-            .into_iter()
-            .next()
-            .expect("the stratum streamed")
-            .stream
-            .into_rows();
+        let rows = drain(
+            execution
+                .streams
+                .into_iter()
+                .next()
+                .expect("the stratum streamed")
+                .stream,
+        );
         assert_eq!(rows.len(), expected);
     }
 }

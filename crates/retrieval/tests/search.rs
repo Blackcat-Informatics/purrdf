@@ -366,7 +366,9 @@ async fn manual_composition(
     let mut unweighted_strata = Vec::new();
     for stream in execution.streams {
         match RankedStreamAdapter::new(stream.stream, profile, &stream.stratum) {
-            Some(adapter) => streams.push((stream.stratum, adapter)),
+            // The plan the unit was compiled from rides on with the rows, which
+            // is how the trailer comes to name it.
+            Some(adapter) => streams.push((stream.stratum, adapter.with_plan_id(stream.plan_id))),
             None => unweighted_strata.push(stream.stratum),
         }
     }
@@ -1146,8 +1148,11 @@ fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
     let generous = run(TopK::new(1_000));
     assert_eq!(generous.rows, whole.rows);
 
-    // And the bound moves the rows, never the report: every stratum still
-    // reaches its own terminal status under the smallest bound there is.
+    // And under the smallest bound there is, every stratum still has a status —
+    // a status that tells the truth about the bound rather than one copied from
+    // the unbounded run. A search that answered "every producer was exhausted"
+    // after reading one row from each would have had to read every row of every
+    // stream to say it, and it would have been wrong anyway.
     let none = run(TopK::new(0));
     assert!(
         none.rows.is_empty(),
@@ -1155,7 +1160,125 @@ fn the_bound_is_the_bound_and_a_larger_one_refuses_nothing() {
         none.rows
     );
     assert_eq!(
-        none.trailer, whole.trailer,
-        "the trailer is the completeness claim, and the rows never were"
+        none.trailer.statuses.keys().collect::<Vec<_>>(),
+        whole.trailer.statuses.keys().collect::<Vec<_>>(),
+        "the same producers are named whatever the bound"
+    );
+    assert_eq!(
+        none.trailer.plan_id, whole.trailer.plan_id,
+        "and the answer descends from the same plan"
+    );
+    for (stratum, status) in &none.trailer.statuses {
+        let whole_status = whole
+            .trailer
+            .statuses
+            .get(stratum)
+            .expect("the same producers are named");
+        match (status, whole_status) {
+            // A stratum that ranked rows was read down to one of them and no
+            // further, so it is reported at that contribution. The unbounded run
+            // read the same stratum to its end.
+            (
+                ProducerStatus::CeilingReached { bound },
+                ProducerStatus::Exhausted { rows_emitted },
+            ) => {
+                assert!(*bound > Fixed::ZERO, "{stratum} was closed at no row");
+                assert!(*rows_emitted > 0, "{stratum} had rows to stop short of");
+            }
+            // A stratum with nothing to read, or one that could not run, is the
+            // same either way: there was never anything for a bound to stop.
+            (bounded, unbounded) => assert_eq!(
+                bounded, unbounded,
+                "{stratum} held no rows, so the bound cannot have changed its status"
+            ),
+        }
+    }
+
+    // The completeness claim is still the trailer's, and it was never in the
+    // rows: the unbounded run is where every producer reports exhaustion.
+    for status in whole.trailer.statuses.values() {
+        assert!(
+            !matches!(status, ProducerStatus::CeilingReached { .. }),
+            "nothing stopped the unbounded run, so nothing in it is bounded"
+        );
+    }
+}
+
+/// A registry whose *only* producer cannot run, so nothing reaches the fusion.
+fn registry_of_only_the_failing_stratum() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    let arity = PfArity::new(1, 1);
+    registry.register_ranked(
+        ex("pf/broken"),
+        Arc::new(FailingProducer {
+            arity,
+            mode: arity.all_free_mode(),
+        }),
+        ranked(
+            &ex("stratum/broken"),
+            vec![TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: Some("en".to_owned()),
+                predicate: Some(ex("body")),
+            }],
+            false,
+        ),
+    );
+    registry
+}
+
+#[test]
+fn an_answer_names_its_plan_even_when_no_stream_reached_the_fusion() {
+    // Every producer the plan reached failed to run, so no stream existed to
+    // carry the plan's identity into the trailer. That is the one case where the
+    // identity cannot be read back off the answer, and it is not a refusal: the
+    // plan ran, the failure is reported per producer, and the answer still names
+    // the plan it descends from.
+    let registry = registry_of_only_the_failing_stratum();
+    let stats = statistics_with_the_failing_stratum();
+    let env = fixture_env(&registry, &stats);
+    let profile = FusionProfile::new(
+        BTreeMap::from([(iri(&ex("stratum/broken")), Fixed::ONE)]),
+        K,
+        4,
+    )
+    .expect("the fixture profile is valid");
+    let request = mixed_request();
+
+    let result = block_on(search(
+        &request,
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("a producer that could not run is a status, not a whole-request refusal");
+
+    assert_eq!(
+        result.rows,
+        Vec::new(),
+        "the only producer could not run, so nothing ranked"
+    );
+    assert_eq!(
+        result.trailer.plan_id, None,
+        "no stream reached the fusion, so no stream carried the identity"
+    );
+    assert_eq!(
+        result.plan_id,
+        plan(&request, &registry, &stats)
+            .expect("the request plans")
+            .id(),
+        "and the answer still names the plan that ran"
+    );
+    assert!(
+        matches!(
+            result.trailer.statuses.get(&iri(&ex("stratum/broken"))),
+            Some(ProducerStatus::ExecutionFailed { .. })
+        ),
+        "an empty answer is not 'nothing matched': {:?}",
+        result.trailer.statuses
     );
 }

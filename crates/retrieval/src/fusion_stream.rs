@@ -18,10 +18,13 @@
 //! The frontier is not the whole of what a fusion holds, and saying otherwise
 //! would overstate it. Per-stream duplicate detection
 //! ([`ProtocolError::DuplicateItem`]) needs the set of items each stream has
-//! already emitted, and that set is proportional to the rows **pulled** — which
-//! the frontier argument bounds for a caller that certifies its top `k` through
-//! [`FusionStream::next`], and does not bound for one that drives every stream
-//! to its receipt, because draining pulls everything by construction.
+//! already emitted, and that set is proportional to the rows **pulled**. The
+//! frontier argument bounds exactly that: nothing here ever pulls a row it was
+//! not asked for. Certifying the top `k` through [`FusionStream::next`] pulls
+//! what the threshold argument requires and no more, and
+//! [`FusionStream::trailer`] pulls nothing at all — it reports the state each
+//! stream is already in. A caller that wants every row still pays for every
+//! row, because it asked for them one at a time.
 
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,30 +48,40 @@ pub type CandidateId = Term;
 ///
 /// # Where each variant comes from
 ///
-/// Every variant is the producer's own declaration, converted from the receipt
-/// it returned through [`RankedStream::receipt`] — plus, for the strata that
-/// never became a stream, the executor's report carried in by
+/// Three of the four are the producer's own declaration, converted from the
+/// receipt it returned through [`RankedStream::receipt`] — plus, for the strata
+/// that never became a stream, the executor's report carried in by
 /// [`FusionTrailer::completed_with`].
 ///
-/// Two of them this crate's own executor cannot mint, and that is a fact about
-/// the executor rather than about the vocabulary.
-/// [`RankedStreamImpl`](crate::RankedStreamImpl) materializes its rows and is
-/// always drained, so it declares [`Self::Exhausted`]; a unit that cannot run at
-/// all becomes [`Self::ExecutionFailed`]. It never declares
-/// [`Self::CeilingReached`], because it stops at no *score* bound — the row
-/// bound a caller passes to [`fuse`](crate::fuse) belongs to the fusion, not to
-/// a producer. And it never declares [`Self::TermsRejected`], because a producer
-/// that accepts none of the request's terms is rejected at planning
+/// [`Self::CeilingReached`] has a second author, and only one meaning. It says
+/// that reading stopped at a contribution bound rather than at the end of the
+/// rows: everything at or above `bound` was read, and what lies below it was
+/// not. A producer says it when it stops at a bound of its own. The fusion says
+/// it when the caller's row bound stopped it reading a stream that still held
+/// rows — see [`FusionStream::trailer`], which is where a bounded stop is
+/// written down. Either way the claim is the same and it is falsifiable in the
+/// same way: this stratum is not complete below `bound`. Draining the stream to
+/// make it say [`Self::Exhausted`] instead would be both a lie about the answer
+/// and the end of the memory bound that makes top-k fusion worth having.
+///
+/// [`Self::TermsRejected`] has exactly one author, the producer, and it is
+/// deliberately not minted anywhere else. A producer that accepts none of the
+/// request's terms is rejected at planning
 /// ([`RejectionReason::NoAcceptedTerm`](crate::RejectionReason)) and so compiles
 /// no unit to run: it has no stratum in the answer to report under, and the
 /// per-term fact that nothing served a term is reported per term instead, in
-/// [`Plan::unserved_terms`](crate::Plan::unserved_terms).
+/// [`Plan::unserved_terms`](crate::Plan::unserved_terms). Minting a stratum
+/// status from that would report one fact twice, in two shapes that could
+/// disagree. What the variant is for is the producer that *was* handed terms and
+/// declined them: "I did not look" and "I looked and found nothing"
+/// ([`Self::Exhausted`] with no rows) are different answers, and a caller
+/// composing [`RankedStream`] producers by hand through [`fuse`](crate::fuse)
+/// can say either. The fusion engine validates the claim against the rows the
+/// stream actually emitted, so it cannot be used to hide them.
 ///
-/// Both remain reachable through the public protocol, which is the point of
-/// having them: [`RankedStream`] is implemented by caller-supplied producers,
-/// and a producer that stops at its own declared score bound or declines the
-/// terms it was handed reports exactly these, with the fusion engine validating
-/// the claim against the rows it actually emitted.
+/// [`RankedStreamImpl`](crate::RankedStreamImpl), this crate's own executor
+/// stream, materializes its rows and declares [`Self::Exhausted`]; a unit that
+/// cannot run at all becomes [`Self::ExecutionFailed`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProducerStatus {
     /// The producer emitted every row it had.
@@ -76,10 +89,12 @@ pub enum ProducerStatus {
         /// How many rows it emitted.
         rows_emitted: u64,
     },
-    /// The producer stopped at a declared score bound rather than at
-    /// exhaustion. Declared by the producer itself; see this type's header.
+    /// Reading stopped at a contribution bound rather than at the end of the
+    /// rows. Declared by the producer, or written down by a fusion the caller's
+    /// row bound stopped; see this type's header.
     CeilingReached {
-        /// The inclusive bound at which it stopped.
+        /// The inclusive bound at which it stopped: every row at or above this
+        /// contribution was read, and the rows below it were not.
         bound: Fixed,
     },
     /// The producer could not run.
@@ -103,6 +118,12 @@ impl From<ProducerReceipt> for ProducerStatus {
     /// apart is what stops an unverified claim from being mistaken for a
     /// verified one at the type level. The conversion is total and lossless, so
     /// nothing a producer said is reworded on the way through.
+    ///
+    /// Not every status arrives this way, and that is the other half of keeping
+    /// the types apart: a stream the caller's row bound stopped never returned
+    /// a receipt at all, so the fusion records its
+    /// [`ProducerStatus::CeilingReached`] directly rather than mint a
+    /// [`ProducerReceipt`] the producer never uttered.
     fn from(receipt: ProducerReceipt) -> Self {
         match receipt {
             ProducerReceipt::Exhausted { rows_emitted } => Self::Exhausted { rows_emitted },
@@ -265,8 +286,10 @@ impl<S: RankedStream> FusionStream<S> {
     /// Build a fusion engine over `streams` under `profile`.
     ///
     /// No plan identity is attached; use [`with_plan_id`](Self::with_plan_id) to
-    /// name the pinned plan the streams came from. No stream is pulled until the
-    /// first [`next`](Self::next) call.
+    /// name the pinned plan the streams came from. [`fuse`](crate::fuse) does
+    /// that for its caller, reading the identity off the streams themselves
+    /// through [`RankedStream::plan_id`]. No stream is pulled until the first
+    /// [`next`](Self::next) call.
     #[must_use]
     pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Self {
         let count = streams.len();
@@ -335,25 +358,65 @@ impl<S: RankedStream> FusionStream<S> {
         }
     }
 
-    /// Drain every remaining stream and return the terminal trailer.
+    /// Close every stream that is still open at the bound reading stopped at,
+    /// and return the terminal trailer.
     ///
-    /// Draining discards rows but forces every producer to its terminal receipt,
-    /// so the trailer's statuses cover every stream this fusion was handed —
-    /// including the ones a caller's row bound stopped reading — and cannot be
-    /// forged. A producer that never became a stream is not here and cannot be;
-    /// the stage that ran it adds it through
-    /// [`FusionTrailer::completed_with`].
+    /// Every stream this fusion was handed gets a status, and no stream is read
+    /// to produce one. A stream that reached its own end already returned a
+    /// receipt, which was checked against the rows it emitted
+    /// ([`ProtocolError::ForgedReceipt`]) and is reported unchanged. A stream
+    /// still holding rows — because the caller stopped certifying, or because
+    /// the threshold argument never needed to look further — is closed with
+    /// [`ProducerStatus::CeilingReached`] at the contribution of its current
+    /// head: the last row read from it, and therefore the inclusive bound above
+    /// which it was read completely.
+    ///
+    /// # A bounded stop rather than a drain
+    ///
+    /// Draining here would force each producer to utter `Exhausted`, and the
+    /// trailer would then say every stratum was complete — which is false
+    /// whenever a bound stopped the reading, and expensive exactly when the
+    /// bound mattered most: it pulls every row of every stream, so a top-ten
+    /// answer over three million-row strata would read three million rows.
+    /// §7's memory bound is the whole reason fused enumeration is top-k, and a
+    /// terminal report is not allowed to spend it.
+    ///
+    /// The bounded status is not a weaker claim, it is an honest one. §6 asks
+    /// that every producer keep its own status, not that every producer be
+    /// exhausted, and "read down to this contribution and no further" is a
+    /// status a consumer can act on: it names precisely where this stratum's
+    /// evidence ends. Completeness is still asserted only here, never
+    /// mid-stream, and still never by the rows a caller happens to hold.
+    ///
+    /// A producer that never became a stream is not here and cannot be; the
+    /// stage that ran it adds it through [`FusionTrailer::completed_with`].
+    ///
+    /// Nothing is consumed: the streams are left exactly as they were, so a
+    /// caller that reads the trailer and then decides to certify further rows
+    /// through [`next`](Self::next) still can, and each stream's own receipt
+    /// replaces its bounded status if it later reaches the end.
     ///
     /// # Errors
     ///
-    /// [`FusionError::Protocol`] when a stream violates the protocol while
-    /// draining, and [`FusionError::Overflow`] on a checked sum overflow.
+    /// [`FusionError::Protocol`] when a stream violates the protocol while its
+    /// first row is pulled, and [`FusionError::Overflow`] on a checked sum
+    /// overflow — both only on a fusion whose streams have not been read at all
+    /// yet, because a bound of zero rows must still report a status per
+    /// producer.
     pub async fn trailer(&mut self) -> Result<FusionTrailer, FusionError> {
         self.ensure_initialized().await?;
         for index in 0..self.streams.len() {
-            while self.heads[index].is_some() {
-                self.heads[index] = self.fetch(index).await?;
-            }
+            // A head is a row already pulled and not yet merged, so its
+            // contribution is the lowest this fusion read from the stream;
+            // contributions are monotonically non-increasing with rank, so
+            // everything above it was read too. A stream with no head has
+            // already recorded its own receipt.
+            let Some(bound) = self.heads[index].as_ref().map(|head| head.contribution) else {
+                continue;
+            };
+            let stratum = self.streams[index].0.clone();
+            self.statuses
+                .insert(stratum, ProducerStatus::CeilingReached { bound });
         }
         Ok(FusionTrailer {
             statuses: self.statuses.clone(),

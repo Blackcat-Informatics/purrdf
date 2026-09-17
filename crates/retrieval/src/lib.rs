@@ -55,7 +55,8 @@
 //! no producer is in [`SearchResult::unserved_terms`] with a typed
 //! [`UnservedReason`], because statuses answer per producer and a caller asks
 //! per term. Completeness is asserted only by the trailer, which exists only
-//! once every stream has reached its terminal receipt.
+//! once every stream has reached a terminal status — its own receipt, or the
+//! contribution bound the fused top-k stopped reading it at.
 //!
 //! # Fusion is a law, not a knob
 //!

@@ -82,6 +82,10 @@ struct MockStream {
     receipt: ProducerReceipt,
     rows_emitted: u64,
     drop_counter: Arc<AtomicUsize>,
+    /// A shared count of the rows actually pulled from this stream.
+    pull_counter: Arc<AtomicUsize>,
+    /// The pinned plan this stream claims to descend from, if any.
+    plan_id: Option<PlanId>,
 }
 
 impl Drop for MockStream {
@@ -97,16 +101,28 @@ impl MockStream {
             receipt,
             rows_emitted: 0,
             drop_counter: Arc::new(AtomicUsize::new(0)),
+            pull_counter: Arc::new(AtomicUsize::new(0)),
+            plan_id: None,
         }
     }
 
     fn tracked(steps: Vec<Step>, receipt: ProducerReceipt, counter: Arc<AtomicUsize>) -> Self {
-        Self {
-            steps: steps.into(),
-            receipt,
-            rows_emitted: 0,
-            drop_counter: counter,
-        }
+        let mut stream = Self::new(steps, receipt);
+        stream.drop_counter = counter;
+        stream
+    }
+
+    /// The same producer, counting every row pulled from it into `counter`.
+    fn counted(steps: Vec<Step>, receipt: ProducerReceipt, counter: Arc<AtomicUsize>) -> Self {
+        let mut stream = Self::new(steps, receipt);
+        stream.pull_counter = counter;
+        stream
+    }
+
+    /// The same producer, claiming to descend from `plan_id` (or from no plan).
+    fn pinned(mut self, plan_id: Option<PlanId>) -> Self {
+        self.plan_id = plan_id;
+        self
     }
 }
 
@@ -121,6 +137,7 @@ impl RankedStream for MockStream {
         match self.steps.pop_front() {
             Some(Step::Row(rank, score, item)) => {
                 self.rows_emitted += 1;
+                self.pull_counter.fetch_add(1, Ordering::SeqCst);
                 Ok(Some((rank, score, item)))
             }
             Some(Step::Fail(error)) => Err(error),
@@ -130,6 +147,10 @@ impl RankedStream for MockStream {
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         Ok(self.receipt.clone())
+    }
+
+    fn plan_id(&self) -> Option<PlanId> {
+        self.plan_id
     }
 }
 
@@ -1187,9 +1208,12 @@ fn a_bound_larger_than_the_answer_returns_everything_and_refuses_nothing() {
 
 #[test]
 fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
-    // One stratum answers, one could not. The rows a consumer holds change with
-    // the bound; the terminal report does not, because the trailer drives every
-    // producer to its own receipt whatever the bound stopped reading.
+    // One stratum answers, one could not. Whatever the bound, every producer
+    // has a status in the trailer and none of it is readable from the rows in
+    // hand — that is the claim. The statuses themselves are *not* invariant
+    // under the bound, and must not be: a bound that stopped the reading leaves
+    // the text stratum incomplete, and a trailer that said `Exhausted` anyway
+    // would be asserting completeness the fusion never established.
     let profile = profile(&[("text", Fixed::ONE), ("geo", Fixed::ONE)], K, 4);
     let streams = || {
         vec![
@@ -1216,20 +1240,19 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
         ]
     };
 
-    let expected_statuses = BTreeMap::from([
-        (
-            stratum("text"),
-            ProducerStatus::Exhausted { rows_emitted: 3 },
-        ),
-        (
-            stratum("geo"),
-            ProducerStatus::ExecutionFailed {
-                reason: "no index".to_owned(),
-            },
-        ),
-    ]);
+    let failed = ProducerStatus::ExecutionFailed {
+        reason: "no index".to_owned(),
+    };
+    // A stratum that was read down to rank `r` and no further is reported at
+    // rank `r`'s contribution: everything at or above it was read, and what lies
+    // below it was not.
+    let stopped_at = |rank| ProducerStatus::CeilingReached {
+        bound: contribution(Fixed::ONE, rank, K).expect("the fixture contribution fits"),
+    };
 
-    // A prefix: one row of three, and the report is already whole.
+    // A prefix: one row of three, and the report is already whole — every
+    // producer named, and the one that answered named as incomplete, because
+    // reading stopped at the second row it held.
     let prefix = block_on(async {
         purrdf_retrieval::fuse::<MockStream, Term>(streams(), &profile, TopK::new(1))
             .await
@@ -1237,12 +1260,18 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
     });
     assert_eq!(prefix.rows.len(), 1, "the consumer holds one row of three");
     assert_eq!(
-        prefix.trailer.statuses, expected_statuses,
-        "and the trailer still names every producer, including the one that could not answer"
+        prefix.trailer.statuses,
+        BTreeMap::from([
+            (stratum("text"), stopped_at(2)),
+            (stratum("geo"), failed.clone()),
+        ]),
+        "the trailer names every producer, including the one that could not answer, \
+         and does not claim the bounded one was exhausted"
     );
 
     // No rows at all. An empty answer is not "the search found nothing": the
-    // trailer says what every producer did, and one of them failed.
+    // trailer says what every producer did — one failed outright, and the other
+    // was never read past its first row.
     let none = block_on(async {
         purrdf_retrieval::fuse::<MockStream, Term>(streams(), &profile, TopK::new(0))
             .await
@@ -1254,13 +1283,218 @@ fn completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand() {
         none.rows
     );
     assert_eq!(
-        none.trailer.statuses, expected_statuses,
-        "zero rows read, and the completeness claim is unchanged — it was never in the rows"
+        none.trailer.statuses,
+        BTreeMap::from([
+            (stratum("text"), stopped_at(1)),
+            (stratum("geo"), failed.clone()),
+        ]),
+        "zero rows certified, and the completeness claim is still the trailer's — \
+         it was never in the rows"
     );
 
-    // Every row. Same report again: the row count carried no claim in either
-    // direction.
+    // Every row. The same producers, and now the text stratum really was
+    // exhausted, so it says so: nothing about the row count carried the claim
+    // in either direction, and nothing about the claim was invented to match it.
     let whole = block_on(run_fuse(streams(), &profile));
     assert_eq!(whole.rows.len(), 3);
-    assert_eq!(whole.trailer.statuses, expected_statuses);
+    assert_eq!(
+        whole.trailer.statuses,
+        BTreeMap::from([
+            (
+                stratum("text"),
+                ProducerStatus::Exhausted { rows_emitted: 3 }
+            ),
+            (stratum("geo"), failed),
+        ])
+    );
+}
+
+// 15. The bound stops the reading, not only the returning.
+#[test]
+fn a_bounded_stop_closes_a_stream_instead_of_draining_it() {
+    // A stratum with far more rows than the bound asks for, and a counter on
+    // every pull. If the terminal report drained the stream to make it declare
+    // `Exhausted`, the count would be the whole stream and the memory bound
+    // top-k exists for would be gone — with the rows returned looking exactly
+    // the same either way, which is why this is counted rather than eyeballed.
+    const ROWS: u64 = 500;
+    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let steps = (1..=ROWS)
+        .map(|rank| row(rank, Fixed::ONE, K, &format!("item-{rank:04}")))
+        .collect();
+    let streams = vec![(
+        stratum("text"),
+        MockStream::counted(steps, exhausted(ROWS), Arc::clone(&pulls)),
+    )];
+
+    let bounded = block_on(async {
+        purrdf_retrieval::fuse::<MockStream, Term>(streams, &profile, TopK::new(3))
+            .await
+            .expect("a bounded fusion succeeds")
+    });
+
+    assert_eq!(bounded.rows.len(), 3, "the bound is the bound");
+    let pulled = pulls.load(Ordering::SeqCst);
+    assert!(
+        pulled < 16,
+        "a top-3 answer over {ROWS} rows pulled {pulled} of them, which is a drain"
+    );
+    assert_eq!(
+        bounded.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::CeilingReached {
+            bound: contribution(Fixed::ONE, u64::try_from(pulled).expect("a small count"), K)
+                .expect("the fixture contribution fits")
+        }),
+        "the stratum is closed at the contribution of the last row read from it"
+    );
+
+    // The neighbour that must still succeed, and the reason the bounded status
+    // is not simply what this fusion always says: a bound the stream cannot
+    // reach exhausts it, and then the producer's own receipt is what the
+    // trailer reports.
+    let pulls = Arc::new(AtomicUsize::new(0));
+    let steps = (1..=3)
+        .map(|rank| row(rank, Fixed::ONE, K, &format!("item-{rank:04}")))
+        .collect();
+    let streams = vec![(
+        stratum("text"),
+        MockStream::counted(steps, exhausted(3), Arc::clone(&pulls)),
+    )];
+    let whole = block_on(async {
+        purrdf_retrieval::fuse::<MockStream, Term>(streams, &profile, TopK::new(1_000))
+            .await
+            .expect("a bound above the stream is not a refusal")
+    });
+    assert_eq!(
+        whole.rows.len(),
+        3,
+        "every row the stream held is in the answer"
+    );
+    assert_eq!(
+        whole.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 3 }),
+        "a stream that genuinely ended reports its own receipt, verified against the rows"
+    );
+}
+
+// 16. The pinned plan travels on the streams, and two plans in one fusion is a
+//     refusal rather than an answer filed under one of them.
+#[test]
+fn the_trailer_names_a_plan_only_when_every_stream_names_the_same_one() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K, 4);
+    let first = plan_id("first-plan");
+    let second = plan_id("second-plan");
+    let streams = |left: Option<PlanId>, right: Option<PlanId>| {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).pinned(left),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)).pinned(right),
+            ),
+        ]
+    };
+
+    // Agreement: the identity the streams carried is the identity the answer
+    // reports.
+    let agreed = block_on(run_fuse(streams(Some(first), Some(first)), &profile));
+    assert_eq!(agreed.trailer.plan_id, Some(first));
+    assert_eq!(agreed.rows.len(), 2);
+
+    // Disagreement: one answer cannot descend from two plans, and picking one
+    // of them would be right about half the rows.
+    let error = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams(Some(first), Some(second)),
+        &profile,
+        TOP_K,
+    ))
+    .expect_err("two pinned plans in one fusion is a refusal");
+    assert!(
+        matches!(
+            &error,
+            FusionError::PlanIdMismatch { expected, got: Some(got) }
+                if *expected == first && *got == second
+        ),
+        "expected PlanIdMismatch, got {error:?}"
+    );
+
+    // And the neighbours that must still fuse, so the refusal stays narrow.
+    // Streams that name no plan at all are not in disagreement about one; the
+    // answer simply names none rather than borrowing an identity.
+    let unpinned = block_on(run_fuse(streams(None, None), &profile));
+    assert_eq!(unpinned.trailer.plan_id, None);
+    assert_eq!(unpinned.rows, agreed.rows, "and the rows are the same rows");
+
+    let mixed = block_on(run_fuse(streams(Some(first), None), &profile));
+    assert_eq!(
+        mixed.trailer.plan_id, None,
+        "one stream that descends from no plan means no single plan produced the answer"
+    );
+    assert_eq!(mixed.rows, agreed.rows, "and the rows are the same rows");
+}
+
+// 17. "I declined the terms" is a different answer from "I found nothing", and
+//     a producer cannot use the first to hide rows it emitted.
+#[test]
+fn a_producer_that_declined_its_terms_is_not_a_producer_that_found_nothing() {
+    let profile = profile(&[("text", Fixed::ONE)], K, 4);
+
+    // The producer was handed terms it does not serve and says so. It emits no
+    // rows, and the trailer keeps the reason it emitted none.
+    let declined = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(Vec::new(), ProducerReceipt::TermsRejected),
+        )],
+        &profile,
+    ));
+    assert_eq!(
+        declined.rows,
+        Vec::new(),
+        "a producer that declined its terms emits no rows"
+    );
+    assert_eq!(
+        declined.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::TermsRejected)
+    );
+
+    // The neighbour it must stay distinguishable from: a producer that served
+    // the terms, looked, and had nothing to return. Same empty answer, different
+    // report — which is the whole reason the variant exists.
+    let searched = block_on(run_fuse(
+        vec![(stratum("text"), MockStream::new(Vec::new(), exhausted(0)))],
+        &profile,
+    ));
+    assert_eq!(searched.rows, declined.rows, "both answers are empty");
+    assert_eq!(
+        searched.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 0 }),
+        "and they are not the same answer"
+    );
+
+    // And the claim is checked against what the stream actually did: a producer
+    // that emitted a row and then declared it had declined the terms is refused,
+    // so the variant cannot be used to disown rows already in the fusion.
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(
+            stratum("text"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a")],
+                ProducerReceipt::TermsRejected,
+            ),
+        )],
+        &profile,
+        TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ForgedReceipt { declared: 0, actual: 1 })
+        ),
+        "expected ForgedReceipt, got {result:?}"
+    );
 }

@@ -16,6 +16,16 @@
 //! compared. If the frontier — or the per-stream duplicate set, or anything else
 //! the engine keeps — grew with the input, the longer run would show it.
 //!
+//! # It is [`fuse`] that is measured, not a fusion assembled here
+//!
+//! The bound belongs to the shipped entry point or it belongs to nothing. A
+//! measurement taken over a hand-driven [`FusionStream`] would be measuring the
+//! engine while the function every caller actually reaches — the one `search`
+//! composes — went unmeasured, and that is exactly the gap a terminal report
+//! that drained its streams would hide in: the rows would be bounded, the
+//! reading would not, and no assertion here would notice. So each run below is a
+//! whole `fuse` call, including the trailer it returns.
+//!
 //! # The fixture is multi-stratum on purpose
 //!
 //! The Fagin NRA frontier exists to hold candidates seen in *some* streams while
@@ -42,8 +52,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    Fixed, FusionProfile, FusionStream, Iri, ProducerReceipt, ProtocolError, RankedStream, Term,
-    contribution,
+    Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError, RankedStream, Term,
+    TopK, contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -268,39 +278,56 @@ struct Measurement {
     /// How many `(stratum, rank, contribution)` triples the certified rows
     /// carried, summed — the evidence the frontier was actually populated.
     contributions: usize,
+    /// How many of the three strata the trailer closed at a contribution bound
+    /// rather than at exhaustion — the evidence the bound stopped the reading
+    /// and not merely the returning.
+    bounded: usize,
 }
 
-/// Certify [`CERTIFIED_ROWS`] rows from three streams of `total` rows each,
-/// measuring the peak heap the fusion held while doing it.
+/// Fuse [`CERTIFIED_ROWS`] rows out of three streams of `total` rows each
+/// through the shipped [`fuse`], measuring the peak heap it held while doing it.
 fn measure(total: u64) -> Measurement {
+    measure_rows(total, CERTIFIED_ROWS)
+}
+
+/// Fuse `rows` rows out of three streams of `total` rows each through the
+/// shipped [`fuse`], measuring the peak heap it held while doing it.
+fn measure_rows(total: u64, rows: usize) -> Measurement {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, &pulls);
-    let mut fusion = FusionStream::new(streams, profile);
 
-    // The baseline is taken after construction, so what is measured is the
-    // fusion's own working set and not the fixture's.
+    // The baseline is taken after the fixture is built, so what is measured is
+    // the fusion's own working set and not the fixture's.
     let baseline = reset_peak();
-    let mut contributions = 0usize;
-    for _ in 0..CERTIFIED_ROWS {
-        let row = block_on(fusion.next())
-            .expect("the fixture streams obey the protocol")
-            .expect("a certified row");
-        contributions += row.contributions.len();
-        // The row is dropped here: what is being measured is what the *fusion*
-        // retains, not what a caller chose to keep.
-        drop(row);
-    }
+    let result = block_on(fuse::<LazyStream, Term>(streams, &profile, TopK::new(rows)))
+        .expect("the fixture streams obey the protocol");
     let peak_bytes = peak_since(baseline);
     let pulls = pulls.load(Ordering::SeqCst);
 
-    // Dropped without draining. Draining would force every stream to its receipt
-    // and so pull every row it has, which is the one thing that does grow with
-    // the input and is not what this measures.
-    drop(fusion);
+    assert_eq!(
+        result.rows.len(),
+        rows,
+        "the bound is what stopped this run, so every measured run did the same work"
+    );
+    let contributions = result
+        .rows
+        .iter()
+        .map(|row| row.contributions.len())
+        .sum::<usize>();
+    let bounded = result
+        .trailer
+        .statuses
+        .values()
+        .filter(|status| matches!(status, ProducerStatus::CeilingReached { .. }))
+        .count();
+    // The peak was read before this: what is measured is what the *fusion* held,
+    // not what the caller then chose to keep.
+    drop(result);
     Measurement {
         peak_bytes,
         pulls,
         contributions,
+        bounded,
     }
 }
 
@@ -333,14 +360,30 @@ fn the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length() {
         "the two runs must do identical work; only the streams' length differs"
     );
 
-    // Second: the measurement is live. A fusion that held nothing at all would
+    // Second: the bound stopped the *reading*, which is the only way the
+    // comparison below can hold through `fuse` at all. Every stratum still held
+    // rows when the bound was reached, and the trailer says so at the
+    // contribution each was read down to instead of claiming exhaustion it would
+    // have had to read a million rows to earn.
+    assert_eq!(
+        short.bounded,
+        STRATA.len(),
+        "a stratum that still held rows reported something other than a bounded stop"
+    );
+    assert_eq!(
+        long.bounded,
+        STRATA.len(),
+        "a stratum that still held rows reported something other than a bounded stop"
+    );
+
+    // Third: the measurement is live. A fusion that held nothing at all would
     // read zero here, and then the comparison below would be vacuous.
     assert!(
         short.peak_bytes > 0,
         "the fusion allocated nothing, so this measures nothing"
     );
 
-    // Third, the claim. The streams are a thousand times longer in the second
+    // Fourth, the claim. The streams are a thousand times longer in the second
     // run and the peak does not follow: the frontier is bounded by the profile's
     // `max_contributions` x strata over the disagreement window, and the
     // duplicate-detection sets are bounded by the rows pulled — neither by the
@@ -370,24 +413,13 @@ fn the_peak_follows_the_rows_certified_when_the_stream_length_is_fixed() {
     // is a statement about the input, not an artefact of a peak that never moves.
     let _warm = measure(1_000);
     let few = measure(1_000);
-
-    let pulls = Arc::new(AtomicUsize::new(0));
-    let (profile, streams) = fixture(1_000, &pulls);
-    let mut fusion = FusionStream::new(streams, profile);
-    let baseline = reset_peak();
-    for _ in 0..(CERTIFIED_ROWS * 8) {
-        let row = block_on(fusion.next())
-            .expect("the fixture streams obey the protocol")
-            .expect("a certified row");
-        drop(row);
-    }
-    let many_peak = peak_since(baseline);
-    drop(fusion);
+    let many = measure_rows(1_000, CERTIFIED_ROWS * 8);
 
     assert!(
-        many_peak > few.peak_bytes,
+        many.peak_bytes > few.peak_bytes,
         "certifying eight times as many rows must move the peak; \
-         {many_peak} against {}",
+         {} against {}",
+        many.peak_bytes,
         few.peak_bytes
     );
 }

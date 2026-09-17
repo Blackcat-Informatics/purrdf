@@ -18,8 +18,8 @@ use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, Fixed, FusionProfile, Iri, Metric,
-    Plan, PlanOrigin, ProducerDecision, ProducerStatus, RejectionReason, RequestTerm,
-    RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, Weight, compile,
+    Plan, PlanOrigin, ProducerDecision, ProducerStatus, RankedStreamImpl, RejectionReason,
+    RequestTerm, RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, Weight, compile,
     contribution, execute,
 };
 use purrdf_sparql_eval::{
@@ -1352,11 +1352,22 @@ fn a_stratum_no_producer_ranks_under_still_bounds_a_depth_at_zero() {
 // 8. Execution: failure isolation and replay
 // ---------------------------------------------------------------------------
 
+/// Read an executed stream the way a caller that stopped at `execute` reads it:
+/// one row at a time through the ranked-stream protocol, to exhaustion.
+fn drain(mut stream: RankedStreamImpl) -> Vec<(u64, Term)> {
+    let mut rows = Vec::new();
+    while let Some(row) = block_on(stream.next()).expect("a materialized stream obeys the protocol")
+    {
+        rows.push(row);
+    }
+    rows
+}
+
 fn rows_by_stratum(result: purrdf_retrieval::ExecutionResult) -> BTreeMap<Iri, Vec<(u64, Term)>> {
     result
         .streams
         .into_iter()
-        .map(|stream| (stream.stratum, stream.stream.into_rows()))
+        .map(|stream| (stream.stratum, drain(stream.stream)))
         .collect()
 }
 

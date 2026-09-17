@@ -51,8 +51,26 @@
 //! "two answered" are therefore different answers, readable from one place.
 //!
 //! The trailer property survives that: it is assembled from a value that exists
-//! only once every stream has reached its terminal receipt, so nothing readable
-//! mid-stream gained a completeness claim.
+//! only once every stream has reached a terminal status — its own receipt, or
+//! the contribution bound `top_k` stopped it at — so nothing readable mid-stream
+//! gained a completeness claim.
+//!
+//! # The plan's identity travels with the rows
+//!
+//! An answer names the plan it descends from, and there are two ways to make it
+//! do so. One is to ask the plan at the end, which always succeeds and proves
+//! nothing: the name would be right even if the rows had come from somewhere
+//! else entirely. The other is to carry the identity along with the rows and
+//! read it back off the answer, which is what happens here — [`execute`] tags
+//! each stream with the plan its unit was compiled from, the bridge below keeps
+//! the tag, and [`fuse`] names it in the trailer only when every stream still
+//! agrees on it.
+//!
+//! `search` therefore takes [`SearchResult::plan_id`] from the trailer and
+//! refuses an answer whose streams carried a different identity, or none while
+//! streams fused. The flow is load-bearing rather than decorative: break it
+//! anywhere between the plan and the trailer and the search fails instead of
+//! filing its rows under a plan that did not produce them.
 //!
 //! # A term that reached no producer is in the answer too
 //!
@@ -168,6 +186,15 @@ pub struct SearchResult {
     /// rather than as a term that silently contributed no rows.
     pub unserved_terms: Vec<UnservedTerm>,
     /// The canonical identity of the plan the answer descends from.
+    ///
+    /// Read back off [`Self::trailer`], where it arrived on the streams
+    /// themselves: `execute` tags each stream with the plan its unit was
+    /// compiled from, and `fuse` names that plan in the trailer when every
+    /// stream still agrees on it. So this is the identity that travelled the
+    /// pipeline with the rows, not one re-read from the plan after the fact —
+    /// and a stream whose identity changed on the way is a refusal
+    /// ([`FusionError::PlanIdMismatch`]) rather than an answer filed under a
+    /// plan that did not produce it.
     pub plan_id: PlanId,
     /// The identity of the fusion profile the answer was fused under.
     pub profile_id: FusionProfileId,
@@ -309,12 +336,16 @@ where
     let mut unweighted_strata: Vec<Iri> = Vec::new();
     for stratum_stream in executed {
         let stratum = stratum_stream.stratum.clone();
+        let plan_id = stratum_stream.plan_id;
         let Some(adapter) = RankedStreamAdapter::new(stratum_stream.stream, profile, &stratum)
         else {
             unweighted_strata.push(stratum);
             continue;
         };
-        streams.push((stratum, adapter));
+        // The stream carries the plan it was compiled from into the fusion, so
+        // the identity the answer reports is the one that travelled with the
+        // rows rather than one read back off the plan at the end.
+        streams.push((stratum, adapter.with_plan_id(plan_id)));
     }
     // `execute` yields its streams in the compiler's stratum order, but the
     // report is sorted rather than inherited: it is part of the answer, and an
@@ -333,9 +364,32 @@ where
     }
 
     // 5. Fuse. `Term` is the item type: the executor's candidate terms.
+    let fused_strata = streams.len();
     let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, top_k)
         .await
         .map_err(SearchError::FusionError)?;
+
+    // 5b. Read the plan identity back off the answer rather than off the plan.
+    //     Every stream handed to `fuse` was tagged with the compiled plan, and
+    //     `fuse` puts the tag in the trailer only if all of them still agreed on
+    //     it, so this is the identity that actually travelled plan → compiled
+    //     bundle → stream → answer. A trailer that names a different plan, or
+    //     none while streams fused, means something replaced a stream on the way
+    //     and the answer is not the one this plan produced.
+    //
+    //     No stream at all is the one case with nothing to read: every unit
+    //     failed, so no stream existed to carry the identity. The plan still ran
+    //     and the answer still names it.
+    let plan_id = match fused.trailer.plan_id {
+        Some(carried) if carried == compiled.plan_id => carried,
+        carried if fused_strata > 0 => {
+            return Err(SearchError::FusionError(FusionError::PlanIdMismatch {
+                expected: compiled.plan_id,
+                got: carried,
+            }));
+        }
+        _ => compiled.plan_id,
+    };
 
     // 6. Complete the terminal report. Fusion verified the strata it was handed;
     //    the executor holds the rest — a stratum whose unit failed and a stratum
@@ -348,7 +402,7 @@ where
         rows: fused.rows,
         trailer,
         unserved_terms: plan.unserved_evidence(),
-        plan_id: plan.id(),
+        plan_id,
         profile_id: profile.id(),
         unweighted_strata,
     })
@@ -390,6 +444,8 @@ pub struct RankedStreamAdapter {
     weight: Fixed,
     /// The profile's smoothing constant.
     k: u32,
+    /// The pinned plan these rows descend from, when the caller named one.
+    plan_id: Option<PlanId>,
 }
 
 impl RankedStreamAdapter {
@@ -412,7 +468,27 @@ impl RankedStreamAdapter {
             inner: stream,
             weight: profile.weight(stratum)?,
             k: profile.k_parameter(),
+            plan_id: None,
         })
+    }
+
+    /// Name the pinned plan these rows descend from.
+    ///
+    /// [`execute`] tags every stream it returns with the plan its unit was
+    /// compiled from ([`StratumStream::plan_id`](crate::StratumStream)), and
+    /// this is how that tag continues into the fusion: [`fuse`] reads it back
+    /// through [`RankedStream::plan_id`] and names it in the trailer, so the
+    /// identity in a fused answer is the one that travelled with the rows.
+    ///
+    /// It is attached here rather than taken by [`new`](Self::new) because the
+    /// executor's rows and their provenance arrive as two fields of one
+    /// `StratumStream`, and a caller resuming at `execute` holds both. A caller
+    /// whose stream descends from no plan attaches nothing and fuses anyway; see
+    /// [`RankedStream::plan_id`].
+    #[must_use]
+    pub const fn with_plan_id(mut self, plan_id: PlanId) -> Self {
+        self.plan_id = Some(plan_id);
+        self
     }
 }
 
@@ -454,5 +530,9 @@ impl RankedStream for RankedStreamAdapter {
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         self.inner.receipt().await
+    }
+
+    fn plan_id(&self) -> Option<PlanId> {
+        self.plan_id
     }
 }

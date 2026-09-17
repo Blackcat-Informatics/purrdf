@@ -216,6 +216,16 @@ reads a prefix and stops holds evidence that the answer is incomplete,
 and only the trailer can say otherwise. Nothing readable mid-stream
 entitles a consumer to a completeness claim.
 
+A status per producer is not the same obligation as an *ending* per
+producer, and reading the first as the second would quietly repeal §7.
+A producer the top-k bound stopped mid-stream has a true status — read
+down to this contribution and no further — and that is what the trailer
+carries for it. Draining the stream instead, so that it can be made to
+declare exhaustion, would spend the whole memory bound on the report and
+would then assert a completeness the fusion never established. The
+trailer reports the state each producer is in; it does not put producers
+into a state so that it has something to report.
+
 ## 7. Fused is top-k by construction; unfused streams without bound
 
 The two rungs differ in kind, and the difference is algebraic rather than
