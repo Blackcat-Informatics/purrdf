@@ -45,15 +45,26 @@
 //!    `d_eff ≈ (ln d)² / ζ(2)`, which is about 42 at `d = 4096`.
 //! 3. **Power-law cluster sizes.** Corpora are not made of equal piles. Membership follows
 //!    a harmonic law, so a few clusters hold most rows and a long tail holds the rest.
-//! 4. **Dimension-invariant cluster tightness.** Members are placed at an *intended cosine*
-//!    `ρ` to their centroid: `v = ρ·c + sqrt(1 - ρ²)·u`. This is the property that must be
-//!    parameterised, and getting it wrong is subtle. Adding isotropic noise of a fixed
-//!    amplitude `σ` instead gives an expected cosine of `1 / sqrt(1 + d·σ²)`, which is a
-//!    function of the width: an amplitude that makes tight clusters at `d = 64` drives the
-//!    cosine to about 0.077 at `d = 4096`, leaving members essentially orthogonal to the
-//!    centroid they were supposedly drawn around. A generator like that produces a corpus
-//!    that *looks* clustered in its source and is indistinguishable from uniform in its
-//!    output.
+//! 4. **Cluster tightness you can ask for, and get.** Members are placed at an *intended
+//!    cosine* `ρ` to their centroid: `v = ρ·c + sqrt(1 - ρ²)·u`. The alternative — isotropic
+//!    noise at a fixed amplitude `σ` — fails in two different ways depending on where the
+//!    noise is added, and BOTH are measured in `tests/corpus_geometry.rs` rather than argued
+//!    here:
+//!
+//!    * Added in the **ambient** space, the achieved cosine tracks the width. Its expectation
+//!      is `1 / sqrt(1 + d·σ²·var)`, where `var` is the variance of the noise draw — `1/3`
+//!      for [`Stream::unit`], which is uniform on `[-1, 1)` rather than the unit-variance
+//!      draw the textbook form assumes. One amplitude measures 0.89 at `d = 64` and 0.24 at
+//!      `d = 4096`: members of the same nominal tightness end up nearly orthogonal to their
+//!      centroid as the width grows.
+//!    * Added in the **latent** space, tightness does NOT track the width — the latent
+//!      dimension is fixed, so there is no `d` to grow. What is lost instead is control: the
+//!      achieved cosine is an emergent 0.94 that no caller asked for, and it moves with
+//!      `intrinsic` and `σ` rather than with the one number the caller cares about.
+//!
+//!    So width-invariance alone is not the argument for this parameterisation, and it would
+//!    be dishonest to present it as one. The argument is that `ρ` is the achieved cosine, at
+//!    every width, without retuning.
 //!
 //! The unit tests measure `d_eff` from the generated vectors, but by the **diagonal** of
 //! the covariance rather than its spectrum -- see `effective_dimension` in the test module.
@@ -365,6 +376,72 @@ pub fn embedding_like_structured(shape: CorpusShape, seed: u64) -> Result<Struct
 
     // The centroids through the identical map. No draw is taken here -- these are values the
     // generator already holds -- so the corpus is unchanged by the fact that we keep them.
+    let mut centroid_data = Vec::with_capacity(clusters * dims);
+    for centroid in &centroids {
+        centroid_data.extend_from_slice(&to_ambient(centroid, &projection, &scale, dims));
+    }
+
+    Ok(Structured {
+        matrix: VectorMatrix::new(rows, dims, data)?,
+        cluster: membership,
+        centroids: VectorMatrix::new(clusters, dims, centroid_data)?,
+    })
+}
+
+/// The rejected parameterisation applied where this generator ACTUALLY mixes: the latent space.
+///
+/// The near counterfactual, and the one that is easy to get wrong. [`embedding_like_structured`]
+/// forms its member in a latent space of `shape.intrinsic` dimensions and only then projects;
+/// so the literal one-line alternative to `v = ρ·c + sqrt(1-ρ²)·u` is `v = c + σ·n` **in that
+/// same latent space**, with everything else — the projection, the spectrum, the renormalisation,
+/// the cluster law, the draw order — held identical. Every other line here is copied from the
+/// shipped path deliberately: a control that differs in a second place cannot attribute what it
+/// measures to the first.
+///
+/// `shape.within_cluster_cosine` is ignored; `sigma` replaces it.
+///
+/// # Errors
+///
+/// As [`embedding_like_structured`].
+pub fn latent_fixed_amplitude(shape: CorpusShape, sigma: f64, seed: u64) -> Result<Structured> {
+    let CorpusShape {
+        rows,
+        dims,
+        intrinsic,
+        clusters,
+        ..
+    } = shape;
+    let latent = intrinsic.max(1).min(dims);
+    let clusters = clusters.max(1);
+
+    let mut stream = Stream::new(seed);
+    let projection: Vec<Vec<f64>> = (0..latent).map(|_| stream.direction(dims)).collect();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a coordinate index is far inside a 53-bit mantissa"
+    )]
+    let scale: Vec<f64> = (0..dims).map(|j| 1.0 / ((j as f64) + 1.0).sqrt()).collect();
+    let centroids: Vec<Vec<f64>> = (0..clusters).map(|_| stream.direction(latent)).collect();
+    let (weights, weight_total) = cluster_weights(clusters);
+
+    let mut data = Vec::with_capacity(rows * dims);
+    let mut membership = Vec::with_capacity(rows);
+    for _ in 0..rows {
+        let cluster = cluster_of(stream.next_bits(), &weights, weight_total);
+
+        // The ONE line that differs from the shipped generator: a fixed amplitude rather than
+        // an intended cosine. The same number of draws is taken either way, so the two paths
+        // stay aligned on the stream and a difference in the output is a difference in the
+        // mix rather than in the sampling.
+        let mut point: Vec<f64> = (0..latent)
+            .map(|axis| stream.unit().mul_add(sigma, centroids[cluster][axis]))
+            .collect();
+        normalize(&mut point);
+
+        data.extend_from_slice(&to_ambient(&point, &projection, &scale, dims));
+        membership.push(cluster);
+    }
+
     let mut centroid_data = Vec::with_capacity(clusters * dims);
     for centroid in &centroids {
         centroid_data.extend_from_slice(&to_ambient(centroid, &projection, &scale, dims));
