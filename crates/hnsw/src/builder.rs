@@ -69,6 +69,21 @@ struct Round<'a> {
 /// a norm and a row's is zero; [`HnswError::NonFiniteDistance`] if a kernel result leaves
 /// the finite range.
 pub(crate) fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Result<HnswIndex> {
+    build_with_batch(matrix, kernel, params, None)
+}
+
+/// Build with an explicit round size, or the profile rule when `batch` is `None`.
+///
+/// `batch = Some(1)` is a plain serial insertion: each node proposes against the graph
+/// that already holds every row below it. It exists so the determinism suite can observe
+/// that the round structure is load-bearing — within-round isolation produces a different
+/// graph — rather than asserting the property against a second identical build.
+pub(crate) fn build_with_batch(
+    matrix: VectorMatrix,
+    kernel: Kernel,
+    params: Params,
+    batch: Option<usize>,
+) -> Result<HnswIndex> {
     params.validate_against(matrix.rows(), matrix.dims())?;
 
     let n = matrix.rows();
@@ -79,7 +94,7 @@ pub(crate) fn build(matrix: VectorMatrix, kernel: Kernel, params: Params) -> Res
     let norms = compute_norms(&matrix, kernel)?;
 
     let mut graph = Graph::with_levels(levels.clone());
-    let batch = n.isqrt().max(1);
+    let batch = batch.unwrap_or_else(|| n.isqrt().max(1)).max(1);
     let mut start = 0;
     while start < n {
         let end = (start + batch).min(n);

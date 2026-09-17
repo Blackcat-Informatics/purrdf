@@ -428,6 +428,33 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
     }
     let entry_raw = cursor.u64()?;
 
+    // A node record is at least 16 bytes of fixed fields (row, level, reserved) plus one
+    // 16-byte layer record (layer, reserved, count), so a payload claiming more nodes than
+    // its remaining bytes could hold is malformed. The check runs BEFORE any allocation:
+    // without it a hostile count turns a bad payload into an allocator abort, which is not
+    // a typed error.
+    const MIN_NODE_BYTES: usize = 16 + 16;
+    if node_count > cursor.remaining() / MIN_NODE_BYTES {
+        return Err(HnswError::InvalidPayload {
+            reason: format!(
+                "the payload claims {node_count} node(s) but holds only {} byte(s) after the \
+                 header",
+                cursor.remaining()
+            ),
+        });
+    }
+    // The level cap is a function of the node count and M, and the encoder cannot record a
+    // level above it. Bounding `max_level` here bounds every per-node layer allocation.
+    let level_ceiling = crate::level::level_cap(node_count, params.m());
+    if max_level > level_ceiling {
+        return Err(HnswError::InvalidPayload {
+            reason: format!(
+                "the header records max level {max_level}, above the {level_ceiling} the node \
+                 count and M admit"
+            ),
+        });
+    }
+
     let mut levels = Vec::with_capacity(node_count);
     let mut layers: Vec<Vec<Vec<Ranked>>> = Vec::with_capacity(node_count);
     for row in 0..node_count {
@@ -466,6 +493,17 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Result<GraphImage> {
                 });
             }
             let count = cursor.usize()?;
+            // Each neighbour is a row (u64) plus a distance (u64): 16 bytes. Reject a count
+            // the remaining payload cannot possibly hold before allocating.
+            if count > cursor.remaining() / 16 {
+                return Err(HnswError::InvalidPayload {
+                    reason: format!(
+                        "node {row} layer {layer} claims {count} neighbour(s) but only {} \
+                         byte(s) remain",
+                        cursor.remaining()
+                    ),
+                });
+            }
             let mut neighbors = Vec::with_capacity(count);
             let mut previous: Option<usize> = None;
             for _ in 0..count {
@@ -618,6 +656,13 @@ impl<'a> Cursor<'a> {
         usize::try_from(value).map_err(|_| HnswError::InvalidPayload {
             reason: format!("payload value {value} does not fit this platform's index range"),
         })
+    }
+
+    /// The number of bytes not yet consumed.
+    ///
+    /// Used to bound an untrusted length before it is handed to an allocator.
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.at)
     }
 
     /// Fail if any bytes remain; trailing bytes are a corrupt payload, not padding.

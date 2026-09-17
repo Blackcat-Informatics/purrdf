@@ -51,6 +51,7 @@ mod builder;
 mod graph;
 mod search;
 
+pub mod determinism;
 pub mod error;
 pub mod level;
 pub mod params;

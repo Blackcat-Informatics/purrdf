@@ -40,6 +40,9 @@ exclude = [
     # digests can be compared. Never published, depended on by nothing,
     # and built only by scripts/check-geo-determinism.sh.
     "crates/geo/determinism",
+    # The same pattern for purrdf-hnsw's cross-target determinism check,
+    # built only by scripts/check-hnsw-determinism.sh.
+    "crates/hnsw/determinism",
 ]
 
 [workspace.package]
