@@ -22,13 +22,18 @@
 //! fuse(streams, profile)              -> one ordered answer
 //! ```
 //!
-//! This build ships the first stage — [`plan`], the pure planner — together
-//! with the stage's value ([`Plan`]), the typed request lattice
-//! ([`RetrievalRequest`], [`RequestTerm`]), the statistics input planning
-//! consults ([`Statistics`]), the plan's canonical identity ([`PlanId`]), and
-//! the fourth stage's engine: the verified ranked-stream protocol
-//! ([`RankedStream`]) and the exact fixed-point fusion ([`fuse`], [`FusionStream`],
-//! [`FusionProfile`]). Compiling and executing are the remaining stages.
+//! This build ships all four stages. [`plan`] is the pure planner, with the
+//! stage's value ([`Plan`]), the typed request lattice ([`RetrievalRequest`],
+//! [`RequestTerm`]), the statistics input planning consults ([`Statistics`]),
+//! and the plan's canonical identity ([`PlanId`]). [`compile`] is the semantic
+//! admission waist ([`AdmissionEnvironment`], [`AdmissionError`]) that emits the
+//! per-stratum SPARQL units a caller can run directly ([`CompiledRetrieval`],
+//! [`StratumUnit`]). [`execute`] runs those units independently through
+//! `purrdf-sparql-eval`, isolating a stratum's failure in its own
+//! [`ProducerStatus`] ([`ExecutionResult`], [`StratumStream`],
+//! [`RankedStreamImpl`]). Finally [`fuse`] is the exact fixed-point fusion over
+//! the verified ranked-stream protocol ([`RankedStream`], [`FusionStream`],
+//! [`FusionProfile`]).
 //!
 //! # Fusion is a law, not a knob
 //!
@@ -68,8 +73,11 @@
 )]
 #![forbid(unsafe_code)]
 
+mod admission;
 mod canonical;
+mod compile;
 mod error;
+mod execute;
 mod fixed;
 mod fuse;
 mod fusion_profile;
@@ -83,7 +91,10 @@ mod reciprocal_rank;
 mod request;
 mod statistics;
 
+pub use admission::{AdmissionEnvironment, AdmissionError};
+pub use compile::{CompiledRetrieval, StratumUnit, compile};
 pub use error::{FusionError, PlanError};
+pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, execute};
 pub use fuse::{FusionResult, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
 pub use fusion_stream::{CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus};
