@@ -406,15 +406,28 @@ worth having. The position is folded into the digest as well as the IRI, because
 the position is what a validation plan indexes its resolved row by, so two
 catalogs over the same classes with different assignments are different analyses.
 
-One capability is refused at pack time rather than lost at restore. The model
-carries the SHACL 1.2 expression-bodied function declarations and nothing else
-about the function registry, so a `sh:SPARQLFunction` declaration has no home in
-it. A product carrying one would restore a shapes graph whose call sites resolve
-to nothing and **validate green**. The writer therefore compares the declared
-populations of the parsed and reassembled registries and refuses on
-`unsupported-capability` — a total statement of the condition rather than a probe
-for the one case known today, so a future declared-function kind that assembly
-cannot reproduce fails without anyone remembering to add a branch.
+The two kinds of function a shapes graph declares are both carried, and they are
+carried by different halves of the product, because that is where each one
+actually lives. The SHACL 1.2 expression-bodied declarations are model — their
+bodies *are* node expressions — so they come off the decoded model. A SHACL-AF §5
+`sh:SPARQLFunction` is an IRI, an ordered parameter list, a `sh:select`/`sh:ask`
+body and a return type, all stated by the shapes graph itself, so a restore
+re-parses it from the shapes dataset the product already carries. There is one
+parser for those declarations and a restore runs it; a second on-disk
+transcription would be a second thing to drift, and its first drift would be a
+restored function whose arity or return constraint was not the one the author
+wrote.
+
+A declared function that assembly cannot reproduce is still refused at pack time
+rather than lost at restore, because a product carrying one would restore a
+shapes graph whose call sites resolve to nothing and **validate green**. The
+writer compares the declared populations of the parsed and reassembled registries
+and refuses on `unsupported-capability` — a total statement of the condition
+rather than a probe for the kinds known today, so a future declared-function kind
+that assembly cannot reproduce fails without anyone remembering to add a branch.
+The case that reaches it now is an expression-bodied declaration nothing in the
+model calls, named only from `sh:sparql` query text: the model is its carrier, so
+a declaration the model never reaches is not in it.
 
 ## 8. Determinism, and the target-agreement arrangement
 

@@ -810,7 +810,8 @@ impl<'a> ShapesProductView<'a> {
     /// In order, and nothing partial escapes: verify the profile, verify the stage
     /// id, check the host-supplied half of the identity, refuse an oversized decode
     /// against the governor in force, restore the dataset (cheap tier only), decode
-    /// the model, link it, then hand the assembled shapes graph to the type gate
+    /// the model, re-derive the shapes graph's own SPARQL function declarations from
+    /// that dataset, link it, then hand the assembled shapes graph to the type gate
     /// that installs the host's bindings, re-derives the class catalog, and checks
     /// the whole identity before any [`PreparedShapes`] exists (`certified`).
     ///
@@ -845,10 +846,39 @@ impl<'a> ShapesProductView<'a> {
         let dataset = dataset::open_dataset(self.section(SECTION_DATASET)?)?;
         let parts = ast::decode_ast(self.section(SECTION_AST)?)?;
 
-        // The parser's own post-tree pass, over the decoded tree: install the shared
-        // handles and PROVE the sharing topology. The decoder installed the bodies
-        // from the byte stream's two-pass layout, so none are supplied here.
+        // The shapes graph's own SPARQL-bodied function declarations, re-derived
+        // from the dataset the product carries — the same move the class catalog
+        // makes, and for the same reason: the input is already in hand, so a second
+        // transcription of it would only be something to drift.
+        //
+        // This happens BEFORE linking because that is the order a parse performs it
+        // in, and the order decides nothing else: `parse_sparql_functions` skips an
+        // IRI the graph also declares as a custom node-expression function, so the
+        // two populations are disjoint by the time either is registered.
+        //
+        // `certified::install` derives the same declarations again, from the same
+        // dataset, and on this path the two derivations cannot disagree. That
+        // repetition is deliberate and it is the cheaper of the two options: the
+        // alternative is to hand `install` a registry this function already built,
+        // which would make the one site that decides what a restore installs depend
+        // on a caller having remembered to build it — exactly the "a later path
+        // returns early with a value that looks finished" defect the type gate
+        // exists to rule out. The value built here is not redundant either way: it
+        // is what the restored `Shapes` must carry for identity row 6 to be the row
+        // a parse of this graph would have produced.
         let mut functions = UserFunctionRegistry::new();
+        crate::shapes::register_declared_sparql_functions(
+            &dataset,
+            &self.provenance,
+            &mut functions,
+        )
+        .map_err(|error| {
+            malformed(format!(
+                "this product's carried shapes dataset does not re-derive its own SPARQL function \
+                 declarations under the parse inputs the product records ({error}); re-prepare \
+                 the product from a shapes graph this build parses"
+            ))
+        })?;
         link::link_shapes(
             &parts.node_shapes,
             &parts.shape_index,

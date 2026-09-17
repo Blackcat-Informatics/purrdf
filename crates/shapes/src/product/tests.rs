@@ -95,17 +95,57 @@ ex:alice ex:income 10, 20 .
 ex:bob   ex:income 5 .
 ";
 
-/// SHACL-AF §5: a `sh:SPARQLFunction` declaration. Its body is parse output that
-/// the declarative AST has no field for, so a product cannot carry it.
+/// SHACL-AF §5: a `sh:SPARQLFunction` declaration whose body a `sh:sparql`
+/// constraint actually CALLS, so the verdict depends on the function resolving.
+///
+/// A round-trip over a graph whose function never fires proves nothing — the
+/// restored registry could be empty and every assertion would still hold. Here a
+/// restore that lost `ex:double` cannot produce the same report, because the filter
+/// that decides the verdict is the call.
 const SPARQL_FN_SHAPES: &str = r#"
 ex:double a sh:SPARQLFunction ;
   sh:parameter [ sh:path ex:arg ; sh:datatype xsd:integer ] ;
   sh:returnType xsd:integer ;
   sh:select """SELECT ?result WHERE { BIND(?arg * 2 AS ?result) }""" .
 
+ex:CapShape a sh:NodeShape ;
+  sh:targetClass ex:Thing ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "the doubled value exceeds the cap" ;
+    sh:select """SELECT $this ?value WHERE { $this ex:n ?value . FILTER (ex:double(?value) > 10) }""" ;
+  ] .
+"#;
+
+/// Data on which `ex:double` fires for `ex:high` and not for `ex:low`.
+const SPARQL_FN_DATA: &str = r#"
+ex:low  a ex:Thing ; ex:n "3"^^xsd:integer .
+ex:high a ex:Thing ; ex:n "7"^^xsd:integer .
+"#;
+
+/// The NEGATIVE CONTROL for [`SPARQL_FN_DATA`]: the same two nodes, with their
+/// values moved to the other side of the cap, so the verdict flips.
+const SPARQL_FN_DATA_FLIPPED: &str = r#"
+ex:low  a ex:Thing ; ex:n "9"^^xsd:integer .
+ex:high a ex:Thing ; ex:n "2"^^xsd:integer .
+"#;
+
+/// A `sh:ListParameterExpressionFunction` no NODE EXPRESSION calls, called instead
+/// from `sh:sparql` query TEXT.
+///
+/// The declarative model is what a product carries, and a declaration nothing in
+/// that model reaches is not in it — while the `sh:select` body above still names
+/// the function by IRI, so a restore would resolve that call to nothing. This is the
+/// construct a product genuinely cannot carry.
+const UNREACHABLE_FN_SHAPES: &str = r#"
+ex:incomeTotal a sh:ListParameterExpressionFunction ;
+  rdfs:subClassOf sh:ListParameterExpression ;
+  sh:bodyExpression [ shnex:sum [ shnex:pathValues ex:income ; shnex:focusNode [ shnex:arg 0 ] ] ] ;
+  sh:parameter [ a sh:Parameter ; sh:path shnex:arg0 ; sh:nodeKind sh:IRI ] .
+
 ex:S a sh:NodeShape ;
-  sh:targetClass ex:Person ;
-  sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+  sh:targetNode ex:alice ;
+  sh:sparql [ sh:select """SELECT $this WHERE { FILTER (ex:incomeTotal($this) > 30) }""" ] .
 "#;
 
 /// The `AGG(<iri>, …)` IRI the custom-aggregate fixture registers under.
@@ -330,7 +370,7 @@ fn admit_equals_rebuild() {
 /// capability comes from the shapes graph itself.
 #[test]
 fn empty_host_bindings_suffice_under_core_profile() {
-    for fixture in [PLAIN_SHAPES, EXPRESSION_FN_SHAPES] {
+    for fixture in [PLAIN_SHAPES, EXPRESSION_FN_SHAPES, SPARQL_FN_SHAPES] {
         let bytes = product_of(fixture);
         ShapesProduct::open(&bytes)
             .expect("opens")
@@ -723,31 +763,108 @@ fn declared_identity_readable_without_admission() {
     );
 }
 
-// ── The writer refuses before it emits ─────────────────────────────────────────
+// ── A declared SPARQL function survives the round trip ─────────────────────────
 
-/// A shapes graph declaring a `sh:SPARQLFunction` is refused at WRITE time, with
-/// nothing emitted — the declarative AST has no field for a SPARQL-bodied
-/// declaration, so a product carrying one would restore a shapes graph whose call
-/// sites resolve to nothing.
+/// A `sh:SPARQLFunction` the shapes graph declares is reinstated by a restore, so a
+/// product answers EXACTLY what the document answers — including on data that flips
+/// the verdict.
+///
+/// The declaration is re-derived from the shapes dataset the product already
+/// carries, which is the same move the class catalog makes. Nothing about it reaches
+/// the encoded model, so this property is about a capability rather than about a new
+/// field: a restore that skipped the re-derivation would resolve `ex:double(?value)`
+/// to nothing, the filter would never hold, and every report below would come back
+/// conforming.
 #[test]
-fn to_product_refuses_before_emitting_bytes() {
-    let prepared = prepare(SPARQL_FN_SHAPES);
-    let error = prepared
-        .to_product(&ShapesProfile::CORE)
-        .expect_err("a sh:SPARQLFunction declaration is not representable");
-    assert_eq!(error.dimension(), ProductDimension::UnsupportedCapability);
+fn a_declared_sparql_function_survives_the_round_trip() {
+    let data = data_of(SPARQL_FN_DATA);
+    let document = prepare(SPARQL_FN_SHAPES);
+    let expected = report_nt(&document, &data);
     assert!(
-        error.message().contains("sh:SPARQLFunction"),
-        "the refusal must name the construct it refused: {error}",
+        expected.contains("http://example.org/ns#high")
+            && !expected.contains("http://example.org/ns#low"),
+        "the function must actually decide the verdict, or this property is vacuous: {expected}",
     );
 
-    // The NEIGHBOURING valid case: a §7.2 list-parameter declaration IS
-    // representable, and the product it writes opens and admits. Without this the
-    // check above would pass just as well for a writer that refused every
-    // function-bearing shapes graph.
+    let bytes = prepare(SPARQL_FN_SHAPES)
+        .to_product(&ShapesProfile::CORE)
+        .expect("a sh:SPARQLFunction declaration is representable");
+    let admitted = ShapesProduct::open(&bytes)
+        .expect("opens")
+        .admit(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect("admits");
+    assert_eq!(
+        report_nt(&admitted, &data),
+        expected,
+        "an admitted product must answer what the document answers, byte for byte",
+    );
+
+    let rebuilt = ShapesProduct::open(&bytes)
+        .expect("opens")
+        .rebuild(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect("rebuilds");
+    assert_eq!(
+        report_nt(&rebuilt, &data),
+        expected,
+        "the two restore seams must agree about a declared SPARQL function too",
+    );
+
+    // THE NEGATIVE CONTROL. Move both values across the cap: the verdict must flip,
+    // and it must flip IDENTICALLY through both routes. Without this the assertions
+    // above would hold just as well for two routes that both silently report nothing.
+    let flipped = data_of(SPARQL_FN_DATA_FLIPPED);
+    let flipped_expected = report_nt(&document, &flipped);
+    assert!(
+        flipped_expected.contains("http://example.org/ns#low")
+            && !flipped_expected.contains("http://example.org/ns#high"),
+        "the control must genuinely flip which node the function condemns: {flipped_expected}",
+    );
+    assert_ne!(flipped_expected, expected);
+    assert_eq!(report_nt(&admitted, &flipped), flipped_expected);
+    assert_eq!(report_nt(&rebuilt, &flipped), flipped_expected);
+}
+
+// ── The writer refuses before it emits ─────────────────────────────────────────
+
+/// A declared function the product's model cannot reach is refused at WRITE time,
+/// with nothing emitted.
+///
+/// The construct is a `sh:ListParameterExpressionFunction` that no node expression
+/// calls: nothing in the declarative model reaches the declaration, so the model
+/// cannot carry it — while a `sh:sparql` body still names it, so a restore would
+/// resolve that call site to nothing and validate green. The refusal is reached
+/// through the registry fingerprint comparison rather than through a probe for this
+/// case, which is what makes it hold for a kind nobody has thought of yet.
+#[test]
+fn to_product_refuses_before_emitting_bytes() {
+    let prepared = prepare(UNREACHABLE_FN_SHAPES);
+    let error = prepared
+        .to_product(&ShapesProfile::CORE)
+        .expect_err("a declaration the model cannot reach is not representable");
+    assert_eq!(error.dimension(), ProductDimension::UnsupportedCapability);
+    assert!(
+        error.message().contains("validate green"),
+        "the refusal must name the harm it prevents: {error}",
+    );
+
+    // The NEIGHBOURING valid cases. Without these the check above would pass just as
+    // well for a writer that refused every function-bearing shapes graph — which is
+    // exactly the over-refusal this pairing exists to catch.
+    //
+    // A §7.3 list-parameter declaration a node expression DOES call:
     let bytes = prepare(EXPRESSION_FN_SHAPES)
         .to_product(&ShapesProfile::CORE)
-        .expect("an expression-bodied declaration is representable");
+        .expect("an expression-bodied declaration the model reaches is representable");
+    ShapesProduct::open(&bytes)
+        .expect("opens")
+        .admit(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect("admits");
+
+    // …and a SHACL-AF §5 `sh:SPARQLFunction`, which the shapes dataset states and a
+    // restore re-derives:
+    let bytes = prepare(SPARQL_FN_SHAPES)
+        .to_product(&ShapesProfile::CORE)
+        .expect("a SPARQL-bodied declaration is representable");
     ShapesProduct::open(&bytes)
         .expect("opens")
         .admit(&ShapesProfile::CORE, &HostBindings::empty())

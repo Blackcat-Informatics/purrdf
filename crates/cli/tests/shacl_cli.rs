@@ -327,6 +327,111 @@ fn valid_import_configurations_still_pack_and_round_trip() {
     );
 }
 
+// ── `shacl pack` and a SHACL-AF `sh:SPARQLFunction` ────────────────────────────
+//
+// A shapes graph declaring a SPARQL function used to be refused outright by `shacl pack`:
+// the declaration is parse output rather than model, so nothing in the encoded model
+// carried it. It is now re-derived at restore from the shapes dataset the product already
+// carries, which is where it was stated in the first place. These fixtures put the function
+// on the critical path of the verdict, so a restore that lost it could not produce the same
+// report — it would report nothing at all.
+
+/// A shapes graph declaring `ex:double` as a `sh:SPARQLFunction` and calling it from the
+/// `sh:sparql` body that decides whether a node conforms.
+const SPARQL_FN_SHAPES: &str = concat!(
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    "ex:double a sh:SPARQLFunction ;\n",
+    "  sh:parameter [ sh:path ex:arg ; sh:datatype xsd:integer ] ;\n",
+    "  sh:returnType xsd:integer ;\n",
+    "  sh:select \"SELECT ?result WHERE { BIND(?arg * 2 AS ?result) }\" .\n",
+    "ex:CapShape a sh:NodeShape ;\n",
+    "  sh:targetClass ex:Thing ;\n",
+    "  sh:sparql [ a sh:SPARQLConstraint ;\n",
+    "    sh:message \"the doubled value exceeds the cap\" ;\n",
+    "    sh:select \"SELECT $this ?value WHERE { $this ex:n ?value . FILTER (ex:double(?value) > 10) }\" ] .\n",
+);
+
+/// Two `ex:Thing`s: `ex:high` doubles past the cap, `ex:low` does not.
+const SPARQL_FN_DATA: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    "ex:low  a ex:Thing ; ex:n \"3\"^^xsd:integer .\n",
+    "ex:high a ex:Thing ; ex:n \"7\"^^xsd:integer .\n",
+);
+
+/// THE NEGATIVE CONTROL for [`SPARQL_FN_DATA`]: both values moved across the cap, so the
+/// verdict flips to the other node.
+const SPARQL_FN_DATA_FLIPPED: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+    "ex:low  a ex:Thing ; ex:n \"9\"^^xsd:integer .\n",
+    "ex:high a ex:Thing ; ex:n \"2\"^^xsd:integer .\n",
+);
+
+/// THE FALSIFIABLE CORE: `shacl pack` SUCCEEDS on a shapes graph declaring a
+/// `sh:SPARQLFunction`, and validating through that product reaches the byte-identical
+/// report `validate --shapes` reaches over the same document — on data where the function
+/// decides the verdict, and on data where it decides it the other way.
+#[test]
+fn packing_a_sparql_function_agrees_byte_for_byte_with_validating_the_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SPARQL_FN_SHAPES);
+    let data = write_file(dir.path(), "data.ttl", SPARQL_FN_DATA);
+    let flipped = write_file(dir.path(), "flipped.ttl", SPARQL_FN_DATA_FLIPPED);
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    assert_eq!(
+        code(&packed),
+        0,
+        "a sh:SPARQLFunction declaration must pack: {}",
+        stderr(&packed)
+    );
+    assert_eq!(
+        code(&run(&["shacl", "verify", product_path])),
+        0,
+        "the packed product verifies"
+    );
+
+    for (graph, condemned, spared) in [(&data, "high", "low"), (&flipped, "low", "high")] {
+        let via_product = run(&[
+            "validate",
+            "--shapes-product",
+            product_path,
+            "--format",
+            "sarif",
+            graph,
+        ]);
+        let via_document = run(&["validate", "--shapes", &shapes, "--format", "sarif", graph]);
+        assert_eq!(code(&via_product), 0, "{}", stderr(&via_product));
+        assert_eq!(code(&via_document), 0, "{}", stderr(&via_document));
+        assert_eq!(
+            stdout(&via_product),
+            stdout(&via_document),
+            "a product carrying a declared SPARQL function must reach the byte-identical report"
+        );
+        // Not vacuous: the function has to have FIRED, on exactly the node whose doubled
+        // value clears the cap. Two routes that both reported nothing would agree too.
+        for out in [&via_product, &via_document] {
+            assert!(
+                stderr(out).contains("shacl conforms false\n")
+                    && stderr(out).contains("shacl results 1\n"),
+                "the declared function must decide the verdict: {}",
+                stderr(out)
+            );
+            assert!(
+                stdout(out).contains(&format!("http://example.org/{condemned}"))
+                    && !stdout(out).contains(&format!("http://example.org/{spared}")),
+                "the report must name ex:{condemned} and not ex:{spared}: {}",
+                stdout(out)
+            );
+        }
+    }
+}
+
 #[test]
 fn a_packed_product_verifies_explains_and_validates_identically() {
     let dir = tempfile::tempdir().expect("tempdir");

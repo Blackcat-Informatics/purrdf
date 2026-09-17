@@ -183,13 +183,25 @@ reifier bindings, statement annotations, and `rdf:dirLangString` literals whose
 base direction is part of their identity (`"x"@en--ltr` and `"x"@en--rtl` are
 two distinct terms).
 
+**SPARQL functions the shapes graph declares are carried, and they are carried
+by the dataset.** A SHACL-AF §5 `sh:SPARQLFunction` is an IRI, an ordered
+`sh:parameter` list, a `sh:select`/`sh:ask` body and a `sh:returnType` — all of
+it stated by the shapes graph — so a restore re-derives the declaration from the
+shapes dataset the product already carries rather than from a second
+transcription of it in the model. There is one parser for those declarations,
+and a restore runs it, which is what keeps a restored function identical to the
+parsed one. The SHACL 1.2 expression-bodied declarations
+(`sh:ListParameterExpressionFunction`) are carried too, from the model, because
+their bodies *are* node expressions.
+
 Two capabilities are refused at pack time rather than lost at restore, both on
 `unsupported-capability`:
 
-- a shapes graph declaring a `sh:SPARQLFunction`, because only the SHACL 1.2
-  expression-bodied declarations survive a restore and a product carrying one
-  would resolve every call site of that function to nothing and validate
-  green;
+- a declared function that nothing in the model reaches — an expression-bodied
+  declaration called only from `sh:sparql` query text, say. The model is what
+  carries those declarations, so one the model never reaches is not in it, and
+  a product written from it would resolve that call site to nothing and
+  validate green. Call the function from the shapes model and it packs;
 - an `owl:imports` this pack call has no way to resolve — but ONLY through the
   Python, C-ABI and WebAssembly bindings' lower-level, text-only entry point,
   which carries no `--import` table and no place to print a warning. The CLI's
@@ -381,7 +393,7 @@ outermost unmet precondition rather than a downstream symptom of it.
 | `aggregate-registry` | prepared against a different custom-aggregate registry | wire the same aggregates into the executing host |
 | `property-function-registry` | prepared against a different property-function registry | wire the same relations into the executing host |
 | `class-catalog` | the pinned class analysis is not the one this build re-derives | re-pack with the build that will execute it |
-| `unsupported-capability` | well-formed bytes asking for something this build cannot honour | see the message — a `sh:SPARQLFunction` declaration, or a decode larger than the scratch ceiling in force |
+| `unsupported-capability` | well-formed bytes asking for something this build cannot honour | see the message — a declared function nothing in the model reaches, or a decode larger than the scratch ceiling in force |
 | `depth-limit` | a structure nests past the decoder's fixed ceiling | re-pack from a shapes graph this build parses; the ceiling is a stack guard, not a semantic limit |
 | `malformed` | structurally invalid in a way no other dimension names | discard and re-pack |
 

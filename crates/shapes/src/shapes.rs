@@ -30,6 +30,15 @@ use crate::term::{NamedNode, Term};
 pub(crate) mod link;
 mod parser;
 
+/// Re-derive a shapes graph's `sh:SPARQLFunction` declarations from the shapes
+/// dataset it carries.
+///
+/// Re-exported here because the prepared-product codec (`crate::product`) is not a
+/// descendant of this module and so cannot name `parser`, which stays private: the
+/// sub-parsers are this module's internals, and exactly one of them is a published
+/// step that a restore has to re-run.
+pub(crate) use parser::functions::register_declared_sparql_functions;
+
 // ── Public types ───────────────────────────────────────────────────────────────
 
 /// The `sh:nodeKind` value IRI mapped to a typed enum variant.
@@ -917,7 +926,8 @@ impl<'s> Parser<'s> {
         let custom_fns = self.custom_fns.clone();
         let bodies = self.parse_custom_function_bodies(&custom_fns)?;
 
-        let mut functions = self.parse_sparql_functions()?;
+        let mut functions = UserFunctionRegistry::new();
+        self.parse_sparql_functions(&mut functions)?;
 
         // The post-tree linking pass: install the bodies, fill the one shared
         // `sh:nodeByExpression` resolution table (§7.2), register the

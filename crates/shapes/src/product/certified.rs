@@ -149,7 +149,8 @@ impl CertifiedParts {
 /// function (see [`verify_declared_functions`]);
 /// [`ProductDimension::FunctionRegistry`] when a registry cannot be fingerprinted;
 /// [`ProductDimension::DepthLimit`] or [`ProductDimension::Malformed`] when the
-/// declaration walk refuses.
+/// declaration walk refuses or the carried shapes dataset does not re-derive its own
+/// SPARQL function declarations.
 fn install(shapes: &mut Shapes, host: &HostBindings<'_>) -> Result<(), ShapesProductError> {
     let assembled = assemble_functions(shapes, host)?;
     verify_declared_functions(&shapes.functions, &assembled)?;
@@ -159,7 +160,9 @@ fn install(shapes: &mut Shapes, host: &HostBindings<'_>) -> Result<(), ShapesPro
 }
 
 /// The user-function registry a restore assembles: the host's injected table, plus
-/// the shapes graph's own expression-bodied declarations registered into it.
+/// BOTH kinds of declaration the shapes graph itself states — the SPARQL-bodied
+/// `sh:SPARQLFunction`s re-derived from the carried shapes dataset, and the
+/// expression-bodied §7.3 declarations registered from the model.
 ///
 /// The direction is forced and it is worth stating. `UserFunctionRegistry` exposes
 /// registration but not enumeration — a registered native closure cannot be read
@@ -167,34 +170,81 @@ fn install(shapes: &mut Shapes, host: &HostBindings<'_>) -> Result<(), ShapesPro
 /// It can only be the table the declarations are registered into, which is why
 /// every restore path starts from the host's registry rather than from an empty one.
 ///
+/// # Why the two kinds come from two places
+///
+/// They are recovered from the two different things a product carries, because that
+/// is where each one actually lives. The expression-bodied declarations ARE model —
+/// their bodies are node expressions the AST section encodes — so they come off the
+/// decoded model. A `sh:SPARQLFunction`'s body is query text in the shapes graph,
+/// and the shapes graph travels inside the product under the envelope's per-section
+/// SHA-256 and whole-container digest, so it is re-parsed from there. Neither kind
+/// needs the host's cooperation, which is what
+/// [`FnPopulation::Declared`] means by "rebuildable at restore by re-parsing that
+/// graph".
+///
+/// The order matches the parse's: SPARQL-bodied first, then expression-bodied. The
+/// parser's own precedence rule — a node typed BOTH belongs to the declaring class
+/// that gives it a body — is enforced inside the re-derivation, so the two sets are
+/// disjoint and the order is a statement of intent rather than a tiebreak.
+///
 /// # Errors
 ///
 /// [`ProductDimension::DepthLimit`] or [`ProductDimension::Malformed`] when the
-/// declaration walk over `shapes` refuses.
+/// declaration walk over `shapes` refuses, or when the carried shapes dataset no
+/// longer re-parses as the shapes graph it claims to be.
 pub(super) fn assemble_functions(
     shapes: &Shapes,
     host: &HostBindings<'_>,
 ) -> Result<UserFunctionRegistry, ShapesProductError> {
     let declarations = ast::custom_functions(shapes)?;
     let mut registry = host.functions().clone();
+    crate::shapes::register_declared_sparql_functions(
+        shapes.dataset(),
+        shapes.provenance(),
+        &mut registry,
+    )
+    .map_err(|error| {
+        ShapesProductError::new(
+            ProductDimension::Malformed,
+            format!(
+                "this shapes graph's SPARQL function declarations do not re-derive from the \
+                 shapes dataset carried alongside them ({error}); re-prepare the product from a \
+                 shapes graph this build parses, because the declarations and the dataset must \
+                 describe one parse"
+            ),
+        )
+    })?;
     link::register_expression_bodied_functions(&declarations, &mut registry);
     Ok(registry)
 }
 
 /// Refuse when assembly loses a DECLARED function the shapes graph really has.
 ///
-/// The declarative AST carries the custom node-expression declarations and nothing
-/// else about the function registry, so the only declared functions a restore can
-/// reinstate are the expression-bodied ones SHACL 1.2 SPARQL Extensions §7.3 asks an
-/// engine to register. A `sh:SPARQLFunction` declaration is parse output too, and it
-/// has no home in the AST section — a product carrying one would restore a shapes
-/// graph whose `ex:f(?x)` call sites resolve to nothing.
+/// A declared function is one the shapes graph's own content states — the
+/// SPARQL-bodied `sh:SPARQLFunction`s and the expression-bodied declarations
+/// SHACL 1.2 SPARQL Extensions §7.3 asks an engine to register — as opposed to the
+/// native closures only a host can wire. [`assemble_functions`] reinstates both
+/// kinds, so a restore that drops one is a defect rather than a documented limit;
+/// this is what makes that defect loud instead of silent, because the symptom
+/// otherwise is a restored shapes graph whose `ex:f(?x)` call sites resolve to
+/// nothing and validate green.
 ///
-/// Comparing the two registries' [`FnPopulation::Declared`] fingerprints is a total
-/// statement of that condition rather than a probe for the one case known today: any
+/// Comparing the two registries' [`FnPopulation::Declared`] fingerprints is a TOTAL
+/// statement of that condition rather than a probe for the kinds known today: a
 /// future declared-function kind that assembly cannot reproduce fails here without
 /// anyone remembering to add a branch. The injected population is deliberately not
 /// compared — it is the host's, identical on both sides by construction.
+///
+/// # What the comparison does and does not cover
+///
+/// The fingerprint binds each declaration's IRI, kind, arity, parameter variables
+/// and type constraints; it deliberately does not digest a body, because the only
+/// stable byte form for a parsed query is the algebra serializer's rendering and
+/// making that load-bearing would turn a wording change in an unrelated module into
+/// a silent invalidation of every product ever written. The binding that DOES cover
+/// bodies is the shapes graph itself: every declared entry is a function of that
+/// graph's content, and the graph is identity component 0 and a digested section of
+/// the container.
 ///
 /// # Errors
 ///
@@ -211,11 +261,10 @@ pub(super) fn verify_declared_functions(
     }
     Err(ShapesProductError::new(
         ProductDimension::UnsupportedCapability,
-        "this shapes graph declares SPARQL functions that a prepared product cannot carry — only \
-         the SHACL 1.2 §7.3 expression-bodied declarations (`sh:ListParameterExpressionFunction`) \
-         survive a restore, and a `sh:SPARQLFunction` does not; remove the declaration or use the \
-         shapes graph directly, because a product that restored without it would resolve every \
-         call site of that function to nothing and validate green",
+        "this shapes graph declares a SPARQL function that a restore of this build does not \
+         reinstate, so a product written from it would resolve that function's call sites to \
+         nothing and validate green; use the shapes graph directly until this build carries the \
+         declaration, because a product may only promise what its restore reproduces",
     ))
 }
 

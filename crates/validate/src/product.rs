@@ -154,7 +154,8 @@ impl std::error::Error for ShapesProductRefusal {}
 /// graph declares an import it has no way to honour: refuse. Packing the root
 /// graph alone and calling it done is exactly the silent omission this whole
 /// codec exists to rule out; see [`ProductDimension::UnsupportedCapability`],
-/// which is also where a `sh:SPARQLFunction` this format cannot carry refuses.
+/// which is also where a declared function nothing in the shapes model reaches
+/// refuses.
 ///
 /// # Errors
 ///

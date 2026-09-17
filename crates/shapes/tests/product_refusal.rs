@@ -1487,6 +1487,41 @@ ex:inst a ex:ByKind ; ex:kind ex:Kind .
     );
     admit(&product_for(shapes))
         .expect("a rarely exercised but implemented capability must still restore");
+
+    // A second rare-but-implemented capability, and the one over-refusal bites
+    // hardest on: a SHACL-AF §5 `sh:SPARQLFunction` whose body a constraint calls.
+    // The declaration is not in the model a product encodes — it is re-derived from
+    // the shapes dataset the product carries — so nothing about it is visible to the
+    // tag walk, and a restore that dropped it would report NOTHING rather than fail.
+    let ttl = format!(
+        "{PREFIXES}{}",
+        r#"
+ex:double a sh:SPARQLFunction ;
+    sh:parameter [ sh:path ex:arg ; sh:datatype xsd:integer ] ;
+    sh:returnType xsd:integer ;
+    sh:select """SELECT ?result WHERE { BIND(?arg * 2 AS ?result) }""" .
+
+ex:CapShape a sh:NodeShape ;
+    sh:targetClass ex:Thing ;
+    sh:sparql [ sh:select """SELECT $this ?value WHERE { $this ex:n ?value . FILTER (ex:double(?value) > 10) }""" ] .
+"#
+    );
+    let data = data_of(r#"ex:high a ex:Thing ; ex:n "7"^^xsd:integer ."#);
+    let document = parse_shapes(&ttl, None).expect("the SPARQL-function fixture parses");
+    let expected = report_nt(&PreparedShapes::new(Arc::new(document)), &data);
+    assert!(
+        expected.contains("http://example.org/ns#high"),
+        "the declared function must decide the verdict, or this case is vacuous: {expected}",
+    );
+
+    let shapes = parse_shapes(&ttl, None).expect("the SPARQL-function fixture parses");
+    let restored =
+        admit(&product_for(shapes)).expect("a declared SPARQL function must still restore");
+    assert_eq!(
+        report_nt(&restored, &data),
+        expected,
+        "the restored product must answer what the document answers",
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
