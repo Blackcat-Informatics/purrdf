@@ -1577,6 +1577,7 @@ version = "2.0.2"
 dependencies = [
  "boon",
  "criterion",
+ "proc-macro2",
  "proptest",
  "purrdf-core",
  "purrdf-gts",
@@ -1592,6 +1593,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "smallvec",
+ "syn 2.0.118",
 ]
 
 [[package]]

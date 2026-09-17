@@ -91,6 +91,19 @@ criterion = { workspace = true }
 # instance nodes, rather than asserting the schema's JSON shape. Dev-only; never
 # enters the release/wasm build.
 boon = { workspace = true }
+# Rust parser for the structural source census (`tests/product_model_census.rs`).
+# The declarative SHACL model's totality guarantee — a codec covers every variant
+# and every field — is only mechanical if the variant/field set is READ from the
+# source rather than enumerated by hand, and the reachability closure that keeps
+# that set honest needs an AST, not a regex. Dev-only; never enters the
+# release/wasm build. Version and the `full`/`visit` feature set are pinned once
+# in the root `[workspace.dependencies]`.
+syn = { workspace = true }
+# `syn`'s token substrate. The census refuses a field type it cannot read
+# structurally (a macro type, a `verbatim` type), and quoting the raw
+# `TokenStream` is the only way that refusal can name the field it refused —
+# a silent skip there is the exact defect the census exists to stop. Dev-only.
+proc-macro2 = { workspace = true }
 
 [[bench]]
 name = "validate"
