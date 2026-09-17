@@ -1052,7 +1052,8 @@ def native_suites() -> list[SuiteResult]:
              "--test", "conformance", "--test", "invariants",
              "--test", "oracle_contract", "--test", "sparql_e2e",
              "--test", "purremb_roundtrip", "--test", "adversarial_payload",
-             "--test", "vector_query", "--test", "determinism"],
+             "--test", "vector_query", "--test", "determinism",
+             "--test", "corpus_geometry"],
             detail=(
                 "the approximate half of the retrieval pair, graded against the exact "
                 "path as its oracle: every offered row compared to the exact scan's "
@@ -1062,7 +1063,12 @@ def native_suites() -> list[SuiteResult]:
                 "contract (an offer is never a proof of absence), the PURREMB guard "
                 "round-trip through the real INDEX_GUARDS and INDEX_PAYLOAD sections, "
                 "the SPARQL property-function seam from query text, and the "
-                "decoder-hostility cases. The cross-target digest is a separate gate "
+                "decoder-hostility cases. It also grades the CORPUS the recall figures "
+                "are taken over -- effective dimension, spectral decay, cluster "
+                "tightness at an intended cosine -- because on this crate the "
+                "distribution decides the recall, so a generator that drifted toward "
+                "uniform would quietly turn every recall number into a statement about "
+                "the fixture. The cross-target digest is a separate gate "
                 "(`make hnsw-determinism`), so this row measures the native target only"
             ),
         ),
