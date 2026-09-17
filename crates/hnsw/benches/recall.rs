@@ -46,6 +46,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use purrdf_core::DistanceMetric;
+use purrdf_hnsw::corpus::{self, CorpusShape};
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
@@ -54,8 +55,12 @@ use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
 
 /// The corpus: rows and dimensions, the width this index targets.
-const ROWS: usize = 2_048;
-const DIMS: usize = 4_096;
+const LADDER: [(usize, usize); 4] = [
+    (2_048, 4_096),
+    (50_000, 4_096),
+    (200_000, 4_096),
+    (1_000_000, 4_096),
+];
 
 /// The query set: the first [`QUERIES`] rows, and how many repetitions each latency sample
 /// takes. Recall and rank are computed once per query; latency is sampled `REPEATS` times.
@@ -77,7 +82,7 @@ const EF_CONSTRUCTION: usize = 200;
 const SEED: u64 = 0x484e_5357_5f52_4543;
 
 /// A uniform family in `[-1, 1)` from the fixed splitmix64 stream.
-fn matrix(rows: usize, dims: usize) -> VectorMatrix {
+fn uniform(rows: usize, dims: usize) -> VectorMatrix {
     let elements = rows
         .checked_mul(dims)
         .expect("the fixture shape fits usize");
@@ -134,9 +139,66 @@ fn rank_bucket(rank: usize) -> usize {
 /// The exact-rank histogram's bucket labels.
 const BUCKETS: [&str; 6] = ["0..k", "k..2k", "2k..4k", "4k..8k", "8k..16k", ">=16k"];
 
+/// The corpus families this harness reports, and why both are present.
+///
+/// `uniform` is the CONTROL, not the subject. Independent coordinates make pairwise
+/// distances concentrate, so at this width the nearest and hundredth-nearest rows differ by
+/// about a percent of a typical distance and no graph has a gradient to descend. A recall
+/// figure measured there is a statement about the generator. It is reported anyway, beside
+/// the structured family, because the comparison is the evidence: a number with nothing to
+/// compare it against cannot show whether an index or a corpus is responsible for it.
+///
+/// `embedding-like` is the subject: low intrinsic dimension carried into the full width, a
+/// decaying spectrum so leading coordinates dominate, power-law cluster sizes, and cluster
+/// tightness fixed at an intended cosine rather than an absolute noise amplitude. See
+/// `purrdf_hnsw::corpus` for why each of those is load-bearing.
+const FAMILIES: [&str; 2] = ["uniform", "embedding-like"];
+
+/// Build the named family at `rows x dims`.
+fn family(name: &str, rows: usize, dims: usize) -> VectorMatrix {
+    match name {
+        "uniform" => uniform(rows, dims),
+        _ => corpus::embedding_like(CorpusShape::embedding_like(rows, dims), SEED)
+            .expect("the shaped corpus is finite and rectangular"),
+    }
+}
+
 fn main() {
-    let vectors = matrix(ROWS, DIMS);
-    let norms: Vec<f64> = (0..ROWS).map(|row| norm(vectors.row(row))).collect();
+    println!("purrdf-hnsw recall / work / latency against the exact oracle (report-only; no gate)");
+    println!(
+        "queries={QUERIES} k={K} metric=squared-euclidean M={M} M0={M0} \
+         ef_construction={EF_CONSTRUCTION}"
+    );
+    println!("The exact oracle is Kernel::distance + best() over every row.");
+    println!("Recall is comparable ONLY within one ef; each row is a distinct index identity.");
+    println!(
+        "Every scale in LADDER is reported. Nothing here is gated off by default: a point \
+         that is not measured is a point this harness does not claim."
+    );
+    println!();
+
+    for (rows, dims) in LADDER {
+        for name in FAMILIES {
+            report(name, rows, dims);
+        }
+    }
+
+    println!(
+        "The exact oracle returns recall 1.000 at every ef by construction; an index that \
+         beats it on latency by missing its rows is the trade this table prices."
+    );
+}
+
+/// Measure one `(family, rows, dims)` across the whole `ef` sweep.
+///
+/// The graph is built ONCE. `ef_search` is search-side -- the build never reads it -- so
+/// rebuilding per `ef` would pay the dominant cost six times over for six identical graphs.
+/// Each sweep step rebinds the declared parameter instead, which mints a new artifact
+/// identity (its canonical image differs) without touching the graph, and is emphatically
+/// not a query-time override: every search still runs at whatever its index declares.
+fn report(name: &str, rows: usize, dims: usize) {
+    let vectors = family(name, rows, dims);
+    let norms: Vec<f64> = (0..rows).map(|row| norm(vectors.row(row))).collect();
 
     // The exact ordering for every query, computed once: it is the oracle the index is
     // scored against, and recomputing it per `ef` would not change a bit of it.
@@ -148,19 +210,18 @@ fn main() {
         })
         .collect();
 
-    println!("purrdf-hnsw recall / work / latency against the exact oracle (report-only; no gate)");
-    println!(
-        "corpus={ROWS}x{DIMS} queries={QUERIES} k={K} metric=squared-euclidean \
-         M={M} M0={M0} ef_construction={EF_CONSTRUCTION}"
-    );
-    println!("The exact oracle is Kernel::distance + best() over every row.");
-    println!("Recall is comparable ONLY within one ef; each row is a distinct index.");
-    println!();
+    println!("--- corpus={name} {rows}x{dims} ---");
+
+    let seed_params = Params::new(M, M0, EF_CONSTRUCTION, EF_VALUES[0]).expect("valid parameters");
+    let mut index = HnswIndex::build(
+        vectors.clone(),
+        &DistanceMetric::SquaredEuclidean,
+        seed_params,
+    )
+    .expect("the fixture builds");
 
     for ef in EF_VALUES {
-        let params = Params::new(M, M0, EF_CONSTRUCTION, ef).expect("valid parameters");
-        let index = HnswIndex::build(vectors.clone(), &DistanceMetric::SquaredEuclidean, params)
-            .expect("the fixture builds");
+        index = index.rebind_ef_search(ef).expect("a valid beam width");
 
         let mut hits = 0_usize;
         let mut searched = 0_usize;
@@ -169,7 +230,7 @@ fn main() {
         let mut buckets = [0_usize; BUCKETS.len()];
 
         for (query, ordered) in exact_ordered.iter().enumerate() {
-            let mut rank_by_row = vec![usize::MAX; ROWS];
+            let mut rank_by_row = vec![usize::MAX; rows];
             for (rank, scored) in ordered.iter().enumerate() {
                 rank_by_row[scored.row] = rank;
             }
@@ -188,7 +249,8 @@ fn main() {
             }
         }
 
-        // Latency, sampled over the same query set for both paths.
+        // Latency, sampled over the same query set for both paths. Reported, never
+        // asserted: a wall-clock number from a machine under load measures the machine.
         let mut index_ns = Vec::with_capacity(QUERIES * REPEATS);
         let mut exact_ns = Vec::with_capacity(QUERIES * REPEATS);
         for query in 0..QUERIES {
@@ -234,9 +296,4 @@ fn main() {
         );
         println!();
     }
-
-    println!(
-        "The exact oracle returns recall 1.000 at every ef by construction; an index that \
-         beats it on latency by missing its rows is the trade this table prices."
-    );
 }

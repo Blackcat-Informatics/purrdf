@@ -59,6 +59,7 @@ mod graph;
 mod search;
 mod select;
 
+pub mod corpus;
 pub mod determinism;
 pub mod error;
 pub mod guard;
@@ -150,6 +151,31 @@ impl HnswIndex {
             metric: format!("{metric:?}"),
         })?;
         builder::build(matrix, kernel, params)
+    }
+
+    /// The same graph under a different declared `ef_search`.
+    ///
+    /// `ef_search` is part of the artifact's identity, so this produces a **different
+    /// artifact** -- its canonical image differs and a guard committing the old one will no
+    /// longer verify. That is the point: advancing a parameter is a compatibility event, and
+    /// this is the supported way to make one without paying to rebuild a graph that does not
+    /// depend on the parameter being changed.
+    ///
+    /// It is emphatically not a query-time override. A search still runs at whatever
+    /// `ef_search` its index declares; the caller who wants a different beam holds a
+    /// different index.
+    ///
+    /// # Errors
+    ///
+    /// [`HnswError::InvalidParameter`] if `ef_search` is not a valid beam width.
+    pub fn rebind_ef_search(self, ef_search: usize) -> Result<Self> {
+        let params = Params::new(
+            self.params.m(),
+            self.params.m0(),
+            self.params.ef_construction(),
+            ef_search,
+        )?;
+        Ok(Self { params, ..self })
     }
 
     /// The `k` nearest rows to `query_row`, in rank order, nearest first.
