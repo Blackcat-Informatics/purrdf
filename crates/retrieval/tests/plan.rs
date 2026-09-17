@@ -1,0 +1,257 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The plan value's contract: equality, serialization, canonical stability,
+//! digest sensitivity, decode round-trip and loud version refusal.
+
+use std::collections::HashMap;
+
+use pretty_assertions::assert_eq;
+use purrdf_retrieval::{
+    Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, ProducerBinding, ProducerDecision,
+    RegistryId, RejectionReason, RequestTerm, StatisticsEntry, StatisticsSnapshot, Term, Weight,
+};
+
+fn iri(text: &str) -> Iri {
+    Iri::parse(text).expect("fixture IRIs are valid")
+}
+
+fn stratum() -> Iri {
+    iri("http://example.org/stratum/a")
+}
+
+fn baseline() -> Plan {
+    let mut stratum_depths = HashMap::new();
+    stratum_depths.insert(stratum(), 10);
+    let mut stratum_weights = HashMap::new();
+    stratum_weights.insert(stratum(), Weight::from_raw(1_000_000_000_000));
+
+    Plan {
+        version: Plan::VERSION,
+        request_terms: vec![
+            RequestTerm::Lexical {
+                text: "quick brown".to_owned(),
+                language: Some("en".to_owned()),
+                predicate: Some(iri("http://example.org/p")),
+            },
+            RequestTerm::Vector {
+                embedding: vec![0.25, -1.5],
+                metric: Metric::Cosine,
+                index_hint: Some("hint".to_owned()),
+            },
+            RequestTerm::Spatial {
+                geometry: "POINT(0 0)".to_owned(),
+                predicate: iri("http://example.org/geo"),
+                max_distance: Some(Fixed::from_raw(5)),
+            },
+            RequestTerm::EntitySeed {
+                entity: Term::new("<http://example.org/e>"),
+            },
+        ],
+        producer_bindings: vec![ProducerBinding {
+            producer: "http://example.org/pf/text".to_owned(),
+            stratum: stratum(),
+            request_terms: vec![0],
+        }],
+        producer_decisions: vec![
+            ProducerDecision::Selected {
+                producer: "http://example.org/pf/text".to_owned(),
+                stratum: stratum(),
+            },
+            ProducerDecision::Rejected {
+                producer: "http://example.org/pf/knn".to_owned(),
+                reason: RejectionReason::NoAcceptedTerm,
+            },
+        ],
+        stratum_depths,
+        stratum_weights,
+        statistics_snapshot: StatisticsSnapshot {
+            source: "example-statistics".to_owned(),
+            revision: "r1".to_owned(),
+            entries: vec![StatisticsEntry {
+                subject: "http://example.org/p".to_owned(),
+                cardinality: 42,
+                selectivity_ppm: Some(1_000),
+            }],
+        },
+        registry_instance_id: RegistryId::from_raw(7),
+        registry_content_fingerprint: "example-fingerprint".to_owned(),
+    }
+}
+
+#[test]
+fn plan_equality_is_field_equality() {
+    assert_eq!(baseline(), baseline());
+
+    let mut changed = baseline();
+    changed.registry_content_fingerprint = "other".to_owned();
+    assert_ne!(baseline(), changed);
+}
+
+#[test]
+fn plans_differing_only_in_map_insertion_order_are_equal() {
+    let mut left = baseline();
+    left.stratum_depths
+        .insert(iri("http://example.org/stratum/b"), 3);
+    let mut right = baseline();
+    right
+        .stratum_depths
+        .insert(iri("http://example.org/stratum/b"), 3);
+    // `HashMap` has no insertion-order guarantee; equality (and the canonical
+    // bytes below) must therefore not depend on it.
+    assert_eq!(left, right);
+    assert_eq!(left.canonical_bytes(), right.canonical_bytes());
+    assert_eq!(left.id(), right.id());
+}
+
+#[test]
+fn serde_round_trip_preserves_the_plan() {
+    let plan = baseline();
+    let json = serde_json::to_string(&plan).expect("plan serializes");
+    let decoded: Plan = serde_json::from_str(&json).expect("plan deserializes");
+    assert_eq!(decoded, plan);
+    assert_eq!(decoded.id(), plan.id());
+}
+
+#[test]
+fn canonical_bytes_and_decode_round_trip() {
+    let plan = baseline();
+    let bytes = plan.canonical_bytes();
+    assert_eq!(bytes, plan.canonical_bytes(), "encoding is deterministic");
+    let decoded = Plan::from_canonical_bytes(&bytes).expect("canonical decode");
+    assert_eq!(decoded, plan);
+    assert_eq!(decoded.canonical_bytes(), bytes);
+}
+
+#[test]
+fn canonical_bytes_are_stable_across_map_order() {
+    let mut plan = baseline();
+    plan.stratum_weights
+        .insert(iri("http://example.org/stratum/z"), Weight::from_raw(2));
+    plan.stratum_weights
+        .insert(iri("http://example.org/stratum/m"), Weight::from_raw(3));
+    let mut shuffled = plan.clone();
+    shuffled.stratum_weights.clear();
+    for key in [
+        "http://example.org/stratum/z",
+        "http://example.org/stratum/a",
+        "http://example.org/stratum/m",
+    ] {
+        shuffled
+            .stratum_weights
+            .insert(iri(key), plan.stratum_weights[&iri(key)]);
+    }
+    assert_eq!(plan.canonical_bytes(), shuffled.canonical_bytes());
+}
+
+#[test]
+// Each mutation starts from a fresh clone of the baseline on purpose; the final
+// clone is flagged only because it happens to be the last use of `base`.
+#[allow(clippy::redundant_clone)]
+fn digest_is_sensitive_to_every_field() {
+    let base = baseline();
+    let base_id = base.id();
+
+    let mut changed = base.clone();
+    changed.version = base.version.wrapping_add(1);
+    assert_ne!(changed.id(), base_id, "version");
+
+    let mut changed = base.clone();
+    changed.request_terms[0] = RequestTerm::Lexical {
+        text: "different".to_owned(),
+        language: Some("en".to_owned()),
+        predicate: Some(iri("http://example.org/p")),
+    };
+    assert_ne!(changed.id(), base_id, "request text");
+
+    let mut changed = base.clone();
+    if let RequestTerm::Vector { embedding, .. } = &mut changed.request_terms[1] {
+        embedding[0] = 0.5;
+    }
+    assert_ne!(changed.id(), base_id, "embedding");
+
+    let mut changed = base.clone();
+    changed.producer_bindings[0].request_terms.push(1);
+    assert_ne!(changed.id(), base_id, "producer binding");
+
+    let mut changed = base.clone();
+    changed.producer_decisions.push(ProducerDecision::Rejected {
+        producer: "http://example.org/pf/geo".to_owned(),
+        reason: RejectionReason::DepthExceeded,
+    });
+    assert_ne!(changed.id(), base_id, "producer decision");
+
+    let mut changed = base.clone();
+    changed.stratum_depths.insert(stratum(), 11);
+    assert_ne!(changed.id(), base_id, "stratum depth");
+
+    let mut changed = base.clone();
+    changed
+        .stratum_weights
+        .insert(stratum(), Weight::from_raw(2_000_000_000_000));
+    assert_ne!(changed.id(), base_id, "stratum weight");
+
+    let mut changed = base.clone();
+    changed.statistics_snapshot.revision = "r2".to_owned();
+    assert_ne!(changed.id(), base_id, "statistics revision");
+
+    let mut changed = base.clone();
+    changed.statistics_snapshot.entries[0].cardinality = 43;
+    assert_ne!(changed.id(), base_id, "statistics entry");
+
+    let mut changed = base.clone();
+    changed.registry_instance_id = RegistryId::from_raw(8);
+    assert_ne!(changed.id(), base_id, "registry instance id");
+
+    let mut changed = base.clone();
+    changed.registry_content_fingerprint = "other-fingerprint".to_owned();
+    assert_ne!(changed.id(), base_id, "registry content fingerprint");
+}
+
+#[test]
+fn version_mismatch_on_decode_refuses_loudly() {
+    let mut bytes = baseline().canonical_bytes();
+    let mismatched = (PLAN_VERSION + 1).to_le_bytes();
+    bytes[0] = mismatched[0];
+    bytes[1] = mismatched[1];
+    match Plan::from_canonical_bytes(&bytes) {
+        Err(PlanError::VersionMismatch { found, expected }) => {
+            assert_eq!(found, PLAN_VERSION + 1);
+            assert_eq!(expected, PLAN_VERSION);
+        }
+        other => panic!("expected a loud version mismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn truncated_canonical_bytes_are_refused() {
+    let mut bytes = baseline().canonical_bytes();
+    bytes.truncate(bytes.len() - 1);
+    assert!(matches!(
+        Plan::from_canonical_bytes(&bytes),
+        Err(PlanError::Truncated { .. })
+    ));
+}
+
+/// The grep gate: no function pointer may appear anywhere in this crate's
+/// sources. A function pointer cannot be serialized, compared for equality, or
+/// trusted to describe accepted request language, so the plan is pure data and
+/// the capability declarations are closed enums of owned values.
+#[test]
+fn crate_sources_contain_no_function_pointers() {
+    const SOURCES: &[(&str, &str)] = &[
+        ("lib.rs", include_str!("../src/lib.rs")),
+        ("plan.rs", include_str!("../src/plan.rs")),
+        ("request.rs", include_str!("../src/request.rs")),
+        ("id.rs", include_str!("../src/id.rs")),
+        ("iri.rs", include_str!("../src/iri.rs")),
+        ("error.rs", include_str!("../src/error.rs")),
+        ("canonical.rs", include_str!("../src/canonical.rs")),
+    ];
+    for (name, source) in SOURCES {
+        assert!(
+            !source.contains("fn("),
+            "{name} contains a function pointer; plans and capability declarations must be pure data"
+        );
+    }
+}

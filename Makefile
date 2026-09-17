@@ -183,7 +183,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 23 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 24 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -297,7 +297,7 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
-			-p purrdf-geo -p purrdf-text \
+			-p purrdf-geo -p purrdf-text -p purrdf-retrieval \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \

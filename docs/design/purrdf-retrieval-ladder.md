@@ -99,7 +99,7 @@ it through `purrdf-sparql-eval` with no composition layer in the path,
 which extends the repository's existing discipline — the conformance
 suites already insist the evaluator is the single source of query truth —
 out to a seam a caller can stand on. And the planner is **structurally
-unable to hide a decision**: if the plan's executable content is query
+unable to hide a decision**: if a plan's executable content is query
 text and the executor runs only query text, everything the planner chose
 is visible in the emission, and nothing can live between planning and
 execution.

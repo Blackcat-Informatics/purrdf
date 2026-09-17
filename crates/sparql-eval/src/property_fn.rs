@@ -58,7 +58,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::{DatasetView, GraphMatch, TermValue};
+use purrdf_core::{DatasetView, GraphMatch, Iri, TermValue};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
@@ -284,6 +284,215 @@ pub trait PfCursor {
 }
 
 // ---------------------------------------------------------------------------
+// Ranked-retrieval capability declarations
+// ---------------------------------------------------------------------------
+
+/// The kind of RDF term a [`TermPattern`] accepts.
+///
+/// This is a closed, declarative classification, not a predicate function: a
+/// consumer matches an incoming request term against it by a lookup over data,
+/// which is what makes a capability declaration serializable and stable across
+/// processes. `Any` is the explicit "no kind restriction" declaration and is
+/// deliberately distinct from a wildcard implementation — callers read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TermKind {
+    /// Any term kind is accepted.
+    Any,
+    /// An IRI term.
+    Iri,
+    /// A blank-node term.
+    Blank,
+    /// A literal term.
+    Literal,
+    /// A quoted triple term (RDF 1.2).
+    Triple,
+}
+
+impl TermKind {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Iri => "iri",
+            Self::Blank => "blank",
+            Self::Literal => "literal",
+            Self::Triple => "triple",
+        }
+    }
+}
+
+/// One declarative shape of request term a ranked producer accepts.
+///
+/// A pattern is matched by field equality over an incoming term's kind,
+/// datatype IRI, language tag, and (for an associated predicate) IRI. There is
+/// no function pointer here by construction: function pointers cannot be
+/// serialized, cannot be compared for equality, and are not a stable
+/// description of accepted request language.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TermPattern {
+    /// The term kind this pattern accepts.
+    pub kind: TermKind,
+    /// If set, the literal datatype IRI the term must carry.
+    pub datatype: Option<String>,
+    /// If set, the literal language tag the term must carry.
+    pub language: Option<String>,
+    /// If set, the predicate IRI the term's triple must carry.
+    pub predicate: Option<String>,
+}
+
+impl TermPattern {
+    /// A pattern accepting any term of `kind`, with no further constraint.
+    #[must_use]
+    pub const fn of_kind(kind: TermKind) -> Self {
+        Self {
+            kind,
+            datatype: None,
+            language: None,
+            predicate: None,
+        }
+    }
+
+    /// Append this pattern's canonical, injective description to `out`.
+    fn push_canonical(&self, out: &mut String) {
+        push_canonical_field(out, self.kind.as_str());
+        push_canonical_option(out, self.datatype.as_deref());
+        push_canonical_option(out, self.language.as_deref());
+        push_canonical_option(out, self.predicate.as_deref());
+    }
+}
+
+/// A ranked producer's ordering guarantee over the rows of one invocation.
+///
+/// The evaluator already treats emission order as part of a relation's
+/// contract (see [`PfCursor`]); this declaration names the *rank* half of that
+/// contract so a fusion stage can rely on it without inspecting rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RankOrdering {
+    /// Rows are emitted in strictly descending score order under a declared
+    /// total tie-break, so every row has an unambiguous 1-based rank.
+    StrictlyDescending,
+    /// Rows are emitted in non-increasing score order; equal scores may appear
+    /// in any order, so ranks within a tie are interchangeable.
+    NonIncreasing,
+}
+
+impl RankOrdering {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StrictlyDescending => "strictly-descending",
+            Self::NonIncreasing => "non-increasing",
+        }
+    }
+}
+
+/// A ranked producer's duplicate handling within one invocation's stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DuplicatePolicy {
+    /// An item appears at most once in the stream.
+    Unique,
+    /// The stream may repeat an item; a consumer must de-duplicate.
+    Allowed,
+}
+
+impl DuplicatePolicy {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unique => "unique",
+            Self::Allowed => "allowed",
+        }
+    }
+}
+
+/// A relation's ranked-retrieval capability — the declaration a composition
+/// layer reads to decide which producers a request reaches.
+///
+/// [`NotRanked`](Self::NotRanked) is the explicit "this relation does not
+/// participate in ranked retrieval" variant, not a sentinel or a bare `None`:
+/// a producer that does not fuse is a fact the planner can name and a registry
+/// can fingerprint, rather than an absence it must infer. Every field of the
+/// [`Ranked`](Self::Ranked) arm is owned, declarative data, so the whole value
+/// is `Clone + PartialEq + Eq + Debug` and has a canonical description; there
+/// is deliberately no function pointer anywhere in this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetrievalCapability {
+    /// The relation does not participate in ranked retrieval.
+    NotRanked,
+    /// The relation emits rows ranked within `stratum`.
+    Ranked {
+        /// The caller-supplied stratum label these rows are ranked within. No
+        /// vocabulary is minted here; the caller names its own strata.
+        stratum: Iri,
+        /// The request-term shapes this producer accepts. Matching is a lookup
+        /// over these declarations, never inference.
+        accepted_terms: Vec<TermPattern>,
+        /// The producer's ordering guarantee.
+        ordering: RankOrdering,
+        /// The producer's duplicate handling.
+        duplicates: DuplicatePolicy,
+    },
+}
+
+impl RetrievalCapability {
+    /// A canonical, injective, length-framed description of this declaration.
+    ///
+    /// This is the capability's contribution to a registry's content
+    /// fingerprint. It is a pure function of the value and does not depend on
+    /// registration order, iteration order, or the host that built it. Fields
+    /// whose absence and empty spelling must stay distinguishable are framed
+    /// explicitly: every string is length-prefixed, and every optional string
+    /// carries an explicit present/absent byte.
+    #[must_use]
+    pub fn canonical_description(&self) -> String {
+        let mut out = String::new();
+        match self {
+            Self::NotRanked => out.push('n'),
+            Self::Ranked {
+                stratum,
+                accepted_terms,
+                ordering,
+                duplicates,
+            } => {
+                out.push('r');
+                push_canonical_field(&mut out, stratum.as_str());
+                push_canonical_field(&mut out, ordering.as_str());
+                push_canonical_field(&mut out, duplicates.as_str());
+                out.push_str(&accepted_terms.len().to_string());
+                out.push(':');
+                for term in accepted_terms {
+                    out.push('\u{1}');
+                    term.push_canonical(&mut out);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Append a length-framed canonical field to `out`.
+fn push_canonical_field(out: &mut String, value: &str) {
+    out.push_str(&value.len().to_string());
+    out.push(':');
+    out.push_str(value);
+}
+
+/// Append a present/absent discriminant and, when present, a framed value.
+fn push_canonical_option(out: &mut String, value: Option<&str>) {
+    match value {
+        None => out.push('0'),
+        Some(value) => {
+            out.push('1');
+            push_canonical_field(out, value);
+        }
+    }
+    out.push(';');
+}
+
+// ---------------------------------------------------------------------------
 // The relation trait
 // ---------------------------------------------------------------------------
 
@@ -362,6 +571,21 @@ pub trait PropertyFunction: Send + Sync {
     /// a bound that under-states reality turns an admission decision into a wrong one.
     /// A genuinely unbounded generator declares [`u64::MAX`].
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64;
+
+    /// This relation's ranked-retrieval capability — the declaration a
+    /// composition layer over the property-function seam reads to decide which
+    /// request terms reach this producer and how its rows rank.
+    ///
+    /// This is **required**, not defaulted. A defaulted `NotRanked` would let a
+    /// genuinely ranked producer silently fall out of fusion with no compile
+    /// error and no declaration to read, which is exactly the silent omission
+    /// the hard-fail doctrine forbids. A relation that does not fuse says so
+    /// explicitly by returning [`RetrievalCapability::NotRanked`].
+    ///
+    /// The method is host code exactly as `arity`/`modes`/`volatility` are, so
+    /// every read of it goes through [`declaration_contained`] like the rest of
+    /// the declaration surface.
+    fn retrieval_capability(&self) -> RetrievalCapability;
 
     /// Begin one invocation, returning its row cursor.
     ///
@@ -536,6 +760,10 @@ pub struct PfDescriptor {
     /// The declared access patterns, in the order the relation returns them, each
     /// with its declared row bound.
     pub modes: Vec<PfMode>,
+    /// The declared ranked-retrieval capability. Consumed by a composition
+    /// layer over the seam; [`RetrievalCapability::NotRanked`] is the explicit
+    /// "does not fuse" declaration.
+    pub retrieval: RetrievalCapability,
 }
 
 /// A caller-injected table of property functions, keyed by predicate IRI.
@@ -736,6 +964,9 @@ impl PropertyFunctionRegistry {
             let arity = declaration_contained(iri, "arity", || relation.arity())?;
             let volatility =
                 declaration_contained(iri, "determinism class", || relation.volatility())?;
+            let retrieval = declaration_contained(iri, "retrieval capability", || {
+                relation.retrieval_capability()
+            })?;
             let modes = declaration_contained(iri, "declared modes", || relation.modes().to_vec())?;
             let mut described_modes = Vec::with_capacity(modes.len());
             for mode in modes {
@@ -752,6 +983,7 @@ impl PropertyFunctionRegistry {
                 object_arity: arity.object,
                 volatility,
                 modes: described_modes,
+                retrieval,
             });
         }
         out.sort_by(|a, b| a.iri.cmp(&b.iri));
@@ -961,6 +1193,12 @@ impl PropertyFunction for MemoryRelation {
         // Exact, and mode-independent: a filtered scan of the table cannot emit more
         // rows than the table holds, whichever positions are bound.
         self.rows.len() as u64
+    }
+
+    fn retrieval_capability(&self) -> RetrievalCapability {
+        // A plain table declares no stratum and emits in insertion order, so it
+        // declares no participation in ranked retrieval.
+        RetrievalCapability::NotRanked
     }
 
     fn open(
@@ -1458,6 +1696,10 @@ mod tests {
             1
         }
 
+        fn retrieval_capability(&self) -> RetrievalCapability {
+            RetrievalCapability::NotRanked
+        }
+
         fn open(
             &self,
             _args: &PfArgs<'_>,
@@ -1618,6 +1860,10 @@ mod tests {
 
         fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
             0
+        }
+
+        fn retrieval_capability(&self) -> RetrievalCapability {
+            RetrievalCapability::NotRanked
         }
 
         fn open(

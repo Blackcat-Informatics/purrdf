@@ -147,7 +147,7 @@ use purrdf_sparql_eval::{
     CancellationFlag, ChargePoint, CustomAggregate, EvalError, GovernedOutcome,
     HttpRemoteQuerySource, HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs,
     PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, RemoteError, StopSignal, Volatility, WallDeadline,
+    QueryOptions, RemoteError, RetrievalCapability, StopSignal, Volatility, WallDeadline,
 };
 
 /// The dimensions a case may set a ceiling on, in the order every pinned consumption
@@ -721,6 +721,10 @@ impl PropertyFunction for ScriptedRelation {
 
     fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
         self.spec.emits
+    }
+
+    fn retrieval_capability(&self) -> RetrievalCapability {
+        RetrievalCapability::NotRanked
     }
 
     fn open(

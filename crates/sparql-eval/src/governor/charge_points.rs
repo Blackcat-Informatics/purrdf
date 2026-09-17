@@ -868,6 +868,10 @@ impl crate::property_fn::PropertyFunction for CountingRelation {
         self.declared
     }
 
+    fn retrieval_capability(&self) -> crate::property_fn::RetrievalCapability {
+        crate::property_fn::RetrievalCapability::NotRanked
+    }
+
     fn open(
         &self,
         _args: &crate::property_fn::PfArgs<'_>,

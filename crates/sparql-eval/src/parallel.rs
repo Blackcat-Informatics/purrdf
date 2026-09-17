@@ -1662,6 +1662,10 @@ mod tests {
             0
         }
 
+        fn retrieval_capability(&self) -> crate::property_fn::RetrievalCapability {
+            crate::property_fn::RetrievalCapability::NotRanked
+        }
+
         fn open(
             &self,
             _args: &crate::property_fn::PfArgs<'_>,

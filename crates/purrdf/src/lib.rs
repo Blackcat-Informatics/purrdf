@@ -177,6 +177,13 @@ pub mod sparql {
     // errors explicitly; every error *type* (`ParseError`, `EvalError`,
     // `Error`) is still re-exported at this module's root by the globs above.
     pub use purrdf_sparql_algebra::error;
+    // Both crates also expose a `TermPattern`: the algebra's parser-level term
+    // pattern, and the evaluator's declarative *retrieval capability* pattern
+    // (what request terms a ranked property function accepts). The bare name
+    // stays bound to the longer-standing parser type; the capability pattern is
+    // reachable under a distinct alias so the two are never confused.
+    pub use purrdf_sparql_algebra::TermPattern;
+    pub use purrdf_sparql_eval::TermPattern as RetrievalTermPattern;
 }
 
 /// XSD datatype value spaces and operations.

@@ -95,6 +95,32 @@ impl RegistryId {
     pub(crate) fn stable_encoding(self) -> u64 {
         self.0
     }
+
+    /// The raw counter value behind this identity, so a value that records what
+    /// it was planned against — a composition layer's serializable `Plan` — can
+    /// carry it as plain data.
+    ///
+    /// The value is meaningful only while this process is alive; see the type's
+    /// docs. A caller that persists it and reloads it later (or elsewhere) gets
+    /// an identity that names no live registry, which is exactly why a
+    /// deserialized plan is admitted against the durable content fingerprint
+    /// rather than against this number.
+    #[must_use]
+    pub const fn as_u64(self) -> u64 {
+        self.0
+    }
+
+    /// Rebuild an identity from its encoded counter value — the decode half of
+    /// [`Self::as_u64`], used when a serialized plan is read back.
+    ///
+    /// Reconstructing an identity does **not** make it name a live registry: the
+    /// counter is per-process and monotonic, so a value decoded from a document
+    /// can never collide with one this process mints. A decoded plan is matched
+    /// against a registry by its content fingerprint, never by this value.
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
 }
 
 impl Default for RegistryId {

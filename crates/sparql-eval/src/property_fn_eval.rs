@@ -854,7 +854,9 @@ mod tests {
     use super::*;
     use crate::engine::NativeSparqlEngine;
     use crate::error::EvalError;
-    use crate::property_fn::{MemoryRelation, PfCursor, PfRow, PropertyFunctionRegistry};
+    use crate::property_fn::{
+        MemoryRelation, PfCursor, PfRow, PropertyFunctionRegistry, RetrievalCapability,
+    };
     use crate::user_fn::Volatility;
 
     const EX: &str = "http://example.org/";
@@ -1033,6 +1035,10 @@ mod tests {
             self.row_bound
         }
 
+        fn retrieval_capability(&self) -> RetrievalCapability {
+            RetrievalCapability::NotRanked
+        }
+
         fn open(
             &self,
             args: &PfArgs<'_>,
@@ -1127,6 +1133,10 @@ mod tests {
             self.rows.len() as u64
         }
 
+        fn retrieval_capability(&self) -> RetrievalCapability {
+            RetrievalCapability::NotRanked
+        }
+
         fn open(
             &self,
             args: &PfArgs<'_>,
@@ -1180,6 +1190,10 @@ mod tests {
 
         fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
             1
+        }
+
+        fn retrieval_capability(&self) -> RetrievalCapability {
+            RetrievalCapability::NotRanked
         }
 
         fn open(

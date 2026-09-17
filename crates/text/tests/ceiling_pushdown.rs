@@ -28,7 +28,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     EvalError, NativeSparqlEngine, PfArgs, PfArity, PfCursor, PropertyFunction,
-    PropertyFunctionRegistry, QueryOptions, Volatility,
+    PropertyFunctionRegistry, QueryOptions, RetrievalCapability, Volatility,
 };
 use purrdf_text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 
@@ -92,6 +92,10 @@ impl PropertyFunction for CeilingRecorder {
 
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
         self.inner.rows_per_invocation(mode)
+    }
+
+    fn retrieval_capability(&self) -> RetrievalCapability {
+        self.inner.retrieval_capability()
     }
 
     fn open(

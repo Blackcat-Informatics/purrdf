@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-retrieval"
+description = "Composition layer over the ranked property-function producers: pure-data retrieval plans with a canonical, domain-separated BLAKE3 identity, driven by caller-supplied producers, strata and weights with no fabricated default vocabulary."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-retrieval"
+rust-version.workspace = true
+readme = "README.md"
+keywords = ["rdf", "sparql", "retrieval", "search", "ranking"]
+categories = ["database-implementations", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only and wasm32-unknown-unknown-clean: the crate is a pure composition
+# layer over the SPARQL evaluator's property-function seam. It holds no store,
+# opens no file and reads no clock.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_retrieval"
+
+[dependencies]
+# The RDF 1.2 IR: caller-supplied IRIs are validated with the kernel's parser,
+# and terms are carried without ever naming a dataset-local `TermId`.
+purrdf-core.workspace = true
+# The property-function seam: `RegistryId` is the instance identity a plan
+# records, and the producer-capability declarations are consumed from here.
+purrdf-sparql-eval.workspace = true
+# The exact base-10 fixed-point type (`Fixed`) stratum weights are expressed in,
+# so a plan never carries a float where exactness is the whole point.
+purrdf-text.workspace = true
+# Fixed-output-length hashing for the plan identity. Deterministic and keyless,
+# so the same canonical bytes yield the same digest on every target.
+blake3.workspace = true
+# Serialization of the plan as a plain document. `derive` builds the impls.
+serde.workspace = true
+# Error types carry structured context; `derive` builds the impls.
+thiserror.workspace = true
+
+[dev-dependencies]
+# Colored line-diffs on assert_eq! failure (repo convention).
+pretty_assertions.workspace = true
+# A document format for the serde round-trip test.
+serde_json.workspace = true

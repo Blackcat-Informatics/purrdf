@@ -43,7 +43,7 @@ use std::sync::Arc;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_eval::{
-    EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, Volatility,
+    EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RetrievalCapability, Volatility,
 };
 
 use crate::analysis::Analyzer;
@@ -577,6 +577,14 @@ impl PropertyFunction for TextSearchRelation {
         )
     }
 
+    fn retrieval_capability(&self) -> RetrievalCapability {
+        // The relation emits ranked BM25 rows, but a stratum label, its accepted
+        // request terms, and its fusion ordering are caller-supplied registry
+        // configuration that this scaffold task does not yet thread through the
+        // seam. "Does not fuse yet" is declared explicitly rather than guessed.
+        RetrievalCapability::NotRanked
+    }
+
     /// Begin one ranked-retrieval invocation.
     ///
     /// # Refusals
@@ -998,6 +1006,10 @@ impl PropertyFunction for TermOccurrenceRelation {
             mode.is_bound(OCCURRENCE_LANG),
             mode.is_bound(OCCURRENCE_POSITION),
         )
+    }
+
+    fn retrieval_capability(&self) -> RetrievalCapability {
+        RetrievalCapability::NotRanked
     }
 
     /// Begin one positional-matching invocation.

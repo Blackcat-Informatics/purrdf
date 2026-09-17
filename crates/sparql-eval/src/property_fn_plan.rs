@@ -1186,6 +1186,13 @@ pub(crate) fn content_fingerprint(
             out.push(':');
             out.push_str(&mode.rows_per_invocation.to_string());
         }
+        // The ranked-retrieval capability declaration (T3): a producer's
+        // participation in fusion is a declaration a prepared plan's identity
+        // must cover, exactly as arity, volatility and modes are. `NotRanked`
+        // contributes a fixed one-byte description, so a relation that does not
+        // fuse cannot perturb the digest of one that does.
+        out.push('\u{5}');
+        out.push_str(&descriptor.retrieval.canonical_description());
         out.push('\u{4}');
     }
     Ok(out)
