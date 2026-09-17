@@ -85,6 +85,7 @@ use purrdf_datalog::seminaive::{compile, evaluate};
 use purrdf_datalog::store::{Fact, RelationStore};
 
 use crate::calculus::{ChaseRule, program_with_attribution};
+use crate::digest_hex::hex;
 use crate::engine::{seed, surface_of};
 use crate::interner::{Interner, intern_into};
 use crate::reasoner::{DlAxiom, Reasoner, Verdict};
@@ -217,16 +218,6 @@ impl From<EntailError> for ExplainError {
     fn from(error: EntailError) -> Self {
         Self::Entail(Box::new(error))
     }
-}
-
-/// Render a 32-byte digest as lowercase hex.
-fn hex(digest: [u8; 32]) -> String {
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    out
 }
 
 // ── The chase lane: a checkable derivation ──────────────────────────────────────

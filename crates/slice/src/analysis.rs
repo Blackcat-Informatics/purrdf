@@ -124,7 +124,8 @@ pub fn bundle_content_id(raw_digests: &[&str]) -> String {
         h.update(d.as_bytes());
         h.update(b"\n");
     }
-    hex::encode(h.finalize())
+    let digest = h.finalize();
+    format!("{digest:x}")
 }
 
 // ── Analysis graph output ─────────────────────────────────────────────────────
@@ -521,6 +522,30 @@ mod tests {
         let id1 = bundle_content_id(&["aaa", "bbb", "ccc"]);
         let id2 = bundle_content_id(&["ccc", "bbb", "aaa"]);
         assert_eq!(id1, id2);
+    }
+
+    /// GOLDEN: pins `bundle_content_id`'s literal output over a fixed input.
+    ///
+    /// This is the only place in `purrdf-slice` a real SHA-256 hex string is pinned. Every
+    /// other cache-key test in this crate is relational (`assert_eq!`/`assert_ne!` between
+    /// two computed keys), which cannot detect a change to the ENCODING — uppercase hex, a
+    /// truncated digest, or an added prefix would still satisfy every relational test.
+    /// `bundle_content_id` is the right call site to pin: it produces the
+    /// `bundleContentId` stamped into every emitted provenance triple, and it is reachable
+    /// from the Python bindings, so a user sees this exact string.
+    ///
+    /// The golden below is `sha256("alpha\nbeta\n")` — i.e. each of the two (already
+    /// sorted) inputs, followed by a newline, concatenated and hashed — computed
+    /// independently with `sha256sum` outside this crate. A change to this literal is a
+    /// user-visible content-ID change and must not be "fixed" by updating the literal
+    /// without understanding why the encoding moved.
+    #[test]
+    fn bundle_content_id_is_pinned_sha256_hex() {
+        let id = bundle_content_id(&["alpha", "beta"]);
+        assert_eq!(
+            id,
+            "e49c81e2d2f84e259d40e2fb8192f3bcd198b355184845d76d8f58807d0d78ee"
+        );
     }
 
     #[test]

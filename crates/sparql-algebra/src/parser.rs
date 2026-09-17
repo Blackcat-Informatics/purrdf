@@ -25,7 +25,7 @@ use crate::ast::{
 };
 use crate::error::{ParseError, Result};
 use crate::lexer::{Spanned, Token, tokenize};
-use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex, langtag};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
@@ -5430,11 +5430,17 @@ fn is_modifier_terminator_word(w: &str) -> bool {
 /// `@en--unk` ("undefined base direction") and `@en--LTR` ("upper case LTR").
 ///
 /// The lexer hands over the raw `[a-zA-Z0-9-]+` run after `@`, so this is the
-/// one site that enforces the production. An unknown or wrongly-cased suffix
-/// is a syntax error here — never silently dropped to a plain `@en`, and never
-/// folded into the language tag as `en--foo`. The split is on the FIRST `--`:
-/// the production admits exactly one, so `en--x--ltr` is refused as a bad
+/// one site in the parser that enforces the production — but only the
+/// **direction** half is decided here. An unknown or wrongly-cased suffix is a
+/// syntax error here, never silently dropped to a plain `@en` and never folded
+/// into the language tag as `en--foo`; the split is on the FIRST `--`, the
+/// production admitting exactly one, so `en--x--ltr` is refused as a bad
 /// direction (`x--ltr`) rather than read as language `en--x`.
+///
+/// The **language** half is not this function's to decide. It goes to
+/// [`purrdf_iri::langtag`] under [`LANGTAG_PROFILE`], which is the same
+/// acceptance language every RDF codec in the workspace applies, so that a tag
+/// a query may write is a tag a document may hold.
 fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>)> {
     let (lang, dir) = match tag.split_once("--") {
         Some((lang, "ltr")) => (lang, Some(BaseDirection::Ltr)),
@@ -5450,23 +5456,49 @@ fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>
         }
         None => (tag, None),
     };
-    if !is_langtag(lang) {
+    if let Err(error) = langtag::parse_with(lang, LANGTAG_PROFILE) {
         return Err(ParseError::syntax(
-            format!("invalid language tag `@{tag}`: expected [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*"),
+            format!(
+                "invalid language tag `@{tag}`: {error} [{code}]",
+                code = error.diagnostic_code()
+            ),
             at,
         ));
     }
     Ok((lang.to_owned(), dir))
 }
 
-/// The language half of `LANG_DIR`: `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`.
+/// The acceptance language every language tag in a SPARQL query is held to.
+///
+/// [`langtag::Profile::ConcreteSyntaxLangtagBounded`] — the same profile every
+/// native RDF codec in this workspace names, and the same one the projection
+/// term builder names. That is not tidiness, it is the round-trip obligation: a
+/// literal written in a `VALUES` clause or a `BIND` must be expressible in the
+/// RDF files the query is run against, and a query result is serialized by
+/// those very codecs. When this site held its own transcription of the
+/// `LANGTAG` terminal the workspace shipped three acceptance languages at once
+/// — `"a"@cantbethislong` bound from SPARQL and was refused from N-Triples,
+/// which is the same defect as a codec that cannot read back what a codec
+/// wrote.
+///
+/// The profile is the terminal `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*` that SPARQL 1.2
+/// rule [145] spells, plus the RFC 5646 §2.1 eight-character subtag ceiling
+/// outside private use. Both halves are load-bearing: the terminal takes
+/// `@en-fr-jura` and `@fr-be-fbcl`, which §2.1 has no reading for and W3C
+/// corpora carry, while the ceiling refuses `@cantbethislong`, which the
+/// N-Triples negative-syntax corpus requires to be refused.
+const LANGTAG_PROFILE: langtag::Profile = langtag::Profile::ConcreteSyntaxLangtagBounded;
+
+/// The language half of `LANG_DIR`, decided by [`purrdf_iri::langtag`] under
+/// [`LANGTAG_PROFILE`] rather than by a private transcription of the terminal.
+///
+/// Kept as a predicate because [`crate::validate`] asks the same question of an
+/// algebra assembled programmatically, where there is no token to point at and
+/// so nothing to do with the typed error; [`split_lang_dir`] calls
+/// [`langtag::parse_with`] directly so that the parse diagnostic can name the
+/// production that refused.
 pub(crate) fn is_langtag(lang: &str) -> bool {
-    let mut subtags = lang.split('-');
-    let primary_ok = subtags.next().is_some_and(|primary| {
-        !primary.is_empty() && primary.bytes().all(|b| b.is_ascii_alphabetic())
-    });
-    primary_ok
-        && subtags.all(|sub| !sub.is_empty() && sub.bytes().all(|b| b.is_ascii_alphanumeric()))
+    langtag::is_well_formed_with(lang, LANGTAG_PROFILE)
 }
 
 fn expect_arity(args: &[Expression], n: usize, name: &str, at: usize) -> Result<()> {
@@ -10471,5 +10503,101 @@ mod tests {
             .parse_query(q)
             .expect_err("ADJUST with three arguments must be refused at parse time");
         assert!(matches!(error, ParseError::Syntax { .. }));
+    }
+
+    // ── `LANGTAG` is decided by the workspace's owner, not by this parser ─────────
+
+    /// A query in a `VALUES` clause built from the tag under test, which is the
+    /// shortest path from a `LANGTAG` token to a bound term.
+    fn query_with_tag(tag: &str) -> String {
+        format!("SELECT ?v WHERE {{ VALUES ?v {{ \"a\"@{tag} }} }}")
+    }
+
+    /// The refusal side: a tag this parser used to bind and every RDF codec in
+    /// the workspace refuses.
+    ///
+    /// `@cantbethislong` is a bare fourteen-character subtag. The N-Triples
+    /// negative-syntax corpus requires it to be refused, and it was — from
+    /// N-Triples. From SPARQL it bound, because this parser carried its own
+    /// transcription of the `LANGTAG` terminal with no length bound in it. One
+    /// binary, two acceptance languages, and a `VALUES` row that could never be
+    /// written to a file.
+    ///
+    /// The diagnostic is asserted as well as the refusal: the reason now names
+    /// the production that bit (`langtag-subtag-length-over-eight`) rather than
+    /// restating the terminal, which is what makes the two surfaces' refusals
+    /// recognisably the same refusal.
+    #[test]
+    fn a_subtag_over_the_length_ceiling_is_refused_in_a_query() {
+        let error = try_parse(&query_with_tag("cantbethislong"))
+            .expect_err("a bare fourteen-character subtag is over the §2.1 ceiling");
+        assert!(
+            matches!(error, ParseError::Syntax { .. }),
+            "the error type and its byte offset are unchanged: {error:?}"
+        );
+        let message = error.to_string();
+        for expected in [
+            "langtag-subtag-length-over-eight",
+            "language-tag subtag longer than 8 characters",
+        ] {
+            assert!(
+                message.contains(expected),
+                "the typed reason must reach the user, missing {expected:?}: {message}"
+            );
+        }
+    }
+
+    /// The acceptance side, which is the half that catches an over-refusal.
+    ///
+    /// The first row is the neighbour of the refusal above — one character
+    /// inside the ceiling — and the second is the same over-long subtag moved
+    /// behind the `x` private-use marker, where the ceiling does not apply. The
+    /// rest are the tags the workspace's own fixtures, the approved W3C corpora
+    /// and downstream projects publish: `en-fr-jura` and `fr-be-fbcl` have no
+    /// RFC 5646 reading at all and must still bind, and the `x-…-<language
+    /// name>` families run past the eight-character private-use cap by design.
+    #[test]
+    fn every_tag_the_workspace_writes_still_binds_in_a_query() {
+        for tag in [
+            "abcdefgh",
+            "en-x-cantbethislong",
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "i-enochian",
+            "de-CH-x-phonebk",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "x-purrdf-english",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "x-gmeow-norwegiannynorsk",
+        ] {
+            assert!(
+                try_parse(&query_with_tag(tag)).is_ok(),
+                "`@{tag}` is written by this workspace and must still parse"
+            );
+        }
+    }
+
+    /// The terminal's own refusals, which the swap must not have loosened, and
+    /// which now arrive under the owner's stable codes instead of this parser's
+    /// private prose — so a consumer can tell `@9-9` from `@en-` without
+    /// matching on a sentence.
+    #[test]
+    fn the_langtag_terminals_own_refusals_still_bite_in_a_query() {
+        for (tag, code) in [
+            ("9-9", "langtag-terminal-primary-not-alpha"),
+            ("123-456", "langtag-terminal-primary-not-alpha"),
+            ("en-", "langtag-subtag-length-zero"),
+        ] {
+            let error = try_parse(&query_with_tag(tag))
+                .expect_err("the `LANGTAG` terminal does not admit this")
+                .to_string();
+            assert!(
+                error.contains(code),
+                "`@{tag}` must refuse under {code}, got {error}"
+            );
+        }
     }
 }

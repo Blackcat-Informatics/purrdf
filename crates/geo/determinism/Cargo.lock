@@ -255,12 +255,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "oxilangtag"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d3b4eb570abd4a1dcb062c31fd37b832264d9dc7292c3e69acfe926c87b063f"
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -276,26 +270,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-cdt"
+version = "2.0.2"
+dependencies = [
+ "purrdf-iri",
+ "purrdf-xsd",
+]
+
+[[package]]
 name = "purrdf-core"
-version = "0.12.0"
+version = "2.0.2"
 dependencies = [
  "ahash",
  "csv",
  "hashbrown",
- "oxilangtag",
+ "purrdf-cdt",
  "purrdf-events",
  "purrdf-iri",
+ "regex",
+ "regex-syntax",
  "sha2",
  "smallvec",
 ]
 
 [[package]]
 name = "purrdf-events"
-version = "0.12.0"
+version = "2.0.2"
 
 [[package]]
 name = "purrdf-geo"
-version = "0.12.0"
+version = "2.0.2"
 dependencies = [
  "purrdf-core",
  "purrdf-iri",
@@ -313,27 +317,28 @@ dependencies = [
 
 [[package]]
 name = "purrdf-iri"
-version = "0.12.0"
+version = "2.0.2"
 
 [[package]]
 name = "purrdf-sparql-algebra"
-version = "0.12.0"
+version = "2.0.2"
 dependencies = [
  "memchr",
+ "purrdf-cdt",
  "purrdf-iri",
  "purrdf-xsd",
- "smallvec",
 ]
 
 [[package]]
 name = "purrdf-sparql-eval"
-version = "0.12.0"
+version = "2.0.2"
 dependencies = [
  "ahash",
  "getrandom",
  "hashbrown",
  "js-sys",
  "md-5",
+ "purrdf-cdt",
  "purrdf-core",
  "purrdf-iri",
  "purrdf-sparql-algebra",
@@ -349,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-sparql-results"
-version = "0.12.0"
+version = "2.0.2"
 dependencies = [
  "purrdf-core",
  "purrdf-iri",
@@ -357,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-xsd"
-version = "0.12.0"
+version = "2.0.2"
 
 [[package]]
 name = "quote"

@@ -3329,35 +3329,35 @@ fn eval_function<D: DatasetView + Sync>(
         Function::Md5 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = md5::Md5::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha1 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha1::Sha1::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha256 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha384 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha512 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
@@ -3368,28 +3368,28 @@ fn eval_function<D: DatasetView + Sync>(
         Function::Sha3_224 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_224::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_256 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_384 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_512 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
@@ -4575,17 +4575,6 @@ fn encode_for_uri(s: &str) -> String {
     out
 }
 
-/// Render a byte slice as lowercase hex.
-fn hex_lower(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-            s.push(char::from_digit(u32::from(*b >> 4), 16).unwrap());
-            s.push(char::from_digit(u32::from(*b & 0xf), 16).unwrap());
-            s
-        })
-}
-
 /// Format a timezone offset in minutes as an `xsd:dayTimeDuration` string,
 /// e.g. `+60` → `"PT1H"`, `0` → `"PT0S"`, `-330` → `"-PT5H30M"`.
 fn format_daytime_duration(offset_minutes: i64) -> String {
@@ -4698,14 +4687,19 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     // Set variant bits (RFC 4122 §4.1.1): top 2 bits of octet 8 = 10.
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    // One rendering pass for all 16 bytes, then slice the 32-character result at
+    // the RFC 4122 group boundaries. `hex::lower` emits exactly two characters
+    // per byte, so byte *b* occupies characters `2b..2b+2` and every group
+    // boundary is a character index: 8, 12, 16, 20. Every character is ASCII, so
+    // the byte slices are also character slices.
+    let hex = purrdf_core::hex::lower(&bytes);
     let uuid = format!(
         "{}-{}-{}-{}-{}",
-        hex[0..4].join(""),
-        hex[4..6].join(""),
-        hex[6..8].join(""),
-        hex[8..10].join(""),
-        hex[10..16].join(""),
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32],
     );
     (uuid, bytes)
 }
@@ -6773,6 +6767,64 @@ mod tests {
             assert_eq!(&parts[2][..1], "4");
         } else {
             panic!("STRUUID() must produce a literal");
+        }
+    }
+
+    /// The rendered string and the returned bytes are two views of one value,
+    /// and the grouping is a pure function of the byte positions: character
+    /// `2b`/`2b+1` of the un-hyphenated form is byte `b`, lowercase, zero-padded.
+    ///
+    /// This pins the *shape* rather than a fixed value (`make_uuid` is random by
+    /// construction): 36 characters, hyphens at 8/13/18/23, lowercase hex
+    /// everywhere else, version nibble `4`, variant nibble in `8|9|a|b`, and —
+    /// the property a grouping bug would break — the hyphen-stripped string
+    /// re-parses to exactly the bytes that were rendered, in order.
+    #[test]
+    fn make_uuid_groups_the_rendered_bytes_at_the_rfc4122_boundaries() {
+        let ds = empty_ds();
+        let mut ctx = EvalCtx::new(&ds);
+        ctx.rng_state = 0x0F0F_1234_0000_00FFu64;
+        // The failure messages carry the DRAW ORDINAL rather than the rendered
+        // value. The seed above is fixed, so the ordinal reproduces the exact
+        // value a failure saw — and interpolating a generated identifier into a
+        // message is what `rust/cleartext-logging` flags, whatever its
+        // provenance. The ordinal is the better diagnostic anyway: it says which
+        // draw broke, not merely what it looked like.
+        for draw in 0..512u32 {
+            let (uuid, bytes) = make_uuid(&mut ctx);
+            assert_eq!(uuid.len(), 36, "draw {draw} must be 36 characters");
+            for index in [8usize, 13, 18, 23] {
+                assert_eq!(
+                    uuid.as_bytes()[index],
+                    b'-',
+                    "draw {draw} must have a hyphen at index {index}"
+                );
+            }
+            let stripped: String = uuid.chars().filter(|ch| *ch != '-').collect();
+            assert_eq!(
+                stripped.len(),
+                32,
+                "draw {draw} must carry 32 hex characters"
+            );
+            assert!(
+                stripped
+                    .chars()
+                    .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch)),
+                "draw {draw} must be lowercase hex outside its hyphens"
+            );
+            assert_eq!(&stripped[12..13], "4", "draw {draw} must carry version 4");
+            assert!(
+                matches!(&stripped[16..17], "8" | "9" | "a" | "b"),
+                "draw {draw} must carry the RFC 4122 variant nibble"
+            );
+            for (index, byte) in bytes.iter().enumerate() {
+                let pair = &stripped[index * 2..index * 2 + 2];
+                assert_eq!(
+                    u8::from_str_radix(pair, 16).expect("a hex pair parses"),
+                    *byte,
+                    "draw {draw} pair {index} must render byte {byte:#04x}"
+                );
+            }
         }
     }
 

@@ -123,6 +123,7 @@ pub(crate) mod axioms;
 pub(crate) mod calculus;
 pub mod combined;
 pub(crate) mod datatypes;
+pub(crate) mod digest_hex;
 pub(crate) mod engine;
 pub mod entails;
 pub mod explain;

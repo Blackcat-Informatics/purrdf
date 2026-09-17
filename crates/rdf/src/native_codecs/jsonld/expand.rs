@@ -16,6 +16,7 @@ use super::{
     RdfDiagnostic, RdfQuad, RdfTerm, XSD_STRING, decode, parse, validated_iri_term,
 };
 use crate::{RdfLiteral, RdfTextDirection, RdfTriple};
+use purrdf_iri::langtag;
 
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
@@ -1495,7 +1496,61 @@ fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
     }
 }
 
+/// The JSON-LD / YAML-LD language-tag contract: the concrete syntaxes' `LANGTAG`
+/// terminal under the RFC 5646 §2.1 eight-character subtag ceiling, decided by
+/// [`purrdf_iri::langtag`].
+///
+/// There was NO contract here before. `@language` was read, case-folded, and
+/// interned unexamined, so this reader admitted `1`, `9-9`, `123-456`, `en-`,
+/// `-` and `!!!` — and, worst of all, `en us`, whose embedded space is not
+/// expressible in `LANGTAG` at all. A document carrying it converted to N-Quads
+/// with exit 0, an empty loss ledger, and a line reading `"hello"@en us .` that
+/// no parser in this workspace (or any other) can read back. The writer was
+/// faithful; the reader was the defect.
+///
+/// The profile is [`langtag::Profile::ConcreteSyntaxLangtagBounded`], the one
+/// acceptance language every codec in this crate names — `text_parse`'s two
+/// parsers, `rdfxml`, and the term projection in `projections::term` all name
+/// the same one. It has to be shared, and for the same reason stated there: a
+/// dataset read from JSON-LD is serialized to Turtle, N-Quads or RDF/XML
+/// verbatim, so any tag this reader takes that those readers refuse is a file
+/// this workspace writes and cannot read back.
+///
+/// # Why the check is here and not at the three `@language` entry points
+///
+/// A language tag reaches the carrier from three places — a value object's
+/// `@language` member ([`expand_value_object`]), a `@container: "@language"`
+/// map key ([`expand_language_map`]), and the `@context` default / term
+/// `@language` mapping applied to a bare string ([`effective_language`], via
+/// [`expand_scalar`]). All three converge HERE: [`lower_literal`] is the only
+/// function in this module that builds a language-tagged [`RdfLiteral`], and
+/// [`Lowerer::lower_term`] is the only caller. Gating the funnel
+/// is therefore complete by construction, where three entry-point gates would be
+/// complete only as long as nobody adds a fourth.
+///
+/// The tag named in the failure is the case-folded one, because that is the tag
+/// the carrier holds and the tag a serializer would have written; naming the
+/// document's original casing would name a string that never reaches a file.
+///
+/// The failure reports the module's
+/// [`langtag::LanguageTagError::diagnostic_code`], so the user learns which
+/// production refused. JSON-LD decode diagnostics carry no line/column or JSON
+/// pointer (the `serde_json` value tree this walks has discarded both by the
+/// time expansion runs), which this does not change.
+fn validate_language_tag(tag: &str) -> Result<(), RdfDiagnostic> {
+    match langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(RdfDiagnostic::error(
+            error.diagnostic_code(),
+            format!("JSON-LD: invalid language tag {tag:?}: {error}"),
+        )),
+    }
+}
+
 fn lower_literal(literal: &Literal) -> Result<RdfTerm, RdfDiagnostic> {
+    if let Some(language) = literal.language.as_deref() {
+        validate_language_tag(language)?;
+    }
     let value = match (
         literal.language.as_deref(),
         literal.direction.as_deref(),

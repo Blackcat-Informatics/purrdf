@@ -51,7 +51,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use petgraph::graph::{DiGraph, NodeIndex};
+use purrdf_core::graph::tarjan_scc;
 use sha2::{Digest, Sha256};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
@@ -177,9 +177,37 @@ pub struct LinkUnit {
 }
 
 impl LinkUnit {
-    /// Whether this link unit is a genuine cycle (more than one member).
+    /// Whether this link unit holds **more than one mutually dependent slice**.
+    ///
+    /// This is a member-count test, and it is all the member list can support: a
+    /// slice that depends on itself is a strongly connected component of size
+    /// one, exactly like an independent slice, so the two are indistinguishable
+    /// here. A self-dependency is a genuine cycle — it has to be reasoned as a
+    /// fixpoint just as a two-slice cycle does — and this method does not see
+    /// it. Use [`is_cycle_in`](Self::is_cycle_in), which reads the edges the
+    /// unit was built from, when self-dependency matters.
     pub fn is_cycle(&self) -> bool {
         self.members.len() > 1
+    }
+
+    /// Whether this link unit is a cycle **including self-dependency**, judged
+    /// against the dependency edges it was built from.
+    ///
+    /// More than one member is always a cycle. A single member is a cycle when
+    /// it declares a build edge to itself. That fact lives in the edges rather
+    /// than in [`members`](Self::members), because a self-looping slice and an
+    /// independent one produce the same size-one component — which is why this
+    /// method takes `edges` and [`is_cycle`](Self::is_cycle) cannot.
+    ///
+    /// Pass the same slice you passed to [`link_units`]; edges belonging to
+    /// other slices are ignored.
+    pub fn is_cycle_in(&self, edges: &[DependencyEdge]) -> bool {
+        self.members.len() > 1
+            || edges.iter().any(|edge| {
+                edge.from_slice == edge.to_slice
+                    && is_build_edge(edge)
+                    && self.contains(&edge.from_slice)
+            })
     }
 
     /// Whether the given slice IRI is a member of this link unit (attribution at
@@ -210,29 +238,32 @@ fn is_build_edge(edge: &DependencyEdge) -> bool {
     edge.edge_kind.is_semantic() && edge.reconciliation != ReconciliationStatus::Stale
 }
 
-/// Build a directed dependency graph projected from S4 edges, over the slice
+/// Build the directed dependency graph projected from S4 edges, over the slice
 /// IRIs of a catalog: a `from → to` edge means *from depends on to*. Every slice
 /// in the catalog is a node, even with no edges (singletons must still appear as
-/// their own link unit / product seed).
-fn build_unit_graph(catalog: &SliceCatalog, edges: &[DependencyEdge]) -> DiGraph<SliceIri, ()> {
-    let mut graph = DiGraph::new();
-    let mut index: BTreeMap<SliceIri, NodeIndex> = BTreeMap::new();
-
-    // Sort slice IRIs for deterministic node insertion order.
-    let mut slices: Vec<SliceIri> = catalog
+/// their own link unit / product seed). Returns the sorted node list and an
+/// index-based adjacency list over it.
+fn build_unit_graph(
+    catalog: &SliceCatalog,
+    edges: &[DependencyEdge],
+) -> (Vec<SliceIri>, Vec<Vec<usize>>) {
+    // Sort slice IRIs for deterministic node numbering.
+    let mut nodes: Vec<SliceIri> = catalog
         .records()
         .iter()
         .map(|r| r.manifest.slice_iri.clone())
         .collect();
-    slices.sort();
-    slices.dedup();
-    for slice in &slices {
-        let idx = graph.add_node(slice.clone());
-        index.insert(slice.clone(), idx);
-    }
+    nodes.sort();
+    nodes.dedup();
+    let index: BTreeMap<&SliceIri, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(position, slice)| (slice, position))
+        .collect();
 
     // Add build-relevant edges (semantic, non-stale). Deduplicate so multiple
     // evidence rows for one (from,to) do not multiply edges.
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
     let mut seen: BTreeSet<(SliceIri, SliceIri)> = BTreeSet::new();
     for edge in edges {
         if !is_build_edge(edge) {
@@ -248,23 +279,24 @@ fn build_unit_graph(catalog: &SliceCatalog, edges: &[DependencyEdge]) -> DiGraph
             // catalog node set is authoritative.
             continue;
         };
-        graph.add_edge(from, to, ());
+        adjacency[from].push(to);
     }
 
-    graph
+    (nodes, adjacency)
 }
 
 /// Compute the **link units** (SCCs) of a catalog under its S4 dependency edges
 /// (RFC §8). Mutually dependent slices collapse to one [`LinkUnit`]; singletons
 /// remain individually nameable. The result is deterministic: members are
 /// sorted within each unit, and units are sorted by their smallest member.
+/// [`tarjan_scc`] guarantees neither order itself, so both are imposed here.
 pub fn link_units(catalog: &SliceCatalog, edges: &[DependencyEdge]) -> Vec<LinkUnit> {
-    let graph = build_unit_graph(catalog, edges);
-    let mut units: Vec<LinkUnit> = petgraph::algo::tarjan_scc(&graph)
+    let (nodes, adjacency) = build_unit_graph(catalog, edges);
+    let mut units: Vec<LinkUnit> = tarjan_scc(&adjacency)
         .into_iter()
         .map(|component| {
             let mut members: Vec<SliceIri> =
-                component.into_iter().map(|n| graph[n].clone()).collect();
+                component.into_iter().map(|n| nodes[n].clone()).collect();
             members.sort();
             LinkUnit { members }
         })
@@ -405,7 +437,8 @@ fn slice_phase_leaf(
         hasher.update(b"\x1e");
     }
 
-    Ok(hex(hasher.finalize().as_slice()))
+    let digest = hasher.finalize();
+    Ok(format!("{digest:x}"))
 }
 
 // ── Merkle cache key ────────────────────────────────────────────────────────
@@ -470,7 +503,8 @@ fn merkle_root(
         hasher.update(leaf.as_bytes());
         hasher.update(b"\x1e");
     }
-    Ok(hex(hasher.finalize().as_slice()))
+    let digest = hasher.finalize();
+    Ok(format!("{digest:x}"))
 }
 
 /// Compute the cache key for a **source unit** (one slice) at `phase`.
@@ -531,17 +565,6 @@ pub fn product_unit_key(
         members: unit.closure.clone(),
         root,
     })
-}
-
-// ── Hex helper ──────────────────────────────────────────────────────────────
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
 }
 
 #[cfg(test)]

@@ -31,6 +31,7 @@ use super::text_parse::LineParseMode;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
+use purrdf_iri::langtag;
 use purrdf_iri::terminals::is_ws;
 
 /// The HexTuples codec: a standalone (non-line-family) [`RdfCodec`] over the
@@ -163,7 +164,7 @@ fn parse_hextuples_line(
         <[String; 6]>::try_from(fields).map_err(|_| parse_err("internal: field count mismatch"))?;
     let subject = node_term(&subject, base)?;
     validate_iri(&predicate, base)?;
-    let object = object_term(&value, &datatype, &language, base)?;
+    let object = object_term(&value, &datatype, &language, base, lineno)?;
     let graph = if graph.is_empty() {
         None
     } else {
@@ -222,12 +223,50 @@ fn node_term(value: &str, base: &purrdf_iri::BaseScope) -> Result<HexTerm, RdfDi
     }
 }
 
+/// The HexTuples language-field contract: the concrete syntaxes' `LANGTAG`
+/// terminal under the RFC 5646 §2.1 eight-character subtag ceiling, decided by
+/// [`purrdf_iri::langtag`].
+///
+/// There was NO contract here before. Field 5 was moved into the literal
+/// unexamined whenever field 4 was `rdf:langString`, so this reader admitted
+/// `1`, `9-9`, `123-456`, `en-`, `-` and `!!!` — and `en us`, whose embedded
+/// space is not expressible in `LANGTAG` at all, which converted to N-Quads with
+/// exit 0 and produced a line no parser can read back.
+///
+/// The profile is [`langtag::Profile::ConcreteSyntaxLangtagBounded`], the one
+/// acceptance language every codec in this crate names — `text_parse`'s two
+/// parsers, `rdfxml`, `jsonld`'s expander and the term projection in
+/// `projections::term` all name the same one. It has to be shared: HexTuples
+/// writes whatever `@lang` a dataset carries into field 5 verbatim and every
+/// other serializer does the same into its own surface, so a tag one reader
+/// takes is a tag the others are handed.
+///
+/// The failure reports the module's
+/// [`langtag::LanguageTagError::diagnostic_code`], so the user learns which
+/// production refused, and keeps the `line {lineno}:` prefix this codec's other
+/// per-line diagnostics carry — HexTuples is NDJSON, so the line number is the
+/// whole of the position information it has (there is no column: the parser is
+/// `serde_json` over a whole line and records no intra-line span).
+fn validate_language_tag(language: &str, lineno: usize) -> Result<(), RdfDiagnostic> {
+    match langtag::parse_with(language, langtag::Profile::ConcreteSyntaxLangtagBounded) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(RdfDiagnostic::error(
+            error.diagnostic_code(),
+            format!("HexTuples: line {lineno}: invalid language tag {language:?}: {error}"),
+        )),
+    }
+}
+
 /// The object term, keyed by the `datatype` sentinel / IRI and the language field.
+///
+/// `lineno` is carried for the language-tag DIAGNOSTIC only — see
+/// [`validate_language_tag`].
 fn object_term(
     value: &str,
     datatype: &str,
     language: &str,
     base: &purrdf_iri::BaseScope,
+    lineno: usize,
 ) -> Result<HexTerm, RdfDiagnostic> {
     match datatype {
         GLOBAL_ID => {
@@ -239,12 +278,19 @@ fn object_term(
             validate_blank_label(label)?;
             Ok(HexTerm::Blank(label.to_owned()))
         }
-        RDF_LANG_STRING if !language.is_empty() => Ok(HexTerm::Literal(RdfLiteral {
-            lexical_form: value.to_owned(),
-            datatype: None,
-            language: Some(language.to_owned()),
-            direction: None,
-        })),
+        // The empty-language guard stays where it was: an empty field 5 means "no
+        // language", not "a language that is the empty string", and falls through to
+        // the datatype arm exactly as before. Validating it would refuse documents
+        // that carry no language tag at all.
+        RDF_LANG_STRING if !language.is_empty() => {
+            validate_language_tag(language, lineno)?;
+            Ok(HexTerm::Literal(RdfLiteral {
+                lexical_form: value.to_owned(),
+                datatype: None,
+                language: Some(language.to_owned()),
+                direction: None,
+            }))
+        }
         "" | XSD_STRING => Ok(HexTerm::Literal(RdfLiteral::simple(value.to_owned()))),
         datatype => {
             validate_iri(datatype, base)?;

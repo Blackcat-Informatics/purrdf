@@ -43,10 +43,7 @@
 //! both spellings accept, with no diagnostic. See the [`terminals`] module
 //! documentation for the worked counterexample.
 
-use std::sync::OnceLock;
-
-use purrdf_iri::terminals;
-use regex::Regex;
+use purrdf_iri::{langtag, terminals};
 
 use crate::error::{Result, ShexError};
 
@@ -237,11 +234,24 @@ pub(crate) fn decode_uchar(
     Ok((decoded, 2 + width))
 }
 
-/// `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*` (body, without the `@`).
-fn langtag_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new("^[a-zA-Z]+(-[a-zA-Z0-9]+)*$").unwrap_or_else(|_| unreachable!()))
-}
+/// The acceptance language a `LANGTAG` body (the text after the `@`) is decided
+/// against.
+///
+/// [`langtag::Profile::ConcreteSyntaxLangtagBounded`] — the profile every native
+/// RDF codec, the projection term builder, the SPARQL parser and the shape-map
+/// parser name. A ShExC schema is a concrete syntax whose `LANGTAG` terminal is
+/// spelled exactly as Turtle's, and its literals are matched against literals
+/// that a codec parsed, so the two must agree: a tag the schema takes and the
+/// codec refuses describes a node that cannot exist in any dataset, and the
+/// reverse makes a parseable literal unmatchable.
+///
+/// The private regex this replaced was the bare terminal with no length bound at
+/// all, so `@cantbethislong` — which the N-Triples negative-syntax corpus
+/// requires to be refused — lexed here. The ceiling is what closes that gap,
+/// and it stops at the `x` private-use marker, so the `@x-gmeow-…` and
+/// `@x-purrdf-…` families that downstream projects publish in volume are still
+/// taken.
+const LANGTAG_PROFILE: langtag::Profile = langtag::Profile::ConcreteSyntaxLangtagBounded;
 
 struct Lexer<'a> {
     src: &'a str,
@@ -552,9 +562,12 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
             return Ok(Token::At);
         }
-        if !langtag_re().is_match(&body) {
+        if let Err(error) = langtag::parse_with(&body, LANGTAG_PROFILE) {
             return Err(ShexError::lex(
-                format!("malformed language tag @{body}"),
+                format!(
+                    "malformed language tag @{body}: {error} [{code}]",
+                    code = error.diagnostic_code()
+                ),
                 start,
             ));
         }
@@ -1086,5 +1099,91 @@ mod tests {
             toks("ex:%41B"),
             vec![Token::PName("ex".into(), "%41B".into())]
         );
+    }
+
+    // ── `LANGTAG` is decided by the workspace's owner, not by this lexer ──────────
+
+    /// The refusal side: a tag this lexer used to take and every RDF codec in
+    /// the workspace refuses.
+    ///
+    /// The private regex here was the bare `LANGTAG` terminal with no length
+    /// bound, so `@cantbethislong` — a bare fourteen-character subtag the
+    /// N-Triples negative-syntax corpus requires to be refused — lexed as a
+    /// `Token::LangTag`. A ShExC value set could therefore name a literal that
+    /// no RDF document could hold, which is a shape that can never match.
+    ///
+    /// The refusal keeps its `ShexError::Lex` type and its byte offset; what is
+    /// new is that the reason names the production that bit.
+    #[test]
+    fn a_subtag_over_the_length_ceiling_is_no_longer_lexed_as_a_langtag() {
+        let error = tokenize("\"x\"@cantbethislong")
+            .expect_err("a bare fourteen-character subtag is over the §2.1 ceiling");
+        assert!(
+            matches!(error, ShexError::Lex { .. }),
+            "the error type and its offset are unchanged: {error:?}"
+        );
+        let message = error.to_string();
+        for expected in [
+            "malformed language tag @cantbethislong",
+            "langtag-subtag-length-over-eight",
+        ] {
+            assert!(
+                message.contains(expected),
+                "the typed reason must reach the user, missing {expected:?}: {message}"
+            );
+        }
+    }
+
+    /// The acceptance side, which is the half that catches an over-refusal.
+    ///
+    /// Row one is the neighbour one character inside the ceiling, row two is the
+    /// same over-long subtag moved behind the `x` marker where the ceiling does
+    /// not apply, and the rest are the tags this workspace's fixtures, the
+    /// vendored shexTest vectors (`@en-fr-jura`, `@fr-be-fbcl`, neither of which
+    /// has an RFC 5646 reading) and downstream projects publish.
+    #[test]
+    fn every_tag_the_workspace_writes_still_lexes_as_a_langtag() {
+        for tag in [
+            "abcdefgh",
+            "en-x-cantbethislong",
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "i-enochian",
+            "de-CH-x-phonebk",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "x-purrdf-english",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "x-gmeow-norwegiannynorsk",
+        ] {
+            assert_eq!(
+                toks(&format!("\"x\"@{tag}")),
+                vec![Token::StringLit("x".into()), Token::LangTag(tag.into())],
+                "`@{tag}` is written by this workspace and must still lex"
+            );
+        }
+    }
+
+    /// The terminal's own refusals, unchanged in verdict and now carrying the
+    /// owner's stable code. `@1` is the one that used to be invisible: the
+    /// regex refused it with the same sentence it used for every other failure.
+    #[test]
+    fn the_langtag_terminals_own_refusals_still_bite_in_the_lexer() {
+        for (tag, code) in [
+            ("1", "langtag-terminal-primary-not-alpha"),
+            ("9-9", "langtag-terminal-primary-not-alpha"),
+            ("en-", "langtag-subtag-length-zero"),
+            ("en--US", "langtag-subtag-length-zero"),
+        ] {
+            let error = tokenize(&format!("\"x\"@{tag}"))
+                .expect_err("the `LANGTAG` terminal does not admit this")
+                .to_string();
+            assert!(
+                error.contains(code),
+                "`@{tag}` must refuse under {code}, got {error}"
+            );
+        }
     }
 }

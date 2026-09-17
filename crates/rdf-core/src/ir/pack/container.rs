@@ -331,8 +331,8 @@ impl std::fmt::Display for PackError {
                 write!(
                     f,
                     "pack-container: canonical-identity digest mismatch: header claims {}, recomputed {}",
-                    hex32(expected),
-                    hex32(computed)
+                    crate::hex::lower(expected),
+                    crate::hex::lower(computed)
                 )
             }
             Self::ViewNotReady { checkpoint, cause } => write!(
@@ -441,19 +441,6 @@ fn read_digest(bytes: &[u8], pos: &mut usize) -> [u8; 32] {
     digest.copy_from_slice(&bytes[*pos..*pos + 32]);
     *pos += 32;
     digest
-}
-
-/// Lowercase-hex a 32-byte digest, for [`PackError::RdfcDigestMismatch`]'s
-/// `Display`. A tiny local helper rather than a crate-wide hex utility: the
-/// only other digest-hex renderer ([`super::certify::PackDigest::to_hex`])
-/// lives one layer up and this module has no reason to depend on it.
-fn hex32(digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(64);
-    for b in digest {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
 }
 
 // ---------------------------------------------------------------------------
