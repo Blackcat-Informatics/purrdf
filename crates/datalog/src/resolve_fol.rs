@@ -1531,7 +1531,7 @@ pub fn check_fol_proof(
 /// The **content key** of a proof node: the canonical content key ([`canon`]) of
 /// the ground atom it concludes — the stable "term identity" of what was proved.
 ///
-/// A caller that reads the issue's derivation recipe as a fold over premise TERM
+/// A caller that reads the published recipe as a fold over premise TERM
 /// keys builds `sha1(rule_identity ++ "\n" ++ sorted(child content keys))` from
 /// this and [`FolProof::rule_identity`]. [`derivation_id`] instead folds over
 /// child DERIVATION ids (a Merkle recursion); both readings are exposed and
@@ -1597,7 +1597,7 @@ pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
     hex_lower(&hasher.finalize())
 }
 
-/// The **flat** derivation identity — the issue's literal recipe, folding a node's
+/// The **flat** derivation identity — the published flat recipe, folding a node's
 /// rule identity over its PREMISES' term content keys ONE level, rather than
 /// recursively over their derivation ids ([`derivation_id`]).
 ///
@@ -1605,7 +1605,7 @@ pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
 /// each premise's content key is [`content_key`] (the [`canon`] of the atom it
 /// proves), stable-sorted as a MULTISET (duplicates kept). This coincides with
 /// [`derivation_id`] on a single-level proof and diverges on a deeper one: the two
-/// are the two readings of the issue's `sorted(premise_content_keys)` (term keys
+/// are the two readings of `sorted(premise_content_keys)` (term keys
 /// here; child derivation ids in [`derivation_id`]), both published so a consumer
 /// keys on whichever its own lane uses.
 #[must_use]
@@ -2654,7 +2654,7 @@ mod tests {
         // accidental change to the recipe's byte layout is caught, not silently absorbed.
         assert_eq!(id_a, "53555bbd09ce3202c40ed2048f97fde7eadd31b2");
 
-        // The issue's literal formula is the public `flat_derivation_id`
+        // The published flat formula is the public `flat_derivation_id`
         // (`sha1(rule_identity ++ "\n" ++ sorted(premise content keys))`), and it
         // reproduces byte-for-byte across the two independent resolutions too.
         assert_eq!(

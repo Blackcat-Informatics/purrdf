@@ -3,12 +3,10 @@
 
 //! The build-cost harness: how long one deterministic HNSW build takes, at scale.
 //!
-//! This target exists to replace an unmeasured number with a measured one. The issue that
-//! offered this crate cited its own prototype at "~32 minutes at 10^6 rows" at 4,096
-//! dimensions; this crate requires its own measured figure instead, and the plan forbids
-//! quoting the prototype's as if it were ours. So the harness builds the index through the
-//! **shipped build path** — [`HnswIndex::build`], not a private shortcut — at 5,000,
-//! 50,000, 200,000 and 1,000,000 rows, times each once, and prints the table.
+//! This target exists to disclose the shipped build path's wall-clock cost at scale, rather
+//! than leave it unmeasured. It builds the index through the **shipped build path** —
+//! [`HnswIndex::build`], not a private shortcut — at 5,000, 50,000, 200,000 and 1,000,000
+//! rows, times each once, and prints the table.
 //!
 //! It is **report-only**. Nothing here asserts a timing, no gate invokes it, and a slow
 //! sample on a shared host is not a failure. The number's job is disclosure, not
@@ -17,18 +15,17 @@
 //! # Why one-shot rather than criterion
 //!
 //! Criterion's method is to repeat a closure until the sampling distribution settles.
-//! That is exactly wrong for this quantity: a 10^6-row build at 4,096 dimensions is tens
-//! of minutes, so ten samples would be hours per point and would measure the host's thermal
-//! state rather than the code. A harness that times one build per scale is the honest
-//! instrument here, and the reason `[[bench]] harness = false` is deliberate.
+//! That is exactly wrong for a build whose cost grows with row count and dimension: ten
+//! samples at the largest scale would multiply an already-long build by ten and measure
+//! the host's thermal state rather than the code. A harness that times one build per scale
+//! is the honest instrument here, and the reason `[[bench]] harness = false` is deliberate.
 //!
 //! # The 10^6-row point
 //!
-//! At 4,096 dimensions a million rows is ~32.8 GiB of `f64` — the vectors alone — and the
-//! measured build cost scales superlinearly (50,000 rows took ~6 minutes on the host this
-//! was first run on; the digest corpus at 5,000 took ~10 seconds). The 10^6-row point is
-//! therefore the one scale the task calls out as "not a CI gate": it runs **on demand**,
-//! via `PURRDF_HNSW_BENCH_1M=1`, and a host that cannot afford the memory or the hours
+//! Build cost is expected to grow superlinearly with row count: each insertion's search
+//! visits more of an already-larger graph, so the per-row cost rises as the corpus does.
+//! The 10^6-row point is therefore not part of the default run: it executes **on demand**,
+//! via `PURRDF_HNSW_BENCH_1M=1`, and a host that cannot afford the memory or the time
 //! omits it. The default set is 5,000 / 50,000 / 200,000.
 //!
 //! ```text
@@ -58,8 +55,7 @@ use purrdf_core::DistanceMetric;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 
-/// Every row in the harness indexes this many dimensions — the issue's own width, so the
-/// measured figure is directly comparable to the "~32 minutes at 10^6 rows" prototype.
+/// Every row in the harness indexes this many dimensions, the width this index targets.
 const DIMS: usize = 4_096;
 
 /// The admission scales, in ascending order. The default run measures all but 10^6, which
@@ -117,9 +113,9 @@ const fn fnv1a_64(bytes: &[u8]) -> u64 {
 
 /// Whether the 10^6-row scale is admitted on this host.
 ///
-/// Off by default, because at this implementation's measured scaling it is hours and
-/// ~33 GiB. `PURRDF_HNSW_BENCH_1M=1` enables it on a host that can afford both; the task
-/// calls this the one scale that is not a CI gate.
+/// Off by default, because both build cost and memory grow with row count.
+/// `PURRDF_HNSW_BENCH_1M=1` enables it on a host that can afford both; it is the one scale
+/// excluded from the default run and from every gate.
 fn includes_one_million() -> bool {
     std::env::var("PURRDF_HNSW_BENCH_1M").is_ok_and(|value| value == "1")
 }

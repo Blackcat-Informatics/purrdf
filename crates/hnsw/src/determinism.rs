@@ -23,17 +23,17 @@
 //!
 //! The corpus is generated from a seeded splitmix64 integer stream rather than committed
 //! as a multi-hundred-megabyte binary: 5,000 rows at 4,096 dimensions. This is the
-//! fixture the issue measured its own prototype on, and the one the cross-target gate in
-//! `scripts/check-hnsw-determinism.sh` runs under `wasm32-unknown-unknown`.
+//! fixture the cross-target gate in `scripts/check-hnsw-determinism.sh` runs under
+//! `wasm32-unknown-unknown`.
 //!
 //! # The goldens
 //!
 //! [`digest`] is pinned natively by `crates/hnsw/tests/determinism.rs` against
 //! `GOLDEN_DIGEST`, and the shell gate reads that constant out of the test source so
-//! there is exactly one copy in the tree. The issue-author's prototype digests are cited
-//! as prior evidence for the *property* (the round build differs from a serial insert);
-//! they are not reproducible targets, because this crate's batch schedule and level
-//! formula are specified here for the first time.
+//! there is exactly one copy in the tree. The pinned digest is this crate's own evidence
+//! for the *property* that the round build differs from a serial insert (see
+//! [`digest_serial`]); this crate's batch schedule and level formula are specified here
+//! for the first time, so there is no external target to reproduce.
 
 use purrdf_sparql_eval::knn::Kernel;
 

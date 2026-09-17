@@ -65,14 +65,14 @@ means:
 ## Build cost
 
 Building at 4,096 dimensions is expensive and is disclosed rather than tuned
-away. `cargo bench -p purrdf-hnsw --bench build` measures the shipped build path
+away. `cargo bench -p purrdf-hnsw --bench build` times the shipped build path
 at 5,000, 50,000 and 200,000 rows, with 1,000,000 rows behind
-`PURRDF_HNSW_BENCH_1M=1`. On the host the harness was first run on, 5,000 rows
-took about 10 seconds and 50,000 rows about 6 minutes; the scaling is
-superlinear, and a million rows is a tens-of-minutes, ~33 GiB operation. The
-issue that offered this crate cited its own prototype at "~32 minutes at 10^6
-rows"; that figure is prototype evidence only and is not this implementation's
-measurement.
+`PURRDF_HNSW_BENCH_1M=1`; every number it prints is a wall-clock sample from
+whatever host runs it, reported for disclosure and never as an acceptance
+threshold. The cost that is deterministic and hardware-independent is distance
+evaluations: `CacheState::evaluations` (`crates/hnsw/src/search.rs`) counts
+every one a search performs, and `cargo bench -p purrdf-hnsw --bench recall`
+reports the mean and maximum rows visited per query at each `ef_search`.
 
 ## Usage
 
@@ -87,8 +87,7 @@ let nearest = index.search_rows(0, 2)?; // row 0's two nearest neighbours
 ```
 
 The crate depends on `purrdf-core`, `purrdf-sparql-eval`, `purrdf-xsd` and
-`rayon`. Nothing depends on it: it is a standalone sibling like `purrdf-text`
-and `purrdf-geo`, **not** re-exported from the `purrdf` facade.
+`rayon`.
 
 ## PURREMB integration
 

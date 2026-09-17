@@ -15,8 +15,7 @@ crate does and does not make.
 It is a **sibling crate**, not a kernel change. `purrdf-core` and
 `purrdf-sparql-eval` do not name this crate; the dependency arrow is
 one-directional, `purrdf-hnsw → {purrdf-core, purrdf-sparql-eval, purrdf-xsd,
-rayon}`, and the crate is not re-exported from the `purrdf` facade. The exact
-kNN path remains the oracle and is not modified.
+rayon}`. The exact kNN path remains the oracle and is not modified.
 
 All example IRIs use `example.org`. PurRDF mints no vocabulary; every predicate
 a query calls this crate by is caller-supplied configuration.
@@ -301,11 +300,14 @@ a rejected payload, budget exhaustion mid-traversal, and an empty index.
 
 These are decisions, not omissions:
 
-* **No SELECT-NEIGHBORS heuristic.** The issue's own measurements show roughly
-  3x build cost for no recall gain on the target corpus family, so it is not
-  shipped — no dead code and no retention test.
-* **No predicate-filtered traversal.** No consumer exists in this issue, and a
-  filter parameter would design against an absent caller; filter pushdown needs
+* **No `extendCandidates` heuristic extension.** Malkov & Yashunin's optional
+  candidate-list extension (walking neighbours-of-neighbours before pruning)
+  raises build cost for uncertain recall gain on the target corpus family, so
+  it is not shipped — no dead code and no retention test. Neighbour selection
+  itself is the plain relative-neighbourhood condition
+  (`crates/hnsw/src/select.rs`).
+* **No predicate-filtered traversal.** No consumer exists yet, and a filter
+  parameter would design against an absent caller; filter pushdown needs
   algebra/evaluator work outside this crate.
 * **No prefix-dimension routing or exact rerank.** That would change the
   distance law, and the profile binds `IndexCoordinates.prefix_dimension` to the

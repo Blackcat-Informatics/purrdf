@@ -304,7 +304,7 @@ fn gts_ingest(c: &mut Criterion) {
     let limits = ViewLimits::default();
     let shapes = ingest_shapes();
 
-    // NON-VACUITY: the issue shape really is the largish, trap-bearing base its
+    // NON-VACUITY: the shape named "issue" really is the largish, trap-bearing base its
     // name claims, and the two surfaces really are measuring one ingestion — the
     // emitted container bytes are equal, blank wire values included.
     let issue = &shapes[0];

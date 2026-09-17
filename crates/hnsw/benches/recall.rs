@@ -22,7 +22,7 @@
 //! `ef_search` — the parameter is not a query-time override. So the harness builds one
 //! index per `ef`, prints each on its own row, and never divides one row's numbers by
 //! another's. A ratio across rows would be a comparison between two different indexes
-//! wearing the same corpus, which is exactly the misreading the task calls out.
+//! wearing the same corpus, which is exactly the misreading this rule avoids.
 //!
 //! # The oracle is the exact path, not a second implementation
 //!
@@ -53,7 +53,7 @@ use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
 /// The one kernel both paths rank by.
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
 
-/// The corpus: rows and dimensions, the width being the issue's own.
+/// The corpus: rows and dimensions, the width this index targets.
 const ROWS: usize = 2_048;
 const DIMS: usize = 4_096;
 
