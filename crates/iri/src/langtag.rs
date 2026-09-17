@@ -285,13 +285,13 @@ pub enum Profile {
     /// // What it widens: a private-use subtag past the eight-character bound,
     /// // in both the whole-tag and the trailing-section position.
     /// assert_eq!(
-    ///     parse("x-purrdf-norwegiannynorsk"),
+    ///     parse("x-gmeow-norwegiannynorsk"),
     ///     Err(LanguageTagError::SubtagLengthOverEight)
     /// );
-    /// let relaxed = parse_with("x-purrdf-norwegiannynorsk", Profile::Rfc5646PrivateUseRelaxed)?;
+    /// let relaxed = parse_with("x-gmeow-norwegiannynorsk", Profile::Rfc5646PrivateUseRelaxed)?;
     /// assert_eq!(
     ///     relaxed.private_use_subtags().collect::<Vec<_>>(),
-    ///     ["purrdf", "norwegiannynorsk"]
+    ///     ["gmeow", "norwegiannynorsk"]
     /// );
     ///
     /// // What it does NOT widen: an over-long subtag before the marker is not
@@ -1041,10 +1041,10 @@ impl<'a> LanguageTag<'a> {
     /// // A subtag past the §2.1 eight-character bound needs the profile that
     /// // admits it, and then reads back whole.
     /// assert_eq!(
-    ///     parse_with("x-purrdf-norwegiannynorsk", Profile::Rfc5646PrivateUseRelaxed)?
+    ///     parse_with("x-gmeow-norwegiannynorsk", Profile::Rfc5646PrivateUseRelaxed)?
     ///         .private_use_subtags()
     ///         .collect::<Vec<_>>(),
-    ///     ["purrdf", "norwegiannynorsk"]
+    ///     ["gmeow", "norwegiannynorsk"]
     /// );
     ///
     /// // No private-use section yields nothing, not an empty subtag.
