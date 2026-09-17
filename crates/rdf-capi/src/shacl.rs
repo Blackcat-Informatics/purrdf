@@ -17,6 +17,12 @@
 //! product's stage id, profile and complete input binding are checked before any of
 //! it reaches a validator.
 //!
+//! `purrdf_shapes_product_rebuild` is the forward-compatibility path: a product
+//! whose stage id this build does not know refuses `purrdf_shapes_product_admit`
+//! with the dimension `stage-id`, and rebuilding re-derives the preparation from
+//! the shapes dataset the product carries instead — no RDF text is parsed and no
+//! file is read.
+//!
 //! **A refusal is not flattened to a string here.** The codec refuses on a closed set
 //! of named dimensions, and collapsing them would put "these bytes are corrupt", "this
 //! product is from another build" and "your configuration differs from the one it was
@@ -429,6 +435,152 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit_expecting(
     }
 }
 
+/// Rebuild a prepared product and validate a data graph with it. Native-testable,
+/// pointer-free core.
+fn rebuild_product_bytes(product: &[u8], data_nt: &str) -> Result<Vec<u8>, ShapesProductRefusal> {
+    purrdf_validate::validate_with_rebuilt_shapes_product(
+        product,
+        data_nt,
+        &SarifOptions::default(),
+    )
+    .map(String::into_bytes)
+}
+
+/// REBUILD a prepared product — re-deriving its preparation from the shapes
+/// dataset it carries, ignoring its memo — validate `data_nt` (N-Triples) with it,
+/// and write the SARIF 2.1.0 report bytes to `*out_buffer` (free with
+/// `purrdf_buffer_free`).
+///
+/// The forward-compatibility path: a product whose stage id this build does not
+/// know refuses `purrdf_shapes_product_admit` with the dimension `stage-id`, and
+/// this is the remedy it names. No RDF text is parsed and no file other than the
+/// product itself is read — the shapes dataset travels inside the product under
+/// the envelope's own digests, and this re-derives the shapes graph from it.
+///
+/// Also correct, and does the identical work, over a CURRENT product whose stage
+/// id this build already knows: rebuilding re-derives from the SAME carried
+/// dataset `purrdf_shapes_product_admit` restores a memo of, so the two reach the
+/// byte-identical report. This entry point is a second DOOR onto one product,
+/// never a second, divergent answer.
+///
+/// Admission runs against the EMPTY host bindings, for the same reason
+/// `purrdf_shapes_product_admit` does; see this module's documentation.
+///
+/// A malformed `data_nt` also returns `PURRDF_STATUS_SHAPES_PRODUCT_ERROR`, with a NULL
+/// dimension: the data graph is not a product, so no admission dimension names it.
+///
+/// # Safety
+/// `product` must be valid for reads of `product_len` bytes; `data_nt` must be a
+/// non-null, NUL-terminated C string; `out_buffer` must be a writable pointer;
+/// `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shapes_product_rebuild(
+    product: *const u8,
+    product_len: usize,
+    data_nt: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if data_nt.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_shapes_product_rebuild",
+                ));
+            }
+            let bytes = product_bytes(product, product_len, "purrdf_shapes_product_rebuild")?;
+            let data = cstr_to_str(data_nt)?;
+            let sarif =
+                rebuild_product_bytes(bytes, data).map_err(|refusal| product_error(&refusal))?;
+            *out_buffer = PurrdfBuffer::into_raw(sarif);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Rebuild a prepared product bound to an expected identity, and validate a data
+/// graph with it. Native-testable, pointer-free core.
+fn rebuild_product_bytes_expecting(
+    product: &[u8],
+    data_nt: &str,
+    expect_identity: &[u8; 32],
+) -> Result<Vec<u8>, ShapesProductRefusal> {
+    purrdf_validate::validate_with_rebuilt_shapes_product_expecting(
+        product,
+        data_nt,
+        expect_identity,
+        &SarifOptions::default(),
+    )
+    .map(String::into_bytes)
+}
+
+/// REBUILD a prepared product ONLY IF its input binding is `expect_identity` —
+/// re-deriving its preparation from the shapes dataset it carries, ignoring its
+/// memo — validate `data_nt` (N-Triples) with it, and write the SARIF 2.1.0
+/// report bytes to `*out_buffer` (free with `purrdf_buffer_free`).
+///
+/// The bound twin of `purrdf_shapes_product_rebuild`, for the same reason
+/// `purrdf_shapes_product_admit_expecting` exists beside
+/// `purrdf_shapes_product_admit`: the forward-compatibility rescue is not a
+/// reason to stop asking *is this the product I asked for?* — a cache entry from
+/// another build, or a product a deployment placed on disk under a stage id this
+/// build does not recognize, is still just a file that could be the wrong one.
+/// The 32-byte comparison runs FIRST, ahead of the re-derivation, exactly as it
+/// does on `purrdf_shapes_product_admit_expecting`, so a product that is not the
+/// one required is named as such rather than re-derived and validated against.
+///
+/// `expect_identity` carries the same meaning it does on
+/// `purrdf_shapes_product_admit_expecting` — the 64 hexadecimal digits
+/// `purrdf_shapes_product_open` renders on its `identity-digest` line, passed
+/// back unchanged.
+///
+/// Admission runs against the EMPTY host bindings, for the same reason
+/// `purrdf_shapes_product_admit` does; see this module's documentation.
+///
+/// A product carrying a different binding returns `PURRDF_STATUS_SHAPES_PRODUCT_ERROR`
+/// with the dimension `shapes-graph`. An `expect_identity` that is not 64
+/// hexadecimal digits returns `PURRDF_STATUS_INVALID_ARGUMENT` instead, and not
+/// as a product refusal: no product was ever opened, so there is nothing for an
+/// admission dimension to name.
+///
+/// # Safety
+/// `product` must be valid for reads of `product_len` bytes; `data_nt` and
+/// `expect_identity` must be non-null, NUL-terminated C strings; `out_buffer`
+/// must be a writable pointer; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shapes_product_rebuild_expecting(
+    product: *const u8,
+    product_len: usize,
+    data_nt: *const c_char,
+    expect_identity: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if data_nt.is_null() || expect_identity.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_shapes_product_rebuild_expecting",
+                ));
+            }
+            let bytes = product_bytes(
+                product,
+                product_len,
+                "purrdf_shapes_product_rebuild_expecting",
+            )?;
+            let data = cstr_to_str(data_nt)?;
+            let expected = purrdf_validate::parse_identity_digest(cstr_to_str(expect_identity)?)
+                .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
+            let sarif = rebuild_product_bytes_expecting(bytes, data, &expected)
+                .map_err(|refusal| product_error(&refusal))?;
+            *out_buffer = PurrdfBuffer::into_raw(sarif);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
 /// Corroborate a prepared product's carried dataset against its claimed identity.
 /// Native-testable, pointer-free core.
 fn certify_product_bytes(product: &[u8]) -> Result<(), ShapesProductRefusal> {
@@ -573,6 +725,11 @@ mod tests {
         let via_product = admit_product_bytes(&product, DATA).expect("validated via product");
         let via_document = validate_to_sarif_bytes(SHAPES, None, DATA).expect("validated directly");
         assert_eq!(via_product, via_document);
+
+        // Rebuilding a CURRENT product reaches the byte-identical verdict too: the
+        // forward-compatibility door must not be a second, divergent answer.
+        let via_rebuild = rebuild_product_bytes(&product, DATA).expect("rebuilt via product");
+        assert_eq!(via_rebuild, via_product);
     }
 
     #[test]
@@ -708,6 +865,122 @@ mod tests {
         let mut error: *mut PurrdfError = std::ptr::null_mut();
         unsafe {
             let status = purrdf_shapes_product_admit_expecting(
+                product.as_ptr(),
+                product.len(),
+                data.as_ptr(),
+                mistyped.as_ptr(),
+                &raw mut buffer,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::InvalidArgument as i32);
+            assert!(buffer.is_null(), "a refused call writes no buffer");
+            assert!(!error.is_null());
+            assert!(
+                purrdf_shapes_product_error_dimension(error).is_null(),
+                "no product was opened, so no admission dimension names this",
+            );
+            purrdf_error_free(error);
+        }
+    }
+
+    /// The rebuild path answers the same "is this the product I asked for?"
+    /// question `admit_expecting` does: a product whose binding is not the one
+    /// required is refused on `shapes-graph` even though its stage id is one this
+    /// build knows and the unbound `rebuild` would otherwise happily re-derive it.
+    #[test]
+    fn a_rebuilt_product_that_is_not_the_expected_one_is_refused() {
+        let held = encode_product_bytes(SHAPES, None).expect("product encoded");
+        let wanted = rendered_selector(&encode_product_bytes(OTHER_SHAPES, None).expect("encoded"));
+        assert_ne!(wanted, rendered_selector(&held));
+
+        let expected = purrdf_validate::parse_identity_digest(&wanted).expect("selector parses");
+        let refusal = rebuild_product_bytes_expecting(&held, DATA, &expected)
+            .expect_err("the product held is not the product required");
+        let error = Box::into_raw(Box::new(product_error(&refusal)));
+        unsafe {
+            let dimension = purrdf_shapes_product_error_dimension(error);
+            assert!(!dimension.is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(dimension).to_str().expect("utf8"),
+                "shapes-graph",
+            );
+            purrdf_error_free(error);
+        }
+
+        // The gap this closes: the unbound rebuild restores the very same bytes,
+        // because nothing in them states which product was meant.
+        rebuild_product_bytes(&held, DATA).expect("an unbound rebuild cannot ask which product");
+    }
+
+    /// The neighbouring VALID case: a product required to be ITSELF still
+    /// rebuilds, and reaches the byte-identical report the unbound rebuild and
+    /// the bound `admit_expecting` both reach.
+    #[test]
+    fn a_rebuilt_product_required_to_be_itself_validates_identically() {
+        let product = encode_product_bytes(SHAPES, None).expect("product encoded");
+        let own = purrdf_validate::parse_identity_digest(&rendered_selector(&product))
+            .expect("the rendering is accepted back");
+
+        let bound_rebuild = rebuild_product_bytes_expecting(&product, DATA, &own)
+            .expect("a product required to be itself rebuilds");
+        let unbound_rebuild =
+            rebuild_product_bytes(&product, DATA).expect("the unbound rebuild validates");
+        assert_eq!(
+            bound_rebuild, unbound_rebuild,
+            "stating which product you meant changes the door, not the answer",
+        );
+
+        let bound_admit = admit_product_bytes_expecting(&product, DATA, &own)
+            .expect("a product required to be itself admits");
+        assert_eq!(
+            bound_rebuild, bound_admit,
+            "choosing to re-derive rather than restore the memo must not change the answer",
+        );
+    }
+
+    /// The exported entry point, driven through pointers exactly as a C host
+    /// drives it: the satisfied expectation yields a SARIF buffer and
+    /// `PURRDF_STATUS_OK`, and a selector that is not a digest yields
+    /// `PURRDF_STATUS_INVALID_ARGUMENT` with NO dimension — no product was
+    /// opened, so nothing may be blamed on one.
+    #[test]
+    fn the_exported_rebuild_entry_point_binds_a_restore_through_pointers() {
+        use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+
+        let product = encode_product_bytes(SHAPES, None).expect("product encoded");
+        let own = std::ffi::CString::new(rendered_selector(&product)).expect("no interior NUL");
+        let data = std::ffi::CString::new(DATA).expect("no interior NUL");
+
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        unsafe {
+            let status = purrdf_shapes_product_rebuild_expecting(
+                product.as_ptr(),
+                product.len(),
+                data.as_ptr(),
+                own.as_ptr(),
+                &raw mut buffer,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            assert!(error.is_null());
+
+            let mut ptr: *const u8 = std::ptr::null();
+            let mut len: usize = 0;
+            assert_eq!(
+                purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
+                PurrdfStatus::Ok as i32
+            );
+            let sarif = std::str::from_utf8(std::slice::from_raw_parts(ptr, len)).expect("utf8");
+            assert!(sarif.contains("\"version\": \"2.1.0\""));
+            purrdf_buffer_free(buffer);
+        }
+
+        let mistyped = std::ffi::CString::new("not-a-digest").expect("no interior NUL");
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        unsafe {
+            let status = purrdf_shapes_product_rebuild_expecting(
                 product.as_ptr(),
                 product.len(),
                 data.as_ptr(),

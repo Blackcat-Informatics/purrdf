@@ -595,6 +595,39 @@ impl PyShapesProduct {
         Ok(PyPreparedShapes { inner })
     }
 
+    /// **The forward-compatibility path, bound to the product you MEANT.**
+    /// Re-derive the preparation exactly as `rebuild()` does, but only after
+    /// confirming the product's input binding is `expected_identity`.
+    ///
+    /// The rescue `rebuild()` performs is not a reason to stop asking whether
+    /// this is the artifact the caller wanted: a cache entry from another
+    /// build, or a product a deployment placed on disk under a stage id this
+    /// build does not recognize, is still just a file that could be the wrong
+    /// one. The same 32-byte comparison `admit_expecting()` runs FIRST also runs
+    /// first here, ahead of the re-derivation, for the identical reason.
+    ///
+    /// `expected_identity` carries the same meaning it does on
+    /// `admit_expecting()` — the 64 hexadecimal digits `identity_digest()`
+    /// returns for the product you intend.
+    ///
+    /// Raises `ShapesProductError` with `.dimension == "shapes-graph"` when the
+    /// product carries a different binding, and `ValueError` when
+    /// `expected_identity` is not 64 hexadecimal digits — no product was
+    /// inspected in that case, so no dimension names it.
+    fn rebuild_expecting(
+        &self,
+        py: Python<'_>,
+        expected_identity: &str,
+    ) -> PyResult<PyPreparedShapes> {
+        let expected = purrdf_validate::parse_identity_digest(expected_identity)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let bytes = &self.bytes;
+        let inner = py
+            .detach(|| purrdf_validate::rebuild_shapes_product_expecting(bytes, &expected))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
+        Ok(PyPreparedShapes { inner })
+    }
+
     /// **The cold path.** Independently corroborate the shapes dataset's canonical
     /// identity against the one this product's binding claims.
     ///

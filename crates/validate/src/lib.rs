@@ -71,7 +71,9 @@ pub use product::{
     ShapesProductRefusal, admit_shapes_product, admit_shapes_product_expecting,
     certify_shapes_product, explain_shapes_product, pack_shapes_product,
     pack_shapes_product_from_dataset, parse_identity_digest, prepared_to_product,
-    rebuild_shapes_product, validate_with_shapes_product, validate_with_shapes_product_expecting,
+    rebuild_shapes_product, rebuild_shapes_product_expecting, validate_with_rebuilt_shapes_product,
+    validate_with_rebuilt_shapes_product_expecting, validate_with_shapes_product,
+    validate_with_shapes_product_expecting,
 };
 pub use regime::{
     ABSENT_DL_PROOF, DL_PROOF_BANNER, DL_PROOF_CHECK_BANNER, DL_PROOF_GOLDEN_VECTORS,

@@ -1462,6 +1462,54 @@ export function shaclProductValidateToSarif(
 ): string;
 
 /**
+ * The forward-compatibility twin of `shaclProductValidateToSarif`: restore a
+ * prepared product by RE-DERIVING its preparation from the shapes dataset it
+ * carries, rather than admitting its memo, and validate an N-Triples data graph
+ * with it.
+ *
+ * `shaclProductValidateToSarif` refuses a product whose stage id this guest does
+ * not know with `dimension === "stage-id"`; this is the remedy it names. No RDF
+ * text is parsed and no file is read — the dataset travels inside the product
+ * under the envelope's own digests.
+ *
+ * Also correct, and does the identical work, over a CURRENT product whose stage
+ * id this guest already knows: rebuilding re-derives from the SAME carried
+ * dataset `shaclProductValidateToSarif` restores a memo of, so the two reach the
+ * byte-identical report. This is a second door onto one product, never a
+ * second, divergent answer.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductValidateToSarifRebuild(
+  product: Uint8Array,
+  dataNt: string,
+): string;
+
+/**
+ * `shaclProductValidateToSarifRebuild`, bound to the product you meant.
+ *
+ * The forward-compatibility rescue is not a reason to stop asking *is this the
+ * product the host meant?* — a product fetched over the network or read out of
+ * a cache under a stage id this guest does not recognize is still just bytes
+ * that could be the wrong ones. The 32-byte comparison runs FIRST, ahead of the
+ * re-derivation, exactly as it does on `shaclProductValidateToSarifExpecting`.
+ *
+ * `expectIdentity` carries the same meaning it does there — the 64 hexadecimal
+ * digits `shaclProductExplain` prints on its `identity-digest` line, passed
+ * back unchanged.
+ *
+ * Throws a `ShaclProductRefusal`: `dimension === "shapes-graph"` when the
+ * product carries a different binding, and `dimension === undefined` when
+ * `expectIdentity` is not 64 hexadecimal digits, because no product was
+ * inspected in that case.
+ */
+export function shaclProductValidateToSarifRebuildExpecting(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+): string;
+
+/**
  * `shaclProductValidateToSarif`, bound to the product you meant.
  *
  * Everything the unbound call checks is a question about the executing guest — its

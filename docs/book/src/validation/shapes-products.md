@@ -330,6 +330,19 @@ are two entry points at one boundary rather than a flag on one:
   shapes from the dataset the product carries, under the product's own recorded
   parse inputs.
 
+Every binding reaches both paths, not only Rust: the CLI's `validate
+--shapes-product --rebuild`, Python's `ShapesProduct.rebuild()`, the C ABI's
+`purrdf_shapes_product_rebuild`, and WebAssembly's
+`shaclProductValidateToSarifRebuild` are the identical two-entry-point seam
+described here, each restoring the SAME carried dataset `admit` would restore a
+memo of — so rebuilding a CURRENT product (one whose stage id this build does
+know) reaches the byte-identical report `admit` does, on every surface. `rebuild`
+composes with the "which product did you mean" expectation too: `--rebuild
+--expect-identity`, `rebuild_expecting`, and the identical Rust
+`ShapesProductView::rebuild_expecting` all check the expectation FIRST, exactly as
+`admit_expecting` does, so re-deriving from the dataset never bypasses the binding
+a caller required.
+
 **`rebuild` is not a Turtle fallback.** No RDF text is parsed and no file is
 read; the dataset travels inside the product under the envelope's digests. The
 alternative — carrying only the compiled model and telling callers to keep the
@@ -352,9 +365,13 @@ let prepared = if known {
 
 // Or state WHICH product you meant, and fail closed when it is not that one.
 // `wanted` is the digest `declared_identity().digest()` returns for the product
-// you intend — the same value `shacl explain` prints.
+// you intend — the same value `shacl explain` prints. `admit_expecting` and
+// `rebuild_expecting` check it FIRST, ahead of everything else either restore
+// seam checks, so the choice of repair strategy never bypasses the binding.
 let prepared = ShapesProduct::open(&product)?
     .admit_expecting(&ShapesProfile::CORE, &HostBindings::empty(), &wanted)?;
+let prepared = ShapesProduct::open(&product)?
+    .rebuild_expecting(&ShapesProfile::CORE, &HostBindings::empty(), &wanted)?;
 ```
 
 `ShapesProduct::open` runs the container's cheap integrity tier — magic, format
@@ -513,7 +530,7 @@ is printed; in Python the exception's `.dimension` is `None`; in JavaScript
 | `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE]` | parse, prepare, write the product | product written | the shapes did not parse, or the graph declares something a product cannot carry | bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
 | `purrdf shacl verify [IN]` | corroborate the carried dataset against the claimed identity | prints the identity digest | refused, with `shacl dimension <label>` on stderr | bad flags |
 | `purrdf shacl explain [IN]` | print what the product says it was compiled from | prints the `key value` rendering | the bytes are not a well-formed product | bad flags |
-| `purrdf validate --shapes-product FILE [--expect-identity HEX] [IN]` | restore and validate | validation ran | product refused | bad flags, a parse flag passed against a product, an `--expect-identity` that is not 64 hexadecimal digits, or `--expect-identity` without a product |
+| `purrdf validate --shapes-product FILE [--rebuild] [--expect-identity HEX] [IN]` | restore and validate — `--rebuild` re-derives from the carried dataset instead of admitting the memo | validation ran | product refused | bad flags, a parse flag passed against a product, `--rebuild` or `--expect-identity` without a product, or an `--expect-identity` that is not 64 hexadecimal digits |
 
 `IN` defaults to `-` (standard input) for `verify` and `explain`. For
 `validate`, `--shapes-product -` collides with the data graph's own default of
@@ -544,6 +561,10 @@ print(report.conforms)
 
 # …or say which product you meant, and fail closed when it is not that one.
 restored = view.admit_expecting("9f2c…64 lowercase hex…1b")
+
+# The same binding, over the rebuild seam: the expectation is checked FIRST,
+# ahead of the re-derivation, so choosing to rebuild never bypasses it.
+restored = view.rebuild_expecting("9f2c…64 lowercase hex…1b")
 ```
 
 `ShapesProduct.certify()` is the cold path; call it from a build step or a test.
@@ -556,6 +577,15 @@ it takes the 64 hexadecimal digits `identity_digest()` reports, and raises
 a different binding. A selector that is not a digest raises a plain `ValueError`
 instead — no product was opened, so nothing may be blamed on one.
 
+`rebuild()` re-derives from the SAME carried dataset `admit()` restores a memo
+of, so calling it on a CURRENT product (`stage_known() == True`) reaches the
+byte-identical report — it is a second door onto one product, never a second,
+divergent answer. `rebuild_expecting(expected_identity)` is its bound twin,
+taking the identical `expected_identity` `admit_expecting` does: the expectation
+is checked FIRST, ahead of the re-derivation, exactly as it is on
+`admit_expecting`, so a caller who reaches for the forward-compatibility rescue
+never loses the binding.
+
 ## From JavaScript / WebAssembly
 
 ```js
@@ -565,7 +595,9 @@ import {
   shaclProductExplain,
   shaclProductCertify,
   shaclProductValidateToSarif,
+  shaclProductValidateToSarifRebuild,
   shaclProductValidateToSarifExpecting,
+  shaclProductValidateToSarifRebuildExpecting,
 } from "@blackcatinformatics/purrdf";
 
 await ready(); // one-time async wasm instantiation
@@ -576,8 +608,22 @@ console.log(shaclProductExplain(product));
 try {
   const sarif = shaclProductValidateToSarif(product, dataNt);
 
+  // …or, for a stage id this guest does not know, re-derive from the carried
+  // dataset instead of admitting the memo — the remedy the `stage-id` refusal
+  // above would name.
+  const rebuilt = shaclProductValidateToSarifRebuild(product, dataNt);
+
   // …or say which product you meant, and fail closed when it is not that one.
   const bound = shaclProductValidateToSarifExpecting(product, dataNt, wantHex);
+
+  // …or both: rebuild AND fail closed when it is not the product you meant.
+  // The expectation is checked FIRST, ahead of the re-derivation, so the
+  // rescue never bypasses the binding.
+  const boundRebuilt = shaclProductValidateToSarifRebuildExpecting(
+    product,
+    dataNt,
+    wantHex,
+  );
 } catch (refusal) {
   console.error(refusal.dimension, refusal.message);
   refusal.free();
@@ -588,26 +634,50 @@ A wasm guest has no retrieval IRI to derive a base from, so the host supplies
 `shapesBase` explicitly; it is recorded in the product, and a restore resolves
 the same relative references without the document.
 
+`shaclProductValidateToSarifRebuild` re-derives from the SAME carried dataset
+`shaclProductValidateToSarif` restores a memo of, so calling it on a CURRENT
+product reaches the byte-identical report — it is a second door onto one
+product, never a second, divergent answer.
+`shaclProductValidateToSarifRebuildExpecting` is its bound twin, taking the
+identical `expectIdentity` `shaclProductValidateToSarifExpecting` does: the
+expectation is checked FIRST, ahead of the re-derivation, exactly as it is on
+`shaclProductValidateToSarifExpecting`, so a host that reaches for the
+forward-compatibility rescue never loses the binding.
+
 `shaclProductValidateToSarifExpecting` takes the 64 hexadecimal digits
 `shaclProductExplain` prints on its `identity-digest` line. A product carrying a
 different binding rejects with `dimension === "shapes-graph"`; a selector that is
 not a digest rejects with `dimension === undefined`, because no product was
-inspected.
+inspected. `shaclProductValidateToSarifRebuildExpecting` carries the identical
+selector and the identical refusal shape.
 
 ## From C
 
 The C ABI exposes `purrdf_shapes_product_encode`, `purrdf_shapes_product_open`,
-`purrdf_shapes_product_admit`, `purrdf_shapes_product_admit_expecting` and
-`purrdf_shapes_product_certify`, with
-`purrdf_shapes_product_error_dimension` returning the refusal's stable label (or
-`NULL` when the shapes document simply did not parse).
+`purrdf_shapes_product_admit`, `purrdf_shapes_product_admit_expecting`,
+`purrdf_shapes_product_rebuild`, `purrdf_shapes_product_rebuild_expecting` and
+`purrdf_shapes_product_certify`, with `purrdf_shapes_product_error_dimension`
+returning the refusal's stable label (or `NULL` when the shapes document simply
+did not parse).
+
+`purrdf_shapes_product_rebuild` is the forward-compatibility twin of
+`purrdf_shapes_product_admit`: it re-derives the preparation from the shapes
+dataset the product carries instead of admitting its memo, which is the remedy
+`purrdf_shapes_product_admit`'s `stage-id` refusal names.
+`purrdf_shapes_product_rebuild_expecting` is its bound twin, taking the
+identical `expect_identity` `purrdf_shapes_product_admit_expecting` does: the
+expectation is checked FIRST, ahead of the re-derivation, exactly as it is on
+`purrdf_shapes_product_admit_expecting`, so a C host that reaches for the
+forward-compatibility rescue never loses the binding.
 
 `purrdf_shapes_product_admit_expecting` is `purrdf_shapes_product_admit` bound to
 the product you meant: it takes the `identity-digest` value
 `purrdf_shapes_product_open` renders, as a NUL-terminated C string, and returns
 `PURRDF_STATUS_SHAPES_PRODUCT_ERROR` with the dimension `shapes-graph` when the
 product carries a different binding. A selector that is not 64 hexadecimal digits
-returns `PURRDF_STATUS_INVALID_ARGUMENT` and no dimension. See
+returns `PURRDF_STATUS_INVALID_ARGUMENT` and no dimension.
+`purrdf_shapes_product_rebuild_expecting` carries the identical selector and the
+identical refusal shape. See
 [`crates/rdf-capi/include/purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h)
 and [Getting Started: C](../getting-started/c.md).
 

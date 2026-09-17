@@ -836,6 +836,33 @@ pub(crate) enum Command {
         /// that silently did nothing.
         #[arg(long = "expect-identity", value_name = "HEX")]
         expect_identity: Option<String>,
+        /// Restore `--shapes-product` from its carried shapes DATASET, re-deriving the
+        /// preparation rather than admitting its memo — the forward-compatibility path
+        /// for a stage id this build does not recognize.
+        ///
+        /// Without this flag, `--shapes-product` refuses such a product on `shacl
+        /// dimension stage-id` and names this flag as the remedy on stderr. With it, no
+        /// RDF text is parsed and no file other than the product itself is read: the
+        /// shapes dataset travels inside the product under its own digests, and this
+        /// re-derives the shapes graph from it.
+        ///
+        /// Also accepted, and does the identical work, when the product's stage id IS
+        /// one this build knows — rebuilding a CURRENT product re-derives from the same
+        /// carried dataset admission would restore a memo of, so the two routes reach
+        /// the byte-identical report. This flag is a second DOOR onto one product, never
+        /// a second, divergent answer.
+        ///
+        /// Composes with `--expect-identity`: the two ask different questions — which
+        /// restore strategy to use, and which artifact was meant — and both are
+        /// answered in full. The expectation is still checked FIRST, exactly as it is
+        /// without this flag, so a product that is not the one required is refused on
+        /// `shapes-graph` before anything is re-derived; `--rebuild` bypasses the memo,
+        /// never the binding a caller required.
+        ///
+        /// Refused against `--shapes`: a shapes DOCUMENT has no memo to skip and no
+        /// carried dataset to re-derive from — it is parsed on this run either way.
+        #[arg(long)]
+        rebuild: bool,
         /// Shapes-graph format override; inferred from the shapes path's extension when
         /// omitted. Turtle is read through `purrdf_shapes::engine::parse_shapes`, the exact
         /// boundary every other host uses, which additionally recovers the shapes DOCUMENT's

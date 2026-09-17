@@ -2607,6 +2607,83 @@ int32_t purrdf_shapes_product_admit_expecting(const uint8_t *product,
                                               PurrdfError **out_error);
 
 /**
+ * REBUILD a prepared product — re-deriving its preparation from the shapes
+ * dataset it carries, ignoring its memo — validate `data_nt` (N-Triples) with it,
+ * and write the SARIF 2.1.0 report bytes to `*out_buffer` (free with
+ * `purrdf_buffer_free`).
+ *
+ * The forward-compatibility path: a product whose stage id this build does not
+ * know refuses `purrdf_shapes_product_admit` with the dimension `stage-id`, and
+ * this is the remedy it names. No RDF text is parsed and no file other than the
+ * product itself is read — the shapes dataset travels inside the product under
+ * the envelope's own digests, and this re-derives the shapes graph from it.
+ *
+ * Also correct, and does the identical work, over a CURRENT product whose stage
+ * id this build already knows: rebuilding re-derives from the SAME carried
+ * dataset `purrdf_shapes_product_admit` restores a memo of, so the two reach the
+ * byte-identical report. This entry point is a second DOOR onto one product,
+ * never a second, divergent answer.
+ *
+ * Admission runs against the EMPTY host bindings, for the same reason
+ * `purrdf_shapes_product_admit` does; see this module's documentation.
+ *
+ * A malformed `data_nt` also returns `PURRDF_STATUS_SHAPES_PRODUCT_ERROR`, with a NULL
+ * dimension: the data graph is not a product, so no admission dimension names it.
+ *
+ * # Safety
+ * `product` must be valid for reads of `product_len` bytes; `data_nt` must be a
+ * non-null, NUL-terminated C string; `out_buffer` must be a writable pointer;
+ * `out_error` must be null or writable.
+ */
+int32_t purrdf_shapes_product_rebuild(const uint8_t *product,
+                                      size_t product_len,
+                                      const char *data_nt,
+                                      PurrdfBuffer **out_buffer,
+                                      PurrdfError **out_error);
+
+/**
+ * REBUILD a prepared product ONLY IF its input binding is `expect_identity` —
+ * re-deriving its preparation from the shapes dataset it carries, ignoring its
+ * memo — validate `data_nt` (N-Triples) with it, and write the SARIF 2.1.0
+ * report bytes to `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * The bound twin of `purrdf_shapes_product_rebuild`, for the same reason
+ * `purrdf_shapes_product_admit_expecting` exists beside
+ * `purrdf_shapes_product_admit`: the forward-compatibility rescue is not a
+ * reason to stop asking *is this the product I asked for?* — a cache entry from
+ * another build, or a product a deployment placed on disk under a stage id this
+ * build does not recognize, is still just a file that could be the wrong one.
+ * The 32-byte comparison runs FIRST, ahead of the re-derivation, exactly as it
+ * does on `purrdf_shapes_product_admit_expecting`, so a product that is not the
+ * one required is named as such rather than re-derived and validated against.
+ *
+ * `expect_identity` carries the same meaning it does on
+ * `purrdf_shapes_product_admit_expecting` — the 64 hexadecimal digits
+ * `purrdf_shapes_product_open` renders on its `identity-digest` line, passed
+ * back unchanged.
+ *
+ * Admission runs against the EMPTY host bindings, for the same reason
+ * `purrdf_shapes_product_admit` does; see this module's documentation.
+ *
+ * A product carrying a different binding returns `PURRDF_STATUS_SHAPES_PRODUCT_ERROR`
+ * with the dimension `shapes-graph`. An `expect_identity` that is not 64
+ * hexadecimal digits returns `PURRDF_STATUS_INVALID_ARGUMENT` instead, and not
+ * as a product refusal: no product was ever opened, so there is nothing for an
+ * admission dimension to name.
+ *
+ * # Safety
+ * `product` must be valid for reads of `product_len` bytes; `data_nt` and
+ * `expect_identity` must be non-null, NUL-terminated C strings; `out_buffer`
+ * must be a writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_shapes_product_rebuild_expecting(const uint8_t *product,
+                                                size_t product_len,
+                                                const char *data_nt,
+                                                const char *expect_identity,
+                                                PurrdfBuffer **out_buffer,
+                                                PurrdfError **out_error);
+
+/**
  * CERTIFY a prepared product: independently re-derive its shapes dataset's canonical
  * identity and compare it against the one the product's own binding claims.
  *

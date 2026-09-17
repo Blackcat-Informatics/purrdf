@@ -179,6 +179,10 @@ pub(crate) struct ValidateOptions<'a> {
     /// admission boundary compares, so a mis-typed digest is a usage error before any
     /// file is opened.
     pub(crate) expect_identity: Option<&'a str>,
+    /// `--rebuild`: re-derive `--shapes-product`'s preparation from its carried
+    /// dataset rather than admitting its memo. See [`ShapesPlan::load`] for how it
+    /// composes with [`Self::expect_identity`].
+    pub(crate) rebuild: bool,
     /// `--shapes-from`: the shapes-graph format override.
     pub(crate) shapes_from: Option<CliRdfFormat>,
     /// `--shapes-graph`: the IRI the shapes graph is exposed under to SHACL-SPARQL paths,
@@ -241,6 +245,7 @@ pub(crate) fn run(
     refuse_inapplicable_flags(options, ledger_target)?;
     refuse_parse_flags_against_a_product(options)?;
     refuse_an_expectation_with_no_product(options)?;
+    refuse_a_rebuild_with_no_product(options)?;
 
     let data_format = format::resolve(options.from, options.input)?;
     // The DATA parse is the only leg `--base` has here: the shapes graph resolves against
@@ -416,6 +421,9 @@ enum ShapesPlan<'a> {
         /// this restore to proceed. `None` leaves the restore unbound — the product is
         /// still admitted in full, but nothing states WHICH product was wanted.
         expect_identity: Option<[u8; 32]>,
+        /// `--rebuild`: re-derive the preparation from the product's carried dataset
+        /// rather than admitting its memo. See [`ShapesPlan::load`].
+        rebuild: bool,
     },
 }
 
@@ -439,6 +447,7 @@ impl<'a> ShapesPlan<'a> {
             return Ok(Self::Product {
                 path,
                 expect_identity,
+                rebuild: options.rebuild,
             });
         }
         // clap makes exactly one of the two required, so the `else` is unreachable from a
@@ -483,14 +492,28 @@ impl<'a> ShapesPlan<'a> {
     /// # The product arm is an ADMISSION, not a load
     ///
     /// The bytes are acquired through the sealed immutable-input authority and handed to
-    /// [`purrdf_validate::admit_shapes_product`], which verifies the container's framing
-    /// and every section digest, then checks the product's stage id, profile and full
-    /// input binding BEFORE any of it reaches a validator. A refusal names its
+    /// [`purrdf_validate::admit_shapes_product`] (or, under `--rebuild`,
+    /// [`purrdf_validate::rebuild_shapes_product`]), which verifies the container's
+    /// framing and every section digest, then checks the product's stage id, profile
+    /// and full input binding BEFORE any of it reaches a validator. A refusal names its
     /// dimension — see [`crate::shacl::admission_error`] — because "these bytes are
     /// corrupt", "this product is from another build" and "your configuration differs
     /// from the one it was prepared against" are three different actions, and the flag
     /// that flattened them into one message would have made the typed boundary
     /// pointless at exactly the process edge an operator meets it.
+    ///
+    /// # `--rebuild` and `--expect-identity` compose
+    ///
+    /// Four entry points at one boundary rather than one restore with two
+    /// independent booleans bolted on: which of `admit`/`rebuild` and which of the
+    /// bound/unbound pair is exactly the product of `--rebuild` and
+    /// `--expect-identity`, and each combination is a real, distinct call into
+    /// `purrdf-validate` rather than a flag this function would otherwise have to
+    /// branch on twice. The expectation is checked FIRST in every case — inside
+    /// `admit_shapes_product_expecting`/`rebuild_shapes_product_expecting`, ahead of
+    /// the stage id and the profile — so `--rebuild` changes which repair strategy
+    /// runs AFTER the artifact is confirmed to be the one required; it can never
+    /// bypass that requirement.
     ///
     /// # Errors
     ///
@@ -507,16 +530,20 @@ impl<'a> ShapesPlan<'a> {
             Self::Product {
                 path,
                 expect_identity,
+                rebuild,
             } => {
                 let owner = source::acquire_product_input(path)?;
-                // Two entry points at one boundary, chosen by whether the operator
-                // stated which product they wanted. `--expect-identity` adds a 32-byte
-                // comparison ahead of every other check, so the wrong file is named as
-                // the wrong file rather than restored and validated against.
-                let admitted = match expect_identity {
-                    None => purrdf_validate::admit_shapes_product(owner.as_bytes()),
-                    Some(ref expected) => {
+                let admitted = match (rebuild, expect_identity) {
+                    (false, None) => purrdf_validate::admit_shapes_product(owner.as_bytes()),
+                    (false, Some(ref expected)) => {
                         purrdf_validate::admit_shapes_product_expecting(owner.as_bytes(), expected)
+                    }
+                    (true, None) => purrdf_validate::rebuild_shapes_product(owner.as_bytes()),
+                    (true, Some(ref expected)) => {
+                        purrdf_validate::rebuild_shapes_product_expecting(
+                            owner.as_bytes(),
+                            expected,
+                        )
                     }
                 };
                 admitted.map(ShapesSource::Restored).map_err(|error| {
@@ -590,6 +617,32 @@ fn refuse_an_expectation_with_no_product(options: &ValidateOptions<'_>) -> Resul
          parses a shapes document instead: `--shapes` has no prepared binding to require, and \
          the document it names is read on this run rather than restored from a cache. Pass \
          `--shapes-product FILE` to bind a product, or drop the flag"
+            .to_owned(),
+    ))
+}
+
+/// Refuse `--rebuild` when there is no product for it to restore.
+///
+/// The flag names a REPAIR STRATEGY for a prepared product's restore — re-derive
+/// from the carried dataset instead of admitting the memo — and a shapes document
+/// has no memo and no carried dataset: `--shapes` parses the document named on
+/// this command line every time, so there is nothing for `--rebuild` to change.
+///
+/// Accepting it against `--shapes` and silently ignoring it would be the usual
+/// no-op this pipeline refuses everywhere else, applied to a flag an operator
+/// reaches for specifically because a *product* stopped restoring the ordinary
+/// way; a spelling that quietly did nothing would hide exactly the situation the
+/// operator is trying to diagnose.
+fn refuse_a_rebuild_with_no_product(options: &ValidateOptions<'_>) -> Result<(), CliError> {
+    if !options.rebuild || options.shapes_product.is_some() {
+        return Ok(());
+    }
+    Err(CliError::Usage(
+        "--rebuild re-derives a PREPARED PRODUCT's preparation from its carried dataset instead \
+         of admitting its memo, and this run parses a shapes document instead: `--shapes` has no \
+         memo to skip and no carried dataset to re-derive from, because the document it names is \
+         parsed on this run either way. Pass `--shapes-product FILE` to restore a product, or \
+         drop the flag"
             .to_owned(),
     ))
 }

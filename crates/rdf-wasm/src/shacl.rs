@@ -17,6 +17,12 @@
 //! provenance — so restoring one is an admission, and the codec refuses on a closed
 //! set of named dimensions rather than one opaque error.
 //!
+//! `shaclProductValidateToSarifRebuild` is the forward-compatibility path:
+//! `shaclProductValidateToSarif` refuses a product whose stage id this guest does
+//! not know with `dimension === "stage-id"`, and rebuilding re-derives the
+//! preparation from the shapes dataset the product carries instead of admitting
+//! its memo — no RDF text is parsed and no file is read.
+//!
 //! Carrying that across the JS boundary as a `JsError` would delete it. The label
 //! would survive only as a prefix of the message string, and the codec's own
 //! documentation says matching on message text is not supported, so every JS
@@ -292,6 +298,109 @@ pub fn shacl_product_validate_to_sarif(
     product_validate_impl(product, data_nt).map_err(ShaclProductRefusal::from)
 }
 
+/// Rebuild a prepared product and validate a data graph with it. Native-testable
+/// core.
+pub(crate) fn product_validate_rebuild_impl(
+    product: &[u8],
+    data_nt: &str,
+) -> Result<String, ShapesProductRefusal> {
+    purrdf_validate::validate_with_rebuilt_shapes_product(
+        product,
+        data_nt,
+        &purrdf_validate::SarifOptions::default(),
+    )
+}
+
+/// `shaclProductValidateToSarifRebuild(product, dataNt)` → a SARIF 2.1.0 JSON
+/// string, restoring the preparation by RE-DERIVING it from the shapes dataset the
+/// product carries rather than admitting its memo.
+///
+/// The forward-compatibility path: [`shacl_product_validate_to_sarif`] refuses a
+/// product whose stage id this guest does not know with `dimension ===
+/// "stage-id"`, and this is the remedy it names. No RDF text is parsed and no
+/// file is read — the dataset travels inside the product under the envelope's
+/// own digests, and this re-derives the shapes graph from it.
+///
+/// Also correct, and does the identical work, over a CURRENT product whose stage
+/// id this guest already knows: rebuilding re-derives from the SAME carried
+/// dataset [`shacl_product_validate_to_sarif`] restores a memo of, so the two
+/// reach the byte-identical report. This function is a second DOOR onto one
+/// product, never a second, divergent answer.
+///
+/// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A
+/// malformed `dataNt` rejects with `dimension === undefined`, for the same
+/// reason [`shacl_product_validate_to_sarif`] does.
+#[wasm_bindgen(js_name = shaclProductValidateToSarifRebuild)]
+pub fn shacl_product_validate_to_sarif_rebuild(
+    product: &[u8],
+    data_nt: &str,
+) -> Result<String, ShaclProductRefusal> {
+    product_validate_rebuild_impl(product, data_nt).map_err(ShaclProductRefusal::from)
+}
+
+/// Rebuild a prepared product bound to an expected identity and validate a data
+/// graph with it. Native-testable core.
+///
+/// The selector arrives as TEXT for the same reason it does on
+/// [`product_validate_expecting_impl`]: it is the only shape a JavaScript host
+/// can hold it in, and decoding it here rather than at the boundary keeps this
+/// exercisable off wasm exactly as its siblings are.
+pub(crate) fn product_validate_rebuild_expecting_impl(
+    product: &[u8],
+    data_nt: &str,
+    expect_identity: &str,
+) -> Result<String, ShaclProductRefusal> {
+    // A selector that is not 64 hexadecimal digits refused BEFORE the product is
+    // opened, so the refusal carries no dimension: nothing was inspected, and
+    // naming a dimension would claim the product was at fault for the caller's
+    // argument.
+    let expected = purrdf_validate::parse_identity_digest(expect_identity).map_err(|message| {
+        ShaclProductRefusal {
+            dimension: None,
+            message,
+        }
+    })?;
+    purrdf_validate::validate_with_rebuilt_shapes_product_expecting(
+        product,
+        data_nt,
+        &expected,
+        &purrdf_validate::SarifOptions::default(),
+    )
+    .map_err(ShaclProductRefusal::from)
+}
+
+/// `shaclProductValidateToSarifRebuildExpecting(product, dataNt, expectIdentity)` →
+/// a SARIF 2.1.0 JSON string, restoring the preparation by RE-DERIVING it from
+/// the shapes dataset the product carries rather than admitting its memo, but
+/// only from the product whose input binding is `expectIdentity`.
+///
+/// The bound twin of [`shacl_product_validate_to_sarif_rebuild`], for the same
+/// reason [`shacl_product_validate_to_sarif_expecting`] exists beside
+/// [`shacl_product_validate_to_sarif`]: the forward-compatibility rescue is not
+/// a reason to stop asking *is this the product the host meant?* — a product
+/// fetched over the network or read out of a cache under a stage id this guest
+/// does not recognize is still just bytes that could be the wrong ones. The
+/// 32-byte comparison runs FIRST, ahead of the re-derivation, exactly as it does
+/// on [`shacl_product_validate_to_sarif_expecting`].
+///
+/// `expectIdentity` carries the same meaning it does on
+/// [`shacl_product_validate_to_sarif_expecting`] — the 64 hexadecimal digits
+/// `shaclProductExplain` prints on its `identity-digest` line.
+///
+/// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A
+/// product carrying a different binding rejects with `dimension ===
+/// "shapes-graph"`; an `expectIdentity` that is not 64 hexadecimal digits
+/// rejects with `dimension === undefined`, because no product was ever
+/// inspected.
+#[wasm_bindgen(js_name = shaclProductValidateToSarifRebuildExpecting)]
+pub fn shacl_product_validate_to_sarif_rebuild_expecting(
+    product: &[u8],
+    data_nt: &str,
+    expect_identity: &str,
+) -> Result<String, ShaclProductRefusal> {
+    product_validate_rebuild_expecting_impl(product, data_nt, expect_identity)
+}
+
 /// Admit a prepared product bound to an expected identity and validate a data graph
 /// with it. Native-testable core.
 ///
@@ -428,6 +537,12 @@ mod tests {
         let via_product = product_validate_impl(&product, DATA).expect("validated via product");
         let via_document = validate_to_sarif_impl(SHAPES, None, DATA).expect("validated directly");
         assert_eq!(via_product, via_document);
+
+        // Rebuilding a CURRENT product reaches the byte-identical verdict too: the
+        // forward-compatibility door must not be a second, divergent answer.
+        let via_rebuild =
+            product_validate_rebuild_impl(&product, DATA).expect("rebuilt via product");
+        assert_eq!(via_rebuild, via_product);
     }
 
     #[test]
@@ -510,6 +625,65 @@ mod tests {
         // significant — a selector that passed through a manifest or a CI variable
         // must not be turned away for a shape the mechanism does not care about.
         product_validate_expecting_impl(&product, DATA, &own.to_uppercase())
+            .expect("an upper-case selector names the same product");
+    }
+
+    /// The rebuild path answers the same "is this the product the host meant?"
+    /// question `product_validate_expecting_impl` does: a product whose binding
+    /// is not the one required is refused on `shapes-graph` even though its
+    /// stage id is one this guest knows and the unbound rebuild would otherwise
+    /// happily re-derive it.
+    #[test]
+    fn a_rebuilt_product_that_is_not_the_expected_one_is_refused_across_the_boundary() {
+        let held = pack_product_impl(SHAPES, None).expect("product packed");
+        let wanted = rendered_selector(&pack_product_impl(OTHER_SHAPES, None).expect("packed"));
+        assert_ne!(wanted, rendered_selector(&held));
+
+        let refusal = product_validate_rebuild_expecting_impl(&held, DATA, &wanted)
+            .expect_err("the product held is not the product required");
+        assert_eq!(refusal.dimension().as_deref(), Some("shapes-graph"));
+
+        // A selector that is not a digest refuses with NO dimension: nothing was
+        // opened, so naming one would blame the product for the host's argument.
+        let mistyped = product_validate_rebuild_expecting_impl(&held, DATA, "not-a-digest")
+            .expect_err("a non-digest selector is refused");
+        assert_eq!(mistyped.dimension(), None);
+
+        // The gap this closes: the unbound rebuild restores the very same bytes,
+        // because nothing in them states which product was meant.
+        product_validate_rebuild_impl(&held, DATA)
+            .expect("an unbound rebuild cannot ask which product was wanted");
+    }
+
+    /// The neighbouring VALID case: a product required to be ITSELF still
+    /// rebuilds across the boundary, and reaches the byte-identical report the
+    /// unbound rebuild and the bound admission-based validation both reach.
+    #[test]
+    fn a_rebuilt_product_required_to_be_itself_validates_identically() {
+        let product = pack_product_impl(SHAPES, None).expect("product packed");
+        let own = rendered_selector(&product);
+
+        let bound_rebuild = product_validate_rebuild_expecting_impl(&product, DATA, &own)
+            .expect("a product required to be itself rebuilds");
+        let unbound_rebuild =
+            product_validate_rebuild_impl(&product, DATA).expect("the unbound rebuild validates");
+        assert_eq!(
+            bound_rebuild, unbound_rebuild,
+            "stating which product you meant changes the door, not the answer",
+        );
+
+        let bound_admit = product_validate_expecting_impl(&product, DATA, &own)
+            .expect("a product required to be itself admits");
+        assert_eq!(
+            bound_rebuild, bound_admit,
+            "choosing to re-derive rather than restore the memo must not change the answer",
+        );
+
+        // The rendering is the accepted spelling, and case on the way in is not
+        // significant — a selector that passed through a manifest or a CI
+        // variable must not be turned away for a shape the mechanism does not
+        // care about.
+        product_validate_rebuild_expecting_impl(&product, DATA, &own.to_uppercase())
             .expect("an upper-case selector names the same product");
     }
 }

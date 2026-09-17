@@ -359,6 +359,35 @@ pub fn rebuild_shapes_product(product: &[u8]) -> Result<PreparedShapes, ShapesPr
     ShapesProduct::open(product)?.rebuild(&ShapesProfile::CORE, &HostBindings::empty())
 }
 
+/// **The forward-compatibility path, bound to the product the caller MEANT.** Open
+/// `product`, confirm its input binding is `expected_identity`, and only then
+/// re-derive the preparation from its carried dataset.
+///
+/// A stage id this build does not know is not a reason to stop asking *is this the
+/// product I asked for?* — see [`admit_shapes_product_expecting`] for why that
+/// question is checked ahead of everything the codec itself decides, and
+/// [`purrdf_shapes::product::ShapesProductView::rebuild_expecting`] for why the
+/// same 32-byte comparison is exactly as free on this path as it is there: the
+/// envelope's identity region is decoded and authenticated by
+/// [`ShapesProduct::open`] independently of whether the stage id is one this build
+/// recognizes.
+///
+/// # Errors
+///
+/// [`ShapesGraph`](ProductDimension::ShapesGraph) when the product's binding is not
+/// the required one, and otherwise every dimension [`rebuild_shapes_product`]
+/// refuses on.
+pub fn rebuild_shapes_product_expecting(
+    product: &[u8],
+    expected_identity: &[u8; 32],
+) -> Result<PreparedShapes, ShapesProductError> {
+    ShapesProduct::open(product)?.rebuild_expecting(
+        &ShapesProfile::CORE,
+        &HostBindings::empty(),
+        expected_identity,
+    )
+}
+
 /// **The cold path.** Open `product` and independently corroborate its shapes
 /// dataset's canonical identity against the one its binding claims.
 ///
@@ -500,6 +529,80 @@ pub fn validate_with_shapes_product_expecting(
     validate_with_product(product, data_nt, Some(expected_identity), options)
 }
 
+/// **The forward-compatibility path.** Rebuild `product` — re-deriving the
+/// preparation from its carried dataset rather than admitting its memo — and
+/// validate `data_nt` (N-Triples) with it, rendering the SHACL report to a SARIF
+/// 2.1.0 JSON string.
+///
+/// The rebuild twin of [`validate_with_shapes_product`], for the one binding this
+/// module serves that has no way to inspect a `stage-known false` line and retry:
+/// a host driving this in one call needs the rescue to happen automatically when
+/// the memo is one this build cannot read, and [`rebuild_shapes_product`] is that
+/// rescue. It is also the answer a CURRENT product gets when a caller reaches for
+/// this path anyway — [`rebuild`](purrdf_shapes::product::ShapesProductView::rebuild)
+/// re-derives from the SAME carried dataset [`admit_shapes_product`] restores a
+/// memo of, so the two reach the identical report.
+///
+/// # Errors
+///
+/// [`ShapesProductRefusal::Admission`] when the product is refused — most notably
+/// [`Malformed`](ProductDimension::Malformed) when the carried dataset does not
+/// re-derive as a shapes graph — and [`ShapesProductRefusal::Shapes`] when the DATA
+/// graph does not parse or the validation hard-fails.
+pub fn validate_with_rebuilt_shapes_product(
+    product: &[u8],
+    data_nt: &str,
+    options: &SarifOptions,
+) -> Result<String, ShapesProductRefusal> {
+    validate_with_rebuilt_product(product, data_nt, None, options)
+}
+
+/// **The forward-compatibility path, bound to the product the caller MEANT.**
+/// Rebuild `product` — only if its input binding is `expected_identity` — and
+/// validate `data_nt` (N-Triples) with it, rendering the SHACL report to a SARIF
+/// 2.1.0 JSON string.
+///
+/// The bound twin of [`validate_with_rebuilt_shapes_product`], for the same
+/// reason [`validate_with_shapes_product_expecting`] exists beside
+/// [`validate_with_shapes_product`]: a host driving this in one call has no
+/// separate step to check an identity before it commits to the rescue, so the
+/// expectation has to travel with the rebuild. An unknown stage id is not a
+/// reason to stop asking *is this the product I asked for?* — see
+/// [`rebuild_shapes_product_expecting`] for why the comparison runs first, ahead
+/// of the re-derivation, exactly as it does on the admission path.
+///
+/// # Errors
+///
+/// [`ShapesProductRefusal::Admission`] on
+/// [`ShapesGraph`](ProductDimension::ShapesGraph) when the product's binding is
+/// not the required one, on any other dimension [`rebuild_shapes_product`]
+/// refuses on, and [`ShapesProductRefusal::Shapes`] when the DATA graph does not
+/// parse or the validation hard-fails.
+pub fn validate_with_rebuilt_shapes_product_expecting(
+    product: &[u8],
+    data_nt: &str,
+    expected_identity: &[u8; 32],
+    options: &SarifOptions,
+) -> Result<String, ShapesProductRefusal> {
+    validate_with_rebuilt_product(product, data_nt, Some(expected_identity), options)
+}
+
+/// The ONE rebuild-validation body, with the caller's expectation as its only
+/// variable — the same arrangement [`validate_with_product`] makes for the
+/// admission path.
+fn validate_with_rebuilt_product(
+    product: &[u8],
+    data_nt: &str,
+    expected_identity: Option<&[u8; 32]>,
+    options: &SarifOptions,
+) -> Result<String, ShapesProductRefusal> {
+    let prepared = match expected_identity {
+        None => rebuild_shapes_product(product)?,
+        Some(expected) => rebuild_shapes_product_expecting(product, expected)?,
+    };
+    validate_prepared(&prepared, data_nt, options)
+}
+
 /// The ONE product-validation body, with the caller's expectation as its only
 /// variable — the same arrangement `purrdf-shapes` makes one layer down, where
 /// `admit` and `admit_expecting` are two entry points over one admission sequence.
@@ -517,6 +620,20 @@ fn validate_with_product(
         None => admit_shapes_product(product)?,
         Some(expected) => admit_shapes_product_expecting(product, expected)?,
     };
+    validate_prepared(&prepared, data_nt, options)
+}
+
+/// Validate `data_nt` (N-Triples) against an already-restored preparation,
+/// rendering the SHACL report to a SARIF 2.1.0 JSON string.
+///
+/// The one tail every restore route shares — admitted, bound-admitted, or
+/// rebuilt — so a data-graph parse failure or a validation hard-fail is reported
+/// identically regardless of which door the preparation came through.
+fn validate_prepared(
+    prepared: &PreparedShapes,
+    data_nt: &str,
+    options: &SarifOptions,
+) -> Result<String, ShapesProductRefusal> {
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
     let report = engine::validate_dataset_with_shapes_graph(data.as_ref(), prepared.shapes(), None)
@@ -563,7 +680,9 @@ mod tests {
         ShapesProductRefusal, admit_shapes_product, admit_shapes_product_expecting,
         certify_shapes_product, explain_shapes_product, pack_shapes_product,
         pack_shapes_product_from_dataset, parse_identity_digest, rebuild_shapes_product,
-        validate_with_shapes_product, validate_with_shapes_product_expecting,
+        rebuild_shapes_product_expecting, validate_with_rebuilt_shapes_product,
+        validate_with_rebuilt_shapes_product_expecting, validate_with_shapes_product,
+        validate_with_shapes_product_expecting,
     };
     use crate::SarifOptions;
     use purrdf_shapes::product::ProductDimension;
@@ -609,6 +728,14 @@ mod tests {
             .expect("validate with the product");
         assert!(sarif.contains("\"version\": \"2.1.0\""));
         assert!(sarif.contains("\"level\": \"error\""));
+
+        // The rebuild route reaches the identical report for a CURRENT product: a
+        // caller who reaches for the forward-compatibility path anyway must not get
+        // a second, divergent answer.
+        let rebuilt_sarif =
+            validate_with_rebuilt_shapes_product(&product, DATA, &SarifOptions::default())
+                .expect("validate with the rebuilt product");
+        assert_eq!(sarif, rebuilt_sarif);
     }
 
     #[test]
@@ -770,6 +897,57 @@ mod tests {
         );
     }
 
+    /// The composed rebuild-and-validate call answers the same "is this the
+    /// product I asked for?" question as `validate_with_shapes_product_expecting`:
+    /// a product that is not the one required is refused before its carried
+    /// dataset is ever re-derived.
+    #[test]
+    fn refuses_a_rebuild_validation_that_is_not_the_expected_one() {
+        let held = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let wanted = pack_shapes_product(OTHER_SHAPES, None).expect("other shapes pack");
+        let selector =
+            parse_identity_digest(&rendered_selector(&wanted)).expect("a rendered selector parses");
+
+        let refusal = validate_with_rebuilt_shapes_product_expecting(
+            &held,
+            DATA,
+            &selector,
+            &SarifOptions::default(),
+        )
+        .expect_err("the product held is not the product required");
+        assert_eq!(refusal.dimension(), Some(ProductDimension::ShapesGraph));
+
+        // The gap this closes: the unbound rebuild-and-validate call runs over the
+        // very same bytes, because nothing in them states which product was meant.
+        validate_with_rebuilt_shapes_product(&held, DATA, &SarifOptions::default())
+            .expect("an unbound rebuild-and-validate cannot ask which product was wanted");
+    }
+
+    /// The neighbouring VALID case: a product required to be ITSELF still runs the
+    /// composed rebuild-and-validate call, and reaches the byte-identical report
+    /// the unbound rebuild-and-validate call and the bound admission both reach.
+    #[test]
+    fn accepts_the_expected_product_neighbour_on_rebuild_validation() {
+        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let selector = parse_identity_digest(&rendered_selector(&product))
+            .expect("a rendered selector parses");
+
+        let bound = validate_with_rebuilt_shapes_product_expecting(
+            &product,
+            DATA,
+            &selector,
+            &SarifOptions::default(),
+        )
+        .expect("a product required to be itself rebuilds and validates");
+        let unbound =
+            validate_with_rebuilt_shapes_product(&product, DATA, &SarifOptions::default())
+                .expect("the unbound rebuild-and-validate call runs");
+        assert_eq!(
+            bound, unbound,
+            "stating which product you meant must not change the answer, only the door",
+        );
+    }
+
     /// The selector spelling is a ROUND TRIP, not two conventions that happen to
     /// agree today: what a product renders is what the boundary accepts back.
     #[test]
@@ -789,6 +967,61 @@ mod tests {
         let shouted = parse_identity_digest(&rendered.to_uppercase())
             .expect("an upper-case selector names the same product");
         assert_eq!(selector, shouted);
+    }
+
+    /// The rebuild path answers the same "is this the product I asked for?"
+    /// question `admit_expecting` does: a product whose binding is not the one
+    /// required is refused on `shapes-graph` even though its stage id is one this
+    /// build knows and `rebuild` would otherwise happily re-derive it.
+    #[test]
+    fn refuses_a_rebuilt_product_that_is_not_the_expected_one() {
+        let held = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let wanted = pack_shapes_product(OTHER_SHAPES, None).expect("other shapes pack");
+        let selector =
+            parse_identity_digest(&rendered_selector(&wanted)).expect("a rendered selector parses");
+
+        let refusal = rebuild_shapes_product_expecting(&held, &selector)
+            .expect_err("the product held is not the product required");
+        assert_eq!(refusal.dimension(), ProductDimension::ShapesGraph);
+
+        // The gap this closes: the unbound rebuild restores the very same bytes,
+        // because nothing in them states which product was meant.
+        rebuild_shapes_product(&held).expect("an unbound rebuild cannot ask which product");
+    }
+
+    /// The neighbouring VALID case: a product required to be ITSELF still rebuilds,
+    /// and reaches the byte-identical report the unbound rebuild and the bound
+    /// `admit_expecting` both reach — stating which product you meant, and choosing
+    /// to re-derive rather than restore the memo, must not change the answer.
+    #[test]
+    fn accepts_the_expected_product_neighbour_on_rebuild() {
+        use purrdf_shapes::engine;
+
+        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let selector = parse_identity_digest(&rendered_selector(&product))
+            .expect("a rendered selector parses");
+
+        let bound_rebuild = rebuild_shapes_product_expecting(&product, &selector)
+            .expect("a product required to be itself rebuilds");
+        let bound_admit = admit_shapes_product_expecting(&product, &selector)
+            .expect("a product required to be itself admits");
+
+        // The bound rebuild and the bound admit must reach the byte-identical
+        // report over the same data: choosing to re-derive rather than restore
+        // the memo — and stating which product you meant — must not change the
+        // answer, only the door.
+        let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(DATA)
+            .expect("the data graph parses");
+        let rebuilt_report =
+            engine::validate_dataset_with_shapes_graph(data.as_ref(), bound_rebuild.shapes(), None)
+                .expect("validated against the rebuilt shapes");
+        let admitted_report =
+            engine::validate_dataset_with_shapes_graph(data.as_ref(), bound_admit.shapes(), None)
+                .expect("validated against the admitted shapes");
+        assert_eq!(
+            crate::report_to_sarif_string(&rebuilt_report, &SarifOptions::default()),
+            crate::report_to_sarif_string(&admitted_report, &SarifOptions::default()),
+        );
     }
 
     /// A selector that is not 64 hexadecimal digits carries NO dimension, because no

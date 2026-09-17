@@ -111,3 +111,37 @@ def test_a_selector_that_is_not_a_digest_names_no_dimension(bad: str) -> None:
 
     # The neighbouring valid spelling still admits.
     product.admit_expecting(product.identity_digest())
+
+
+def test_a_rebuilt_product_that_is_not_the_expected_one_is_refused() -> None:
+    """``rebuild_expecting()`` answers the same "is this the product I asked for?"
+    question ``admit_expecting()`` does: a product whose binding is not the one
+    required is refused on ``shapes-graph`` even though its stage id is one this
+    build knows and the unbound ``rebuild()`` would otherwise happily re-derive it.
+    """
+    held = _product(_SHAPES)
+    wanted = _product(_OTHER_SHAPES).identity_digest()
+    assert wanted != held.identity_digest()
+
+    with pytest.raises(purrdf.shapes.ShapesProductError) as refused:
+        held.rebuild_expecting(wanted)
+    assert refused.value.dimension == "shapes-graph"
+
+    # The gap this closes: the unbound rebuild restores the very same bytes,
+    # because nothing in them states which product was meant.
+    held.rebuild()
+
+
+def test_a_rebuilt_product_required_to_be_itself_answers_identically() -> None:
+    """The paired neighbour: a satisfied expectation changes the door, not the
+    answer — rebuilding rather than admitting must not change it either."""
+    product = _product(_SHAPES)
+
+    bound_rebuild = product.rebuild_expecting(product.identity_digest()).validate_nt(_DATA)
+    unbound_rebuild = product.rebuild().validate_nt(_DATA)
+    assert bound_rebuild.conforms is False, "the fixture must find its violation"
+    assert bound_rebuild.conforms == unbound_rebuild.conforms
+    assert bound_rebuild.to_ntriples() == unbound_rebuild.to_ntriples()
+
+    bound_admit = product.admit_expecting(product.identity_digest()).validate_nt(_DATA)
+    assert bound_rebuild.to_ntriples() == bound_admit.to_ntriples()

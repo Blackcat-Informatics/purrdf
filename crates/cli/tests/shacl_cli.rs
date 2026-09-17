@@ -17,12 +17,20 @@
 //!   product is refused non-zero with its dimension on stderr, the right one produces a
 //!   report byte-identical to the unbound run, and the digest `shacl explain` prints is
 //!   accepted back verbatim;
+//! * `--rebuild` rescues a product whose stage id this build does not know — refused on
+//!   `stage-id` without the flag, restored with it — reaches the byte-identical report on
+//!   a CURRENT product too, and still honours `--expect-identity` rather than bypassing it;
 //! * `shacl pack --shapes-graph` records the same absolute IRI `validate --shapes
 //!   --shapes-graph` resolves, so a SHACL-SPARQL body reading `$shapesGraph` reaches the
 //!   byte-identical verdict through either lane.
 
 use std::path::Path;
 use std::process::{Command, Output};
+use std::sync::Arc;
+
+use purrdf_core::artifact::{ArtifactBuilder, ArtifactSpec, ArtifactView};
+use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
+use purrdf_shapes::product::ShapesProfile;
 
 /// A `Command` for the built `purrdf` binary.
 fn purrdf() -> Command {
@@ -1088,5 +1096,270 @@ fn accepts_pack_without_shapes_graph_neighbour() {
         "no --shapes-graph at pack time still restores a validator with $shapesGraph \
          unbound: {}",
         stderr(&via_product)
+    );
+}
+
+// ── `validate --shapes-product --rebuild` ──────────────────────────────────────────
+//
+// `rebuild` is the prepared-product design's entire forward-compatibility answer: a
+// reader that meets a product whose stage id it does not know refuses `admit` and
+// re-derives the preparation from the shapes DATASET the product carries instead —
+// no RDF text is parsed and no file is read. Until now that path had no command-line
+// spelling: an operator meeting a `stage-id` refusal was told to "restore with a
+// rebuild" by a verb this binary did not have.
+
+/// The envelope constants a reader observes from any product this build writes —
+/// the header magic, the format version, and the section count — re-declared here so
+/// the tamper below can reframe a real product's sections into a new, fully
+/// self-consistent container. This is the SAME technique
+/// `crates/shapes/tests/product_refusal.rs` uses to build its `stage-id` fixture:
+/// repacking recomputes every digest, so the result is a product this build's own
+/// envelope check accepts — a tamper the envelope itself would refuse would prove
+/// nothing about `--rebuild`.
+const PRODUCT_MAGIC: [u8; 8] = *b"PURRSHP1";
+const PRODUCT_FORMAT_VERSION: u32 = 1;
+const PRODUCT_SECTION_COUNT: usize = 3;
+const PRODUCT_SPEC: ArtifactSpec =
+    ArtifactSpec::new(PRODUCT_MAGIC, PRODUCT_FORMAT_VERSION, PRODUCT_SECTION_COUNT);
+const SECTION_IDENTITY: u32 = 0;
+const SECTION_DATASET: u32 = 1;
+const SECTION_AST: u32 = 2;
+
+/// Parse `shapes_ttl`, prepare and pack it exactly as `shacl pack` does, then splice
+/// a stage id NO build ever wrote into its identity section and reframe the
+/// container so every digest still checks out.
+///
+/// This is the one state `admit` cannot reach and `--rebuild` exists for: a product
+/// whose memo describes a preparation stage this build does not recognize. The
+/// dataset section is untouched, so the shapes graph it carries is still exactly the
+/// one `shapes_ttl` describes — only the memo's stage id is foreign.
+fn foreign_stage_product(shapes_ttl: &str) -> Vec<u8> {
+    let shapes = parse_shapes(shapes_ttl, None).expect("the fixture shapes parse");
+    let genuine = PreparedShapes::new(Arc::new(shapes))
+        .to_product(&ShapesProfile::CORE)
+        .expect("the fixture packs under this build");
+
+    let view = ArtifactView::from_bytes(PRODUCT_SPEC, &genuine).expect("the genuine product opens");
+    let mut identity_section = view
+        .section(SECTION_IDENTITY)
+        .expect("the identity section is present")
+        .to_vec();
+    // The stage id is the identity section's first 32 bytes — see
+    // `purrdf_shapes::product`'s `encode_preamble`/`decode_preamble`.
+    identity_section[..32].copy_from_slice(&[0xAB; 32]);
+
+    let mut builder = ArtifactBuilder::new(PRODUCT_SPEC);
+    builder
+        .identity(view.identity().clone())
+        .section(SECTION_IDENTITY, &identity_section)
+        .section(
+            SECTION_DATASET,
+            view.section(SECTION_DATASET)
+                .expect("the dataset section is present"),
+        )
+        .section(
+            SECTION_AST,
+            view.section(SECTION_AST)
+                .expect("the ast section is present"),
+        );
+    builder
+        .build_bytes()
+        .expect("the repack frames a well-formed product")
+}
+
+/// THE FALSIFIABLE CORE: `--shapes-product` alone refuses a product whose stage id
+/// this build does not know on `stage-id`, and `--rebuild` is the remedy that
+/// production surface names — not merely a capability that exists somewhere in
+/// Rust. The rebuilt report is byte-identical to validating the ORIGINAL shapes
+/// document directly, which is the property that makes rescuing the product safe
+/// rather than merely non-crashing.
+#[test]
+fn rebuild_rescues_a_product_whose_stage_id_this_build_does_not_know() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes_path = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let data_path = write_file(dir.path(), "data.ttl", DATA);
+    let product = dir.path().join("foreign.purrshp");
+    std::fs::write(&product, foreign_stage_product(SHAPES)).expect("write foreign product");
+    let product_path = product.to_str().expect("utf8 path");
+
+    // Without --rebuild: refused on stage-id, non-zero, no report on stdout.
+    let unrebuilt = run(&["validate", "--shapes-product", product_path, &data_path]);
+    assert_eq!(
+        code(&unrebuilt),
+        1,
+        "a foreign stage id must not admit: {}",
+        stderr(&unrebuilt)
+    );
+    assert!(
+        stderr(&unrebuilt).contains("shacl dimension stage-id\n"),
+        "the refusal names its dimension on its own line: {}",
+        stderr(&unrebuilt)
+    );
+    assert!(
+        stdout(&unrebuilt).is_empty(),
+        "a refused restore writes no report: {}",
+        stdout(&unrebuilt)
+    );
+
+    // With --rebuild: the same bytes restore and validate.
+    let rebuilt = run(&[
+        "validate",
+        "--shapes-product",
+        product_path,
+        "--rebuild",
+        &data_path,
+    ]);
+    assert_eq!(code(&rebuilt), 0, "{}", stderr(&rebuilt));
+    assert!(
+        stderr(&rebuilt).contains("shacl conforms false\n"),
+        "the fixture must actually find its violation, or the comparison is vacuous: {}",
+        stderr(&rebuilt)
+    );
+
+    // …and the rescued report is BYTE-IDENTICAL to validating the original document
+    // directly: rebuilding must not merely succeed, it must answer correctly.
+    let via_document = run(&["validate", "--shapes", &shapes_path, &data_path]);
+    assert_eq!(code(&via_document), 0, "{}", stderr(&via_document));
+    assert_eq!(
+        stdout(&rebuilt),
+        stdout(&via_document),
+        "a rescued product must answer exactly what the original document does",
+    );
+}
+
+/// THE PAIRED NEIGHBOUR: `--rebuild` on a CURRENT product (one whose stage id this
+/// build already knows) must ALSO succeed, and must reach the byte-identical report
+/// plain `admit` does. `--rebuild` is a second door onto one product, never a
+/// second, divergent answer — over-refusal's mirror image is a second success that
+/// silently disagrees with the first.
+#[test]
+fn rebuild_on_a_current_product_matches_admit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data_path = write_file(dir.path(), "data.ttl", DATA);
+    let product_path = pack(dir.path(), "shapes.purrshp", SHAPES);
+
+    let admitted = run(&["validate", "--shapes-product", &product_path, &data_path]);
+    let rebuilt = run(&[
+        "validate",
+        "--shapes-product",
+        &product_path,
+        "--rebuild",
+        &data_path,
+    ]);
+    assert_eq!(code(&admitted), 0, "{}", stderr(&admitted));
+    assert_eq!(code(&rebuilt), 0, "{}", stderr(&rebuilt));
+    assert_eq!(
+        stdout(&admitted),
+        stdout(&rebuilt),
+        "rebuilding a current product must not move a single byte of the report",
+    );
+    assert_eq!(
+        stderr(&admitted),
+        stderr(&rebuilt),
+        "…nor a single byte of the verdict lines",
+    );
+}
+
+/// `--rebuild` composes with `--expect-identity` rather than escaping it: the
+/// expectation is checked FIRST regardless of which repair strategy is chosen, so a
+/// product that is not the one required is refused on `shapes-graph` — never
+/// silently rebuilt into a report about a shapes graph nobody asked about.
+#[test]
+fn rebuild_still_honours_expect_identity() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data_path = write_file(dir.path(), "data.ttl", DATA);
+    let a = pack(dir.path(), "a.purrshp", SHAPES);
+    let b = pack(dir.path(), "b.purrshp", OTHER_SHAPES);
+    let own = explained_identity(&a);
+    let other = explained_identity(&b);
+    assert_ne!(own, other, "the two fixtures must be two products");
+
+    // Mismatched digest: --rebuild must not become an escape hatch around the
+    // identity binding.
+    let mismatched = run(&[
+        "validate",
+        "--shapes-product",
+        &a,
+        "--rebuild",
+        "--expect-identity",
+        &other,
+        &data_path,
+    ]);
+    assert_ne!(code(&mismatched), 0, "the wrong product must not rebuild");
+    assert!(
+        stderr(&mismatched).contains("shacl dimension shapes-graph\n"),
+        "the mismatch is refused on its dimension even under --rebuild: {}",
+        stderr(&mismatched)
+    );
+    assert!(
+        stdout(&mismatched).is_empty(),
+        "a refused restore writes no report: {}",
+        stdout(&mismatched)
+    );
+
+    // Matching digest: --rebuild still succeeds, byte-identical to the unbound
+    // rebuild and to the bound admit over the same product.
+    let matched = run(&[
+        "validate",
+        "--shapes-product",
+        &a,
+        "--rebuild",
+        "--expect-identity",
+        &own,
+        &data_path,
+    ]);
+    assert_eq!(code(&matched), 0, "{}", stderr(&matched));
+    let unbound_rebuild = run(&["validate", "--shapes-product", &a, "--rebuild", &data_path]);
+    assert_eq!(code(&unbound_rebuild), 0, "{}", stderr(&unbound_rebuild));
+    assert_eq!(
+        stdout(&matched),
+        stdout(&unbound_rebuild),
+        "a satisfied expectation must not move a single byte of the rebuilt report",
+    );
+}
+
+/// `--rebuild` names a repair strategy for restoring a PRODUCT, and a shapes
+/// DOCUMENT has no memo to skip and no carried dataset to re-derive from — it is
+/// refused BY NAME against `--shapes` rather than accepted and silently ignored,
+/// the same posture `--expect-identity` takes. The neighbouring VALID case — the
+/// same flag against `--shapes-product` — still succeeds.
+#[test]
+fn rebuild_is_refused_against_a_shapes_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes_path = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let data_path = write_file(dir.path(), "data.ttl", DATA);
+    let product_path = pack(dir.path(), "shapes.purrshp", SHAPES);
+
+    let against_a_document = run(&[
+        "validate",
+        "--shapes",
+        &shapes_path,
+        "--rebuild",
+        &data_path,
+    ]);
+    assert_eq!(
+        code(&against_a_document),
+        2,
+        "{}",
+        stderr(&against_a_document)
+    );
+    assert!(
+        stderr(&against_a_document).contains("--rebuild"),
+        "the flag is refused BY NAME against a shapes document: {}",
+        stderr(&against_a_document)
+    );
+
+    let against_a_product = run(&[
+        "validate",
+        "--shapes-product",
+        &product_path,
+        "--rebuild",
+        &data_path,
+    ]);
+    assert_eq!(
+        code(&against_a_product),
+        0,
+        "{}",
+        stderr(&against_a_product)
     );
 }

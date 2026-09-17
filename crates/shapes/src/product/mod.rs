@@ -29,6 +29,7 @@
 //! | [`admit`](ShapesProductView::admit) | COMMON — every restore | nothing expensive | the stage id is one this build knows |
 //! | [`admit_expecting`](ShapesProductView::admit_expecting) | COMMON — every restore | nothing expensive | as `admit`, and the caller knows which product it wants |
 //! | [`rebuild`](ShapesProductView::rebuild) | fallback | the whole shapes graph, from the carried dataset | the stage id is one this build does NOT know |
+//! | [`rebuild_expecting`](ShapesProductView::rebuild_expecting) | fallback | as `rebuild` | as `rebuild`, and the caller knows which product it wants |
 //! | [`certify`](ShapesProductView::certify) | COLD — never in normal usage | the shapes dataset's canonical identity | a verify subcommand, a conformance harness |
 //!
 //! `admit` and `admit_expecting` are two entry points over ONE body: the second
@@ -1024,6 +1025,54 @@ impl<'a> ShapesProductView<'a> {
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
     ) -> Result<PreparedShapes, ShapesProductError> {
+        self.rebuild_bound(profile, host, None)
+    }
+
+    /// **The forward-compatibility path, bound to the product the caller MEANT.**
+    /// Re-derive the preparation exactly as [`rebuild`](Self::rebuild) does, but only
+    /// after the product's own input binding is confirmed to be `expected_identity`.
+    ///
+    /// A reader that meets an unknown stage id still has the same question
+    /// [`admit_expecting`](Self::admit_expecting) answers for the known-stage
+    /// path: *is this the product I asked for?* The rescue that `rebuild` performs
+    /// does not make that question go away — a cache entry from another build is
+    /// still just a file on disk that could be the wrong one — so the same 32-byte
+    /// comparison runs first here too, ahead of the profile check, for the same
+    /// reason it runs first in [`admit_expecting`](Self::admit_expecting): a
+    /// caller who named the wrong artifact is told THAT, rather than being handed
+    /// a well-formed report about a shapes graph nobody asked about.
+    ///
+    /// The comparison reads the envelope's own identity region, which is decoded
+    /// and authenticated by [`ShapesProduct::open`] independently of the stage id
+    /// — a product whose stage this build does not know still declares which
+    /// inputs it was compiled from, so the expectation is exactly as free here as
+    /// it is on [`admit_expecting`](Self::admit_expecting).
+    ///
+    /// # Errors
+    ///
+    /// [`ProductDimension::ShapesGraph`] when the product's binding is not the one
+    /// required. Otherwise every dimension [`rebuild`](Self::rebuild) refuses on.
+    pub fn rebuild_expecting(
+        self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+        expected_identity: &[u8; 32],
+    ) -> Result<PreparedShapes, ShapesProductError> {
+        self.rebuild_bound(profile, host, Some(expected_identity))
+    }
+
+    /// The ONE rebuild path, with the caller's expectation as its only variable —
+    /// the same arrangement [`admit_bound`](Self::admit_bound) makes for the
+    /// admission path.
+    fn rebuild_bound(
+        self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+        expected_identity: Option<&[u8; 32]>,
+    ) -> Result<PreparedShapes, ShapesProductError> {
+        if let Some(expected) = expected_identity {
+            self.verify_expected_identity(expected)?;
+        }
         self.verify_profile(profile)?;
         self.refuse_ungovernable_decode()?;
 

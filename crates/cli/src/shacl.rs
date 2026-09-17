@@ -31,12 +31,12 @@
 //!   actually carries, not by guessing.
 //!
 //! Both print a refusal's DIMENSION, because the dimension is the stable thing a
-//! caller branches on: `stage-id` means re-pack or restore with a rebuild,
-//! `container-digest` means the file is corrupt in place, `function-registry` means
-//! the caller's own configuration is wrong and re-packing will not help. Collapsing
-//! those to one exit code and one prose string is exactly what the typed boundary
-//! exists to prevent, so the label is written to stderr as a `key value` line
-//! alongside the message.
+//! caller branches on: `stage-id` means re-pack, or restore with `validate
+//! --shapes-product --rebuild`; `container-digest` means the file is corrupt in
+//! place; `function-registry` means the caller's own configuration is wrong and
+//! re-packing will not help. Collapsing those to one exit code and one prose
+//! string is exactly what the typed boundary exists to prevent, so the label is
+//! written to stderr as a `key value` line alongside the message.
 //!
 //! # Exit codes
 //!
@@ -95,8 +95,8 @@ use crate::{sink, source};
 /// The read and the import fold are [`crate::shapes_source::read_shapes_document`] and
 /// [`crate::shapes_source::fold_shapes_imports`] — the identical functions
 /// `validate --shapes --import` calls — rather than a second copy of the same walk. That is
-/// what makes `purrdf shacl pack --import IRI=FILE … | purrdf validate --shapes-product …`
-/// and `purrdf validate --shapes … --import IRI=FILE …` agree by construction: there is
+/// what makes a product written by `purrdf shacl pack --import IRI=FILE` and a run of
+/// `purrdf validate --shapes --import IRI=FILE` agree by construction: there is
 /// exactly one implementation of "what does folding this closure mean", so the two commands
 /// cannot silently diverge on it the way they used to, when this lane parsed raw text with no
 /// import table at all and dropped an unresolved `owl:imports` with nothing printed.
