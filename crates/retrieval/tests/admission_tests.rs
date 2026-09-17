@@ -17,10 +17,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
-    Metric, Plan, PlanOrigin, ProducerDecision, ProducerStatus, RankedStreamImpl, RejectionReason,
-    RequestTerm, RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, Weight, compile,
-    contribution, execute,
+    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionError,
+    FusionProfile, Iri, Metric, Plan, PlanOrigin, ProducerDecision, ProducerStatus,
+    RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
+    UnservedReason, UnservedTerm, compile, contribution, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -952,52 +952,97 @@ fn an_environment_that_names_no_profile_checks_no_monotone_range() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Weights
+// 5. Weights are the fusion law's, and are checked where they live
+//
+// A plan records no weights, so the admission waist has no weight dimension.
+// Both halves of what one would have asked are answered by the value that
+// actually holds the fusing weights, and these two tests pin them there — each
+// with the neighbouring case that must still be admitted, because a weight
+// check that over-refuses costs a caller its whole answer.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn admission_rejects_undeclared_stratum_weight() {
+fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
+    let stratum = iri(&ex("stratum/text"));
+
+    // The criterion: a non-positive weight cannot participate in the §5 sum, so
+    // no profile carrying one can be built. A plan therefore cannot present one.
+    let error = FusionProfile::new(BTreeMap::from([(stratum.clone(), Fixed::ZERO)]), 60)
+        .expect_err("a zero weight cannot fuse");
+    match error {
+        FusionError::NonPositiveWeight {
+            stratum: named,
+            weight,
+        } => {
+            assert_eq!(named, stratum.as_str());
+            assert_eq!(weight, Fixed::ZERO);
+        }
+        other => panic!("expected NonPositiveWeight, got {other:?}"),
+    }
+
+    // THE NEIGHBOURING CASE: the smallest strictly positive weight there is —
+    // one raw unit, `10^-12` — is admitted. The refusal is of a weight that
+    // cannot contribute at all, never of a small one. (What such a weight cannot
+    // do is order a deep stratum, and that is a different, separately named
+    // dimension: see the monotone-depth tests above.)
+    let thin = FusionProfile::new(BTreeMap::from([(stratum.clone(), Fixed::from_raw(1))]), 60)
+        .expect("one raw unit is strictly positive");
+    assert_eq!(thin.weight(&stratum), Some(Fixed::from_raw(1)));
+
+    // And a profile a plan can actually be fused under admits that plan, with no
+    // weight dimension of its own left at the waist to trip over.
     let registry = fixture_registry();
     let stats = statistics("r1");
-    let mut plan = fresh_plan(&registry, &stats);
-    plan.stratum_weights
-        .insert(iri(&ex("stratum/ghost")), Weight::new(Fixed::ONE));
+    let plan = fresh_plan(&registry, &stats);
+    let weights: BTreeMap<Iri, Fixed> = plan
+        .stratum_depths
+        .keys()
+        .cloned()
+        .map(|reached| (reached, Fixed::ONE))
+        .collect();
+    let profile = FusionProfile::new(weights, 60).expect("unit weights are valid");
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
-        fusion_profile: None,
+        fusion_profile: Some(&profile),
     };
-    let error = compile(&plan, &env).expect_err("a weight for an undeclared stratum is refused");
-    match error {
-        AdmissionError::UndeclaredStratumWeight { stratum } => {
-            assert_eq!(*stratum, iri(&ex("stratum/ghost")));
-        }
-        other => panic!("expected UndeclaredStratumWeight, got {other:?}"),
-    }
+    compile(&plan, &env).expect("a valid profile admits the plan it will fuse");
 }
 
 #[test]
-fn admission_rejects_invalid_weight() {
+fn a_profile_weighting_a_stratum_no_producer_emits_under_is_admitted() {
+    // A profile is a reusable law, chosen without reference to any one plan, so
+    // a weight for a stratum this request never reaches costs nothing and hides
+    // nothing: no stream ever carries that stratum, so the weight is simply
+    // never consulted. Refusing it would refuse the reuse a profile exists for.
     let registry = fixture_registry();
     let stats = statistics("r1");
-    let mut plan = fresh_plan(&registry, &stats);
-    plan.stratum_weights
-        .insert(iri(&ex("stratum/text")), Weight::from_raw(0));
+    let plan = fresh_plan(&registry, &stats);
+    let ghost = iri(&ex("stratum/ghost"));
+    let weights: BTreeMap<Iri, Fixed> = plan
+        .stratum_depths
+        .keys()
+        .cloned()
+        .chain(core::iter::once(ghost.clone()))
+        .map(|stratum| (stratum, Fixed::ONE))
+        .collect();
+    let profile = FusionProfile::new(weights, 60).expect("every weight is strictly positive");
+    assert_eq!(
+        profile.weight(&ghost),
+        Some(Fixed::ONE),
+        "the profile does declare the stratum nothing emits under"
+    );
+
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
-        fusion_profile: None,
+        fusion_profile: Some(&profile),
     };
-    let error = compile(&plan, &env).expect_err("a non-positive weight is refused");
-    match error {
-        AdmissionError::InvalidWeight {
-            stratum, weight, ..
-        } => {
-            assert_eq!(*stratum, iri(&ex("stratum/text")));
-            assert_eq!(weight, Fixed::ZERO);
-        }
-        other => panic!("expected InvalidWeight, got {other:?}"),
-    }
+    let compiled = compile(&plan, &env).expect("an unreached weight is not the plan's problem");
+    assert!(
+        compiled.units.iter().all(|unit| unit.stratum != ghost),
+        "and no unit is emitted for it, because no producer ranks there"
+    );
 }
 
 // ---------------------------------------------------------------------------

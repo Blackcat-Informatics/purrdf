@@ -10,7 +10,7 @@ use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     Fixed, Iri, Metric, PLAN_VERSION, Plan, PlanError, PlanOrigin, ProducerBinding,
     ProducerDecision, RegistryId, RejectionReason, RequestTerm, StatisticsEntry,
-    StatisticsSnapshot, Term, UnservedReason, UnservedTerm, Weight,
+    StatisticsSnapshot, Term, UnservedReason, UnservedTerm,
 };
 
 fn iri(text: &str) -> Iri {
@@ -21,21 +21,9 @@ fn stratum() -> Iri {
     iri("http://example.org/stratum/a")
 }
 
-/// A whole-number stratum weight.
-///
-/// `Fixed::from_integer` takes the number a reader means; `Fixed::from_raw`
-/// takes raw units of `10^-12`, so `Weight::from_raw(2)` would be `2 * 10^-12`
-/// rather than two. Weights are only ever compared with each other, so mixing
-/// the two constructors in one map is an error nothing refuses.
-fn unit_weight(units: i64) -> Weight {
-    Weight::new(Fixed::from_integer(units).expect("a small integer is representable"))
-}
-
 fn baseline() -> Plan {
     let mut stratum_depths = HashMap::new();
     stratum_depths.insert(stratum(), 10);
-    let mut stratum_weights = HashMap::new();
-    stratum_weights.insert(stratum(), Weight::new(Fixed::ONE));
 
     Plan {
         version: Plan::VERSION,
@@ -92,7 +80,6 @@ fn baseline() -> Plan {
             },
         ],
         stratum_depths,
-        stratum_weights,
         statistics_snapshot: StatisticsSnapshot {
             source: "example-statistics".to_owned(),
             revision: "r1".to_owned(),
@@ -334,20 +321,20 @@ fn the_digest_separates_every_interval_field() {
 #[test]
 fn canonical_bytes_are_stable_across_map_order() {
     let mut plan = baseline();
-    plan.stratum_weights
-        .insert(iri("http://example.org/stratum/z"), unit_weight(2));
-    plan.stratum_weights
-        .insert(iri("http://example.org/stratum/m"), unit_weight(3));
+    plan.stratum_depths
+        .insert(iri("http://example.org/stratum/z"), 20);
+    plan.stratum_depths
+        .insert(iri("http://example.org/stratum/m"), 30);
     let mut shuffled = plan.clone();
-    shuffled.stratum_weights.clear();
+    shuffled.stratum_depths.clear();
     for key in [
         "http://example.org/stratum/z",
         "http://example.org/stratum/a",
         "http://example.org/stratum/m",
     ] {
         shuffled
-            .stratum_weights
-            .insert(iri(key), plan.stratum_weights[&iri(key)]);
+            .stratum_depths
+            .insert(iri(key), plan.stratum_depths[&iri(key)]);
     }
     assert_eq!(plan.canonical_bytes(), shuffled.canonical_bytes());
 }
@@ -403,10 +390,6 @@ fn digest_is_sensitive_to_every_field() {
     let mut changed = base.clone();
     changed.stratum_depths.insert(stratum(), 11);
     assert_ne!(changed.id(), base_id, "stratum depth");
-
-    let mut changed = base.clone();
-    changed.stratum_weights.insert(stratum(), unit_weight(2));
-    assert_ne!(changed.id(), base_id, "stratum weight");
 
     let mut changed = base.clone();
     changed.statistics_snapshot.revision = "r2".to_owned();
@@ -515,6 +498,33 @@ fn version_mismatch_on_decode_refuses_loudly() {
         }
         other => panic!("expected a loud version mismatch, got {other:?}"),
     }
+}
+
+/// Version 1 carried a per-stratum weight map between the depths and the
+/// statistics snapshot. Removing it moved every byte after the depths, so a
+/// version-1 encoding read under this layout would take the old weight count
+/// for the statistics source's length — a plan nobody wrote, under an identity a
+/// caller still recognises. The version therefore moved with the layout, and the
+/// old one is refused by name.
+#[test]
+fn the_superseded_layout_is_refused_by_name_rather_than_misread() {
+    let mut bytes = baseline().canonical_bytes();
+    bytes[..2].copy_from_slice(&1_u16.to_le_bytes());
+    match Plan::from_canonical_bytes(&bytes) {
+        Err(PlanError::VersionMismatch { found, expected }) => {
+            assert_eq!(found, 1, "the refusal names the layout it was handed");
+            assert_eq!(expected, PLAN_VERSION);
+        }
+        other => panic!("expected a loud version mismatch, got {other:?}"),
+    }
+
+    // THE NEIGHBOURING CASE: the same plan, written by this build, still
+    // decodes. What is refused is the old layout, not the plan.
+    let plan = baseline();
+    assert_eq!(
+        Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("this build's layout decodes"),
+        plan
+    );
 }
 
 #[test]

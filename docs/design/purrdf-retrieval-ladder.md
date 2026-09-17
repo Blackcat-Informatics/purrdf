@@ -79,9 +79,20 @@ query that silently answers less than the registry promised. Admission
 therefore checks the plan against the registry's declared invariants —
 producers the registry **declares** mandatory are present and receive
 what the registry says they must receive, per-stratum depths respect
-declared bounds, weights refer to declared strata and are valid under §5
-— and refuses with the exact violated dimension rather than executing a
-plausible subset.
+declared bounds — and refuses with the exact violated dimension rather
+than executing a plausible subset.
+
+Stratum weights are **not** among those invariants, and §8 is why: the
+fusion profile is deliberately not a planning input, so a plan records no
+weights for admission to check. The two things a weight dimension would
+have asked are answered where the fusing weights live instead. A weight
+unusable under §5 cannot exist, because `FusionProfile` construction
+refuses a non-positive weight, an empty weight map, and a weight vector
+whose admitted ceiling leaves the fixed-point range. And the mismatch
+that can actually cost a caller rows — a stratum the plan reaches that the
+profile does not weight — is *reported* per stratum on the answer rather
+than refused, because a profile is a reusable law chosen without
+reference to any one plan.
 
 The composition layer itself takes no position on which producers must
 exist. Whether some producer is mandatory, always-applicable, or must
@@ -114,7 +125,7 @@ is called with the term absent from its arguments and the emitted text
 carries no trace of the request. Two different requests then compile to
 the same query, which is exactly what that producer asked for. So the
 decision lives in the plan instead, per term: such a term is bound to
-no producer and is reported in the plan's own unserved-term evidence,
+no producer and is reported in the plan value's own unserved-term evidence,
 which makes an empty evidence list mean the strong thing — every term
 reached a producer *with its content*. Between the text and that list,
 nothing the planner chose is unaccounted for.
@@ -262,6 +273,35 @@ are natively this), so that configuration belongs at the first exit. The
 question a host can act on while reading the refusal is therefore: *do
 you want these two weighted differently, and is the score bounded? Then
 separate strata.*
+
+**The input protocol is validated against what each producer declared,
+not against one law applied to all of them.** A ranked producer states,
+where it is registered, how its rows are ordered and whether an item may
+repeat within one invocation. `fuse` is the consumer both declarations
+were written for, so both reach it — carried from the registry through
+the compiled unit and the executed stream rather than re-fetched at the
+end — and each is honoured on its own terms. A producer that declares its
+repeats are the consumer's to remove is **de-duplicated**: one
+contribution per `(stratum, item)`, at the best rank the stream gave it,
+never counted twice. A producer that declares an item appears at most
+once is believed, and pays no per-stream identity set for the promise —
+which matters, because that set is the one structure a fusion holds that
+grows with the rows *pulled* rather than with the disagreement window, so
+an honest uniqueness declaration is what makes a deep answer affordable.
+Refusing the permissive declaration instead would be the mirror failure:
+a policy whose own definition names the consumer's obligation, rejected by
+the consumer for exercising it.
+
+The ordering declaration reads the same way. Both spellings forbid a
+contribution that rises with rank — the threshold over the stream heads
+would otherwise not be an upper bound and certification would be unsound
+— and they differ exactly on equality. A producer that declared its ranks
+may tie is admitted when two adjacent ranks carry one contribution; one
+that declared every rank unambiguous is refused, because that equality is
+precisely the condition under which the fused sum can no longer separate
+those ranks. It is the same claim the monotone-depth dimension above
+refuses at admission, held one layer lower against a stream that reached
+fusion without passing the waist.
 
 ## 6. Producer status survives fusion — the only place it can die
 

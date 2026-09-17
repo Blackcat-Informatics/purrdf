@@ -110,16 +110,11 @@
     "http://example.org/stratum/text": 100,
     "http://example.org/stratum/universal": 200
   },
-  "stratum_weights": {
-    "http://example.org/stratum/graph": 1000000000000,
-    "http://example.org/stratum/text": 1000000000000,
-    "http://example.org/stratum/universal": 1000000000000
-  },
   "unserved_terms": [
     {
       "reason": "AcceptedWithoutPlacement",
       "request_term": 1
     }
   ],
-  "version": 1
+  "version": 2
 }

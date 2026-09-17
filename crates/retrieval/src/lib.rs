@@ -58,6 +58,18 @@
 //! once every stream has reached a terminal status — its own receipt, or the
 //! contribution bound the fused top-k stopped reading it at.
 //!
+//! That includes what each producer declared about its *own* rows. A ranked
+//! producer states its rank ordering and its duplicate handling where it is
+//! registered, and fusion is the consumer both declarations were written for, so
+//! they are carried from the registry to that consumer as a [`StreamContract`] —
+//! read at the admission waist into [`StratumUnit`], tagged onto every
+//! [`StratumStream`], reported through [`RankedStream::contract`]. A producer
+//! that declared [`DuplicatePolicy::Allowed`] is de-duplicated, which is what
+//! that policy says its consumer must do; one that declared
+//! [`DuplicatePolicy::Unique`] is believed and costs no per-stream identity set
+//! at all. A [`RankOrdering::StrictlyDescending`] stream is held to strict
+//! descent and a [`RankOrdering::NonIncreasing`] one is not.
+//!
 //! # Fusion is a law, not a knob
 //!
 //! A [`FusionProfile`] fixes the decay rule and its smoothing constant, every
@@ -234,25 +246,29 @@ pub use id::{
     FUSION_PROFILE_ID_BYTES, FUSION_PROFILE_ID_DOMAIN, FUSION_PROFILE_VERSION, FusionProfileId,
     PLAN_ID_BYTES, PLAN_ID_DOMAIN, PLAN_VERSION, PlanId,
 };
-pub use iri::{Iri, Term, Weight};
+pub use iri::{Iri, Term};
 pub use plan::{
     Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
     StatisticsSnapshot, UnservedReason, UnservedTerm,
 };
 pub use planner::plan;
-pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
+pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
 pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
 pub use request::{Metric, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
 pub use statistics::Statistics;
 
-// The exact fixed-point type stratum weights and fused scores are expressed in,
-// and the fixed-point scale itself. Re-exported so a caller building a plan or
-// a fusion profile can name those values without depending on `purrdf-text`
-// directly.
+// The exact fixed-point type a fusion profile's weights and the fused scores
+// are expressed in, and the fixed-point scale itself. Re-exported so a caller
+// building a plan or a fusion profile can name those values without depending
+// on `purrdf-text` directly.
 pub use fixed::{Fixed, RECIP_K};
 pub use purrdf_text::SCALE_DIGITS;
 // The registry instance identity a plan records. Re-exported for the same
 // reason: `Plan::registry_instance_id` is a value a caller compares against a
 // live Registry.
 pub use purrdf_sparql_eval::RegistryId;
+// The two halves of a producer's declared stream contract. Re-exported because
+// `StreamContract` is built from them and a caller assembling a stream of its
+// own must be able to name them without depending on the evaluator crate.
+pub use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering};

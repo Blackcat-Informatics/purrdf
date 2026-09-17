@@ -68,8 +68,8 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError, RankedStream, Term,
-    TopK, contribution, fuse,
+    DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError,
+    RankOrdering, RankedStream, StreamContract, Term, TopK, contribution, fuse,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -151,6 +151,14 @@ impl RankedStream for ScriptedStream {
         Ok(ProducerReceipt::Exhausted {
             rows_emitted: self.emitted,
         })
+    }
+
+    /// The fixture's scripted rows are distinct and strictly rank-ordered, so
+    /// this is what they honestly declare. It is part of the determinism claim:
+    /// the contract decides what the engine holds and refuses, so a target that
+    /// read it differently would fuse differently.
+    fn contract(&self) -> StreamContract {
+        StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique)
     }
 }
 

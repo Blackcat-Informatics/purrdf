@@ -92,22 +92,36 @@
 
 use std::collections::BTreeMap;
 
-use purrdf_sparql_eval::{PfDescriptor, RegistryId};
+use purrdf_sparql_eval::{PfDescriptor, RankedDeclaration, RegistryId};
 
 use crate::admission::{AdmissionEnvironment, AdmissionError, admit_plan};
 use crate::id::PlanId;
 use crate::iri::Iri;
 use crate::matching::{PlacementError, place, render_slots};
 use crate::plan::{Plan, ProducerBinding};
+use crate::ranked_stream::StreamContract;
 use crate::render::RenderError;
 
-/// One stratum's independently executable query text.
+/// One stratum's independently executable query text, and the contract the rows
+/// it returns will arrive under.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StratumUnit {
     /// The caller-supplied stratum the unit ranks within.
     pub stratum: Iri,
     /// A self-contained SPARQL `SELECT` over the stratum's registered relations.
     pub sparql: String,
+    /// The rank ordering and duplicate handling the stratum's producer
+    /// declared — read off the registry here, at the one stage that is already
+    /// holding the declaration, and carried forward rather than re-fetched.
+    ///
+    /// A stratum carries exactly one producer, so this is that producer's own
+    /// declaration with nothing derived: there is no second producer's contract
+    /// to reconcile it with, and none to weaken it to. [`execute`](crate::execute)
+    /// tags each stream with it and the fusion engine reads it before pulling a
+    /// row, so the promise a stream is held to is the one the registry the unit
+    /// was *compiled against* stated — an identity `execute` re-checks before it
+    /// runs anything.
+    pub contract: StreamContract,
 }
 
 /// The admitted, compiled plan: the query units plus the identities that pin them.
@@ -167,10 +181,12 @@ pub fn compile(
             // nothing reporting it.
             continue;
         };
-        let sparql = emit_unit(plan, binding, &admitted.descriptors, *depth)?;
+        let declaration = ranked_declaration(binding, &admitted.descriptors)?;
+        let sparql = emit_unit(plan, binding, declaration, &admitted.descriptors, *depth)?;
         units.push(StratumUnit {
             stratum: stratum.clone(),
             sparql,
+            contract: StreamContract::declared(declaration),
         });
     }
     units.sort_by(|left, right| left.stratum.cmp(&right.stratum));
@@ -183,14 +199,33 @@ pub fn compile(
     })
 }
 
+/// The ranked declaration `binding`'s producer supplied at registration.
+///
+/// Looked up once per stratum and handed to both readers — the emitter, which
+/// needs its placements, and the unit's [`StreamContract`], which is two of its
+/// fields. One lookup because one declaration: a second read could drift from
+/// the first, and the text and the contract must describe the same producer.
+fn ranked_declaration<'a>(
+    binding: &ProducerBinding,
+    descriptors: &'a BTreeMap<String, PfDescriptor>,
+) -> Result<&'a RankedDeclaration, AdmissionError> {
+    descriptors
+        .get(&binding.producer)
+        .ok_or_else(|| malformed(binding, "has no registry declaration to compile against"))?
+        .ranked
+        .as_ref()
+        .ok_or_else(|| malformed(binding, "declares no ranked capability to compile against"))
+}
+
 /// Render one stratum's `SELECT` over its one `binding` at `depth`.
 fn emit_unit(
     plan: &Plan,
     binding: &ProducerBinding,
+    declaration: &RankedDeclaration,
     descriptors: &BTreeMap<String, PfDescriptor>,
     depth: u32,
 ) -> Result<String, AdmissionError> {
-    let branch = emit_branch(plan, binding, descriptors, depth)?;
+    let branch = emit_branch(plan, binding, declaration, descriptors, depth)?;
     Ok(format!(
         "SELECT ?{CANDIDATE_NAME} WHERE {{\n  {branch}\n}}\nLIMIT {depth}"
     ))
@@ -200,16 +235,13 @@ fn emit_unit(
 fn emit_branch(
     plan: &Plan,
     binding: &ProducerBinding,
+    declaration: &RankedDeclaration,
     descriptors: &BTreeMap<String, PfDescriptor>,
     depth: u32,
 ) -> Result<String, AdmissionError> {
     let descriptor = descriptors
         .get(&binding.producer)
         .ok_or_else(|| malformed(binding, "has no registry declaration to compile against"))?;
-    let declaration = descriptor
-        .ranked
-        .as_ref()
-        .ok_or_else(|| malformed(binding, "declares no ranked capability to compile against"))?;
     let subject = descriptor.subject_arity;
     let total = subject + descriptor.object_arity;
     if total == 0 {

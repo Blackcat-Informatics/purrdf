@@ -402,7 +402,6 @@ AMBIGUOUS_PLAN_PHRASES: frozenset[str] = frozenset(
         "crates/retrieval/src/lib.rs",
         "crates/retrieval/src/matching.rs",
         "crates/retrieval/src/plan.rs",
-        "crates/retrieval/src/planner.rs",
         "crates/retrieval/tests/admission_tests.rs",
         "crates/retrieval/tests/search.rs",
         "crates/sparql-eval/src/governor/ledger.rs",

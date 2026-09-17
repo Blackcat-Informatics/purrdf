@@ -51,8 +51,11 @@ The stages:
 * `Plan` — pure, inspectable, editable and serializable data: the request
   terms, per-producer bindings, selected/rejected producers with reasons, every
   request term that reached no producer at all and why (`UnservedTerm`), the
-  per-stratum depths and weights, the statistics snapshot it was planned
-  against, and both registry identities.
+  per-stratum depths, the statistics snapshot it was planned against, and both
+  registry identities. It records **no** stratum weights: the weights that fuse
+  an answer belong to the `FusionProfile`, which is chosen later and is
+  deliberately not a planning input, so a plan carrying a second set could only
+  be a number no fusion reads.
 * `PlanId` — a domain-separated BLAKE3 digest over a versioned, canonical,
   length-framed encoding of the plan. A version mismatch on decode refuses
   loudly rather than guessing.

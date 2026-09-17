@@ -54,6 +54,15 @@
 //! [`RankedStreamAdapter`](crate::RankedStreamAdapter), the same exported bridge
 //! [`search`](crate::search) composes with. Stopping here and resuming later is
 //! one supported path, not a private one.
+//!
+//! What *is* attached here is the producer's own ranked-stream contract —
+//! its rank ordering and its duplicate handling — carried through from the
+//! compiled unit into [`StratumStream::contract`]. That is not a fusion input
+//! the way a weight is: it is the producer's declaration about its own rows, and
+//! the same one-stratum-one-producer rule the ranks rest on makes it
+//! unambiguous, so a stratum's contract is simply its producer's. It travels
+//! with the rows rather than being looked up again at the end, for the reason
+//! the plan identity does.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -64,16 +73,28 @@ use crate::compile::{CANDIDATE_NAME, CompiledRetrieval};
 use crate::fusion_stream::ProducerStatus;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, StreamContract};
 use crate::render::candidate_lexical;
 
-/// One stratum's ranked rows, tagged with the pinned plan they descend from.
+/// One stratum's ranked rows, tagged with the pinned plan they descend from and
+/// the contract its producer declared them under.
 #[derive(Debug)]
 pub struct StratumStream {
     /// The stratum the stream's ranks are within.
     pub stratum: Iri,
     /// The admitted plan the stream was compiled from.
     pub plan_id: PlanId,
+    /// The rank ordering and duplicate handling the stratum's producer declared,
+    /// carried from [`StratumUnit::contract`](crate::StratumUnit).
+    ///
+    /// It travels with the rows for the reason [`Self::plan_id`] does: the
+    /// fusion stage is the consumer those two declarations were written for, and
+    /// a consumer that re-fetched them from a registry at the end would be
+    /// reading a fact about that registry rather than about the stream in its
+    /// hand. A caller that stops here and fuses later hands this to
+    /// [`RankedStreamAdapter::new`](crate::RankedStreamAdapter::new) alongside
+    /// the stream, which is why it is a field of the same value.
+    pub contract: StreamContract,
     /// The evaluator's rows, in rank order.
     pub stream: RankedStreamImpl,
 }
@@ -266,6 +287,7 @@ pub async fn execute<D: DatasetView + Sync>(
                     streams.push(StratumStream {
                         stratum: unit.stratum.clone(),
                         plan_id: compiled.plan_id,
+                        contract: unit.contract,
                         stream: RankedStreamImpl::new(ranked),
                     });
                     statuses.insert(

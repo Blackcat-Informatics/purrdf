@@ -10,7 +10,27 @@ use core::fmt;
 /// A plan's encoded form begins with this value. A decoder that reads any other
 /// version refuses with [`PlanError::VersionMismatch`](crate::PlanError::VersionMismatch)
 /// rather than reinterpret the bytes under a layout they were not written for.
-pub const PLAN_VERSION: u16 = 1;
+///
+/// # Why this is 2
+///
+/// Version 1 carried a per-stratum weight map between the depths and the
+/// statistics snapshot. Nothing read it: the planner wrote the identity weight
+/// for every stratum unconditionally, and the weights that actually fuse an
+/// answer come from a [`FusionProfile`](crate::FusionProfile), which §8 of the
+/// design record deliberately keeps out of the plan. A plan recording a weight
+/// of one and a profile weighting that stratum a thousandth both admitted and
+/// fused with nothing reconciling them, so the field made plan identity
+/// sensitive to a number that decided nothing. It is gone.
+///
+/// Removing a field is not the append-only change a new discriminator byte is
+/// (see `plan.rs`'s tag space, which grows without moving this value). The
+/// weight map sat *inside* the layout, so a version-1 plan's remaining bytes lie
+/// at different offsets under version 2: a decoder reading those bytes would
+/// take the old weight count for the statistics source's length and answer with
+/// a plan nobody wrote. The version is therefore bumped so the decoder refuses
+/// the old layout by name — `VersionMismatch { found: 1, expected: 2 }` — rather
+/// than mis-reading it.
+pub const PLAN_VERSION: u16 = 2;
 
 /// The domain-separation prefix mixed into every [`PlanId`].
 ///

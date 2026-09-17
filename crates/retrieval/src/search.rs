@@ -72,6 +72,18 @@
 //! anywhere between the plan and the trailer and the search fails instead of
 //! filing its rows under a plan that did not produce them.
 //!
+//! # So does each producer's declared stream contract
+//!
+//! The same route carries a second thing the fusion stage is the consumer of:
+//! the rank ordering and duplicate handling each producer declared where it was
+//! registered. [`compile`] reads them off the registry it admits against,
+//! [`execute`] tags every stream with them, the bridge below reports them, and
+//! [`FusionStream`](crate::FusionStream) reads them before it pulls a row — so a
+//! producer that declared its repeats are the consumer's to remove is
+//! de-duplicated, and one that promised there are none is believed and charged
+//! nothing for the promise. `search` chooses neither; it only refuses to lose
+//! the declaration on the way.
+//!
 //! # A term that reached no producer is in the answer too
 //!
 //! Statuses are per producer, and a caller asks per term. A request can carry a
@@ -143,7 +155,7 @@ use crate::id::{FusionProfileId, PlanId};
 use crate::iri::{Iri, Term};
 use crate::plan::UnservedTerm;
 use crate::planner::plan;
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
 use crate::reciprocal_rank::contribution_under;
 use crate::request::RetrievalRequest;
 use crate::statistics::Statistics;
@@ -341,8 +353,16 @@ where
     for stratum_stream in executed {
         let stratum = stratum_stream.stratum.clone();
         let plan_id = stratum_stream.plan_id;
-        let Some(adapter) = RankedStreamAdapter::new(stratum_stream.stream, profile, &stratum)
-        else {
+        // The contract travels with the stream, exactly as the plan identity
+        // does: it is the producer's own declaration, read at the admission
+        // waist and carried, so the promise fusion holds this stream to is the
+        // one its producer made and not one re-read off a registry afterwards.
+        let Some(adapter) = RankedStreamAdapter::new(
+            stratum_stream.stream,
+            stratum_stream.contract,
+            profile,
+            &stratum,
+        ) else {
             unweighted_strata.push(stratum);
             continue;
         };
@@ -445,6 +465,8 @@ where
 pub struct RankedStreamAdapter {
     /// The executor's rows, in rank order.
     inner: RankedStreamImpl,
+    /// The contract the stratum's producer declared these rows under.
+    contract: StreamContract,
     /// The profile's weight for this stream's stratum.
     weight: Fixed,
     /// The profile's decay rule, carrying its smoothing constant.
@@ -454,13 +476,22 @@ pub struct RankedStreamAdapter {
 }
 
 impl RankedStreamAdapter {
-    /// Bridge `stream` for `stratum` under `profile`, or `None` when `profile`
-    /// declares no weight for that stratum.
+    /// Bridge `stream` for `stratum` under `profile`, reporting `contract`, or
+    /// `None` when `profile` declares no weight for that stratum.
     ///
     /// The weight is read from the profile here rather than taken as an
     /// argument, so a caller cannot attach a weight the profile does not
     /// declare — the contribution is a function of the law in force and of
     /// nothing else.
+    ///
+    /// The contract goes the other way: it is taken as an argument, because it
+    /// is the *producer's* declaration and no profile knows it. A caller
+    /// resuming at [`execute`] holds it beside the stream it is bridging
+    /// ([`StratumStream::contract`](crate::StratumStream)) and passes it
+    /// through; a caller whose stream came from somewhere else states its own,
+    /// with [`StreamContract::new`]. It is a parameter rather than a builder
+    /// step for the reason [`RankedStream::contract`] has no default — there is
+    /// no honest value for a stream that declines to say.
     ///
     /// `None` is the honest answer for an unweighted stratum rather than an
     /// error: a weight is exactly "how much does this count", and a profile that
@@ -468,9 +499,15 @@ impl RankedStreamAdapter {
     /// caller decides what to do with the stream it cannot fuse — [`search`]
     /// names it in [`SearchResult::unweighted_strata`] and fuses the rest.
     #[must_use]
-    pub fn new(stream: RankedStreamImpl, profile: &FusionProfile, stratum: &Iri) -> Option<Self> {
+    pub fn new(
+        stream: RankedStreamImpl,
+        contract: StreamContract,
+        profile: &FusionProfile,
+        stratum: &Iri,
+    ) -> Option<Self> {
         Some(Self {
             inner: stream,
+            contract,
             weight: profile.weight(stratum)?,
             decay: profile.decay(),
             plan_id: None,
@@ -535,6 +572,10 @@ impl RankedStream for RankedStreamAdapter {
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         self.inner.receipt().await
+    }
+
+    fn contract(&self) -> StreamContract {
+        self.contract
     }
 
     fn plan_id(&self) -> Option<PlanId> {

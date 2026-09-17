@@ -23,26 +23,34 @@
 //! name `x`.
 //!
 //! The frontier is not the whole of what a fusion holds, and saying otherwise
-//! would overstate it. Per-stream duplicate detection
-//! ([`ProtocolError::DuplicateItem`]) needs the set of items each stream has
-//! already emitted, and that set is proportional to the rows **pulled**. The
-//! frontier argument bounds exactly that: nothing here ever pulls a row it was
-//! not asked for. Certifying the top `k` through [`FusionStream::next`] pulls
-//! what the threshold argument requires and no more, and
-//! [`FusionStream::trailer`] pulls nothing at all — it reports the state each
-//! stream is already in. A caller that wants every row still pays for every
-//! row, because it asked for them one at a time.
+//! would overstate it. De-duplicating a stream that declared
+//! [`DuplicatePolicy::Allowed`] needs the set of items that stream has already
+//! emitted, and that set is proportional to the rows **pulled**. The frontier
+//! argument bounds exactly that: nothing here ever pulls a row it was not asked
+//! for. Certifying the top `k` through [`FusionStream::next`] pulls what the
+//! threshold argument requires and no more, and [`FusionStream::trailer`] pulls
+//! nothing at all — it reports the state each stream is already in. A caller
+//! that wants every row still pays for every row, because it asked for them one
+//! at a time.
+//!
+//! A stream that declared [`DuplicatePolicy::Unique`] is not charged for that
+//! set at all — there is nothing to de-duplicate, so no identity set is built
+//! for it — and it is the one structure here that grows with the rows pulled
+//! rather than with the disagreement window. Declaring uniqueness truthfully is
+//! therefore what makes a deep answer affordable, and `fusion_frontier_alloc`
+//! measures the difference rather than asserting it.
 
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, btree_map};
 
+use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering};
 use purrdf_text::Fixed;
 
 use crate::error::FusionError;
 use crate::fusion_profile::FusionProfile;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
 
 /// A candidate's identity in the frontier: its canonical term.
 pub type CandidateId = Term;
@@ -271,7 +279,18 @@ pub struct FusionStream<S: RankedStream> {
     next_ranks: Vec<u64>,
     rows_pulled: Vec<u64>,
     last_contribution: Vec<Option<Fixed>>,
-    seen_items: Vec<BTreeSet<Term>>,
+    /// Each stream's declared contract, read once at construction.
+    contracts: Vec<StreamContract>,
+    /// The identity set of every stream that declared
+    /// [`DuplicatePolicy::Allowed`], and `None` for every stream that declared
+    /// [`DuplicatePolicy::Unique`].
+    ///
+    /// The absence is the point, not a micro-optimization: this is the only
+    /// structure in the engine that grows with the rows pulled, and a stream
+    /// that promised no repeats has nothing for it to hold. `None` also makes
+    /// the promise structural — there is no set for a later edit to start
+    /// filling on a stream that declined to pay for one.
+    seen_items: Vec<Option<BTreeSet<Term>>>,
     statuses: BTreeMap<Iri, ProducerStatus>,
     frontier: BTreeMap<CandidateId, CandidateState>,
     threshold: Fixed,
@@ -292,6 +311,13 @@ impl<S: RankedStream> fmt::Debug for FusionStream<S> {
 impl<S: RankedStream> FusionStream<S> {
     /// Build a fusion engine over `streams` under `profile`.
     ///
+    /// Every stream's declared contract is read here, before any row is pulled,
+    /// through [`RankedStream::contract`] — so what the engine holds and what it
+    /// refuses is decided by the producers' own declarations rather than by one
+    /// law applied to all of them. A stream declaring
+    /// [`DuplicatePolicy::Allowed`] gets an identity set to de-duplicate
+    /// against; one declaring [`DuplicatePolicy::Unique`] gets none.
+    ///
     /// No plan identity is attached; use [`with_plan_id`](Self::with_plan_id) to
     /// name the pinned plan the streams came from. [`fuse`](crate::fuse) does
     /// that for its caller, reading the identity off the streams themselves
@@ -300,6 +326,17 @@ impl<S: RankedStream> FusionStream<S> {
     #[must_use]
     pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Self {
         let count = streams.len();
+        let contracts: Vec<StreamContract> = streams
+            .iter()
+            .map(|(_, stream)| stream.contract())
+            .collect();
+        let seen_items = contracts
+            .iter()
+            .map(|contract| match contract.duplicates {
+                DuplicatePolicy::Unique => None,
+                DuplicatePolicy::Allowed => Some(BTreeSet::new()),
+            })
+            .collect();
         Self {
             streams,
             profile,
@@ -310,7 +347,8 @@ impl<S: RankedStream> FusionStream<S> {
             next_ranks: vec![1; count],
             rows_pulled: vec![0; count],
             last_contribution: vec![None; count],
-            seen_items: (0..count).map(|_| BTreeSet::new()).collect(),
+            contracts,
+            seen_items,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
             threshold: Fixed::ZERO,
@@ -446,89 +484,155 @@ impl<S: RankedStream> FusionStream<S> {
         Ok(())
     }
 
-    /// Pull and validate one row from stream `index`.
+    /// Pull and validate rows from stream `index` until one of them is a head,
+    /// or the stream ends.
     ///
-    /// Validation is the whole point of the boundary: rank contiguity, monotone
-    /// contributions, per-stream uniqueness, the profile's contribution value,
-    /// and a consistent terminal receipt.
+    /// Validation is the whole point of the boundary: rank contiguity, the
+    /// declared rank ordering, the profile's contribution value, the declared
+    /// duplicate handling, and a consistent terminal receipt. Every one of those
+    /// is checked on every row the producer emits — including a row this function
+    /// then drops as a declared duplicate, because a dropped row is still a row
+    /// the producer made claims about, and a claim nobody checks is a hole a
+    /// permissive policy could be used to hide a bad row in.
+    ///
+    /// # Why this loops
+    ///
+    /// Under [`DuplicatePolicy::Allowed`] a repeat contributes nothing: the item
+    /// already holds this stratum's best rank, which is its first and lowest,
+    /// and counting it again would add a second contribution for one stratum.
+    /// So the row is validated and discarded, and the loop goes on to the next
+    /// one. A discarded row never becomes a head, so nothing downstream has to
+    /// know a stream repeats at all — including the frontier's own
+    /// once-per-stream check, which stays the exact refusal it was.
+    ///
+    /// The producer is still charged for it. The rank counter advances, the
+    /// monotone baseline advances, and `rows_pulled` counts it, so the terminal
+    /// receipt is still measured against every row the producer actually emitted
+    /// ([`ProtocolError::ForgedReceipt`]).
     async fn fetch(&mut self, index: usize) -> Result<Option<Head>, FusionError> {
-        let pulled = {
-            let (_, stream) = &mut self.streams[index];
-            stream.next().await
-        };
-        let Some((rank, producer_contribution, item)) = pulled? else {
-            let receipt = {
+        loop {
+            let pulled = {
                 let (_, stream) = &mut self.streams[index];
-                stream.receipt().await
-            }?;
-            self.finish(index, receipt)?;
-            return Ok(None);
-        };
+                stream.next().await
+            };
+            let Some((rank, producer_contribution, item)) = pulled? else {
+                let receipt = {
+                    let (_, stream) = &mut self.streams[index];
+                    stream.receipt().await
+                }?;
+                self.finish(index, receipt)?;
+                return Ok(None);
+            };
 
-        let expected_rank = self.next_ranks[index];
-        if rank < expected_rank {
-            return Err(ProtocolError::OutOfOrderRanks {
-                expected: expected_rank,
-                got: rank,
+            let expected_rank = self.next_ranks[index];
+            if rank < expected_rank {
+                return Err(ProtocolError::OutOfOrderRanks {
+                    expected: expected_rank,
+                    got: rank,
+                }
+                .into());
             }
-            .into());
-        }
-        if rank > expected_rank {
-            return Err(ProtocolError::NonContiguousRanks {
-                gap: rank - expected_rank,
+            if rank > expected_rank {
+                return Err(ProtocolError::NonContiguousRanks {
+                    gap: rank - expected_rank,
+                }
+                .into());
             }
-            .into());
+            self.check_ordering(index, rank, producer_contribution)?;
+
+            // The stratum is read by reference, not cloned: an `Iri` owns its
+            // text, so cloning one here would be a heap allocation on every row
+            // every stream emits, to serve a lookup that only borrows and an
+            // error arm that is taken once at most.
+            let weight = {
+                let stratum = &self.streams[index].0;
+                self.profile
+                    .weight(stratum)
+                    .ok_or_else(|| FusionError::UnknownStratum {
+                        stratum: stratum.as_str().to_owned(),
+                    })?
+            };
+            let expected =
+                crate::reciprocal_rank::contribution_under(self.profile.decay(), weight, rank)?;
+            if producer_contribution != expected {
+                return Err(ProtocolError::ContributionMismatch {
+                    expected,
+                    got: producer_contribution,
+                }
+                .into());
+            }
+
+            self.last_contribution[index] = Some(producer_contribution);
+            self.next_ranks[index] = rank + 1;
+            self.rows_pulled[index] += 1;
+
+            let item: Term = item.into();
+            match self.seen_items[index].as_mut() {
+                // `Unique`: the producer promised no repeats, so there is no set
+                // to consult and none to grow. The promise is not unchecked —
+                // `pull` refuses a stream that contributes to one frontier
+                // candidate twice — but once a candidate has been certified and
+                // removed there is nothing left to check it against, and the
+                // retained-forever set that would be is exactly what this arm
+                // declines to pay for. See [`Self::pull`].
+                None => {
+                    return Ok(Some(Head {
+                        rank,
+                        contribution: expected,
+                        item,
+                    }));
+                }
+                // `Allowed`: the producer said repeats happen and the consumer
+                // must de-duplicate, so the consumer de-duplicates. The insert's
+                // own answer is the test, so the repeat costs one set operation
+                // rather than a lookup and an insert.
+                Some(seen) => {
+                    if seen.insert(item.clone()) {
+                        return Ok(Some(Head {
+                            rank,
+                            contribution: expected,
+                            item,
+                        }));
+                    }
+                }
+            }
         }
-        if let Some(previous) =
-            self.last_contribution[index].filter(|previous| producer_contribution > *previous)
-        {
+    }
+
+    /// Hold stream `index`'s contribution sequence to the ordering it declared.
+    ///
+    /// Both declarations forbid a contribution that *rises* with rank, because
+    /// the threshold over the stream heads would otherwise not be an upper bound
+    /// and the whole certification argument would fail. They differ on equality:
+    /// a [`RankOrdering::NonIncreasing`] producer said equal scores may appear in
+    /// any order, so two adjacent ranks carrying one contribution is exactly
+    /// what it declared; a [`RankOrdering::StrictlyDescending`] producer said
+    /// every row has an unambiguous rank, and a repeated contribution is the
+    /// condition under which the fused sum can no longer tell those ranks apart.
+    fn check_ordering(
+        &self,
+        index: usize,
+        rank: u64,
+        contribution: Fixed,
+    ) -> Result<(), ProtocolError> {
+        let Some(previous) = self.last_contribution[index] else {
+            return Ok(());
+        };
+        if contribution > previous {
             return Err(ProtocolError::NonMonotoneContribution {
                 previous,
-                got: producer_contribution,
-            }
-            .into());
+                got: contribution,
+            });
         }
-
-        let item: Term = item.into();
-        if self.seen_items[index].contains(&item) {
-            return Err(ProtocolError::DuplicateItem {
-                item: item.as_str().to_owned(),
-            }
-            .into());
+        if contribution == previous
+            && self.contracts[index].ordering == RankOrdering::StrictlyDescending
+        {
+            return Err(ProtocolError::RepeatedContribution {
+                rank,
+                value: contribution,
+            });
         }
-
-        // The stratum is read by reference, not cloned: an `Iri` owns its text,
-        // so cloning one here would be a heap allocation on every row every
-        // stream emits, to serve a lookup that only borrows and an error arm
-        // that is taken once at most.
-        let weight = {
-            let stratum = &self.streams[index].0;
-            self.profile
-                .weight(stratum)
-                .ok_or_else(|| FusionError::UnknownStratum {
-                    stratum: stratum.as_str().to_owned(),
-                })?
-        };
-        let expected =
-            crate::reciprocal_rank::contribution_under(self.profile.decay(), weight, rank)?;
-        if producer_contribution != expected {
-            return Err(ProtocolError::ContributionMismatch {
-                expected,
-                got: producer_contribution,
-            }
-            .into());
-        }
-
-        self.seen_items[index].insert(item.clone());
-        self.last_contribution[index] = Some(producer_contribution);
-        self.next_ranks[index] = rank + 1;
-        self.rows_pulled[index] += 1;
-
-        Ok(Some(Head {
-            rank,
-            contribution: expected,
-            item,
-        }))
+        Ok(())
     }
 
     /// Record a terminal receipt, refusing one the rows contradict.
@@ -789,20 +893,31 @@ impl<S: RankedStream> FusionStream<S> {
     /// profile's declared ceiling, and [`ProtocolError::DuplicateItem`] when
     /// this stream would contribute to one frontier candidate twice.
     ///
-    /// # One duplicate condition, one error value
+    /// # Where a declared-`Unique` stream's promise is actually checked
     ///
-    /// [`Self::fetch`] is the author of the per-stream uniqueness refusal, and
-    /// it is strictly the broader one: `seen_items[index]` holds every item this
-    /// stream has emitted *ever*, so it refuses a repeat whether or not the
-    /// earlier occurrence is still in the frontier, and it refuses it at the row
-    /// boundary before this function is reached. The check below is the same
-    /// claim restated where `seen_streams` is relied upon — it is what makes
-    /// "`index` is in `seen_streams`" mean "this stream has contributed, once"
-    /// at the point [`Self::is_final`] reads it, rather than an invariant
-    /// maintained at a distance. It raises the same
-    /// [`ProtocolError::DuplicateItem`] carrying the same item, so a protocol
-    /// violation has one name however it is caught, and it costs one `BTreeSet`
-    /// operation, not two: the insert's own return value is the test.
+    /// Here, and only here. A stream that declared
+    /// [`DuplicatePolicy::Unique`] keeps no identity set — that is the whole
+    /// saving the declaration buys, since the set is the one structure that
+    /// grows with the rows pulled — so the refusal below is the engine's own,
+    /// derived from state it needs anyway: `seen_streams` must mean "this stream
+    /// has contributed, once" at the point [`Self::is_final`] reads it, and the
+    /// insert's own return value is the test, so the check costs one `BTreeSet`
+    /// operation and no extra memory at all.
+    ///
+    /// Its reach is exactly the frontier's, and that bound is worth stating
+    /// plainly: a repeat is refused for as long as the earlier occurrence is
+    /// still un-emitted, which is every repeat that could corrupt a candidate's
+    /// score or its best rank. A stream that repeats an item *after* that item
+    /// has already been certified and removed is not detected, because detecting
+    /// it is precisely the retained-forever set the producer's declaration said
+    /// was unnecessary. `Unique` is a promise this layer relies on; a producer
+    /// that cannot make it declares [`DuplicatePolicy::Allowed`] instead and is
+    /// de-duplicated in [`Self::fetch`], completely and at the cost the policy
+    /// implies.
+    ///
+    /// Under `Allowed` this arm is unreachable rather than merely unused: a
+    /// repeat is dropped in [`Self::fetch`] and never becomes a head, so no
+    /// second row from one stream ever reaches one frontier candidate.
     async fn pull(&mut self, index: usize) -> Result<(), FusionError> {
         let Some(head) = self.heads[index].take() else {
             return Ok(());

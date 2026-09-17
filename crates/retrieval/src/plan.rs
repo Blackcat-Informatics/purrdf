@@ -4,10 +4,16 @@
 //! The plan value: pure, inspectable, editable and serializable data.
 //!
 //! A plan records everything the planner decided — which request terms it
-//! bound, which producers it selected or rejected and why, the depth and weight
-//! of every stratum, the statistics it was planned against, and both registry
+//! bound, which producers it selected or rejected and why, the depth of every
+//! stratum, the statistics it was planned against, and both registry
 //! identities. It is a value rather than a reporting obligation, so a caller
 //! can inspect or correct it term by term.
+//!
+//! What it does **not** record is how those strata will be weighted against each
+//! other. That is a [`FusionProfile`](crate::FusionProfile), chosen at `fuse`
+//! time and deliberately not a planning input (§8 of the design record), so a
+//! plan carrying a second weight map could only ever be a number no fusion
+//! reads — and a plan identity sensitive to it.
 //!
 //! The same property makes a plan untrusted input: a value that can be edited
 //! can be edited wrongly, and one that can be deserialized can be forged. The
@@ -33,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use crate::canonical::{Reader, Writer};
 use crate::error::PlanError;
 use crate::id::{PLAN_VERSION, PlanId};
-use crate::iri::{Iri, Term, Weight};
+use crate::iri::{Iri, Term};
 use crate::request::{Metric, RequestTerm};
 
 // Canonical discriminators. One tag space per enum, never reused.
@@ -349,8 +355,6 @@ pub struct Plan {
     pub unserved_terms: Vec<UnservedTerm>,
     /// Per-stratum maximum depth, keyed by stratum label.
     pub stratum_depths: HashMap<Iri, u32>,
-    /// Per-stratum fusion weight, keyed by stratum label.
-    pub stratum_weights: HashMap<Iri, Weight>,
     /// The statistics snapshot the plan was planned against.
     pub statistics_snapshot: StatisticsSnapshot,
     /// The live registry instance the plan was planned against. This is a
@@ -389,7 +393,6 @@ impl PartialEq for Plan {
             && self.producer_decisions == other.producer_decisions
             && self.unserved_terms == other.unserved_terms
             && self.stratum_depths == other.stratum_depths
-            && self.stratum_weights == other.stratum_weights
             && self.statistics_snapshot == other.statistics_snapshot
             && self.registry_instance_id == other.registry_instance_id
             && self.registry_content_fingerprint == other.registry_content_fingerprint
@@ -415,7 +418,6 @@ impl Plan {
         write_bindings(&mut writer, &self.producer_bindings);
         write_decisions(&mut writer, &self.producer_decisions);
         write_depths(&mut writer, &self.stratum_depths);
-        write_weights(&mut writer, &self.stratum_weights);
         write_statistics(&mut writer, &self.statistics_snapshot);
         writer.u64(self.registry_instance_id.as_u64());
         writer.string(&self.registry_content_fingerprint);
@@ -443,7 +445,6 @@ impl Plan {
         let producer_bindings = read_bindings(&mut reader)?;
         let producer_decisions = read_decisions(&mut reader)?;
         let stratum_depths = read_depths(&mut reader)?;
-        let stratum_weights = read_weights(&mut reader)?;
         let statistics_snapshot = read_statistics(&mut reader)?;
         let registry_instance_id = RegistryId::from_raw(reader.u64()?);
         let registry_content_fingerprint = reader.string("registry content fingerprint")?;
@@ -461,7 +462,6 @@ impl Plan {
             producer_decisions,
             unserved_terms,
             stratum_depths,
-            stratum_weights,
             statistics_snapshot,
             registry_instance_id,
             registry_content_fingerprint,
@@ -993,37 +993,6 @@ fn read_depths(reader: &mut Reader<'_>) -> Result<HashMap<Iri, u32>, PlanError> 
         depths.insert(key, value);
     }
     Ok(depths)
-}
-
-/// Write the per-stratum weights, sorted by stratum IRI for the reason
-/// [`write_depths`] sorts, and each as its exact raw scaled integer.
-fn write_weights(writer: &mut Writer, weights: &HashMap<Iri, Weight>) {
-    let mut entries: Vec<(&Iri, Weight)> =
-        weights.iter().map(|(key, value)| (key, *value)).collect();
-    entries.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
-    writer.u64(entries.len() as u64);
-    for (key, value) in entries {
-        write_iri(writer, key);
-        writer.i128(value.into_raw());
-    }
-}
-
-/// Read the per-stratum weights written by [`write_weights`].
-///
-/// A raw integer is accepted here whatever its sign. Whether a weight is usable
-/// — strictly positive, keying a stratum the registry declares — is a semantic
-/// question the admission waist answers against a live registry, and refusing it
-/// here would leave a caller unable to decode and inspect the very plan it needs
-/// to correct.
-fn read_weights(reader: &mut Reader<'_>) -> Result<HashMap<Iri, Weight>, PlanError> {
-    let count = reader.count()?;
-    let mut weights = HashMap::with_capacity(count.min(1024));
-    for _ in 0..count {
-        let key = read_iri(reader, "stratum weight key")?;
-        let value = Weight::from_raw(reader.i128()?);
-        weights.insert(key, value);
-    }
-    Ok(weights)
 }
 
 /// Write the statistics snapshot: the provider's label and revision, then each

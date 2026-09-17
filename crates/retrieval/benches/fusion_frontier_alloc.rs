@@ -44,8 +44,8 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    Fixed, FusionProfile, FusionStream, Iri, ProducerReceipt, ProtocolError, RankedStream, Term,
-    contribution,
+    DuplicatePolicy, Fixed, FusionProfile, FusionStream, Iri, ProducerReceipt, ProtocolError,
+    RankOrdering, RankedStream, StreamContract, Term, contribution,
 };
 
 // ---------------------------------------------------------------------------
@@ -261,6 +261,12 @@ impl RankedStream for LazyStream {
         Ok(ProducerReceipt::Exhausted {
             rows_emitted: self.emitted,
         })
+    }
+
+    /// Each stream emits a permutation of the universe, so its items really are
+    /// distinct and its contributions really do strictly descend.
+    fn contract(&self) -> StreamContract {
+        StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique)
     }
 }
 

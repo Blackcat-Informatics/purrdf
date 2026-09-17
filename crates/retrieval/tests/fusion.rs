@@ -15,9 +15,9 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    DecayRule, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream, Iri,
-    PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankedStream, Term, TopK,
-    contribution, contribution_under,
+    DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult,
+    FusionStream, Iri, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
+    RankOrdering, RankedStream, StreamContract, Term, TopK, contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -81,6 +81,21 @@ enum Step {
     Fail(ProtocolError),
 }
 
+/// The contract most fixtures here declare: strictly descending contributions
+/// and no repeated item. It is the honest declaration for a scripted stream of
+/// distinct items at contiguous ranks, and it is what `register_ranked`'s own
+/// fixtures elsewhere in the crate state.
+fn strict_unique() -> StreamContract {
+    StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique)
+}
+
+/// The honest declaration for a producer whose adjacent ranks can carry one
+/// contribution — a stratum weighted so lightly that the truncation collides.
+/// Its rows still never rise; they are simply allowed to tie.
+fn non_increasing_unique() -> StreamContract {
+    StreamContract::new(RankOrdering::NonIncreasing, DuplicatePolicy::Unique)
+}
+
 /// A producer whose rows and failures are pre-scripted.
 struct MockStream {
     steps: VecDeque<Step>,
@@ -91,6 +106,10 @@ struct MockStream {
     pull_counter: Arc<AtomicUsize>,
     /// The pinned plan this stream claims to descend from, if any.
     plan_id: Option<PlanId>,
+    /// What this stream declares about its own rows. A fixture that is *about*
+    /// the declaration states its own; everything else declares the strict,
+    /// unique contract its scripted rows actually satisfy.
+    contract: StreamContract,
 }
 
 impl Drop for MockStream {
@@ -108,6 +127,7 @@ impl MockStream {
             drop_counter: Arc::new(AtomicUsize::new(0)),
             pull_counter: Arc::new(AtomicUsize::new(0)),
             plan_id: None,
+            contract: strict_unique(),
         }
     }
 
@@ -127,6 +147,12 @@ impl MockStream {
     /// The same producer, claiming to descend from `plan_id` (or from no plan).
     fn pinned(mut self, plan_id: Option<PlanId>) -> Self {
         self.plan_id = plan_id;
+        self
+    }
+
+    /// The same producer, declaring `contract` about its rows.
+    fn declaring(mut self, contract: StreamContract) -> Self {
+        self.contract = contract;
         self
     }
 }
@@ -152,6 +178,10 @@ impl RankedStream for MockStream {
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         Ok(self.receipt.clone())
+    }
+
+    fn contract(&self) -> StreamContract {
+        self.contract
     }
 
     fn plan_id(&self) -> Option<PlanId> {
@@ -568,24 +598,11 @@ fn protocol_violations_are_typed() {
         "expected NonContiguousRanks, got {result:?}"
     );
 
-    let duplicate = vec![(
-        stratum("text"),
-        MockStream::new(
-            vec![row(1, weight, K, "a"), row(2, weight, K, "a")],
-            exhausted(2),
-        ),
-    )];
-    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        duplicate, &profile, TOP_K,
-    ));
-    assert!(
-        matches!(
-            &result,
-            Err(FusionError::Protocol(error))
-                if matches!(&**error, ProtocolError::DuplicateItem { item } if item == "a")
-        ),
-        "expected DuplicateItem, got {result:?}"
-    );
+    // A repeated item is a protocol violation too, but its refusal depends on
+    // the stream's *declaration* rather than on the row alone, so it is not part
+    // of this battery: see
+    // `a_declared_unique_streams_repeat_is_refused_while_the_first_is_unemitted`
+    // and the de-duplication tests beside it.
 
     let error_after_rows = vec![(
         stratum("text"),
@@ -1694,13 +1711,20 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
         ),
         (
             stratum("sparse"),
+            // `NonIncreasing`, because under this weight that is what its rows
+            // honestly are: every contribution truncates to zero, so no two
+            // adjacent ranks differ. A producer declaring strict descent here
+            // would be declaring something this profile's arithmetic cannot
+            // deliver, and is refused for exactly that — see
+            // `the_declared_ordering_decides_whether_a_repeated_contribution_is_refused`.
             MockStream::new(
                 vec![
                     row(1, ZERO_CONTRIBUTING_WEIGHT, K, "z"),
                     row(2, ZERO_CONTRIBUTING_WEIGHT, K, "a"),
                 ],
                 exhausted(2),
-            ),
+            )
+            .declaring(non_increasing_unique()),
         ),
     ];
     let result = block_on(run_fuse(streams, &profile));
@@ -1789,34 +1813,54 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
     );
 }
 
-// 20. A same-stream duplicate whose earlier occurrence is still in the frontier
-//     is refused, once, under one name.
+// ---------------------------------------------------------------------------
+// 20. The two declarations a ranked producer makes about its own rows are read,
+//     and each is honoured on its own terms.
 //
-// Two paths could notice it and they must not become two answers. `fetch`'s
-// per-stream `seen_items` is the broader and earlier of the two — it holds every
-// item the stream has ever emitted, so it refuses a repeat whether or not the
-// first is still un-emitted, and it refuses it at the row boundary. `pull`'s
-// `seen_streams` insert is the same claim restated where the finality test reads
-// it, and raises the same `ProtocolError::DuplicateItem` carrying the same item,
-// so the refusal below is one condition with one name however it is caught.
-#[test]
-fn a_same_stream_duplicate_still_in_the_frontier_is_refused() {
-    let profile = profile(&[("dense", Fixed::ONE), ("sparse", Fixed::ONE)], K);
-    // `a` cannot be emitted before the duplicate is read: the sparse stream is
-    // open and has not named it, so it is not final and stays in the frontier.
-    let streams = vec![
-        (
-            stratum("dense"),
-            MockStream::new(
-                vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
-                exhausted(2),
-            ),
-        ),
+// `RankedDeclaration` states a rank ordering and a duplicate policy where a
+// producer is registered, and this layer is the consumer both were written for.
+// So both reach it — carried with the stream, never re-fetched — and each of the
+// four spellings gets the treatment it declared. Every test below pairs the case
+// it refuses with the neighbouring case it must still admit, because a duplicate
+// policy whose own definition names the consumer's obligation, refused by that
+// consumer, is over-refusal at its purest.
+// ---------------------------------------------------------------------------
+
+/// `DuplicatePolicy::Allowed`, with the strict ordering the fixtures' rows keep.
+fn allowed_duplicates() -> StreamContract {
+    StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Allowed)
+}
+
+/// Two streams: `dense` as scripted, and a one-row `sparse` stream that stays
+/// open long enough to keep `dense`'s first candidate in the frontier.
+///
+/// Without the second stratum nothing is held: a single-stratum candidate is
+/// final the moment it is read, so it certifies and leaves the frontier before
+/// the next row arrives. The fixture is two strata because the frontier is where
+/// a declared-`Unique` stream's promise is checked.
+fn dense_and_sparse(dense: MockStream) -> Vec<(Iri, MockStream)> {
+    vec![
+        (stratum("dense"), dense),
         (
             stratum("sparse"),
             MockStream::new(vec![row(1, Fixed::ONE, K, "q")], exhausted(1)),
         ),
-    ];
+    ]
+}
+
+fn dense_sparse_profile() -> FusionProfile {
+    profile(&[("dense", Fixed::ONE), ("sparse", Fixed::ONE)], K)
+}
+
+#[test]
+fn a_declared_unique_streams_repeat_is_refused_while_the_first_is_unemitted() {
+    let profile = dense_sparse_profile();
+    // `a` cannot be emitted before the duplicate is read: the sparse stream is
+    // open and has not named it, so it is not final and stays in the frontier.
+    let streams = dense_and_sparse(MockStream::new(
+        vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
+        exhausted(2),
+    ));
     let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         streams, &profile, TOP_K,
     ));
@@ -1829,8 +1873,8 @@ fn a_same_stream_duplicate_still_in_the_frontier_is_refused() {
         "expected DuplicateItem for `a`, got {result:?}"
     );
 
-    // The neighbour that must NOT be refused: the same item named once by each
-    // of the two streams is the whole point of fusing them, not a duplicate.
+    // THE NEIGHBOURING CASE: the same item named once by each of the two streams
+    // is the whole point of fusing them, not a duplicate.
     let shared = vec![
         (
             stratum("dense"),
@@ -1848,6 +1892,245 @@ fn a_same_stream_duplicate_still_in_the_frontier_is_refused() {
         2,
         "one candidate, two strata, no duplicate"
     );
+}
+
+/// What a `Unique` declaration buys and what it costs, stated as one test
+/// because they are one decision.
+///
+/// A stream that promised no repeats keeps no identity set, so the promise is
+/// checked exactly where the engine needs that state anyway: the frontier. A
+/// repeat whose first occurrence has already been certified and removed is
+/// therefore *not* caught — that detection is precisely the retained-forever set
+/// the declaration said was unnecessary, and it is the one structure a fusion
+/// holds that grows with the rows pulled.
+///
+/// This is pinned rather than left to be discovered. A producer that cannot make
+/// the promise has a complete, supported answer one line away, and the second
+/// half of this test is that answer: the same stream declared `Allowed` is
+/// de-duplicated in full.
+#[test]
+fn a_unique_declaration_is_relied_on_past_the_frontier_and_allowed_is_the_remedy() {
+    // One stratum, so `a` certifies the moment it is read and the repeat arrives
+    // after it left the frontier.
+    let profile = profile(&[("dense", Fixed::ONE)], K);
+    let repeated = vec![(
+        stratum("dense"),
+        MockStream::new(
+            vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
+            exhausted(2),
+        ),
+    )];
+    let fused = block_on(run_fuse(repeated, &profile));
+    assert_eq!(
+        fused
+            .rows
+            .iter()
+            .map(|fused_row| fused_row.entity.clone())
+            .collect::<Vec<_>>(),
+        vec![Term::new("a"), Term::new("a")],
+        "the promise is relied on: a repeat past the frontier reaches the answer"
+    );
+
+    // The remedy, and it is complete: the identical stream, declaring the policy
+    // that says its repeats are the consumer's to remove.
+    let deduplicated = vec![(
+        stratum("dense"),
+        MockStream::new(
+            vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "a")],
+            exhausted(2),
+        )
+        .declaring(allowed_duplicates()),
+    )];
+    let fused = block_on(run_fuse(deduplicated, &profile));
+    assert_eq!(
+        fused.rows.len(),
+        1,
+        "a de-duplicated stream names `a` once, got {:?}",
+        fused.rows
+    );
+    assert_eq!(
+        fused.rows[0].score,
+        contribution(Fixed::ONE, 1, K).expect("fits"),
+        "and at its best — first, lowest — rank"
+    );
+}
+
+#[test]
+fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
+    let profile = dense_sparse_profile();
+    // The exact stream the `Unique` test above refuses, declaring instead that
+    // its repeats are the consumer's to remove. This layer is that consumer, and
+    // this is the case where it does the removing: one stream, one item, two
+    // ranks, one contribution.
+    let streams = dense_and_sparse(
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "a"),
+                row(3, Fixed::ONE, K, "b"),
+            ],
+            exhausted(3),
+        )
+        .declaring(allowed_duplicates()),
+    );
+    let fused = block_on(run_fuse(streams, &profile));
+
+    let dense_contribution = |entity: &str| -> Vec<(u64, Fixed)> {
+        fused
+            .rows
+            .iter()
+            .filter(|fused_row| fused_row.entity == Term::new(entity))
+            .flat_map(|fused_row| fused_row.contributions.iter())
+            .filter(|(iri, _, _)| *iri == stratum("dense"))
+            .map(|(_, rank, value)| (*rank, *value))
+            .collect()
+    };
+
+    assert_eq!(
+        fused
+            .rows
+            .iter()
+            .filter(|fused_row| fused_row.entity == Term::new("a"))
+            .count(),
+        1,
+        "the repeat contributes once, not twice: {:?}",
+        fused.rows
+    );
+    assert_eq!(
+        dense_contribution("a"),
+        vec![(1, contribution(Fixed::ONE, 1, K).expect("fits"))],
+        "and at the BEST rank the stream gave it, which is its first"
+    );
+    // The row after the repeat is not renumbered: rank 3 is still rank 3, so a
+    // dropped duplicate does not silently promote its successors.
+    assert_eq!(
+        dense_contribution("b"),
+        vec![(3, contribution(Fixed::ONE, 3, K).expect("fits"))],
+        "a discarded duplicate leaves every later rank exactly where it was"
+    );
+    // The producer is still charged for the row it emitted, so a receipt that
+    // under-counts is still a forged one.
+    assert_eq!(
+        fused.trailer.statuses[&stratum("dense")],
+        ProducerStatus::Exhausted { rows_emitted: 3 },
+        "the discarded row was still pulled, and the receipt is measured against it"
+    );
+
+    // THE NEIGHBOURING CASE: `Allowed` changes nothing for a stream that does
+    // not in fact repeat. Same rows, both declarations, byte-identical answers.
+    let rows_of = |contract: StreamContract| {
+        let streams = dense_and_sparse(
+            MockStream::new(
+                vec![
+                    row(1, Fixed::ONE, K, "a"),
+                    row(2, Fixed::ONE, K, "b"),
+                    row(3, Fixed::ONE, K, "c"),
+                ],
+                exhausted(3),
+            )
+            .declaring(contract),
+        );
+        block_on(run_fuse(streams, &profile)).rows
+    };
+    assert_eq!(
+        rows_of(allowed_duplicates()),
+        rows_of(strict_unique()),
+        "with no repeat to remove, the policy is invisible in the answer"
+    );
+}
+
+#[test]
+fn the_declared_ordering_decides_whether_a_repeated_contribution_is_refused() {
+    // A contribution is the profile's own function of the rank, so a weight
+    // small enough that the truncation collides makes two adjacent ranks carry
+    // one value. `monotone_depth` is the exact rank at which that first happens,
+    // and one raw unit of weight collides immediately.
+    let weight = Fixed::from_raw(1);
+    let profile = profile(&[("thin", weight)], K);
+    let first = contribution(weight, 1, K).expect("fits");
+    let second = contribution(weight, 2, K).expect("fits");
+    assert_eq!(
+        first, second,
+        "this fixture needs a profile whose adjacent ranks collide, or it tests nothing"
+    );
+
+    // The criterion: a producer that declared every rank unambiguous, refused
+    // for a rank the fused sum can no longer separate from its predecessor.
+    let streams = vec![(
+        stratum("thin"),
+        MockStream::new(
+            vec![
+                Step::Row(1, first, Term::new("a")),
+                Step::Row(2, second, Term::new("b")),
+            ],
+            exhausted(2),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams, &profile, TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::RepeatedContribution { rank: 2, value } if value == second)
+        ),
+        "expected RepeatedContribution at rank 2, got {result:?}"
+    );
+
+    // THE NEIGHBOURING CASE, and the whole reason the two spellings exist: the
+    // same stream, declaring that its equal scores are interchangeable, fuses.
+    let streams = vec![(
+        stratum("thin"),
+        MockStream::new(
+            vec![
+                Step::Row(1, first, Term::new("a")),
+                Step::Row(2, second, Term::new("b")),
+            ],
+            exhausted(2),
+        )
+        .declaring(non_increasing_unique()),
+    )];
+    let fused = block_on(run_fuse(streams, &profile));
+    assert_eq!(
+        fused
+            .rows
+            .iter()
+            .map(|fused_row| fused_row.entity.clone())
+            .collect::<Vec<_>>(),
+        vec![Term::new("a"), Term::new("b")],
+        "a non-increasing producer's tied ranks are admitted, in rank order"
+    );
+
+    // And a contribution that *rises* is refused under either declaration,
+    // because the threshold over the heads would stop being an upper bound.
+    let first_rank = contribution(Fixed::ONE, 1, K).expect("fits");
+    let risen = Fixed::from_raw(first_rank.into_raw() + 1);
+    for contract in [strict_unique(), non_increasing_unique()] {
+        let heavy = crate::profile(&[("thin", Fixed::ONE)], K);
+        let streams = vec![(
+            stratum("thin"),
+            MockStream::new(
+                vec![
+                    row(1, Fixed::ONE, K, "a"),
+                    Step::Row(2, risen, Term::new("b")),
+                ],
+                exhausted(2),
+            )
+            .declaring(contract),
+        )];
+        let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+            streams, &heavy, TOP_K,
+        ));
+        assert!(
+            matches!(
+                &result,
+                Err(FusionError::Protocol(error))
+                    if matches!(**error, ProtocolError::NonMonotoneContribution { .. })
+            ),
+            "a rising contribution is refused under {contract:?}, got {result:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

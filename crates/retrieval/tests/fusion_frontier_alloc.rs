@@ -52,8 +52,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError, RankedStream, Term,
-    TopK, contribution, fuse,
+    DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError,
+    RankOrdering, RankedStream, StreamContract, Term, TopK, contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -203,6 +203,14 @@ struct LazyStream {
     emitted: u64,
     total: u64,
     pulls: Arc<AtomicUsize>,
+    /// What this stream declares about its own rows.
+    ///
+    /// Its rows are the same either way — each stratum emits a permutation, so
+    /// no item ever repeats — and that is the point: the declaration alone
+    /// decides whether the engine builds a per-stream identity set, so measuring
+    /// the two against identical rows measures exactly what the declaration
+    /// costs.
+    duplicates: DuplicatePolicy,
 }
 
 // The trait's methods are `async`; this fixture's body is synchronous because it
@@ -233,6 +241,10 @@ impl RankedStream for LazyStream {
             rows_emitted: self.emitted,
         })
     }
+
+    fn contract(&self) -> StreamContract {
+        StreamContract::new(RankOrdering::StrictlyDescending, self.duplicates)
+    }
 }
 
 /// The fixture profile and its three streams, each `total` rows long.
@@ -240,7 +252,11 @@ impl RankedStream for LazyStream {
 /// The profile's contribution maximum is three — one per stratum — because it
 /// weights three strata; that is exactly the number of contributions a
 /// candidate here can accumulate.
-fn fixture(total: u64, pulls: &Arc<AtomicUsize>) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
+fn fixture(
+    total: u64,
+    duplicates: DuplicatePolicy,
+    pulls: &Arc<AtomicUsize>,
+) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
     let weights: BTreeMap<Iri, Fixed> = STRATA
         .iter()
         .map(|name| (stratum(name), Fixed::ONE))
@@ -262,6 +278,7 @@ fn fixture(total: u64, pulls: &Arc<AtomicUsize>) -> (FusionProfile, Vec<(Iri, La
                     emitted: 0,
                     total,
                     pulls: Arc::clone(pulls),
+                    duplicates,
                 },
             )
         })
@@ -287,15 +304,15 @@ struct Measurement {
 
 /// Fuse [`CERTIFIED_ROWS`] rows out of three streams of `total` rows each
 /// through the shipped [`fuse`], measuring the peak heap it held while doing it.
-fn measure(total: u64) -> Measurement {
-    measure_rows(total, CERTIFIED_ROWS)
+fn measure(total: u64, duplicates: DuplicatePolicy) -> Measurement {
+    measure_rows(total, CERTIFIED_ROWS, duplicates)
 }
 
 /// Fuse `rows` rows out of three streams of `total` rows each through the
 /// shipped [`fuse`], measuring the peak heap it held while doing it.
-fn measure_rows(total: u64, rows: usize) -> Measurement {
+fn measure_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measurement {
     let pulls = Arc::new(AtomicUsize::new(0));
-    let (profile, streams) = fixture(total, &pulls);
+    let (profile, streams) = fixture(total, duplicates, &pulls);
 
     // The baseline is taken after the fixture is built, so what is measured is
     // the fusion's own working set and not the fixture's.
@@ -337,11 +354,14 @@ fn the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length() {
     // Warm every lazy one-time allocation (the format machinery, the IRI parser
     // tables) outside the measured window, so the first run is not charged for
     // state the later runs inherit.
-    let warm = measure(1_000);
+    let warm = measure(1_000, DuplicatePolicy::Allowed);
     assert!(warm.pulls > 0);
 
-    let short = measure(1_000);
-    let long = measure(1_000_000);
+    // Measured under `Allowed`, which is the harder of the two: it is the
+    // declaration that makes the engine keep a per-stream identity set, so it is
+    // the one under which the peak could still have tracked the input.
+    let short = measure(1_000, DuplicatePolicy::Allowed);
+    let long = measure(1_000_000, DuplicatePolicy::Allowed);
 
     // First: the frontier was genuinely exercised. Every certified row carries
     // one contribution per stratum, which it could only have done by being held
@@ -406,15 +426,16 @@ fn the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length() {
 }
 
 #[test]
-fn the_peak_follows_the_rows_certified_when_the_stream_length_is_fixed() {
+fn the_peak_follows_the_rows_certified_when_a_stream_declares_allowed_duplicates() {
     // The mirror of the test above, and the reason it is not vacuous: the peak
     // is not simply constant. Holding the streams at one length and pulling more
-    // rows *does* move it, because the per-stream duplicate sets grow with the
-    // rows pulled. So "the peak did not move when the input grew a thousandfold"
-    // is a statement about the input, not an artefact of a peak that never moves.
-    let _warm = measure(1_000);
-    let few = measure(1_000);
-    let many = measure_rows(1_000, CERTIFIED_ROWS * 8);
+    // rows *does* move it, because a stream that declared `Allowed` is
+    // de-duplicated against an identity set, and that set grows with the rows
+    // pulled. So "the peak did not move when the input grew a thousandfold" is a
+    // statement about the input, not an artefact of a peak that never moves.
+    let _warm = measure(1_000, DuplicatePolicy::Allowed);
+    let few = measure(1_000, DuplicatePolicy::Allowed);
+    let many = measure_rows(1_000, CERTIFIED_ROWS * 8, DuplicatePolicy::Allowed);
 
     assert!(
         many.peak_bytes > few.peak_bytes,
@@ -422,5 +443,59 @@ fn the_peak_follows_the_rows_certified_when_the_stream_length_is_fixed() {
          {} against {}",
         many.peak_bytes,
         few.peak_bytes
+    );
+}
+
+/// **What a `Unique` declaration costs, measured rather than asserted.**
+///
+/// The identity set is the one structure a fusion holds that grows with the rows
+/// *pulled* rather than with the disagreement window, and a stream that promised
+/// no repeats is not charged for one. The rows below are identical under both
+/// declarations — each stratum emits a permutation, so nothing ever repeats —
+/// so every byte of difference between the two runs is the set and nothing else.
+#[test]
+fn a_unique_declaration_is_what_keeps_a_deep_answer_affordable() {
+    // Warm the one-time allocations under both declarations, so neither run is
+    // charged for state the other inherits.
+    let _warm = measure(1_000, DuplicatePolicy::Allowed);
+    let _warm = measure(1_000, DuplicatePolicy::Unique);
+
+    let deep = CERTIFIED_ROWS * 8;
+    let allowed = measure_rows(1_000, deep, DuplicatePolicy::Allowed);
+    let unique = measure_rows(1_000, deep, DuplicatePolicy::Unique);
+
+    // The rows are the same rows: the declaration decides what is *held*, never
+    // what is answered.
+    assert_eq!(
+        allowed.pulls, unique.pulls,
+        "the two declarations read the same stream to the same depth"
+    );
+    assert_eq!(
+        allowed.contributions, unique.contributions,
+        "and certify the same evidence"
+    );
+
+    assert!(
+        unique.peak_bytes < allowed.peak_bytes,
+        "a promise of uniqueness must cost less to keep than to check; \
+         unique held {} bytes against allowed's {}",
+        unique.peak_bytes,
+        allowed.peak_bytes
+    );
+
+    // And the saving is the part that *grows*. Some growth with `k` is the
+    // answer itself — `fuse` returns the certified rows, and eight times as many
+    // rows is eight times as much answer under either declaration — so the claim
+    // is about what the two runs do NOT share: the identity set. Comparing the
+    // growth rather than the peak subtracts the answer from both sides.
+    let shallow_allowed = measure_rows(1_000, CERTIFIED_ROWS, DuplicatePolicy::Allowed);
+    let shallow_unique = measure_rows(1_000, CERTIFIED_ROWS, DuplicatePolicy::Unique);
+    let allowed_growth = allowed.peak_bytes - shallow_allowed.peak_bytes;
+    let unique_growth = unique.peak_bytes - shallow_unique.peak_bytes;
+    assert!(
+        unique_growth < allowed_growth,
+        "reading eight times as deep must cost a `Unique` stream less than an \
+         `Allowed` one; unique grew {unique_growth} bytes against allowed's \
+         {allowed_growth}"
     );
 }

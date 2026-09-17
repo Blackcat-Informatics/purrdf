@@ -133,10 +133,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, RankedDeclaration};
-use purrdf_text::Fixed;
 
 use crate::error::PlanError;
-use crate::iri::{Iri, Weight};
+use crate::iri::Iri;
 use crate::matching::{carries_content, pattern_matches, place};
 use crate::plan::{
     Plan, PlanOrigin, ProducerBinding, ProducerDecision, RejectionReason, StatisticsEntry,
@@ -144,15 +143,6 @@ use crate::plan::{
 };
 use crate::request::{RequestTerm, RetrievalRequest};
 use crate::statistics::Statistics;
-
-/// The raw scale of the unit stratum weight a plan records (exactly one).
-///
-/// Planning happens before a fusion profile is chosen (the profile is
-/// deliberately not a plan input), so the planner records the identity weight —
-/// one — for every stratum it places. A caller that wants a different weighting
-/// chooses it in the profile at fusion time; admission validates the plan's
-/// weights against the declared strata rather than reading a policy into them.
-const UNIT_WEIGHT_RAW: i128 = Fixed::ONE.into_raw();
 
 /// Parts per million of unity: the value "every row matches" is reported as.
 ///
@@ -168,9 +158,14 @@ const PPM_UNIT: u64 = 1_000_000;
 /// receives), every considered producer's decision — selected or rejected with
 /// a reason — every request term that reached no producer at all with the reason
 /// it did not, the per-stratum depth derived from the registry's row-bound
-/// declarations capped by statistics, the unit weight map, the statistics
-/// snapshot actually consulted, and both registry identities (the ephemeral
-/// instance id and the durable content fingerprint).
+/// declarations capped by statistics, the statistics snapshot actually
+/// consulted, and both registry identities (the ephemeral instance id and the
+/// durable content fingerprint).
+///
+/// It records no stratum weights. Planning happens before a fusion profile is
+/// chosen — the profile is deliberately not a planning input — and the weights
+/// that fuse an answer are that profile's, so there is no second weighting for
+/// a plan to carry.
 ///
 /// # Errors
 ///
@@ -369,7 +364,6 @@ pub fn plan(
     }
     let strata: BTreeSet<Iri> = declared_bounds.keys().cloned().collect();
     let mut stratum_depths: HashMap<Iri, u32> = HashMap::with_capacity(strata.len());
-    let mut stratum_weights: HashMap<Iri, Weight> = HashMap::with_capacity(strata.len());
     for stratum in &strata {
         let declared = declared_bounds.get(stratum).copied().unwrap_or(0);
         let reached = terms_at(&request.terms, reaching.get(stratum));
@@ -380,7 +374,6 @@ pub fn plan(
             });
         }
         stratum_depths.insert(stratum.clone(), u32::try_from(bound).unwrap_or(u32::MAX));
-        stratum_weights.insert(stratum.clone(), Weight::from_raw(UNIT_WEIGHT_RAW));
     }
 
     // 5. Capture the statistics the planner actually consulted: the strata it
@@ -395,7 +388,6 @@ pub fn plan(
         producer_decisions: decisions,
         unserved_terms,
         stratum_depths,
-        stratum_weights,
         statistics_snapshot,
         registry_instance_id: registry.instance_id(),
         registry_content_fingerprint: content_fingerprint,

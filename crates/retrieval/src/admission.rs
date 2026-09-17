@@ -24,8 +24,6 @@
 //! * every stratum depth respects the registry's declared row bound, and — when
 //!   the environment names the fusion profile the answer will be composed under
 //!   — the depth at which that profile's own arithmetic stops ordering ranks;
-//! * every stratum weight keys a declared stratum and is strictly positive under
-//!   §5 of the design record;
 //! * every bound producer can actually be *invoked* for the request terms the
 //!   plan gives it — every declared placement renders, no two contend for one
 //!   position, and some declared access pattern serves the result;
@@ -128,11 +126,37 @@
 //! producer the registry does **not** declare mandatory and that placement
 //! refuses is simply dropped from the plan, with its reason recorded in the
 //! plan's decisions.
+//!
+//! # There is no stratum-weight dimension here
+//!
+//! There used to be, and it checked a number the plan invented. A plan records
+//! no weights: §8 of the design record keeps the fusion profile out of planning,
+//! so the weights that fuse an answer are the profile's and there is no second
+//! set for this waist to validate. Both halves of what the old dimension asked
+//! are answered where the fusing weights actually live, and neither is
+//! duplicated here:
+//!
+//! * *is this weight usable?* — [`FusionProfile::new`] refuses a non-positive
+//!   weight ([`FusionError::NonPositiveWeight`](crate::FusionError::NonPositiveWeight)),
+//!   an empty weight map, and a weight vector whose admitted ceiling leaves the
+//!   fixed-point range. A profile that exists is a profile whose every weight is
+//!   already valid, so no plan can present an invalid one.
+//! * *does this weight name a stratum that ranks?* — the direction that can cost
+//!   a caller rows is a stratum the plan **reaches** that the profile does not
+//!   weight, and [`search`](crate::search) reports exactly that, by name, in
+//!   [`SearchResult::unweighted_strata`](crate::SearchResult::unweighted_strata),
+//!   refusing outright only when the two are wholly disjoint. The mirror — a
+//!   profile weighting a stratum no producer emits under — costs nothing and
+//!   hides nothing: no stream ever carries that stratum, so the weight is simply
+//!   never consulted, and fusion still refuses a *stream* whose stratum has no
+//!   weight ([`FusionError::UnknownStratum`](crate::FusionError::UnknownStratum)).
+//!   A profile is a reusable law, deliberately chosen without reference to any
+//!   one plan; refusing it for naming a stratum this request did not reach would
+//!   refuse the reuse it exists for.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, RegistryId};
-use purrdf_text::Fixed;
 
 use crate::fusion_profile::FusionProfile;
 use crate::id::PLAN_VERSION;
@@ -280,25 +304,6 @@ pub enum AdmissionError {
         requested: u32,
     },
 
-    /// A weight keys a stratum no registered producer emits under.
-    #[error("stratum weight refers to undeclared stratum {stratum}")]
-    UndeclaredStratumWeight {
-        /// The undeclared stratum.
-        stratum: Box<Iri>,
-    },
-
-    /// A stratum weight is not strictly positive, so it cannot participate in
-    /// the §5 reciprocal-rank sum.
-    #[error("stratum {stratum} carries invalid weight {weight:?}: {reason}")]
-    InvalidWeight {
-        /// The stratum whose weight was rejected.
-        stratum: Box<Iri>,
-        /// The rejected weight, exact.
-        weight: Fixed,
-        /// Why the weight cannot be admitted.
-        reason: String,
-    },
-
     /// The plan was planned against a different statistics revision than the one
     /// the environment now reports.
     #[error(
@@ -399,8 +404,6 @@ impl AdmissionError {
             Self::InsufficientBindings { .. } => "insufficient_bindings",
             Self::DepthBoundViolation { .. } => "depth_bound_violation",
             Self::DepthBeyondMonotoneRange { .. } => "depth_beyond_monotone_range",
-            Self::UndeclaredStratumWeight { .. } => "undeclared_stratum_weight",
-            Self::InvalidWeight { .. } => "invalid_weight",
             Self::StaleStatistics { .. } => "stale_statistics",
             Self::RegistryMismatch { .. } => "registry_instance_mismatch",
             Self::RegistryFingerprintMismatch { .. } => "registry_fingerprint_mismatch",
@@ -560,9 +563,9 @@ fn describe(registry: &PropertyFunctionRegistry) -> Result<Vec<PfDescriptor>, Ad
 ///
 /// Performs every semantic check in the order a caller sees the dimensions:
 /// version, registry content fingerprint, live instance identity, statistics
-/// revision, mandatory producers and their bindings, per-stratum depth bounds,
-/// then stratum weights. The first violated dimension is returned; admission does
-/// not accumulate refusals.
+/// revision, mandatory producers and their bindings, then per-stratum depth
+/// bounds. The first violated dimension is returned; admission does not
+/// accumulate refusals.
 pub(crate) fn admit_plan<'a>(
     plan: &'a Plan,
     env: &AdmissionEnvironment<'_>,
@@ -871,23 +874,6 @@ pub(crate) fn admit_plan<'a>(
                     requested: *depth,
                 });
             }
-        }
-    }
-
-    // 8. Stratum weights must key a declared stratum and be strictly positive
-    //    under §5; a non-positive weight cannot participate in the sum.
-    for (stratum, weight) in &plan.stratum_weights {
-        if !strata.contains_key(stratum) {
-            return Err(AdmissionError::UndeclaredStratumWeight {
-                stratum: Box::new(stratum.clone()),
-            });
-        }
-        if !weight.is_positive() {
-            return Err(AdmissionError::InvalidWeight {
-                stratum: Box::new(stratum.clone()),
-                weight: weight.fixed(),
-                reason: "stratum weight must be strictly positive under §5".to_owned(),
-            });
         }
     }
 

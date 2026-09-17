@@ -600,7 +600,7 @@ async fn manual_composition(
     let mut streams = Vec::new();
     let mut unweighted_strata = Vec::new();
     for stream in execution.streams {
-        match RankedStreamAdapter::new(stream.stream, profile, &stream.stratum) {
+        match RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum) {
             // The plan the unit was compiled from travels on with the rows; the
             // trailer names it, and the answer's identity is read back from
             // there rather than asked of the plan a second time.

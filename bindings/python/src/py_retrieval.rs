@@ -13,8 +13,9 @@
 //!
 //! * [`plan`] — the pure planner. Returns the plan document: its canonical id,
 //!   every producer decision with the dimension that refused it, the per-stratum
-//!   depths and weights, the statistics snapshot the planner consulted, and
-//!   every request term that reached no producer at all.
+//!   depths, the statistics snapshot the planner consulted, and every request
+//!   term that reached no producer at all. No weights: those are the fusion
+//!   law's, chosen at `search` time and deliberately not a planning input.
 //! * [`compile`] — semantic admission plus emission. Returns the per-stratum
 //!   SPARQL a host can read, run or log verbatim.
 //! * [`search`] — `fuse ∘ execute ∘ compile ∘ plan`. Returns the fused ranking
@@ -844,12 +845,6 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
         depths.set_item(stratum.as_str(), depth)?;
     }
     out.set_item("stratum_depths", depths)?;
-
-    let weights = PyDict::new(py);
-    for (stratum, weight) in &planned.stratum_weights {
-        weights.set_item(stratum.as_str(), weight.into_raw())?;
-    }
-    out.set_item("stratum_weights", weights)?;
 
     out.set_item(
         "unserved_terms",

@@ -10,10 +10,79 @@
 //! against what it actually emitted. A producer that cannot describe its own
 //! completeness cleanly reports it through this channel; it never gets to return
 //! a plausible-looking answer that quietly omitted a row.
+//!
+//! # Validated against what the producer declared, not against one fixed law
+//!
+//! Two of those checks are not absolute, because the registry does not state
+//! them absolutely. A ranked producer declares its rank ordering and its
+//! duplicate handling where it is registered
+//! ([`RankedDeclaration`]), and the consumer of its rows is this layer — so the
+//! consumer reads both and holds the stream to the promise it actually made.
+//! [`StreamContract`] is that pair, carried with the stream through
+//! [`RankedStream::contract`], and every refusal below that names an ordering or
+//! a repeat says which declaration it was measured against.
 
+use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering, RankedDeclaration};
 use purrdf_text::Fixed;
 
 use crate::iri::Term;
+
+/// The two promises a ranked producer makes about one invocation's rows: how
+/// they are ordered, and whether an item may repeat.
+///
+/// Both halves are the producer's own — [`RankedDeclaration::ordering`] and
+/// [`RankedDeclaration::duplicates`], supplied by the host where the producer is
+/// registered. Neither is inferred and neither has a default: a stream either
+/// repeats items or it does not, and the consumer's behaviour differs, so there
+/// is no honest "unstated" answer the way there is for a stream that descends
+/// from no plan ([`RankedStream::plan_id`]).
+///
+/// # Why the contract travels with the stream
+///
+/// A stratum carries exactly one producer, refused at registration by
+/// [`register_ranked`](purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked)
+/// and again at the admission waist, so a stratum's contract *is* its producer's
+/// contract — nothing is combined, averaged or weakened across producers to
+/// obtain it. The admission waist reads it off the registry once, into
+/// [`StratumUnit::contract`](crate::StratumUnit), [`execute`](crate::execute)
+/// tags every stream it returns with it
+/// ([`StratumStream::contract`](crate::StratumStream)), and
+/// [`FusionStream`](crate::FusionStream) asks each stream for it before pulling
+/// a row. That is the same route a plan identity takes, and for the same reason:
+/// a fact re-fetched at the end would be true of the registry rather than of the
+/// stream that is actually being read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StreamContract {
+    /// The ordering guarantee the producer declared. Fusion holds a
+    /// [`RankOrdering::StrictlyDescending`] stream to strict descent and a
+    /// [`RankOrdering::NonIncreasing`] one to non-increasing.
+    pub ordering: RankOrdering,
+    /// The duplicate handling the producer declared. A
+    /// [`DuplicatePolicy::Unique`] stream is believed and a repeat is a protocol
+    /// violation; a [`DuplicatePolicy::Allowed`] stream is de-duplicated by the
+    /// consumer, which is what that policy says a consumer must do.
+    pub duplicates: DuplicatePolicy,
+}
+
+impl StreamContract {
+    /// The contract `declaration` states, verbatim.
+    #[must_use]
+    pub const fn declared(declaration: &RankedDeclaration) -> Self {
+        Self {
+            ordering: declaration.ordering,
+            duplicates: declaration.duplicates,
+        }
+    }
+
+    /// A contract stated directly, for a stream a caller built itself.
+    #[must_use]
+    pub const fn new(ordering: RankOrdering, duplicates: DuplicatePolicy) -> Self {
+        Self {
+            ordering,
+            duplicates,
+        }
+    }
+}
 
 /// A producer's declaration of how its stream ended.
 ///
@@ -69,7 +138,15 @@ pub enum ProtocolError {
         gap: u64,
     },
 
-    /// The same item was emitted twice within one stream.
+    /// The same item was emitted twice within one stream that declared
+    /// [`DuplicatePolicy::Unique`].
+    ///
+    /// Raised only under that declaration. A stream declaring
+    /// [`DuplicatePolicy::Allowed`] says repeats happen and the consumer must
+    /// de-duplicate, and this layer is that consumer: it de-duplicates such a
+    /// stream instead of refusing it — one contribution per `(stratum, item)`,
+    /// at the best rank the stream gave it. Raising this for a policy that
+    /// predicted the repeat would be a refusal of valid input.
     #[error("stream emitted item {item:?} more than once")]
     DuplicateItem {
         /// The repeated item's canonical text.
@@ -79,12 +156,42 @@ pub enum ProtocolError {
     /// A producer contribution rose from one rank to the next. Contributions
     /// must be monotonically non-increasing with rank, or the threshold that
     /// bounds fusion would not be an upper bound.
+    ///
+    /// Raised under either [`RankOrdering`], because neither admits a
+    /// contribution that rises.
     #[error("stream contribution rose from {previous:?} to {got:?} with rank")]
     NonMonotoneContribution {
         /// The previous rank's contribution.
         previous: Fixed,
         /// The contribution that rose above it.
         got: Fixed,
+    },
+
+    /// A producer that declared [`RankOrdering::StrictlyDescending`] emitted the
+    /// same contribution at two adjacent ranks.
+    ///
+    /// The declaration says every row has an unambiguous rank; two adjacent
+    /// ranks carrying one contribution is exactly the condition under which the
+    /// fused sum stops separating them, so the stream is no longer strictly
+    /// descending in the only quantity fusion sums. A producer whose ranks may
+    /// legitimately tie declares [`RankOrdering::NonIncreasing`] and is admitted
+    /// here, which is the difference between the two spellings.
+    ///
+    /// A plan admitted through [`compile`](crate::compile) cannot reach this: a
+    /// contribution is the profile's own function of the rank, and
+    /// [`AdmissionError::DepthBeyondMonotoneRange`](crate::AdmissionError::DepthBeyondMonotoneRange)
+    /// already refuses a per-stratum depth past the rank at which that function
+    /// stops separating adjacent ranks. This is the same claim held against a
+    /// stream that reached fusion without passing the waist — a hand-built one,
+    /// or one read deeper than its weight can order.
+    #[error(
+        "stream declared strictly descending contributions but repeated {value:?} at rank {rank}"
+    )]
+    RepeatedContribution {
+        /// The 1-based rank that repeated its predecessor's contribution.
+        rank: u64,
+        /// The contribution both ranks carried.
+        value: Fixed,
     },
 
     /// A producer's contribution does not equal the profile's declared
@@ -188,6 +295,24 @@ pub trait RankedStream {
     /// A [`ProtocolError`] when the producer cannot produce a consistent
     /// receipt.
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError>;
+
+    /// The two promises this stream makes about its rows: its rank ordering and
+    /// its duplicate handling.
+    ///
+    /// Read once by [`FusionStream::new`](crate::FusionStream::new), before any
+    /// row is pulled, and then applied to every row of this stream. A producer
+    /// registered through the seam reports exactly what it declared — see
+    /// [`StreamContract::declared`] — and a stream a caller assembled by hand
+    /// states its own.
+    ///
+    /// There is deliberately **no default**, which is where this differs from
+    /// [`plan_id`](Self::plan_id). A stream may honestly descend from no plan,
+    /// so `None` is an answer; a stream cannot honestly decline to say whether
+    /// it repeats items, because it either does or it does not and the consumer
+    /// keeps a different amount of state for each. A default would be this
+    /// layer fabricating a declaration the producer never made, and then holding
+    /// the producer to it.
+    fn contract(&self) -> StreamContract;
 
     /// The pinned plan these rows descend from, when the stream has one.
     ///

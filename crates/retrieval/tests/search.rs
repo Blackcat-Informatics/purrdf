@@ -366,7 +366,7 @@ async fn manual_composition(
     let mut streams = Vec::new();
     let mut unweighted_strata = Vec::new();
     for stream in execution.streams {
-        match RankedStreamAdapter::new(stream.stream, profile, &stream.stratum) {
+        match RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum) {
             // The plan the unit was compiled from rides on with the rows, which
             // is how the trailer comes to name it.
             Some(adapter) => streams.push((stream.stratum, adapter.with_plan_id(stream.plan_id))),

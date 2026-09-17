@@ -23,7 +23,8 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CompiledRetrieval, Fixed, FusionProfile, Iri, ProducerStatus,
-    RequestTerm, RetrievalRequest, Statistics, Term, TopK, compile, execute, plan, search,
+    RankedStream, RankedStreamAdapter, RequestTerm, RetrievalRequest, Statistics, StreamContract,
+    Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -162,6 +163,19 @@ fn producer(prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
 /// how the round-trip test can see that a candidate reached the query as a seed
 /// rather than merely being accepted by the planner.
 fn ranked(stratum: &str) -> RankedDeclaration {
+    declaring(
+        stratum,
+        RankOrdering::StrictlyDescending,
+        DuplicatePolicy::Unique,
+    )
+}
+
+/// The same declaration, stating `ordering` and `duplicates` explicitly.
+fn declaring(
+    stratum: &str,
+    ordering: RankOrdering,
+    duplicates: DuplicatePolicy,
+) -> RankedDeclaration {
     RankedDeclaration {
         stratum: kernel_iri(stratum),
         accepted_terms: vec![AcceptedTerm {
@@ -174,8 +188,8 @@ fn ranked(stratum: &str) -> RankedDeclaration {
         }],
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
-        duplicates: DuplicatePolicy::Unique,
+        ordering,
+        duplicates,
         mandatory: true,
     }
 }
@@ -549,4 +563,74 @@ fn a_forced_failure_isolates_to_its_stratum() {
         2,
         "and it streams to completion"
     );
+}
+
+/// **The producer's declaration reaches the consumer that was written for it.**
+///
+/// The rank ordering and duplicate policy a host supplies at `register_ranked`
+/// decide what the fusion engine holds and what it refuses, and the fusion
+/// engine is three stages downstream of the registry. So the declaration is
+/// carried rather than re-fetched, on the same route the pinned plan identity
+/// takes: admission reads it off the registry the units are compiled against,
+/// the compiled unit carries it, the executed stream is tagged with it, and the
+/// exported bridge reports it through the protocol the engine reads.
+///
+/// This walks that route for both spellings of both halves, because a carry that
+/// happened to deliver one constant everywhere would look identical to one that
+/// delivered nothing.
+#[test]
+fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
+    for (ordering, duplicates) in [
+        (RankOrdering::StrictlyDescending, DuplicatePolicy::Unique),
+        (RankOrdering::NonIncreasing, DuplicatePolicy::Allowed),
+    ] {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(
+            ex("pf/alpha"),
+            producer("alpha/", 2),
+            declaring(&ex(STRATA[0]), ordering, duplicates),
+        );
+        // The second stratum keeps the other spelling throughout, so a carry
+        // that overwrote every stratum with one contract would be caught here
+        // rather than agreeing with itself.
+        registry.register_ranked(ex("pf/beta"), producer("beta/", 2), ranked(&ex(STRATA[1])));
+
+        let stats = statistics();
+        let bundle = compiled(&registry, &stats);
+        let expected = StreamContract::new(ordering, duplicates);
+        let beta = StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique);
+
+        let unit = bundle
+            .units
+            .iter()
+            .find(|unit| unit.stratum == iri(&ex(STRATA[0])))
+            .expect("the alpha stratum compiled a unit");
+        assert_eq!(
+            unit.contract, expected,
+            "the compiled unit carries the declaration the registry it was admitted against made"
+        );
+
+        let execution = block_on(execute(&bundle, &registry, &*dataset_of(&[])))
+            .expect("the fixture registry executes");
+        let profile = fixture_profile();
+        for stream in execution.streams {
+            let wanted = if stream.stratum == iri(&ex(STRATA[0])) {
+                expected
+            } else {
+                beta
+            };
+            assert_eq!(
+                stream.contract, wanted,
+                "the executed stream is tagged with its own producer's declaration"
+            );
+            let adapter =
+                RankedStreamAdapter::new(stream.stream, stream.contract, &profile, &stream.stratum)
+                    .expect("the fixture profile weights every stratum the plan reached");
+            assert_eq!(
+                adapter.contract(),
+                wanted,
+                "and the bridge reports it through the protocol the fusion engine reads"
+            );
+        }
+    }
 }

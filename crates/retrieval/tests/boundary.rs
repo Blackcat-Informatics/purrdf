@@ -42,8 +42,8 @@ use purrdf_retrieval::{
     Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanError, PlanId,
     PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedStream,
     RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest, SearchError,
-    SearchResult, Statistics, StatisticsSnapshot, Term, TopK, Weight, compile, contribution,
-    execute, fuse, plan, search,
+    SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK, compile,
+    contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -125,6 +125,14 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         duplicates: DuplicatePolicy::Unique,
         mandatory,
     }
+}
+
+/// The contract every fixture producer here declares, and the one a hand-built
+/// stream in this file states: strictly descending ranks, no repeats. It is
+/// spelled once so the registered declaration above and the streams below cannot
+/// drift into describing two different promises.
+fn strict_unique() -> StreamContract {
+    StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique)
 }
 
 fn lexical_term() -> RequestTerm {
@@ -377,6 +385,10 @@ impl RankedStream for ScriptedStream {
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         Ok(self.receipt.clone())
     }
+
+    fn contract(&self) -> StreamContract {
+        strict_unique()
+    }
 }
 
 /// A well-formed row at `rank` for `weight` under `k`.
@@ -414,7 +426,6 @@ fn stop_at_plan_inspect_value() {
     );
     assert_eq!(planned.request_terms.len(), 1);
     assert!(!planned.stratum_depths.is_empty());
-    assert!(!planned.stratum_weights.is_empty());
     assert_eq!(planned.registry_instance_id, registry.instance_id());
     assert_eq!(
         planned.registry_content_fingerprint,
@@ -518,8 +529,6 @@ fn start_at_compile_hand_built_plan() {
 
     let mut stratum_depths = HashMap::new();
     stratum_depths.insert(stratum.clone(), 10);
-    let mut stratum_weights = HashMap::new();
-    stratum_weights.insert(stratum.clone(), Weight::new(Fixed::ONE));
 
     // Built by hand, never through the planner. It is still a plan, so admission
     // covers it on exactly the same terms as planner origin.
@@ -535,7 +544,6 @@ fn start_at_compile_hand_built_plan() {
         // The one request term is bound below, so nothing went unserved.
         unserved_terms: Vec::new(),
         stratum_depths,
-        stratum_weights,
         statistics_snapshot: StatisticsSnapshot {
             source: stats.source().to_owned(),
             revision: stats.revision().to_owned(),
@@ -712,6 +720,10 @@ impl RankedStream for LazyStream {
 
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError> {
         Ok(exhausted(self.emitted))
+    }
+
+    fn contract(&self) -> StreamContract {
+        strict_unique()
     }
 }
 
@@ -1365,11 +1377,12 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut streams = Vec::new();
     for stream in execution.streams {
-        let adapter = RankedStreamAdapter::new(stream.stream, &profile, &stream.stratum)
-            .expect("the profile weights the stratum the plan reached")
-            // The stream knows the plan its unit was compiled from, and the
-            // bridge carries that on rather than making the caller re-state it.
-            .with_plan_id(stream.plan_id);
+        let adapter =
+            RankedStreamAdapter::new(stream.stream, stream.contract, &profile, &stream.stratum)
+                .expect("the profile weights the stratum the plan reached")
+                // The stream knows the plan its unit was compiled from, and the
+                // bridge carries that on rather than making the caller re-state it.
+                .with_plan_id(stream.plan_id);
         streams.push((stream.stratum, adapter));
     }
     let fused = block_on(fuse::<RankedStreamAdapter, Term>(streams, &profile, TOP_K))
@@ -1401,6 +1414,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     assert!(
         RankedStreamAdapter::new(
             RankedStreamImpl::new(vec![(1, Term::new("a"))]),
+            strict_unique(),
             &elsewhere,
             &stratum("resume"),
         )
@@ -1436,8 +1450,9 @@ fn executed_stream(suffix: &str, profile: &FusionProfile) -> (PlanId, Iri, Ranke
         .into_iter()
         .next()
         .expect("the stratum streamed");
-    let adapter = RankedStreamAdapter::new(stream.stream, profile, &stream.stratum)
-        .expect("the profile weights the stratum the plan reached");
+    let adapter =
+        RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum)
+            .expect("the profile weights the stratum the plan reached");
     (stream.plan_id, stream.stratum, adapter)
 }
 
@@ -1521,6 +1536,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(vec![(0, Term::new("a"))]),
+        strict_unique(),
         &profile,
         &stratum("resume"),
     )
@@ -1540,6 +1556,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // ordinary row carrying the profile's own contribution.
     let mut adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(vec![(1, Term::new("a"))]),
+        strict_unique(),
         &profile,
         &stratum("resume"),
     )

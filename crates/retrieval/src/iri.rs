@@ -13,15 +13,15 @@
 //! * [`Iri`] validates through the kernel parser, hashes and orders by its
 //!   textual content, and serializes as the IRI string — a deserialized IRI is
 //!   re-parsed, so a forged document cannot smuggle an unvalidated IRI in.
-//! * [`Weight`] wraps `Fixed` and serializes as its raw `i128`, preserving the
-//!   exact value across a round trip.
 //! * [`Term`] carries a caller's canonical term lexical; the layer mints no
 //!   vocabulary and parses no RDF.
+//! * `fixed_option` carries an optional exact fixed-point value as its raw
+//!   `i128`, so a round trip preserves it without introducing a decimal-string
+//!   parsing convention the layer does not otherwise need.
 
 use core::fmt;
 use core::hash::{Hash, Hasher};
 
-use purrdf_text::Fixed;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::PlanError;
@@ -105,65 +105,6 @@ impl<'de> Deserialize<'de> for Iri {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
         Self::parse(&text).map_err(serde::de::Error::custom)
-    }
-}
-
-/// An exact fixed-point stratum weight.
-///
-/// `Fixed` has no serde impl of its own, and serializing a weight as a decimal
-/// string would reintroduce a parsing convention the layer does not need. This
-/// newtype serializes the raw `i128` instead, so the value is preserved exactly.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Weight(Fixed);
-
-impl Weight {
-    /// Wrap an exact fixed-point value.
-    #[must_use]
-    pub const fn new(value: Fixed) -> Self {
-        Self(value)
-    }
-
-    /// Build a weight from its raw scaled integer.
-    #[must_use]
-    pub const fn from_raw(raw: i128) -> Self {
-        Self(Fixed::from_raw(raw))
-    }
-
-    /// The raw scaled integer.
-    #[must_use]
-    pub const fn into_raw(self) -> i128 {
-        self.0.into_raw()
-    }
-
-    /// The wrapped fixed-point value.
-    #[must_use]
-    pub const fn fixed(self) -> Fixed {
-        self.0
-    }
-
-    /// Whether this weight is strictly positive.
-    #[must_use]
-    pub fn is_positive(self) -> bool {
-        self.0 > Fixed::ZERO
-    }
-}
-
-impl From<Fixed> for Weight {
-    fn from(value: Fixed) -> Self {
-        Self(value)
-    }
-}
-
-impl Serialize for Weight {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i128(self.0.into_raw())
-    }
-}
-
-impl<'de> Deserialize<'de> for Weight {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = i128::deserialize(deserializer)?;
-        Ok(Self::from_raw(raw))
     }
 }
 
