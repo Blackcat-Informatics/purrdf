@@ -181,6 +181,18 @@ name = "purremb_alloc"
 harness = false
 
 [[bench]]
+# One-shot allocation/count/high-water probes over the pack RESTORE path
+# (`PackView::from_bytes`, `dataset_from_view`, and `restore_pack` over both), on an
+# RDF 1.1 and an RDF 1.2 fixture. Separate from the `pack_query` Criterion target so
+# the allocator atomics cannot distort its timings, and separate from that target's
+# concerns because a decoder that quietly returns to one allocation per term reads as
+# noise in a latency measurement and as a scaling count here. Report-only — no
+# allocation or timing threshold is asserted. `make bench` lane only — excluded from
+# `make check`.
+name = "pack_restore_alloc"
+harness = false
+
+[[bench]]
 name = "shared_views"
 harness = false
 

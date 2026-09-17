@@ -83,7 +83,7 @@
 //! ```
 
 use crate::error::{IriError, Result};
-use crate::parse::{Iri, parse};
+use crate::parse::{Iri, IriForm, classify, parse};
 
 /// An [`Iri`] that is guaranteed to be **absolute** (to have a scheme).
 ///
@@ -643,6 +643,34 @@ impl BaseScope {
         }
     }
 
+    /// [`resolve`](Self::resolve)'s verdict for a caller that needs only the
+    /// ACCEPTANCE, not the resolved [`Iri`].
+    ///
+    /// Accepts exactly what `resolve` accepts and fails with exactly the error
+    /// `resolve` fails with — an **absolute** reference simply skips building the
+    /// owned `Iri` that `resolve` hands back and this caller would drop unread. That
+    /// is sound because `resolve` carries an absolute reference lexical-verbatim
+    /// (see [`Reference::Absolute`]'s doc comment): the value it returns is `reference`
+    /// itself, so a caller that does not want the value needs nothing beyond the
+    /// grammar check [`classify`] already performed. Every other shape — the empty
+    /// same-document reference, and a relative reference with or without a base —
+    /// falls through to `resolve` itself rather than to a second transcription of it.
+    ///
+    /// The store-once term tables of an RDF dataset are the motivating caller: they
+    /// validate each DISTINCT IRI exactly once and keep the string in their own
+    /// arena, so the parsed `Iri` is pure waste — one allocation per distinct IRI in
+    /// a document, a pack dictionary, or a restored dataset.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`resolve`](Self::resolve) returns for the same reference and scope.
+    pub fn check(&self, reference: &str) -> Result<()> {
+        if !reference.is_empty() && classify(reference)? == IriForm::Absolute {
+            return Ok(());
+        }
+        self.resolve(reference).map(drop)
+    }
+
     /// Resolve `reference` for a grammar whose syntax admits **no relative
     /// reference at all** (N-Triples, N-Quads, TriX, `HexTuples`).
     ///
@@ -748,5 +776,70 @@ mod tests {
         // Popping an empty scope is a no-op, not a panic.
         scope.pop();
         assert!(scope.is_empty());
+    }
+
+    /// `check` is `resolve`'s verdict, so the two must agree on EVERY reference —
+    /// acceptance, refusal, and which refusal.
+    ///
+    /// `check` short-circuits the absolute arm to skip building an `Iri` nobody
+    /// reads, and a short circuit is exactly where an accept-everything or a
+    /// refuse-everything hides: either one still passes any test that only exercises
+    /// its own half. So both halves are executed here against the SAME references,
+    /// under a scope that has a base and one that does not, and the verdicts are
+    /// compared rather than asserted independently.
+    #[test]
+    fn check_agrees_with_resolve_on_every_reference() {
+        let rooted = BaseScope::rooted(
+            BaseIri::parse("http://example.org/a/b").unwrap(),
+            BaseOrigin::Caller,
+        );
+        let empty = BaseScope::empty();
+
+        for reference in [
+            // Absolute — the arm `check` short-circuits.
+            "http://example.org/x",
+            "https://example.org/x?q=1#f",
+            "urn:example:x",
+            "file:///tmp/x",
+            "http://example.org/a/bb/ccc/../d;p?q",
+            // Relative — resolved with a base, refused without one.
+            "foo",
+            "../d",
+            "/d",
+            "?q",
+            "#frag",
+            // The same-document reference, which is relative by definition.
+            "",
+            // Not well formed at all: a syntax error in either scope, and NOT a
+            // base-related one.
+            "http://example.org/<bad>",
+            "http://exa mple.org/x",
+            "1nvalid:x",
+        ] {
+            for (name, scope) in [("rooted", &rooted), ("empty", &empty)] {
+                let resolved = scope.resolve(reference);
+                let checked = scope.check(reference);
+                assert_eq!(
+                    resolved.is_ok(),
+                    checked.is_ok(),
+                    "{name}: check and resolve disagree on accepting {reference:?}",
+                );
+                if let (Err(expected), Err(actual)) = (&resolved, &checked) {
+                    assert_eq!(
+                        expected.diagnostic_code(),
+                        actual.diagnostic_code(),
+                        "{name}: check and resolve refuse {reference:?} for different reasons",
+                    );
+                }
+            }
+        }
+
+        // The counts prove the loop above was not vacuous in either direction: an
+        // empty scope accepts exactly the absolute references and refuses the rest.
+        let absolute = ["http://example.org/x", "urn:example:x"];
+        let relative = ["foo", "", "../d"];
+        assert!(absolute.iter().all(|r| empty.check(r).is_ok()));
+        assert!(relative.iter().all(|r| empty.check(r).is_err()));
+        assert!(relative.iter().all(|r| rooted.check(r).is_ok()));
     }
 }

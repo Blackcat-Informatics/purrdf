@@ -95,6 +95,16 @@ enum TermLookup<'a> {
     },
 }
 
+/// Whether `s` is its own lowercase image, tested WITHOUT building that image.
+///
+/// `str::to_lowercase` always allocates, even when it is about to return a copy of
+/// its input. A BCP 47 language tag reaching an interner has normally already been
+/// lowercased at ingress, so the copy is the common case and the comparison is what
+/// the caller actually wanted.
+fn is_lowercase(s: &str) -> bool {
+    s.chars().flat_map(char::to_lowercase).eq(s.chars())
+}
+
 /// Hash a borrowed lookup. MUST hash byte-identically to [`hash_stored`] for equal
 /// values — explicit discriminant tags + `str::hash` (so the find/insert hashes agree).
 fn hash_lookup<H: Hasher>(lookup: &TermLookup<'_>, state: &mut H) {
@@ -560,6 +570,39 @@ impl RdfDatasetBuilder {
         self.interner.intern(TermLookup::Iri(iri))
     }
 
+    /// Reserve room for a bulk replay of `terms` distinct terms whose strings occupy
+    /// `term_bytes` bytes, plus `quads` base quads, so the string arena, the term
+    /// table, the value index, the quad table and the quad index each grow ONCE
+    /// instead of doubling their way through the replay.
+    ///
+    /// Every figure is a hint, never a contract: pushing more or fewer of anything is
+    /// correct and costs only the ordinary growth. Deliberately not public — the
+    /// caller that can state these numbers honestly is a whole-view import
+    /// ([`super::import::DatasetImporter`]), which reads all three off the source
+    /// view's own `term_count`/`term_bytes_hint`/`len_hint`, and a public `reserve`
+    /// would invite callers to guess.
+    ///
+    /// `term_bytes` of `0` means "no figure available" and reserves no arena at all,
+    /// rather than reserving a fabricated one: an over-reserved arena is retained for
+    /// the frozen dataset's entire lifetime, so guessing here costs memory forever
+    /// while guessing wrong on the tables costs one extra growth.
+    pub(crate) fn reserve_for_replay(&mut self, terms: usize, term_bytes: usize, quads: usize) {
+        let Interner {
+            arena,
+            terms: table,
+            index,
+            ..
+        } = &mut self.interner;
+        arena.reserve(term_bytes);
+        table.reserve(terms);
+        index.reserve(terms, |&i| hash_stored_value(arena, &table[i as usize]));
+
+        self.quads.reserve(quads);
+        let rows = &self.quads;
+        self.quad_index
+            .reserve(quads, |&i| hash_of(&rows[i as usize]));
+    }
+
     /// Explicitly declare that a named graph exists, even if it turns out to own
     /// zero quads. The frozen dataset's `GRAPH ?g` enumeration
     /// ([`RdfDataset::named_graphs`](super::dataset::RdfDataset::named_graphs))
@@ -651,30 +694,82 @@ impl RdfDatasetBuilder {
     ///
     /// The scan is guarded by the datatype IRI, so an ordinary literal pays two
     /// string comparisons and nothing more.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the by-value `RdfLiteral` is this method's PUBLISHED signature and every \
+                  caller in and outside the workspace builds one inline, so narrowing it to a \
+                  borrow is a breaking change, not a cleanup. The body stopped needing \
+                  ownership when the work moved to `intern_literal_parts`, which borrows — the \
+                  interner copies a literal's strings into its own arena either way, so \
+                  consuming the literal here would free it a few lines earlier and nothing else"
+    )]
     pub fn intern_literal(&mut self, lit: RdfLiteral) -> TermId {
-        let datatype_iri = lit.datatype_iri();
+        self.intern_literal_parts(
+            &lit.lexical_form,
+            lit.datatype.as_deref(),
+            lit.language.as_deref(),
+            lit.direction,
+        )
+    }
+
+    /// [`intern_literal`](Self::intern_literal) over BORROWED components — the same
+    /// C0.1 identity policy, the same id, and no owned [`RdfLiteral`] in between.
+    ///
+    /// The interner's key ([`TermLookup`]) is borrowed and its arena is the only place
+    /// a literal's strings are ever stored, so a caller that already holds `&str`s —
+    /// a bulk import replaying another store's dictionary
+    /// ([`super::import::DatasetImporter`]) — was allocating an owned lexical form, an
+    /// owned datatype IRI and an owned language tag per literal purely to hand them to
+    /// a function that borrows them straight back. This is that function, and
+    /// `intern_literal` is now a thin owned wrapper over it, so the two cannot
+    /// disagree about identity.
+    ///
+    /// `datatype` is the literal's EXPLICIT datatype (`None` meaning "unstated"),
+    /// exactly as [`RdfLiteral::datatype`] carries it; the language-tag override and
+    /// the `xsd:string` default are applied here, so both entry points expand the
+    /// datatype the same way rather than each spelling the rule.
+    ///
+    /// The language tag is lowercased for the key ONLY when it is not already its own
+    /// lowercase image. BCP 47 tags are case-insensitive and ingress normalizes them,
+    /// so the common case is a tag that is already lowercase and a `to_lowercase`
+    /// whose output is a copy of its input.
+    ///
+    /// Crate-internal: the owned form is the published ingress, and a second public
+    /// spelling of the same operation would be surface with no caller.
+    pub(crate) fn intern_literal_parts(
+        &mut self,
+        lexical: &str,
+        datatype: Option<&str>,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> TermId {
+        // C0.1 datatype expansion, identical to `RdfLiteral::datatype_iri`: a language
+        // tag names the datatype whatever the explicit one says, then an explicit
+        // datatype, then `xsd:string`.
+        let datatype_iri = match (language, datatype) {
+            (Some(_), _) => RdfLiteral::language_datatype_iri(direction),
+            (None, Some(explicit)) => explicit,
+            (None, None) => super::term::XSD_STRING,
+        };
         if self.interner.invalid_literal.is_none() {
-            self.interner.invalid_literal = RdfLiteral::validate_components(
-                datatype_iri,
-                lit.language.as_deref(),
-                lit.direction,
-            )
-            .err();
+            self.interner.invalid_literal =
+                RdfLiteral::validate_components(datatype_iri, language, direction).err();
         }
         let datatype_id = self.intern_iri(datatype_iri);
 
         // A composite literal's embedded labels are blank nodes of this dataset.
-        for (label, scope) in crate::cdt_blank::cdt_embedded_blanks(&lit.lexical_form, datatype_iri)
-        {
+        for (label, scope) in crate::cdt_blank::cdt_embedded_blanks(lexical, datatype_iri) {
             self.intern_blank(&label, scope);
         }
 
-        let language_key = lit.language.map(|lang| lang.to_lowercase());
+        let lowered = language
+            .filter(|tag| !is_lowercase(tag))
+            .map(str::to_lowercase);
         self.interner.intern(TermLookup::Literal {
-            lexical: &lit.lexical_form,
+            lexical,
             datatype: datatype_id,
-            language: language_key.as_deref(),
-            direction: lit.direction,
+            language: lowered.as_deref().or(language),
+            direction,
         })
     }
 
@@ -1212,6 +1307,29 @@ impl RdfDatasetBuilder {
         store_once(&mut self.reifiers, &mut self.reifier_index, binding);
     }
 
+    /// Reserve room for `rows` more reifier bindings, table and dedup index together.
+    ///
+    /// The RDF 1.2 twin of [`reserve_for_replay`](Self::reserve_for_replay), split out
+    /// because a source states its overlay size separately from its base-quad count
+    /// (a graph with no reifiers at all must reserve nothing for them). A hint, never
+    /// a contract. See that method for why this is not public.
+    pub(crate) fn reserve_reifiers(&mut self, rows: usize) {
+        self.reifiers.reserve(rows);
+        let existing = &self.reifiers;
+        self.reifier_index
+            .reserve(rows, |&i| hash_of(&existing[i as usize]));
+    }
+
+    /// Reserve room for `rows` more statement annotations, table and dedup index
+    /// together. The annotation twin of
+    /// [`reserve_reifiers`](Self::reserve_reifiers); the same hint discipline applies.
+    pub(crate) fn reserve_annotations(&mut self, rows: usize) {
+        self.annotations.reserve(rows);
+        let existing = &self.annotations;
+        self.annotation_index
+            .reserve(rows, |&i| hash_of(&existing[i as usize]));
+    }
+
     /// The predicate implicitly interned by reifier insertion, if any. Native
     /// rewrite observers use this actual ID without changing allocation order.
     pub(crate) const fn reifies_predicate(&self) -> Option<TermId> {
@@ -1368,7 +1486,19 @@ impl RdfDatasetBuilder {
         let mut named_graphs: Vec<TermId> = declared_graphs;
         // `filter_map` reports a zero lower bound, so the three `extend`s below
         // would otherwise grow by doubling; the exact upper bound is known here.
-        named_graphs.reserve(quads.len() + reifiers.len() + annotations.len());
+        //
+        // Guarded by a scan for any graph slot at all, because the upper bound is the
+        // ROW COUNT and the common dataset has no named graph whatsoever: reserving
+        // unconditionally asks the allocator for one `TermId` per row of a
+        // default-graph-only dataset and then frees every byte of it again at
+        // `into_boxed_slice`. The scan allocates nothing and reads the same slices the
+        // extends are about to.
+        if quads.iter().any(|q| q.g.is_some())
+            || reifiers.iter().any(|(_, _, g)| g.is_some())
+            || annotations.iter().any(|(_, _, _, g)| g.is_some())
+        {
+            named_graphs.reserve(quads.len() + reifiers.len() + annotations.len());
+        }
         named_graphs.extend(quads.iter().filter_map(|q| q.g));
         // A reifier / annotation declared inside a `GRAPH g { … }` block owns no base
         // quad in g (the `<< … >>` folds entirely into the side-tables), so g would be
