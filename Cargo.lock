@@ -2363,12 +2363,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "visual-hashing"
-version = "0.1.3"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89cff0f3901531f1ae5441b09b201b1e61698fba5a5625d44b6243c5b381a3e3"
-dependencies = [
- "blake3",
-]
+checksum = "5056c65a9a789c9c1156fbfab38df224d7b729089e3b075892136e8f3092166e"
 
 [[package]]
 name = "wait-timeout"
