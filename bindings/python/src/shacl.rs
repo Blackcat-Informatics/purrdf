@@ -548,6 +548,39 @@ impl PyShapesProduct {
         Ok(PyPreparedShapes { inner })
     }
 
+    /// **The common path, bound to the product you MEANT.** Restore exactly as
+    /// `admit()` does, but only after confirming the product's input binding is
+    /// `expected_identity`.
+    ///
+    /// Everything `admit()` checks is a question about this PROCESS — its build, its
+    /// registries, its class analysis. None of them asks whether these are the bytes
+    /// the caller wanted, because nothing in a product states which product was
+    /// meant. Admitting a cache entry, a downloaded artifact or a path built from a
+    /// configuration string without saying which one it must be is how a validator
+    /// returns a well-formed report about a shapes graph nobody asked about.
+    ///
+    /// `expected_identity` is the 64 hexadecimal digits `identity_digest()` returns
+    /// for the product you intend — one spelling, readable off the artifact itself,
+    /// so the selector can be pinned in a test or a deployment manifest.
+    ///
+    /// Raises `ShapesProductError` with `.dimension == "shapes-graph"` when the
+    /// product carries a different binding, and `ValueError` when
+    /// `expected_identity` is not 64 hexadecimal digits — no product was inspected in
+    /// that case, so no dimension names it.
+    fn admit_expecting(
+        &self,
+        py: Python<'_>,
+        expected_identity: &str,
+    ) -> PyResult<PyPreparedShapes> {
+        let expected = purrdf_validate::parse_identity_digest(expected_identity)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let bytes = &self.bytes;
+        let inner = py
+            .detach(|| purrdf_validate::admit_shapes_product_expecting(bytes, &expected))
+            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
+        Ok(PyPreparedShapes { inner })
+    }
+
     /// **The forward-compatibility path.** Ignore the memo and re-derive the
     /// preparation from the shapes dataset the product carries.
     ///

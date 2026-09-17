@@ -74,6 +74,14 @@
 //! file is corrupt) and `function-registry` (your configuration, not the product) are three
 //! different actions and one exit code cannot carry the difference.
 //!
+//! Every one of those checks asks about THIS PROCESS — is this the build that wrote the
+//! memo, are these the registries the product was prepared against. None of them asks
+//! whether this is the product the operator wanted, because the product cannot know:
+//! nothing in a file states which file was meant. `--expect-identity HEX` is how the
+//! operator states it, and it is checked first and costs 32 bytes of comparison. Without
+//! it, naming the wrong product on the command line produces a decided, well-formed
+//! report about a shapes graph nobody asked about, with a `0` exit status.
+//!
 //! `--shapes-from`, `--shapes-graph` and `--import` all configure a PARSE, and this route
 //! performs none: the product carries its own base, prefix map and `sh:shapesGraph` IRI,
 //! bound by its identity. They are refused by name rather than accepted and ignored — see
@@ -166,6 +174,11 @@ pub(crate) struct ValidateOptions<'a> {
     /// `--shapes-product`: a prepared product to RESTORE instead of parsing a shapes
     /// document. See [`load_prepared`].
     pub(crate) shapes_product: Option<&'a str>,
+    /// `--expect-identity`: the input binding `--shapes-product` must carry, as the
+    /// operator wrote it. [`ShapesPlan::decide`] turns it into the 32-byte selector the
+    /// admission boundary compares, so a mis-typed digest is a usage error before any
+    /// file is opened.
+    pub(crate) expect_identity: Option<&'a str>,
     /// `--shapes-from`: the shapes-graph format override.
     pub(crate) shapes_from: Option<CliRdfFormat>,
     /// `--shapes-graph`: the IRI the shapes graph is exposed under to SHACL-SPARQL paths,
@@ -227,6 +240,7 @@ pub(crate) fn run(
     refuse_two_stdins(options)?;
     refuse_inapplicable_flags(options, ledger_target)?;
     refuse_parse_flags_against_a_product(options)?;
+    refuse_an_expectation_with_no_product(options)?;
 
     let data_format = format::resolve(options.from, options.input)?;
     // The DATA parse is the only leg `--base` has here: the shapes graph resolves against
@@ -398,6 +412,10 @@ enum ShapesPlan<'a> {
     Product {
         /// The product path, or `-`.
         path: &'a str,
+        /// `--expect-identity`, decoded: the input binding the product must carry for
+        /// this restore to proceed. `None` leaves the restore unbound — the product is
+        /// still admitted in full, but nothing states WHICH product was wanted.
+        expect_identity: Option<[u8; 32]>,
     },
 }
 
@@ -409,7 +427,19 @@ impl<'a> ShapesPlan<'a> {
     /// Any usage error in `--shapes-from`, `--shapes-graph` or the shapes path.
     fn decide(options: &ValidateOptions<'a>) -> Result<Self, CliError> {
         if let Some(path) = options.shapes_product {
-            return Ok(Self::Product { path });
+            // Decoded HERE, before a byte of the product is read: a mis-typed selector is
+            // the operator's command line, not the artifact's fault, so it exits as a
+            // usage error rather than as a refusal that would name a dimension of a
+            // product nothing ever inspected.
+            let expect_identity = options
+                .expect_identity
+                .map(purrdf_validate::parse_identity_digest)
+                .transpose()
+                .map_err(|why| CliError::Usage(format!("--expect-identity {why}")))?;
+            return Ok(Self::Product {
+                path,
+                expect_identity,
+            });
         }
         // clap makes exactly one of the two required, so the `else` is unreachable from a
         // command line; it is reported rather than unwrapped because an unreachable panic
@@ -474,13 +504,24 @@ impl<'a> ShapesPlan<'a> {
                 ..
             } => load_shapes(options, path, format, base.as_deref())
                 .map(|shapes| ShapesSource::Parsed(Box::new(shapes))),
-            Self::Product { path } => {
+            Self::Product {
+                path,
+                expect_identity,
+            } => {
                 let owner = source::acquire_product_input(path)?;
-                purrdf_validate::admit_shapes_product(owner.as_bytes())
-                    .map(ShapesSource::Restored)
-                    .map_err(|error| {
-                        crate::shacl::admission_error(&format!("--shapes-product {path}"), &error)
-                    })
+                // Two entry points at one boundary, chosen by whether the operator
+                // stated which product they wanted. `--expect-identity` adds a 32-byte
+                // comparison ahead of every other check, so the wrong file is named as
+                // the wrong file rather than restored and validated against.
+                let admitted = match expect_identity {
+                    None => purrdf_validate::admit_shapes_product(owner.as_bytes()),
+                    Some(ref expected) => {
+                        purrdf_validate::admit_shapes_product_expecting(owner.as_bytes(), expected)
+                    }
+                };
+                admitted.map(ShapesSource::Restored).map_err(|error| {
+                    crate::shacl::admission_error(&format!("--shapes-product {path}"), &error)
+                })
             }
         }
     }
@@ -527,6 +568,30 @@ fn refuse_two_stdins(options: &ValidateOptions<'_>) -> Result<(), CliError> {
         ));
     }
     Ok(())
+}
+
+/// Refuse `--expect-identity` when there is no product for it to bind.
+///
+/// The flag states which PREPARED PRODUCT the operator meant, and a shapes document has
+/// no prepared binding to state: it is parsed on this run, from the path on this command
+/// line, so the question "is this the artifact I asked for" has already been answered by
+/// the path itself.
+///
+/// Accepting it against `--shapes` and ignoring it would be worse than the usual silent
+/// no-op. This is the one flag an operator reaches for precisely because they do not
+/// trust that the right bytes arrived; a spelling of it that quietly checks nothing
+/// hands back exactly the reassurance it was asked to withhold.
+fn refuse_an_expectation_with_no_product(options: &ValidateOptions<'_>) -> Result<(), CliError> {
+    if options.expect_identity.is_none() || options.shapes_product.is_some() {
+        return Ok(());
+    }
+    Err(CliError::Usage(
+        "--expect-identity names the input binding a PREPARED PRODUCT must carry, and this run \
+         parses a shapes document instead: `--shapes` has no prepared binding to require, and \
+         the document it names is read on this run rather than restored from a cache. Pass \
+         `--shapes-product FILE` to bind a product, or drop the flag"
+            .to_owned(),
+    ))
 }
 
 /// Refuse the shapes-PARSE flags against `--shapes-product`.

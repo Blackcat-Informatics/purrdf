@@ -819,6 +819,23 @@ pub(crate) enum Command {
         /// without admitting it.
         #[arg(long = "shapes-product", value_name = "FILE")]
         shapes_product: Option<String>,
+        /// Require `--shapes-product` to be the product whose INPUT BINDING is `HEX` — the
+        /// 64 hexadecimal digits `purrdf shacl explain` prints on its `identity-digest`
+        /// line, passed back unchanged. The restore is refused before anything is decoded
+        /// when the product carries a different binding, so a consumer that names the
+        /// wrong file learns it here instead of receiving a well-formed report about a
+        /// shapes graph nobody asked about.
+        ///
+        /// Everything else `--shapes-product` checks is a question about THIS PROCESS —
+        /// its build, its registries, its class analysis. This is the one question about
+        /// the artifact, and only the caller can ask it: the product cannot know which
+        /// product was wanted. Without it the wrong product validates silently.
+        ///
+        /// Refused against `--shapes`: a shapes DOCUMENT has no prepared binding to
+        /// require, and a flag whose whole job is to fail closed must never be the flag
+        /// that silently did nothing.
+        #[arg(long = "expect-identity", value_name = "HEX")]
+        expect_identity: Option<String>,
         /// Shapes-graph format override; inferred from the shapes path's extension when
         /// omitted. Turtle is read through `purrdf_shapes::engine::parse_shapes`, the exact
         /// boundary every other host uses, which additionally recovers the shapes DOCUMENT's

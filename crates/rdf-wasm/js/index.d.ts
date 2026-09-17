@@ -1461,4 +1461,26 @@ export function shaclProductValidateToSarif(
   dataNt: string,
 ): string;
 
+/**
+ * `shaclProductValidateToSarif`, bound to the product you meant.
+ *
+ * Everything the unbound call checks is a question about the executing guest — its
+ * build, its registries, its class analysis. None of them asks whether these are the
+ * bytes the host wanted, because nothing in a product states which product was meant.
+ * A host that fetches a product, reads one out of a cache, or builds its path from
+ * configuration has no other way to say so, and the wrong product validates silently.
+ *
+ * `expectIdentity` is the 64 hexadecimal digits `shaclProductExplain` prints on its
+ * `identity-digest` line, passed back unchanged.
+ *
+ * Throws a `ShaclProductRefusal`: `dimension === "shapes-graph"` when the product
+ * carries a different binding, and `dimension === undefined` when `expectIdentity` is
+ * not 64 hexadecimal digits, because no product was inspected in that case.
+ */
+export function shaclProductValidateToSarifExpecting(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+): string;
+
 export function version(): string;

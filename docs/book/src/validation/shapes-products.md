@@ -257,6 +257,67 @@ Everything describing the **data** graph stays live: `--from`, `--base`,
 `--max-intermediate-cells`, `--max-scratch-bytes`, `--max-remote-requests`), and
 the positional `IN`/`OUT`.
 
+### Binding a restore to the product you meant
+
+Every check above asks about **this process** — is this the build that wrote the
+memo, are these the registries the product was prepared against, does this build
+re-derive the pinned class analysis. Not one of them asks whether the file named
+on the command line is the product you wanted, because nothing in a product states
+which product was meant. So naming the wrong one is not an error:
+
+```console
+$ purrdf validate --shapes-product WRONG.purrshp data.ttl
+shacl conforms true
+```
+
+That is a decided, well-formed, authenticated verdict about a shapes graph nobody
+asked about, and it exits `0`. `--expect-identity HEX` is how you say which
+product you meant:
+
+```console
+$ purrdf validate --shapes-product WRONG.purrshp \
+    --expect-identity 9f2c…64 lowercase hex…1b data.ttl
+shacl dimension shapes-graph
+purrdf: --shapes-product WRONG.purrshp: shapes-graph: this product was prepared
+from the shapes graph whose input binding is 4b81…, and the caller required the
+product bound to 9f2c…; …
+```
+
+`HEX` is the product's **input binding**: the 64 hexadecimal digits of the
+identity that covers the shapes dataset, the `sh:shapesGraph` IRI, the prefix map,
+the base, the profile, the box-role vocabulary, all three registries and the class
+catalog at once. Read it off the product you intend with either verb that prints
+it — `shacl explain`'s `identity-digest` line, or `shacl verify`'s stdout — and
+pass it back unchanged:
+
+```bash
+WANT=$(purrdf shacl explain shapes.purrshp | awk '/^identity-digest /{print $2}')
+purrdf validate --shapes-product shapes.purrshp --expect-identity "$WANT" data.ttl
+```
+
+The check is the **first** thing the restore does, ahead of the profile and the
+stage id: a caller who named the wrong artifact is told that, rather than sent to
+re-pack a product that was never the one they wanted. It costs a 32-byte
+comparison, because the identity digest is already decoded by the time the bytes
+have opened.
+
+A satisfied expectation changes nothing else. `--expect-identity` with the
+product's own digest produces the report byte-identical to the run without the
+flag — the flag changes the door, not the answer.
+
+Two spellings are refused as usage errors (exit `2`) rather than accepted:
+`--expect-identity` against `--shapes`, because a shapes document has no prepared
+binding to require; and a value that is not 64 hexadecimal digits, which names no
+dimension because no product was ever inspected. Case is not significant on the
+way in, so a selector that passed through a manifest or a CI variable in upper
+case still names its product.
+
+The writer is byte-deterministic, so the binding is a property of the shapes graph
+and its parse inputs, not of a particular pack run: re-packing the same shapes
+graph under the same base and prefixes yields the same digest, which is what makes
+the selector worth writing down in a deployment manifest beside the product it
+names.
+
 Under the hood there are two ways a product becomes a validator again, and they
 are two entry points at one boundary rather than a flag on one:
 
@@ -288,6 +349,12 @@ let prepared = if known {
 } else {
     view.rebuild(&ShapesProfile::CORE, &HostBindings::empty())?
 };
+
+// Or state WHICH product you meant, and fail closed when it is not that one.
+// `wanted` is the digest `declared_identity().digest()` returns for the product
+// you intend — the same value `shacl explain` prints.
+let prepared = ShapesProduct::open(&product)?
+    .admit_expecting(&ShapesProfile::CORE, &HostBindings::empty(), &wanted)?;
 ```
 
 `ShapesProduct::open` runs the container's cheap integrity tier — magic, format
@@ -366,13 +433,25 @@ re-packing blindly.
 ## The refusal dimensions
 
 Every refusal carries one of twenty stable kebab-case labels, printed to stderr
-as `shacl dimension <label>` by `shacl verify`, `shacl explain` and
-`validate --shapes-product` alike. **The dimension is what you branch on; the
-message is what you read.** Matching on message text is not supported.
+as `shacl dimension <label>`. **The dimension is what you branch on; the message
+is what you read.** Matching on message text is not supported.
 
 The dimensions are checked from the outside of the container inward, and the
 first one that fails is the one reported — so the label always names the
 outermost unmet precondition rather than a downstream symptom of it.
+
+The twenty split into two groups by **which verb can report them**, and the split
+is not a taxonomy: it is the cost decision this codec is built around. A restore
+is the common path and must not canonicalize a shapes graph's blank nodes;
+certification is the cold path that does. A dimension only one of the two can
+reach is not something the other quietly skips — it is a statement that verb never
+makes.
+
+### Admit-time dimensions
+
+Reported by `validate --shapes-product` on every restore, by `shacl explain` for
+the structural rows it reaches while opening the bytes, and by `shacl verify`,
+which opens the product before it certifies anything.
 
 | Dimension | What it means | What to do |
 | --- | --- | --- |
@@ -384,8 +463,7 @@ outermost unmet precondition rather than a downstream symptom of it.
 | `trailer` | the trailer is absent or inconsistent with the bytes ahead of it | discard and re-pack |
 | `section-digest` | a section no longer matches its recorded digest | discard and re-pack — the product is corrupt in place |
 | `container-digest` | the whole-container digest disagrees with the bytes | discard and re-pack — something outside the section bodies moved |
-| `dataset-identity` | prepared from a different shapes dataset | re-pack from the same shapes graph the execution loads |
-| `shapes-graph` | prepared under a different `sh:shapesGraph` IRI | expose the shapes under the same named graph, or re-pack with that IRI |
+| `shapes-graph` | prepared under a different `sh:shapesGraph` IRI — or, under [`--expect-identity`](#binding-a-restore-to-the-product-you-meant), carrying an input binding that is not the one you required | expose the shapes under the same named graph and re-pack with that IRI, or point the expectation at the product you meant |
 | `prefixes` | prepared against a different prefix map | pack and execute under the same prefixes — the map decides which IRI a prefixed name denotes |
 | `base` | prepared against a different base IRI | pack and execute under the same base — relative references resolve against it |
 | `vocabulary` | prepared under a different box-role vocabulary | supply the same vocabulary; PurRDF mints no vocabulary IRIs and there is no default to fall back on |
@@ -402,6 +480,26 @@ naming them: `malformed` is a corrupt cache to discard, `format-version` is a
 stale artifact to recompile, and `function-registry` is a configuration error in
 your own process that re-packing will not fix.
 
+### The certify-time dimension
+
+| Dimension | What it means | What to do |
+| --- | --- | --- |
+| `dataset-identity` | the shapes dataset the product carries does not *canonicalize* to the digest its own binding claims | discard and re-pack from the shapes graph — the section and the binding over it no longer describe one dataset |
+
+Only `shacl verify` reports this one. A restore does **not** re-canonicalize the
+shapes dataset: it takes that component from the product's own binding, because
+the computation is a graph isomorphism over the shapes graph's blank nodes and
+would plausibly cost more than the shapes parse a product exists to eliminate.
+The envelope's per-section SHA-256 and whole-container digest still cover those
+bytes on every path, so a swapped section is refused as `section-digest` or
+`container-digest`; what only certification establishes is that the bytes
+canonicalize to what the binding claims.
+
+So a product whose stored canonical digest has been tampered with **will open,
+will admit, and will fail `shacl verify`.** That is a documented split pinned by
+test, not a hole: if you need the statement, run `verify` — from a build step, a
+release check or a conformance harness, never before every validation.
+
 One failure carries **no** dimension: a shapes or data *document* that does not
 parse never reached the admission boundary, so nothing was inspected and naming
 a dimension for it would claim otherwise. On the CLI no `shacl dimension` line
@@ -415,7 +513,7 @@ is printed; in Python the exception's `.dimension` is `None`; in JavaScript
 | `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE]` | parse, prepare, write the product | product written | the shapes did not parse, or the graph declares something a product cannot carry | bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
 | `purrdf shacl verify [IN]` | corroborate the carried dataset against the claimed identity | prints the identity digest | refused, with `shacl dimension <label>` on stderr | bad flags |
 | `purrdf shacl explain [IN]` | print what the product says it was compiled from | prints the `key value` rendering | the bytes are not a well-formed product | bad flags |
-| `purrdf validate --shapes-product FILE [IN]` | restore and validate | validation ran | product refused | bad flags, or a parse flag passed against a product |
+| `purrdf validate --shapes-product FILE [--expect-identity HEX] [IN]` | restore and validate | validation ran | product refused | bad flags, a parse flag passed against a product, an `--expect-identity` that is not 64 hexadecimal digits, or `--expect-identity` without a product |
 
 `IN` defaults to `-` (standard input) for `verify` and `explain`. For
 `validate`, `--shapes-product -` collides with the data graph's own default of
@@ -443,11 +541,20 @@ for label, value in view.identity_components():
 restored = view.admit() if view.stage_known() else view.rebuild()
 report = restored.validate_nt(data_nt)
 print(report.conforms)
+
+# …or say which product you meant, and fail closed when it is not that one.
+restored = view.admit_expecting("9f2c…64 lowercase hex…1b")
 ```
 
 `ShapesProduct.certify()` is the cold path; call it from a build step or a test.
 Refusals raise `shacl.ShapesProductError`, whose `.dimension` carries the label
 string (or `None` when no product was ever inspected).
+
+`admit_expecting(expected_identity)` is `admit()` bound to the product you meant:
+it takes the 64 hexadecimal digits `identity_digest()` reports, and raises
+`ShapesProductError` with `.dimension == "shapes-graph"` when the product carries
+a different binding. A selector that is not a digest raises a plain `ValueError`
+instead — no product was opened, so nothing may be blamed on one.
 
 ## From JavaScript / WebAssembly
 
@@ -458,6 +565,7 @@ import {
   shaclProductExplain,
   shaclProductCertify,
   shaclProductValidateToSarif,
+  shaclProductValidateToSarifExpecting,
 } from "@blackcatinformatics/purrdf";
 
 await ready(); // one-time async wasm instantiation
@@ -467,6 +575,9 @@ console.log(shaclProductExplain(product));
 
 try {
   const sarif = shaclProductValidateToSarif(product, dataNt);
+
+  // …or say which product you meant, and fail closed when it is not that one.
+  const bound = shaclProductValidateToSarifExpecting(product, dataNt, wantHex);
 } catch (refusal) {
   console.error(refusal.dimension, refusal.message);
   refusal.free();
@@ -477,12 +588,26 @@ A wasm guest has no retrieval IRI to derive a base from, so the host supplies
 `shapesBase` explicitly; it is recorded in the product, and a restore resolves
 the same relative references without the document.
 
+`shaclProductValidateToSarifExpecting` takes the 64 hexadecimal digits
+`shaclProductExplain` prints on its `identity-digest` line. A product carrying a
+different binding rejects with `dimension === "shapes-graph"`; a selector that is
+not a digest rejects with `dimension === undefined`, because no product was
+inspected.
+
 ## From C
 
 The C ABI exposes `purrdf_shapes_product_encode`, `purrdf_shapes_product_open`,
-`purrdf_shapes_product_admit` and `purrdf_shapes_product_certify`, with
+`purrdf_shapes_product_admit`, `purrdf_shapes_product_admit_expecting` and
+`purrdf_shapes_product_certify`, with
 `purrdf_shapes_product_error_dimension` returning the refusal's stable label (or
-`NULL` when the shapes document simply did not parse). See
+`NULL` when the shapes document simply did not parse).
+
+`purrdf_shapes_product_admit_expecting` is `purrdf_shapes_product_admit` bound to
+the product you meant: it takes the `identity-digest` value
+`purrdf_shapes_product_open` renders, as a NUL-terminated C string, and returns
+`PURRDF_STATUS_SHAPES_PRODUCT_ERROR` with the dimension `shapes-graph` when the
+product carries a different binding. A selector that is not 64 hexadecimal digits
+returns `PURRDF_STATUS_INVALID_ARGUMENT` and no dimension. See
 [`crates/rdf-capi/include/purrdf.h`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf-capi/include/purrdf.h)
 and [Getting Started: C](../getting-started/c.md).
 

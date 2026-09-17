@@ -292,6 +292,70 @@ pub fn shacl_product_validate_to_sarif(
     product_validate_impl(product, data_nt).map_err(ShaclProductRefusal::from)
 }
 
+/// Admit a prepared product bound to an expected identity and validate a data graph
+/// with it. Native-testable core.
+///
+/// The selector arrives as TEXT because that is the only shape a JavaScript host can
+/// hold it in, and it is decoded here rather than at the boundary so this is
+/// exercisable off wasm exactly as its siblings are.
+///
+/// This core returns the GUEST-facing refusal where its siblings return the plain Rust
+/// one, because it is the only product entry point with a failure the Rust type cannot
+/// spell honestly: a selector that is not a digest is neither an admission refusal nor
+/// a shapes document that did not parse. Converting at the wasm wrapper would mean
+/// inventing one of those two claims here and unpicking it there.
+pub(crate) fn product_validate_expecting_impl(
+    product: &[u8],
+    data_nt: &str,
+    expect_identity: &str,
+) -> Result<String, ShaclProductRefusal> {
+    // A selector that is not 64 hexadecimal digits refused BEFORE the product is
+    // opened, so the refusal carries no dimension: nothing was inspected, and naming
+    // a dimension would claim the product was at fault for the caller's argument.
+    let expected = purrdf_validate::parse_identity_digest(expect_identity).map_err(|message| {
+        ShaclProductRefusal {
+            dimension: None,
+            message,
+        }
+    })?;
+    purrdf_validate::validate_with_shapes_product_expecting(
+        product,
+        data_nt,
+        &expected,
+        &purrdf_validate::SarifOptions::default(),
+    )
+    .map_err(ShaclProductRefusal::from)
+}
+
+/// `shaclProductValidateToSarifExpecting(product, dataNt, expectIdentity)` → a SARIF
+/// 2.1.0 JSON string, but only from the product whose input binding is
+/// `expectIdentity`.
+///
+/// Everything [`shacl_product_validate_to_sarif`] checks is a question about the
+/// executing guest — its build, its registries, its class analysis. None of them asks
+/// whether these are the bytes the host meant, because nothing in a product states
+/// which product was wanted. A host that fetches a product over the network, reads one
+/// out of a cache, or builds its path from a configuration string has no other way to
+/// say so, and admitting the wrong one produces a decided, well-formed SARIF log about
+/// a shapes graph nobody asked about.
+///
+/// `expectIdentity` is the 64 hexadecimal digits `shaclProductExplain` prints on its
+/// `identity-digest` line — one spelling, readable off the artifact, so the selector
+/// can be pinned in a manifest beside the product it names.
+///
+/// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A product
+/// carrying a different binding rejects with `dimension === "shapes-graph"`; an
+/// `expectIdentity` that is not 64 hexadecimal digits rejects with
+/// `dimension === undefined`, because no product was ever inspected.
+#[wasm_bindgen(js_name = shaclProductValidateToSarifExpecting)]
+pub fn shacl_product_validate_to_sarif_expecting(
+    product: &[u8],
+    data_nt: &str,
+    expect_identity: &str,
+) -> Result<String, ShaclProductRefusal> {
+    product_validate_expecting_impl(product, data_nt, expect_identity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +453,63 @@ mod tests {
 
         // The neighbouring VALID case still succeeds — a refusal is a claim too.
         product_validate_impl(&product, DATA).expect("the unmodified product still validates");
+    }
+
+    /// A second shapes graph over different classes, so the two products genuinely
+    /// carry two input bindings.
+    const OTHER_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        ex:WidgetShape a sh:NodeShape ;\n\
+          sh:targetClass ex:Widget ;\n\
+          sh:property [ sh:path ex:maker ; sh:minCount 1 ] .\n";
+
+    /// The `identity-digest` a product renders — read the way a JavaScript host reads
+    /// it, out of `shaclProductExplain`'s own text.
+    fn rendered_selector(product: &[u8]) -> String {
+        product_explain_impl(product)
+            .expect("explained")
+            .lines()
+            .find_map(|line| line.strip_prefix("identity-digest ").map(ToOwned::to_owned))
+            .expect("the rendering carries an identity digest")
+    }
+
+    #[test]
+    fn a_product_that_is_not_the_expected_one_is_refused_across_the_boundary() {
+        let held = pack_product_impl(SHAPES, None).expect("product packed");
+        let wanted = rendered_selector(&pack_product_impl(OTHER_SHAPES, None).expect("packed"));
+        assert_ne!(wanted, rendered_selector(&held));
+
+        let refusal = product_validate_expecting_impl(&held, DATA, &wanted)
+            .expect_err("the product held is not the product required");
+        assert_eq!(refusal.dimension().as_deref(), Some("shapes-graph"));
+
+        // A selector that is not a digest refuses with NO dimension: nothing was
+        // opened, so naming one would blame the product for the host's argument.
+        let mistyped = product_validate_expecting_impl(&held, DATA, "not-a-digest")
+            .expect_err("a non-digest selector is refused");
+        assert_eq!(mistyped.dimension(), None);
+
+        // The gap this closes: unbound, the very same bytes validate.
+        product_validate_impl(&held, DATA).expect("an unbound validation cannot ask which product");
+    }
+
+    #[test]
+    fn a_product_required_to_be_itself_validates_identically() {
+        let product = pack_product_impl(SHAPES, None).expect("product packed");
+        let own = rendered_selector(&product);
+
+        let bound = product_validate_expecting_impl(&product, DATA, &own)
+            .expect("a product required to be itself validates");
+        let unbound = product_validate_impl(&product, DATA).expect("validated");
+        assert_eq!(
+            bound, unbound,
+            "stating which product you meant changes the door, not the answer",
+        );
+
+        // The rendering is the accepted spelling, and case on the way in is not
+        // significant — a selector that passed through a manifest or a CI variable
+        // must not be turned away for a shape the mechanism does not care about.
+        product_validate_expecting_impl(&product, DATA, &own.to_uppercase())
+            .expect("an upper-case selector names the same product");
     }
 }

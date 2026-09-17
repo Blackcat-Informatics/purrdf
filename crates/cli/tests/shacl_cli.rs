@@ -13,6 +13,10 @@
 //!   <label>` line, and the neighbouring UNMODIFIED product still succeeds;
 //! * the shapes-PARSE flags are refused by name against `--shapes-product` rather than
 //!   accepted and ignored;
+//! * `--expect-identity` binds a restore to the product the operator NAMED: the wrong
+//!   product is refused non-zero with its dimension on stderr, the right one produces a
+//!   report byte-identical to the unbound run, and the digest `shacl explain` prints is
+//!   accepted back verbatim;
 //! * `shacl pack --shapes-graph` records the same absolute IRI `validate --shapes
 //!   --shapes-graph` resolves, so a SHACL-SPARQL body reading `$shapesGraph` reaches the
 //!   byte-identical verdict through either lane.
@@ -654,6 +658,230 @@ fn the_shapes_parse_flags_are_refused_against_a_product() {
         ])),
         0
     );
+}
+
+// ── `validate --shapes-product --expect-identity` ──────────────────────────────────
+//
+// Every other check `--shapes-product` runs asks about THIS PROCESS. None of them asks
+// whether the file named on the command line is the product the operator wanted,
+// because nothing in a product states which product was meant — so before this flag
+// existed, `validate --shapes-product WRONG.product data.ttl` validated against
+// whatever shapes that product happened to carry and exited 0.
+
+/// A second shapes graph over different classes, so the two products genuinely carry
+/// two input bindings and neither's shapes say anything about the other's data.
+const OTHER_SHAPES: &str = concat!(
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix ex: <http://example.org/> .\n",
+    "ex:WidgetShape a sh:NodeShape ;\n",
+    "  sh:targetClass ex:Widget ;\n",
+    "  sh:property [ sh:path ex:maker ; sh:minCount 1 ] .\n",
+);
+
+/// Pack `shapes` into `dir/name`, returning the product path.
+fn pack(dir: &Path, name: &str, shapes: &str) -> String {
+    let source = write_file(dir, &format!("{name}.ttl"), shapes);
+    let product = dir.join(name);
+    let product_path = product.to_str().expect("utf8 path").to_owned();
+    let out = run(&["shacl", "pack", "--shapes", &source, "--out", &product_path]);
+    assert_eq!(code(&out), 0, "pack failed: {}", stderr(&out));
+    product_path
+}
+
+/// The `identity-digest` line `shacl explain` prints for `product` — read exactly the
+/// way an operator reads it, out of the command's own stdout.
+fn explained_identity(product: &str) -> String {
+    let out = run(&["shacl", "explain", product]);
+    assert_eq!(code(&out), 0, "explain failed: {}", stderr(&out));
+    stdout(&out)
+        .lines()
+        .find_map(|line| line.strip_prefix("identity-digest ").map(ToOwned::to_owned))
+        .expect("explain prints an identity-digest line")
+}
+
+/// THE FALSIFIABLE CORE, on the production surface: a valid product that is NOT the one
+/// named is refused, non-zero, with its dimension on stderr. Without `--expect-identity`
+/// this command line is indistinguishable from the right one, and exits 0 with a report.
+#[test]
+fn validating_a_product_that_is_not_the_expected_one_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let a = pack(dir.path(), "a.purrshp", SHAPES);
+    let b = pack(dir.path(), "b.purrshp", OTHER_SHAPES);
+
+    let wanted = explained_identity(&b);
+    assert_ne!(
+        wanted,
+        explained_identity(&a),
+        "the two fixtures must be two products, or the expectation is vacuous",
+    );
+
+    let out = run(&[
+        "validate",
+        "--shapes-product",
+        &a,
+        "--expect-identity",
+        &wanted,
+        &data,
+    ]);
+    assert_ne!(code(&out), 0, "the wrong product must not validate");
+    assert!(
+        stderr(&out).contains("shacl dimension shapes-graph\n"),
+        "the refusal names its dimension on its own line: {}",
+        stderr(&out)
+    );
+    assert!(
+        stdout(&out).is_empty(),
+        "a refused restore writes no report: {}",
+        stdout(&out)
+    );
+
+    // The gap this closes, stated as a passing assertion: without the flag, the very
+    // same command line validates against whatever that product happens to carry.
+    let unbound = run(&["validate", "--shapes-product", &a, &data]);
+    assert_eq!(code(&unbound), 0, "{}", stderr(&unbound));
+}
+
+/// The PAIRED NEIGHBOUR. A matrix of refusals alone is satisfied by refusing
+/// everything, and an expectation nobody can satisfy would send every operator back to
+/// the unbound spelling it exists to replace. So `--expect-identity <A's own digest>`
+/// against `A.product` must succeed and produce a report byte-identical to the one with
+/// no `--expect-identity` at all: stating which product you meant changes the door, not
+/// the answer.
+#[test]
+fn validating_a_product_against_its_own_identity_changes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let a = pack(dir.path(), "a.purrshp", SHAPES);
+    let own = explained_identity(&a);
+
+    let bound = run(&[
+        "validate",
+        "--shapes-product",
+        &a,
+        "--expect-identity",
+        &own,
+        &data,
+    ]);
+    let unbound = run(&["validate", "--shapes-product", &a, &data]);
+    assert_eq!(code(&bound), 0, "{}", stderr(&bound));
+    assert_eq!(code(&unbound), 0, "{}", stderr(&unbound));
+    assert_eq!(
+        stdout(&bound),
+        stdout(&unbound),
+        "a satisfied expectation must not move a single byte of the report",
+    );
+    assert_eq!(
+        stderr(&bound),
+        stderr(&unbound),
+        "…nor a single byte of the verdict lines",
+    );
+    assert!(
+        stderr(&bound).contains("shacl conforms false\n"),
+        "the fixture must actually find its violation, or the comparison is vacuous: {}",
+        stderr(&bound)
+    );
+}
+
+/// The mechanism is USABLE end to end, not merely present: the digest `shacl explain`
+/// prints, fed straight back into `--expect-identity` with nothing edited, is accepted.
+/// A selector nobody can read off the artifact is not a mechanism.
+#[test]
+fn the_identity_explain_prints_is_the_identity_expect_identity_accepts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let a = pack(dir.path(), "a.purrshp", SHAPES);
+
+    let explained = run(&["shacl", "explain", &a]);
+    assert_eq!(code(&explained), 0, "{}", stderr(&explained));
+    let printed = stdout(&explained)
+        .lines()
+        .find_map(|line| line.strip_prefix("identity-digest ").map(ToOwned::to_owned))
+        .expect("explain prints an identity-digest line");
+    assert_eq!(printed.len(), 64, "the printed selector is 64 hex digits");
+
+    let out = run(&[
+        "validate",
+        "--shapes-product",
+        &a,
+        "--expect-identity",
+        &printed,
+        &data,
+    ]);
+    assert_eq!(
+        code(&out),
+        0,
+        "the digest `shacl explain` prints must be accepted verbatim: {}",
+        stderr(&out)
+    );
+
+    // `shacl verify` prints the same one fact about the same product, so a manifest
+    // built from either verb names the same artifact.
+    let verified = run(&["shacl", "verify", &a]);
+    assert_eq!(code(&verified), 0, "{}", stderr(&verified));
+    assert_eq!(stdout(&verified).trim_end(), printed);
+}
+
+/// A mis-typed selector is the OPERATOR's command line, not the artifact's fault: it
+/// exits 2 as a usage error and names no dimension, because no product was inspected.
+/// And `--expect-identity` against `--shapes` is refused rather than accepted and
+/// ignored — a flag whose whole job is to fail closed must never be the flag that
+/// silently did nothing.
+#[test]
+fn a_selector_that_names_nothing_is_a_usage_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let a = pack(dir.path(), "a.purrshp", SHAPES);
+    let own = explained_identity(&a);
+
+    let mistyped = run(&[
+        "validate",
+        "--shapes-product",
+        &a,
+        "--expect-identity",
+        "not-a-digest",
+        &data,
+    ]);
+    assert_eq!(code(&mistyped), 2, "{}", stderr(&mistyped));
+    assert!(
+        stderr(&mistyped).contains("--expect-identity")
+            && !stderr(&mistyped).contains("shacl dimension"),
+        "no product was inspected, so no dimension is named: {}",
+        stderr(&mistyped)
+    );
+
+    let against_a_document = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--expect-identity",
+        &own,
+        &data,
+    ]);
+    assert_eq!(
+        code(&against_a_document),
+        2,
+        "{}",
+        stderr(&against_a_document)
+    );
+    assert!(
+        stderr(&against_a_document).contains("--expect-identity"),
+        "the flag is refused BY NAME against a shapes document: {}",
+        stderr(&against_a_document)
+    );
+
+    // The neighbouring VALID case still succeeds, with the same product and the same
+    // digest: only the two spellings above are refused.
+    let ok = run(&[
+        "validate",
+        "--shapes-product",
+        &a,
+        "--expect-identity",
+        &own,
+        &data,
+    ]);
+    assert_eq!(code(&ok), 0, "{}", stderr(&ok));
 }
 
 // ── `shacl pack --shapes-graph` and SHACL-SPARQL's `$shapesGraph` ──────────────────

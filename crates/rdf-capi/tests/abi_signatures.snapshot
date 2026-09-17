@@ -84,6 +84,7 @@ int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset, const c
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shapes_product_admit(const uint8_t *product, size_t product_len, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_shapes_product_admit_expecting(const uint8_t *product, size_t product_len, const char *data_nt, const char *expect_identity, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shapes_product_certify(const uint8_t *product, size_t product_len, PurrdfError **out_error)
 int32_t purrdf_shapes_product_encode(const char *shapes_ttl, const char *shapes_base_iri, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shapes_product_open(const uint8_t *product, size_t product_len, PurrdfBuffer **out_buffer, PurrdfError **out_error)

@@ -19,6 +19,13 @@
 //! with only a negative test is an incomplete test, and the pairing is spelled in
 //! the names so the pairs can be counted by reading the file.
 //!
+//! One dimension carries TWO pairs. `shapes-graph` names both disagreements about
+//! which shapes graph is being executed: the `sh:shapesGraph` IRI a product was
+//! prepared under, and — through the bound admission entry point — a whole input
+//! binding that is not the one the consumer required. The second is a question
+//! about the ARTIFACT rather than the environment, and no other refusal in this
+//! file asks it, so it gets its own pair rather than riding the first one's.
+//!
 //! Four further neighbours have no refusal to pair with, and are here because they
 //! are where over-refusal actually bites: an empty shapes graph, a shapes graph
 //! that is 100% SHACL-SPARQL, one whose shapes are `sh:deactivated`, and one that
@@ -201,6 +208,25 @@ fn admit(bytes: &[u8]) -> Result<PreparedShapes, ShapesProductError> {
 /// admission's: a caller restoring a product sees one outcome, not two.
 fn admit_with(bytes: &[u8], host: &HostBindings<'_>) -> Result<PreparedShapes, ShapesProductError> {
     ShapesProduct::open(bytes)?.admit(&ShapesProfile::CORE, host)
+}
+
+/// Open and admit `bytes` under the empty host, bound to the input binding
+/// `expected` — the caller's statement of WHICH product it wanted.
+fn admit_expecting(
+    bytes: &[u8],
+    expected: &[u8; 32],
+) -> Result<PreparedShapes, ShapesProductError> {
+    ShapesProduct::open(bytes)?.admit_expecting(
+        &ShapesProfile::CORE,
+        &HostBindings::empty(),
+        expected,
+    )
+}
+
+/// The input binding `bytes` declares — the selector a consumer reads off a product
+/// in order to require it later, and the same value `shacl explain` renders.
+fn declared_selector(bytes: &[u8]) -> [u8; 32] {
+    *opened(bytes).declared_identity().digest()
 }
 
 /// Open and rebuild `bytes` under the empty host.
@@ -997,6 +1023,72 @@ fn accepts_shapes_graph_neighbour() {
         "https://example.org/shapes",
     ))))
     .expect("a product restores under the shapes-graph IRI it was prepared with");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// shapes-graph, as an EXPECTATION the consumer states
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Every other refusal in this file is a question about the executing environment:
+// is this the build that wrote the memo, are these the registries, does this
+// build's class walk re-derive the pinned analysis. None of them asks whether the
+// bytes in hand are the ones the CONSUMER wanted, because nothing in a product
+// states which product was meant — so an unbound `admit` of the wrong file
+// succeeds, and returns a well-formed report about a shapes graph nobody asked
+// about. `admit_expecting` is the consumer's half of that statement.
+
+/// Provoke: the product is a perfectly valid one, and it is not the one required.
+fn refusal_expected_identity() -> ShapesProductError {
+    let wanted = declared_selector(&product_of(OTHER_SHAPES));
+    let held = product_of(PLAIN_SHAPES);
+    assert_ne!(
+        declared_selector(&held),
+        wanted,
+        "the two fixtures must genuinely be two products, or the expectation is vacuous",
+    );
+    admit_expecting(&held, &wanted)
+        .expect_err("a product that is not the one required must not restore")
+}
+
+#[test]
+fn refuses_expected_identity() {
+    assert_eq!(
+        refusal_expected_identity().dimension(),
+        ProductDimension::ShapesGraph,
+    );
+
+    // The GAP this closes, stated as a passing assertion: the very same product
+    // admits when nothing says which product was wanted. That is not a hole in
+    // `admit` — it is the question `admit` cannot ask, and the reason the bound
+    // entry point has to exist for a consumer to be able to ask it.
+    admit(&product_of(PLAIN_SHAPES))
+        .expect("an unbound admit cannot know which product was meant, and does not pretend to");
+}
+
+#[test]
+fn accepts_expected_identity_neighbour() {
+    // A product required to be ITSELF restores, and restores to the same answer
+    // the unbound path reaches. A matrix of refusals alone is satisfied by
+    // refusing everything, and an expectation nobody can satisfy is worse than no
+    // expectation at all: it would push every consumer straight back to the
+    // unbound call this exists to replace.
+    let bytes = product_of(PLAIN_SHAPES);
+    let restored = admit_expecting(&bytes, &declared_selector(&bytes))
+        .expect("a product required to be itself must restore");
+    assert_eq!(
+        report_nt(&restored, &data_of(PLAIN_DATA)),
+        plain_expected_report(),
+        "a bound restore must answer exactly what the parsed shapes graph answers",
+    );
+
+    // ...and the binding is a property of the product's INPUTS, not of the bytes
+    // that happen to carry them: the writer is deterministic, so a second pack of
+    // the same shapes graph is required by the same selector. A selector that
+    // moved per-pack would be unusable in a manifest, which is the only place
+    // anyone would write one down.
+    let packed_again = product_of(PLAIN_SHAPES);
+    admit_expecting(&packed_again, &declared_selector(&bytes))
+        .expect("two packs of one shapes graph share one input binding");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

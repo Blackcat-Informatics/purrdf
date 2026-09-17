@@ -352,6 +352,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         Command::Validate {
             shapes,
             shapes_product,
+            expect_identity,
             shapes_from,
             shapes_graph,
             import,
@@ -371,6 +372,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 output,
                 shapes: shapes.as_deref(),
                 shapes_product: shapes_product.as_deref(),
+                expect_identity: expect_identity.as_deref(),
                 shapes_from: *shapes_from,
                 shapes_graph: shapes_graph.as_deref(),
                 imports: import,

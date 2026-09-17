@@ -27,8 +27,17 @@
 //! | Path | Tier | Re-derives | When |
 //! |------|------|------------|------|
 //! | [`admit`](ShapesProductView::admit) | COMMON — every restore | nothing expensive | the stage id is one this build knows |
+//! | [`admit_expecting`](ShapesProductView::admit_expecting) | COMMON — every restore | nothing expensive | as `admit`, and the caller knows which product it wants |
 //! | [`rebuild`](ShapesProductView::rebuild) | fallback | the whole shapes graph, from the carried dataset | the stage id is one this build does NOT know |
 //! | [`certify`](ShapesProductView::certify) | COLD — never in normal usage | the shapes dataset's canonical identity | a verify subcommand, a conformance harness |
+//!
+//! `admit` and `admit_expecting` are two entry points over ONE body: the second
+//! adds a single 32-byte comparison against the identity the caller requires, ahead
+//! of every other check. Everything `admit` verifies is a question about the
+//! executing ENVIRONMENT; the expectation is the one question about the ARTIFACT —
+//! *is this the product I asked for?* — and without it a caller that names the
+//! wrong file gets a successful restore and a report about a shapes graph nobody
+//! asked about.
 //!
 //! Performance in the common case is paramount; conformance testing may be slow,
 //! because it is never part of normal usage. That standing rule is the whole
@@ -833,6 +842,72 @@ impl<'a> ShapesProductView<'a> {
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
     ) -> Result<PreparedShapes, ShapesProductError> {
+        self.admit_bound(profile, host, None)
+    }
+
+    /// **The common path, bound to the product the caller MEANT.** Restore the
+    /// preparation exactly as [`admit`](Self::admit) does, but only after the
+    /// product's own input binding is confirmed to be `expected_identity` — the
+    /// 32-byte digest of the [`Identity`] the caller requires.
+    ///
+    /// # Why an expectation is a separate entry point rather than a flag
+    ///
+    /// Everything [`admit`](Self::admit) checks is a question about the EXECUTING
+    /// ENVIRONMENT: is this build the one that wrote the memo, are these the
+    /// registries the product was prepared against, does this build's class walk
+    /// re-derive the analysis the product pinned. Not one of them asks the
+    /// question a consumer holding a product actually has, which is *is this the
+    /// product I asked for?* A caller that hands the loader the wrong file gets a
+    /// perfectly successful restore and a well-formed report about a shapes graph
+    /// nobody asked about — the same silent-wrong-answer failure this whole codec
+    /// exists to rule out, arriving through the one door the codec did not guard.
+    ///
+    /// The expectation is checked FIRST, ahead of the profile and the stage id,
+    /// because it is the outermost precondition of the three: a caller who named
+    /// the wrong artifact is told THAT, rather than being sent to re-pack a
+    /// product that was never the one they wanted. It is also free — the identity
+    /// digest is decoded by [`ShapesProduct::open`], so the comparison is 32 bytes
+    /// against 32 bytes with nothing restored and nothing decoded.
+    ///
+    /// `expected_identity` is exactly the digest that
+    /// [`declared_identity`](Self::declared_identity) reports for the
+    /// product a caller intends, and the same value `purrdf shacl explain` renders
+    /// on its `identity-digest` line. There is no second digest and no second
+    /// spelling: a selector a consumer cannot read off the artifact it names is a
+    /// mechanism nobody can use.
+    ///
+    /// # Errors
+    ///
+    /// [`ProductDimension::ShapesGraph`] when the product's binding is not the one
+    /// required — the dimension documented as "the shapes-graph identity the
+    /// product was prepared against is not the identity supplied for execution",
+    /// which is precisely the disagreement an expectation miss reports. Otherwise
+    /// every dimension [`admit`](Self::admit) refuses on.
+    pub fn admit_expecting(
+        self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+        expected_identity: &[u8; 32],
+    ) -> Result<PreparedShapes, ShapesProductError> {
+        self.admit_bound(profile, host, Some(expected_identity))
+    }
+
+    /// The ONE admission path, with the caller's expectation as its only variable.
+    ///
+    /// [`admit`](Self::admit) and [`admit_expecting`](Self::admit_expecting) are
+    /// two entry points over this body rather than two bodies, for the reason the
+    /// link pass and the shared pack seam are each one function called from two
+    /// places: a second transcription of an ordered sequence of checks is how the
+    /// bound and unbound restores come to disagree about what one of them means.
+    fn admit_bound(
+        self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+        expected_identity: Option<&[u8; 32]>,
+    ) -> Result<PreparedShapes, ShapesProductError> {
+        if let Some(expected) = expected_identity {
+            self.verify_expected_identity(expected)?;
+        }
         self.verify_profile(profile)?;
         self.verify_stage_id()?;
         identity::check_host_bindings(
@@ -1002,6 +1077,38 @@ impl<'a> ShapesProductView<'a> {
         self.view
             .section(kind)
             .map_err(|error| refuse_artifact(&error))
+    }
+
+    /// Refuse a product whose input binding is not the one the caller required.
+    ///
+    /// The comparison is over the whole [`Identity`] digest, which is what makes it
+    /// a SELECTOR rather than a second opinion about one component: it covers the
+    /// shapes dataset, the shapes-graph IRI, the prefix map, the base, the profile,
+    /// the vocabulary, all three registries and the class catalog at once, and it
+    /// is authenticated by the envelope's identity region before this view exists.
+    ///
+    /// The refusal cannot name WHICH component moved, and it deliberately does not
+    /// pretend to: a caller holding an expectation holds a digest, not a decoded
+    /// identity, so there is nothing to diff against. What it does carry is both
+    /// digests and the command that prints the required one, so the caller can put
+    /// the two products side by side — which is the actionable half.
+    fn verify_expected_identity(&self, expected: &[u8; 32]) -> Result<(), ShapesProductError> {
+        let declared = self.declared_identity().digest();
+        if declared == expected {
+            return Ok(());
+        }
+        Err(ShapesProductError::new(
+            ProductDimension::ShapesGraph,
+            format!(
+                "this product was prepared from the shapes graph whose input binding is {}, and \
+                 the caller required the product bound to {}; restore the product prepared from \
+                 the shapes graph you named, or read the binding of the product you meant off \
+                 the artifact itself — `purrdf shacl explain` prints it on its `identity-digest` \
+                 line, in exactly this spelling",
+                hex(declared),
+                hex(expected)
+            ),
+        ))
     }
 
     /// Refuse a product prepared under another profile.

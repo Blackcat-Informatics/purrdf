@@ -273,6 +273,77 @@ pub fn admit_shapes_product(product: &[u8]) -> Result<PreparedShapes, ShapesProd
     ShapesProduct::open(product)?.admit(&ShapesProfile::CORE, &HostBindings::empty())
 }
 
+/// **The common path, bound to the product the caller MEANT.** Open `product`,
+/// confirm its input binding is `expected_identity`, and only then admit it.
+///
+/// Everything [`admit_shapes_product`] checks is a question about the executing
+/// process — its build, its registries, its class analysis. This adds the one
+/// question about the ARTIFACT: *is this the product I asked for?* Without it a
+/// consumer that names the wrong file is handed a successful restore and a
+/// well-formed report about a shapes graph nobody asked about, which is the silent
+/// wrong answer the whole codec exists to rule out.
+///
+/// `expected_identity` is the 32-byte digest of the product's input binding, the
+/// same value [`explain_shapes_product`] renders on its `identity-digest` line.
+/// [`parse_identity_digest`] turns that rendering back into one, so every surface
+/// that carries the selector as text reads and writes one spelling.
+///
+/// # Errors
+///
+/// [`ShapesGraph`](ProductDimension::ShapesGraph) when the product's binding is not
+/// the required one, and otherwise every dimension [`admit_shapes_product`] refuses
+/// on.
+pub fn admit_shapes_product_expecting(
+    product: &[u8],
+    expected_identity: &[u8; 32],
+) -> Result<PreparedShapes, ShapesProductError> {
+    ShapesProduct::open(product)?.admit_expecting(
+        &ShapesProfile::CORE,
+        &HostBindings::empty(),
+        expected_identity,
+    )
+}
+
+/// Read a 32-byte identity selector back out of the text a host carries it as.
+///
+/// The accepted spelling is 64 hexadecimal digits — exactly what
+/// [`explain_shapes_product`]'s `identity-digest` line prints, so the digest a
+/// consumer reads off an artifact can be handed straight back without editing. Case
+/// is not significant on the way in: the renderer emits lowercase, but a selector
+/// that travelled through a shell, a spreadsheet or a CI variable may not have
+/// stayed that way, and refusing `9F2C…` for a shape the mechanism does not care
+/// about would be refusing input that is actually valid.
+///
+/// Nothing about a malformed selector is a statement about a product — no product
+/// has been opened, and none may be, so this refuses with prose and no
+/// [`ProductDimension`]. Each host raises it through its own argument-error channel
+/// rather than through the admission one, for the same reason
+/// [`ShapesProductRefusal::Shapes`] carries no dimension.
+///
+/// # Errors
+///
+/// A prescriptive message naming the fix when `text` is not 64 hexadecimal digits.
+pub fn parse_identity_digest(text: &str) -> Result<[u8; 32], String> {
+    let trimmed = text.trim();
+    if trimmed.len() != 64 || !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "an expected product identity is the 64 hexadecimal digits of the product's input \
+             binding, and `{trimmed}` is not that; read the value off the product you mean — \
+             `purrdf shacl explain` prints it on its `identity-digest` line — and pass it \
+             unchanged"
+        ));
+    }
+
+    let mut digest = [0u8; 32];
+    for (slot, pair) in digest.iter_mut().zip(trimmed.as_bytes().as_chunks::<2>().0) {
+        let text = std::str::from_utf8(pair)
+            .expect("two ASCII hexadecimal digits are valid UTF-8 by the check above");
+        *slot = u8::from_str_radix(text, 16)
+            .expect("two ASCII hexadecimal digits parse as a byte by the check above");
+    }
+    Ok(digest)
+}
+
 /// **The forward-compatibility path.** Open `product` and re-derive the preparation
 /// from the shapes dataset the product carries, ignoring its memo.
 ///
@@ -400,7 +471,52 @@ pub fn validate_with_shapes_product(
     data_nt: &str,
     options: &SarifOptions,
 ) -> Result<String, ShapesProductRefusal> {
-    let prepared = admit_shapes_product(product)?;
+    validate_with_product(product, data_nt, None, options)
+}
+
+/// Admit `product` — only if its input binding is `expected_identity` — and validate
+/// `data_nt` (N-Triples) with it, rendering the SHACL report to a SARIF 2.1.0 JSON
+/// string.
+///
+/// The bound twin of [`validate_with_shapes_product`], and the shape every non-Rust
+/// host reaches for: the hosts validate through one call rather than holding a
+/// restored preparation across their own language boundary, so the expectation has
+/// to travel with the validation. See [`admit_shapes_product_expecting`] for why an
+/// unbound restore is the one door the codec did not guard.
+///
+/// # Errors
+///
+/// [`ShapesProductRefusal::Admission`] on
+/// [`ShapesGraph`](ProductDimension::ShapesGraph) when the product's binding is not
+/// the required one, on any other dimension the product is refused for, and
+/// [`ShapesProductRefusal::Shapes`] when the DATA graph does not parse or the
+/// validation hard-fails.
+pub fn validate_with_shapes_product_expecting(
+    product: &[u8],
+    data_nt: &str,
+    expected_identity: &[u8; 32],
+    options: &SarifOptions,
+) -> Result<String, ShapesProductRefusal> {
+    validate_with_product(product, data_nt, Some(expected_identity), options)
+}
+
+/// The ONE product-validation body, with the caller's expectation as its only
+/// variable — the same arrangement `purrdf-shapes` makes one layer down, where
+/// `admit` and `admit_expecting` are two entry points over one admission sequence.
+///
+/// Two entry points rather than two bodies: a bound validation that restored the
+/// product through a second sequence of steps would be a second answer about one
+/// artifact, and the expectation exists precisely to stop a second answer.
+fn validate_with_product(
+    product: &[u8],
+    data_nt: &str,
+    expected_identity: Option<&[u8; 32]>,
+    options: &SarifOptions,
+) -> Result<String, ShapesProductRefusal> {
+    let prepared = match expected_identity {
+        None => admit_shapes_product(product)?,
+        Some(expected) => admit_shapes_product_expecting(product, expected)?,
+    };
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n")))?;
     let report = engine::validate_dataset_with_shapes_graph(data.as_ref(), prepared.shapes(), None)
@@ -444,9 +560,10 @@ fn render_component(value: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ShapesProductRefusal, admit_shapes_product, certify_shapes_product, explain_shapes_product,
-        pack_shapes_product, pack_shapes_product_from_dataset, rebuild_shapes_product,
-        validate_with_shapes_product,
+        ShapesProductRefusal, admit_shapes_product, admit_shapes_product_expecting,
+        certify_shapes_product, explain_shapes_product, pack_shapes_product,
+        pack_shapes_product_from_dataset, parse_identity_digest, rebuild_shapes_product,
+        validate_with_shapes_product, validate_with_shapes_product_expecting,
     };
     use crate::SarifOptions;
     use purrdf_shapes::product::ProductDimension;
@@ -587,5 +704,112 @@ mod tests {
     #[test]
     fn accepts_a_graph_with_no_imports_neighbour() {
         pack_shapes_product(SHAPES, None).expect("a graph with no owl:imports still packs");
+    }
+
+    /// A second shapes graph, over different classes, so the two products genuinely
+    /// carry two input bindings.
+    const OTHER_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        ex:WidgetShape a sh:NodeShape ;\n\
+          sh:targetClass ex:Widget ;\n\
+          sh:property [ sh:path ex:maker ; sh:minCount 1 ] .\n";
+
+    /// The `identity-digest` a product renders — the one spelling of the selector,
+    /// read here exactly the way a consumer reads it off an artifact.
+    fn rendered_selector(product: &[u8]) -> String {
+        explain_shapes_product(product)
+            .expect("explain")
+            .lines()
+            .find_map(|line| line.strip_prefix("identity-digest ").map(ToOwned::to_owned))
+            .expect("the rendering carries an identity digest")
+    }
+
+    /// The whole point: a product that is perfectly valid and is NOT the one the
+    /// caller required is refused, on a named dimension, before anything is decoded.
+    #[test]
+    fn refuses_a_product_that_is_not_the_expected_one() {
+        let held = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let wanted = pack_shapes_product(OTHER_SHAPES, None).expect("other shapes pack");
+        let selector =
+            parse_identity_digest(&rendered_selector(&wanted)).expect("a rendered selector parses");
+
+        let refusal = admit_shapes_product_expecting(&held, &selector)
+            .expect_err("the product held is not the product required");
+        assert_eq!(refusal.dimension(), ProductDimension::ShapesGraph);
+
+        // The gap this closes: the unbound path admits the very same bytes, because
+        // nothing in them states which product was meant.
+        admit_shapes_product(&held).expect("an unbound admit cannot ask which product was wanted");
+    }
+
+    /// The neighbouring VALID case: a product required to be ITSELF restores, and
+    /// validating through the bound path reaches the byte-identical report the unbound
+    /// path reaches. An expectation nobody can satisfy would send every consumer back
+    /// to the unbound call it exists to replace.
+    #[test]
+    fn accepts_the_expected_product_neighbour() {
+        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let selector = parse_identity_digest(&rendered_selector(&product))
+            .expect("a rendered selector parses");
+
+        admit_shapes_product_expecting(&product, &selector)
+            .expect("a product required to be itself restores");
+
+        let bound = validate_with_shapes_product_expecting(
+            &product,
+            DATA,
+            &selector,
+            &SarifOptions::default(),
+        )
+        .expect("the bound validation runs");
+        let unbound = validate_with_shapes_product(&product, DATA, &SarifOptions::default())
+            .expect("the unbound validation runs");
+        assert_eq!(
+            bound, unbound,
+            "stating which product you meant must not change the answer, only the door",
+        );
+    }
+
+    /// The selector spelling is a ROUND TRIP, not two conventions that happen to
+    /// agree today: what a product renders is what the boundary accepts back.
+    #[test]
+    fn the_rendered_selector_is_the_accepted_selector() {
+        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let rendered = rendered_selector(&product);
+        assert_eq!(rendered.len(), 64, "the rendering is 64 hexadecimal digits");
+
+        let selector = parse_identity_digest(&rendered).expect("the rendering is accepted back");
+        admit_shapes_product_expecting(&product, &selector)
+            .expect("a product is required by the selector it renders");
+
+        // Case is not significant on the way in. The renderer emits lowercase, but a
+        // selector that travelled through a shell, a manifest or a CI variable may not
+        // have stayed that way, and refusing it for a shape the mechanism does not care
+        // about would be refusing input that is actually valid.
+        let shouted = parse_identity_digest(&rendered.to_uppercase())
+            .expect("an upper-case selector names the same product");
+        assert_eq!(selector, shouted);
+    }
+
+    /// A selector that is not 64 hexadecimal digits carries NO dimension, because no
+    /// product was opened to name a dimension of. The two neighbouring valid spellings
+    /// — the rendering itself, and the rendering with surrounding whitespace a shell or
+    /// a file read leaves behind — must still parse.
+    #[test]
+    fn refuses_a_selector_that_is_not_a_digest() {
+        for bad in ["", "not-a-digest", "abc", &"f".repeat(63), &"f".repeat(65)] {
+            let why = parse_identity_digest(bad).expect_err("a non-digest selector is refused");
+            assert!(
+                why.contains("64 hexadecimal digits"),
+                "the refusal names the accepted spelling, got {why:?}",
+            );
+        }
+
+        let product = pack_shapes_product(SHAPES, None).expect("shapes pack");
+        let rendered = rendered_selector(&product);
+        let direct = parse_identity_digest(&rendered).expect("the rendering parses");
+        let padded =
+            parse_identity_digest(&format!("  {rendered}\n")).expect("a padded selector parses");
+        assert_eq!(direct, padded);
     }
 }

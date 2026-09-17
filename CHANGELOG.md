@@ -75,6 +75,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **capi:** `purrdf_shapes_product_encode`, `purrdf_shapes_product_open`,
   `purrdf_shapes_product_admit`, `purrdf_shapes_product_certify` and
   `purrdf_shapes_product_error_dimension`.
+- **shapes/validate/cli/python/wasm/capi:** A restore can now be BOUND to the
+  product the consumer meant. Every other admission check asks about the
+  executing process — its build, its registries, its class analysis — and none
+  of them asks whether the bytes in hand are the ones the caller wanted, because
+  nothing in a product states which product was meant; an unbound restore of the
+  wrong artifact therefore succeeded and returned a well-formed report about a
+  shapes graph nobody asked about. `ShapesProductView::admit_expecting` takes the
+  32-byte digest of the input binding the caller requires and refuses on
+  `shapes-graph` when the product carries another, ahead of every other check and
+  before anything is decoded; `admit` is the unbound case of the same body.
+  `purrdf-validate` exposes `admit_shapes_product_expecting`,
+  `validate_with_shapes_product_expecting` and `parse_identity_digest`, and every
+  surface routes through it: `purrdf validate --shapes-product FILE
+  --expect-identity HEX` on the command line, `ShapesProduct.admit_expecting` in
+  Python, `shaclProductValidateToSarifExpecting` in JavaScript, and
+  `purrdf_shapes_product_admit_expecting` in C. The selector is the 64
+  hexadecimal digits `shacl explain` prints on its `identity-digest` line and
+  `shacl verify` prints on stdout, accepted back unchanged; a satisfied
+  expectation produces the byte-identical report the unbound call produces.
 
 ### Performance
 

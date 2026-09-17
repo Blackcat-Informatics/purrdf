@@ -2571,6 +2571,42 @@ int32_t purrdf_shapes_product_admit(const uint8_t *product,
                                     PurrdfError **out_error);
 
 /**
+ * ADMIT a prepared product ONLY IF its input binding is `expect_identity`, validate
+ * `data_nt` (N-Triples) with it, and write the SARIF 2.1.0 report bytes to
+ * `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * Everything `purrdf_shapes_product_admit` checks is a question about the executing
+ * process — its build, its registries, its class analysis. None of them asks whether
+ * these are the bytes the caller meant, because nothing in a product states which
+ * product was wanted. A host that mmaps a cache entry, reads a product a deployment
+ * placed on disk, or builds its path from a configuration string has no other way to
+ * say so, and admitting the wrong one produces a decided, well-formed SARIF log about
+ * a shapes graph nobody asked about.
+ *
+ * `expect_identity` is the 64 hexadecimal digits `purrdf_shapes_product_open` renders
+ * on its `identity-digest` line, passed back unchanged — one spelling, readable off
+ * the artifact, so the selector can be pinned beside the product it names.
+ *
+ * A product carrying a different binding returns `PURRDF_STATUS_SHAPES_PRODUCT_ERROR`
+ * with the dimension `shapes-graph`. An `expect_identity` that is not 64 hexadecimal
+ * digits returns `PURRDF_STATUS_INVALID_ARGUMENT` instead, and not as a product
+ * refusal: no product was ever opened, so there is nothing for an admission dimension
+ * to name, and reporting the caller's own argument as a product failure would send
+ * them to inspect an artifact that is not at fault.
+ *
+ * # Safety
+ * `product` must be valid for reads of `product_len` bytes; `data_nt` and
+ * `expect_identity` must be non-null, NUL-terminated C strings; `out_buffer` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_shapes_product_admit_expecting(const uint8_t *product,
+                                              size_t product_len,
+                                              const char *data_nt,
+                                              const char *expect_identity,
+                                              PurrdfBuffer **out_buffer,
+                                              PurrdfError **out_error);
+
+/**
  * CERTIFY a prepared product: independently re-derive its shapes dataset's canonical
  * identity and compare it against the one the product's own binding claims.
  *
