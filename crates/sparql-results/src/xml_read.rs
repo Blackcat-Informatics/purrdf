@@ -213,6 +213,16 @@ fn decode_term(elem: &Element) -> Result<TermValue, Error> {
         }),
         "literal" => {
             let language = elem.attr("xml:lang").map(str::to_owned);
+            // A tag arriving in a DOCUMENT is parsed input, held to the same
+            // grammar as every other parsed tag in the workspace — see
+            // [`crate::error::language_tag_refusal`] for why a results reader
+            // is on that list.
+            if let Some(detail) = language
+                .as_deref()
+                .and_then(crate::error::language_tag_refusal)
+            {
+                return Err(fmt(&detail));
+            }
             // `its:dir` — resolved by NAMESPACE URI (`ITS_NS`) plus local name
             // `dir`, not by the literal QName spelling — is the spelling the
             // SPARQL 1.2 Query Results specification uses for RDF 1.2 base
@@ -1193,5 +1203,77 @@ mod tests {
             Some(TermValue::Iri("http://example.org/s2".to_owned()))
         );
         assert_eq!(parsed.rows[1][2], None, "absent binding must be unbound");
+    }
+
+    /// Tags the `LANGTAG` grammar refuses, and the neighbouring ones it must
+    /// still take — the same two corpora the SRJ reader and the
+    /// `STRLANG`/`STRLANGDIR` gate use, because there is one accept set.
+    const REFUSED_TAGS: &[&str] = &["en us", "1", "9-9", "123-456", "en-", "-", "!!!"];
+    const ACCEPTED_TAGS: &[&str] = &[
+        "en",
+        "en-US",
+        "zh-Hans-CN",
+        "de-CH-x-phonebk",
+        "i-enochian",
+        "x-purrdf-afrikaans",
+        "x-gmeow-english",
+        "en-fr-jura",
+        "fr-be-fbcl",
+    ];
+
+    fn srx_with_lang(tag: &str) -> Vec<u8> {
+        format!(
+            "<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\">\
+             <head><variable name=\"l\"/></head><results><result>\
+             <binding name=\"l\"><literal xml:lang=\"{tag}\">x</literal></binding>\
+             </result></results></sparql>"
+        )
+        .into_bytes()
+    }
+
+    /// A results DOCUMENT is parsed input, whatever syntax it arrives in.
+    #[test]
+    fn a_refused_language_tag_in_a_document_is_refused_with_its_diagnostic_code() {
+        for tag in REFUSED_TAGS {
+            let error = from_xml(&srx_with_lang(tag))
+                .expect_err("a tag the grammar refuses must not decode");
+            let Error::Format(message) = &error else {
+                panic!("expected Error::Format for {tag:?}, got {error:?}");
+            };
+            assert!(
+                message.starts_with("SPARQL-XML: invalid language tag "),
+                "the refusal must name the format and the tag: {message}"
+            );
+            assert!(
+                message.contains(&format!("`{tag}`")),
+                "the refusal must quote the offending tag verbatim, since this \
+                 crate's error carries no position: {message}"
+            );
+            assert!(
+                message.contains("(langtag-"),
+                "the refusal must surface the grammar's own diagnostic code, not \
+                 collapse to a generic sentence: {message}"
+            );
+        }
+    }
+
+    /// The over-refusal half: the private-use and terminal-only shapes a
+    /// too-strict profile would silently start dropping on ingress.
+    #[test]
+    fn every_well_formed_language_tag_still_reads_back() {
+        for tag in ACCEPTED_TAGS {
+            let parsed = from_xml(&srx_with_lang(tag))
+                .unwrap_or_else(|e| panic!("{tag:?} must still parse: {e}"));
+            assert_eq!(
+                parsed.rows[0][0],
+                Some(TermValue::Literal {
+                    lexical_form: "x".to_owned(),
+                    datatype: RDF_LANGSTRING.to_owned(),
+                    language: Some((*tag).to_owned()),
+                    direction: None,
+                }),
+                "the gate must not alter the tag it lets through ({tag:?})"
+            );
+        }
     }
 }

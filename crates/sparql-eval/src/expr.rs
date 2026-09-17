@@ -4305,7 +4305,51 @@ fn build_regex(pattern: &str, flags: &str) -> Option<purrdf_core::xsd_regex::Com
     purrdf_core::xsd_regex::compile(pattern, flags).ok()
 }
 
+/// The language-tag grammar every runtime tag constructor in this module is
+/// held to, and it is the SAME profile the SPARQL parser holds a literal `@tag`
+/// written in query text to (`purrdf_sparql_algebra`'s `LANGTAG_PROFILE`), the
+/// RDF codec readers hold a parsed tag to, and `RdfLiteral::validate_components`
+/// holds a tag entering an `RdfDataset` to.
+///
+/// One profile across all four doors is the point. `STRLANG`/`STRLANGDIR` build
+/// a tag at RUNTIME out of a computed string, so the parser's gate cannot see
+/// them, and the term they build is interned into the evaluator's bump arena
+/// ([`crate::scratch::ScratchInterner`]) rather than an `RdfDatasetBuilder`, so
+/// the IR kernel's gate cannot see them either. Without this call a `SELECT`
+/// would serialize `"x"@en us` — which no SPARQL-results reader can parse back —
+/// while the identical tag in a `CONSTRUCT` template was refused, because that
+/// path does route through the validated dataset builder.
+const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
+    purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
+
+/// Is `lang` a language tag the workspace's one grammar accepts?
+///
+/// # Case
+///
+/// Called on the tag **as the query wrote it**, before `to_ascii_lowercase`.
+/// That is not a coin-flip: under [`LANGTAG_PROFILE`] every production is
+/// defined over case-insensitive character classes (`ALPHA` is `[a-zA-Z]`, the
+/// terminal's later subtags are `[a-zA-Z0-9]`) and the only other rule is a
+/// subtag LENGTH bound, which ASCII case-folding cannot change. So the accept
+/// set is identical either side of the fold and `en-US` passes; gating first
+/// merely lets a refusal quote what the user typed. `the_gate_is_case_blind`
+/// proves the two orders agree over the whole valid corpus.
+fn well_formed_langtag(lang: &str) -> bool {
+    purrdf_iri::langtag::is_well_formed_with(lang, LANGTAG_PROFILE)
+}
+
 /// `STRLANG(lexical, lang)`.
+///
+/// # Failure mode
+///
+/// A malformed language tag leaves the expression **unbound** (`Ok(None)`), not
+/// a hard `Err`. SPARQL 1.1 §17.4.2.5 makes `STRLANG` "an error" when its
+/// arguments are not as required, and §17.2's evaluation rules turn an
+/// expression error into an unbound result — a dropped `FILTER` row or an
+/// unbound `BIND` — rather than an aborted query. That is also this function's
+/// own established convention for every other refusal it already makes: a
+/// non-`xsd:string` lexical argument and an empty tag both `return Ok(None)`
+/// here, and `build_regex`'s contract above spells the same reasoning out.
 fn eval_str_lang<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -4319,12 +4363,20 @@ fn eval_str_lang<D: DatasetView + Sync>(
     if lang.is_empty() {
         return Ok(None); // an empty language tag is not a valid rdf:langString
     }
+    if !well_formed_langtag(&lang) {
+        return Ok(None); // not a language tag at all — see `well_formed_langtag`
+    }
     Ok(Some(make_string(ctx, lex, Some(lang.to_ascii_lowercase()))))
 }
 
 /// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
 /// constructor. An empty `dir` yields a plain `rdf:langString`; `ltr`/`rtl`
 /// (case-insensitive) yield an `rdf:dirLangString`; any other direction errors.
+///
+/// The language half is held to [`LANGTAG_PROFILE`] exactly as [`eval_str_lang`]
+/// holds it, and refuses the same way — unbound, not a query abort. A direction
+/// does not make a non-tag into a tag: `"en us"--ltr` is as unreadable as
+/// `"en us"` on its own.
 fn eval_str_lang_dir<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -4338,6 +4390,9 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
     };
     if lang.is_empty() {
         return Ok(None); // a directional language string needs a language
+    }
+    if !well_formed_langtag(&lang) {
+        return Ok(None); // not a language tag at all — see `well_formed_langtag`
     }
     // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
     // else, including an empty string, is a type error (unbound).
@@ -8707,5 +8762,148 @@ mod tests {
             ":d has no :q triple of its own, so the doubly-negated form must be \
              empty — the pre-fix classifier wrongly admitted :d"
         );
+    }
+
+    /// Tags the `LANGTAG` grammar refuses. Before the gate every one of these
+    /// reached a serializer verbatim — `"x"@en us` in TSV, `"xml:lang":"en us"`
+    /// in JSON — output no SPARQL-results reader can parse back.
+    const REFUSED_TAGS: &[&str] = &["en us", "1", "9-9", "123-456", "en-", "-", "!!!"];
+
+    /// Tags that MUST still bind. The over-refusal half: three of these
+    /// (`i-enochian`, the two `x-` private-use tags) and the two
+    /// terminal-only shapes (`en-fr-jura`, `fr-be-fbcl`) are exactly what a
+    /// profile chosen one notch too strict would silently start dropping.
+    const ACCEPTED_TAGS: &[&str] = &[
+        "en",
+        "en-US",
+        "zh-Hans-CN",
+        "de-CH-x-phonebk",
+        "i-enochian",
+        "x-purrdf-afrikaans",
+        "x-gmeow-english",
+        "en-fr-jura",
+        "fr-be-fbcl",
+    ];
+
+    /// `STRLANG(lexical, tag)` as a whole [`TermValue`], or `None` when the
+    /// expression is unbound (a SPARQL expression error).
+    fn str_lang(ds: &RdfDataset, lexical: &str, tag: &str) -> Option<TermValue> {
+        let mut ctx = EvalCtx::new(ds);
+        let schema = VarSchema::new();
+        let expr = Expression::FunctionCall(Function::StrLang, vec![lit(lexical), lit(tag)]);
+        let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
+        Some(value_of(&ctx, term))
+    }
+
+    /// `STRLANGDIR(lexical, tag, dir)` as a whole [`TermValue`], or `None`.
+    fn str_lang_dir(ds: &RdfDataset, lexical: &str, tag: &str, dir: &str) -> Option<TermValue> {
+        let mut ctx = EvalCtx::new(ds);
+        let schema = VarSchema::new();
+        let expr =
+            Expression::FunctionCall(Function::StrLangDir, vec![lit(lexical), lit(tag), lit(dir)]);
+        let term = eval_expr(&expr, &[], &schema, &mut ctx).expect("eval")?;
+        Some(value_of(&ctx, term))
+    }
+
+    /// The language tag of a literal `TermValue`, for assertions.
+    fn tag_of(value: &TermValue) -> Option<&str> {
+        match value {
+            TermValue::Literal { language, .. } => language.as_deref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn str_lang_refuses_a_tag_the_grammar_refuses() {
+        let ds = empty_ds();
+        for tag in REFUSED_TAGS {
+            assert_eq!(
+                str_lang(&ds, "x", tag),
+                None,
+                "STRLANG(\"x\", {tag:?}) must be a SPARQL expression error (unbound), \
+                 not a literal a serializer then writes out unreadably"
+            );
+        }
+    }
+
+    #[test]
+    fn str_lang_still_binds_every_tag_the_grammar_takes() {
+        let ds = empty_ds();
+        for tag in ACCEPTED_TAGS {
+            let value = str_lang(&ds, "x", tag)
+                .unwrap_or_else(|| panic!("STRLANG(\"x\", {tag:?}) must still bind"));
+            assert_eq!(
+                tag_of(&value),
+                Some(tag.to_ascii_lowercase().as_str()),
+                "the gate must not change which tag STRLANG produces, only \
+                 whether it produces one"
+            );
+        }
+    }
+
+    #[test]
+    fn str_lang_dir_refuses_a_tag_the_grammar_refuses() {
+        let ds = empty_ds();
+        for tag in REFUSED_TAGS {
+            // A base direction does not rescue a non-tag: `"x"@en us--ltr` is as
+            // unreadable as `"x"@en us`, and that is what this emitted before.
+            assert_eq!(
+                str_lang_dir(&ds, "x", tag, "ltr"),
+                None,
+                "STRLANGDIR(\"x\", {tag:?}, \"ltr\") must be unbound"
+            );
+        }
+    }
+
+    #[test]
+    fn str_lang_dir_still_binds_every_tag_the_grammar_takes() {
+        let ds = empty_ds();
+        for tag in ACCEPTED_TAGS {
+            for dir in ["ltr", "rtl"] {
+                let value = str_lang_dir(&ds, "x", tag, dir).unwrap_or_else(|| {
+                    panic!("STRLANGDIR(\"x\", {tag:?}, {dir:?}) must still bind")
+                });
+                assert_eq!(tag_of(&value), Some(tag.to_ascii_lowercase().as_str()));
+            }
+        }
+    }
+
+    #[test]
+    fn the_gate_is_case_blind_so_it_may_run_before_the_fold() {
+        // `well_formed_langtag` judges the tag AS WRITTEN and `eval_str_lang`
+        // lowercases afterwards. That ordering is only safe because the profile's
+        // productions are case-insensitive character classes plus a length bound,
+        // none of which ASCII folding can move. Prove it over both corpora rather
+        // than assert it in a comment: `en-US` is the case that would break.
+        for tag in ACCEPTED_TAGS.iter().chain(REFUSED_TAGS) {
+            assert_eq!(
+                well_formed_langtag(tag),
+                well_formed_langtag(&tag.to_ascii_lowercase()),
+                "gating before vs after `to_ascii_lowercase` must accept the same \
+                 set, else the order of the two lines would be load-bearing ({tag:?})"
+            );
+        }
+        assert!(well_formed_langtag("en-US"));
+        assert!(well_formed_langtag("en-us"));
+    }
+
+    #[test]
+    fn str_lang_agrees_with_the_profile_the_query_parser_already_enforces() {
+        // The asymmetry this fixes: a tag written as a literal `@tag` in query
+        // text is refused by the parser, and a tag routed through a CONSTRUCT
+        // template is refused by the dataset builder, but STRLANG built one at
+        // runtime into a scratch arena that neither gate can see. One profile,
+        // one accept set, whichever door the tag comes through.
+        let ds = empty_ds();
+        for tag in ACCEPTED_TAGS.iter().chain(REFUSED_TAGS) {
+            let bound = str_lang(&ds, "x", tag).is_some();
+            assert_eq!(
+                bound,
+                purrdf_sparql_algebra::SparqlParser::new()
+                    .parse_query(&format!("SELECT * WHERE {{ BIND(\"x\"@{tag} AS ?v) }}"))
+                    .is_ok(),
+                "STRLANG and the concrete-syntax `@{tag}` must agree"
+            );
+        }
     }
 }
