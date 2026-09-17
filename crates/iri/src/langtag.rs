@@ -24,7 +24,20 @@
 //! Case is insignificant to the judgement, and the input is never re-encoded or
 //! case-normalized: RDF keeps language tags lexical-verbatim, and the §2.1.1
 //! case conventions are a *presentation* recommendation, not part of the
-//! grammar.
+//! grammar. A caller that wants that presentation asks for it explicitly with
+//! [`canonical_case`], which is a separate, allocating rewrite and never
+//! changes what [`parse`] or [`is_well_formed`] answer.
+//!
+//! # What a parsed tag gives you
+//!
+//! [`LanguageTag`] borrows the input and reports each section as a slice of it.
+//! Beyond the flat sections it decomposes the two grouped ones the grammar
+//! leaves joined — [`LanguageTag::extensions_by_singleton`] yields one
+//! [`Extension`] per `singleton 1*("-" (2*8alphanum))` run, and
+//! [`LanguageTag::private_use_subtags`] yields the subtags after the `x`
+//! marker. [`LanguageTagBuf`] is the owning twin for callers that must outlive
+//! the borrow, and carries the standard trait set ([`core::str::FromStr`],
+//! [`AsRef`], [`core::borrow::Borrow`], [`Ord`], [`core::hash::Hash`]).
 //!
 //! # Profiles
 //!
@@ -72,14 +85,20 @@
 //!
 //! [RFC 5646 §2.1]: https://www.rfc-editor.org/rfc/rfc5646#section-2.1
 
+use core::borrow::Borrow;
+use core::cmp::Ordering;
 use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::str::FromStr;
 
 /// The closed `grandfathered` set of RFC 5646 §2.2.8, in the order the RFC
 /// presents it: the seventeen `irregular` tags, then the nine `regular` ones.
 ///
-/// Matched case-insensitively as whole tags. The set is closed by the
-/// specification — "no new grandfathered tags will be created" — so this array
-/// is complete by construction rather than by maintenance.
+/// Matched case-insensitively as whole tags, and the spelling here is the
+/// **registered** one, which is what §2.1.1 canonical case preserves for these
+/// tags rather than deriving. The set is closed by the specification — "no new
+/// grandfathered tags will be created" — so this array is complete by
+/// construction rather than by maintenance.
 const GRANDFATHERED: [&str; 26] = [
     // irregular
     "en-GB-oed",
@@ -125,13 +144,26 @@ const SUBTAG_CEILING: usize = 8;
 /// most three `extlang` subtags in total.
 const EXTLANG_REPEAT_LIMIT: usize = 2;
 
+/// A `singleton`, and the `x`/`X` `privateuse` marker, are each exactly one
+/// character. That is what makes a one-character subtag unambiguous: no other
+/// production admits one.
+const SINGLETON_LENGTH: usize = 1;
+
+/// Bytes to skip to step past a leading one-character marker *and* the hyphen
+/// that joins it to the subtags it introduces (`u-islamcal` -> `islamcal`).
+const MARKER_PREFIX_WIDTH: usize = SINGLETON_LENGTH + 1;
+
 /// The acceptance language a judgement is made against.
 ///
 /// Every variant other than [`Self::Rfc5646`] is a *widening* of it: the set of
 /// accepted tags only grows, and each variant documents the single bound it
 /// lifts. Nothing here narrows the grammar, so a tag accepted under
 /// [`Self::Rfc5646`] is accepted under every profile.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// The variants are declared in acceptance order, so the derived [`Ord`] *is*
+/// the ⊂ relation this module documents: a greater profile accepts every tag a
+/// lesser one does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Profile {
     /// The RFC 5646 §2.1 ABNF verbatim, with nothing added or removed. This is
@@ -227,7 +259,7 @@ pub enum Profile {
 
 /// Which of the three top-level `Language-Tag` alternatives matched, or that
 /// none did and only a looser profile's grammar was satisfied.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TagForm {
     /// The ordinary `langtag` production (`language ["-" script] ...`).
     Langtag,
@@ -249,7 +281,7 @@ pub enum TagForm {
 /// could not be satisfied, and one for input left over after the whole
 /// production ran. Callers (and fixtures) can therefore assert *which* rule
 /// refused, not merely that something did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum LanguageTagError {
     /// A subtag position held no characters at all: an empty input, a leading
@@ -310,11 +342,17 @@ impl LanguageTagError {
             Self::TerminalSubtagNotAlphanum => "langtag-terminal-subtag-not-alphanum",
         }
     }
-}
 
-impl fmt::Display for LanguageTagError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let message = match self {
+    /// The human-readable reason, as a `&'static str`.
+    ///
+    /// [`fmt::Display`] renders exactly this. It is exposed separately because
+    /// a consumer whose own error type carries a `&'static str` payload — the
+    /// embedding artifact validator is one — would otherwise have to collapse
+    /// every refusal to a single generic sentence to fit, which is precisely
+    /// how a typed diagnostic stops reaching the user.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
             Self::SubtagLengthZero => "language tag has a zero-length subtag",
             Self::SubtagLengthOverEight => "language-tag subtag longer than 8 characters",
             Self::LanguageProductionUnmatched => {
@@ -332,15 +370,20 @@ impl fmt::Display for LanguageTagError {
             Self::TerminalSubtagNotAlphanum => {
                 "`LANGTAG` subtag after the first holds a character outside [a-zA-Z0-9]"
             }
-        };
-        f.write_str(message)
+        }
+    }
+}
+
+impl fmt::Display for LanguageTagError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message())
     }
 }
 
 impl core::error::Error for LanguageTagError {}
 
 /// A half-open byte range into the tag a [`LanguageTag`] borrows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Span {
     /// Byte offset of the first character of the section.
     start: usize,
@@ -362,20 +405,13 @@ impl Span {
     }
 }
 
-/// A language tag accepted by the profile it was parsed under, borrowing the
-/// input verbatim.
+/// Where each section of the `langtag` production sat in the input.
 ///
-/// Each section of the `langtag` production is recorded as the byte range it
-/// occupied, so every accessor is a slice of the original input: nothing is
-/// copied, re-encoded or case-normalized. A tag whose [`form`](Self::form) is
-/// [`TagForm::ConcreteSyntaxOnly`] has no sections at all, that terminal naming
-/// none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LanguageTag<'a> {
-    /// The input, exactly as supplied.
-    tag: &'a str,
-    /// Which top-level alternative matched.
-    form: TagForm,
+/// Split out from [`LanguageTag`] so that the borrowing and the owning form can
+/// share one decomposition rather than two copies of the same seven fields that
+/// could drift apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Sections {
     /// `language`, minus any `extlang`; `None` for the whole-tag forms.
     language: Option<Span>,
     /// The `extlang` subtags as one hyphen-joined run.
@@ -393,6 +429,49 @@ pub struct LanguageTag<'a> {
     private_use: Option<Span>,
 }
 
+impl Sections {
+    /// The decomposition of a form that names no sections.
+    const NONE: Self = Self {
+        language: None,
+        extlang: None,
+        script: None,
+        region: None,
+        variants: None,
+        extensions: None,
+        private_use: None,
+    };
+}
+
+/// A language tag accepted by the profile it was parsed under, borrowing the
+/// input verbatim.
+///
+/// Each section of the `langtag` production is recorded as the byte range it
+/// occupied, so every accessor is a slice of the original input: nothing is
+/// copied, re-encoded or case-normalized. A tag whose [`form`](Self::form) is
+/// [`TagForm::ConcreteSyntaxOnly`] has no sections at all, that terminal naming
+/// none.
+///
+/// # Identity
+///
+/// [`PartialEq`] is structural over the whole decomposition, but [`Ord`] and
+/// [`Hash`] key on the tag string alone. Those agree, and the agreement is a
+/// property of the parser rather than a convention: a `LanguageTag` can only be
+/// produced by [`parse_with`], and for one input string every profile that
+/// accepts it yields the *same* record (the wider profiles only ever lift a
+/// bound, and [`Profile::ConcreteSyntaxLangtag`] returns the narrower profile's
+/// reading verbatim whenever one exists). So equal strings imply equal records,
+/// which is exactly what makes the [`Borrow<str>`] impl below lawful — a
+/// `HashMap` or `BTreeMap` keyed by a tag can be probed with a plain `&str`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LanguageTag<'a> {
+    /// The input, exactly as supplied.
+    tag: &'a str,
+    /// Which top-level alternative matched.
+    form: TagForm,
+    /// Where each section of the production sat.
+    sections: Sections,
+}
+
 impl<'a> LanguageTag<'a> {
     /// A tag that matched a whole-tag alternative (`privateuse` as the entire
     /// input, or `grandfathered`), which has no decomposable sections.
@@ -400,13 +479,19 @@ impl<'a> LanguageTag<'a> {
         Self {
             tag,
             form,
-            language: None,
-            extlang: None,
-            script: None,
-            region: None,
-            variants: None,
-            extensions: None,
-            private_use,
+            sections: Sections {
+                private_use,
+                ..Sections::NONE
+            },
+        }
+    }
+
+    /// The parse record for an accepted tag, given its decomposition.
+    const fn decomposed(tag: &'a str, form: TagForm, sections: Sections) -> Self {
+        Self {
+            tag,
+            form,
+            sections,
         }
     }
 
@@ -426,48 +511,121 @@ impl<'a> LanguageTag<'a> {
     /// whole-tag private-use tag has no decomposable components).
     #[must_use]
     pub fn primary_language(&self) -> Option<&'a str> {
-        self.language.map(|span| span.of(self.tag))
+        self.sections.language.map(|span| span.of(self.tag))
     }
 
     /// The extended-language subtags, hyphen-joined, when present.
     #[must_use]
     pub fn extended_language(&self) -> Option<&'a str> {
-        self.extlang.map(|span| span.of(self.tag))
+        self.sections.extlang.map(|span| span.of(self.tag))
     }
 
     /// The script subtag, when present.
     #[must_use]
     pub fn script(&self) -> Option<&'a str> {
-        self.script.map(|span| span.of(self.tag))
+        self.sections.script.map(|span| span.of(self.tag))
     }
 
     /// The region subtag, when present.
     #[must_use]
     pub fn region(&self) -> Option<&'a str> {
-        self.region.map(|span| span.of(self.tag))
+        self.sections.region.map(|span| span.of(self.tag))
     }
 
     /// The variant subtags in order of appearance.
     pub fn variants(&self) -> impl Iterator<Item = &'a str> {
-        self.variants
-            .map(|span| span.of(self.tag))
-            .into_iter()
-            .flat_map(|section| section.split('-'))
+        subtags_in(self.sections.variants.map(|span| span.of(self.tag)))
     }
 
     /// The raw extension section (`a-myext-b-another`), hyphen-joined, when
-    /// present. Grouping the subtags under their singletons is the caller's
-    /// concern: well-formedness does not interpret extensions.
+    /// present.
+    ///
+    /// This is the run exactly as written. Use
+    /// [`extensions_by_singleton`](Self::extensions_by_singleton) to walk it as
+    /// the `singleton 1*("-" (2*8alphanum))` groups the ABNF actually names.
     #[must_use]
     pub fn extensions(&self) -> Option<&'a str> {
-        self.extensions.map(|span| span.of(self.tag))
+        self.sections.extensions.map(|span| span.of(self.tag))
+    }
+
+    /// The extension sections, one [`Extension`] per singleton, in the order
+    /// they appear.
+    ///
+    /// The grouping is recovered from the run rather than recorded during the
+    /// parse, and it is unambiguous: `extension = singleton 1*("-"
+    /// (2*8alphanum))` gives every extension subtag at least two characters, so
+    /// the only one-character subtag inside the run is the next singleton.
+    ///
+    /// Well-formedness does not *interpret* extensions and does not deduplicate
+    /// them: RFC 5646 §2.2.9 puts a repeated singleton on the invalid-but-well-
+    /// formed side, so `ar-a-aaa-b-bbb-a-ccc` yields three extensions, two of
+    /// which are keyed `a`. A caller that needs one section per singleton must
+    /// decide for itself which repeat wins.
+    pub fn extensions_by_singleton(&self) -> impl Iterator<Item = Extension<'a>> {
+        split_extensions(self.extensions())
+    }
+
+    /// The first extension section keyed by `singleton`, matched
+    /// case-insensitively because `singleton` is an ABNF character range over
+    /// both cases.
+    ///
+    /// "First" rather than "the": see
+    /// [`extensions_by_singleton`](Self::extensions_by_singleton) for why a
+    /// well-formed tag may carry a singleton twice.
+    #[must_use]
+    pub fn extension(&self, singleton: char) -> Option<Extension<'a>> {
+        self.extensions_by_singleton()
+            .find(|extension| extension.singleton().eq_ignore_ascii_case(&singleton))
     }
 
     /// The private-use section including its `x`/`X` marker (`x-phonebk`), or
     /// the whole tag for the whole-tag private-use form.
     #[must_use]
     pub fn private_use(&self) -> Option<&'a str> {
-        self.private_use.map(|span| span.of(self.tag))
+        self.sections.private_use.map(|span| span.of(self.tag))
+    }
+
+    /// The private-use subtags after the `x`/`X` marker, in order.
+    ///
+    /// Empty when the tag has no private-use section. The marker itself is
+    /// never yielded, and `privateuse = "x" 1*("-" (1*8alphanum))` guarantees at
+    /// least one subtag whenever the section exists.
+    pub fn private_use_subtags(&self) -> impl Iterator<Item = &'a str> {
+        subtags_in(
+            self.private_use()
+                .and_then(|section| section.get(MARKER_PREFIX_WIDTH..)),
+        )
+    }
+
+    /// This tag rewritten in the RFC 5646 §2.1.1 canonical case convention.
+    ///
+    /// See [`canonical_case`] for the rule and its two exceptions. Allocating
+    /// and idempotent; the result parses to an equal tag under the same profile,
+    /// case being insignificant to the grammar.
+    #[must_use]
+    pub fn canonical_case(&self) -> String {
+        let mut canonical = String::with_capacity(self.tag.len());
+        write_canonical_case(self.tag, &mut canonical);
+        canonical
+    }
+
+    /// `true` when this tag is already spelled in §2.1.1 canonical case.
+    ///
+    /// Decides the same question as `tag.as_str() == tag.canonical_case()`
+    /// without allocating.
+    #[must_use]
+    pub fn is_canonical_case(&self) -> bool {
+        canonical_case_holds(self.tag)
+    }
+
+    /// This tag as an owning [`LanguageTagBuf`], copying the input once.
+    #[must_use]
+    pub fn to_owned_tag(&self) -> LanguageTagBuf {
+        LanguageTagBuf {
+            tag: self.tag.to_owned(),
+            form: self.form,
+            sections: self.sections,
+        }
     }
 }
 
@@ -475,6 +633,334 @@ impl fmt::Display for LanguageTag<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.tag)
     }
+}
+
+impl AsRef<str> for LanguageTag<'_> {
+    fn as_ref(&self) -> &str {
+        self.tag
+    }
+}
+
+impl Borrow<str> for LanguageTag<'_> {
+    fn borrow(&self) -> &str {
+        self.tag
+    }
+}
+
+impl Hash for LanguageTag<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.tag.hash(state);
+    }
+}
+
+impl Ord for LanguageTag<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.tag.cmp(other.tag)
+    }
+}
+
+impl PartialOrd for LanguageTag<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// One `extension = singleton 1*("-" (2*8alphanum))` section of a tag.
+///
+/// Yielded by [`LanguageTag::extensions_by_singleton`]. The section is a slice
+/// of the original input, so its case is whatever the author wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Extension<'a> {
+    /// The `singleton` that keys this extension.
+    singleton: char,
+    /// The whole section, singleton included (`u-islamcal`).
+    section: &'a str,
+}
+
+impl<'a> Extension<'a> {
+    /// The singleton this extension is keyed by (`'u'` in `u-islamcal`), as
+    /// written.
+    #[must_use]
+    pub const fn singleton(self) -> char {
+        self.singleton
+    }
+
+    /// The whole section including its singleton (`u-islamcal`).
+    #[must_use]
+    pub const fn as_str(self) -> &'a str {
+        self.section
+    }
+
+    /// The subtags after the singleton, in order (`co`, `phonebk` for
+    /// `u-co-phonebk`).
+    ///
+    /// Never empty: the `1*` in the production requires at least one.
+    pub fn subtags(self) -> impl Iterator<Item = &'a str> {
+        self.section
+            .get(MARKER_PREFIX_WIDTH..)
+            .into_iter()
+            .flat_map(|subtags| subtags.split('-'))
+    }
+}
+
+impl fmt::Display for Extension<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.section)
+    }
+}
+
+impl AsRef<str> for Extension<'_> {
+    fn as_ref(&self) -> &str {
+        self.section
+    }
+}
+
+/// An owning [`LanguageTag`].
+///
+/// The borrowing form is the working one — it copies nothing — but a caller
+/// that stores a tag past the lifetime of the bytes it was read from needs the
+/// tag to own them. This is that form: the same decomposition over a `String`,
+/// with the trait set a map key or a sort key needs.
+///
+/// Its identity rules are [`LanguageTag`]'s, for the same reason: structural
+/// equality, string-keyed [`Ord`] and [`Hash`], and therefore a lawful
+/// [`Borrow<str>`] that lets `HashMap<LanguageTagBuf, _>` be probed with `&str`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LanguageTagBuf {
+    /// The tag exactly as supplied.
+    tag: String,
+    /// Which top-level alternative matched.
+    form: TagForm,
+    /// Where each section of the production sat.
+    sections: Sections,
+}
+
+impl LanguageTagBuf {
+    /// Parses `tag` against [`Profile::Rfc5646`] into an owning tag.
+    ///
+    /// # Errors
+    ///
+    /// The typed [`LanguageTagError`] [`parse`] would have returned.
+    pub fn parse(tag: &str) -> Result<Self, LanguageTagError> {
+        Self::parse_with(tag, Profile::Rfc5646)
+    }
+
+    /// Parses `tag` against `profile` into an owning tag.
+    ///
+    /// # Errors
+    ///
+    /// The typed [`LanguageTagError`] [`parse_with`] would have returned.
+    pub fn parse_with(tag: &str, profile: Profile) -> Result<Self, LanguageTagError> {
+        parse_with(tag, profile).map(|parsed| parsed.to_owned_tag())
+    }
+
+    /// The borrowing view, which is where every section accessor lives.
+    #[must_use]
+    pub fn as_language_tag(&self) -> LanguageTag<'_> {
+        LanguageTag {
+            tag: &self.tag,
+            form: self.form,
+            sections: self.sections,
+        }
+    }
+
+    /// The tag exactly as supplied.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.tag
+    }
+
+    /// Consumes the tag, returning the string it owns.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.tag
+    }
+
+    /// Which top-level alternative matched.
+    #[must_use]
+    pub const fn form(&self) -> TagForm {
+        self.form
+    }
+
+    /// The primary language subtag, when the form has one.
+    #[must_use]
+    pub fn primary_language(&self) -> Option<&str> {
+        self.as_language_tag().primary_language()
+    }
+
+    /// The extended-language subtags, hyphen-joined, when present.
+    #[must_use]
+    pub fn extended_language(&self) -> Option<&str> {
+        self.as_language_tag().extended_language()
+    }
+
+    /// The script subtag, when present.
+    #[must_use]
+    pub fn script(&self) -> Option<&str> {
+        self.as_language_tag().script()
+    }
+
+    /// The region subtag, when present.
+    #[must_use]
+    pub fn region(&self) -> Option<&str> {
+        self.as_language_tag().region()
+    }
+
+    /// The variant subtags in order of appearance.
+    pub fn variants(&self) -> impl Iterator<Item = &str> {
+        subtags_in(self.sections.variants.map(|span| span.of(&self.tag)))
+    }
+
+    /// The raw extension section, hyphen-joined, when present.
+    #[must_use]
+    pub fn extensions(&self) -> Option<&str> {
+        self.as_language_tag().extensions()
+    }
+
+    /// The extension sections, one per singleton, in order.
+    pub fn extensions_by_singleton(&self) -> impl Iterator<Item = Extension<'_>> {
+        split_extensions(self.extensions())
+    }
+
+    /// The first extension section keyed by `singleton`.
+    #[must_use]
+    pub fn extension(&self, singleton: char) -> Option<Extension<'_>> {
+        self.as_language_tag().extension(singleton)
+    }
+
+    /// The private-use section including its `x`/`X` marker.
+    #[must_use]
+    pub fn private_use(&self) -> Option<&str> {
+        self.as_language_tag().private_use()
+    }
+
+    /// The private-use subtags after the `x`/`X` marker, in order.
+    pub fn private_use_subtags(&self) -> impl Iterator<Item = &str> {
+        subtags_in(
+            self.private_use()
+                .and_then(|section| section.get(MARKER_PREFIX_WIDTH..)),
+        )
+    }
+
+    /// This tag rewritten in RFC 5646 §2.1.1 canonical case.
+    #[must_use]
+    pub fn canonical_case(&self) -> String {
+        self.as_language_tag().canonical_case()
+    }
+
+    /// `true` when this tag is already spelled in §2.1.1 canonical case.
+    #[must_use]
+    pub fn is_canonical_case(&self) -> bool {
+        self.as_language_tag().is_canonical_case()
+    }
+
+    /// This tag re-spelled in §2.1.1 canonical case, keeping the decomposition.
+    ///
+    /// Case is insignificant to every production, so the spans are unchanged by
+    /// construction — the rewrite replaces bytes, never subtag boundaries.
+    #[must_use]
+    pub fn into_canonical_case(self) -> Self {
+        let mut canonical = String::with_capacity(self.tag.len());
+        write_canonical_case(&self.tag, &mut canonical);
+        Self {
+            tag: canonical,
+            ..self
+        }
+    }
+}
+
+impl fmt::Display for LanguageTagBuf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.tag)
+    }
+}
+
+impl AsRef<str> for LanguageTagBuf {
+    fn as_ref(&self) -> &str {
+        &self.tag
+    }
+}
+
+impl Borrow<str> for LanguageTagBuf {
+    fn borrow(&self) -> &str {
+        &self.tag
+    }
+}
+
+impl Hash for LanguageTagBuf {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.tag.hash(state);
+    }
+}
+
+impl Ord for LanguageTagBuf {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.tag.cmp(&other.tag)
+    }
+}
+
+impl PartialOrd for LanguageTagBuf {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl FromStr for LanguageTagBuf {
+    type Err = LanguageTagError;
+
+    fn from_str(tag: &str) -> Result<Self, Self::Err> {
+        Self::parse(tag)
+    }
+}
+
+impl From<LanguageTag<'_>> for LanguageTagBuf {
+    fn from(tag: LanguageTag<'_>) -> Self {
+        tag.to_owned_tag()
+    }
+}
+
+/// The subtags of one hyphen-joined run, or nothing when the run is absent.
+///
+/// A free function rather than a method because both [`LanguageTag`] and
+/// [`LanguageTagBuf`] need it at *different* lifetimes: the borrowing form
+/// yields slices of the input it was parsed from, the owning form slices of the
+/// `String` it holds.
+fn subtags_in(run: Option<&str>) -> impl Iterator<Item = &str> {
+    run.into_iter().flat_map(|section| section.split('-'))
+}
+
+/// The extension sections of one hyphen-joined extension run, keyed by
+/// singleton. The twin of [`subtags_in`], and a free function for the same
+/// reason.
+fn split_extensions(run: Option<&str>) -> impl Iterator<Item = Extension<'_>> {
+    let mut rest = run.unwrap_or_default();
+    core::iter::from_fn(move || next_extension(&mut rest))
+}
+
+/// Splits the leading `extension` section off a hyphen-joined extension run,
+/// advancing `rest` past it.
+///
+/// The section ends immediately before the next one-character subtag, which can
+/// only be the following singleton: every `extension` subtag is `2*8alphanum`.
+fn next_extension<'a>(rest: &mut &'a str) -> Option<Extension<'a>> {
+    if rest.is_empty() {
+        return None;
+    }
+    let mut end = rest.len();
+    let mut offset = 0usize;
+    for (index, subtag) in rest.split('-').enumerate() {
+        if index > 0 && subtag.len() == SINGLETON_LENGTH {
+            // Back up over the hyphen that joined this singleton to the section
+            // being split off, so neither side keeps a dangling separator.
+            end = offset - 1;
+            break;
+        }
+        offset += subtag.len() + 1;
+    }
+    let (section, tail) = rest.split_at(end);
+    *rest = tail.strip_prefix('-').unwrap_or_default();
+    let singleton = section.chars().next()?;
+    Some(Extension { singleton, section })
 }
 
 /// `true` when `tag` matches the RFC 5646 `Language-Tag` production.
@@ -488,6 +974,85 @@ pub fn is_well_formed(tag: &str) -> bool {
 #[must_use]
 pub fn is_well_formed_with(tag: &str, profile: Profile) -> bool {
     parse_with(tag, profile).is_ok()
+}
+
+/// Rewrites `tag` in the **RFC 5646 §2.1.1** canonical case convention.
+///
+/// # The rule
+///
+/// §2.1.1 is a recommendation about *presentation*, not part of the grammar:
+/// "all subtags, including extension and private use subtags, use lowercase
+/// letters with two exceptions: two-letter and four-letter subtags that neither
+/// appear at the start of the tag nor occur after singletons. Such two-letter
+/// subtags are all uppercase … and four-letter subtags are titlecase". So
+/// `de-de` becomes `de-DE`, `zh-hant` becomes `zh-Hant`, and `EN-us` becomes
+/// `en-US`.
+///
+/// # The two forms with their own rule
+///
+/// * A **grandfathered** tag keeps its *registered* spelling, which the §2.2.8
+///   list holds verbatim: `I-ENOCHIAN` becomes `i-enochian`, `en-gb-oed`
+///   becomes `en-GB-oed`, `SGN-be-fr` becomes `sgn-BE-FR`. These are canonical
+///   by registration rather than by rule, so they are looked up, not derived.
+/// * A **whole-tag private-use** form (`x-…`) lowercases entirely. It falls out
+///   of the positional rule rather than needing a special case — the `x` marker
+///   *is* a one-character subtag, so every subtag after it is "after a
+///   singleton" — but it is worth stating, because the naive reading of "title-
+///   case the four-letter subtag" would corrupt `x-gmeow-chinese-latn` into a
+///   `Latn` that is not a script and never was. Private-use subtags are
+///   case-insensitive and carry no title-case rule at any length.
+///
+/// The rewrite touches bytes only, never subtag boundaries, so the result is
+/// well-formed under the same profile and re-parses to an equal tag. It is
+/// idempotent.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::{Profile, canonical_case, canonical_case_with};
+///
+/// // The three conventions: language lower, region upper, script title.
+/// assert_eq!(canonical_case("de-de")?, "de-DE");
+/// assert_eq!(canonical_case("zh-hant")?, "zh-Hant");
+/// assert_eq!(canonical_case("EN-us")?, "en-US");
+///
+/// // A grandfathered tag keeps its registered spelling.
+/// assert_eq!(canonical_case("EN-GB-OED")?, "en-GB-oed");
+/// assert_eq!(canonical_case("I-ENOCHIAN")?, "i-enochian");
+///
+/// // A whole-tag private-use form lowercases, and nothing in it is a script.
+/// assert_eq!(canonical_case("X-GMEOW-CHINESE-LATN")?, "x-gmeow-chinese-latn");
+///
+/// // Long private-use subtags need the profile that admits them, and then
+/// // come back byte-identical.
+/// assert_eq!(
+///     canonical_case_with("x-gmeow-norwegiannynorsk", Profile::Rfc5646PrivateUseRelaxed)?,
+///     "x-gmeow-norwegiannynorsk"
+/// );
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
+///
+/// # Errors
+///
+/// A typed [`LanguageTagError`]: there is no canonical case for a string that
+/// is not a language tag, and inventing one would be the silent-drop bug in its
+/// normalizing disguise.
+pub fn canonical_case(tag: &str) -> Result<String, LanguageTagError> {
+    canonical_case_with(tag, Profile::Rfc5646)
+}
+
+/// Rewrites `tag` in §2.1.1 canonical case, accepting whatever `profile` does.
+///
+/// [`canonical_case`] is this with [`Profile::Rfc5646`], and describes the rule.
+/// A tag accepted only by [`Profile::ConcreteSyntaxLangtag`] has no RFC 5646
+/// reading and therefore no sections; §2.1.1's rule is positional, so it still
+/// applies, and it is applied exactly as written.
+///
+/// # Errors
+///
+/// A typed [`LanguageTagError`] naming the production that refused.
+pub fn canonical_case_with(tag: &str, profile: Profile) -> Result<String, LanguageTagError> {
+    Ok(parse_with(tag, profile)?.canonical_case())
 }
 
 /// Parses `tag` against `Language-Tag = langtag / privateuse / grandfathered`.
@@ -568,17 +1133,19 @@ pub fn parse_with(tag: &str, profile: Profile) -> Result<LanguageTag<'_>, Langua
     let private_use = take_private_use(&mut cursor, profile)?;
     require_exhausted(&cursor)?;
 
-    Ok(LanguageTag {
+    Ok(LanguageTag::decomposed(
         tag,
-        form: TagForm::Langtag,
-        language: Some(language),
-        extlang,
-        script,
-        region,
-        variants,
-        extensions,
-        private_use,
-    })
+        TagForm::Langtag,
+        Sections {
+            language: Some(language),
+            extlang,
+            script,
+            region,
+            variants,
+            extensions,
+            private_use,
+        },
+    ))
 }
 
 /// [`Profile::ConcreteSyntaxLangtag`]: the `LANGTAG` terminal rather than the
@@ -631,14 +1198,113 @@ fn check_langtag_terminal(tag: &str) -> Result<(), LanguageTagError> {
     Ok(())
 }
 
-/// `true` when `tag` is one of the 26 closed `grandfathered` tags of §2.2.8.
+/// The **registered** spelling of `tag`, when it is one of the 26 closed
+/// `grandfathered` tags of §2.2.8.
 ///
 /// Whole-tag comparison, so `zh-min` and `zh-min-nan` cannot shadow each other,
-/// and case-insensitive, because RFC 5234 literals are.
-fn is_grandfathered(tag: &str) -> bool {
+/// and case-insensitive, because RFC 5234 literals are. Returning the registry's
+/// own spelling rather than a bool is what lets §2.1.1 canonical case *preserve*
+/// these tags instead of deriving them: the registered forms are the canonical
+/// ones by fiat, not by rule.
+fn registered_grandfathered(tag: &str) -> Option<&'static str> {
     GRANDFATHERED
         .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(tag))
+        .copied()
+        .find(|candidate| candidate.eq_ignore_ascii_case(tag))
+}
+
+/// `true` when `tag` is one of the 26 closed `grandfathered` tags of §2.2.8.
+fn is_grandfathered(tag: &str) -> bool {
+    registered_grandfathered(tag).is_some()
+}
+
+/// The case RFC 5646 §2.1.1 asks of one subtag position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubtagCase {
+    /// Every character lowercase — the default, and the whole rule for the
+    /// first subtag and for everything after a singleton.
+    Lower,
+    /// Every character uppercase — a two-character `region`.
+    Upper,
+    /// First character uppercase, rest lowercase — a four-character `script`.
+    Title,
+}
+
+/// The §2.1.1 case convention for the subtag at `index`, given whether a
+/// `singleton` (or the `x` private-use marker) has already been seen.
+///
+/// §2.1.1 states the rule *positionally* rather than by production — everything
+/// is lowercase except "two-letter and four-letter subtags that neither appear
+/// at the start of the tag nor occur after singletons", which are uppercase and
+/// title-case respectively. That is exactly this function, and it is why the
+/// rule applies to the raw subtag sequence with no parse tree in hand. The
+/// carve-outs are not decoration: they are what keeps `x-gmeow-chinese-latn`
+/// from acquiring a `Latn` that was never a script subtag, and what keeps the
+/// four-character subtags of an extension (`de-DE-u-co-phonebk`) lowercase.
+const fn subtag_case(index: usize, after_singleton: bool, length: usize) -> SubtagCase {
+    if index == 0 || after_singleton {
+        return SubtagCase::Lower;
+    }
+    match length {
+        2 => SubtagCase::Upper,
+        4 => SubtagCase::Title,
+        _ => SubtagCase::Lower,
+    }
+}
+
+/// One byte of a subtag, cased as `case` asks. `first` selects the title-case
+/// pivot and is ignored by the other two conventions.
+const fn cased_byte(byte: u8, case: SubtagCase, first: bool) -> u8 {
+    match case {
+        SubtagCase::Lower => byte.to_ascii_lowercase(),
+        SubtagCase::Upper => byte.to_ascii_uppercase(),
+        SubtagCase::Title if first => byte.to_ascii_uppercase(),
+        SubtagCase::Title => byte.to_ascii_lowercase(),
+    }
+}
+
+/// Appends the §2.1.1 canonical spelling of `tag` to `out`.
+///
+/// Only bytes change: the subtag boundaries are copied across untouched, which
+/// is what makes the rewrite safe to apply to an already-parsed tag without
+/// re-deriving its spans.
+fn write_canonical_case(tag: &str, out: &mut String) {
+    if let Some(registered) = registered_grandfathered(tag) {
+        out.push_str(registered);
+        return;
+    }
+    let mut after_singleton = false;
+    for (index, subtag) in tag.split('-').enumerate() {
+        if index > 0 {
+            out.push('-');
+        }
+        let case = subtag_case(index, after_singleton, subtag.len());
+        for (position, byte) in subtag.bytes().enumerate() {
+            out.push(char::from(cased_byte(byte, case, position == 0)));
+        }
+        after_singleton = after_singleton || subtag.len() == SINGLETON_LENGTH;
+    }
+}
+
+/// `true` when `tag` is already spelled in §2.1.1 canonical case. The same walk
+/// as [`write_canonical_case`], comparing instead of appending.
+fn canonical_case_holds(tag: &str) -> bool {
+    if let Some(registered) = registered_grandfathered(tag) {
+        return tag == registered;
+    }
+    let mut after_singleton = false;
+    for (index, subtag) in tag.split('-').enumerate() {
+        let case = subtag_case(index, after_singleton, subtag.len());
+        let cased = subtag
+            .bytes()
+            .enumerate()
+            .all(|(position, byte)| byte == cased_byte(byte, case, position == 0));
+        if !cased {
+            return false;
+        }
+        after_singleton = after_singleton || subtag.len() == SINGLETON_LENGTH;
+    }
+    true
 }
 
 /// Enforces the subtag-length envelope every production shares.
@@ -954,8 +1620,9 @@ fn is_private_use_subtag(text: &str, profile: Profile) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        GRANDFATHERED, LanguageTagError, Profile, TagForm, is_well_formed, is_well_formed_with,
-        parse, parse_with,
+        Extension, GRANDFATHERED, LanguageTagBuf, LanguageTagError, Profile, TagForm,
+        canonical_case, canonical_case_with, is_well_formed, is_well_formed_with, parse,
+        parse_with,
     };
 
     #[test]
@@ -1342,6 +2009,388 @@ mod tests {
             Err(LanguageTagError::UnconsumedSubtag),
             "…and RFC 5646 still refuses it, which is the whole point"
         );
+    }
+
+    /// §2.1.1's three conventions, each with a neighbour that must come back
+    /// byte-identical. Normalization rewrites strings, so "it changed nothing"
+    /// is as much a claim to prove as "it changed this".
+    #[test]
+    fn canonical_case_applies_the_section_2_1_1_conventions() {
+        // (input, canonical spelling)
+        let rewritten: &[(&str, &str)] = &[
+            // region: two characters, uppercase.
+            ("de-de", "de-DE"),
+            ("EN-us", "en-US"),
+            ("sr-latn-rs", "sr-Latn-RS"),
+            // script: four characters, title case.
+            ("zh-hant", "zh-Hant"),
+            ("ZH-HANS-CN", "zh-Hans-CN"),
+            // language: always lowercase, whatever its length.
+            ("DE", "de"),
+            ("ABCDEFGH", "abcdefgh"),
+            // variants and extensions: lowercase, and a four-character variant
+            // is not a script even though it is four characters.
+            ("SL-ROZAJ-BISKE-1994", "sl-rozaj-biske-1994"),
+            ("HY-LATN-IT-AREVELA", "hy-Latn-IT-arevela"),
+            ("DE-DE-U-CO-PHONEBK", "de-DE-u-co-phonebk"),
+            ("EN-US-U-ISLAMCAL", "en-US-u-islamcal"),
+            // a three-digit region stays as written; digits have no case.
+            ("ES-419", "es-419"),
+        ];
+        for (input, canonical) in rewritten {
+            assert_eq!(
+                canonical_case(input).as_deref(),
+                Ok(*canonical),
+                "{input:?}"
+            );
+            assert!(!parse(input).expect("well-formed").is_canonical_case());
+        }
+
+        // Already canonical: the rewrite must be the identity on these.
+        for unchanged in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "es-419",
+            "sl-rozaj-biske-1994",
+            "zh-cmn-Hans-CN-1901-u-islamcal-x-priv",
+        ] {
+            assert_eq!(
+                canonical_case(unchanged).as_deref(),
+                Ok(unchanged),
+                "{unchanged:?} is already canonical"
+            );
+            assert!(
+                parse(unchanged).expect("well-formed").is_canonical_case(),
+                "{unchanged:?}"
+            );
+        }
+    }
+
+    /// Grandfathered tags are canonical by *registration*, so the rewrite looks
+    /// them up rather than deriving them.
+    #[test]
+    fn canonical_case_restores_the_registered_grandfathered_spelling() {
+        for (input, registered) in [
+            ("I-ENOCHIAN", "i-enochian"),
+            ("i-enochian", "i-enochian"),
+            ("en-gb-oed", "en-GB-oed"),
+            ("EN-GB-OED", "en-GB-oed"),
+            ("SGN-be-fr", "sgn-BE-FR"),
+            ("ART-LOJBAN", "art-lojban"),
+            ("ZH-MIN-NAN", "zh-min-nan"),
+        ] {
+            assert_eq!(
+                canonical_case(input).as_deref(),
+                Ok(registered),
+                "{input:?}"
+            );
+        }
+        // Every registered spelling is its own canonical form, which is what
+        // makes the lookup a fixed point rather than a second convention.
+        for tag in GRANDFATHERED {
+            assert_eq!(canonical_case(tag).as_deref(), Ok(tag), "{tag:?}");
+            assert!(parse(tag).expect("grandfathered").is_canonical_case());
+        }
+    }
+
+    /// The private-use space has no title-case rule at any subtag length, and
+    /// the families below are published downstream in volume. A normalizer that
+    /// "helpfully" title-cased a four-character private-use subtag would mangle
+    /// every one of them while every other test stayed green.
+    #[test]
+    fn canonical_case_lowercases_private_use_and_title_cases_nothing_in_it() {
+        for unchanged in [
+            "x-gmeow-english",
+            "x-gmeow-chinese-latn",
+            "x-purrdf-english",
+            "de-CH-x-phonebk",
+            "en-x-ab",
+            "en-x-abcd",
+            "x-ab-cd",
+        ] {
+            assert_eq!(
+                canonical_case(unchanged).as_deref(),
+                Ok(unchanged),
+                "{unchanged:?} must survive normalization byte-identical"
+            );
+        }
+        // Mixed case inside the private-use space folds down, and only down.
+        for (input, canonical) in [
+            ("X-GMEOW-CHINESE-LATN", "x-gmeow-chinese-latn"),
+            ("az-Arab-x-AZE-derbend", "az-Arab-x-aze-derbend"),
+            ("DE-ch-X-PhoneBk", "de-CH-x-phonebk"),
+        ] {
+            assert_eq!(canonical_case(input).as_deref(), Ok(canonical), "{input:?}");
+        }
+        // The over-long families need the profile that admits them; §2.1.1 then
+        // leaves them exactly as written, sixteen-character subtag and all.
+        for over_ceiling in [
+            "x-gmeow-norwegiannynorsk",
+            "x-gmeow-westernfrisian",
+            "x-purrdf-afrikaans",
+            "x-purrdf-norwegiannynorsk",
+        ] {
+            assert_eq!(
+                canonical_case_with(over_ceiling, Profile::Rfc5646PrivateUseRelaxed).as_deref(),
+                Ok(over_ceiling),
+                "{over_ceiling:?} must survive normalization byte-identical"
+            );
+        }
+    }
+
+    /// Normalization is a rewrite of an *accepted* tag: it never invents a
+    /// canonical form for something the grammar refused, and never changes what
+    /// the grammar accepts.
+    #[test]
+    fn canonical_case_refuses_exactly_what_the_grammar_refuses() {
+        // (refused input, the error it must name, a neighbour that must
+        // normalize)
+        let cases: &[(&str, LanguageTagError, &str)] = &[
+            ("", LanguageTagError::SubtagLengthZero, "en"),
+            ("en--US", LanguageTagError::SubtagLengthZero, "en-US"),
+            ("e", LanguageTagError::LanguageProductionUnmatched, "en"),
+            ("de-419-DE", LanguageTagError::UnconsumedSubtag, "de-DE"),
+            ("en-x", LanguageTagError::PrivateUseWithoutSubtag, "en-x-a"),
+            (
+                "x-purrdf-afrikaans",
+                LanguageTagError::SubtagLengthOverEight,
+                "x-purrdf-english",
+            ),
+        ];
+        for (refused, expected, accepted) in cases {
+            assert_eq!(canonical_case(refused), Err(*expected), "{refused:?}");
+            assert!(canonical_case(accepted).is_ok(), "{accepted:?}");
+        }
+    }
+
+    /// Idempotent, and a fixed point of the grammar: the canonical spelling is
+    /// accepted by the same profile and decomposes into the same sections,
+    /// because case is insignificant to every production.
+    #[test]
+    fn canonical_case_is_idempotent_and_stays_well_formed() {
+        for tag in [
+            "DE-de",
+            "ZH-HANT",
+            "en-us",
+            "SL-IT-NEDIS",
+            "zh-CMN-hans-CN",
+            "AR-a-aaa-b-bbb-a-ccc",
+            "X-WHATEVER",
+            "I-ENOCHIAN",
+        ] {
+            let once = canonical_case(tag).expect("well-formed");
+            let twice = canonical_case(&once).expect("canonical form stays well-formed");
+            assert_eq!(once, twice, "{tag:?} must reach a fixed point");
+            assert!(parse(&once).expect("well-formed").is_canonical_case());
+            let original = parse(tag).expect("well-formed");
+            let normalized = parse(&once).expect("well-formed");
+            assert_eq!(original.form(), normalized.form(), "{tag:?}");
+            assert_eq!(
+                original.primary_language().map(str::to_ascii_lowercase),
+                normalized.primary_language().map(str::to_ascii_lowercase),
+                "{tag:?} must keep its decomposition"
+            );
+        }
+    }
+
+    #[test]
+    fn extensions_group_under_their_singletons() {
+        let tag = parse("en-US-u-islamcal-a-myext-t-en").expect("well-formed");
+        let grouped = tag
+            .extensions_by_singleton()
+            .map(|extension| (extension.singleton(), extension.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            grouped,
+            [('u', "u-islamcal"), ('a', "a-myext"), ('t', "t-en")]
+        );
+        assert_eq!(
+            tag.extension('u')
+                .map(|extension| extension.subtags().collect::<Vec<_>>()),
+            Some(vec!["islamcal"])
+        );
+        assert_eq!(tag.extension('z'), None);
+
+        // Multi-subtag extensions, and the singleton lookup that finds them.
+        let multi = parse("de-DE-u-co-phonebk-nu-latn").expect("well-formed");
+        let unicode = multi.extension('u').expect("a `u` extension");
+        assert_eq!(unicode.as_str(), "u-co-phonebk-nu-latn");
+        assert_eq!(
+            unicode.subtags().collect::<Vec<_>>(),
+            ["co", "phonebk", "nu", "latn"]
+        );
+        // `singleton` is an ABNF character range over both cases.
+        assert_eq!(multi.extension('U'), Some(unicode));
+
+        // No extensions at all is an empty iterator, not a one-item one.
+        assert_eq!(
+            parse("en-US")
+                .expect("well-formed")
+                .extensions_by_singleton()
+                .count(),
+            0
+        );
+        assert_eq!(
+            parse("x-whatever")
+                .expect("well-formed")
+                .extensions_by_singleton()
+                .count(),
+            0
+        );
+
+        // §2.2.9 admits a repeated singleton, so the grouping must report it
+        // rather than silently fold the two together.
+        let duplicated = parse("ar-a-aaa-b-bbb-a-ccc").expect("well-formed");
+        assert_eq!(
+            duplicated
+                .extensions_by_singleton()
+                .map(Extension::as_str)
+                .collect::<Vec<_>>(),
+            ["a-aaa", "b-bbb", "a-ccc"]
+        );
+        assert_eq!(
+            duplicated.extension('a').map(Extension::as_str),
+            Some("a-aaa"),
+            "the lookup reports the first, and says so"
+        );
+    }
+
+    #[test]
+    fn private_use_subtags_are_reported_one_by_one() {
+        let trailing = parse("de-CH-x-phonebk").expect("well-formed");
+        assert_eq!(trailing.private_use(), Some("x-phonebk"));
+        assert_eq!(
+            trailing.private_use_subtags().collect::<Vec<_>>(),
+            ["phonebk"]
+        );
+
+        let whole = parse("x-gmeow-chinese-latn").expect("well-formed");
+        assert_eq!(
+            whole.private_use_subtags().collect::<Vec<_>>(),
+            ["gmeow", "chinese", "latn"]
+        );
+
+        let relaxed = parse_with(
+            "x-gmeow-norwegiannynorsk",
+            Profile::Rfc5646PrivateUseRelaxed,
+        )
+        .expect("the relaxed profile admits the long subtag");
+        assert_eq!(
+            relaxed.private_use_subtags().collect::<Vec<_>>(),
+            ["gmeow", "norwegiannynorsk"]
+        );
+
+        // The marker is never yielded, and a tag without the section yields
+        // nothing rather than an empty subtag.
+        assert_eq!(
+            parse("en-US")
+                .expect("well-formed")
+                .private_use_subtags()
+                .count(),
+            0
+        );
+        assert_eq!(
+            parse("en-a-bb")
+                .expect("well-formed")
+                .private_use_subtags()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn the_owning_form_carries_the_borrowing_form_and_its_traits() {
+        use std::collections::{BTreeMap, HashMap};
+
+        let owned: LanguageTagBuf = "zh-Hans-CN-x-priv".parse().expect("well-formed");
+        assert_eq!(owned.as_str(), "zh-Hans-CN-x-priv");
+        assert_eq!(owned.form(), TagForm::Langtag);
+        assert_eq!(owned.primary_language(), Some("zh"));
+        assert_eq!(owned.script(), Some("Hans"));
+        assert_eq!(owned.region(), Some("CN"));
+        assert_eq!(owned.private_use_subtags().collect::<Vec<_>>(), ["priv"]);
+        assert_eq!(owned.to_string(), "zh-Hans-CN-x-priv");
+        assert_eq!(AsRef::<str>::as_ref(&owned), "zh-Hans-CN-x-priv");
+
+        // The two forms agree section for section.
+        let borrowed = parse("zh-Hans-CN-x-priv").expect("well-formed");
+        assert_eq!(owned.as_language_tag(), borrowed);
+        assert_eq!(borrowed.to_owned_tag(), owned);
+        assert_eq!(LanguageTagBuf::from(borrowed), owned);
+
+        // `Borrow<str>` is what makes a tag usable as a map key probed by a
+        // plain string, which is the whole reason the owning form exists.
+        let mut hashed = HashMap::new();
+        hashed.insert(owned.clone(), 1_u8);
+        assert_eq!(hashed.get("zh-Hans-CN-x-priv"), Some(&1));
+        let mut ordered = BTreeMap::new();
+        ordered.insert(owned, 1_u8);
+        assert_eq!(ordered.get("zh-Hans-CN-x-priv"), Some(&1));
+        let owned = LanguageTagBuf::parse("zh-Hans-CN-x-priv").expect("well-formed");
+        assert_eq!(ordered.get(&owned), Some(&1));
+
+        // `Ord` is the string order, so a sort is the spelling's sort.
+        let mut tags = ["en-US", "de-DE", "zh-Hant"]
+            .map(|tag| LanguageTagBuf::parse(tag).expect("well-formed"))
+            .to_vec();
+        tags.sort();
+        assert_eq!(
+            tags.iter().map(LanguageTagBuf::as_str).collect::<Vec<_>>(),
+            ["de-DE", "en-US", "zh-Hant"]
+        );
+
+        // Normalization on the owning form keeps the decomposition.
+        let folded = LanguageTagBuf::parse("ZH-hant-cn").expect("well-formed");
+        assert!(!folded.is_canonical_case());
+        assert_eq!(folded.canonical_case(), "zh-Hant-CN");
+        let canonical = folded.into_canonical_case();
+        assert_eq!(canonical.as_str(), "zh-Hant-CN");
+        assert_eq!(canonical.script(), Some("Hant"));
+        assert_eq!(canonical.region(), Some("CN"));
+        assert_eq!(
+            canonical,
+            LanguageTagBuf::parse("zh-Hant-CN").expect("well-formed"),
+            "normalizing must land on the record a fresh parse gives"
+        );
+
+        // And it refuses what the borrowing form refuses, by the same error.
+        assert_eq!(
+            "de-419-DE".parse::<LanguageTagBuf>(),
+            Err(LanguageTagError::UnconsumedSubtag)
+        );
+        assert!("de-DE".parse::<LanguageTagBuf>().is_ok());
+        assert_eq!(
+            LanguageTagBuf::parse("x-purrdf-afrikaans"),
+            Err(LanguageTagError::SubtagLengthOverEight)
+        );
+        assert!(
+            LanguageTagBuf::parse_with("x-purrdf-afrikaans", Profile::Rfc5646PrivateUseRelaxed)
+                .is_ok()
+        );
+    }
+
+    /// Every error renders the same text through both doors, so a consumer that
+    /// can only carry a `&'static str` reports the same reason as one that can
+    /// format.
+    #[test]
+    fn the_error_message_is_what_display_renders() {
+        for error in [
+            LanguageTagError::SubtagLengthZero,
+            LanguageTagError::SubtagLengthOverEight,
+            LanguageTagError::LanguageProductionUnmatched,
+            LanguageTagError::ExtlangRepetitionExceeded,
+            LanguageTagError::SingletonWithoutSubtag,
+            LanguageTagError::PrivateUseWithoutSubtag,
+            LanguageTagError::UnconsumedSubtag,
+            LanguageTagError::TerminalPrimaryNotAlpha,
+            LanguageTagError::TerminalSubtagNotAlphanum,
+        ] {
+            assert_eq!(error.to_string(), error.message(), "{error:?}");
+            assert!(!error.message().is_empty(), "{error:?}");
+        }
     }
 
     #[test]

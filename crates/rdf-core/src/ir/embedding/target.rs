@@ -1225,13 +1225,31 @@ fn four_digest_block(
     Ok(block)
 }
 
+/// Refuses a language tag that is not well-formed RFC 5646, or is well-formed
+/// but not in the lowercase form RDF term identity uses.
+///
+/// The two refusals are reported separately and in that order, because they are
+/// different defects with different fixes: the first is a broken tag, the second
+/// is a correct tag spelled in a case this artifact cannot store. Collapsing
+/// both into one sentence — which is what this did before — throws away the
+/// typed reason the grammar already produced, and tells an author whose tag is
+/// merely `en-US` that it is "invalid".
+///
+/// Deliberately NOT canonical case (RFC 5646 §2.1.1). §2.1.1 title-cases a
+/// script and uppercases a region, which is the *opposite* of the form required
+/// here: the IR lowercases language tags at intern time and the pack dictionary
+/// refuses a tag that is not already at that fixed point, so `zh-Hant` is
+/// exactly what must not reach this artifact.
 fn validate_language_tag(language: &str) -> Result<(), EmbeddingError> {
-    let canonical_lowercase = !language.is_empty()
-        && language
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-    if !canonical_lowercase || !purrdf_iri::langtag::is_well_formed(language) {
-        return Err(EmbeddingError::Malformed("invalid lowercase language tag"));
+    purrdf_iri::langtag::parse(language)
+        .map_err(|error| EmbeddingError::Malformed(error.message()))?;
+    let canonical_lowercase = language
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    if !canonical_lowercase {
+        return Err(EmbeddingError::Malformed(
+            "language tag is well-formed but not lowercase",
+        ));
     }
     Ok(())
 }
@@ -1448,6 +1466,66 @@ mod tests {
                 validate_language_tag(invalid).is_err(),
                 "accepted {invalid:?}"
             );
+        }
+    }
+
+    /// A rejection has to say *which* rule refused. The two rules here fail for
+    /// different reasons and want different fixes, and the one that is easy to
+    /// mistake for the other is a perfectly good tag in the wrong case.
+    #[test]
+    fn a_refused_language_tag_names_the_rule_that_refused_it() {
+        // Well-formed RFC 5646, wrong case for RDF term identity: the message
+        // must say so, not call the tag invalid.
+        for cased in ["EN", "en-US", "zh-Hant", "de-CH-X-phonebk"] {
+            let error = validate_language_tag(cased).expect_err("not lowercase");
+            assert!(
+                matches!(
+                    error,
+                    EmbeddingError::Malformed("language tag is well-formed but not lowercase")
+                ),
+                "{cased:?} reported {error:?}"
+            );
+            // …and the lowercase neighbour of each is accepted, so the rule is
+            // about case and nothing else.
+            validate_language_tag(&cased.to_ascii_lowercase())
+                .expect("the lowercase spelling is accepted");
+        }
+
+        // Not a language tag at all: the grammar's own reason is forwarded.
+        for (malformed, reason) in [
+            ("", purrdf_iri::langtag::LanguageTagError::SubtagLengthZero),
+            (
+                "en--us",
+                purrdf_iri::langtag::LanguageTagError::SubtagLengthZero,
+            ),
+            (
+                "en-u",
+                purrdf_iri::langtag::LanguageTagError::SingletonWithoutSubtag,
+            ),
+            (
+                "en-x",
+                purrdf_iri::langtag::LanguageTagError::PrivateUseWithoutSubtag,
+            ),
+            (
+                "en-abcdefghi",
+                purrdf_iri::langtag::LanguageTagError::SubtagLengthOverEight,
+            ),
+            (
+                "de-419-de",
+                purrdf_iri::langtag::LanguageTagError::UnconsumedSubtag,
+            ),
+        ] {
+            let error = validate_language_tag(malformed).expect_err("malformed");
+            assert!(
+                matches!(error, EmbeddingError::Malformed(message) if message == reason.message()),
+                "{malformed:?} reported {error:?}"
+            );
+        }
+
+        // The accepted neighbours, so tightening the message did not tighten
+        // the rule: each of these is a tag the artifact really does carry.
+        for accepted in ["en", "en-us", "zh-hans-cn", "de-ch-x-phonebk", "und"] {
+            validate_language_tag(accepted).expect("still accepted");
         }
     }
 

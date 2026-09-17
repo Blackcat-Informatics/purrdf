@@ -32,10 +32,15 @@
 //!   `oxiri` has none of this — it is the EXTEND deliverable for this slice.
 //! * **BCP 47 language tags** — [`langtag`], RFC 5646 `Language-Tag`
 //!   well-formedness against the §2.1 ABNF and the closed §2.2.8 grandfathered
-//!   list, shared by embedding metadata and CSVW validation. Well-formedness is
-//!   the whole of it: subtags are never checked against the IANA Language
-//!   Subtag Registry, and RFC 4647 language-range matching is not implemented
-//!   anywhere in this crate.
+//!   list, shared by embedding metadata and CSVW validation. An accepted tag
+//!   decomposes into its sections — including the two the grammar leaves
+//!   hyphen-joined, extensions keyed by their singleton and the private-use
+//!   subtags — in borrowing or owning form, and
+//!   [`langtag::canonical_case`] rewrites it in the §2.1.1 case convention
+//!   (language lower, region upper, script title, registered spelling for the
+//!   grandfathered tags). What is *not* here: subtags are never checked against
+//!   the IANA Language Subtag Registry, and RFC 4647 language-range matching is
+//!   not implemented anywhere in this crate.
 //! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
 //!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) that
 //!   every scanner above this leaf shares. They live here because a scanner's

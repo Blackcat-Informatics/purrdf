@@ -11,7 +11,8 @@
 //! accepted neighbor (repo refusal discipline).
 
 use purrdf_iri::langtag::{
-    LanguageTagError, Profile, TagForm, is_well_formed, is_well_formed_with, parse, parse_with,
+    LanguageTagBuf, LanguageTagError, Profile, TagForm, canonical_case, canonical_case_with,
+    is_well_formed, is_well_formed_with, parse, parse_with,
 };
 
 /// RFC 5646 Appendix A — every well-formed example, transcribed verbatim.
@@ -357,13 +358,193 @@ fn the_terminal_profile_keeps_published_tags_readable() {
 fn consumer_contracts_hold() {
     // The two workspace consumers this module replaces a dependency for:
     //
-    // 1. Embedding metadata accepts only canonical-lowercase, well-formed
-    //    tags (its lowercase check is separate and stays separate).
+    // 1. Embedding metadata accepts only lowercase, well-formed tags (that
+    //    lowercase check is the RDF term-identity form, is separate from
+    //    §2.1.1 canonical case, and stays separate — they disagree on purpose).
     assert!(is_well_formed("en-us"));
     assert!(is_well_formed("zh-hans-cn"));
-    // 2. CSVW accepts any well-formed tag and lowercases afterwards.
+    // 2. CSVW accepts any well-formed tag and stores it in canonical case.
     assert!(is_well_formed("en-US"));
+    assert_eq!(canonical_case("en-us").as_deref(), Ok("en-US"));
+    assert_eq!(canonical_case("zh-hans-cn").as_deref(), Ok("zh-Hans-CN"));
     assert!(!is_well_formed("not a tag"));
     assert!(!is_well_formed("und-"));
     assert!(is_well_formed("und"));
+    assert_eq!(canonical_case("und").as_deref(), Ok("und"));
+}
+
+/// RFC 5646 §2.1.1 over the whole Appendix A corpus, and over the published
+/// private-use families the terminal profile exists for.
+///
+/// Normalization rewrites strings, so it needs the same two-sided discipline a
+/// refusal does: the tags whose spelling must change, and the tags that must
+/// come back byte-identical. The second column is the load-bearing one — the
+/// RFC's own examples are written in canonical case, so a normalizer that was
+/// wrong about *any* of the three conventions would move one of them.
+#[test]
+fn canonical_case_is_a_fixed_point_of_the_rfc_examples() {
+    for tag in APPENDIX_A_WELL_FORMED.iter().chain(GRANDFATHERED.iter()) {
+        // The one Appendix A example not written in canonical case: the RFC
+        // gives it as an illustration that private-use subtags may be written
+        // in any case, and §2.1.1 folds them down.
+        let expected = if *tag == "az-Arab-x-AZE-derbend" {
+            "az-Arab-x-aze-derbend"
+        } else {
+            tag
+        };
+        assert_eq!(
+            canonical_case(tag).as_deref(),
+            Ok(expected),
+            "{tag:?} under RFC 5646 §2.1.1"
+        );
+    }
+
+    // The three conventions, each with the case-folded input that exercises it.
+    for (written, canonical) in [
+        ("de-de", "de-DE"),
+        ("EN-us", "en-US"),
+        ("zh-hant", "zh-Hant"),
+        ("SR-latn-rs", "sr-Latn-RS"),
+        ("HY-latn-it-AREVELA", "hy-Latn-IT-arevela"),
+        ("EN-us-U-ISLAMCAL", "en-US-u-islamcal"),
+        ("I-ENOCHIAN", "i-enochian"),
+        ("en-gb-oed", "en-GB-oed"),
+        ("SGN-be-fr", "sgn-BE-FR"),
+    ] {
+        assert_eq!(
+            canonical_case(written).as_deref(),
+            Ok(canonical),
+            "{written:?}"
+        );
+        assert_eq!(
+            canonical_case(canonical).as_deref(),
+            Ok(canonical),
+            "{canonical:?} must be a fixed point"
+        );
+    }
+}
+
+/// The private-use families downstream projects publish in volume must be
+/// neither refused nor mangled by normalization.
+///
+/// A private-use subtag is case-insensitive and carries no title-case rule at
+/// any length, so the four-character `latn` in `x-gmeow-chinese-latn` must NOT
+/// become `Latn`: it is not a script subtag and never was. The over-long
+/// members need [`Profile::Rfc5646PrivateUseRelaxed`] to be admitted at all —
+/// that is the pre-existing §2.1 ceiling, not something normalization decides —
+/// and under it they come back byte-identical.
+#[test]
+fn canonical_case_leaves_the_published_private_use_families_alone() {
+    // Within the §2.1 private-use ceiling: unchanged under the default profile.
+    for tag in [
+        "x-gmeow-english",
+        "x-gmeow-chinese-latn",
+        "x-purrdf-english",
+        "de-CH-x-phonebk",
+    ] {
+        assert_eq!(
+            canonical_case(tag).as_deref(),
+            Ok(tag),
+            "{tag:?} must survive normalization byte-identical"
+        );
+    }
+
+    // Over the ceiling: refused by §2.1 exactly as before, and unchanged under
+    // the profile that admits them. `x-gmeow-norwegiannynorsk` is the
+    // sixteen-character case.
+    for tag in [
+        "x-gmeow-norwegiannynorsk",
+        "x-gmeow-westernfrisian",
+        "x-purrdf-afrikaans",
+        "x-purrdf-norwegiannynorsk",
+    ] {
+        assert_eq!(
+            canonical_case(tag),
+            Err(LanguageTagError::SubtagLengthOverEight),
+            "{tag:?} is over the §2.1 private-use ceiling, as it always was"
+        );
+        for profile in [
+            Profile::Rfc5646PrivateUseRelaxed,
+            Profile::ConcreteSyntaxLangtag,
+        ] {
+            assert_eq!(
+                canonical_case_with(tag, profile).as_deref(),
+                Ok(tag),
+                "{tag:?} must survive normalization byte-identical under {profile:?}"
+            );
+        }
+    }
+
+    // Mixed case inside the private-use space folds down, and only down: no
+    // subtag there acquires a capital.
+    assert_eq!(
+        canonical_case("X-GMEOW-CHINESE-LATN").as_deref(),
+        Ok("x-gmeow-chinese-latn")
+    );
+    assert_eq!(
+        canonical_case("DE-ch-X-PHONEBK").as_deref(),
+        Ok("de-CH-x-phonebk")
+    );
+}
+
+/// The tags the module pins as must-keep-working end to end, through every
+/// surface this crate offers: the judgement, the decomposition, the owning
+/// form, and the normalizer.
+#[test]
+fn the_pinned_tags_survive_every_surface() {
+    // (tag, the narrowest profile that accepts it)
+    let pinned: &[(&str, Profile)] = &[
+        ("en", Profile::Rfc5646),
+        ("en-US", Profile::Rfc5646),
+        ("zh-Hans-CN", Profile::Rfc5646),
+        ("de-CH-x-phonebk", Profile::Rfc5646),
+        ("i-enochian", Profile::Rfc5646),
+        ("x-gmeow-english", Profile::Rfc5646),
+        ("x-gmeow-chinese-latn", Profile::Rfc5646),
+        ("x-purrdf-afrikaans", Profile::Rfc5646PrivateUseRelaxed),
+        (
+            "x-gmeow-norwegiannynorsk",
+            Profile::Rfc5646PrivateUseRelaxed,
+        ),
+    ];
+    for (tag, profile) in pinned {
+        assert!(is_well_formed_with(tag, *profile), "{tag:?}");
+        let parsed = parse_with(tag, *profile).expect("accepted");
+        assert_eq!(parsed.as_str(), *tag, "the input is kept verbatim");
+        assert!(parsed.is_canonical_case(), "{tag:?} is already canonical");
+        assert_eq!(parsed.canonical_case(), **tag, "{tag:?}");
+
+        let owned = LanguageTagBuf::parse_with(tag, *profile).expect("accepted");
+        assert_eq!(owned.as_language_tag(), parsed, "{tag:?}");
+        assert_eq!(owned.as_str(), *tag);
+        assert_eq!(owned.into_canonical_case().as_str(), *tag, "{tag:?}");
+    }
+}
+
+/// The two grouped sections a caller previously had to re-split by hand.
+#[test]
+fn grouped_sections_are_reported_rather_than_left_to_the_caller() {
+    let tag = parse("de-DE-u-co-phonebk-t-en-a-myext-x-priv-ate").expect("well-formed");
+    assert_eq!(
+        tag.extensions_by_singleton()
+            .map(|extension| (extension.singleton(), extension.as_str()))
+            .collect::<Vec<_>>(),
+        [('u', "u-co-phonebk"), ('t', "t-en"), ('a', "a-myext"),]
+    );
+    assert_eq!(
+        tag.extension('u')
+            .expect("a `u` extension")
+            .subtags()
+            .collect::<Vec<_>>(),
+        ["co", "phonebk"]
+    );
+    assert_eq!(
+        tag.private_use_subtags().collect::<Vec<_>>(),
+        ["priv", "ate"]
+    );
+
+    // A tag with neither section reports neither, rather than an empty string.
+    let plain = parse("en-US").expect("well-formed");
+    assert_eq!(plain.extensions_by_singleton().count(), 0);
+    assert_eq!(plain.private_use_subtags().count(), 0);
 }
