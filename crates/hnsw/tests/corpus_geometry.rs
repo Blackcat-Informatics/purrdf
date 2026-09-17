@@ -240,18 +240,119 @@ fn the_intended_cluster_cosine_is_the_cosine_the_corpus_achieves() {
     );
 }
 
+/// The widths the two tightness tests span, and the bound they hold the span to.
+///
+/// A factor of sixteen, which is wide enough that a width-dependent parameterisation has
+/// nowhere to hide: see `the_rejected_parameterisation_really_is_width_dependent`, which
+/// measures what this range does to the alternative.
+const WIDTHS: [usize; 3] = [256, 1024, 4096];
+
+/// The largest span, at six decimals, the achieved cosine may show across [`WIDTHS`].
+const WIDTH_SPAN_BOUND: i64 = 20_000;
+
+/// The rejected parameterisation: isotropic noise at a fixed per-component amplitude.
+///
+/// Implemented HERE, in the test file, rather than described in a comment. The module doc
+/// rejects this form and gives a closed form for why -- an expected cosine of
+/// `1/sqrt(1 + d*sigma^2)`, which falls as the width grows. A comment quoting that formula is
+/// not evidence: the formula is about noise added in a bare ambient space, while this
+/// generator projects, applies a spectrum and renormalises, all of which partially preserve
+/// the centroid direction and make the closed form a substantial underestimate of the
+/// achieved cosine. The only way to know what this corpus family would do under the rejected
+/// form is to build it and measure.
+///
+/// `sigma` is the per-component noise amplitude, in the same ambient space the centroid lives
+/// in, so the `d` of the closed form really is `dims`.
+fn fixed_amplitude(dims: usize, sigma: f64, seed: u64) -> Structured {
+    const ROWS: usize = 512;
+    const CLUSTERS: usize = 64;
+    let mut stream = Stream::new(seed);
+
+    let mut centroid_data = Vec::with_capacity(CLUSTERS * dims);
+    let mut centroids = Vec::with_capacity(CLUSTERS);
+    for _ in 0..CLUSTERS {
+        let mut direction: Vec<f64> = (0..dims).map(|_| stream.unit()).collect();
+        normalize(&mut direction);
+        centroid_data.extend_from_slice(&direction);
+        centroids.push(direction);
+    }
+
+    let mut data = Vec::with_capacity(ROWS * dims);
+    let mut cluster = Vec::with_capacity(ROWS);
+    for row in 0..ROWS {
+        let which = row % CLUSTERS;
+        let mut point: Vec<f64> = centroids[which]
+            .iter()
+            .map(|value| stream.unit().mul_add(sigma, *value))
+            .collect();
+        normalize(&mut point);
+        data.extend_from_slice(&point);
+        cluster.push(which);
+    }
+
+    Structured {
+        matrix: VectorMatrix::new(ROWS, dims, data).expect("valid"),
+        cluster,
+        centroids: VectorMatrix::new(CLUSTERS, dims, centroid_data).expect("valid"),
+    }
+}
+
+#[test]
+fn the_rejected_parameterisation_really_is_width_dependent() {
+    // The CONTROL for the invariance test below, and the reason its bound can be called tight
+    // rather than merely satisfied. Without this, "the achieved cosine does not track the
+    // width" is a sentence with nothing to contrast against: a bound is only meaningful
+    // beside the failure it excludes, and that failure has to be measured, not quoted from a
+    // formula derived for a different construction.
+    //
+    // The amplitude is tuned so this form produces tight clusters at a NARROW width -- the
+    // tuning the module doc names as the trap, because it is what an author would naturally
+    // do while developing against small fixtures.
+    const SIGMA: f64 = 0.110_24;
+    let achieved: Vec<i64> = WIDTHS
+        .into_iter()
+        .map(|dims| {
+            pinned(mean_centroid_cosine(&fixed_amplitude(
+                dims, SIGMA, 0xBAD_C051,
+            )))
+        })
+        .collect();
+
+    // Measured: 0.700 at 256, 0.443 at 1,024, 0.239 at 4,096 -- the achieved tightness falls
+    // by two thirds across the range, which is the whole defect. Note how far these sit from
+    // the closed form's 0.493 / 0.273 / 0.140 at the same amplitude: the projection and the
+    // renormalisation preserve much more of the centroid direction than the bare-ambient
+    // formula predicts, so quoting the formula would have UNDERSTATED the achieved cosine by
+    // about 1.7x at every width. The formula names the shape of the failure; only the
+    // measurement gives its size.
+    assert_eq!(
+        achieved,
+        vec![700_236, 442_590, 239_452],
+        "the rejected parameterisation's measured width-dependence moved"
+    );
+
+    let span =
+        achieved.iter().max().expect("three widths") - achieved.iter().min().expect("three widths");
+    assert!(
+        span > WIDTH_SPAN_BOUND,
+        "the rejected form must FAIL the invariance bound this file holds the real \
+         generator to, or that bound proves nothing: span {span} against a bound of \
+         {WIDTH_SPAN_BOUND}"
+    );
+}
+
 #[test]
 fn cluster_tightness_is_the_same_at_every_width() {
     // The half of the claim that is about WIDTH, and the reason the parameter is a cosine at
-    // all. The module documents the alternative it rejects: isotropic noise of a fixed
-    // amplitude gives an expected cosine of 1/sqrt(1 + d*sigma^2), so an amplitude tuned to
-    // make tight clusters at d = 64 drives the cosine to about 0.077 at d = 4096 -- members
-    // essentially orthogonal to the centroid they were supposedly drawn around, a corpus that
-    // looks clustered in its source and is indistinguishable from uniform in its output.
+    // all. The alternative the module rejects -- isotropic noise at a fixed amplitude -- makes
+    // members progressively more orthogonal to the centroid they were supposedly drawn around
+    // as the width grows, producing a corpus that looks clustered in its source and is
+    // indistinguishable from uniform in its output. That failure is measured directly by
+    // `the_rejected_parameterisation_really_is_width_dependent` rather than asserted here.
     //
-    // That failure is invisible to a test taken at ONE width, which is what every geometry
-    // test here was. Three widths spanning a factor of sixteen, one intended cosine.
-    let achieved: Vec<i64> = [256, 1024, 4096]
+    // The failure is invisible to a test taken at ONE width, which is what every geometry
+    // test in this file was. Three widths spanning a factor of sixteen, one intended cosine.
+    let achieved: Vec<i64> = WIDTHS
         .into_iter()
         .map(|dims| {
             let structured = embedding_like_structured(tightness_shape(dims, 0.75), 0xC051_5EED)
@@ -266,16 +367,18 @@ fn cluster_tightness_is_the_same_at_every_width() {
         "the achieved within-cluster cosine moved at one or more widths"
     );
 
-    // Measured span: 0.0089 across widths 256 to 4,096, against an intended 0.75. The
-    // rejected parameterisation would have fallen to about 0.077 at the top width -- a span
-    // of roughly 0.67 -- so this bound sits two orders of magnitude inside the failure it
-    // exists to catch, and is not a tolerance widened to fit a measurement.
+    // The bound is not a tolerance widened to fit a measurement, and that is now a measured
+    // statement rather than a claim: the control above runs the rejected parameterisation over
+    // the same widths and the same statistic, and its span must EXCEED this bound for that
+    // test to pass. So the two tests bracket the bound from both sides -- the real generator
+    // must come in under it, the rejected one must not -- and neither side is a number anybody
+    // typed into a comment.
     let (low, high) = (
         *achieved.iter().min().expect("three widths"),
         *achieved.iter().max().expect("three widths"),
     );
     assert!(
-        high - low < 20_000,
+        high - low < WIDTH_SPAN_BOUND,
         "the achieved cosine must not track the width: it spans {low}..{high} at six \
          decimals across a 16x range of widths, which is the width-dependence this \
          parameterisation exists to avoid"
