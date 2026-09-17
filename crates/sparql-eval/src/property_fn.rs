@@ -998,10 +998,12 @@ impl PropertyFunctionRegistry {
     /// * `decl.candidate_position` is also a placement or depth target: a
     ///   position filled with a constant cannot also be the projected candidate.
     /// * `decl.stratum` is already claimed by another registered producer — one
-    ///   stratum carries one producer; see [`assert_stratum_unclaimed`] for the
-    ///   argument, for the two exits a host splits such a configuration through,
-    ///   and for the configuration that shares a scoring law and still belongs at
-    ///   the second one.
+    ///   stratum carries one producer, because a rank means something only inside
+    ///   the list that assigned it. The panic message carries the whole argument:
+    ///   the two exits a host splits such a configuration through, and the third
+    ///   configuration that shares a scoring law and still belongs at the second
+    ///   exit, because a differential weight over a bounded score can act only in
+    ///   rank space.
     ///
     /// A declaration that cannot be rendered is host misconfiguration, and like a
     /// duplicate registration it is caught where it is committed rather than at
