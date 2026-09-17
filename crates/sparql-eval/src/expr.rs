@@ -6784,35 +6784,45 @@ mod tests {
         let ds = empty_ds();
         let mut ctx = EvalCtx::new(&ds);
         ctx.rng_state = 0x0F0F_1234_0000_00FFu64;
-        for _ in 0..512 {
+        // The failure messages carry the DRAW ORDINAL rather than the rendered
+        // value. The seed above is fixed, so the ordinal reproduces the exact
+        // value a failure saw — and interpolating a generated identifier into a
+        // message is what `rust/cleartext-logging` flags, whatever its
+        // provenance. The ordinal is the better diagnostic anyway: it says which
+        // draw broke, not merely what it looked like.
+        for draw in 0..512u32 {
             let (uuid, bytes) = make_uuid(&mut ctx);
-            assert_eq!(uuid.len(), 36, "{uuid} must be 36 characters");
+            assert_eq!(uuid.len(), 36, "draw {draw} must be 36 characters");
             for index in [8usize, 13, 18, 23] {
                 assert_eq!(
                     uuid.as_bytes()[index],
                     b'-',
-                    "{uuid} must have a hyphen at index {index}"
+                    "draw {draw} must have a hyphen at index {index}"
                 );
             }
             let stripped: String = uuid.chars().filter(|ch| *ch != '-').collect();
-            assert_eq!(stripped.len(), 32, "{uuid} must carry 32 hex characters");
+            assert_eq!(
+                stripped.len(),
+                32,
+                "draw {draw} must carry 32 hex characters"
+            );
             assert!(
                 stripped
                     .chars()
                     .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch)),
-                "{uuid} must be lowercase hex outside its hyphens"
+                "draw {draw} must be lowercase hex outside its hyphens"
             );
-            assert_eq!(&stripped[12..13], "4", "{uuid} must carry version 4");
+            assert_eq!(&stripped[12..13], "4", "draw {draw} must carry version 4");
             assert!(
                 matches!(&stripped[16..17], "8" | "9" | "a" | "b"),
-                "{uuid} must carry the RFC 4122 variant nibble"
+                "draw {draw} must carry the RFC 4122 variant nibble"
             );
             for (index, byte) in bytes.iter().enumerate() {
                 let pair = &stripped[index * 2..index * 2 + 2];
                 assert_eq!(
                     u8::from_str_radix(pair, 16).expect("a hex pair parses"),
                     *byte,
-                    "{uuid} character pair {index} must render byte {byte:#04x}"
+                    "draw {draw} pair {index} must render byte {byte:#04x}"
                 );
             }
         }
