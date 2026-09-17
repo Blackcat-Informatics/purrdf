@@ -114,7 +114,7 @@ impl VectorMatrix {
     ///
     /// The width is kept rather than widened, which halves what the corpus costs resident.
     /// Every distance is still computed in binary64, in the same order, with the same
-    /// separate roundings -- see [`Vectors`].
+    /// separate roundings.
     ///
     /// # Errors
     ///
