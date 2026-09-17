@@ -3,67 +3,36 @@
 
 //! Integration test: run every corpus case through the real validator and compare
 //! against the frozen expected report by normalised tuple set.
+//!
+//! Case discovery and the exact case count live in [`shacl_corpora`], the one
+//! reader for this crate's two SHACL corpora, so this file is only the grading
+//! half.
+
+mod shacl_corpora;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
 
-use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::report::{conforms_from_ntriples, tuples_from_ntriples};
 
-const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus");
-
-/// The corpus fixtures' caller-supplied box-role vocabulary: the reifier-shape
-/// cases (38–42) annotate shapes with `meta:graphBoxRole` terms under
-/// `https://example.org/meta/`. PurRDF mints no vocabulary of its own, so the
-/// harness configures the vocab explicitly, exactly as a consumer would.
-fn corpus_box_role_vocab() -> BoxRoleVocab {
-    BoxRoleVocab::for_namespace("https://example.org/meta/")
-}
+use shacl_corpora::{first_party_box_role_vocab, first_party_cases};
 
 #[test]
 fn conformance_corpus() {
-    let corpus_path = Path::new(CORPUS_DIR);
-    assert!(
-        corpus_path.exists(),
-        "corpus directory not found at {CORPUS_DIR}"
-    );
-
-    let mut cases: Vec<_> = fs::read_dir(corpus_path)
-        .expect("failed to read corpus dir")
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.is_dir() { Some(path) } else { None }
-        })
-        .collect();
-    cases.sort();
-
-    // Assert the EXACT case count (not merely non-empty) so a removed or renamed
-    // corpus directory fails fast instead of silently reducing coverage. Bump this
-    // when adding a case.
-    assert_eq!(
-        cases.len(),
-        70,
-        "unexpected corpus case count — update this when adding/removing a corpus case"
-    );
+    let cases = first_party_cases();
 
     let mut failures: Vec<String> = Vec::new();
     let mut passed = 0usize;
 
-    for case_path in &cases {
+    for case in &cases {
         let case_failures_before = failures.len();
-        let case_name = case_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        let case_name = &case.name;
 
-        let data_nt = fs::read_to_string(case_path.join("data.nt"))
+        let data_nt = fs::read_to_string(&case.data_path)
             .unwrap_or_else(|e| panic!("case {case_name}: cannot read data.nt: {e}"));
-        let shapes_ttl = fs::read_to_string(case_path.join("shapes.ttl"))
+        let shapes_ttl = fs::read_to_string(&case.shapes_path)
             .unwrap_or_else(|e| panic!("case {case_name}: cannot read shapes.ttl: {e}"));
-        let expected_nt = fs::read_to_string(case_path.join("expected-report.nt"))
+        let expected_nt = fs::read_to_string(&case.expected_report_path)
             .unwrap_or_else(|e| panic!("case {case_name}: cannot read expected-report.nt: {e}"));
 
         // Run the validator with the corpus box-role vocabulary configured.
@@ -71,7 +40,7 @@ fn conformance_corpus() {
             &data_nt,
             &shapes_ttl,
             None,
-            Some(corpus_box_role_vocab()),
+            Some(first_party_box_role_vocab()),
         ) {
             Ok(r) => r,
             Err(e) => {

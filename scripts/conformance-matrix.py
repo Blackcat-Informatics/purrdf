@@ -277,6 +277,56 @@ def _suite_shapes_corpus() -> SuiteResult:
     )
 
 
+def _suite_product_equivalence() -> SuiteResult:
+    """Prepared-shapes-product equivalence over BOTH SHACL corpora.
+
+    Not a second SHACL grading -- the two rows above already decide whether the
+    engine's answer is right. This one decides whether the prepared-product
+    codec CHANGES that answer: every shapes graph in `vectors/shacl/` and
+    `crates/shapes/corpus/` is validated three ways (parsed from source, packed
+    and admitted, packed and rebuilt from the carried dataset) and the three
+    reports must be byte-identical as N-Triples.
+
+    The Pass column is shapes graphs whose three lanes agreed; the ledger column
+    is shapes graphs the product writer REFUSES, and its budget is the thing
+    that makes over-refusal visible -- a codec that quietly stopped packing a
+    construct would otherwise move those cases out of the comparison and leave
+    every remaining comparison passing."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-shapes", "--locked",
+        "--test", "product_corpus_equivalence", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(
+        r"PRODUCT-EQUIVALENCE: passed (\d+) ledgered (\d+) unparsable (\d+) "
+        r"disagreed (\d+) total (\d+)",
+        out,
+    )
+    if m:
+        passed, ledgered, unparsable, disagreed, total = (
+            int(m.group(i)) for i in (1, 2, 3, 4, 5)
+        )
+        detail = (
+            f"{passed}/{total} shapes graphs agree across parse/admit/rebuild; "
+            f"{ledgered} refused by the product writer; {unparsable} whose own RDF the "
+            "suite requires the validator to reject"
+        )
+        return SuiteResult(
+            "SHACL prepared-product equivalence",
+            "W3C data-shapes + first-party corpus",
+            passed=passed, xskip=ledgered,
+            failed=(disagreed + total - passed - ledgered - unparsable),
+            detail=detail, ok=(rc == 0 and failed == 0 and disagreed == 0), log=out,
+        )
+    return _no_scoreboard(
+        "SHACL prepared-product equivalence",
+        "W3C data-shapes + first-party corpus",
+        "`PRODUCT-EQUIVALENCE: passed N ledgered N unparsable N disagreed N total N`",
+        cmd, out,
+    )
+
+
 def _suite_xsd_regex_corpus() -> SuiteResult:
     """First-party XSD/XPath `regExp` corpus: scrape the harness's per-case
     scoreboard so the matrix reports the case count rather than the handful of
@@ -1050,6 +1100,7 @@ def native_suites() -> list[SuiteResult]:
         _suite_entailment_rl(),
         _suite_shacl_w3c(),
         _suite_shapes_corpus(),
+        _suite_product_equivalence(),
         _suite_xsd_regex_corpus(),
         _suite_shacl_rules(),
         _suite_shex_validation(),
@@ -1332,6 +1383,19 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         (
             _noise("first-party SHACL corpus:"),
             _board("SHAPES-CORPUS: passed 9 total 9"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "SHACL prepared-product equivalence",
+        _suite_product_equivalence,
+        (
+            _board(
+                "PRODUCT-EQUIVALENCE: passed 9 ledgered 1 unparsable 2 disagreed 0 total 12"
+            ),
+            _noise("  evidence: 9 agreed on a report, of which 7 carried at least one "
+                   "validation result"),
+            _noise("  refusal dimensions: none — every loadable shapes graph packs"),
             _noise(_CARGO_OK),
         ),
     ),
