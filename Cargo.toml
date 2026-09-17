@@ -261,7 +261,12 @@ strip = "symbols"
 
 # Benchmarks inherit release but keep symbols so perf/flamegraph work.
 [profile.bench]
-debug = true
+# No DWARF, but keep the symbol table. A profiler attributes samples by symbol
+# name, which `strip = "none"` preserves against `[profile.release]`'s
+# `strip = "symbols"`; full debug info buys source-line attribution that nothing
+# in this repository's bench workflow reads, and pays for it in artifact size on
+# the same disk the test lane is competing for.
+debug = 0
 strip = "none"
 
 # === The GATE profile ===
@@ -341,6 +346,21 @@ overflow-checks = true
 # is byte determinism. That is not a trade this workspace makes at any measured
 # price. The debug-info saving is taken here instead, where nearly every unit in
 # the graph is.
+[profile.test]
+# Test binaries carry no debug info. `[profile.dev]`'s line tables exist so a
+# backtrace from a REPL or an example keeps its function names; a test target is
+# the one place that buys nothing, because a failing assertion prints its own
+# file and line and a panicking test prints its own message. Meanwhile this is
+# where the artifacts are: every integration-test file is its own linked binary,
+# and the workspace has well over a hundred of them.
+#
+# Only `debug` is set. `opt-level`, `debug-assertions` and `overflow-checks` are
+# inherited from `[profile.dev]`, which is deliberate and gated —
+# `scripts/check-build-profiles.py` asserts those three and pointedly does not
+# assert `debug`, on the grounds that debug-info size is disk hygiene rather than
+# a correctness property.
+debug = 0
+
 [profile.dev.package."*"]
 debug = false
 

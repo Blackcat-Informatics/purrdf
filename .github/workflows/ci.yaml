@@ -116,6 +116,28 @@ jobs:
     # every other lane too -- and a second place to set one thing was exactly the
     # kind of manifest shadow `scripts/check-build-profiles.py` now reports.
     steps:
+      # This lane links every test target in the workspace, which is the largest
+      # thing CI builds -- one binary per integration-test file, each carrying the
+      # line tables `[profile.dev]` asks for, plus the umbrella crate's doctests,
+      # whose link line pulls in every member crate at once.
+      #
+      # A hosted runner ships ~30 GB of preinstalled toolchains this repository
+      # never uses, and running out of disk here does NOT surface as a disk error:
+      # the linker writes through a memory mapping, so a truncated write arrives as
+      # `rust-lld` dying on SIGBUS with an LLVM crash backtrace, which reads exactly
+      # like a compiler bug. Reclaiming the space up front is what keeps that
+      # failure from being diagnosed as one.
+      #
+      # `hostedtoolcache` is deliberately NOT removed: `setup-node` below reads it,
+      # and deleting it trades disk for a re-download on every run.
+      - name: Reclaim runner disk before the largest link in CI
+        run: |
+          echo "before:"
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift
+          echo "after:"
+          df -h /
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
