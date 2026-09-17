@@ -245,7 +245,10 @@ impl Graph {
             while end < edges.len() && edges[end].node == node && edges[end].layer == layer {
                 end += 1;
             }
-            let mut merged = self.layers[node][layer as usize].clone();
+            // Move the frozen adjacency out rather than cloning it: the merge writes the
+            // result straight back into this slot, so the clone was a copy of a buffer that
+            // was about to be overwritten, and its capacity is reused by the extend below.
+            let mut merged = core::mem::take(&mut self.layers[node][layer as usize]);
             merged.extend(edges[start..end].iter().map(|edge| edge.neighbor));
             merged.sort_unstable();
             merged.dedup();

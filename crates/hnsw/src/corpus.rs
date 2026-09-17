@@ -141,16 +141,12 @@ fn normalize(values: &mut [f64]) {
     }
 }
 
-/// Which cluster row `index` belongs to, under a harmonic (power-law) size law.
+/// Which cluster a draw falls in, given the weights [`cluster_weights`] computed once.
 ///
-/// Integer arithmetic on the hash stream: cluster `c` receives weight `⌈clusters / (c + 1)⌉`,
-/// so the first cluster is the largest and the tail is long. No float takes part, so the
-/// assignment cannot drift with a math library.
-fn cluster_of(bits: u64, clusters: usize) -> usize {
-    let weights: Vec<u64> = (0..clusters)
-        .map(|c| (clusters as u64).div_ceil(c as u64 + 1))
-        .collect();
-    let total: u64 = weights.iter().sum();
+/// Takes the table rather than rebuilding it: this is called once per generated row, and
+/// rebuilding a `clusters`-length vector per row allocated once per row for a table that
+/// never changes.
+fn cluster_of(bits: u64, weights: &[u64], total: u64) -> usize {
     let mut pick = bits % total.max(1);
     for (c, weight) in weights.iter().enumerate() {
         if pick < *weight {
@@ -158,7 +154,20 @@ fn cluster_of(bits: u64, clusters: usize) -> usize {
         }
         pick -= *weight;
     }
-    clusters.saturating_sub(1)
+    weights.len().saturating_sub(1)
+}
+
+/// The harmonic size law's per-cluster weights, computed once per corpus.
+///
+/// Cluster `c` receives weight `ceil(clusters / (c + 1))`, so the first cluster is the
+/// largest and the tail is long. Integer arithmetic throughout, so the assignment cannot
+/// drift with a math library.
+fn cluster_weights(clusters: usize) -> (Vec<u64>, u64) {
+    let weights: Vec<u64> = (0..clusters)
+        .map(|c| (clusters as u64).div_ceil(c as u64 + 1))
+        .collect();
+    let total = weights.iter().sum();
+    (weights, total)
 }
 
 /// Generate a corpus with the geometry described by `shape`.
@@ -201,10 +210,11 @@ pub fn embedding_like(shape: CorpusShape, seed: u64) -> Result<VectorMatrix> {
     let scale: Vec<f64> = (0..dims).map(|j| 1.0 / ((j as f64) + 1.0).sqrt()).collect();
 
     let centroids: Vec<Vec<f64>> = (0..clusters).map(|_| stream.direction(latent)).collect();
+    let (weights, weight_total) = cluster_weights(clusters);
 
     let mut data = Vec::with_capacity(rows * dims);
     for _ in 0..rows {
-        let cluster = cluster_of(stream.next_bits(), clusters);
+        let cluster = cluster_of(stream.next_bits(), &weights, weight_total);
         let offset = stream.direction(latent);
 
         // Intended cosine, not absolute noise: the mix is the same at every width.
@@ -431,8 +441,9 @@ mod tests {
         let clusters = 16;
         let mut counts = vec![0_usize; clusters];
         let mut stream = Stream::new(0xD15C0);
+        let (weights, total) = cluster_weights(clusters);
         for _ in 0..10_000 {
-            counts[cluster_of(stream.next_bits(), clusters)] += 1;
+            counts[cluster_of(stream.next_bits(), &weights, total)] += 1;
         }
         assert!(
             counts[0] > counts[clusters - 1] * 4,

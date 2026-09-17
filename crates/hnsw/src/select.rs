@@ -47,12 +47,15 @@ use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
 use crate::error::Result;
 use crate::graph::VectorMatrix;
-use crate::search::{DistanceCache, pair_distance};
+use crate::search::distance_of;
 
 /// The subset of `beam` that becomes `node`'s edges, at most `cap` of them.
 ///
 /// `beam` must be in `(distance, row)` order, which is what [`crate::search::search_layer`]
 /// returns. The result is returned in that same order.
+///
+/// No distance memo is taken: within one call each candidate is asked about exactly once,
+/// so a cache here only ever misses and inserts.
 ///
 /// # Errors
 ///
@@ -64,7 +67,6 @@ pub(crate) fn select_neighbors(
     matrix: &VectorMatrix,
     kernel: Kernel,
     norms: &[f64],
-    cache: &DistanceCache,
 ) -> Result<Vec<Ranked>> {
     if cap == 0 || beam.is_empty() {
         return Ok(Vec::new());
@@ -82,9 +84,7 @@ pub(crate) fn select_neighbors(
         }
         let mut dominated = false;
         for picked in &chosen {
-            if pair_distance(matrix, kernel, norms, cache, candidate.row, picked.row)?
-                < candidate.distance
-            {
+            if distance_of(matrix, kernel, norms, candidate.row, picked.row)? < candidate.distance {
                 dominated = true;
                 break;
             }
@@ -131,11 +131,10 @@ mod tests {
 
     /// The beam a search over `matrix` would hand to selection, in rank order.
     fn beam_over(matrix: &VectorMatrix, query: usize, rows: &[usize]) -> Vec<Ranked> {
-        let cache = DistanceCache::new();
         let mut beam: Vec<Ranked> = rows
             .iter()
             .map(|&row| Ranked {
-                distance: pair_distance(matrix, Kernel::SquaredEuclidean, &[], &cache, query, row)
+                distance: distance_of(matrix, Kernel::SquaredEuclidean, &[], query, row)
                     .expect("finite"),
                 row,
             })
@@ -153,10 +152,9 @@ mod tests {
     #[test]
     fn a_beam_within_the_budget_is_kept_whole() {
         let matrix = line(8);
-        let cache = DistanceCache::new();
         let beam = beam_over(&matrix, 0, &[1, 2, 3]);
-        let chosen = select_neighbors(&beam, 4, &matrix, Kernel::SquaredEuclidean, &[], &cache)
-            .expect("selects");
+        let chosen =
+            select_neighbors(&beam, 4, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
         assert_eq!(chosen, beam, "no candidate is discarded under the bound");
     }
 
@@ -167,10 +165,9 @@ mod tests {
         // would buy nothing. Row 3 survives — d(3, 1) = 10 exceeds d(3, query) = 9, so no
         // chosen neighbour is a shortcut to it.
         let matrix = duplicate_and_direction();
-        let cache = DistanceCache::new();
         let beam = beam_over(&matrix, 0, &[1, 2, 3]);
-        let chosen = select_neighbors(&beam, 2, &matrix, Kernel::SquaredEuclidean, &[], &cache)
-            .expect("selects");
+        let chosen =
+            select_neighbors(&beam, 2, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
         let rows: Vec<usize> = chosen.iter().map(|pick| pick.row).collect();
         assert_eq!(
             rows,
@@ -198,10 +195,9 @@ mod tests {
         // admits exactly one. Connectivity beats purity, so the budget is filled and the
         // result is restored to rank order.
         let matrix = line(64);
-        let cache = DistanceCache::new();
         let beam = beam_over(&matrix, 0, &[30, 31, 32, 33]);
-        let chosen = select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[], &cache)
-            .expect("selects");
+        let chosen =
+            select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
         assert_eq!(chosen.len(), 3, "the degree budget is spent, not abandoned");
         let mut sorted = chosen.clone();
         sorted.sort_unstable();
@@ -212,16 +208,10 @@ mod tests {
     fn selection_is_a_pure_function_of_the_beam() {
         let matrix = line(64);
         let beam = beam_over(&matrix, 5, &[1, 2, 3, 20, 21, 40]);
-        let first = {
-            let cache = DistanceCache::new();
-            select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[], &cache)
-                .expect("selects")
-        };
-        let second = {
-            let cache = DistanceCache::new();
-            select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[], &cache)
-                .expect("selects")
-        };
-        assert_eq!(first, second, "a fresh cache cannot change the answer");
+        let first =
+            select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
+        let second =
+            select_neighbors(&beam, 3, &matrix, Kernel::SquaredEuclidean, &[]).expect("selects");
+        assert_eq!(first, second, "selection is a function of the beam alone");
     }
 }

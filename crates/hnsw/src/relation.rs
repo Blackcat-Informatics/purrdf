@@ -49,7 +49,7 @@
 //! [`PropertyFunction::open`] — so a call whose ceiling is already exhausted performs no
 //! work and is charged none, and the count resets only when the engine takes it.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{
@@ -60,7 +60,6 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, Ranked, Volatility,
 };
 
-use crate::search::Visited;
 use crate::{HnswIndex, profile};
 
 /// The `?neighbour` position: the retrieved term.
@@ -89,7 +88,7 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// artifact verifies, the unique HNSW guard's profile and coordinates agree with the
 /// searched matrix, the payload commitment holds, the payload decodes, and every row has a
 /// distinct RDF term. An invocation therefore fails only on things about the invocation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HnswSpace {
     /// The decoded graph.
     index: Arc<HnswIndex>,
@@ -101,33 +100,6 @@ pub struct HnswSpace {
     guard: KnnGuard,
     /// The approximation evidence the profile publishes.
     evidence: String,
-    /// Reusable visited scratch, one buffer per concurrent search.
-    ///
-    /// A search's scratch is `O(rows)` to allocate and `O(1)` to reset, so a relation
-    /// invoked once per seed row would otherwise zero a corpus-sized buffer per invocation
-    /// to visit a beam's worth of it. The lock is taken twice per invocation -- once to
-    /// borrow, once to return -- which is nothing beside the search it brackets, and it can
-    /// never affect an answer: the buffer carries no state across searches that `begin` does
-    /// not invalidate.
-    scratch: Mutex<Vec<Visited>>,
-}
-
-impl Clone for HnswSpace {
-    /// A clone shares the graph and starts an empty scratch pool.
-    ///
-    /// The pool is a cache, not state: it holds buffers whose contents every search
-    /// invalidates before reading. Copying it would hand two spaces the same buffers with
-    /// no lock between them, so a clone begins with none and allocates on demand.
-    fn clone(&self) -> Self {
-        Self {
-            index: Arc::clone(&self.index),
-            terms: self.terms.clone(),
-            rows_by_term: self.rows_by_term.clone(),
-            guard: self.guard,
-            evidence: self.evidence.clone(),
-            scratch: Mutex::new(Vec::new()),
-        }
-    }
 }
 
 impl HnswSpace {
@@ -159,7 +131,6 @@ impl HnswSpace {
             rows_by_term,
             guard,
             evidence: profile::LOSS_EVIDENCE.to_owned(),
-            scratch: Mutex::new(Vec::new()),
         })
     }
 
@@ -278,32 +249,6 @@ impl HnswSpace {
     #[must_use]
     pub const fn guard(&self) -> KnnGuard {
         self.guard
-    }
-
-    /// Search `query_row` for `k` neighbours, reusing pooled visited scratch.
-    ///
-    /// Borrows a buffer from the pool, or allocates one when every buffer is in flight, and
-    /// returns it afterwards. The pool therefore grows to the number of searches that were
-    /// ever concurrent and no further.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the underlying search reports.
-    pub(crate) fn search_rows_work_pooled(
-        &self,
-        query_row: usize,
-        k: usize,
-    ) -> crate::Result<(Vec<Ranked>, u64)> {
-        let mut visited = self
-            .scratch
-            .lock()
-            .map_or(None, |mut pool| pool.pop())
-            .unwrap_or_else(|| Visited::new(self.index.rows()));
-        let outcome = self.index.search_rows_work_with(query_row, k, &mut visited);
-        if let Ok(mut pool) = self.scratch.lock() {
-            pool.push(visited);
-        }
-        outcome
     }
 
     /// The approximation evidence the profile publishes.
@@ -593,7 +538,8 @@ impl HnswCursor {
         let (ranked, work) = match self.query_row {
             Some(row) => self
                 .space
-                .search_rows_work_pooled(row, self.select_k)
+                .index
+                .search_rows_work(row, self.select_k)
                 .map_err(|e| EvalError::data(format!("the HNSW search failed: {e}")))?,
             None => (Vec::new(), 0),
         };

@@ -213,15 +213,17 @@ fn report(name: &str, rows: usize, dims: usize) {
     println!("--- corpus={name} {rows}x{dims} ---");
 
     let seed_params = Params::new(M, M0, EF_CONSTRUCTION, EF_VALUES[0]).expect("valid parameters");
-    let mut index = HnswIndex::build(
-        vectors.clone(),
-        &DistanceMetric::SquaredEuclidean,
-        seed_params,
-    )
-    .expect("the fixture builds");
+    let mut index = HnswIndex::build(vectors, &DistanceMetric::SquaredEuclidean, seed_params)
+        .expect("the fixture builds");
+    // The rank table does not depend on `ef`, and `ordered` covers every row, so one buffer
+    // overwritten in place replaces `queries * EF_VALUES.len()` allocate-and-fill passes.
+    let mut rank_by_row = vec![usize::MAX; rows];
 
     for ef in EF_VALUES {
         index = index.rebind_ef_search(ef).expect("a valid beam width");
+        // The index owns the vectors now; read them back rather than keeping a second copy.
+        // Re-borrowed each round because the rebind above consumes the index.
+        let vectors = index.matrix();
 
         let mut hits = 0_usize;
         let mut searched = 0_usize;
@@ -230,7 +232,6 @@ fn report(name: &str, rows: usize, dims: usize) {
         let mut buckets = [0_usize; BUCKETS.len()];
 
         for (query, ordered) in exact_ordered.iter().enumerate() {
-            let mut rank_by_row = vec![usize::MAX; rows];
             for (rank, scored) in ordered.iter().enumerate() {
                 rank_by_row[scored.row] = rank;
             }
@@ -261,7 +262,7 @@ fn report(name: &str, rows: usize, dims: usize) {
                 black_box(&offered);
 
                 let start = Instant::now();
-                let scored = exact_scored(&vectors, &norms, query);
+                let scored = exact_scored(vectors, &norms, query);
                 let answer = best(K, scored);
                 exact_ns.push(start.elapsed().as_nanos() as u64);
                 black_box(&answer);

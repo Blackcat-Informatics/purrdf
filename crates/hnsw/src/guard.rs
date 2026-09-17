@@ -539,13 +539,13 @@ pub fn verify_rebuild(
     if !committed {
         return Ok(false);
     }
-    let Ok(index) = HnswIndex::decode(source_matrix.clone(), bytes) else {
-        return Ok(false);
-    };
-    if index.params() != *params {
-        return Ok(false);
+    // Decoded and rebuilt against a BORROW of the source vectors. Taking ownership meant
+    // cloning the matrix to decode and cloning it again to rebuild, so this path used to
+    // cost twice the matrix in transient memory to answer a yes/no question.
+    match HnswIndex::verify_bytes_against(source_matrix, bytes)? {
+        Some(declared) => Ok(declared == *params),
+        None => Ok(false),
     }
-    index.verify_rebuild()
 }
 
 // ---------------------------------------------------------------------------

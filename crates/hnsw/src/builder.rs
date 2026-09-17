@@ -113,6 +113,23 @@ pub(crate) fn build_with_batch(
     params: Params,
     batch: Option<usize>,
 ) -> Result<HnswIndex> {
+    let (graph, norms) = build_graph(&matrix, kernel, params, batch)?;
+    Ok(HnswIndex::new(matrix, kernel, params, graph, norms))
+}
+
+/// The graph and per-row norms for `matrix`, without taking ownership of it.
+///
+/// The build reads the matrix through a shared reference throughout; ownership is needed
+/// only to hand it to the finished index. Separating the two lets a caller that already
+/// holds the vectors -- `verify_rebuild`, which rebuilds in order to compare -- avoid
+/// copying them. At a million rows of 4,096 `f64` that copy is over thirty gigabytes, and
+/// the guard's verification path was paying it twice.
+pub(crate) fn build_graph(
+    matrix: &VectorMatrix,
+    kernel: Kernel,
+    params: Params,
+    batch: Option<usize>,
+) -> Result<(Graph, Vec<f64>)> {
     params.validate_against(matrix.rows(), matrix.dims())?;
 
     let n = matrix.rows();
@@ -120,7 +137,7 @@ pub(crate) fn build_with_batch(
     let levels: Vec<u32> = (0..n)
         .map(|row| level_from_index(row as u64, params.m(), cap))
         .collect();
-    let norms = compute_norms(&matrix, kernel)?;
+    let norms = compute_norms(matrix, kernel)?;
 
     let mut graph = Graph::with_levels(levels.clone());
 
@@ -151,7 +168,7 @@ pub(crate) fn build_with_batch(
         if !batch_rows.is_empty() {
             let round = Round {
                 frozen: &graph,
-                matrix: &matrix,
+                matrix,
                 kernel,
                 norms: &norms,
                 params: &params,
@@ -162,9 +179,9 @@ pub(crate) fn build_with_batch(
         start = end;
     }
 
-    repair_connectivity(&mut graph, &matrix, kernel, &norms, &params, entry)?;
+    repair_connectivity(&mut graph, matrix, kernel, &norms, &params, entry)?;
 
-    Ok(HnswIndex::new(matrix, kernel, params, graph, norms))
+    Ok((graph, norms))
 }
 
 /// Close the reachability gap the degree bound can open.
@@ -411,7 +428,6 @@ fn propose_node(
             round.matrix,
             round.kernel,
             round.norms,
-            &cache,
         )?;
         // The next (lower) layer starts from the whole beam, as standard HNSW does; the
         // degree bound applies to what is *linked*, not to what seeds the next search.

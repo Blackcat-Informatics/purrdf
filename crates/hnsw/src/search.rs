@@ -221,16 +221,39 @@ pub(crate) fn pair_distance(
     if let Some(distance) = cache.get(a, b) {
         return Ok(distance);
     }
-    let distance = kernel
+    let distance = distance_of(matrix, kernel, norms, a, b)?;
+    cache.insert(a, b, distance);
+    Ok(distance)
+}
+
+/// The distance between two rows, straight from the kernel with no memo.
+///
+/// For a caller that asks each pair exactly once, a memo is not a saving: it is a lookup
+/// that always misses followed by an insert nothing will ever read. Neighbour selection is
+/// that caller -- within one call each candidate appears once -- so it takes this path and
+/// leaves the memo to the beam search, where a node really is re-scored across layers.
+///
+/// This is the same `Kernel::distance` the memo calls. There is still exactly one place the
+/// arithmetic happens.
+///
+/// # Errors
+///
+/// [`HnswError::NonFiniteDistance`] if the kernel's result left the finite range.
+pub(crate) fn distance_of(
+    matrix: &VectorMatrix,
+    kernel: Kernel,
+    norms: &[f64],
+    a: usize,
+    b: usize,
+) -> Result<f64> {
+    kernel
         .distance(
             matrix.row(a),
             norm_of(norms, a),
             matrix.row(b),
             norm_of(norms, b),
         )
-        .ok_or(HnswError::NonFiniteDistance { row: b })?;
-    cache.insert(a, b, distance);
-    Ok(distance)
+        .ok_or(HnswError::NonFiniteDistance { row: b })
 }
 
 /// Greedy descent through layers `from_layer..=to_layer`, nearest-neighbour at each.

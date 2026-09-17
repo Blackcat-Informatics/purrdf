@@ -269,12 +269,15 @@ fn run_regime(fixture: &Fixture, index: &HnswIndex, norms: &[f64], ef: usize, k:
     let mut hits = 0_usize;
     let mut missed = false;
 
+    // Hoisted: `ordered` holds every row, so each pass overwrites every slot and a
+    // per-query allocate-and-fill was O(rows) work repeated `rows` times.
+    let mut rank_by_row = vec![usize::MAX; rows];
+
     for query in 0..rows {
         let mut ordered = exact_scored(&fixture.matrix, norms, query);
         ordered.sort_unstable();
         let exact_top = best(k, ordered.iter().copied());
 
-        let mut rank_by_row = vec![usize::MAX; rows];
         for (rank, scored) in ordered.iter().enumerate() {
             rank_by_row[scored.row] = rank;
         }

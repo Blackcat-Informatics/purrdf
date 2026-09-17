@@ -76,6 +76,8 @@ pub use params::Params;
 // re-exports the exact path's types so a caller names one kernel and one comparator.
 pub use purrdf_sparql_eval::knn::{Kernel, Ranked};
 
+use std::sync::Mutex;
+
 use purrdf_core::DistanceMetric;
 use rayon::prelude::*;
 
@@ -118,6 +120,15 @@ pub struct HnswIndex {
     graph: Graph,
     /// Per-row L2 norms, empty for a kernel that does not divide by one.
     norms: Vec<f64>,
+    /// Reusable visited scratch, one buffer per concurrent search.
+    ///
+    /// `Visited` is generation-stamped: `O(rows)` to allocate once and `O(1)` to reset
+    /// thereafter. Allocating a fresh one per search means zeroing a buffer the size of the
+    /// corpus in order to visit a beam's worth of it -- four megabytes at a million rows,
+    /// per query, to touch a few thousand nodes. The pool grows to the number of searches
+    /// that were ever concurrent and no further, and its lock is taken twice per search
+    /// rather than anywhere near a distance.
+    scratch: Mutex<Vec<Visited>>,
 }
 
 impl HnswIndex {
@@ -135,7 +146,22 @@ impl HnswIndex {
             params,
             graph,
             norms,
+            scratch: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Run `search` against a pooled visited buffer, returning it afterwards.
+    fn with_scratch<T>(&self, search: impl FnOnce(&mut Visited) -> T) -> T {
+        let mut visited = self
+            .scratch
+            .lock()
+            .map_or(None, |mut pool| pool.pop())
+            .unwrap_or_else(|| Visited::new(self.matrix.rows()));
+        let outcome = search(&mut visited);
+        if let Ok(mut pool) = self.scratch.lock() {
+            pool.push(visited);
+        }
+        outcome
     }
 
     /// Build an index over `matrix` under `metric`.
@@ -191,8 +217,7 @@ impl HnswIndex {
     /// [`HnswError::NonFiniteDistance`] if a kernel result leaves the finite range.
     pub fn search_rows(&self, query_row: usize, k: usize) -> Result<Vec<Ranked>> {
         let cache = DistanceCache::new();
-        let mut visited = Visited::new(self.matrix.rows());
-        self.search_with(query_row, k, &cache, &mut visited)
+        self.with_scratch(|visited| self.search_with(query_row, k, &cache, visited))
     }
 
     /// The `k` nearest rows to `query_row`, together with the number of candidate
@@ -209,32 +234,9 @@ impl HnswIndex {
     ///
     /// As [`HnswIndex::search_rows`].
     pub fn search_rows_work(&self, query_row: usize, k: usize) -> Result<(Vec<Ranked>, u64)> {
-        let mut visited = Visited::new(self.matrix.rows());
-        self.search_rows_work_with(query_row, k, &mut visited)
-    }
-
-    /// [`HnswIndex::search_rows_work`] against caller-owned visited scratch.
-    ///
-    /// `Visited` is a generation-stamped buffer: it is `O(rows)` to allocate once and `O(1)`
-    /// to reset thereafter. Allocating a fresh one per search means zeroing a buffer the
-    /// size of the corpus to visit a beam's worth of it -- four megabytes at a million rows,
-    /// per invocation, to touch a few thousand nodes. A caller that searches repeatedly
-    /// should hold one and pass it back in.
-    ///
-    /// The scratch cannot affect the answer: it records which rows this search has already
-    /// scored, and `begin` invalidates every stamp before the first one is read.
-    ///
-    /// # Errors
-    ///
-    /// As [`HnswIndex::search_rows`].
-    pub(crate) fn search_rows_work_with(
-        &self,
-        query_row: usize,
-        k: usize,
-        visited: &mut Visited,
-    ) -> Result<(Vec<Ranked>, u64)> {
         let cache = DistanceCache::new();
-        let ranked = self.search_with(query_row, k, &cache, visited)?;
+        let ranked =
+            self.with_scratch(|visited| self.search_with(query_row, k, &cache, visited))?;
         Ok((ranked, cache.evaluations()))
     }
 
@@ -339,6 +341,43 @@ impl HnswIndex {
         ))
     }
 
+    /// Whether the graph `bytes` encodes is what `matrix` and its declared identity build.
+    ///
+    /// The borrowing form of [`HnswIndex::verify_rebuild`], for a caller that already holds
+    /// the vectors and only wants the verdict. It decodes the image, rebuilds from the
+    /// borrow, and compares -- so neither side copies a matrix that may be tens of
+    /// gigabytes. A structurally invalid payload, a row-count disagreement or a parameter
+    /// disagreement are all `Ok(false)`: this answers a question, it does not raise.
+    ///
+    /// # Errors
+    ///
+    /// Only what the rebuild itself can fail on -- a zero norm under a norm-dividing
+    /// kernel, or a non-finite distance.
+    pub(crate) fn verify_bytes_against(
+        matrix: &VectorMatrix,
+        bytes: &[u8],
+    ) -> Result<Option<Params>> {
+        let Ok(image) = decode_image(bytes) else {
+            return Ok(None);
+        };
+        if image.graph.node_count() != matrix.rows()
+            || image
+                .params
+                .validate_against(matrix.rows(), matrix.dims())
+                .is_err()
+        {
+            return Ok(None);
+        }
+        let (rebuilt, _) = builder::build_graph(matrix, image.kernel, image.params, None)?;
+        if rebuilt.canonical_image(image.kernel, &image.params)
+            == image.graph.canonical_image(image.kernel, &image.params)
+        {
+            Ok(Some(image.params))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Rebuild the index from its own matrix and identity, and report whether the result
     /// is the same index.
     ///
@@ -351,8 +390,21 @@ impl HnswIndex {
     ///
     /// As [`HnswIndex::build`].
     pub fn verify_rebuild(&self) -> Result<bool> {
-        let rebuilt = builder::build(self.matrix.clone(), self.kernel, self.params)?;
-        Ok(rebuilt.canonical_image() == self.canonical_image())
+        // Rebuilt from a borrow: the vectors are already here, and copying a
+        // million-row matrix in order to compare against it is the largest avoidable
+        // allocation in the crate.
+        let (graph, _) = builder::build_graph(&self.matrix, self.kernel, self.params, None)?;
+        Ok(graph.canonical_image(self.kernel, &self.params) == self.canonical_image())
+    }
+
+    /// The vectors this index was built over.
+    ///
+    /// The index owns its matrix so the graph and the vectors cannot drift apart. Exposing
+    /// it by reference means a caller that also needs the vectors -- a harness scoring the
+    /// index against an exact scan, say -- does not have to hand in a second copy.
+    #[must_use]
+    pub const fn matrix(&self) -> &VectorMatrix {
+        &self.matrix
     }
 
     /// The number of indexed rows.
