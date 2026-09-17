@@ -21,7 +21,7 @@ use purrdf_sparql_eval::{
     BindingPattern, ChargePoint, EvalError, GovernedOutcome, GovernedUpdateOutcome, GovernorState,
     MemoryRelation, NativeSparqlEngine, NodeCharges, ParserOptions, PfArgs, PfArity, PfCursor,
     PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors, QueryOptions,
-    ResourceDimension, RetrievalCapability, TrippedGovernor, Volatility,
+    ResourceDimension, TrippedGovernor, Volatility,
 };
 
 /// The namespace this host configured. PurRDF mints none: without this line in the
@@ -410,10 +410,6 @@ impl PropertyFunction for DeclaredHugeRelation {
 
     fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
         1_000_000
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        RetrievalCapability::NotRanked
     }
 
     fn open(

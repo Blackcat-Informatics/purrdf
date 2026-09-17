@@ -284,7 +284,7 @@ pub trait PfCursor {
 }
 
 // ---------------------------------------------------------------------------
-// Ranked-retrieval capability declarations
+// Ranked-retrieval declarations
 // ---------------------------------------------------------------------------
 
 /// The kind of RDF term a [`TermPattern`] accepts.
@@ -405,71 +405,6 @@ impl DuplicatePolicy {
             Self::Unique => "unique",
             Self::Allowed => "allowed",
         }
-    }
-}
-
-/// A relation's ranked-retrieval capability — the declaration a composition
-/// layer reads to decide which producers a request reaches.
-///
-/// [`NotRanked`](Self::NotRanked) is the explicit "this relation does not
-/// participate in ranked retrieval" variant, not a sentinel or a bare `None`:
-/// a producer that does not fuse is a fact the planner can name and a registry
-/// can fingerprint, rather than an absence it must infer. Every field of the
-/// [`Ranked`](Self::Ranked) arm is owned, declarative data, so the whole value
-/// is `Clone + PartialEq + Eq + Debug` and has a canonical description; there
-/// is deliberately no function pointer anywhere in this type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RetrievalCapability {
-    /// The relation does not participate in ranked retrieval.
-    NotRanked,
-    /// The relation emits rows ranked within `stratum`.
-    Ranked {
-        /// The caller-supplied stratum label these rows are ranked within. No
-        /// vocabulary is minted here; the caller names its own strata.
-        stratum: Iri,
-        /// The request-term shapes this producer accepts. Matching is a lookup
-        /// over these declarations, never inference.
-        accepted_terms: Vec<TermPattern>,
-        /// The producer's ordering guarantee.
-        ordering: RankOrdering,
-        /// The producer's duplicate handling.
-        duplicates: DuplicatePolicy,
-    },
-}
-
-impl RetrievalCapability {
-    /// A canonical, injective, length-framed description of this declaration.
-    ///
-    /// This is the capability's contribution to a registry's content
-    /// fingerprint. It is a pure function of the value and does not depend on
-    /// registration order, iteration order, or the host that built it. Fields
-    /// whose absence and empty spelling must stay distinguishable are framed
-    /// explicitly: every string is length-prefixed, and every optional string
-    /// carries an explicit present/absent byte.
-    #[must_use]
-    pub fn canonical_description(&self) -> String {
-        let mut out = String::new();
-        match self {
-            Self::NotRanked => out.push_str(NOT_RANKED_CANONICAL),
-            Self::Ranked {
-                stratum,
-                accepted_terms,
-                ordering,
-                duplicates,
-            } => {
-                out.push('r');
-                push_canonical_field(&mut out, stratum.as_str());
-                push_canonical_field(&mut out, ordering.as_str());
-                push_canonical_field(&mut out, duplicates.as_str());
-                out.push_str(&accepted_terms.len().to_string());
-                out.push(':');
-                for term in accepted_terms {
-                    out.push('\u{1}');
-                    term.push_canonical(&mut out);
-                }
-            }
-        }
-        out
     }
 }
 
@@ -749,37 +684,6 @@ pub trait PropertyFunction: Send + Sync {
     /// A genuinely unbounded generator declares [`u64::MAX`].
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64;
 
-    /// This relation's ranked-retrieval capability — the declaration a
-    /// composition layer over the property-function seam reads to decide which
-    /// request terms reach this producer and how its rows rank.
-    ///
-    /// # Superseded by the registry's side table
-    ///
-    /// Whether a relation is a ranked producer, and of what, is caller-supplied
-    /// configuration about the wiring rather than a property of the relation's
-    /// Rust type, so it is declared where the wiring happens:
-    /// [`PropertyFunctionRegistry::register_ranked`] takes a
-    /// [`RankedDeclaration`] and [`PropertyFunctionRegistry::ranked_declaration`]
-    /// reads it back. As a method on this universal trait it obliged every
-    /// relation that has nothing to do with ranked retrieval — path relations,
-    /// charge points, validation engines, admission gates — to restate that
-    /// fact, which is an interface every implementor pays for and almost none
-    /// uses.
-    ///
-    /// The defaulted body is scaffolding that carries existing implementations
-    /// across to the registry side table, and is deleted together with this
-    /// method.
-    ///
-    /// The method is host code exactly as `arity`/`modes`/`volatility` are, so
-    /// every read of it goes through [`declaration_contained`] like the rest of
-    /// the declaration surface.
-    #[deprecated(
-        note = "declare ranked retrieval through PropertyFunctionRegistry::register_ranked"
-    )]
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        RetrievalCapability::NotRanked
-    }
-
     /// Begin one invocation, returning its row cursor.
     ///
     /// `ceiling` is the optimization licence described in the trait docs — the number
@@ -953,10 +857,6 @@ pub struct PfDescriptor {
     /// The declared access patterns, in the order the relation returns them, each
     /// with its declared row bound.
     pub modes: Vec<PfMode>,
-    /// The declared ranked-retrieval capability. Consumed by a composition
-    /// layer over the seam; [`RetrievalCapability::NotRanked`] is the explicit
-    /// "does not fuse" declaration.
-    pub retrieval: RetrievalCapability,
     /// The ranked declaration the host supplied for this IRI at registration
     /// ([`PropertyFunctionRegistry::register_ranked`]), or `None` when the
     /// relation was registered without one — which is what "does not
@@ -1236,12 +1136,6 @@ impl PropertyFunctionRegistry {
             let arity = declaration_contained(iri, "arity", || relation.arity())?;
             let volatility =
                 declaration_contained(iri, "determinism class", || relation.volatility())?;
-            // Scaffolding read of the deprecated trait method: it is deleted in
-            // the follow-on step that moves every producer onto `register_ranked`.
-            #[allow(deprecated)]
-            let retrieval = declaration_contained(iri, "retrieval capability", || {
-                relation.retrieval_capability()
-            })?;
             let modes = declaration_contained(iri, "declared modes", || relation.modes().to_vec())?;
             let mut described_modes = Vec::with_capacity(modes.len());
             for mode in modes {
@@ -1258,7 +1152,6 @@ impl PropertyFunctionRegistry {
                 object_arity: arity.object,
                 volatility,
                 modes: described_modes,
-                retrieval,
                 // Read BY KEY out of the side table while iterating `relations`,
                 // never by iterating `ranked`: the fixed-key map's order stays
                 // unobservable, and the output is sorted by IRI below.
@@ -1532,12 +1425,6 @@ impl PropertyFunction for MemoryRelation {
         // Exact, and mode-independent: a filtered scan of the table cannot emit more
         // rows than the table holds, whichever positions are bound.
         self.rows.len() as u64
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        // A plain table declares no stratum and emits in insertion order, so it
-        // declares no participation in ranked retrieval.
-        RetrievalCapability::NotRanked
     }
 
     fn open(
@@ -2035,10 +1922,6 @@ mod tests {
             1
         }
 
-        fn retrieval_capability(&self) -> RetrievalCapability {
-            RetrievalCapability::NotRanked
-        }
-
         fn open(
             &self,
             _args: &PfArgs<'_>,
@@ -2199,10 +2082,6 @@ mod tests {
 
         fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
             0
-        }
-
-        fn retrieval_capability(&self) -> RetrievalCapability {
-            RetrievalCapability::NotRanked
         }
 
         fn open(

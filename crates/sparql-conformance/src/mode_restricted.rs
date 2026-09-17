@@ -33,8 +33,7 @@ use std::sync::Arc;
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, GraphMatch, TermValue};
 use purrdf_sparql_eval::{
-    EvalError, MemoryRelation, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-    RetrievalCapability, Volatility,
+    EvalError, MemoryRelation, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, Volatility,
 };
 
 /// A two-column relation that can be computed **only** with its subject side bound.
@@ -110,10 +109,6 @@ impl PropertyFunction for BoundSubjectLookup {
 
     fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
         self.rows_per_subject
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        RetrievalCapability::NotRanked
     }
 
     fn open(

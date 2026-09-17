@@ -1675,10 +1675,6 @@ mod tests {
             1
         }
 
-        fn retrieval_capability(&self) -> purrdf_sparql_eval::RetrievalCapability {
-            purrdf_sparql_eval::RetrievalCapability::NotRanked
-        }
-
         fn open(
             &self,
             args: &purrdf_sparql_eval::PfArgs<'_>,

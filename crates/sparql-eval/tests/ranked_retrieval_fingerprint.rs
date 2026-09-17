@@ -1,41 +1,51 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The ranked-retrieval capability declaration: it is owned, serializable data
-//! (no function pointers) and it is reported by `describe`. The registry's
-//! durable content fingerprint covers a producer's fusion participation as
-//! declared at registration, which is the side table the composition layer
-//! reads.
+//! A producer's participation in ranked retrieval is caller-supplied wiring
+//! held in the registry's side table, and the registry's durable content
+//! fingerprint covers it exactly as it covers arity, volatility and modes.
+//!
+//! Two properties are pinned here. First, the fingerprint separates a registry
+//! whose relation was wired up with a [`RankedDeclaration`] from one whose
+//! identical relation was registered plainly, and joins two registries that
+//! declare the same thing — so "does not fuse" and "fuses like this" can never
+//! share a digest, and a plan admitted against one wiring cannot run against
+//! the other. Second, the declaration types are owned data all the way down:
+//! no function pointer appears in the module that defines them, which is what
+//! makes a canonical description — and hence the fingerprint — possible at all.
+//!
+//! The declaration's own surface (registration, read-back by IRI, validation
+//! against the relation's arity, and the injectivity of its canonical
+//! description) is pinned in `ranked_declaration.rs`.
 
 use std::sync::Arc;
 
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor,
     PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
-    RetrievalCapability, TermKind, TermPattern, TermPlacement, Volatility,
+    TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 const EX_REL: &str = "http://example.org/ns#ranked";
 const EX_STRATUM: &str = "http://example.org/stratum/a";
 
-/// A relation that declares whatever capability it was built with and never
-/// actually opens — the declaration surface is the subject under test.
+/// A two-position relation that never actually opens — the declaration surface
+/// is the subject under test, and the relation itself is identical across every
+/// registry below so it cannot account for any difference observed.
 #[derive(Debug)]
-struct CapabilityRelation {
-    capability: RetrievalCapability,
+struct FixtureRelation {
     modes: [BindingPattern; 1],
 }
 
-impl CapabilityRelation {
-    fn new(capability: RetrievalCapability) -> Self {
+impl FixtureRelation {
+    fn new() -> Self {
         Self {
-            capability,
             modes: [PfArity::new(1, 1).all_free_mode()],
         }
     }
 }
 
-impl PropertyFunction for CapabilityRelation {
+impl PropertyFunction for FixtureRelation {
     fn volatility(&self) -> Volatility {
         Volatility::Stable
     }
@@ -52,64 +62,18 @@ impl PropertyFunction for CapabilityRelation {
         0
     }
 
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        self.capability.clone()
-    }
-
     fn open(
         &self,
         _args: &PfArgs<'_>,
         _ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        Err(EvalError::function(
-            "the capability fixture is never invoked",
-        ))
+        Err(EvalError::function("the fixture is never invoked"))
     }
 }
 
-fn ranked() -> RetrievalCapability {
-    RetrievalCapability::Ranked {
-        stratum: purrdf_core::parse_iri(EX_STRATUM).expect("fixture IRI"),
-        accepted_terms: vec![TermPattern {
-            kind: TermKind::Literal,
-            datatype: None,
-            language: Some("en".to_owned()),
-            predicate: None,
-        }],
-        ordering: RankOrdering::StrictlyDescending,
-        duplicates: DuplicatePolicy::Unique,
-    }
-}
-
-fn registry_with(capability: RetrievalCapability) -> PropertyFunctionRegistry {
-    let mut registry = PropertyFunctionRegistry::new();
-    registry.register(EX_REL, Arc::new(CapabilityRelation::new(capability)));
-    registry
-}
-
-#[test]
-fn describe_reports_the_declared_capability() {
-    let registry = registry_with(ranked());
-    let described = registry.describe().expect("declarations are readable");
-    assert_eq!(described.len(), 1);
-    assert_eq!(described[0].retrieval, ranked());
-}
-
-#[test]
-fn not_ranked_is_an_explicit_declaration() {
-    let registry = registry_with(RetrievalCapability::NotRanked);
-    let described = registry.describe().expect("declarations are readable");
-    assert_eq!(described[0].retrieval, RetrievalCapability::NotRanked);
-    assert_ne!(
-        RetrievalCapability::NotRanked.canonical_description(),
-        ranked().canonical_description()
-    );
-}
-
-/// The fingerprint reads the registry's side table, so the declaration under
-/// test is the one supplied at registration — not the relation's own (now
-/// superseded) trait declaration, which both registries below make identical so
-/// it cannot account for any difference observed here.
+/// A lexical-search declaration whose needle renders at position 1 and whose
+/// candidate is projected from position 0 — every position in range for the
+/// fixture's `1,1` arity.
 fn ranked_declaration() -> RankedDeclaration {
     RankedDeclaration {
         stratum: purrdf_core::parse_iri(EX_STRATUM).expect("fixture IRI"),
@@ -134,9 +98,11 @@ fn ranked_declaration() -> RankedDeclaration {
     }
 }
 
+/// One registry holding the same relation under the same IRI, wired up either
+/// with `declaration` or plainly.
 fn registry_declaring(declaration: Option<RankedDeclaration>) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
-    let relation = Arc::new(CapabilityRelation::new(ranked()));
+    let relation = Arc::new(FixtureRelation::new());
     match declaration {
         Some(declaration) => registry.register_ranked(EX_REL, relation, declaration),
         None => registry.register(EX_REL, relation),
@@ -145,7 +111,7 @@ fn registry_declaring(declaration: Option<RankedDeclaration>) -> PropertyFunctio
 }
 
 #[test]
-fn capability_participates_in_the_content_fingerprint() {
+fn the_ranked_declaration_participates_in_the_content_fingerprint() {
     let ranked_registry = registry_declaring(Some(ranked_declaration()));
     let plain_registry = registry_declaring(None);
     assert_ne!(
@@ -155,9 +121,11 @@ fn capability_participates_in_the_content_fingerprint() {
         plain_registry
             .content_fingerprint()
             .expect("declarations are readable"),
-        "a producer's fusion participation is a declaration the fingerprint must cover"
+        "a producer's fusion participation is a declaration the fingerprint must cover, so \
+         the fixed non-ranked contribution can never spell the same bytes as a ranked one"
     );
-    // Two registries declaring the same ranked capability fingerprint alike.
+    // Two registries declaring the same ranked wiring fingerprint alike: the
+    // digest is a function of the declaration, not of the instance that holds it.
     let same = registry_declaring(Some(ranked_declaration()));
     assert_eq!(
         ranked_registry
@@ -168,6 +136,23 @@ fn capability_participates_in_the_content_fingerprint() {
     );
 }
 
+#[test]
+fn a_changed_declaration_changes_the_fingerprint() {
+    let base = registry_declaring(Some(ranked_declaration()));
+    let changed = registry_declaring(Some(RankedDeclaration {
+        ordering: RankOrdering::NonIncreasing,
+        ..ranked_declaration()
+    }));
+    assert_ne!(
+        base.content_fingerprint()
+            .expect("declarations are readable"),
+        changed
+            .content_fingerprint()
+            .expect("declarations are readable"),
+        "the declaration reaches the digest field by field, not as a mere present/absent bit"
+    );
+}
+
 /// The grep gate on the declaration types: no function pointer may appear in the
 /// module that defines them.
 #[test]
@@ -175,6 +160,6 @@ fn declaration_types_contain_no_function_pointers() {
     const SOURCE: &str = include_str!("../src/property_fn.rs");
     assert!(
         !SOURCE.contains("fn("),
-        "property_fn.rs contains a function pointer; capability declarations must be owned data"
+        "property_fn.rs contains a function pointer; ranked declarations must be owned data"
     );
 }

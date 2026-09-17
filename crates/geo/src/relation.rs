@@ -74,7 +74,7 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_eval::{
     EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
-    RetrievalCapability, Volatility,
+    Volatility,
 };
 
 use crate::error::GeoError;
@@ -1334,13 +1334,6 @@ impl PropertyFunction for GeoRelation {
             (false, false) => self.bounds.free,
             _ => self.bounds.half,
         }
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        // Spatial matches are a relation, not a ranked fusion stratum in this
-        // scaffold: the stratum label and accepted request-term shapes are
-        // caller configuration threaded through the registry in a later task.
-        RetrievalCapability::NotRanked
     }
 
     /// Begin one Query Rewrite invocation.

@@ -190,7 +190,7 @@ pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
 pub use property_fn::{
     AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PfArgs, PfArity, PfCursor,
     PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankOrdering,
-    RankedDeclaration, RequestFacet, RetrievalCapability, TermKind, TermPattern, TermPlacement,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
 };
 // The registry instance identity, re-exported alongside the registry that mints
 // it: a composition layer must be able to tell two independently built registries

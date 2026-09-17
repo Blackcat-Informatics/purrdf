@@ -353,7 +353,7 @@ use purrdf_core::{DatasetView, GraphMatch, TermValue};
 use sha2::{Digest, Sha256};
 
 use crate::error::EvalError;
-use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RetrievalCapability};
+use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction};
 use crate::statement_layer::{self, StatementProbe};
 use crate::user_fn::Volatility;
 
@@ -1812,10 +1812,6 @@ impl PropertyFunction for PathWitnessRelation {
         row_bound(mode, self.graph.shape, self.limits, u64::MAX)
     }
 
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        RetrievalCapability::NotRanked
-    }
-
     fn open(
         &self,
         args: &PfArgs<'_>,
@@ -2114,10 +2110,6 @@ impl PropertyFunction for ShortestPathWitnessRelation {
             self.graph.shape.node_count
         };
         row_bound(mode, self.graph.shape, self.limits, walks_per_seed_cap)
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        RetrievalCapability::NotRanked
     }
 
     fn open(

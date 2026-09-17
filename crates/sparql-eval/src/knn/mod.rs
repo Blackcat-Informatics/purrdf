@@ -106,7 +106,7 @@ use purrdf_core::{
 };
 
 use crate::error::EvalError;
-use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RetrievalCapability};
+use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction};
 use crate::user_fn::Volatility;
 
 pub use metric::{Kernel, Ranked, best, norm};
@@ -696,15 +696,6 @@ impl PropertyFunction for EmbeddingKnnRelation {
         } else {
             rows.min(self.space.guard().max_neighbours())
         }
-    }
-
-    fn retrieval_capability(&self) -> RetrievalCapability {
-        // The scaffold declares no participation in ranked retrieval. Making
-        // this relation's kNN rows a fused stratum is a later task's decision
-        // (it needs the stratum/term-pattern machinery to be wired through the
-        // registry), and it must be an explicit declaration rather than a
-        // guessed default.
-        RetrievalCapability::NotRanked
     }
 
     /// Begin one nearest-neighbour invocation.
