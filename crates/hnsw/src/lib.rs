@@ -12,8 +12,11 @@
 //!   function of the row, with no seed and no entropy ([`level`]).
 //! * **The build** runs in finite batches; each batch proposes against a frozen snapshot
 //!   of the graph and the proposals are merged canonically, so the graph does not depend
-//!   on insertion order or on how many rayon workers ran ([`builder`]).
-//! * **The entry point** is the minimum row index at the current maximum level.
+//!   on insertion order or on how many rayon workers ran.
+//! * **The entry point** is the minimum row index at the maximum level — computed from the
+//!   levels before any link exists, so it too is a pure function of the data.
+//! * **Neighbour selection** keeps a diverse set rather than the nearest `M`, so the graph
+//!   stays navigable; the admission rule is a total function of the beam.
 //! * **Distances** come from the exact path's kernels via
 //!   [`purrdf_sparql_eval::knn`], and candidates are ordered by the shared [`Ranked`] type
 //!   `(distance, row)` — there is no second comparator to drift out of step.
@@ -136,7 +139,7 @@ impl HnswIndex {
     ///
     /// [`HnswError::UnsupportedMetric`] if `metric` is a caller-defined extension metric
     /// with no kernel this crate can evaluate.
-    /// Otherwise the errors of [`builder`]: the parameter validation matrix, a zero-norm
+    /// Otherwise the errors of the builder: the parameter validation matrix, a zero-norm
     /// row under a norm-dividing kernel, or a non-finite distance.
     pub fn build(matrix: VectorMatrix, metric: &DistanceMetric, params: Params) -> Result<Self> {
         let kernel = Kernel::of(metric).ok_or_else(|| HnswError::UnsupportedMetric {

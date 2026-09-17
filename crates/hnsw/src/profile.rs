@@ -10,7 +10,7 @@
 //! a contract this crate must state for itself. That contract is this module:
 //!
 //! * **Identity.** The [`IndexGuardContract::implementation`](purrdf_core::IndexGuardContract)
-//!   artifact identity, whose stable identifier is [`IMPLEMENTATION_ID`](crate::IMPLEMENTATION_ID),
+//!   artifact identity, whose stable identifier is [`IMPLEMENTATION_ID`],
 //!   whose revision bytes carry the approximation evidence string, and whose digest binds
 //!   the profile declaration.
 //! * **Parameter encoding.** [`PARAMETER_ENCODING`], naming the canonical TLV block that

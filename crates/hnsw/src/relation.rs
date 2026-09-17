@@ -44,7 +44,7 @@
 //!
 //! # Work accounting
 //!
-//! [`HnswCursor`] reports one unit per candidate distance actually evaluated, through
+//! The cursor reports one unit per candidate distance actually evaluated, through
 //! [`PfCursor::take_work`]. The search is lazy — it runs on the first pull, not in
 //! [`PropertyFunction::open`] — so a call whose ceiling is already exhausted performs no
 //! work and is charged none, and the count resets only when the engine takes it.
