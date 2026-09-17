@@ -225,8 +225,11 @@ struct Interner {
     /// other structural invariant too, and once one is recorded the dataset can
     /// never be frozen, so later ones cannot change the outcome.
     relative_iri: Option<(String, IriError)>,
-    /// First invalid literal shape, refused at the existing validation boundary.
-    invalid_literal: Option<&'static str>,
+    /// First refused literal, as `(diagnostic code, message)`, held for the
+    /// existing validation boundary. The code is the grammar's own `langtag-*`
+    /// when a language tag is malformed, and `model::LITERAL_SHAPE_CODE` when
+    /// the datatype, language and direction merely disagree.
+    invalid_literal: Option<(&'static str, &'static str)>,
 }
 
 impl Interner {
@@ -654,7 +657,10 @@ impl RdfDatasetBuilder {
     pub fn intern_literal(&mut self, lit: RdfLiteral) -> TermId {
         let datatype_iri = lit.datatype_iri();
         if self.interner.invalid_literal.is_none() {
-            self.interner.invalid_literal = RdfLiteral::validate_components(
+            // Judged on the tag AS AUTHORED, before the lowercase fold below;
+            // the `LANGTAG` terminal is case-insensitive, so the answer is the
+            // same either side of it.
+            self.interner.invalid_literal = RdfLiteral::diagnose_components(
                 datatype_iri,
                 lit.language.as_deref(),
                 lit.direction,
@@ -1153,8 +1159,9 @@ impl RdfDatasetBuilder {
             .map(|(iri, err)| (iri.as_str(), err))
     }
 
-    /// Read the first literal-shape failure recorded by the infallible interner.
-    pub(crate) fn invalid_literal(&self) -> Option<&'static str> {
+    /// Read the first refused literal recorded by the infallible interner, as
+    /// `(diagnostic code, message)`.
+    pub(crate) fn invalid_literal(&self) -> Option<(&'static str, &'static str)> {
         self.interner.invalid_literal
     }
 

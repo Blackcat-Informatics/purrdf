@@ -52,32 +52,79 @@ pub struct RdfLiteral {
     pub direction: Option<RdfTextDirection>,
 }
 
+/// The stable diagnostic code for a literal whose datatype, language and
+/// direction do not agree. Language-tag *grammar* failures do not use it: they
+/// carry `purrdf_iri::langtag`'s own `langtag-*` code, because that module owns
+/// the grammar and its refusal reasons.
+pub(crate) const LITERAL_SHAPE_CODE: &str = "rdf-ir-literal-shape";
+
 impl RdfLiteral {
-    /// Validate the relationship between an expanded datatype, language and direction.
+    /// Validate the relationship between an expanded datatype, language and
+    /// direction, and the well-formedness of the language tag itself.
     ///
-    /// Call after applying any ingress-specific implied datatype rules. This checks
-    /// RDF term shape, not datatype lexical validity or language-tag grammar.
+    /// Call after applying any ingress-specific implied datatype rules. A
+    /// language tag is judged by the one owner of the grammar,
+    /// [`purrdf_iri::langtag`], under
+    /// [`Profile::ConcreteSyntaxLangtagBounded`](purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded)
+    /// — the same acceptance language every codec reader names, so a tag this
+    /// kernel admits is exactly a tag the concrete syntaxes can write and read
+    /// back. This still does NOT check datatype lexical validity.
+    ///
+    /// The judgement is case-insensitive (the `LANGTAG` terminal is
+    /// `[a-zA-Z]+('-'[a-zA-Z0-9]+)*`), so it gives the same answer either side of
+    /// the intern-time lowercase fold: `en-US` and `en-us` are both accepted.
     ///
     /// # Errors
-    /// Refuses missing language tags, empty tags and datatype/direction mismatches.
+    /// Refuses missing language tags, datatype/direction mismatches, and any
+    /// language tag the grammar does not accept — including the empty tag.
     pub fn validate_components(
         datatype: &str,
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
     ) -> Result<(), &'static str> {
+        Self::diagnose_components(datatype, language, direction).map_err(|(_code, message)| message)
+    }
+
+    /// [`validate_components`](Self::validate_components) with the refusal's
+    /// stable diagnostic code attached.
+    ///
+    /// The single implementation; `validate_components` is the `&'static str`
+    /// door onto it and keeps the published signature. Splitting the pair out
+    /// here is what lets `crate::ir::validate` report a malformed language tag
+    /// under the grammar's OWN code rather than collapsing every literal refusal
+    /// into one.
+    pub(crate) fn diagnose_components(
+        datatype: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> Result<(), (&'static str, &'static str)> {
         if let Some(language) = language {
-            if language.is_empty() {
-                return Err("a language tag must not be empty");
+            // The grammar first: a datatype/direction mismatch on a tag that is
+            // not a language tag at all would report the downstream symptom.
+            if let Err(error) = purrdf_iri::langtag::parse_with(
+                language,
+                purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded,
+            ) {
+                return Err((error.diagnostic_code(), error.message()));
             }
             if datatype != Self::language_datatype_iri(direction) {
-                return Err("literal datatype does not match its language and base direction");
+                return Err((
+                    LITERAL_SHAPE_CODE,
+                    "literal datatype does not match its language and base direction",
+                ));
             }
         } else {
             if direction.is_some() {
-                return Err("a base direction requires a language tag");
+                return Err((
+                    LITERAL_SHAPE_CODE,
+                    "a base direction requires a language tag",
+                ));
             }
             if matches!(datatype, RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
-                return Err("a language-string datatype requires a language tag");
+                return Err((
+                    LITERAL_SHAPE_CODE,
+                    "a language-string datatype requires a language tag",
+                ));
             }
         }
         Ok(())
@@ -384,6 +431,71 @@ impl RdfAnnotation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every tag a concrete syntax could legally write must still be admitted —
+    /// the refusal below is only worth having if its neighbours survive.
+    #[test]
+    fn well_formed_language_tags_are_still_admitted() {
+        for tag in [
+            "en",
+            "en-US",
+            "en-us",
+            "zh-Hans-CN",
+            "zh-hans-cn",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "en-fr-jura",
+            "fr-be-fbcl",
+        ] {
+            RdfLiteral::validate_components(RDF_LANG_STRING, Some(tag), None).unwrap_or_else(
+                |reason| panic!("{tag:?} is well-formed but was refused: {reason}"),
+            );
+            // The intern-time lowercase fold must not change the answer: the
+            // `LANGTAG` terminal is case-insensitive, so the check is the same
+            // either side of it.
+            let folded = tag.to_lowercase();
+            RdfLiteral::validate_components(RDF_LANG_STRING, Some(folded.as_str()), None)
+                .unwrap_or_else(|reason| panic!("{folded:?} refused after the fold: {reason}"));
+        }
+    }
+
+    /// The hole this check closes: a tag no parser could read must never reach a
+    /// serializer, and the refusal must name the grammar rule that refused it.
+    #[test]
+    fn malformed_language_tags_are_refused_with_the_grammars_own_code() {
+        for tag in ["1", "9-9", "123-456", "en-", "-", "en us", "!!!", ""] {
+            let (code, message) = RdfLiteral::diagnose_components(RDF_LANG_STRING, Some(tag), None)
+                .expect_err("a malformed language tag must not construct");
+            assert!(
+                code.starts_with("langtag-"),
+                "{tag:?} reported {code:?}, not a grammar code"
+            );
+            assert!(!message.is_empty(), "{tag:?} reported an empty reason");
+            // The `&'static str` door onto the same judgement agrees.
+            assert_eq!(
+                RdfLiteral::validate_components(RDF_LANG_STRING, Some(tag), None),
+                Err(message)
+            );
+        }
+    }
+
+    /// A datatype/language/direction disagreement is NOT a grammar failure and
+    /// keeps its own code, so the two stay distinguishable downstream.
+    #[test]
+    fn shape_failures_keep_the_literal_shape_code() {
+        for (datatype, language, direction) in [
+            (RDF_LANG_STRING, Some("en"), Some(RdfTextDirection::Ltr)),
+            (XSD_STRING, None, Some(RdfTextDirection::Rtl)),
+            (RDF_LANG_STRING, None, None),
+            (RDF_DIR_LANG_STRING, None, None),
+        ] {
+            let (code, _) = RdfLiteral::diagnose_components(datatype, language, direction)
+                .expect_err("mismatched components must not construct");
+            assert_eq!(code, LITERAL_SHAPE_CODE);
+        }
+    }
 
     #[test]
     fn display_for_rdfterm_matches_canonical_emit() {
