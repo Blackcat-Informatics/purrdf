@@ -11,8 +11,8 @@
 //! accepted neighbor (repo refusal discipline).
 
 use purrdf_iri::langtag::{
-    LanguageTagBuf, LanguageTagError, Profile, TagForm, canonical_case, canonical_case_with,
-    is_well_formed, is_well_formed_with, parse, parse_with,
+    Extension, LanguageTagBuf, LanguageTagError, Profile, TagForm, canonical_case,
+    canonical_case_with, is_well_formed, is_well_formed_with, parse, parse_with,
 };
 
 /// RFC 5646 Appendix A — every well-formed example, transcribed verbatim.
@@ -210,6 +210,128 @@ fn abnf_boundaries_with_accepted_neighbors() {
             "{accepted:?} must accept: only a *fourth extlang* is barred"
         );
     }
+}
+
+/// The `extlang` gate: which alternative of `language` a following 3ALPHA
+/// subtag may attach to.
+///
+/// `language = 2*3ALPHA ["-" extlang] / 4ALPHA / 5*8ALPHA`. The optional
+/// `["-" extlang]` hangs off the **first** alternative only, so a three-letter
+/// subtag is an `extlang` after a 2–3 letter primary language and is *nothing*
+/// after a 4-letter (reserved) or 5–8 letter (registered) one. The parser
+/// decides this with a single length test on the primary subtag, which makes the
+/// boundary one comparison wide: flip it and the grammar silently changes shape.
+///
+/// The four cases below are chosen to pin that one comparison from both sides
+/// and at both ends of the range it guards:
+///
+/// * `abcd-Latn` — a 4ALPHA language really does continue, just into `script`
+///   rather than `extlang`; without this the "refuse after 4ALPHA" case could be
+///   satisfied by refusing everything after a 4ALPHA language.
+/// * `AaBbCcDd-x-y-any-x` — the 5*8ALPHA end of the range, at its maximum
+///   length, still carrying a full `privateuse` section whose last subtag is the
+///   one-character `x` that only `privateuse` admits. Mixed case throughout,
+///   because case is insignificant to the judgement.
+/// * `abcd-abc` — the refusal: three letters after a 4ALPHA language satisfy no
+///   production (`script` is 4ALPHA, `region` is 2ALPHA or 3DIGIT, `variant` is
+///   5*8alphanum or DIGIT 3alphanum), so the subtag is left over.
+/// * `ab-abc` — the neighbour that proves the refusal above is about the
+///   *primary language's length* and not about three-letter subtags in general.
+#[test]
+fn extlang_attaches_only_to_the_two_to_three_letter_language_alternative() {
+    // 4ALPHA language: no `extlang`, but `script` still follows.
+    let reserved = parse("abcd-Latn").expect("`4ALPHA` language plus `script`");
+    assert_eq!(reserved.primary_language(), Some("abcd"));
+    assert_eq!(reserved.extended_language(), None);
+    assert_eq!(reserved.script(), Some("Latn"));
+
+    // 5*8ALPHA language at its ceiling: no `extlang`, but `privateuse` follows,
+    // and its final subtag is the one-character `x` no other production admits.
+    let registered = parse("AaBbCcDd-x-y-any-x").expect("`5*8ALPHA` language plus `privateuse`");
+    assert_eq!(registered.primary_language(), Some("AaBbCcDd"));
+    assert_eq!(registered.extended_language(), None);
+    assert_eq!(registered.private_use(), Some("x-y-any-x"));
+    assert_eq!(
+        registered.private_use_subtags().collect::<Vec<_>>(),
+        ["y", "any", "x"]
+    );
+
+    // The refusal: 3ALPHA after a 4ALPHA language is not an `extlang`.
+    assert_eq!(
+        parse("abcd-abc"),
+        Err(LanguageTagError::UnconsumedSubtag),
+        "`[\"-\" extlang]` hangs off `2*3ALPHA` only"
+    );
+
+    // The neighbour: the same 3ALPHA subtag after a 2ALPHA language IS one.
+    let extended = parse("ab-abc").expect("`2*3ALPHA` language plus `extlang`");
+    assert_eq!(extended.primary_language(), Some("ab"));
+    assert_eq!(extended.extended_language(), Some("abc"));
+}
+
+/// Three refusals this corpus asserts elsewhere without the accepted neighbour
+/// the repo's refusal discipline requires, each paired here with the *smallest*
+/// edit that turns it back into a well-formed tag.
+///
+/// Each pair isolates exactly one rule, so an over-refusal that widened any of
+/// them by a single character shows up as a failure on the right-hand column
+/// rather than as continued green:
+///
+/// * `a1` / `aa` — every alternative of `language` is ALPHA, so a two-character
+///   primary containing a DIGIT matches none of them. The neighbour differs by
+///   one character and is the shortest possible tag.
+/// * `en-a-b-cc` / `en-a-bb-b-cc` — `extension = singleton 1*("-" (2*8alphanum))`
+///   gives each extension at least one subtag of two or more characters, so a
+///   second singleton may not appear until the first has one. The neighbour
+///   gives the first singleton its subtag and keeps the second extension intact,
+///   proving that back-to-back extensions themselves are fine.
+/// * `a-DE` / `ab-DE` — a one-character primary language is the RFC's own
+///   Appendix A invalid example; the neighbour shows the region after it was
+///   never the problem.
+#[test]
+fn the_unpaired_refusals_each_have_an_accepted_neighbour() {
+    // (refused, the error it names, accepted neighbour, the rule at stake)
+    let pairs: &[(&str, LanguageTagError, &str, &str)] = &[
+        (
+            "a1",
+            LanguageTagError::LanguageProductionUnmatched,
+            "aa",
+            "a two-character primary language is 2ALPHA, not 2alphanum",
+        ),
+        (
+            "en-a-b-cc",
+            LanguageTagError::SingletonWithoutSubtag,
+            "en-a-bb-b-cc",
+            "a singleton needs a 2*8alphanum subtag before the next singleton",
+        ),
+        (
+            "a-DE",
+            LanguageTagError::LanguageProductionUnmatched,
+            "ab-DE",
+            "the primary language needs at least two characters",
+        ),
+    ];
+    for (refused, expected, accepted, why) in pairs {
+        assert_eq!(parse(refused), Err(*expected), "{refused:?} ({why})");
+        assert!(is_well_formed(accepted), "{accepted:?} must accept ({why})");
+    }
+
+    // The accepted halves are not merely accepted: they decompose the way the
+    // rule at stake says they do.
+    assert_eq!(
+        parse("aa").expect("well-formed").primary_language(),
+        Some("aa")
+    );
+    assert_eq!(
+        parse("en-a-bb-b-cc")
+            .expect("well-formed")
+            .extensions_by_singleton()
+            .map(Extension::as_str)
+            .collect::<Vec<_>>(),
+        ["a-bb", "b-cc"],
+        "both extensions survive, each with its own subtag"
+    );
+    assert_eq!(parse("ab-DE").expect("well-formed").region(), Some("DE"));
 }
 
 #[test]

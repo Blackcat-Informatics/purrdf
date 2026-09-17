@@ -4,6 +4,30 @@
 //! BCP 47 / RFC 5646 language-tag **well-formedness** (the `Language-Tag`
 //! production of [RFC 5646 §2.1]).
 //!
+//! ```rust
+//! use purrdf_iri::langtag::{Profile, is_well_formed, is_well_formed_with, parse};
+//!
+//! // A tag is decomposed into the sections the §2.1 ABNF names.
+//! let tag = parse("zh-Hans-CN-x-priv")?;
+//! assert_eq!(tag.primary_language(), Some("zh"));
+//! assert_eq!(tag.script(), Some("Hans"));
+//! assert_eq!(tag.region(), Some("CN"));
+//! assert_eq!(tag.private_use(), Some("x-priv"));
+//!
+//! // Boundary, both sides: two region subtags are not a `langtag`, one is.
+//! assert!(!is_well_formed("de-419-DE"));
+//! assert!(is_well_formed("de-DE"));
+//!
+//! // Which profile you ask matters. An eight-character ceiling applies to
+//! // private-use subtags under §2.1, and only the wider profiles lift it.
+//! assert!(!is_well_formed("x-purrdf-afrikaans"));
+//! assert!(is_well_formed_with(
+//!     "x-purrdf-afrikaans",
+//!     Profile::Rfc5646PrivateUseRelaxed
+//! ));
+//! # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+//! ```
+//!
 //! # Scope
 //!
 //! [`parse`] decides **well-formedness** and nothing else: the purely syntactic
@@ -163,11 +187,64 @@ const MARKER_PREFIX_WIDTH: usize = SINGLETON_LENGTH + 1;
 /// The variants are declared in acceptance order, so the derived [`Ord`] *is*
 /// the ⊂ relation this module documents: a greater profile accepts every tag a
 /// lesser one does.
+///
+/// # Examples
+///
+/// One tag, three answers — which is exactly why the profile is a parameter and
+/// not a constant:
+///
+/// ```rust
+/// use purrdf_iri::langtag::{Profile, is_well_formed_with};
+///
+/// // Well-formed RFC 5646: every profile takes it.
+/// for profile in [
+///     Profile::Rfc5646,
+///     Profile::Rfc5646PrivateUseRelaxed,
+///     Profile::ConcreteSyntaxLangtag,
+/// ] {
+///     assert!(is_well_formed_with("de-CH-x-phonebk", profile));
+/// }
+///
+/// // Over the §2.1 private-use ceiling: the widening starts at the middle one.
+/// assert!(!is_well_formed_with("x-gmeow-norwegiannynorsk", Profile::Rfc5646));
+/// assert!(is_well_formed_with(
+///     "x-gmeow-norwegiannynorsk",
+///     Profile::Rfc5646PrivateUseRelaxed
+/// ));
+///
+/// // No RFC 5646 reading at all — `jura` is 4ALPHA, and `variant` admits four
+/// // characters only when the first is a DIGIT. Only the terminal takes it.
+/// assert!(!is_well_formed_with("en-fr-jura", Profile::Rfc5646PrivateUseRelaxed));
+/// assert!(is_well_formed_with("en-fr-jura", Profile::ConcreteSyntaxLangtag));
+///
+/// // The declaration order IS the acceptance order.
+/// assert!(Profile::Rfc5646 < Profile::Rfc5646PrivateUseRelaxed);
+/// assert!(Profile::Rfc5646PrivateUseRelaxed < Profile::ConcreteSyntaxLangtag);
+/// assert_eq!(Profile::default(), Profile::Rfc5646);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Profile {
     /// The RFC 5646 §2.1 ABNF verbatim, with nothing added or removed. This is
     /// what [`parse`] and [`is_well_formed`] apply.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{Profile, is_well_formed, is_well_formed_with};
+    ///
+    /// // The profile-free entry points are this profile, exactly.
+    /// for tag in ["en-US", "zh-Hans-CN", "i-enochian", "abcdefghi", "de-419-DE"] {
+    ///     assert_eq!(
+    ///         is_well_formed(tag),
+    ///         is_well_formed_with(tag, Profile::Rfc5646)
+    ///     );
+    /// }
+    ///
+    /// // The §2.1 bounds apply everywhere: eight characters per subtag…
+    /// assert!(is_well_formed_with("abcdefgh", Profile::Rfc5646));
+    /// assert!(!is_well_formed_with("abcdefghi", Profile::Rfc5646));
+    /// ```
     #[default]
     Rfc5646,
     /// RFC 5646 §2.1 with the eight-character subtag ceiling lifted for
@@ -199,6 +276,39 @@ pub enum Profile {
     /// whose whole purpose is registry discipline, which does not apply inside
     /// `x-`. Callers that must round-trip those artifacts select this profile;
     /// callers that judge externally-supplied tags should not.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagError, Profile, parse, parse_with};
+    ///
+    /// // What it widens: a private-use subtag past the eight-character bound,
+    /// // in both the whole-tag and the trailing-section position.
+    /// assert_eq!(
+    ///     parse("x-purrdf-norwegiannynorsk"),
+    ///     Err(LanguageTagError::SubtagLengthOverEight)
+    /// );
+    /// let relaxed = parse_with("x-purrdf-norwegiannynorsk", Profile::Rfc5646PrivateUseRelaxed)?;
+    /// assert_eq!(
+    ///     relaxed.private_use_subtags().collect::<Vec<_>>(),
+    ///     ["purrdf", "norwegiannynorsk"]
+    /// );
+    ///
+    /// // What it does NOT widen: an over-long subtag before the marker is not
+    /// // a private-use one, and every other production keeps its §2.1 shape.
+    /// assert_eq!(
+    ///     parse_with("abcdefghi-x-a", Profile::Rfc5646PrivateUseRelaxed),
+    ///     Err(LanguageTagError::SubtagLengthOverEight)
+    /// );
+    /// assert_eq!(
+    ///     parse_with("de-419-DE", Profile::Rfc5646PrivateUseRelaxed),
+    ///     Err(LanguageTagError::UnconsumedSubtag)
+    /// );
+    /// // …and the neighbours that must still be taken.
+    /// assert!(parse_with("abcdefgh-x-a", Profile::Rfc5646PrivateUseRelaxed).is_ok());
+    /// assert!(parse_with("de-DE", Profile::Rfc5646PrivateUseRelaxed).is_ok());
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     Rfc5646PrivateUseRelaxed,
     /// The `LANGTAG` **terminal** of the RDF concrete syntaxes, rather than the
     /// RFC 5646 `Language-Tag` production.
@@ -254,11 +364,61 @@ pub enum Profile {
     /// profile. Only a tag that has no such reading comes back as
     /// [`TagForm::ConcreteSyntaxOnly`], with no sections, because the terminal
     /// genuinely does not name any.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagError, Profile, TagForm, parse, parse_with};
+    ///
+    /// // A tag with an RFC 5646 reading keeps its decomposition.
+    /// let kept = parse_with("de-CH-x-phonebk", Profile::ConcreteSyntaxLangtag)?;
+    /// assert_eq!(kept, parse("de-CH-x-phonebk")?);
+    /// assert_eq!(kept.region(), Some("CH"));
+    ///
+    /// // A tag with no such reading is accepted with nothing to decompose,
+    /// // because the terminal names no sections.
+    /// assert_eq!(parse("en-fr-jura"), Err(LanguageTagError::UnconsumedSubtag));
+    /// let terminal = parse_with("en-fr-jura", Profile::ConcreteSyntaxLangtag)?;
+    /// assert_eq!(terminal.form(), TagForm::ConcreteSyntaxOnly);
+    /// assert_eq!(terminal.as_str(), "en-fr-jura");
+    /// assert_eq!(terminal.primary_language(), None);
+    ///
+    /// // Still a grammar, not a rubber stamp: the neighbour is what proves the
+    /// // refusal is about the character class rather than about the subtag.
+    /// assert_eq!(
+    ///     parse_with("9-9", Profile::ConcreteSyntaxLangtag),
+    ///     Err(LanguageTagError::TerminalPrimaryNotAlpha)
+    /// );
+    /// assert!(parse_with("en-9", Profile::ConcreteSyntaxLangtag).is_ok());
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     ConcreteSyntaxLangtag,
 }
 
 /// Which of the three top-level `Language-Tag` alternatives matched, or that
 /// none did and only a looser profile's grammar was satisfied.
+///
+/// # Examples
+///
+/// The form is what tells a caller whether there are sections to read at all:
+/// only [`Self::Langtag`] decomposes.
+///
+/// ```rust
+/// use purrdf_iri::langtag::{Profile, TagForm, parse, parse_with};
+///
+/// assert_eq!(parse("zh-Hans-CN")?.form(), TagForm::Langtag);
+/// assert_eq!(parse("x-gmeow-english")?.form(), TagForm::PrivateUse);
+/// assert_eq!(parse("i-enochian")?.form(), TagForm::Grandfathered);
+/// assert_eq!(
+///     parse_with("en-fr-jura", Profile::ConcreteSyntaxLangtag)?.form(),
+///     TagForm::ConcreteSyntaxOnly
+/// );
+///
+/// // The whole-tag forms name no `language`; the ordinary one does.
+/// assert_eq!(parse("zh-Hans-CN")?.primary_language(), Some("zh"));
+/// assert_eq!(parse("i-enochian")?.primary_language(), None);
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TagForm {
     /// The ordinary `langtag` production (`language ["-" script] ...`).
@@ -281,6 +441,24 @@ pub enum TagForm {
 /// could not be satisfied, and one for input left over after the whole
 /// production ran. Callers (and fixtures) can therefore assert *which* rule
 /// refused, not merely that something did.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::{LanguageTagError, is_well_formed, parse};
+///
+/// // The error names the production, so a diagnostic can say which rule bit.
+/// assert_eq!(parse("en--US"), Err(LanguageTagError::SubtagLengthZero));
+/// assert_eq!(parse("e"), Err(LanguageTagError::LanguageProductionUnmatched));
+/// assert_eq!(parse("en-a"), Err(LanguageTagError::SingletonWithoutSubtag));
+/// assert_eq!(parse("en-x"), Err(LanguageTagError::PrivateUseWithoutSubtag));
+/// assert_eq!(parse("de-419-DE"), Err(LanguageTagError::UnconsumedSubtag));
+///
+/// // Each refusal has a neighbour a single edit away that is still accepted.
+/// for accepted in ["en-US", "en", "en-a-bb", "en-x-a", "de-DE"] {
+///     assert!(is_well_formed(accepted));
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum LanguageTagError {
@@ -328,6 +506,26 @@ impl LanguageTagError {
     ///
     /// This module is the single owner of the `langtag-*` family; the strings
     /// are a contract and never change meaning.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagError, parse};
+    ///
+    /// let error = parse("de-419-DE").expect_err("two region subtags");
+    /// assert_eq!(error.diagnostic_code(), "langtag-unconsumed-subtag");
+    ///
+    /// // Every code is in the one family, and distinct within it.
+    /// assert_eq!(
+    ///     LanguageTagError::SubtagLengthOverEight.diagnostic_code(),
+    ///     "langtag-subtag-length-over-eight"
+    /// );
+    /// assert!(error.diagnostic_code().starts_with("langtag-"));
+    ///
+    /// // The code is machine-readable; `message`/`Display` is the prose twin.
+    /// assert_eq!(error.to_string(), error.message());
+    /// assert_ne!(error.to_string(), error.diagnostic_code());
+    /// ```
     #[must_use]
     pub const fn diagnostic_code(self) -> &'static str {
         match self {
@@ -350,6 +548,20 @@ impl LanguageTagError {
     /// embedding artifact validator is one — would otherwise have to collapse
     /// every refusal to a single generic sentence to fit, which is precisely
     /// how a typed diagnostic stops reaching the user.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagError, parse};
+    ///
+    /// // A `&'static str` payload, so it fits an error type that cannot format.
+    /// let reason: &'static str = LanguageTagError::SubtagLengthZero.message();
+    /// assert_eq!(reason, "language tag has a zero-length subtag");
+    ///
+    /// // `Display` renders exactly this, so both doors say the same thing.
+    /// let error = parse("en--US").expect_err("empty interior subtag");
+    /// assert_eq!(error.to_string(), reason);
+    /// ```
     #[must_use]
     pub const fn message(self) -> &'static str {
         match self {
@@ -462,6 +674,29 @@ impl Sections {
 /// reading verbatim whenever one exists). So equal strings imply equal records,
 /// which is exactly what makes the [`Borrow<str>`] impl below lawful — a
 /// `HashMap` or `BTreeMap` keyed by a tag can be probed with a plain `&str`.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::{TagForm, parse};
+///
+/// let tag = parse("zh-cmn-Hans-CN-1901-u-islamcal-x-priv")?;
+/// assert_eq!(tag.form(), TagForm::Langtag);
+/// assert_eq!(tag.primary_language(), Some("zh"));
+/// assert_eq!(tag.extended_language(), Some("cmn"));
+/// assert_eq!(tag.script(), Some("Hans"));
+/// assert_eq!(tag.region(), Some("CN"));
+/// assert_eq!(tag.variants().collect::<Vec<_>>(), ["1901"]);
+/// assert_eq!(tag.extensions(), Some("u-islamcal"));
+/// assert_eq!(tag.private_use(), Some("x-priv"));
+///
+/// // Nothing is copied or re-cased: every section is a slice of the input.
+/// let mixed = parse("EN-us")?;
+/// assert_eq!(mixed.as_str(), "EN-us");
+/// assert_eq!(mixed.primary_language(), Some("EN"));
+/// assert_eq!(mixed.region(), Some("us"));
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LanguageTag<'a> {
     /// The input, exactly as supplied.
@@ -496,12 +731,33 @@ impl<'a> LanguageTag<'a> {
     }
 
     /// The tag exactly as supplied.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// // Verbatim: the parser never re-encodes or case-normalizes its input.
+    /// assert_eq!(parse("eN-Us")?.as_str(), "eN-Us");
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub const fn as_str(&self) -> &'a str {
         self.tag
     }
 
     /// Which top-level alternative matched.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{TagForm, parse};
+    ///
+    /// assert_eq!(parse("en-US")?.form(), TagForm::Langtag);
+    /// assert_eq!(parse("x-purrdf-english")?.form(), TagForm::PrivateUse);
+    /// assert_eq!(parse("art-lojban")?.form(), TagForm::Grandfathered);
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub const fn form(&self) -> TagForm {
         self.form
@@ -509,30 +765,115 @@ impl<'a> LanguageTag<'a> {
 
     /// The primary language subtag (`langtag` form only; a grandfathered or
     /// whole-tag private-use tag has no decomposable components).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// // The `extlang` is reported separately, so this is the primary alone.
+    /// assert_eq!(parse("zh-cmn-Hans-CN")?.primary_language(), Some("zh"));
+    /// assert_eq!(parse("und")?.primary_language(), Some("und"));
+    ///
+    /// // The whole-tag forms name no `language` at all.
+    /// assert_eq!(parse("x-whatever")?.primary_language(), None);
+    /// assert_eq!(parse("i-enochian")?.primary_language(), None);
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn primary_language(&self) -> Option<&'a str> {
         self.sections.language.map(|span| span.of(self.tag))
     }
 
     /// The extended-language subtags, hyphen-joined, when present.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// // `extlang = 3ALPHA *2("-" 3ALPHA)` — up to three subtags, one run.
+    /// assert_eq!(parse("zh-cmn-Hans-CN")?.extended_language(), Some("cmn"));
+    /// assert_eq!(parse("zh-cmn-yue-nan")?.extended_language(), Some("cmn-yue-nan"));
+    ///
+    /// // `["-" extlang]` hangs off the `2*3ALPHA` alternative of `language`
+    /// // only, so a 4ALPHA primary language never has one.
+    /// assert_eq!(parse("abcd-Latn")?.extended_language(), None);
+    /// assert_eq!(parse("cmn-Hans-CN")?.extended_language(), None);
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn extended_language(&self) -> Option<&'a str> {
         self.sections.extlang.map(|span| span.of(self.tag))
     }
 
     /// The script subtag, when present.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{is_well_formed, parse};
+    ///
+    /// // `script = 4ALPHA`, reported as written rather than title-cased.
+    /// assert_eq!(parse("sr-Latn-RS")?.script(), Some("Latn"));
+    /// assert_eq!(parse("ZH-HANT")?.script(), Some("HANT"));
+    /// assert_eq!(parse("en-US")?.script(), None);
+    ///
+    /// // Four letters exactly: `Lat1` is not a script, and is not anything else
+    /// // either, so the tag is refused; the neighbour is accepted.
+    /// assert!(!is_well_formed("en-Lat1"));
+    /// assert!(is_well_formed("en-Latn"));
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn script(&self) -> Option<&'a str> {
         self.sections.script.map(|span| span.of(self.tag))
     }
 
     /// The region subtag, when present.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{is_well_formed, parse};
+    ///
+    /// // `region = 2ALPHA / 3DIGIT`.
+    /// assert_eq!(parse("de-DE")?.region(), Some("DE"));
+    /// assert_eq!(parse("es-419")?.region(), Some("419"));
+    /// assert_eq!(parse("de")?.region(), None);
+    ///
+    /// // One region, not two — with the one-region neighbour that still works.
+    /// assert!(!is_well_formed("de-419-DE"));
+    /// assert!(is_well_formed("de-DE"));
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn region(&self) -> Option<&'a str> {
         self.sections.region.map(|span| span.of(self.tag))
     }
 
     /// The variant subtags in order of appearance.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{is_well_formed, parse};
+    ///
+    /// // `variant = 5*8alphanum / (DIGIT 3alphanum)`.
+    /// assert_eq!(
+    ///     parse("sl-rozaj-biske-1994")?.variants().collect::<Vec<_>>(),
+    ///     ["rozaj", "biske", "1994"]
+    /// );
+    ///
+    /// // A tag with no variants yields nothing, not an empty subtag.
+    /// assert_eq!(parse("en-US")?.variants().count(), 0);
+    ///
+    /// // The four-character alternative must start with a DIGIT; the
+    /// // digit-led neighbour is accepted.
+    /// assert!(!is_well_formed("en-a234"));
+    /// assert!(is_well_formed("en-1234"));
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     pub fn variants(&self) -> impl Iterator<Item = &'a str> {
         subtags_in(self.sections.variants.map(|span| span.of(self.tag)))
     }
@@ -543,6 +884,23 @@ impl<'a> LanguageTag<'a> {
     /// This is the run exactly as written. Use
     /// [`extensions_by_singleton`](Self::extensions_by_singleton) to walk it as
     /// the `singleton 1*("-" (2*8alphanum))` groups the ABNF actually names.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// // Every extension as one run, singletons included.
+    /// assert_eq!(parse("en-a-myext-b-another")?.extensions(), Some("a-myext-b-another"));
+    /// assert_eq!(parse("en-US-u-islamcal")?.extensions(), Some("u-islamcal"));
+    /// assert_eq!(parse("en-US")?.extensions(), None);
+    ///
+    /// // The private-use section is not an extension and is reported apart.
+    /// let both = parse("zh-CN-a-myext-x-private")?;
+    /// assert_eq!(both.extensions(), Some("a-myext"));
+    /// assert_eq!(both.private_use(), Some("x-private"));
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn extensions(&self) -> Option<&'a str> {
         self.sections.extensions.map(|span| span.of(self.tag))
@@ -561,6 +919,39 @@ impl<'a> LanguageTag<'a> {
     /// formed side, so `ar-a-aaa-b-bbb-a-ccc` yields three extensions, two of
     /// which are keyed `a`. A caller that needs one section per singleton must
     /// decide for itself which repeat wins.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{Extension, is_well_formed, parse};
+    ///
+    /// let tag = parse("de-DE-u-co-phonebk-t-en-a-myext")?;
+    /// assert_eq!(
+    ///     tag.extensions_by_singleton()
+    ///         .map(|extension| (extension.singleton(), extension.as_str()))
+    ///         .collect::<Vec<_>>(),
+    ///     [('u', "u-co-phonebk"), ('t', "t-en"), ('a', "a-myext")]
+    /// );
+    ///
+    /// // A repeated singleton is well-formed (validity is a registry concern),
+    /// // so the grouping reports both rather than folding them together.
+    /// assert_eq!(
+    ///     parse("ar-a-aaa-b-bbb-a-ccc")?
+    ///         .extensions_by_singleton()
+    ///         .map(Extension::as_str)
+    ///         .collect::<Vec<_>>(),
+    ///     ["a-aaa", "b-bbb", "a-ccc"]
+    /// );
+    ///
+    /// // Each singleton needs a subtag before the next one may start; the
+    /// // neighbour that gives it one is accepted.
+    /// assert!(!is_well_formed("en-a-b-cc"));
+    /// assert!(is_well_formed("en-a-bb-b-cc"));
+    ///
+    /// // No extensions at all is an empty iterator, not a one-item one.
+    /// assert_eq!(parse("en-US")?.extensions_by_singleton().count(), 0);
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     pub fn extensions_by_singleton(&self) -> impl Iterator<Item = Extension<'a>> {
         split_extensions(self.extensions())
     }
@@ -572,6 +963,29 @@ impl<'a> LanguageTag<'a> {
     /// "First" rather than "the": see
     /// [`extensions_by_singleton`](Self::extensions_by_singleton) for why a
     /// well-formed tag may carry a singleton twice.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{Extension, parse};
+    ///
+    /// let tag = parse("de-DE-u-co-phonebk-nu-latn")?;
+    /// let unicode = tag.extension('u').expect("a `u` extension");
+    /// assert_eq!(unicode.as_str(), "u-co-phonebk-nu-latn");
+    /// assert_eq!(unicode.subtags().collect::<Vec<_>>(), ["co", "phonebk", "nu", "latn"]);
+    ///
+    /// // `singleton` is an ABNF character range over both cases.
+    /// assert_eq!(tag.extension('U'), Some(unicode));
+    /// // A singleton the tag does not carry is `None`, not an empty section.
+    /// assert_eq!(tag.extension('z'), None);
+    ///
+    /// // With a repeated singleton the lookup reports the first, and says so.
+    /// assert_eq!(
+    ///     parse("ar-a-aaa-b-bbb-a-ccc")?.extension('a').map(Extension::as_str),
+    ///     Some("a-aaa")
+    /// );
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn extension(&self, singleton: char) -> Option<Extension<'a>> {
         self.extensions_by_singleton()
@@ -580,6 +994,24 @@ impl<'a> LanguageTag<'a> {
 
     /// The private-use section including its `x`/`X` marker (`x-phonebk`), or
     /// the whole tag for the whole-tag private-use form.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{is_well_formed, parse};
+    ///
+    /// // As the trailing section of a `langtag`…
+    /// assert_eq!(parse("de-CH-x-phonebk")?.private_use(), Some("x-phonebk"));
+    /// // …and as the whole tag.
+    /// assert_eq!(parse("x-gmeow-english")?.private_use(), Some("x-gmeow-english"));
+    /// assert_eq!(parse("en-US")?.private_use(), None);
+    ///
+    /// // The marker needs at least one subtag; the neighbour that has one is
+    /// // accepted.
+    /// assert!(!is_well_formed("en-x"));
+    /// assert!(is_well_formed("en-x-a"));
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn private_use(&self) -> Option<&'a str> {
         self.sections.private_use.map(|span| span.of(self.tag))
@@ -590,6 +1022,35 @@ impl<'a> LanguageTag<'a> {
     /// Empty when the tag has no private-use section. The marker itself is
     /// never yielded, and `privateuse = "x" 1*("-" (1*8alphanum))` guarantees at
     /// least one subtag whenever the section exists.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{Profile, parse, parse_with};
+    ///
+    /// // The `x`/`X` marker is never yielded.
+    /// assert_eq!(
+    ///     parse("x-gmeow-chinese-latn")?.private_use_subtags().collect::<Vec<_>>(),
+    ///     ["gmeow", "chinese", "latn"]
+    /// );
+    /// assert_eq!(
+    ///     parse("de-CH-x-phonebk")?.private_use_subtags().collect::<Vec<_>>(),
+    ///     ["phonebk"]
+    /// );
+    ///
+    /// // A subtag past the §2.1 eight-character bound needs the profile that
+    /// // admits it, and then reads back whole.
+    /// assert_eq!(
+    ///     parse_with("x-purrdf-norwegiannynorsk", Profile::Rfc5646PrivateUseRelaxed)?
+    ///         .private_use_subtags()
+    ///         .collect::<Vec<_>>(),
+    ///     ["purrdf", "norwegiannynorsk"]
+    /// );
+    ///
+    /// // No private-use section yields nothing, not an empty subtag.
+    /// assert_eq!(parse("en-US")?.private_use_subtags().count(), 0);
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     pub fn private_use_subtags(&self) -> impl Iterator<Item = &'a str> {
         subtags_in(
             self.private_use()
@@ -602,6 +1063,20 @@ impl<'a> LanguageTag<'a> {
     /// See [`canonical_case`] for the rule and its two exceptions. Allocating
     /// and idempotent; the result parses to an equal tag under the same profile,
     /// case being insignificant to the grammar.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// // Language lower, region upper, script title — a positional rule.
+    /// assert_eq!(parse("ZH-hant-cn")?.canonical_case(), "zh-Hant-CN");
+    /// // Idempotent: the canonical spelling is a fixed point.
+    /// assert_eq!(parse("zh-Hant-CN")?.canonical_case(), "zh-Hant-CN");
+    /// // Nothing after a singleton is title-cased, so private use folds down.
+    /// assert_eq!(parse("X-GMEOW-CHINESE-LATN")?.canonical_case(), "x-gmeow-chinese-latn");
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn canonical_case(&self) -> String {
         let mut canonical = String::with_capacity(self.tag.len());
@@ -613,12 +1088,46 @@ impl<'a> LanguageTag<'a> {
     ///
     /// Decides the same question as `tag.as_str() == tag.canonical_case()`
     /// without allocating.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// for tag in ["en-US", "zh-Hans-CN", "es-419", "i-enochian", "de-CH-x-phonebk"] {
+    ///     let parsed = parse(tag)?;
+    ///     assert!(parsed.is_canonical_case(), "{tag} is already canonical");
+    ///     // The same question the allocating rewrite answers.
+    ///     assert_eq!(parsed.is_canonical_case(), parsed.as_str() == parsed.canonical_case());
+    /// }
+    ///
+    /// let folded = parse("EN-us")?;
+    /// assert!(!folded.is_canonical_case());
+    /// assert_eq!(folded.canonical_case(), "en-US");
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn is_canonical_case(&self) -> bool {
         canonical_case_holds(self.tag)
     }
 
     /// This tag as an owning [`LanguageTagBuf`], copying the input once.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagBuf, parse};
+    ///
+    /// // The borrow ends with the input; the owning twin outlives it.
+    /// let owned = {
+    ///     let input = String::from("zh-Hans-CN-x-priv");
+    ///     parse(&input)?.to_owned_tag()
+    /// };
+    /// assert_eq!(owned.as_str(), "zh-Hans-CN-x-priv");
+    /// assert_eq!(owned.script(), Some("Hans"));
+    /// assert_eq!(owned, LanguageTagBuf::parse("zh-Hans-CN-x-priv")?);
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn to_owned_tag(&self) -> LanguageTagBuf {
         LanguageTagBuf {
@@ -669,6 +1178,20 @@ impl PartialOrd for LanguageTag<'_> {
 ///
 /// Yielded by [`LanguageTag::extensions_by_singleton`]. The section is a slice
 /// of the original input, so its case is whatever the author wrote.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::parse;
+///
+/// let tag = parse("EN-US-U-ISLAMCAL")?;
+/// let extension = tag.extension('u').expect("a `u` extension");
+/// assert_eq!(extension.singleton(), 'U');
+/// assert_eq!(extension.as_str(), "U-ISLAMCAL");
+/// assert_eq!(extension.to_string(), "U-ISLAMCAL");
+/// assert_eq!(extension.subtags().collect::<Vec<_>>(), ["ISLAMCAL"]);
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Extension<'a> {
     /// The `singleton` that keys this extension.
@@ -680,12 +1203,40 @@ pub struct Extension<'a> {
 impl<'a> Extension<'a> {
     /// The singleton this extension is keyed by (`'u'` in `u-islamcal`), as
     /// written.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// let tag = parse("en-US-u-islamcal-t-en")?;
+    /// assert_eq!(
+    ///     tag.extensions_by_singleton()
+    ///         .map(|extension| extension.singleton())
+    ///         .collect::<Vec<_>>(),
+    ///     ['u', 't']
+    /// );
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub const fn singleton(self) -> char {
         self.singleton
     }
 
     /// The whole section including its singleton (`u-islamcal`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// let tag = parse("de-DE-u-co-phonebk")?;
+    /// let extension = tag.extension('u').expect("a `u` extension");
+    /// assert_eq!(extension.as_str(), "u-co-phonebk");
+    /// // A slice of the input, so it is also a slice of the extension run.
+    /// assert_eq!(tag.extensions(), Some("u-co-phonebk"));
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub const fn as_str(self) -> &'a str {
         self.section
@@ -695,6 +1246,23 @@ impl<'a> Extension<'a> {
     /// `u-co-phonebk`).
     ///
     /// Never empty: the `1*` in the production requires at least one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::parse;
+    ///
+    /// let tag = parse("de-DE-u-co-phonebk-nu-latn-a-myext")?;
+    /// assert_eq!(
+    ///     tag.extension('u').expect("a `u` extension").subtags().collect::<Vec<_>>(),
+    ///     ["co", "phonebk", "nu", "latn"]
+    /// );
+    /// // The singleton is never yielded, and the run is never empty.
+    /// let myext = tag.extension('a').expect("an `a` extension");
+    /// assert_eq!(myext.subtags().collect::<Vec<_>>(), ["myext"]);
+    /// assert!(myext.subtags().next().is_some());
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     pub fn subtags(self) -> impl Iterator<Item = &'a str> {
         self.section
             .get(MARKER_PREFIX_WIDTH..)
@@ -725,6 +1293,32 @@ impl AsRef<str> for Extension<'_> {
 /// Its identity rules are [`LanguageTag`]'s, for the same reason: structural
 /// equality, string-keyed [`Ord`] and [`Hash`], and therefore a lawful
 /// [`Borrow<str>`] that lets `HashMap<LanguageTagBuf, _>` be probed with `&str`.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::collections::HashMap;
+///
+/// use purrdf_iri::langtag::{LanguageTagBuf, TagForm};
+///
+/// // `FromStr` is `parse` with the default profile.
+/// let tag: LanguageTagBuf = "zh-Hans-CN-x-priv".parse()?;
+/// assert_eq!(tag.form(), TagForm::Langtag);
+/// assert_eq!(tag.script(), Some("Hans"));
+/// assert_eq!(tag.private_use_subtags().collect::<Vec<_>>(), ["priv"]);
+/// assert_eq!(tag.to_string(), "zh-Hans-CN-x-priv");
+///
+/// // `Borrow<str>` is why the owning form exists: a map keyed by a tag can be
+/// // probed with a plain string.
+/// let mut labels = HashMap::new();
+/// labels.insert(tag, "simplified Chinese, private");
+/// assert_eq!(labels.get("zh-Hans-CN-x-priv"), Some(&"simplified Chinese, private"));
+///
+/// // And it refuses exactly what the borrowing form refuses.
+/// assert!("de-419-DE".parse::<LanguageTagBuf>().is_err());
+/// assert!("de-DE".parse::<LanguageTagBuf>().is_ok());
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LanguageTagBuf {
     /// The tag exactly as supplied.
@@ -738,6 +1332,26 @@ pub struct LanguageTagBuf {
 impl LanguageTagBuf {
     /// Parses `tag` against [`Profile::Rfc5646`] into an owning tag.
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagBuf, LanguageTagError};
+    ///
+    /// let tag = LanguageTagBuf::parse("sl-IT-nedis")?;
+    /// assert_eq!(tag.primary_language(), Some("sl"));
+    /// assert_eq!(tag.region(), Some("IT"));
+    /// assert_eq!(tag.variants().collect::<Vec<_>>(), ["nedis"]);
+    ///
+    /// // §2.1's eight-character ceiling applies, as always under this profile —
+    /// // and the neighbour one character shorter is still accepted.
+    /// assert_eq!(
+    ///     LanguageTagBuf::parse("x-purrdf-afrikaans"),
+    ///     Err(LanguageTagError::SubtagLengthOverEight)
+    /// );
+    /// assert!(LanguageTagBuf::parse("x-purrdf-english").is_ok());
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// The typed [`LanguageTagError`] [`parse`] would have returned.
@@ -747,6 +1361,28 @@ impl LanguageTagBuf {
 
     /// Parses `tag` against `profile` into an owning tag.
     ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagBuf, Profile, TagForm};
+    ///
+    /// // The profile that admits the private-use families real projects publish.
+    /// let tag = LanguageTagBuf::parse_with(
+    ///     "x-gmeow-norwegiannynorsk",
+    ///     Profile::Rfc5646PrivateUseRelaxed,
+    /// )?;
+    /// assert_eq!(tag.form(), TagForm::PrivateUse);
+    /// assert_eq!(
+    ///     tag.private_use_subtags().collect::<Vec<_>>(),
+    ///     ["gmeow", "norwegiannynorsk"]
+    /// );
+    ///
+    /// // The same string under the strict profile is refused, which is the
+    /// // whole reason the parameter exists.
+    /// assert!(LanguageTagBuf::parse_with("x-gmeow-norwegiannynorsk", Profile::Rfc5646).is_err());
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// The typed [`LanguageTagError`] [`parse_with`] would have returned.
@@ -755,6 +1391,20 @@ impl LanguageTagBuf {
     }
 
     /// The borrowing view, which is where every section accessor lives.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::{LanguageTagBuf, parse};
+    ///
+    /// let owned = LanguageTagBuf::parse("hy-Latn-IT-arevela")?;
+    /// let borrowed = owned.as_language_tag();
+    /// // The two forms are one decomposition, not two that could drift.
+    /// assert_eq!(borrowed, parse("hy-Latn-IT-arevela")?);
+    /// assert_eq!(borrowed.script(), Some("Latn"));
+    /// assert_eq!(borrowed.variants().collect::<Vec<_>>(), ["arevela"]);
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn as_language_tag(&self) -> LanguageTag<'_> {
         LanguageTag {
@@ -771,6 +1421,17 @@ impl LanguageTagBuf {
     }
 
     /// Consumes the tag, returning the string it owns.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::LanguageTagBuf;
+    ///
+    /// // No copy, and the string comes back exactly as it went in.
+    /// let tag = LanguageTagBuf::parse("EN-us")?;
+    /// assert_eq!(tag.into_string(), "EN-us");
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn into_string(self) -> String {
         self.tag
@@ -858,6 +1519,24 @@ impl LanguageTagBuf {
     ///
     /// Case is insignificant to every production, so the spans are unchanged by
     /// construction — the rewrite replaces bytes, never subtag boundaries.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_iri::langtag::LanguageTagBuf;
+    ///
+    /// let folded = LanguageTagBuf::parse("ZH-hant-cn")?;
+    /// assert!(!folded.is_canonical_case());
+    ///
+    /// let canonical = folded.into_canonical_case();
+    /// assert_eq!(canonical.as_str(), "zh-Hant-CN");
+    /// // The sections survive the rewrite, because only bytes changed.
+    /// assert_eq!(canonical.script(), Some("Hant"));
+    /// assert_eq!(canonical.region(), Some("CN"));
+    /// // …and it lands on the record a fresh parse would have given.
+    /// assert_eq!(canonical, LanguageTagBuf::parse("zh-Hant-CN")?);
+    /// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+    /// ```
     #[must_use]
     pub fn into_canonical_case(self) -> Self {
         let mut canonical = String::with_capacity(self.tag.len());
@@ -964,6 +1643,32 @@ fn next_extension<'a>(rest: &mut &'a str) -> Option<Extension<'a>> {
 }
 
 /// `true` when `tag` matches the RFC 5646 `Language-Tag` production.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::is_well_formed;
+///
+/// // All three top-level alternatives.
+/// assert!(is_well_formed("en-US"));
+/// assert!(is_well_formed("x-purrdf-english"));
+/// assert!(is_well_formed("i-enochian"));
+///
+/// // Well-formedness is syntax only: no subtag is ever looked up, so an
+/// // unregistered language, script and region are all well-formed…
+/// assert!(is_well_formed("qq-Zzzz-QQ"));
+/// // …and so is a duplicate extension singleton, which §2.2.9 puts on the
+/// // invalid-but-well-formed side.
+/// assert!(is_well_formed("ar-a-aaa-b-bbb-a-ccc"));
+///
+/// // What actually fails is the ABNF, each refusal beside its neighbour.
+/// assert!(!is_well_formed("e"));
+/// assert!(is_well_formed("en"));
+/// assert!(!is_well_formed("en--US"));
+/// assert!(is_well_formed("en-US"));
+/// assert!(!is_well_formed("a1"));
+/// assert!(is_well_formed("aa"));
+/// ```
 #[must_use]
 pub fn is_well_formed(tag: &str) -> bool {
     parse(tag).is_ok()
@@ -971,6 +1676,28 @@ pub fn is_well_formed(tag: &str) -> bool {
 
 /// `true` when `tag` matches the `Language-Tag` production as `profile` draws
 /// it. [`is_well_formed`] is this with [`Profile::Rfc5646`].
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::{Profile, is_well_formed, is_well_formed_with};
+///
+/// // The profile-free entry point is `Profile::Rfc5646`, exactly.
+/// assert_eq!(
+///     is_well_formed("de-CH-x-phonebk"),
+///     is_well_formed_with("de-CH-x-phonebk", Profile::Rfc5646)
+/// );
+///
+/// // Why the profile matters: an ingesting Turtle parser holds a tag to the
+/// // `LANGTAG` terminal its own grammar states, which is looser than §2.1.
+/// assert!(!is_well_formed_with("en-fr-jura", Profile::Rfc5646));
+/// assert!(is_well_formed_with("en-fr-jura", Profile::ConcreteSyntaxLangtag));
+///
+/// // A caller deciding whether a tag is fit to publish wants the strict one,
+/// // which is why the looser profile is never the default.
+/// assert!(!is_well_formed_with("abcdefghijklmnop", Profile::Rfc5646));
+/// assert!(is_well_formed_with("abcdefghijklmnop", Profile::ConcreteSyntaxLangtag));
+/// ```
 #[must_use]
 pub fn is_well_formed_with(tag: &str, profile: Profile) -> bool {
     parse_with(tag, profile).is_ok()
@@ -1048,6 +1775,39 @@ pub fn canonical_case(tag: &str) -> Result<String, LanguageTagError> {
 /// reading and therefore no sections; §2.1.1's rule is positional, so it still
 /// applies, and it is applied exactly as written.
 ///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::{LanguageTagError, Profile, canonical_case, canonical_case_with};
+///
+/// // The private-use families downstream projects publish need the profile
+/// // that admits them, and then come back byte-identical: nothing in the
+/// // private-use space is title-cased at any length.
+/// assert_eq!(
+///     canonical_case("x-gmeow-norwegiannynorsk"),
+///     Err(LanguageTagError::SubtagLengthOverEight)
+/// );
+/// assert_eq!(
+///     canonical_case_with("x-gmeow-norwegiannynorsk", Profile::Rfc5646PrivateUseRelaxed)?,
+///     "x-gmeow-norwegiannynorsk"
+/// );
+/// assert_eq!(
+///     canonical_case_with("X-PURRDF-ENGLISH", Profile::Rfc5646PrivateUseRelaxed)?,
+///     "x-purrdf-english"
+/// );
+///
+/// // §2.1.1 is positional, not production-driven, so it applies to a
+/// // terminal-only tag too — and applies exactly as written: `FR` is uppercased
+/// // because it is a two-character subtag that is neither first nor after a
+/// // singleton, and `Jura` is title-cased because it is four characters, even
+/// // though this tag has no `region` and no `script` to speak of.
+/// assert_eq!(
+///     canonical_case_with("EN-FR-JURA", Profile::ConcreteSyntaxLangtag)?,
+///     "en-FR-Jura"
+/// );
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
+///
 /// # Errors
 ///
 /// A typed [`LanguageTagError`] naming the production that refused.
@@ -1072,6 +1832,28 @@ pub fn canonical_case_with(tag: &str, profile: Profile) -> Result<String, Langua
 /// | `*("-" extension)` | `take_extensions` |
 /// | `["-" privateuse]` | `take_private_use` |
 ///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::{LanguageTagError, parse};
+///
+/// // One call per line of the production, one section per accessor.
+/// let tag = parse("sl-rozaj-biske-1994")?;
+/// assert_eq!(tag.primary_language(), Some("sl"));
+/// assert_eq!(tag.variants().collect::<Vec<_>>(), ["rozaj", "biske", "1994"]);
+///
+/// // A refusal names the production that refused, not just "invalid".
+/// assert_eq!(
+///     parse("zh-cmn-yue-nan-hak"),
+///     Err(LanguageTagError::ExtlangRepetitionExceeded)
+/// );
+/// // `extlang = 3ALPHA *2("-" 3ALPHA)`: three subtags is the bound, and a
+/// // spent repetition must not poison the sections that follow it.
+/// assert!(parse("zh-cmn-yue-nan").is_ok());
+/// assert!(parse("zh-cmn-yue-nan-Hant-CN").is_ok());
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
+///
 /// # Errors
 ///
 /// A typed [`LanguageTagError`] naming the production that refused; see that
@@ -1087,6 +1869,31 @@ pub fn parse(tag: &str) -> Result<LanguageTag<'_>, LanguageTagError> {
 /// are held to. [`Profile::ConcreteSyntaxLangtag`] replaces the production with
 /// the concrete syntaxes' `LANGTAG` terminal; see [`Profile`] for what each
 /// variant widens.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::{Profile, TagForm, parse, parse_with};
+///
+/// // Widening never costs a caller its decomposition: a tag the narrower
+/// // profile accepts parses to the SAME record under every wider one.
+/// let strict = parse("de-CH-x-phonebk")?;
+/// for profile in [Profile::Rfc5646PrivateUseRelaxed, Profile::ConcreteSyntaxLangtag] {
+///     assert_eq!(parse_with("de-CH-x-phonebk", profile)?, strict);
+/// }
+///
+/// // Only a tag with no RFC 5646 reading at all comes back with no sections,
+/// // because the `LANGTAG` terminal genuinely names none.
+/// let terminal = parse_with("fr-be-fbcl", Profile::ConcreteSyntaxLangtag)?;
+/// assert_eq!(terminal.form(), TagForm::ConcreteSyntaxOnly);
+/// assert_eq!(terminal.primary_language(), None);
+/// // …and the neighbour that does have one keeps it.
+/// assert_eq!(
+///     parse_with("fr-BE", Profile::ConcreteSyntaxLangtag)?.region(),
+///     Some("BE")
+/// );
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
 ///
 /// # Errors
 ///
