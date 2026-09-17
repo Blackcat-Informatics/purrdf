@@ -81,5 +81,18 @@ pub(crate) mod ast;
 )]
 pub(crate) mod dataset;
 pub mod error;
+// Same exemption, same reason, same expiry as `ast` and `dataset` above: the
+// identity's in-crate caller is the container stage, so in a NON-TEST build nothing
+// calls `build_identity`/`check_identity`/`class_catalog_digest` yet. The test build
+// exercises all three, so genuinely unreachable code is still caught.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the identity's in-crate caller is the container stage; the test build exercises \
+                  every item, so unreachable code is still caught"
+    )
+)]
+pub(crate) mod identity;
 
 pub use error::{ProductDimension, ShapesProductError};

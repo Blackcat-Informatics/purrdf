@@ -124,11 +124,25 @@ impl ValidationPlan {
 /// Dataset-independent class references from the complete, cycle-aware shape walk.
 /// Dataset bindings retain only resolved IDs; class names are owned here once.
 #[derive(Debug)]
-struct ClassCatalog {
+pub(crate) struct ClassCatalog {
     indices: FastMap<NamedNode, usize>,
 }
 
 impl ClassCatalog {
+    /// Every planned class with the position its resolved [`TermId`] occupies in a
+    /// [`ValidationPlan`]'s binding row, in unspecified order.
+    ///
+    /// `pub(crate)` for the prepared-product identity
+    /// (`crate::product::identity::class_catalog_digest`), which pins the catalog
+    /// by digest so a restore can prove its own re-derivation matches. The order is
+    /// the backing map's and is therefore NOT a fact about the catalog — every
+    /// consumer sorts.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&NamedNode, usize)> {
+        self.indices
+            .iter()
+            .map(|(class, &position)| (class, position))
+    }
+
     fn for_shapes<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Self {
         let mut scan = ClassScan::default();
         for shape in shapes {
@@ -780,6 +794,31 @@ impl PreparedShapes {
     pub fn new(shapes: Arc<Shapes>) -> Self {
         let classes = Arc::new(ClassCatalog::for_shapes(shapes.node_shapes.iter()));
         Self { shapes, classes }
+    }
+
+    /// The cycle-safe class analysis this preparation derived from its shape tree.
+    ///
+    /// `pub(crate)` and shared rather than public: the catalog is a PURE derivation
+    /// of the shapes, so handing it out publicly would offer callers a second,
+    /// forgeable spelling of something they can always re-derive. The one in-crate
+    /// consumer is `crate::product::identity`, which digests it so a restored
+    /// product's re-derivation can be checked against the digest the product pinned.
+    ///
+    /// The `not(test)` exemption matches `crate::product`'s own: this accessor's
+    /// non-test caller is the container stage, so until that lands nothing in a
+    /// release build reaches it. The test build exercises it, so a genuinely
+    /// unreachable accessor is still caught, and the exemption disappears with the
+    /// container.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "the prepared-product container stage is this accessor's non-test caller; \
+                      the test build exercises it, so unreachable code is still caught"
+        )
+    )]
+    pub(crate) fn class_catalog(&self) -> Arc<ClassCatalog> {
+        Arc::clone(&self.classes)
     }
 
     /// Bind shared shape analysis to a new data holder. All dataset-dependent
