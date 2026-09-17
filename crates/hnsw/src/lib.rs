@@ -147,8 +147,10 @@ impl HnswIndex {
 
     /// The `k` nearest rows to `query_row`, in rank order, nearest first.
     ///
-    /// The beam width is `max(ef_search, k)` capped at the row count, so an invocation is
-    /// never asked for more rows than its beam can hold. An empty `k` returns no rows.
+    /// The beam width is the declared `ef_search`, capped at the row count — never widened
+    /// to fit `k`. A request for more rows than the beam holds is answered with fewer than
+    /// `k` rows rather than by searching a wider graph than the artifact declares. An empty
+    /// `k` returns no rows.
     ///
     /// # Errors
     ///
@@ -221,7 +223,12 @@ impl HnswIndex {
         let Some(entry) = self.graph.entry() else {
             return Ok(Vec::new());
         };
-        let ef = self.params.ef_search().max(k).min(rows);
+        // `ef_search` is part of the declared artifact identity, so it is never widened to
+        // fit a request. A `k` larger than the beam is answered with fewer than `k` rows:
+        // this index offers candidates and never certifies absence, so a short answer is a
+        // legal answer, while a widened beam would silently search a different graph than
+        // the guard committed to.
+        let ef = self.params.ef_search().min(rows);
         let query = Query::new(&self.matrix, self.kernel, &self.norms, cache, query_row);
         // Greedy descent through the layers above 0, then the beam at layer 0.
         let (start, _) = greedy_descend(&self.graph, &query, entry, self.graph.max_level(), 1)?;

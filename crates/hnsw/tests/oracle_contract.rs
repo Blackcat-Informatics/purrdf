@@ -314,6 +314,56 @@ fn a_ceiling_that_prevents_the_first_pull_charges_nothing() {
 }
 
 #[test]
+fn a_planner_ceiling_never_changes_which_rows_are_offered() {
+    // `ef_search` is artifact identity. If the beam width were widened to fit `k`, then a
+    // planner-supplied row ceiling — which shrinks the `k` handed to the search — would
+    // shrink the beam too, and the same query would return a *different* candidate set
+    // depending on a query-plan artifact. `HnswRelation` declares `Volatility::Stable`, so
+    // that would be a false declaration rather than merely a surprise.
+    //
+    // The regime that exposes it is `k > ef_search`, which every other ceiling test in this
+    // file avoids.
+    let (_, space) = fixture_space(64, 4, Params::new(4, 8, 16, 4).expect("valid"));
+    let relation = space.relation();
+    let seed = row_of(&space, 0);
+
+    let (unbounded, _) = drain(&relation, Some(&seed), "16", None, None);
+    let (ceilinged, _) = drain(&relation, Some(&seed), "16", None, Some(3));
+
+    assert!(
+        !ceilinged.is_empty(),
+        "the ceiling should shorten the offer, not empty it"
+    );
+    assert!(
+        ceilinged.len() <= unbounded.len(),
+        "a ceiling can only shorten the offer"
+    );
+    assert_eq!(
+        ceilinged,
+        unbounded[..ceilinged.len()],
+        "the ceilinged offer must be a prefix of the unbounded one: the ceiling decides how \
+         many rows are emitted, never which graph is searched"
+    );
+}
+
+#[test]
+fn a_request_wider_than_the_beam_is_answered_short_not_widened() {
+    // An offer of fewer than `k` rows is legal — this index offers candidates and never
+    // certifies absence. Silently searching a wider graph than the artifact declares is not.
+    let params = Params::new(4, 8, 16, 4).expect("valid");
+    let (_, space) = fixture_space(64, 4, params);
+    let seed = row_of(&space, 0);
+    let (rows, _) = drain(&space.relation(), Some(&seed), "40", None, None);
+    assert_eq!(
+        rows.len(),
+        params.ef_search(),
+        "a request for 40 rows against ef_search={} must be answered with exactly the beam \
+         the artifact declares — neither widened to 40 nor short of the beam",
+        params.ef_search()
+    );
+}
+
+#[test]
 fn a_zero_request_charges_nothing() {
     let (_, space) = fixture_space(32, 4, Params::new(4, 8, 16, 8).expect("valid"));
     let seed = row_of(&space, 0);
