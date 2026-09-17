@@ -379,14 +379,14 @@ fn lookup<I: ViewTermId>(
 /// Intern a value to a solution term (promoting to an existing dataset id).
 ///
 /// [`None`] when the value carries a language tag the grammar refuses — see
-/// [`ScratchInterner::intern`](crate::scratch::ScratchInterner::intern). Every
+/// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked). Every
 /// caller here is inside an expression, so the mapping is the one §17.2 already
 /// states and `eval_str_lang` already performs: the expression is unbound.
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
 ) -> Option<SolutionTerm<D::Id>> {
-    ctx.scratch.intern(ctx.dataset, value)
+    ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
 /// Intern an IRI. Infallible: an IRI carries no language tag.

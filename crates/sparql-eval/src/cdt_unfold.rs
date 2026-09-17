@@ -348,7 +348,7 @@ fn bind<D: DatasetView + Sync>(
     // lexical form carrying an ungrammatical language tag. The row does not
     // survive it, exactly as it does not survive disagreeing with a pre-bound
     // target below: this is a non-match, and a non-match is `false`.
-    let Some(term) = ctx.scratch.intern(ctx.dataset, value) else {
+    let Some(term) = ctx.scratch.intern_checked(ctx.dataset, value) else {
         return false;
     };
     match row[column] {

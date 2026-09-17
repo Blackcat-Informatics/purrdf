@@ -246,13 +246,13 @@ fn as_index(value: &TermValue) -> Option<i64> {
 /// [`None`] when the value carries a language tag the grammar refuses — a
 /// `cdt:List` member is an arbitrary RDF term, so a member lifted back out of a
 /// composite literal's lexical form is exactly such a caller-supplied value. See
-/// [`ScratchInterner::intern`](crate::scratch::ScratchInterner::intern); the
+/// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked); the
 /// list functions are expressions, so the refusal is §17.2's unbound result.
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
 ) -> Option<SolutionTerm<D::Id>> {
-    ctx.scratch.intern(ctx.dataset, value)
+    ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
 /// Intern a typed (no-language) literal. Infallible: there is no tag to judge.

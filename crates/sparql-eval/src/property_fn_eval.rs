@@ -558,7 +558,7 @@ fn eval_call_over<D: DatasetView + Sync>(
                 // answer `unify_row` above gives a row that disagrees, and the
                 // same one `RowIngest::intern_row` documents for a producer that
                 // miscounts its own columns.
-                row[column] = ctx.scratch.intern(ctx.dataset, value);
+                row[column] = ctx.scratch.intern_checked(ctx.dataset, value);
             }
             rows.push(row);
         }

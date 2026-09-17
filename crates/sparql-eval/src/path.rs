@@ -356,7 +356,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // which the parser held to this same profile; a term the
                 // interner refuses names no node, so it reaches nothing, not
                 // even itself.
-                && let Some(term) = ctx.scratch.intern(dataset, sval)
+                && let Some(term) = ctx.scratch.intern_checked(dataset, sval)
             {
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
@@ -378,7 +378,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // to the subject-absent case above.
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
             if path_is_reflexive(path)
-                && let Some(term) = ctx.scratch.intern(dataset, oval)
+                && let Some(term) = ctx.scratch.intern_checked(dataset, oval)
             {
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }

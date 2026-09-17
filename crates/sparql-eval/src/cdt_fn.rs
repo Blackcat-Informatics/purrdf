@@ -699,13 +699,13 @@ fn cdt_literal(
 /// member is an arbitrary RDF term parsed out of a composite literal's LEXICAL
 /// FORM — `"[\"x\"@en us]"^^cdt:List` is a caller-supplied string, not a term
 /// the kernel ever admitted — so this is a real seam, not a formality. See
-/// [`ScratchInterner::intern`](crate::scratch::ScratchInterner::intern); the CDT
+/// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked); the CDT
 /// functions are expressions, so the refusal is §17.2's unbound result.
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
 ) -> Option<SolutionTerm<D::Id>> {
-    ctx.scratch.intern(ctx.dataset, value)
+    ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
 /// Intern a typed (no-language) literal. Infallible: there is no tag to judge.

@@ -51,8 +51,19 @@
 //! JSON-LD blank node identifier rather than a reference, and literal values,
 //! language tags, `LiteralStem`/`LanguageStem` stems, `pattern`/`flags` and a
 //! `SemAct`'s `code` are plain strings the context leaves untyped.
+//!
+//! # A complete language tag is still held to the grammar
+//!
+//! "Untyped by the context" is not "unjudged". The three positions that hold a
+//! WHOLE language tag — an `ObjectLiteral`'s `"language"`, a `Language` value-set
+//! member's `"languageTag"`, and a string exclusion of a `LanguageStemRange` —
+//! go through `check_language_tag` on `crate::lexer`'s `LANGTAG_PROFILE`, the
+//! very constant the ShExC lexer holds `@tag` to. Without that the crate would
+//! refuse its own output, because [`crate::shexc`] writes each of them back out
+//! verbatim after an `@`. A *stem* is deliberately exempt: it is a prefix, and
+//! the empty stem is the spec's "any language" wildcard.
 
-use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
+use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Number, Value, json};
@@ -797,6 +808,7 @@ impl Reader {
             Some("Language") => {
                 let mut obj = Obj::typed(value, "Language", "Language")?;
                 let language_tag = obj.take_str("languageTag")?;
+                check_language_tag(&language_tag, "Language: \"languageTag\"")?;
                 obj.finish()?;
                 Ok(ValueSetValue::Language { language_tag })
             }
@@ -866,7 +878,10 @@ impl Reader {
             .unwrap_or_default()
             .iter()
             .map(|e| match e {
-                Value::String(tag) => Ok(LanguageExclusion::Language(tag.clone())),
+                Value::String(tag) => {
+                    check_language_tag(tag, "LanguageStemRange exclusion")?;
+                    Ok(LanguageExclusion::Language(tag.clone()))
+                }
                 other => {
                     let mut obj = Obj::typed(other, "LanguageStem", "LanguageStemRange exclusion")?;
                     let stem = obj.take_str("stem")?;
@@ -883,7 +898,10 @@ impl Reader {
         let mut obj = Obj::new(value, "ObjectLiteral")?;
         let lit = ObjectLiteral {
             value: obj.take_str("value")?,
-            language: obj.take_str_opt("language")?,
+            language: obj
+                .take_str_opt("language")?
+                .map(|tag| check_language_tag(&tag, "ObjectLiteral: \"language\"").map(|()| tag))
+                .transpose()?,
             datatype: obj
                 .take_str_opt("type")?
                 .map(|dt| self.iri(&dt))
@@ -1041,6 +1059,40 @@ fn plain_stem(value: &Value, what: &'static str) -> Result<StemValue> {
         Value::Object(_) => wildcard_stem(value, what),
         _ => Err(ShexError::shexj(format!(
             "{what}: stem must be a string or Wildcard"
+        ))),
+    }
+}
+
+/// Admit a complete language tag out of an untrusted ShExJ document, on the one
+/// grammar this crate owns.
+///
+/// ShExJ is JSON, so nothing between the file and the AST lexes anything: a
+/// `"language"`, a `"languageTag"` and a `LanguageStemRange` string exclusion are
+/// each a bare `String` lifted straight out of `serde_json`. The ShExC lexer holds
+/// the identical positions to [`crate::lexer::LANGTAG_PROFILE`] (`@tag`), and
+/// [`crate::shexc`] writes every one of them back out **verbatim** after `@`. So
+/// without this call the crate refuses its own output: `parse_shexj` on
+/// `{"language": "en us"}` → `to_shexc` writing `"v"@en us` → `parse_shexc`
+/// rejecting it as a lex error. Refusing at ingress keeps the two syntaxes
+/// denoting the same set of schemas, which is the whole contract between them.
+///
+/// The judgement is on the whole tag, so it is **not** applied to a
+/// `LanguageStem`/`LanguageStemRange` *stem*: a stem is an RFC 4647 basic-filtering
+/// PREFIX (`@en~` matches `en-US`), and the empty stem is the legal "any language"
+/// wildcard — holding a prefix to the complete-tag grammar would refuse schemas the
+/// spec requires.
+///
+/// # Errors
+/// [`ShexError::Shexj`] naming the member, the tag, and `purrdf-iri`'s own
+/// `langtag-*` diagnostic code — the same code `crate::lexer` quotes for the same
+/// condition, because ShEx does not get its own vocabulary for a grammar the
+/// workspace shares.
+fn check_language_tag(tag: &str, what: &str) -> Result<()> {
+    match langtag::parse_with(tag, crate::lexer::LANGTAG_PROFILE) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(ShexError::shexj(format!(
+            "{what}: malformed language tag {tag:?}: {error} [{code}]",
+            code = error.diagnostic_code()
         ))),
     }
 }

@@ -13,8 +13,8 @@
 //! `"xml:lang": "<tag>"` in JSON and as `xml:lang="<tag>"` in XML — bytes no
 //! reader takes back.
 //!
-//! All four converge on `ScratchInterner::intern`, the arena's only door for a
-//! caller-supplied `TermValue`, and that is where the grammar is asked. This
+//! All four converge on `ScratchInterner::intern_checked`, the arena's door for
+//! a caller-supplied `TermValue`, and that is where the grammar is asked. This
 //! file drives the seam a host reaches most easily, a native function, from
 //! real query text through the public engine — and it drives it with BOTH
 //! halves, because a gate that refused `x-purrdf-afrikaans` or `en-fr-jura`

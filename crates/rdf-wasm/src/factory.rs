@@ -16,6 +16,31 @@ use wasm_bindgen::prelude::*;
 
 use crate::term::{Quad, Term, TermInner, parse_direction};
 
+/// Judge a literal's datatype/language/direction agreement — and, inside that,
+/// the language tag's grammar — exactly as the other two language bindings do.
+///
+/// `purrdf-rdf-capi`'s `view_to_value` and `purrdf`'s Python `Literal.__new__`
+/// both call [`RdfLiteral::validate_components`] at the constructor; this crate
+/// was the one binding of the three that did not, so `factory.literal("x", "en
+/// us")` returned a `Literal` and only failed later, at whatever `freeze()` or
+/// serializer eventually met the tag. Naming the shared kernel call rather than
+/// a local re-check is what keeps the three bindings from drifting apart.
+///
+/// The judgement is case-blind, so it gives the same verdict either side of the
+/// lowercase fold `Term::literal`'s canonicalization applies afterwards.
+///
+/// Returns the reason as a `&'static str` rather than a [`JsError`], for the
+/// same reason [`parse_direction`] does: a `JsError` cannot be constructed off
+/// wasm, so a validator that built one would be untestable on the native gate.
+/// The two `#[wasm_bindgen]` doors below wrap it at the boundary.
+fn validate_literal(literal: &RdfLiteral) -> Result<(), &'static str> {
+    RdfLiteral::validate_components(
+        literal.datatype_iri(),
+        literal.language.as_deref(),
+        literal.direction,
+    )
+}
+
 /// An RDF/JS `DataFactory`. Stateless except for the auto-generated blank-node
 /// counter (`blankNode()` with no argument mints a fresh label).
 #[wasm_bindgen]
@@ -69,13 +94,25 @@ impl DataFactory {
     /// (A `#[wasm_bindgen]`-exported type cannot be recovered from an untyped `JsValue`
     /// in Rust, so the polymorphism lives one layer out, in JS.) For base-direction
     /// literals (RDF 1.2) use [`DataFactory::directional_literal`].
+    ///
+    /// # Errors
+    ///
+    /// Throws when `language` is not a language tag the RDF concrete syntaxes
+    /// would have lexed — the same [`RdfLiteral::validate_components`] judgement
+    /// the C ABI and the Python binding make at their own literal constructors,
+    /// so all three language bindings admit one set of tags rather than two.
+    /// Raising it *here* is the whole point: the JS stack trace then names the
+    /// `literal()` call that chose the tag. Without it the tag rides along until
+    /// a `Dataset` freeze or a serializer refuses it, at a call site that never
+    /// saw the string.
     #[wasm_bindgen(js_name = literal)]
-    pub fn literal(&self, value: String, language: Option<String>) -> Term {
+    pub fn literal(&self, value: String, language: Option<String>) -> Result<Term, JsError> {
         let literal = match language {
             Some(language) => RdfLiteral::language_tagged(value, language),
             None => RdfLiteral::simple(value),
         };
-        Term::literal(literal)
+        validate_literal(&literal).map_err(JsError::new)?;
+        Ok(Term::literal(literal))
     }
 
     /// `typedLiteral(value, datatype)` → a datatyped literal. `datatype` must be a
@@ -93,6 +130,14 @@ impl DataFactory {
     /// `directionalLiteral(value, language, direction)` → an RDF-1.2 base-direction
     /// literal (`direction` is `"ltr"` or `"rtl"`). The deliberate extension to stock
     /// RDF/JS — no incumbent library carries base direction.
+    ///
+    /// # Errors
+    ///
+    /// Throws when `direction` is neither `"ltr"` nor `"rtl"`, and — as of the
+    /// language-tag parity fix — when `language` is not a language tag. A base
+    /// direction does not make a non-tag into a tag: `"x"@en us--ltr` is as
+    /// unwritable as `"x"@en us`, so both halves of a directional literal are
+    /// judged, not just the half that already had a checker.
     #[wasm_bindgen(js_name = directionalLiteral)]
     pub fn directional_literal(
         &self,
@@ -101,12 +146,14 @@ impl DataFactory {
         direction: &str,
     ) -> Result<Term, JsError> {
         let direction = parse_direction(direction).map_err(|e| JsError::new(&e))?;
-        Ok(Term::literal(RdfLiteral {
+        let literal = RdfLiteral {
             lexical_form: value,
             datatype: None,
             language: Some(language),
             direction: Some(direction),
-        }))
+        };
+        validate_literal(&literal).map_err(JsError::new)?;
+        Ok(Term::literal(literal))
     }
 
     /// `variable(value)` → a `Variable` term.
@@ -204,13 +251,17 @@ mod tests {
     #[test]
     fn plain_and_language_literals() {
         let f = DataFactory::new();
-        let plain = f.literal("hello".to_owned(), None);
+        let plain = f
+            .literal("hello".to_owned(), None)
+            .expect("no tag to judge");
         assert_eq!(plain.term_type(), "Literal");
         assert_eq!(plain.value(), "hello");
         assert_eq!(plain.language(), "");
         assert_eq!(plain.datatype().unwrap().value(), XSD_STRING);
 
-        let lang = f.literal("hello".to_owned(), Some("en".to_owned()));
+        let lang = f
+            .literal("hello".to_owned(), Some("en".to_owned()))
+            .expect("`en` is a language tag");
         assert_eq!(lang.language(), "en");
     }
 
@@ -235,6 +286,78 @@ mod tests {
         assert_eq!(lit.term_type(), "Literal");
         assert_eq!(lit.language(), "he");
         assert_eq!(lit.direction(), "rtl");
+    }
+
+    /// The parity gap this closes: the C ABI (`purrdf-rdf-capi`'s
+    /// `view_to_value`) and Python (`Literal.__new__`) both refuse a non-tag at
+    /// the constructor; this factory used to hand one back and let a later
+    /// `freeze()` carry the blame.
+    ///
+    /// The accept half is the load-bearing one — a JS caller building
+    /// `@x-purrdf-afrikaans` or `@en-fr-jura` terms must be unaffected — so both
+    /// lists are driven, and the directional door is driven with them because a
+    /// base direction does not make a non-tag into a tag.
+    #[test]
+    fn the_factory_admits_the_same_language_tags_as_the_other_two_bindings() {
+        let f = DataFactory::new();
+        for tag in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "abcdefgh",
+            "en-x-cantbethislong",
+        ] {
+            assert!(
+                f.literal("v".to_owned(), Some((*tag).to_owned())).is_ok(),
+                "{tag} is a tag real data carries and must still build a Literal"
+            );
+            assert!(
+                f.directional_literal("v".to_owned(), (*tag).to_owned(), "ltr")
+                    .is_ok(),
+                "{tag} must still build a directional Literal"
+            );
+        }
+
+        // The refusal half goes at `validate_literal`, the pure validator both
+        // doors call: the doors' own error path builds a `JsError`, which panics
+        // off wasm (see `parse_direction_rejects_bad_direction`). The node lane
+        // in `js/tests` exercises the throw itself.
+        for tag in [
+            "en us",
+            "1",
+            "9-9",
+            "123-456",
+            "en-",
+            "-",
+            "!!!",
+            "abcdefghi",
+            "",
+        ] {
+            assert!(
+                validate_literal(&RdfLiteral::language_tagged("v", tag)).is_err(),
+                "{tag:?} must be refused where the caller named it"
+            );
+            assert!(
+                validate_literal(&RdfLiteral {
+                    lexical_form: "v".to_owned(),
+                    datatype: None,
+                    language: Some((*tag).to_owned()),
+                    direction: Some(purrdf::RdfTextDirection::Ltr),
+                })
+                .is_err(),
+                "{tag:?} must be refused with a direction too"
+            );
+        }
+
+        // An absent tag is not a malformed one: the plain-literal door is
+        // untouched.
+        assert!(f.literal("v".to_owned(), None).is_ok());
     }
 
     #[test]

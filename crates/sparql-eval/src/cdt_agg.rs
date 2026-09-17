@@ -433,8 +433,8 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
     )?;
     // `and_then`, not `map`: an aggregate whose result the interner refuses is
     // an aggregate with no value, which is the same unbound answer this function
-    // already returns for an empty group. See `ScratchInterner::intern`.
-    Ok(value.and_then(|v| ctx.scratch.intern(ctx.dataset, v)))
+    // already returns for an empty group. See `ScratchInterner::intern_checked`.
+    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
 }
 
 /// The scratch-byte cost of one retained [`FoldRow`], through the same

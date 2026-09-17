@@ -251,7 +251,13 @@ pub(crate) fn decode_uchar(
 /// and it stops at the `x` private-use marker, so the `@x-gmeow-…` and
 /// `@x-purrdf-…` families that downstream projects publish in volume are still
 /// taken.
-const LANGTAG_PROFILE: langtag::Profile = langtag::Profile::ConcreteSyntaxLangtagBounded;
+/// `pub(crate)` rather than private: [`crate::shexj`] admits language tags out of
+/// an untrusted JSON document and must judge them on the SAME profile this lexer
+/// judges `@tag` on, or the crate refuses its own output — `parse_shexj` would
+/// accept `{"language": "en us"}`, `to_shexc` would write `"v"@en us`, and
+/// `parse_shexc` would then reject it here. One named constant, one grammar, two
+/// syntaxes.
+pub(crate) const LANGTAG_PROFILE: langtag::Profile = langtag::Profile::ConcreteSyntaxLangtagBounded;
 
 struct Lexer<'a> {
     src: &'a str,
