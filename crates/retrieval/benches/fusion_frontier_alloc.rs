@@ -14,14 +14,14 @@
 //! the claim that the frontier is bounded is made — and enforced — by
 //! `tests/fusion_frontier_alloc.rs`, which compares two runs against each other
 //! rather than against a number. What this adds is the shape of the curve: the
-//! same numbers across a grid of stream lengths, certified-row counts and strata
+//! same numbers across a grid of stream lengths, fused-row counts and strata
 //! counts, so a regression is visible as a *trend* and not only as a tripped
 //! bound.
 //!
 //! For each phase it reports two DISTINCT numbers, on purpose:
 //!
 //! * **`peak_allocated_bytes`** — the high-water mark of live bytes requested
-//!   through the global allocator while the rows were being certified. This is
+//!   through the global allocator while the rows were being fused. This is
 //!   the fusion's own working set: the frontier, the per-stream duplicate sets
 //!   and whatever transient each pull makes.
 //! * **`rss_delta_kb`** — the change in the process resident set
@@ -304,14 +304,14 @@ fn phase(label: &str, total: u64, rows: usize) {
 
     let rss_before = rss_kb();
     let baseline = reset_peak();
-    let mut certified = 0usize;
+    let mut fused = 0usize;
     let mut contributions = 0usize;
-    while certified < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
+    while fused < rows && pulls.load(Ordering::Relaxed) < PULL_BUDGET {
         let Some(row) = block_on(fusion.next()).expect("the fixture obeys the protocol") else {
             break;
         };
         contributions += row.contributions.len();
-        certified += 1;
+        fused += 1;
     }
     let peak = peak_since(baseline);
     let rss_after = rss_kb();
@@ -320,7 +320,7 @@ fn phase(label: &str, total: u64, rows: usize) {
 
     black_box(contributions);
     report(
-        &format!("{label} certified={certified}/{rows} pulled={pulled}"),
+        &format!("{label} fused={fused}/{rows} pulled={pulled}"),
         peak,
         rss_before,
         rss_after,
@@ -330,11 +330,11 @@ fn phase(label: &str, total: u64, rows: usize) {
 fn main() {
     // Warm every lazy one-time allocation outside the reported phases.
     phase("warmup", 1_000, 32);
-    println!("[fusion_frontier_alloc] --- stream length varies, rows certified fixed at 32 ---");
+    println!("[fusion_frontier_alloc] --- stream length varies, rows fused fixed at 32 ---");
     for total in [1_000_u64, 10_000, 100_000, 1_000_000] {
         phase(&format!("strata=3 rows=32 stream={total}"), total, 32);
     }
-    println!("[fusion_frontier_alloc] --- rows certified varies, stream fixed at 1000000 ---");
+    println!("[fusion_frontier_alloc] --- rows fused varies, stream fixed at 1000000 ---");
     for rows in [8_usize, 32, 128, 512, 2048] {
         phase(
             &format!("strata=3 rows={rows} stream=1000000"),
