@@ -37,10 +37,22 @@ use crate::iri::{Iri, Term, Weight};
 use crate::request::{Metric, RequestTerm};
 
 // Canonical discriminators. One tag space per enum, never reused.
+//
+// A tag space grows forward-compatibly and does **not** move
+// [`PLAN_VERSION`](crate::PLAN_VERSION) with it. The version exists to stop
+// bytes being reinterpreted under a layout they were not written for, and
+// appending a discriminator reinterprets nothing: every previously-written tag
+// keeps its number and its encoding, so an old plan's canonical bytes — and
+// therefore its [`PlanId`] — are unchanged, and a build that meets a tag it does
+// not know refuses it by name with [`PlanError::InvalidTag`] rather than reading
+// it as something else. Bumping the version instead would refuse every plan
+// already issued, in order to protect against a misreading that cannot occur.
 const TERM_LEXICAL: u8 = 0;
 const TERM_VECTOR: u8 = 1;
 const TERM_SPATIAL: u8 = 2;
 const TERM_ENTITY_SEED: u8 = 3;
+const TERM_TEMPORAL: u8 = 4;
+const TERM_NUMERIC_RANGE: u8 = 5;
 
 const METRIC_COSINE: u8 = 0;
 const METRIC_DOT: u8 = 1;
@@ -630,6 +642,26 @@ fn write_request_term(writer: &mut Writer, term: &RequestTerm) {
             write_iri(writer, predicate);
             write_option_fixed(writer, *max_distance);
         }
+        RequestTerm::Temporal {
+            predicate,
+            lower,
+            upper,
+        } => {
+            writer.u8(TERM_TEMPORAL);
+            write_iri(writer, predicate);
+            writer.option_string(lower.as_deref());
+            writer.option_string(upper.as_deref());
+        }
+        RequestTerm::NumericRange {
+            predicate,
+            lower,
+            upper,
+        } => {
+            writer.u8(TERM_NUMERIC_RANGE);
+            write_iri(writer, predicate);
+            write_option_fixed(writer, *lower);
+            write_option_fixed(writer, *upper);
+        }
         RequestTerm::EntitySeed { entity } => {
             writer.u8(TERM_ENTITY_SEED);
             writer.string(entity.as_str());
@@ -680,6 +712,26 @@ fn read_request_term(reader: &mut Reader<'_>) -> Result<RequestTerm, PlanError> 
                 geometry,
                 predicate,
                 max_distance,
+            })
+        }
+        TERM_TEMPORAL => {
+            let predicate = read_iri(reader, "temporal predicate")?;
+            let lower = reader.option_string("temporal lower endpoint")?;
+            let upper = reader.option_string("temporal upper endpoint")?;
+            Ok(RequestTerm::Temporal {
+                predicate,
+                lower,
+                upper,
+            })
+        }
+        TERM_NUMERIC_RANGE => {
+            let predicate = read_iri(reader, "numeric range predicate")?;
+            let lower = read_option_fixed(reader)?;
+            let upper = read_option_fixed(reader)?;
+            Ok(RequestTerm::NumericRange {
+                predicate,
+                lower,
+                upper,
             })
         }
         TERM_ENTITY_SEED => Ok(RequestTerm::EntitySeed {

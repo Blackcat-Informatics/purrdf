@@ -175,6 +175,14 @@ pub(crate) fn pattern_matches(pattern: &TermPattern, term: &RequestTerm) -> bool
             RequestTerm::Spatial {
                 predicate: term_predicate,
                 ..
+            }
+            | RequestTerm::Temporal {
+                predicate: term_predicate,
+                ..
+            }
+            | RequestTerm::NumericRange {
+                predicate: term_predicate,
+                ..
             } => term_predicate.as_str() == predicate,
             _ => false,
         };
@@ -191,7 +199,13 @@ pub(crate) fn kind_matches(kind: TermKind, term: &RequestTerm) -> bool {
         return true;
     }
     match term {
-        RequestTerm::Lexical { .. } | RequestTerm::Spatial { .. } => kind == TermKind::Literal,
+        // An interval's endpoints are literals, the same RDF term kind a needle
+        // and a geometry target, so a literal-accepting producer is reachable by
+        // one.
+        RequestTerm::Lexical { .. }
+        | RequestTerm::Spatial { .. }
+        | RequestTerm::Temporal { .. }
+        | RequestTerm::NumericRange { .. } => kind == TermKind::Literal,
         RequestTerm::EntitySeed { entity } => seed_kind(entity.as_str()) == Some(kind),
         // A vector term targets no RDF term kind; only `Any` accepts it.
         RequestTerm::Vector { .. } => false,
@@ -369,9 +383,17 @@ fn facet_value(
                 predicate: Some(predicate),
                 ..
             } => Ok(TermValue::iri(predicate.as_str())),
-            RequestTerm::Spatial { predicate, .. } => Ok(TermValue::iri(predicate.as_str())),
+            RequestTerm::Spatial { predicate, .. }
+            | RequestTerm::Temporal { predicate, .. }
+            | RequestTerm::NumericRange { predicate, .. } => Ok(TermValue::iri(predicate.as_str())),
             _ => Err(PlacementError::MissingFacet { term_index, facet }),
         },
+        RequestFacet::LowerBound => {
+            endpoint_facet(producer, term_index, term, placement, Endpoint::Lower)
+        }
+        RequestFacet::UpperBound => {
+            endpoint_facet(producer, term_index, term, placement, Endpoint::Upper)
+        }
         RequestFacet::MaxDistance => match term {
             RequestTerm::Spatial {
                 max_distance: Some(distance),
@@ -473,7 +495,82 @@ fn value_facet(
                 embedding.len()
             ),
         }),
+        RequestTerm::Temporal { .. } | RequestTerm::NumericRange { .. } => {
+            Err(PlacementError::Unrenderable {
+                term_index,
+                facet,
+                reason: format!(
+                    "producer {producer} declares a value placement for an interval, which is \
+                     two constants and not one; declare LowerBound and UpperBound placements \
+                     so each endpoint reaches its own argument position"
+                ),
+            })
+        }
     }
+}
+
+/// Which endpoint of an interval a placement renders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Endpoint {
+    /// The inclusive lower endpoint.
+    Lower,
+    /// The inclusive upper endpoint.
+    Upper,
+}
+
+/// The `LowerBound` / `UpperBound` facet: one endpoint of an interval term.
+///
+/// An absent endpoint is a genuinely half-open interval, so it is a
+/// [`PlacementError::MissingFacet`] rather than a rendering failure: the term
+/// carries no such endpoint, and the producer asked for one. Rendering a
+/// substitute — an infinity, a zero, the other endpoint — would answer a
+/// different question, so none is invented.
+///
+/// Neither endpoint is rendered without a producer-declared datatype. An
+/// untyped endpoint is a plain string, and a plain string compares
+/// lexicographically: `"9"` would sort above `"10"`, and a temporal endpoint
+/// would not be a point in time at all. The producer names the datatype its own
+/// relation compares under, or the facet is not renderable.
+fn endpoint_facet(
+    producer: &str,
+    term_index: u32,
+    term: &RequestTerm,
+    placement: &TermPlacement,
+    endpoint: Endpoint,
+) -> Result<TermValue, PlacementError> {
+    let facet = placement.facet;
+    let lexical = match term {
+        RequestTerm::Temporal { lower, upper, .. } => match endpoint {
+            Endpoint::Lower => lower.clone(),
+            Endpoint::Upper => upper.clone(),
+        },
+        RequestTerm::NumericRange { lower, upper, .. } => match endpoint {
+            Endpoint::Lower => *lower,
+            Endpoint::Upper => *upper,
+        }
+        // Exact base-10, never a float: `to_decimal_lexical` reproduces the raw
+        // fixed-point integer with nothing lost.
+        .map(purrdf_text::Fixed::to_decimal_lexical),
+        _ => return Err(PlacementError::MissingFacet { term_index, facet }),
+    };
+    let Some(lexical_form) = lexical else {
+        return Err(PlacementError::MissingFacet { term_index, facet });
+    };
+    let datatype = required_datatype(
+        producer,
+        term_index,
+        facet,
+        placement,
+        "an untyped endpoint is a plain string and a plain string compares \
+         lexicographically, so the producer must declare the datatype its own \
+         relation orders under",
+    )?;
+    Ok(TermValue::Literal {
+        lexical_form,
+        datatype,
+        language: None,
+        direction: None,
+    })
 }
 
 /// A literal carrying the placement's datatype, or a plain string when it
@@ -935,6 +1032,257 @@ mod tests {
                 other => panic!("expected Unrenderable, got {other:?}"),
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // The interval modalities: carried ahead of any producer that takes them,
+    // and renderable now rather than dead.
+    // -----------------------------------------------------------------------
+
+    /// `xsd:dateTime`, named by the *fixture producer*, never by this layer:
+    /// PurRDF mints no calendar datatype, and a producer that declares none has
+    /// its endpoint placement refused rather than rendered as a plain string.
+    const XSD_DATE_TIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+
+    /// `xsd:decimal`, likewise the fixture producer's declaration.
+    const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+
+    fn bounds_at(lower: usize, upper: usize, datatype: &str) -> Vec<TermPlacement> {
+        vec![
+            TermPlacement {
+                facet: RequestFacet::LowerBound,
+                position: lower,
+                datatype: Some(datatype.to_owned()),
+            },
+            TermPlacement {
+                facet: RequestFacet::UpperBound,
+                position: upper,
+                datatype: Some(datatype.to_owned()),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_temporal_interval_renders_both_endpoints_under_the_declared_datatype() {
+        let descriptor = descriptor(1, 2, &["fff"]);
+        let placed_interval = place(
+            &ex("pf/mock"),
+            &descriptor,
+            &declaration(any_accepting(bounds_at(1, 2, XSD_DATE_TIME)), None),
+            &[RequestTerm::Temporal {
+                predicate: Iri::parse(&ex("observed")).expect("fixture IRI"),
+                lower: Some("2026-01-01T00:00:00Z".to_owned()),
+                upper: Some("2026-02-01T00:00:00Z".to_owned()),
+            }],
+            &[0],
+            5,
+        )
+        .expect("both endpoints have a constant form");
+        assert_eq!(
+            placed(&placed_interval)[1],
+            format!("\"2026-01-01T00:00:00Z\"^^<{XSD_DATE_TIME}>")
+        );
+        assert_eq!(
+            placed(&placed_interval)[2],
+            format!("\"2026-02-01T00:00:00Z\"^^<{XSD_DATE_TIME}>")
+        );
+    }
+
+    #[test]
+    fn a_numeric_range_renders_its_endpoints_in_exact_base_ten() {
+        let descriptor = descriptor(1, 2, &["fff"]);
+        let placed_range = place(
+            &ex("pf/mock"),
+            &descriptor,
+            &declaration(any_accepting(bounds_at(1, 2, XSD_DECIMAL)), None),
+            &[RequestTerm::NumericRange {
+                predicate: Iri::parse(&ex("price")).expect("fixture IRI"),
+                lower: Some(purrdf_text::Fixed::from_raw(1_500_000_000_000)),
+                upper: Some(purrdf_text::Fixed::from_raw(2_250_000_000_000)),
+            }],
+            &[0],
+            5,
+        )
+        .expect("both endpoints have a constant form");
+        // Exact: the raw fixed-point integer, reproduced digit for digit.
+        assert_eq!(
+            placed(&placed_range)[1],
+            format!("\"1.500000000000\"^^<{XSD_DECIMAL}>")
+        );
+        assert_eq!(
+            placed(&placed_range)[2],
+            format!("\"2.250000000000\"^^<{XSD_DECIMAL}>")
+        );
+    }
+
+    #[test]
+    fn a_half_open_interval_refuses_the_endpoint_it_does_not_carry_but_places_the_one_it_does() {
+        let descriptor = descriptor(1, 2, &["fff"]);
+        let open_above = RequestTerm::NumericRange {
+            predicate: Iri::parse(&ex("price")).expect("fixture IRI"),
+            lower: Some(purrdf_text::Fixed::ONE),
+            upper: None,
+        };
+        let error = place(
+            &ex("pf/mock"),
+            &descriptor,
+            &declaration(any_accepting(bounds_at(1, 2, XSD_DECIMAL)), None),
+            std::slice::from_ref(&open_above),
+            &[0],
+            5,
+        )
+        .expect_err("an absent endpoint is not a value to invent");
+        assert!(
+            matches!(
+                error,
+                PlacementError::MissingFacet {
+                    facet: RequestFacet::UpperBound,
+                    ..
+                }
+            ),
+            "got {error:?}"
+        );
+        // The neighbouring valid case: a producer that asks only for the
+        // endpoint the term carries places it.
+        let lower_only = place(
+            &ex("pf/mock"),
+            &descriptor,
+            &declaration(
+                any_accepting(vec![TermPlacement {
+                    facet: RequestFacet::LowerBound,
+                    position: 1,
+                    datatype: Some(XSD_DECIMAL.to_owned()),
+                }]),
+                None,
+            ),
+            &[open_above],
+            &[0],
+            5,
+        )
+        .expect("the endpoint the term does carry places");
+        assert_eq!(
+            placed(&lower_only)[1],
+            format!("\"1.000000000000\"^^<{XSD_DECIMAL}>")
+        );
+    }
+
+    #[test]
+    fn an_untyped_endpoint_is_refused_but_a_typed_one_places() {
+        // An untyped endpoint would be a plain string, and a plain string
+        // compares lexicographically: `"9"` above `"10"`. The producer names the
+        // datatype its own relation orders under, or the facet is not rendered.
+        let descriptor = descriptor(1, 1, &["ff"]);
+        let term = RequestTerm::Temporal {
+            predicate: Iri::parse(&ex("observed")).expect("fixture IRI"),
+            lower: Some("2026-01-01T00:00:00Z".to_owned()),
+            upper: None,
+        };
+        let untyped = vec![TermPlacement {
+            facet: RequestFacet::LowerBound,
+            position: 1,
+            datatype: None,
+        }];
+        let error = place(
+            &ex("pf/mock"),
+            &descriptor,
+            &declaration(any_accepting(untyped), None),
+            std::slice::from_ref(&term),
+            &[0],
+            5,
+        )
+        .expect_err("an endpoint with no declared datatype is not renderable");
+        match error {
+            PlacementError::Unrenderable { reason, .. } => {
+                assert!(reason.contains("lexicographically"), "{reason}");
+            }
+            other => panic!("expected Unrenderable, got {other:?}"),
+        }
+        assert!(
+            place(
+                &ex("pf/mock"),
+                &descriptor,
+                &declaration(
+                    any_accepting(vec![TermPlacement {
+                        facet: RequestFacet::LowerBound,
+                        position: 1,
+                        datatype: Some(XSD_DATE_TIME.to_owned()),
+                    }]),
+                    None,
+                ),
+                &[term],
+                &[0],
+                5,
+            )
+            .is_ok(),
+            "the neighbouring typed endpoint still places"
+        );
+    }
+
+    #[test]
+    fn an_interval_refuses_a_value_placement_and_says_where_its_endpoints_go() {
+        // An interval is two constants. A producer that declares one `Value`
+        // position for it would receive one of them, or neither, and answer a
+        // wider question than the caller asked.
+        let descriptor = descriptor(1, 1, &["ff"]);
+        let error = place(
+            &ex("pf/mock"),
+            &descriptor,
+            &declaration(any_accepting(value_at(1)), None),
+            &[RequestTerm::NumericRange {
+                predicate: Iri::parse(&ex("price")).expect("fixture IRI"),
+                lower: Some(purrdf_text::Fixed::ONE),
+                upper: Some(purrdf_text::Fixed::ONE),
+            }],
+            &[0],
+            5,
+        )
+        .expect_err("an interval has no single constant form");
+        match error {
+            PlacementError::Unrenderable { reason, .. } => {
+                assert!(reason.contains("LowerBound"), "{reason}");
+                assert!(reason.contains("UpperBound"), "{reason}");
+            }
+            other => panic!("expected Unrenderable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_interval_is_reached_by_a_literal_pattern_and_by_its_own_predicate() {
+        let term = RequestTerm::Temporal {
+            predicate: Iri::parse(&ex("observed")).expect("fixture IRI"),
+            lower: Some("2026-01-01T00:00:00Z".to_owned()),
+            upper: None,
+        };
+        assert!(
+            super::kind_matches(TermKind::Literal, &term),
+            "an interval's endpoints are literals, so a literal producer is reachable"
+        );
+        assert!(super::kind_matches(TermKind::Any, &term));
+        assert!(!super::kind_matches(TermKind::Iri, &term));
+        assert!(
+            super::pattern_matches(
+                &TermPattern {
+                    kind: TermKind::Literal,
+                    datatype: None,
+                    language: None,
+                    predicate: Some(ex("observed")),
+                },
+                &term
+            ),
+            "a predicate constraint reads the interval's own predicate"
+        );
+        assert!(
+            !super::pattern_matches(
+                &TermPattern {
+                    kind: TermKind::Literal,
+                    datatype: None,
+                    language: None,
+                    predicate: Some(ex("elsewhere")),
+                },
+                &term
+            ),
+            "and refuses one it does not carry"
+        );
     }
 
     /// A quoted-triple seed opens `<<`, which also opens `<`, so a classifier

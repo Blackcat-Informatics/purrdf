@@ -601,6 +601,202 @@ fn a_request_every_term_of_which_is_served_records_nothing() {
 }
 
 // ---------------------------------------------------------------------------
+// 2c. The interval modalities: carried ahead of their producers, and reported
+// as unserved rather than quietly dropped.
+// ---------------------------------------------------------------------------
+
+fn temporal_term() -> RequestTerm {
+    RequestTerm::Temporal {
+        predicate: iri(&ex("observed")),
+        lower: Some("2026-01-01T00:00:00Z".to_owned()),
+        upper: Some("2026-02-01T00:00:00Z".to_owned()),
+    }
+}
+
+fn numeric_range_term() -> RequestTerm {
+    RequestTerm::NumericRange {
+        predicate: iri(&ex("price")),
+        lower: Some(purrdf_retrieval::Fixed::ONE),
+        upper: None,
+    }
+}
+
+#[test]
+fn an_interval_term_no_registry_producer_takes_is_reported_per_term() {
+    // The registry's literal producer constrains predicate `body`, so neither
+    // interval reaches it; nothing else in this registry accepts a literal. The
+    // lexical term still reaches it, so the request plans and the answer is
+    // honest about what it could not serve.
+    let request =
+        RetrievalRequest::from_terms(vec![lexical_term(), temporal_term(), numeric_range_term()]);
+    let plan = plan(&request, &literal_only_registry(), &fixture_statistics())
+        .expect("the lexical term still reaches a producer");
+
+    assert_eq!(
+        plan.unserved_terms,
+        vec![
+            UnservedTerm {
+                request_term: 1,
+                reason: UnservedReason::NoProducerAccepts,
+            },
+            UnservedTerm {
+                request_term: 2,
+                reason: UnservedReason::NoProducerAccepts,
+            },
+        ],
+        "a modality the lattice carries ahead of its producers says so by index"
+    );
+    assert_eq!(plan.unserved_evidence(), plan.unserved_terms);
+    // The neighbouring valid case, in the same plan: the term that did reach a
+    // producer is served.
+    assert_eq!(
+        binding(&plan, &ex("pf/literal"))
+            .expect("the literal producer takes the lexical term")
+            .request_terms,
+        vec![0]
+    );
+}
+
+#[test]
+fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
+    // The other side of the same fact: nothing about the arm makes it
+    // unreachable. A producer declaring a literal pattern on the interval's own
+    // predicate, with a placement for each endpoint, is bound to it.
+    let mut registry = PropertyFunctionRegistry::new();
+    let date_time = "http://www.w3.org/2001/XMLSchema#dateTime";
+    registry.register_ranked(
+        ex("pf/temporal"),
+        relation(100),
+        RankedDeclaration {
+            stratum: kernel_iri(&ex("stratum/time")),
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern {
+                    kind: TermKind::Literal,
+                    datatype: None,
+                    language: None,
+                    predicate: Some(ex("observed")),
+                },
+                // The mock relation is arity (1,1), so it has exactly one
+                // argument position beside its candidate and can take exactly
+                // one endpoint; the request below is the half-open interval that
+                // matches what this producer declared it can receive.
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::LowerBound,
+                    position: 1,
+                    datatype: Some(date_time.to_owned()),
+                }],
+            }],
+            depth_placement: None,
+            candidate_position: 0,
+            ordering: RankOrdering::StrictlyDescending,
+            duplicates: DuplicatePolicy::Unique,
+            mandatory: false,
+        },
+    );
+    let request = RetrievalRequest::from_terms(vec![RequestTerm::Temporal {
+        predicate: iri(&ex("observed")),
+        lower: Some("2026-01-01T00:00:00Z".to_owned()),
+        upper: None,
+    }]);
+    let plan = plan(&request, &registry, &fixture_statistics()).expect("the interval term plans");
+    assert_eq!(
+        binding(&plan, &ex("pf/temporal"))
+            .expect("the temporal producer takes the interval")
+            .request_terms,
+        vec![0]
+    );
+    assert_eq!(
+        plan.unserved_terms,
+        Vec::new(),
+        "the interval reached a producer, so nothing is reported unserved"
+    );
+}
+
+#[test]
+fn an_interval_that_constrains_nothing_is_refused_but_a_half_open_one_plans() {
+    for empty in [
+        RequestTerm::Temporal {
+            predicate: iri(&ex("observed")),
+            lower: None,
+            upper: None,
+        },
+        RequestTerm::NumericRange {
+            predicate: iri(&ex("price")),
+            lower: None,
+            upper: None,
+        },
+    ] {
+        let request = RetrievalRequest::from_terms(vec![empty]);
+        let error = plan(&request, &mixed_registry(), &fixture_statistics())
+            .expect_err("an interval with neither endpoint constrains nothing");
+        match error {
+            PlanError::InvalidRequestTerm { reason, .. } => {
+                assert!(reason.contains("neither endpoint"), "{reason}");
+            }
+            other => panic!("expected InvalidRequestTerm, got {other:?}"),
+        }
+    }
+    // The neighbouring valid cases: one endpoint is a half-open interval, and it
+    // plans.
+    for half_open in [temporal_term(), numeric_range_term()] {
+        let request = RetrievalRequest::from_terms(vec![half_open]);
+        assert!(
+            plan(&request, &mixed_registry(), &fixture_statistics()).is_ok(),
+            "an interval carrying an endpoint is a question"
+        );
+    }
+}
+
+#[test]
+fn an_inverted_numeric_range_is_refused_but_a_degenerate_one_plans() {
+    let inverted = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+        predicate: iri(&ex("price")),
+        lower: Some(purrdf_retrieval::Fixed::from_raw(2)),
+        upper: Some(purrdf_retrieval::Fixed::from_raw(1)),
+    }]);
+    let error = plan(&inverted, &mixed_registry(), &fixture_statistics())
+        .expect_err("a range whose lower endpoint is above its upper matches nothing");
+    match error {
+        PlanError::InvalidRequestTerm { reason, .. } => {
+            assert!(reason.contains("exceeds"), "{reason}");
+        }
+        other => panic!("expected InvalidRequestTerm, got {other:?}"),
+    }
+    // The neighbouring valid case, one raw unit away: equal endpoints are a
+    // single point, which is a perfectly good question.
+    let degenerate = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+        predicate: iri(&ex("price")),
+        lower: Some(purrdf_retrieval::Fixed::from_raw(1)),
+        upper: Some(purrdf_retrieval::Fixed::from_raw(1)),
+    }]);
+    assert!(
+        plan(&degenerate, &mixed_registry(), &fixture_statistics()).is_ok(),
+        "a degenerate range is a point, not an empty set"
+    );
+}
+
+#[test]
+fn an_interval_predicate_reaches_the_statistics_snapshot() {
+    // The interval names a predicate, so planning consults the statistics for
+    // it exactly as it does for a needle's predicate; an arm the planner did not
+    // teach `term_predicate` about would silently consult nothing.
+    let request = RetrievalRequest::from_terms(vec![RequestTerm::NumericRange {
+        predicate: iri(&ex("body")),
+        lower: Some(purrdf_retrieval::Fixed::ONE),
+        upper: None,
+    }]);
+    let plan = plan(&request, &mixed_registry(), &fixture_statistics()).expect("plans");
+    assert_eq!(
+        plan.statistics_snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.subject == ex("body"))
+            .map(|entry| entry.cardinality),
+        Some(500)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 3. Producer selection
 // ---------------------------------------------------------------------------
 

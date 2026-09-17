@@ -29,7 +29,13 @@ compositions cannot drift.
 The stages:
 
 * `RetrievalRequest` / `RequestTerm` — the typed term lattice a request is
-  expressed in (lexical, vector, spatial, entity seed).
+  expressed in (lexical, vector, spatial, temporal interval, numeric range,
+  entity seed). The enum is closed and stays closed, so a caller matching
+  exhaustively gets a compile error when a modality is added rather than a
+  wildcard arm that swallows it. It deliberately carries modalities ahead of the
+  producers that answer them — producers are caller-supplied configuration, not
+  a bound on what may be asked — and a term this registry has nobody for is
+  reported per term as an `UnservedTerm`, never dropped.
 * `plan(request, registry, statistics)` — the pure planner. It matches request
   terms to producers by a lookup over the producers' declared capabilities,
   records selected and rejected producers with reasons, derives per-stratum
@@ -49,6 +55,10 @@ The stages:
 * `compile(plan, environment)` — the semantic admission waist. Every plan is
   untrusted input, whether freshly planned, hand-built or deserialized, and it
   is checked here against what the registry declared before anything is emitted.
+  An environment that also names the fusion profile the answer will be composed
+  under is held to that law's own arithmetic: a per-stratum depth beyond the
+  rank at which the profile's contributions stop being distinct is refused, and
+  `search` always names the profile it is about to fuse under.
 * `execute(units, registry, dataset)` — one run per stratum through
   `purrdf-sparql-eval` against the caller's own dataset. A stratum that cannot
   run becomes its own `ProducerStatus` while every other stratum streams on.

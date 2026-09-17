@@ -85,6 +85,18 @@
 //! stratum-named list on the answer, in stratum order, so a caller can see
 //! precisely which part of its plan its profile did not score.
 //!
+//! # The profile reaches admission, without becoming a planning input
+//!
+//! `search` holds both the plan and the law it is about to fuse under, which is
+//! the one point in the pipeline where the two meet before any row is read. So
+//! it re-forms the admission environment around that law: a per-stratum depth is
+//! then admitted against the profile's own arithmetic as well as against the
+//! registry's row bound (see
+//! [`AdmissionError::DepthBeyondMonotoneRange`](crate::AdmissionError::DepthBeyondMonotoneRange)).
+//! The plan is unchanged and the planner still never sees a profile — the
+//! coupling is checked where it becomes knowable, not carried through a stage
+//! that must not know it.
+//!
 //! One case is still a refusal: when the profile weights *none* of the strata
 //! the plan reached, there is no answer to keep working. The plan and the
 //! profile are disjoint, every row that ran would be discarded, and an empty
@@ -265,8 +277,18 @@ where
     // 1. Plan. A pure function of the request, the registry and the statistics.
     let plan = plan(request, registry, statistics).map_err(SearchError::PlanError)?;
 
-    // 2. Compile. Admission against the live environment, then emission.
-    let compiled = compile(&plan, env).map_err(SearchError::AdmissionError)?;
+    // 2. Compile. Admission against the live environment, then emission. The
+    //    environment is re-formed around `profile` rather than taken verbatim:
+    //    `search` is about to fuse under exactly this law, so the admission
+    //    waist is held to it whatever the caller's own environment named. That
+    //    is the one place the profile can be known at admission without making
+    //    it a planning input.
+    let env = AdmissionEnvironment {
+        registry: env.registry,
+        statistics: env.statistics,
+        fusion_profile: Some(profile),
+    };
+    let compiled = compile(&plan, &env).map_err(SearchError::AdmissionError)?;
 
     // 3. Execute. Each stratum runs independently against the caller's dataset; a
     //    failed stratum is a status, not a stream.

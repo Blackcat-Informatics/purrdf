@@ -66,6 +66,15 @@
 //! an intermediate that does not fit is a loud [`FusionError::Overflow`], never
 //! a wrapped score masquerading as an order.
 //!
+//! The law's weight, the fixed-point scale and a stratum's depth are one coupled
+//! quantity: past a depth those first two decide, adjacent ranks stop producing
+//! distinct contributions and the fused score stops separating them. Nothing
+//! errors there and nothing becomes nondeterministic — it simply stops being
+//! rank-ordered, which is exactly the kind of quiet degradation this crate
+//! refuses to leave unsaid. [`FusionProfile::monotone_depth`] reports the exact
+//! bound, and admission refuses a depth beyond it whenever the environment names
+//! the profile the answer will be fused under.
+//!
 //! # A composition outside the kernel
 //!
 //! Nothing in `purrdf-core` or the property-function seam changes to admit this

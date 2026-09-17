@@ -22,7 +22,8 @@
 //!
 //! A request term maps to the RDF term kind its retrieval targets:
 //!
-//! * a lexical term and a spatial term target a **literal**;
+//! * a lexical term, a spatial term, and the endpoints of a temporal or numeric
+//!   interval target a **literal**;
 //! * an entity seed targets the kind its canonical lexical names (`<…>` an IRI,
 //!   `_:…` a blank node, `"…"` a literal);
 //! * a vector term targets **no** RDF term kind, so only a producer that
@@ -30,8 +31,8 @@
 //!
 //! A pattern's `datatype` constraint can never match, because no request term
 //! carries a datatype; its `language` constraint matches only a lexical term
-//! with that tag; its `predicate` constraint matches only a lexical or spatial
-//! term carrying that predicate.
+//! with that tag; its `predicate` constraint matches only a lexical, spatial,
+//! temporal or numeric-range term carrying that predicate.
 //!
 //! # Matching is not enough: a producer must also be *invocable*
 //!
@@ -454,6 +455,17 @@ fn capped(declared: u64, stratum: &Iri, statistics: &impl Statistics) -> u64 {
 }
 
 /// Refuse a request term that cannot name anything.
+///
+/// The two interval arms are refused on the two grounds an interval can be
+/// unusable: it constrains nothing (neither endpoint), or it can match nothing
+/// (a lower endpoint above its upper). The second is checked for a numeric range
+/// and not for a temporal one, and the asymmetry is the point rather than an
+/// omission: a numeric endpoint is an exact [`Fixed`] this layer can order, while
+/// a temporal endpoint is the caller's own lexical form, which this layer does
+/// not parse and therefore cannot order — comparing two calendar lexicals as
+/// strings would refuse legitimate intervals whose encoding is not
+/// lexicographically ordered. A degenerate range whose endpoints are equal is a
+/// single point and is admitted.
 fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
     let reason = match term {
         RequestTerm::Lexical { text, .. } if text.trim().is_empty() => "lexical text is empty",
@@ -471,6 +483,29 @@ fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
         RequestTerm::EntitySeed { entity } if entity.as_str().trim().is_empty() => {
             "entity seed is empty"
         }
+        RequestTerm::Temporal {
+            lower: None,
+            upper: None,
+            ..
+        } => "temporal interval carries neither endpoint",
+        RequestTerm::Temporal { lower, upper, .. }
+            if lower
+                .iter()
+                .chain(upper.iter())
+                .any(|end| end.trim().is_empty()) =>
+        {
+            "temporal interval endpoint is empty"
+        }
+        RequestTerm::NumericRange {
+            lower: None,
+            upper: None,
+            ..
+        } => "numeric range carries neither endpoint",
+        RequestTerm::NumericRange {
+            lower: Some(lower),
+            upper: Some(upper),
+            ..
+        } if lower > upper => "numeric range lower endpoint exceeds its upper endpoint",
         _ => return Ok(()),
     };
     Err(PlanError::InvalidRequestTerm {
@@ -496,7 +531,9 @@ fn declared_row_bound(descriptor: &PfDescriptor) -> u64 {
 fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
     match term {
         RequestTerm::Lexical { predicate, .. } => predicate.as_ref(),
-        RequestTerm::Spatial { predicate, .. } => Some(predicate),
+        RequestTerm::Spatial { predicate, .. }
+        | RequestTerm::Temporal { predicate, .. }
+        | RequestTerm::NumericRange { predicate, .. } => Some(predicate),
         RequestTerm::Vector { .. } | RequestTerm::EntitySeed { .. } => None,
     }
 }

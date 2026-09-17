@@ -19,6 +19,7 @@ use crate::canonical::{Reader, Writer};
 use crate::error::FusionError;
 use crate::id::{FUSION_PROFILE_VERSION, FusionProfileId};
 use crate::iri::Iri;
+use crate::reciprocal_rank::monotone_depth;
 
 // Canonical discriminators. One tag space per enum, never reused.
 const DECAY_RECIPROCAL_RANK: u8 = 0;
@@ -87,6 +88,42 @@ impl TieBreak {
 /// non-positive weight map, a zero contribution ceiling, and a maximum admitted
 /// fused score that leaves the fixed-point range. Once constructed, the profile
 /// is immutable and its [`FusionProfile::id`] names it.
+///
+/// # Weight, scale and depth are one coupled quantity
+///
+/// Three declared quantities decide how deep a stratum's ranks stay *ordered*:
+/// the stratum's **weight** `w`, the fixed-point **scale** `S = 10^SCALE_DIGITS`
+/// the whole layer computes in, and the **per-stratum depth** the plan records.
+/// A contribution at 1-based rank `r` is formed as
+///
+/// ```text
+/// trunc( w · trunc(S / (K + r)) / S )
+/// ```
+///
+/// and the inner truncation is the one that matters: the reciprocal is rounded
+/// to the scale **before** the weight is applied, so the reciprocal's own
+/// resolution is a ceiling no weight can lift. For any `w ≥ 1` the condition for
+/// two adjacent ranks to stay distinct reduces exactly to `trunc(S / D) ≠
+/// trunc(S / (D + 1))` with `D = K + r`, which first fails just above
+/// `D = sqrt(S) = 10^6` **whatever the weight is** — a weight of a thousand buys
+/// no more depth than a weight of one. Below one the weight does bind, and
+/// distinctness is guaranteed while `w · trunc(S / (D · (D + 1))) ≥ S`, which is
+/// roughly `(K + r)² ≲ w · S`. That guarantee is only sufficient, never
+/// necessary — two contributions often differ when it fails, because the outer
+/// truncations can straddle an integer — so the exact first-collision rank is
+/// what [`FusionProfile::monotone_depth`] reports, and the refusal at admission
+/// is against that exact value rather than against a conservative closed form
+/// that would refuse legitimate depths.
+///
+/// Beyond that depth nothing errors and nothing becomes nondeterministic: the
+/// tie-break is total, so the answer stays a pure function of its inputs. What
+/// is lost is that the fused **score** stops separating ranks. Two candidates
+/// one rank apart accumulate the same number, the sum across strata stops being
+/// rank-weighted — a candidate at ranks 5000 and 5001 totals exactly what one at
+/// 4000 and 6001 does — and their relative order falls through to the declared
+/// tie-break's later keys, best stratum rank ascending and then canonical term
+/// byte order. Within one stratum best-rank still reproduces rank order, so the
+/// visible damage is across strata; the arithmetic damage is everywhere.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusionProfile {
     /// The rank-decay rule, carrying its smoothing constant.
@@ -102,6 +139,15 @@ pub struct FusionProfile {
     /// The largest fused score the profile admits, derived at construction and
     /// checked against the fixed-point ceiling.
     ceiling: Fixed,
+    /// Per-stratum monotone depth: the largest depth at which that stratum's
+    /// contributions are still strictly rank-ordered under this profile's
+    /// weight and smoothing constant.
+    ///
+    /// Derived at construction exactly as [`Self::ceiling`] is, and absent from
+    /// the canonical bytes for the same reason: it is a pure function of the
+    /// fields already encoded, so encoding it would put one fact in the identity
+    /// twice.
+    monotone_depths: BTreeMap<Iri, u64>,
 }
 
 impl FusionProfile {
@@ -142,12 +188,20 @@ impl FusionProfile {
         }
 
         let ceiling = Self::compute_ceiling(&weights, max_contributions)?;
+        // Derived once, here, rather than on every admission: a profile is
+        // immutable and is routinely reused across many searches, and the search
+        // is bounded but not free.
+        let monotone_depths = weights
+            .iter()
+            .map(|(stratum, weight)| (stratum.clone(), monotone_depth(*weight, k)))
+            .collect();
         Ok(Self {
             decay: DecayRule::ReciprocalRank { k },
             weights,
             tie_break: TieBreak::default(),
             max_contributions,
             ceiling,
+            monotone_depths,
         })
     }
 
@@ -199,6 +253,26 @@ impl FusionProfile {
     #[must_use]
     pub fn weight(&self, stratum: &Iri) -> Option<Fixed> {
         self.weights.get(stratum).copied()
+    }
+
+    /// The largest depth at which `stratum`'s contributions are still strictly
+    /// rank-ordered under this profile, or `None` when the profile declares no
+    /// weight for it.
+    ///
+    /// This is the exact first-collision rank, not a conservative estimate: at
+    /// this depth every adjacent pair of ranks still produces a distinct
+    /// contribution, and at one rank more the first pair collides. See this
+    /// type's own documentation for the coupling it reports on, and
+    /// [`AdmissionError::DepthBeyondMonotoneRange`](crate::AdmissionError::DepthBeyondMonotoneRange)
+    /// for where a plan is held to it.
+    ///
+    /// `None` is the honest answer for an unweighted stratum rather than zero:
+    /// a profile that says nothing about a stratum has said nothing about how
+    /// deep it may be read either, and that stratum contributes nothing to a
+    /// fusion under this profile.
+    #[must_use]
+    pub fn monotone_depth(&self, stratum: &Iri) -> Option<u64> {
+        self.monotone_depths.get(stratum).copied()
     }
 
     /// The profile's canonical, length-framed bytes.

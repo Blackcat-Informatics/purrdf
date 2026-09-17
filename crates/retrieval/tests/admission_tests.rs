@@ -17,9 +17,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, Fixed, Iri, Metric, Plan, PlanOrigin,
-    ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, Statistics,
-    Term, UnservedReason, UnservedTerm, Weight, compile, execute,
+    AdmissionEnvironment, AdmissionError, CompiledRetrieval, Fixed, FusionProfile, Iri, Metric,
+    Plan, PlanOrigin, ProducerDecision, ProducerStatus, RejectionReason, RequestTerm,
+    RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, Weight, compile,
+    contribution, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -401,6 +402,7 @@ fn admission_accepts_fresh_plan() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&plan, &env).expect("a fresh plan is admitted");
     assert_eq!(compiled.plan_id, plan.id());
@@ -462,6 +464,7 @@ fn admission_rejects_edited_plan_dropping_mandatory() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a deleted mandatory producer is refused");
     assert_eq!(error.dimension(), "missing_mandatory_producer");
@@ -486,6 +489,7 @@ fn admission_rejects_roundtrip_with_dropped_producer() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&decoded, &env).expect_err("the decoded plan still must admit");
     assert!(
@@ -507,6 +511,7 @@ fn admission_rejects_tampered_deserialized() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&decoded, &env).expect_err("a tampered plan is refused");
     assert!(
@@ -525,6 +530,7 @@ fn admission_rejects_missing_mandatory() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a plan without the mandatory producer is refused");
     assert!(
@@ -551,6 +557,7 @@ fn admission_rejects_insufficient_bindings() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("an under-bound producer is refused");
     match error {
@@ -581,6 +588,7 @@ fn admission_rejects_depth_bound_violation() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a raised depth is refused");
     match error {
@@ -598,6 +606,187 @@ fn admission_rejects_depth_bound_violation() {
 }
 
 // ---------------------------------------------------------------------------
+// 4b. Depth against the fusion profile's own arithmetic
+//
+// The registry's row bound answers "can this many rows be produced". It says
+// nothing about whether the profile can still tell them apart once they are, and
+// the failure to tell them apart is silent: no error, no nondeterminism, just
+// rows that stop being ordered by the ranks their producers assigned. The three
+// tests below pin the refusal, the exact bound it is drawn at, and — because a
+// bound off by one in the strict direction would refuse legitimate profiles —
+// that a depth sitting exactly on the bound is admitted and still orders.
+// ---------------------------------------------------------------------------
+
+/// The smoothing constant the monotone-range fixtures use. One, so the bound is
+/// the first colliding denominator less one and the arithmetic is legible.
+const MONOTONE_K: u32 = 1;
+
+/// A profile weighting `stratum/universal` alone, at a weight small enough that
+/// the reciprocal's own resolution is exhausted well inside the registry's
+/// declared row bound of two hundred.
+///
+/// A weight of `10^-9` puts the first colliding rank in the tens. That is a
+/// perfectly legitimate weight — `FusionProfile::new` asks only that a weight be
+/// strictly positive — which is exactly the point: nothing about the profile
+/// itself is malformed, and only the coupling with the depth is.
+fn shallow_profile() -> FusionProfile {
+    FusionProfile::new(
+        BTreeMap::from([(iri(&ex("stratum/universal")), Fixed::from_raw(1_000))]),
+        MONOTONE_K,
+        1,
+    )
+    .expect("a strictly positive weight is a valid profile")
+}
+
+#[test]
+fn admission_rejects_a_depth_beyond_the_profiles_monotone_range() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let profile = shallow_profile();
+    let stratum = iri(&ex("stratum/universal"));
+    let monotone = profile
+        .monotone_depth(&stratum)
+        .expect("the profile weights this stratum");
+    assert!(
+        monotone < 200,
+        "the fixture must collide inside the registry's row bound, got {monotone}"
+    );
+
+    let mut plan = fresh_plan(&registry, &stats);
+    let requested = u32::try_from(monotone + 1).expect("the fixture bound is small");
+    plan.stratum_depths.insert(stratum.clone(), requested);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: Some(&profile),
+    };
+    let error = compile(&plan, &env).expect_err("a depth past the monotone range is refused");
+    match error {
+        AdmissionError::DepthBeyondMonotoneRange {
+            stratum: named,
+            monotone: reported,
+            requested: asked,
+        } => {
+            assert_eq!(*named, stratum, "the refusal names the stratum");
+            assert_eq!(reported, monotone, "and the bound it was drawn at");
+            assert_eq!(asked, requested);
+        }
+        other => panic!("expected DepthBeyondMonotoneRange, got {other:?}"),
+    }
+    assert_eq!(
+        compile(&plan, &env).expect_err("still refused").dimension(),
+        "depth_beyond_monotone_range"
+    );
+}
+
+#[test]
+fn a_depth_exactly_at_the_monotone_bound_is_admitted_and_still_orders_by_rank() {
+    // The neighbouring valid case. A bound drawn one rank short would refuse
+    // this plan, which orders perfectly — the over-refusal this repository
+    // treats as exactly as severe as a wrong answer.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let profile = shallow_profile();
+    let stratum = iri(&ex("stratum/universal"));
+    let monotone = profile
+        .monotone_depth(&stratum)
+        .expect("the profile weights this stratum");
+
+    let mut plan = fresh_plan(&registry, &stats);
+    plan.stratum_depths.insert(
+        stratum.clone(),
+        u32::try_from(monotone).expect("the fixture bound is small"),
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: Some(&profile),
+    };
+    compile(&plan, &env).expect("a depth exactly at the bound is admitted");
+
+    // Admitted *and* ordered: every adjacent pair of ranks the admitted depth
+    // covers produces a strictly smaller contribution than the one before it.
+    let weight = profile
+        .weight(&stratum)
+        .expect("the profile weights this stratum");
+    for rank in 1..monotone {
+        let here = contribution(weight, rank, MONOTONE_K).expect("a 1-based rank contributes");
+        let next = contribution(weight, rank + 1, MONOTONE_K).expect("a 1-based rank contributes");
+        assert!(
+            here > next,
+            "ranks {rank} and {} must stay ordered inside the admitted depth",
+            rank + 1
+        );
+    }
+    // And the first pair beyond it is exactly where they stop.
+    assert_eq!(
+        contribution(weight, monotone, MONOTONE_K).expect("contributes"),
+        contribution(weight, monotone + 1, MONOTONE_K).expect("contributes"),
+        "the bound is the last ordered depth, not one short of it"
+    );
+}
+
+#[test]
+fn a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range() {
+    // The other neighbouring valid case: `shallow_profile` weights only one of
+    // the three strata the fixture plan reaches, and the other two carry depths
+    // of a hundred and fifty. A profile that says nothing about a stratum has
+    // said nothing about how deep it may be read, and refusing those depths
+    // would refuse a plan over a law that does not govern it.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let profile = shallow_profile();
+    let plan = fresh_plan(&registry, &stats);
+    assert_eq!(plan.stratum_depths[&iri(&ex("stratum/text"))], 100);
+    assert!(
+        profile.monotone_depth(&iri(&ex("stratum/text"))).is_none(),
+        "the fixture profile must not weight this stratum"
+    );
+
+    let mut admitted = plan;
+    admitted.stratum_depths.insert(
+        iri(&ex("stratum/universal")),
+        u32::try_from(
+            profile
+                .monotone_depth(&iri(&ex("stratum/universal")))
+                .expect("weighted"),
+        )
+        .expect("the fixture bound is small"),
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: Some(&profile),
+    };
+    compile(&admitted, &env).expect("an unweighted stratum's depth is not this profile's business");
+}
+
+#[test]
+fn an_environment_that_names_no_profile_checks_no_monotone_range() {
+    // The dimension is checked against a law, and an environment that names no
+    // law has none to check against. A caller that plans and compiles before
+    // choosing how to fuse is not refused for not having chosen.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let profile = shallow_profile();
+    let stratum = iri(&ex("stratum/universal"));
+    let monotone = profile
+        .monotone_depth(&stratum)
+        .expect("the profile weights this stratum");
+    let mut plan = fresh_plan(&registry, &stats);
+    plan.stratum_depths.insert(
+        stratum,
+        u32::try_from(monotone + 1).expect("the fixture bound is small"),
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    compile(&plan, &env).expect("no profile named, so no profile arithmetic to violate");
+}
+
+// ---------------------------------------------------------------------------
 // 5. Weights
 // ---------------------------------------------------------------------------
 
@@ -611,6 +800,7 @@ fn admission_rejects_undeclared_stratum_weight() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a weight for an undeclared stratum is refused");
     match error {
@@ -631,6 +821,7 @@ fn admission_rejects_invalid_weight() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a non-positive weight is refused");
     match error {
@@ -657,6 +848,7 @@ fn admission_rejects_stale_statistics() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &moved,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("moved statistics are refused");
     match error {
@@ -690,6 +882,7 @@ fn admission_rejects_registry_instance_mismatch() {
     let env = AdmissionEnvironment {
         registry: &second,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a different live instance is refused");
     match error {
@@ -718,6 +911,7 @@ fn admission_rejects_registry_fingerprint_mismatch() {
     let env = AdmissionEnvironment {
         registry: &changed,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a changed registry is refused");
     assert!(
@@ -760,6 +954,7 @@ fn same_fingerprint_different_implementation_refused() {
     let env = AdmissionEnvironment {
         registry: &implementation_b,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("same fingerprint, different implementation");
     assert!(
@@ -800,6 +995,7 @@ fn a_deserialized_plan_is_admitted_against_a_rebuilt_registry() {
         &AdmissionEnvironment {
             registry: &planned_against,
             statistics: &stats,
+            fusion_profile: None,
         },
     )
     .expect("the fresh plan is admitted in its own process");
@@ -812,6 +1008,7 @@ fn a_deserialized_plan_is_admitted_against_a_rebuilt_registry() {
     let env = AdmissionEnvironment {
         registry: &rebuilt,
         statistics: &stats,
+        fusion_profile: None,
     };
 
     for (path, decoded) in decoded_both_ways(&plan) {
@@ -858,6 +1055,7 @@ fn a_deserialized_plan_against_different_declarations_is_refused() {
     let env = AdmissionEnvironment {
         registry: &changed,
         statistics: &stats,
+        fusion_profile: None,
     };
     for (path, decoded) in decoded_both_ways(&plan) {
         let error = compile(&decoded, &env).expect_err("a moved registry is refused");
@@ -892,6 +1090,7 @@ fn origin_is_what_selects_the_identity_a_plan_is_held_to() {
     let env = AdmissionEnvironment {
         registry: &rebuilt,
         statistics: &stats,
+        fusion_profile: None,
     };
     let mut decoded =
         Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical bytes decode");
@@ -933,6 +1132,7 @@ fn a_same_process_plan_is_still_held_to_its_live_instance() {
         &AdmissionEnvironment {
             registry: &second,
             statistics: &stats,
+            fusion_profile: None,
         },
     )
     .expect_err("a same-process plan names a live instance, and this is not it");
@@ -944,6 +1144,7 @@ fn a_same_process_plan_is_still_held_to_its_live_instance() {
         &AdmissionEnvironment {
             registry: &first,
             statistics: &stats,
+            fusion_profile: None,
         },
     )
     .expect("the registry it was planned against admits it");
@@ -980,6 +1181,7 @@ fn admission_refuses_a_binding_whose_stratum_has_no_depth() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a producer that would never compile is refused");
     assert_eq!(error.dimension(), "malformed_plan");
@@ -1011,6 +1213,7 @@ fn every_bound_stratum_with_a_depth_emits_its_branch() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&plan, &env).expect("the plan admits");
 
@@ -1066,6 +1269,7 @@ fn a_stratum_whose_producer_declares_no_mode_bounds_no_depth() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&plan, &env)
         .expect("a stratum whose producers declared no row count bounds no depth");
@@ -1090,6 +1294,7 @@ fn a_declared_row_bound_still_refuses_a_raised_depth() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a raised depth is still refused");
     match error {
@@ -1120,6 +1325,7 @@ fn a_stratum_no_producer_ranks_under_still_bounds_a_depth_at_zero() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a depth for a stratum nothing ranks under");
     match error {
@@ -1162,6 +1368,7 @@ fn one_stratum_failure_others_continue() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let mut compiled = compile(&plan, &env).expect("the plan admits");
     let failing = compiled.units[1].stratum.clone();
@@ -1200,6 +1407,7 @@ fn pinned_plan_replay_reproduces_candidate_set_and_ranks() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let first = rows_by_stratum(
         block_on(execute(
@@ -1245,6 +1453,7 @@ fn execute_refuses_a_different_registry_instance() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&plan, &env).expect("admits");
     let other = fixture_registry();
@@ -1265,6 +1474,7 @@ fn compiled_retrieval_carries_both_identities() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled: CompiledRetrieval = compile(&plan, &env).expect("admits");
     assert_eq!(compiled.registry_id, registry.instance_id());
@@ -1405,6 +1615,7 @@ fn admit_narrowed(registry: &PropertyFunctionRegistry) -> Result<(), AdmissionEr
     let env = AdmissionEnvironment {
         registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     compile(&plan, &env).map(|_| ())
 }
@@ -1459,6 +1670,7 @@ fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_manda
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&plan, &env).expect("a dropped optional producer is not a refusal");
     assert_eq!(
@@ -1481,6 +1693,7 @@ fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_manda
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&plan, &env).expect_err("a mandatory producer cannot be dropped");
     assert_eq!(error.dimension(), "missing_mandatory_producer");
@@ -1506,6 +1719,7 @@ fn a_mandatory_producer_is_refused_for_a_request_shape_it_does_not_accept() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error =
         compile(&plan, &env).expect_err("a mandatory producer must serve the whole request");
@@ -1536,6 +1750,7 @@ fn a_mandatory_producer_is_refused_for_a_request_shape_it_does_not_accept() {
     let env = AdmissionEnvironment {
         registry: &optional,
         statistics: &stats,
+        fusion_profile: None,
     };
     compile(&plan, &env).expect("an optional producer may cover part of a request");
 }
@@ -1556,6 +1771,7 @@ fn a_plan_that_both_binds_a_term_and_reports_it_unanswered_is_refused() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
 
     let mut plan = fresh_plan(&registry, &stats);
@@ -1606,6 +1822,7 @@ fn a_plan_that_both_binds_a_term_and_reports_it_unanswered_is_refused() {
     let env = AdmissionEnvironment {
         registry: &optional,
         statistics: &stats,
+        fusion_profile: None,
     };
     let mut plan = purrdf_retrieval::plan(&mixed_request(), &optional, &stats).expect("plans");
     for binding in &mut plan.producer_bindings {
@@ -1644,6 +1861,7 @@ fn narrowing_a_producer_leaves_the_plan_admissible_and_the_term_reported() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
 
     let mut plan = purrdf_retrieval::plan(&mixed_request(), &registry, &stats).expect("plans");

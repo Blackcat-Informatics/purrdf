@@ -18,7 +18,9 @@
 //!
 //! * every producer the registry declares **mandatory** is present, is bound to
 //!   the stratum the registry ranks it under, and receives every request term;
-//! * every stratum depth respects the registry's declared row bound;
+//! * every stratum depth respects the registry's declared row bound, and — when
+//!   the environment names the fusion profile the answer will be composed under
+//!   — the depth at which that profile's own arithmetic stops ordering ranks;
 //! * every stratum weight keys a declared stratum and is strictly positive under
 //!   §5 of the design record;
 //! * every bound producer can actually be *invoked* for the request terms the
@@ -96,13 +98,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use purrdf_sparql_eval::{PfDescriptor, PropertyFunctionRegistry, RegistryId};
 use purrdf_text::Fixed;
 
+use crate::fusion_profile::FusionProfile;
 use crate::id::PLAN_VERSION;
 use crate::iri::Iri;
 use crate::plan::{Plan, PlanOrigin};
 use crate::statistics::Statistics;
 
-/// Everything `compile` needs from outside the plan: the live registry and the
-/// statistics provider the replay is admitted against.
+/// Everything `compile` needs from outside the plan: the live registry, the
+/// statistics provider the replay is admitted against, and — when the caller has
+/// chosen one — the fusion law the answer will be composed under.
 ///
 /// The registry is borrowed, not cloned: admission reads its declared
 /// capabilities through [`PropertyFunctionRegistry::describe`] and never opens a
@@ -115,6 +119,20 @@ pub struct AdmissionEnvironment<'a> {
     pub registry: &'a PropertyFunctionRegistry,
     /// The statistics provider whose revision the plan must have recorded.
     pub statistics: &'a dyn Statistics,
+    /// The fusion profile the compiled units' rows will be fused under, when
+    /// the caller has chosen one.
+    ///
+    /// It is an `Option` because the design record is explicit that the profile
+    /// is **not** a planning input: a caller legitimately plans and compiles
+    /// without yet knowing how the result will be fused, and demanding a law it
+    /// has not chosen would refuse that. An environment that names one is held
+    /// to more, not less — a per-stratum depth is then checked against the
+    /// arithmetic that law actually performs
+    /// ([`AdmissionError::DepthBeyondMonotoneRange`]) and not only against the
+    /// registry's row bound. [`search`](crate::search) always names the profile
+    /// it is about to fuse under, so the whole-pipeline path is always held to
+    /// it.
+    pub fusion_profile: Option<&'a FusionProfile>,
 }
 
 impl core::fmt::Debug for AdmissionEnvironment<'_> {
@@ -123,6 +141,10 @@ impl core::fmt::Debug for AdmissionEnvironment<'_> {
             .field("registry", self.registry)
             .field("statistics_source", &self.statistics.source())
             .field("statistics_revision", &self.statistics.revision())
+            .field(
+                "fusion_profile",
+                &self.fusion_profile.map(FusionProfile::id),
+            )
             .finish()
     }
 }
@@ -172,6 +194,35 @@ pub enum AdmissionError {
         stratum: Box<Iri>,
         /// The registry's declared row bound for the stratum.
         declared: u32,
+        /// The depth the plan requested.
+        requested: u32,
+    },
+
+    /// A stratum's recorded depth lies beyond the range in which the fusion
+    /// profile's own arithmetic still orders ranks.
+    ///
+    /// This is a different dimension from [`Self::DepthBoundViolation`], and the
+    /// two are not substitutes. That one asks whether the *registry* can produce
+    /// that many rows; this one asks whether the *profile* can still tell them
+    /// apart once it has. A stratum can pass the first and fail the second, and
+    /// the failure is quiet by nature: nothing errors at fusion time, the answer
+    /// stays deterministic, and the rows simply stop being ordered by the ranks
+    /// their producers assigned. See [`FusionProfile`] for the coupling and
+    /// [`FusionProfile::monotone_depth`] for the exact value reported here.
+    ///
+    /// Raised only when the environment names the profile the answer will be
+    /// fused under, and only for a stratum that profile declares a weight for;
+    /// see [`AdmissionEnvironment::fusion_profile`].
+    #[error(
+        "stratum {stratum} declares depth {requested}, but under this fusion profile its \
+         contributions stop ordering by rank beyond depth {monotone}"
+    )]
+    DepthBeyondMonotoneRange {
+        /// The stratum whose depth outran the profile's arithmetic.
+        stratum: Box<Iri>,
+        /// The largest depth whose adjacent ranks still produce distinct
+        /// contributions under this profile.
+        monotone: u64,
         /// The depth the plan requested.
         requested: u32,
     },
@@ -294,6 +345,7 @@ impl AdmissionError {
             Self::MissingMandatoryProducer { .. } => "missing_mandatory_producer",
             Self::InsufficientBindings { .. } => "insufficient_bindings",
             Self::DepthBoundViolation { .. } => "depth_bound_violation",
+            Self::DepthBeyondMonotoneRange { .. } => "depth_beyond_monotone_range",
             Self::UndeclaredStratumWeight { .. } => "undeclared_stratum_weight",
             Self::InvalidWeight { .. } => "invalid_weight",
             Self::StaleStatistics { .. } => "stale_statistics",
@@ -655,6 +707,32 @@ pub(crate) fn admit_plan(
                 declared: u32::try_from(declared).unwrap_or(u32::MAX),
                 requested: *depth,
             });
+        }
+    }
+
+    // 7b. Per-stratum depth against the *profile's* arithmetic, when the caller
+    //     named the law the answer will be fused under. Step 7 asks whether the
+    //     registry can produce that many rows; this asks whether the profile can
+    //     still tell them apart once it has, and the two bounds are independent:
+    //     a registry declaring a million rows and a weight below one collide
+    //     long before the row bound bites. A stratum the profile does not weight
+    //     is skipped, because it contributes nothing to this fusion and a
+    //     profile that said nothing about it has said nothing about its depth.
+    if let Some(profile) = env.fusion_profile {
+        // Ordered, so a plan violating this in two strata names the same one
+        // every time: the refusal is part of the answer a caller reads back.
+        let ordered: BTreeMap<&Iri, &u32> = plan.stratum_depths.iter().collect();
+        for (stratum, depth) in ordered {
+            let Some(monotone) = profile.monotone_depth(stratum) else {
+                continue;
+            };
+            if u64::from(*depth) > monotone {
+                return Err(AdmissionError::DepthBeyondMonotoneRange {
+                    stratum: Box::new(stratum.clone()),
+                    monotone,
+                    requested: *depth,
+                });
+            }
         }
     }
 

@@ -188,6 +188,139 @@ fn canonical_bytes_and_decode_round_trip() {
     assert_eq!(decoded.canonical_bytes(), bytes);
 }
 
+/// Every interval shape the two new arms admit, so the canonical encoding's new
+/// tags are exercised in both directions and the arms' hand-written equality is
+/// held to the same standard the existing ones are.
+fn interval_terms() -> Vec<RequestTerm> {
+    vec![
+        RequestTerm::Temporal {
+            predicate: iri("http://example.org/observed"),
+            lower: Some("2026-01-01T00:00:00Z".to_owned()),
+            upper: Some("2026-02-01T00:00:00Z".to_owned()),
+        },
+        RequestTerm::Temporal {
+            predicate: iri("http://example.org/observed"),
+            lower: None,
+            upper: Some("2026-02-01T00:00:00Z".to_owned()),
+        },
+        RequestTerm::NumericRange {
+            predicate: iri("http://example.org/price"),
+            lower: Some(Fixed::from_raw(-1_500_000_000_000)),
+            upper: Some(Fixed::from_raw(2_250_000_000_000)),
+        },
+        RequestTerm::NumericRange {
+            predicate: iri("http://example.org/price"),
+            lower: Some(Fixed::ONE),
+            upper: None,
+        },
+    ]
+}
+
+#[test]
+fn interval_terms_round_trip_through_the_canonical_encoding() {
+    let mut plan = baseline();
+    plan.request_terms.extend(interval_terms());
+    let bytes = plan.canonical_bytes();
+    assert_eq!(bytes, plan.canonical_bytes(), "encoding is deterministic");
+    let decoded = Plan::from_canonical_bytes(&bytes).expect("canonical decode");
+    assert_eq!(decoded.request_terms, plan.request_terms);
+    assert_eq!(decoded.canonical_bytes(), bytes);
+    assert_eq!(decoded.id(), plan.id());
+}
+
+#[test]
+fn interval_terms_round_trip_through_serde() {
+    let mut plan = baseline();
+    plan.request_terms.extend(interval_terms());
+    let json = serde_json::to_string(&plan).expect("a plan serializes");
+    let decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    assert_eq!(decoded.request_terms, plan.request_terms);
+    assert_eq!(decoded.id(), plan.id());
+}
+
+#[test]
+fn the_digest_separates_every_interval_field() {
+    // Each field of each new arm is in the identity, and no two distinct
+    // intervals share one. The empty-interval case is deliberately absent: the
+    // planner refuses it, so no admitted plan can carry one.
+    let mut base = baseline();
+    base.request_terms = interval_terms();
+    let base_id = base.id();
+    for (label, term) in [
+        (
+            "temporal predicate",
+            RequestTerm::Temporal {
+                predicate: iri("http://example.org/elsewhere"),
+                lower: Some("2026-01-01T00:00:00Z".to_owned()),
+                upper: Some("2026-02-01T00:00:00Z".to_owned()),
+            },
+        ),
+        (
+            "temporal lower endpoint",
+            RequestTerm::Temporal {
+                predicate: iri("http://example.org/observed"),
+                lower: Some("2026-01-02T00:00:00Z".to_owned()),
+                upper: Some("2026-02-01T00:00:00Z".to_owned()),
+            },
+        ),
+        (
+            "temporal upper endpoint absent",
+            RequestTerm::Temporal {
+                predicate: iri("http://example.org/observed"),
+                lower: Some("2026-01-01T00:00:00Z".to_owned()),
+                upper: None,
+            },
+        ),
+    ] {
+        let mut changed = base.clone();
+        changed.request_terms[0] = term;
+        assert_ne!(changed.id(), base_id, "{label}");
+    }
+    for (label, term) in [
+        (
+            "numeric predicate",
+            RequestTerm::NumericRange {
+                predicate: iri("http://example.org/cost"),
+                lower: Some(Fixed::from_raw(-1_500_000_000_000)),
+                upper: Some(Fixed::from_raw(2_250_000_000_000)),
+            },
+        ),
+        (
+            "numeric lower endpoint",
+            RequestTerm::NumericRange {
+                predicate: iri("http://example.org/price"),
+                lower: Some(Fixed::from_raw(-1_500_000_000_001)),
+                upper: Some(Fixed::from_raw(2_250_000_000_000)),
+            },
+        ),
+        (
+            "numeric upper endpoint absent",
+            RequestTerm::NumericRange {
+                predicate: iri("http://example.org/price"),
+                lower: Some(Fixed::from_raw(-1_500_000_000_000)),
+                upper: None,
+            },
+        ),
+    ] {
+        let mut changed = base.clone();
+        changed.request_terms[2] = term;
+        assert_ne!(changed.id(), base_id, "{label}");
+    }
+    // And a term that differs only in which arm it is: a temporal interval and a
+    // numeric range carrying the same predicate are not one term.
+    let mut swapped = base.clone();
+    swapped.request_terms[0] = RequestTerm::NumericRange {
+        predicate: iri("http://example.org/observed"),
+        lower: None,
+        upper: Some(Fixed::ONE),
+    };
+    assert_ne!(swapped.id(), base_id, "the arm itself is in the identity");
+    assert_ne!(
+        swapped.request_terms[0], base.request_terms[0],
+        "and in equality"
+    );
+}
+
 #[test]
 fn canonical_bytes_are_stable_across_map_order() {
     let mut plan = baseline();

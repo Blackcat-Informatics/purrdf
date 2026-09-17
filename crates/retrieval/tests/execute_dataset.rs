@@ -252,6 +252,7 @@ fn compiled(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> Comp
     let env = AdmissionEnvironment {
         registry,
         statistics: stats,
+        fusion_profile: None,
     };
     let bundle = compile(&planned, &env).expect("the fresh plan is admitted");
     assert_eq!(bundle.units.len(), 2, "one unit per declared stratum");
@@ -405,6 +406,7 @@ fn a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let profile = fixture_profile();
     let dataset = dataset_of(&[]);

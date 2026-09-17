@@ -432,6 +432,15 @@ pub enum RequestFacet {
     Predicate,
     /// The maximum distance the term's match may lie at.
     MaxDistance,
+    /// The inclusive lower endpoint of a term that names an interval.
+    ///
+    /// An interval is two constants, not one, so it cannot ride in
+    /// [`Self::Value`]: a producer that received only one endpoint would answer
+    /// a strictly wider question than the caller asked, which is the silent
+    /// widening this enum exists to make impossible to express by accident.
+    LowerBound,
+    /// The inclusive upper endpoint of a term that names an interval.
+    UpperBound,
 }
 
 impl RequestFacet {
@@ -443,6 +452,8 @@ impl RequestFacet {
             Self::Language => "language",
             Self::Predicate => "predicate",
             Self::MaxDistance => "max-distance",
+            Self::LowerBound => "lower-bound",
+            Self::UpperBound => "upper-bound",
         }
     }
 }

@@ -408,6 +408,7 @@ fn two_real_producers_fuse_into_one_ranking_over_real_data() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &statistics,
+        fusion_profile: None,
     };
     let profile = profile();
     let request = request();
@@ -523,6 +524,7 @@ fn each_real_producer_is_compiled_with_the_facet_it_declared() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &statistics,
+        fusion_profile: None,
     };
     let planned = plan(&request(), &registry, &statistics).expect("the request plans");
     let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
@@ -623,6 +625,7 @@ fn search_equals_the_hand_composed_pipeline_over_the_real_producers() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &statistics,
+        fusion_profile: None,
     };
     let profile = profile();
 

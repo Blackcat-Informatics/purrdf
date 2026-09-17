@@ -262,13 +262,68 @@ statistics that have moved is a detectable condition with a declared
 behavior at admission — never a silent replan and never a silent
 pretense that nothing changed.
 
-## Open questions
+## Open questions, and the answers the implementation records
 
-1. **Where the composition layer lives.** The extension precedent says a
-   sibling crate over the seam, with `purrdf-sparql-eval` untouched;
-   whether it is one crate or a `fuse` primitive plus a thin planner is
-   an implementation choice this document does not fix.
-2. **The reciprocal's scale and rounding.** Fixed by the fusion profile
-   identity in §5; the concrete scale, the rounding direction, and the
-   overflow bound belong to the implementation record with its tests,
-   alongside the existing exact-arithmetic precedents.
+This document deliberately left three questions to the implementation. All
+three are now answered, and the answers are recorded here rather than left
+as questions a shipped design record still asks.
+
+1. **Where the composition layer lives — one crate.** The extension
+   precedent said a sibling crate over the seam with `purrdf-sparql-eval`
+   untouched; what it did not fix was whether that sibling is one crate or
+   a `fuse` primitive plus a thin planner. It is **one crate**,
+   `purrdf-retrieval`. Splitting it would put the admission waist on a
+   crate boundary: `compile` re-derives the planner's own matching and
+   placement decisions over a plan it must treat as untrusted, and it can
+   only do that by running the *same* rule the planner ran. Two crates
+   would be two copies of that rule, and a latent divergence between them
+   is invisible to any test on either side — the exact failure the waist
+   exists to prevent. The `fuse` primitive is still separable *as a
+   surface*: it takes streams and a profile and knows nothing about
+   planning, and a caller that wants only that rung calls only that rung.
+2. **The reciprocal's scale, rounding and overflow bound — decided.** The
+   scale is `purrdf-text`'s own, twelve fractional digits, reusing that
+   crate's `Fixed` rather than defining a second base-10 type: two
+   fixed-point types in one workspace would be two conventions for what a
+   rounded reciprocal means. The rounding direction is **truncation toward
+   zero**, applied to the reciprocal once, at the declared scale, before
+   the weight is applied. The overflow bound is the profile's own admitted
+   ceiling — the largest declared weight times the admitted contribution
+   count — checked at profile construction, and every intermediate is
+   checked at the point it is formed, so an intermediate that leaves the
+   range is a loud refusal rather than a wrapped score. All three are part
+   of the profile's canonical bytes, so a change to any of them is a new
+   profile identity.
+
+   The consequence that must be stated with them is the coupling between
+   the weight, that scale, and the per-stratum depth. Truncating the
+   reciprocal *before* weighting makes the reciprocal's own resolution a
+   ceiling no weight can lift: at any weight of one or more, two adjacent
+   ranks stop producing distinct contributions just above rank
+   `sqrt(10^12) − K`, whatever the weight is, and below one the weight
+   binds earlier. Beyond that depth nothing errors and nothing becomes
+   nondeterministic — the declared tie-break is total — but the fused
+   score stops separating ranks, so the sum across strata stops being
+   rank-weighted. The bound is therefore an admitted dimension rather than
+   a footnote: a per-stratum depth beyond it is refused at the admission
+   waist whenever the environment names the profile the answer will be
+   fused under.
+3. **The request lattice is closed, and stays closed.** The modalities a
+   request can name are not bounded by the producers that happen to exist
+   in-tree — producers are caller-supplied configuration, and a registry
+   that has nobody for a modality is a fact about that registry, not about
+   the lattice. So the lattice carries the modalities the layer means to
+   support, including ones no shipped producer accepts, and a term that
+   reaches nothing is reported per term with a typed reason (§6's obligation
+   applied to the request side).
+
+   Given that, the enum is **closed** rather than `#[non_exhaustive]`, and
+   the choice is deliberate. A closed enum gives a caller matching
+   exhaustively a compile error when a modality is added, which is exactly
+   the signal a caller routing terms to its own producers wants;
+   `#[non_exhaustive]` replaces that signal with a wildcard arm that
+   silently swallows the new modality, and charges every caller a wildcard
+   arm forever in exchange. The semver relief it buys is worth less than
+   the signal it costs, and it is cheapest to buy nothing: adding variants
+   before first publication is free, so the modalities that are foreseeable
+   are added now rather than deferred into a later major version.

@@ -304,6 +304,7 @@ fn fixture_env<'a>(
     AdmissionEnvironment {
         registry,
         statistics: stats,
+        fusion_profile: None,
     }
 }
 
@@ -575,6 +576,67 @@ fn fusion_error_propagates() {
         }
         other => panic!("expected a fusion refusal, got {other:?}"),
     }
+}
+
+#[test]
+fn search_holds_the_plan_to_the_profile_it_is_about_to_fuse_under() {
+    // `search` is the one place the plan and the law meet before a row is read,
+    // so it re-forms the admission environment around that law. The caller's own
+    // environment names no profile here, and the refusal still arrives: a
+    // per-stratum depth of a hundred outruns what a weight of `10^-9` can order.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let shallow = FusionProfile::new(
+        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::from_raw(1_000))]),
+        1,
+        4,
+    )
+    .expect("a strictly positive weight is a valid profile");
+
+    let error = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &shallow,
+        TOP_K,
+    ))
+    .expect_err("the depth outruns the profile's own arithmetic");
+    match error {
+        SearchError::AdmissionError(AdmissionError::DepthBeyondMonotoneRange {
+            stratum,
+            monotone,
+            requested,
+        }) => {
+            assert_eq!(*stratum, iri(&ex("stratum/text")));
+            assert_eq!(
+                monotone,
+                shallow
+                    .monotone_depth(&iri(&ex("stratum/text")))
+                    .expect("weighted"),
+            );
+            assert_eq!(requested, 100);
+        }
+        other => panic!("expected DepthBeyondMonotoneRange, got {other:?}"),
+    }
+
+    // The neighbouring valid case: the fixture profile's unit weights order far
+    // deeper than any depth this plan records, and the same search answers.
+    assert!(
+        block_on(search(
+            &mixed_request(),
+            &registry,
+            &stats,
+            &*common::empty_dataset(),
+            &env,
+            &fixture_profile(),
+            TOP_K,
+        ))
+        .is_ok(),
+        "a profile whose arithmetic covers every recorded depth still answers"
+    );
 }
 
 // ---------------------------------------------------------------------------

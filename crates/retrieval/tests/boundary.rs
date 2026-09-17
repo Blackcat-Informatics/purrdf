@@ -430,6 +430,7 @@ fn stop_at_compile_run_directly() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
 
     let compiled = compile(&planned, &env).expect("the plan is admitted");
@@ -470,6 +471,7 @@ fn stop_at_execute_unbounded_unfused() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&planned, &env).expect("admits");
 
@@ -543,6 +545,7 @@ fn start_at_compile_hand_built_plan() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&hand_built, &env).expect("a hand-built plan is admitted");
     assert_eq!(compiled.plan_id, hand_built.id());
@@ -712,6 +715,7 @@ fn unfused_unbounded_stream() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&planned, &env).expect("admits");
     let execution =
@@ -799,6 +803,7 @@ fn reporting_names_plan_and_profile() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let profile = single_profile(&ex("stratum/report"));
     let request = RetrievalRequest::from_terms(vec![lexical_term()]);
@@ -968,6 +973,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let planned = plan(&request, &registry, &stats).expect("plans");
     let compiled = compile(&planned, &env).expect("admits");

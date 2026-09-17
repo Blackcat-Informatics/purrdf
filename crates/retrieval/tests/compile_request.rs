@@ -315,6 +315,7 @@ fn compile_one(
     let env = AdmissionEnvironment {
         registry,
         statistics: stats,
+        fusion_profile: None,
     };
     let compiled = compile(&planned, &env).expect("the plan is admitted");
     assert_eq!(compiled.units.len(), 1, "the fixture declares one stratum");
@@ -504,6 +505,7 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let compiled = compile(&planned, &env).expect("admits");
     assert!(
@@ -548,6 +550,7 @@ fn depth_zero_is_an_honest_empty_stratum_and_depth_one_emits_one_row() {
         let env = AdmissionEnvironment {
             registry: &registry,
             statistics: &stats,
+            fusion_profile: None,
         };
         let compiled = compile(&planned, &env).expect("admits");
         assert!(
@@ -804,6 +807,7 @@ fn an_edited_plan_that_revives_a_refused_producer_is_refused_at_the_waist() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let error = compile(&planned, &env).expect_err("the edited plan is refused");
     assert_eq!(error.dimension(), "unsatisfiable_placement");
@@ -850,6 +854,7 @@ fn reordering_a_plans_bound_indices_does_not_change_the_emitted_text() {
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
+        fusion_profile: None,
     };
     let forward = compile(&planned, &env).expect("admits");
     let backward = compile(&reordered, &env).expect("admits");

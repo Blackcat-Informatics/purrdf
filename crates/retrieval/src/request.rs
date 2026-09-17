@@ -16,7 +16,29 @@
 //! relation this workspace ships computes a **set** — it sorts and deduplicates
 //! its pairs and carries neither a score nor a rank — so it composes as a
 //! constraint on candidates rather than as a stratum of a fused ranking, and it
-//! is not declared ranked here.
+//! is not declared ranked here. [`RequestTerm::Temporal`] and
+//! [`RequestTerm::NumericRange`] are a third and fourth: no relation in this
+//! workspace accepts either shape today.
+//!
+//! # The lattice is closed, deliberately
+//!
+//! [`RequestTerm`] is a closed enum, and it stays closed. The layer's doctrine
+//! is that producers are caller-supplied configuration, so the modalities a
+//! caller can ask for are not bounded by the producers that happen to exist
+//! in-tree — which is precisely why the interval modalities above are here
+//! before any producer takes them. Carrying a modality ahead of its producer is
+//! honest only when an unanswered term says so, and one does: a term no
+//! declaration accepts is reported per term as
+//! [`UnservedReason::NoProducerAccepts`](crate::UnservedReason::NoProducerAccepts).
+//!
+//! Closed rather than `#[non_exhaustive]` is the deliberate choice, and the
+//! reason is what a caller gets when a modality is added later: an exhaustive
+//! `match` over this enum stops compiling, which is exactly the signal a caller
+//! routing terms to its own producers wants. `#[non_exhaustive]` would replace
+//! that compile error with a wildcard arm that silently swallows the new
+//! modality, and forcing a wildcard arm on every caller is the cost it charges
+//! for the semver relief. The relief is worth less than the signal here,
+//! because adding variants before first publication is free.
 
 use purrdf_text::Fixed;
 use serde::{Deserialize, Serialize};
@@ -99,6 +121,86 @@ pub enum RequestTerm {
         #[serde(with = "crate::iri::fixed_option")]
         max_distance: Option<Fixed>,
     },
+    /// A temporal term: a closed interval on the caller's own time line.
+    ///
+    /// Each endpoint is carried in the caller's own temporal lexical form, the
+    /// way [`Self::Spatial`] carries a geometry in the caller's own geometry
+    /// encoding, and for the same reason: PurRDF mints no calendar datatype and
+    /// parses none, so the layer carries the lexical verbatim and the producer's
+    /// own [`TermPlacement`](purrdf_sparql_eval::TermPlacement) declares which
+    /// datatype it is written under. A producer that declares no datatype for
+    /// the endpoint is refused at placement rather than handed a plain string
+    /// that would compare as one.
+    ///
+    /// # No producer in this workspace accepts this shape yet
+    ///
+    /// Both endpoints nonetheless render, because both have a SPARQL constant
+    /// form: they bind through
+    /// [`RequestFacet::LowerBound`](purrdf_sparql_eval::RequestFacet::LowerBound)
+    /// and [`UpperBound`](purrdf_sparql_eval::RequestFacet::UpperBound).
+    ///
+    /// # Both endpoints are inclusive, and that is the whole interval language
+    ///
+    /// An argument position carries a value, not a comparison operator, so
+    /// expressing a strict endpoint would mean carrying an operator the seam
+    /// declares no facet for — vocabulary this layer does not own and does not
+    /// mint. A caller that wants a strict endpoint narrows the endpoint itself,
+    /// which its own temporal encoding can always express.
+    ///
+    /// An absent endpoint is a half-open interval, and an interval with neither
+    /// endpoint constrains nothing and is refused when the request is planned.
+    Temporal {
+        /// The predicate IRI the interval constrains.
+        predicate: Iri,
+        /// The inclusive lower endpoint, in the caller's temporal lexical form,
+        /// or `None` for an interval unbounded below.
+        lower: Option<String>,
+        /// The inclusive upper endpoint, in the caller's temporal lexical form,
+        /// or `None` for an interval unbounded above.
+        upper: Option<String>,
+    },
+    /// A numeric range term: a closed interval, exact.
+    ///
+    /// The endpoints are [`Fixed`] — the same exact base-10 type a stratum
+    /// weight and a [`Self::Spatial`] maximum distance are carried in —
+    /// never `f64`. Two reasons, and either alone would settle it. A binary
+    /// float cannot represent most decimal endpoints a caller writes, so the
+    /// range that reaches the producer would not be the range the caller asked
+    /// for; and a request term is part of a plan's canonical identity, where a
+    /// type with two spellings of one value (`0.0` and `-0.0`) and a value that
+    /// is not equal to itself (`NaN`) has no place. `Fixed` renders losslessly
+    /// through `to_decimal_lexical`, so the emitted constant is exactly the
+    /// endpoint.
+    ///
+    /// # No producer in this workspace accepts this shape yet
+    ///
+    /// Both endpoints render, through the same
+    /// [`LowerBound`](purrdf_sparql_eval::RequestFacet::LowerBound) and
+    /// [`UpperBound`](purrdf_sparql_eval::RequestFacet::UpperBound) facets
+    /// [`Self::Temporal`] uses; the producer declares the numeric datatype its
+    /// own relation compares under.
+    ///
+    /// # Both endpoints are inclusive
+    ///
+    /// For the reason given on [`Self::Temporal`]. Here the caller's workaround
+    /// is exact rather than merely available: at the declared scale the value
+    /// immediately below an endpoint is `Fixed::from_raw(raw - 1)`, so a strict
+    /// bound is representable without approximation.
+    ///
+    /// An interval with neither endpoint constrains nothing, and one whose
+    /// lower endpoint exceeds its upper can match nothing; both are refused when
+    /// the request is planned. A degenerate interval whose endpoints are equal
+    /// is a single point and is admitted.
+    NumericRange {
+        /// The predicate IRI the interval constrains.
+        predicate: Iri,
+        /// The inclusive lower endpoint, or `None` for a range unbounded below.
+        #[serde(with = "crate::iri::fixed_option")]
+        lower: Option<Fixed>,
+        /// The inclusive upper endpoint, or `None` for a range unbounded above.
+        #[serde(with = "crate::iri::fixed_option")]
+        upper: Option<Fixed>,
+    },
     /// An entity seed: retrieve from a term the caller already knows.
     EntitySeed {
         /// The seed term.
@@ -162,6 +264,38 @@ impl PartialEq for RequestTerm {
                     && left_max_distance == right_max_distance
             }
             (
+                Self::Temporal {
+                    predicate: left_predicate,
+                    lower: left_lower,
+                    upper: left_upper,
+                },
+                Self::Temporal {
+                    predicate: right_predicate,
+                    lower: right_lower,
+                    upper: right_upper,
+                },
+            ) => {
+                left_predicate == right_predicate
+                    && left_lower == right_lower
+                    && left_upper == right_upper
+            }
+            (
+                Self::NumericRange {
+                    predicate: left_predicate,
+                    lower: left_lower,
+                    upper: left_upper,
+                },
+                Self::NumericRange {
+                    predicate: right_predicate,
+                    lower: right_lower,
+                    upper: right_upper,
+                },
+            ) => {
+                left_predicate == right_predicate
+                    && left_lower == right_lower
+                    && left_upper == right_upper
+            }
+            (
                 Self::EntitySeed {
                     entity: left_entity,
                 },
@@ -173,6 +307,8 @@ impl PartialEq for RequestTerm {
                 Self::Lexical { .. }
                 | Self::Vector { .. }
                 | Self::Spatial { .. }
+                | Self::Temporal { .. }
+                | Self::NumericRange { .. }
                 | Self::EntitySeed { .. },
                 _,
             ) => false,
