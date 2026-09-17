@@ -382,6 +382,14 @@ impl PropertyFunction for HnswRelation {
         &self.modes
     }
 
+    /// The declared upper bound on the number of rows one invocation may emit under `mode`.
+    ///
+    /// Mirrors the exact kNN relation's positional bound — `min(1, rows)` when
+    /// `?neighbour` is bound, `min(max_neighbours, rows)` otherwise — but unlike the exact
+    /// path this bound is an upper bound **only**, never a promise that a call attains it:
+    /// [`HnswIndex::search_rows`] may return fewer than `k` rows when the beam does not
+    /// reach the query's exact neighbourhood, which is the approximation this relation
+    /// exists to offer.
     fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
         let rows = self.space.row_count() as u64;
         if mode.is_bound(HNSW_NEIGHBOUR) {

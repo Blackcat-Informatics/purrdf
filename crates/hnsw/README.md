@@ -80,7 +80,11 @@ reports the mean and maximum rows visited per query at each `ef_search`.
 use purrdf_hnsw::{build, Params, VectorMatrix};
 use purrdf_core::DistanceMetric;
 
-let matrix = VectorMatrix::new(3, 2, vec![1.0, 0.0, 0.0, 1.0, 0.9, 0.1])?;
+let matrix = VectorMatrix::from_rows(&[
+    vec![1.0, 0.0],
+    vec![0.0, 1.0],
+    vec![0.9, 0.1],
+])?;
 let params = Params::new(2, 4, 8, 4)?; // M, M0, ef_construction, ef_search
 let index = build(matrix, &DistanceMetric::SquaredEuclidean, params)?;
 let nearest = index.search_rows(0, 2)?; // row 0's two nearest neighbours

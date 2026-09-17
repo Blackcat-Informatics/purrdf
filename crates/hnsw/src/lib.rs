@@ -36,10 +36,11 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use purrdf_hnsw::{build, VectorMatrix, Params};
 //! use purrdf_core::DistanceMetric;
 //!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let matrix = VectorMatrix::from_rows(&[
 //!     vec![1.0, 0.0],
 //!     vec![0.0, 1.0],
@@ -48,6 +49,9 @@
 //! let params = Params::new(2, 4, 8, 4)?;
 //! let index = build(matrix, &DistanceMetric::SquaredEuclidean, params)?;
 //! let nearest = index.search_rows(0, 2)?;
+//! assert_eq!(nearest.len(), 2);
+//! # Ok(())
+//! # }
 //! ```
 
 mod builder;

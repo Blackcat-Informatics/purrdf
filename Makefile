@@ -359,7 +359,7 @@ hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are i
 
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they
-	@# ANSWER the same way there, and for the two ranking surfaces that is the claim
+	@# ANSWER the same way there, and for the three ranking surfaces that is the claim
 	@# that matters. The embedding kNN surface ranks by binary64 arithmetic: a
 	@# reassociated sum or a fused multiply-add changes a last bit, two near-tied
 	@# neighbours swap, and the browser returns a different ANSWER than the host.
