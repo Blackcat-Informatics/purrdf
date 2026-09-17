@@ -43,11 +43,11 @@
 //! comparison depends on iteration order of a hash container and none on thread identity,
 //! so the selected set is a function of the beam alone.
 
-use purrdf_sparql_eval::knn::{Kernel, Ranked};
+use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked};
 
-use crate::error::Result;
+use crate::error::{HnswError, Result};
 use crate::graph::VectorMatrix;
-use crate::search::distance_of;
+use crate::search::norm_of;
 
 /// The subset of `beam` that becomes `node`'s edges, at most `cap` of them.
 ///
@@ -84,9 +84,24 @@ pub(crate) fn select_neighbors(
         }
         let mut dominated = false;
         for picked in &chosen {
-            if distance_of(matrix, kernel, norms, candidate.row, picked.row)? < candidate.distance {
-                dominated = true;
-                break;
+            // The value is never kept -- only whether it falls under the candidate's own
+            // distance -- so the kernel may stop as soon as it cannot. Equality already
+            // falsifies the test, hence `AtOrAbove`.
+            match kernel.distance_bounded(
+                matrix.row(candidate.row),
+                norm_of(norms, candidate.row),
+                matrix.row(picked.row),
+                norm_of(norms, picked.row),
+                Bound::AtOrAbove(candidate.distance),
+            ) {
+                Bounded::Below(_) => {
+                    dominated = true;
+                    break;
+                }
+                Bounded::Beyond => {}
+                Bounded::NonFinite => {
+                    return Err(HnswError::NonFiniteDistance { row: picked.row });
+                }
             }
         }
         if !dominated {
@@ -134,7 +149,8 @@ mod tests {
         let mut beam: Vec<Ranked> = rows
             .iter()
             .map(|&row| Ranked {
-                distance: distance_of(matrix, Kernel::SquaredEuclidean, &[], query, row)
+                distance: Kernel::SquaredEuclidean
+                    .distance(matrix.row(query), 0.0, matrix.row(row), 0.0)
                     .expect("finite"),
                 row,
             })

@@ -89,6 +89,38 @@ impl Kernel {
         matches!(self, Self::Cosine)
     }
 
+    /// [`Kernel::distance`], permitted to stop once the answer cannot clear `bound`.
+    ///
+    /// Returns [`Bounded::Below`] carrying the distance when it is on the near side of the
+    /// bound, and [`Bounded::Beyond`] — with no value — when it is not. A caller that only
+    /// compares the distance against a threshold and discards it otherwise can use this
+    /// instead of [`Kernel::distance`] and get a bit-identical answer wherever it gets one
+    /// at all.
+    ///
+    /// Only [`Kernel::SquaredEuclidean`] can actually abandon: its terms are squares, so its
+    /// partial sums are monotone. `NegativeDot` and `Cosine` accumulate signed products
+    /// whose partial sums can move in either direction, so a partial sum proves nothing
+    /// about the total; those are computed in full and then classified. The API is total so
+    /// a caller need not branch on the kernel to stay correct.
+    #[must_use]
+    pub fn distance_bounded(
+        self,
+        query: &[f64],
+        query_norm: f64,
+        candidate: &[f64],
+        candidate_norm: f64,
+        bound: Bound,
+    ) -> Bounded {
+        if self == Self::SquaredEuclidean {
+            return squared_euclidean_bounded(query, candidate, bound);
+        }
+        match self.distance(query, query_norm, candidate, candidate_norm) {
+            None => Bounded::NonFinite,
+            Some(value) if bound.is_met_by(value) => Bounded::Beyond,
+            Some(value) => Bounded::Below(value),
+        }
+    }
+
     /// The distance from `query` to `candidate` under this kernel, or `None` when the
     /// computation left the finite range.
     ///
@@ -129,6 +161,43 @@ impl Kernel {
     }
 }
 
+/// The threshold a bounded distance is measured against.
+///
+/// The two forms exist because the callers' comparisons differ, and picking the wrong one is
+/// a silent wrong answer rather than a slow one. A caller ranking by [`Ranked`] — distance
+/// first, then row — may only abandon on a **strictly** greater partial sum, because at an
+/// equal distance the row still decides the comparison. A caller testing a bare `<` on the
+/// distance alone may abandon on equality, since equality already falsifies it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Bound {
+    /// Abandon once the partial sum is greater than or equal to this value.
+    AtOrAbove(f64),
+    /// Abandon only once the partial sum is strictly greater than this value.
+    Above(f64),
+}
+
+impl Bound {
+    /// Whether `sum` has reached this bound.
+    #[must_use]
+    pub fn is_met_by(self, sum: f64) -> bool {
+        match self {
+            Self::AtOrAbove(limit) => sum >= limit,
+            Self::Above(limit) => sum > limit,
+        }
+    }
+}
+
+/// The outcome of a bounded distance evaluation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Bounded {
+    /// The distance, on the near side of the bound, computed in full.
+    Below(f64),
+    /// The bound was reached; the distance's value was never completed.
+    Beyond,
+    /// A partial sum left the finite range, exactly as [`Kernel::distance`] reports `None`.
+    NonFinite,
+}
+
 /// `sum(a[i] · b[i])`, accumulated over ascending index.
 ///
 /// The product is bound before it is added so the pair cannot be contracted into a fused
@@ -149,18 +218,59 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 }
 
 /// `sum((a[i] - b[i])²)`, accumulated over ascending index.
+///
+/// Delegates to [`squared_euclidean_bounded`] with an unreachable bound, so there is exactly
+/// one squared-Euclidean fold in this crate and the bounded form cannot drift away from the
+/// full one. An infinite bound can only be met by a sum that has already overflowed, which
+/// that function reports separately.
+fn squared_euclidean(a: &[f64], b: &[f64]) -> f64 {
+    match squared_euclidean_bounded(a, b, Bound::Above(f64::INFINITY)) {
+        Bounded::Below(sum) => sum,
+        // A partial sum that overflowed. `Kernel::distance` turns a non-finite value into
+        // `None`, which is the same answer the unbounded fold gave by returning the
+        // infinity itself.
+        Bounded::NonFinite | Bounded::Beyond => f64::INFINITY,
+    }
+}
+
+/// `sum((a[i] - b[i])²)`, abandoned as soon as the running sum meets `bound`.
+///
+/// Every term is a square and therefore non-negative, so under round-to-nearest the partial
+/// sums are **non-decreasing**: once one meets the bound, no later term can bring the total
+/// back under it. A caller that only needs to know whether the distance clears a threshold
+/// can therefore stop, and at four thousand dimensions stopping early is most of the work
+/// and most of the memory traffic.
+///
+/// The accumulation is bit-identical to running to completion. The chunking controls only
+/// how often the bound is tested; the inner loop still walks ascending index with one
+/// running sum, in the same order, with the same separate roundings. A candidate that is
+/// NOT abandoned is therefore scored exactly as [`Kernel::distance`] would score it, which
+/// is what lets an index use this without moving a single ranked answer.
 #[allow(
     clippy::suboptimal_flops,
     reason = "see `dot`: the multiply and the add are deliberately separate roundings"
 )]
-fn squared_euclidean(a: &[f64], b: &[f64]) -> f64 {
+fn squared_euclidean_bounded(a: &[f64], b: &[f64], bound: Bound) -> Bounded {
+    /// How many terms are folded between bound tests. Purely a cost knob: the sums are
+    /// monotone, so a later test still abandons, and finishing the loop returns the exact
+    /// same total whatever this is.
+    const BLOCK: usize = 64;
+
     let mut sum = 0.0_f64;
-    for (x, y) in a.iter().zip(b.iter()) {
-        let delta = x - y;
-        let square = delta * delta;
-        sum += square;
+    for (block_a, block_b) in a.chunks(BLOCK).zip(b.chunks(BLOCK)) {
+        for (x, y) in block_a.iter().zip(block_b.iter()) {
+            let delta = x - y;
+            let square = delta * delta;
+            sum += square;
+        }
+        if !sum.is_finite() {
+            return Bounded::NonFinite;
+        }
+        if bound.is_met_by(sum) {
+            return Bounded::Beyond;
+        }
     }
-    sum
+    Bounded::Below(sum)
 }
 
 /// The Euclidean (L2) norm of `vector`, by the same scaled fold PURREMB's own
@@ -617,5 +727,109 @@ mod tests {
         let mut reversed = candidates();
         reversed.reverse();
         assert_eq!(best(4, candidates()), best(4, reversed));
+    }
+
+    /// A deterministic stream of values in `[-1, 1)`, for the differential tests below.
+    fn stream(len: usize, seed: u64) -> Vec<f64> {
+        let mut state = seed;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^= z >> 31;
+                ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_bounded_fold_that_does_not_abandon_is_bit_identical_to_the_full_one() {
+        // The whole licence for early abandonment. An index may only use the bounded fold
+        // because a candidate it does NOT abandon is scored exactly as `distance` scores it
+        // -- not approximately, bit for bit -- so no ranked answer can move. Lengths either
+        // side of the block size, so the chunking is exercised rather than skipped.
+        for len in [1_usize, 63, 64, 65, 127, 128, 200, 4_096] {
+            let a = stream(len, 0x5EED_0001);
+            let b = stream(len, 0x5EED_0002);
+            for kernel in [
+                Kernel::SquaredEuclidean,
+                Kernel::NegativeDot,
+                Kernel::Cosine,
+            ] {
+                let (na, nb) = (norm(&a), norm(&b));
+                let full = kernel.distance(&a, na, &b, nb).expect("finite");
+                let bounded = kernel.distance_bounded(&a, na, &b, nb, Bound::Above(f64::INFINITY));
+                match bounded {
+                    Bounded::Below(value) => assert_eq!(
+                        value.to_bits(),
+                        full.to_bits(),
+                        "{kernel:?} at len {len}: the bounded fold must agree bit for bit"
+                    ),
+                    other => panic!("{kernel:?} at len {len}: expected a value, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn abandoning_never_contradicts_the_full_distance() {
+        // Swept across bounds that land below, at, and above the true distance, in both
+        // strictness modes. `Beyond` must only ever be returned when the full distance
+        // genuinely meets the bound -- an abandonment that fired early would be a wrong
+        // answer, not a fast one.
+        let a = stream(300, 0xB0B_0001);
+        let b = stream(300, 0xB0B_0002);
+        let (na, nb) = (norm(&a), norm(&b));
+        let truth = Kernel::SquaredEuclidean
+            .distance(&a, na, &b, nb)
+            .expect("finite");
+
+        for scale in [0.0_f64, 0.25, 0.5, 0.99, 1.0, 1.01, 2.0] {
+            let limit = truth * scale;
+            for bound in [Bound::AtOrAbove(limit), Bound::Above(limit)] {
+                let got = Kernel::SquaredEuclidean.distance_bounded(&a, na, &b, nb, bound);
+                match got {
+                    Bounded::Below(value) => {
+                        assert_eq!(value.to_bits(), truth.to_bits());
+                        assert!(
+                            !bound.is_met_by(truth),
+                            "returned a value for a distance that meets {bound:?}"
+                        );
+                    }
+                    Bounded::Beyond => assert!(
+                        bound.is_met_by(truth),
+                        "abandoned at {bound:?} but the true distance {truth} does not meet it"
+                    ),
+                    Bounded::NonFinite => panic!("the fixture is finite"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_overflowing_fold_is_reported_rather_than_abandoned() {
+        // The hard fail survives. A pair whose squares overflow must be NonFinite, not
+        // silently swallowed as "far away" -- a caller that treated overflow as a large
+        // distance would rank a candidate on a number that never existed.
+        let huge = vec![f64::MAX / 2.0; 8];
+        let zero = vec![0.0_f64; 8];
+        assert_eq!(
+            Kernel::SquaredEuclidean.distance_bounded(
+                &huge,
+                0.0,
+                &zero,
+                0.0,
+                Bound::AtOrAbove(1.0)
+            ),
+            Bounded::NonFinite,
+            "an overflow is an error even when a bound would otherwise have abandoned"
+        );
+        assert_eq!(
+            Kernel::SquaredEuclidean.distance(&huge, 0.0, &zero, 0.0),
+            None,
+            "and the unbounded fold still refuses it too"
+        );
     }
 }

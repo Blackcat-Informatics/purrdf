@@ -109,7 +109,7 @@ use crate::error::EvalError;
 use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction};
 use crate::user_fn::Volatility;
 
-pub use metric::{Kernel, Ranked, best, norm};
+pub use metric::{Bound, Bounded, Kernel, Ranked, best, norm};
 
 /// The `?neighbour` position: the retrieved term.
 const KNN_NEIGHBOUR: usize = 0;
