@@ -389,6 +389,8 @@ AMBIGUOUS_BRANCH_PHRASES: frozenset[str] = frozenset(
 # says "the plan's"/"the plan §" is reported as stale.
 AMBIGUOUS_PLAN_PHRASES: frozenset[str] = frozenset(
     {
+        "bindings/python/python/src/purrdf/__init__.pyi",
+        "bindings/python/src/py_retrieval.rs",
         "crates/datalog/src/seminaive.rs",
         "crates/gts/src/compact.rs",
         "crates/gts/tests/pinned_dict_compaction.rs",
