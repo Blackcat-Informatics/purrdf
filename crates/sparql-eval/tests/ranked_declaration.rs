@@ -298,6 +298,88 @@ fn a_candidate_that_collides_with_the_depth_is_refused() {
     registry.register_ranked(EX_REL, relation(), decl);
 }
 
+// ---- one stratum, one producer -------------------------------------------
+
+#[test]
+#[should_panic(expected = "already serves; one stratum carries one producer")]
+fn a_stratum_a_registered_producer_already_serves_is_refused() {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), declaration());
+    registry.register_ranked(EX_OTHER, relation(), declaration());
+}
+
+#[test]
+fn two_producers_in_two_strata_register_and_read_back_side_by_side() {
+    // The valid neighbour: the SAME two declarations, differing only in the one
+    // field the refusal is about. A rule that refused a second ranked producer —
+    // rather than a second producer under one stratum — would pass the test above
+    // and break every multi-modal host there is.
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), declaration());
+    let second = RankedDeclaration {
+        stratum: stratum(EX_STRATUM_B),
+        ..declaration()
+    };
+    registry.register_ranked(EX_OTHER, relation(), second.clone());
+
+    assert_eq!(registry.ranked_declaration(EX_REL), Some(&declaration()));
+    assert_eq!(registry.ranked_declaration(EX_OTHER), Some(&second));
+}
+
+#[test]
+fn the_stratum_refusal_names_the_stratum_both_producers_and_both_exits() {
+    // The message IS the finding. A host reading it has to be able to tell which
+    // of the two repairs its configuration needs, and naming only "separate
+    // strata" would recommend the quiet one: a summing fusion treats each stratum
+    // as a summand, so two shards recast as two strata give a candidate they both
+    // hold two contributions where the host meant one family's worth.
+    let message = panic_message(|| {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register_ranked(EX_REL, relation(), declaration());
+        registry.register_ranked(EX_OTHER, relation(), declaration());
+    });
+    assert!(message.contains(EX_STRATUM), "{message}");
+    assert!(message.contains(EX_REL), "{message}");
+    assert!(message.contains(EX_OTHER), "{message}");
+    assert!(
+        message.contains("merge them inside ONE producer"),
+        "the same-scoring-law exit: {message}"
+    );
+    assert!(
+        message.contains("give each its own stratum"),
+        "the different-scoring-law exit: {message}"
+    );
+}
+
+#[test]
+fn a_refused_stratum_leaves_the_registry_exactly_as_it_was() {
+    // The discipline the duplicate-IRI refusal keeps: validation precedes every
+    // write, so a host that catches the panic is not left with a half-registered
+    // relation whose declaration is missing.
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(EX_REL, relation(), declaration());
+    without_panic_output(|| {
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut doomed = registry.clone();
+            doomed.register_ranked(EX_OTHER, relation(), declaration());
+        }))
+        .expect_err("the second claim on one stratum panics");
+    });
+    assert_eq!(registry.len(), 1, "the original registry is untouched");
+    assert_eq!(registry.ranked_declaration(EX_OTHER), None);
+}
+
+#[test]
+fn a_plainly_registered_relation_claims_no_stratum() {
+    // `register` supplies no declaration, so it cannot claim a stratum and cannot
+    // be the producer a later claim collides with. The neighbouring valid case
+    // for the scan itself: it reads declarations, not registrations.
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(EX_OTHER, relation());
+    registry.register_ranked(EX_REL, relation(), declaration());
+    assert_eq!(registry.ranked_declaration(EX_REL), Some(&declaration()));
+}
+
 #[test]
 fn a_failed_validation_leaves_the_registry_untouched() {
     let mut registry = PropertyFunctionRegistry::new();

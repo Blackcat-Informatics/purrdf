@@ -29,6 +29,16 @@
 //! plan, the registry and the dataset — a pinned plan replays identically against
 //! the same data.
 //!
+//! That the rank is the *relation's* order, and not an artifact of how the unit
+//! was assembled, rests on one stratum carrying one producer — refused at
+//! registration by
+//! [`register_ranked`](purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked)
+//! and again at the admission waist. A unit with two branches would emit their
+//! concatenation, so the second relation's rank-1 row would arrive at stratum
+//! rank `n+1` and decay here as though it had lost to `n` rows it never competed
+//! with. With one branch there is nothing to concatenate: the stratum's rank
+//! order **is** its producer's emission order, row for row.
+//!
 //! # A raw stream, not yet a fusion stream
 //!
 //! [`RankedStreamImpl`] carries `(rank, candidate)` only. A fusion contribution

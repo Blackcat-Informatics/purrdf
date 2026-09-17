@@ -238,15 +238,19 @@ fn fixture_registry() -> PropertyFunctionRegistry {
     registry
 }
 
-/// A registry whose declarations differ from the fixture's: the catch-all
-/// producer declares a different row bound, so the content fingerprint moves.
+/// A registry whose declarations differ from the fixture's: one extra producer,
+/// under a stratum of its own, so the content fingerprint moves.
+///
+/// The stratum is its own rather than the catch-all's because a stratum carries
+/// one producer; what moves the fingerprint is the extra declaration, and it
+/// moves it either way.
 fn registry_with_different_declaration() -> PropertyFunctionRegistry {
     let mut registry = fixture_registry();
     registry.register_ranked(
         ex("pf/extra"),
         producer(999, "extra/", 0),
         ranked(
-            &ex("stratum/universal"),
+            &ex("stratum/extra"),
             vec![TermPattern::of_kind(TermKind::Any)],
             true,
         ),
@@ -1719,9 +1723,12 @@ fn catch_all_registry(mandatory: bool) -> PropertyFunctionRegistry {
 }
 
 /// `pf/renders` places a request term's value, so a vector term — which has no
-/// SPARQL constant form — makes it unplaceable. `pf/free` shares its stratum and
-/// places nothing, so the plan stays viable and the first producer's own fate is
-/// readable rather than collapsed into `NoApplicableProducers`.
+/// SPARQL constant form — makes it unplaceable. `pf/free` sits in a stratum of
+/// its own and places nothing, so the plan stays viable and the first producer's
+/// own fate is readable rather than collapsed into `NoApplicableProducers`.
+///
+/// The two are in separate strata because a stratum carries one producer; what
+/// this fixture needs from `pf/free` is only that *something* survives planning.
 fn unplaceable_registry(mandatory: bool) -> PropertyFunctionRegistry {
     let mut registry = PropertyFunctionRegistry::new();
     registry.register_ranked(
@@ -1732,7 +1739,7 @@ fn unplaceable_registry(mandatory: bool) -> PropertyFunctionRegistry {
     registry.register_ranked(
         ex("pf/free"),
         producer(30, "free/", 2),
-        declaration(&ex("stratum/render"), renders_nothing(), false),
+        declaration(&ex("stratum/free"), renders_nothing(), false),
     );
     registry
 }
@@ -1871,23 +1878,164 @@ fn a_producer_placement_refuses_is_dropped_unless_the_registry_declared_it_manda
 }
 
 #[test]
-fn a_mandatory_producer_is_refused_for_a_request_shape_it_does_not_accept() {
+fn a_plan_that_binds_two_producers_to_one_stratum_is_refused() {
+    // The plan-side face of the registry's one-stratum-one-producer rule. The
+    // registry refuses a second producer's *declaration*, but a plan is editable,
+    // so it can still carry two bindings under one stratum — the same producer
+    // twice, with two term sets — and that compiles to the same concatenation,
+    // where the second branch's rank-1 row lands below the whole of the first.
+    let registry = fixture_registry();
     let stats = statistics("r1");
-
-    // A host may declare a narrow producer mandatory. That is a claim about
-    // every request, so a request carrying shapes the producer does not accept
-    // falsifies it — and the falsification is a named refusal at the waist, not
-    // an answer that quietly covers one term of three.
-    let registry = literal_only_registry(true);
-    let plan = purrdf_retrieval::plan(&mixed_request(), &registry, &stats)
-        .expect("the lexical term still reaches the producer, so the request plans");
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
         fusion_profile: None,
     };
-    let error =
-        compile(&plan, &env).expect_err("a mandatory producer must serve the whole request");
+
+    // The neighbouring valid case first: one binding per stratum, admitted.
+    let plan = fresh_plan(&registry, &stats);
+    compile(&plan, &env).expect("one binding per stratum is the ordinary plan");
+
+    let mut doubled = plan;
+    let repeat = doubled
+        .producer_bindings
+        .iter()
+        .find(|binding| binding.producer == ex("pf/any"))
+        .expect("the catch-all is bound")
+        .clone();
+    doubled.producer_bindings.push(repeat);
+
+    let error = compile(&doubled, &env).expect_err("one stratum carries one producer");
+    assert_eq!(error.dimension(), "malformed_plan");
+    match error {
+        AdmissionError::MalformedPlan { reason } => {
+            assert!(
+                reason.contains(&ex("stratum/universal")),
+                "the refusal names the stratum: {reason}"
+            );
+            assert!(
+                reason.contains(&ex("pf/any")),
+                "and the producers under it: {reason}"
+            );
+        }
+        other => panic!("expected MalformedPlan, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 9b. What `mandatory` quantifies over
+//
+// Mandatory means "every request term this producer's own patterns accept", not
+// "every request term". The difference is invisible for the one producer shape
+// where it cannot bite — a catch-all `TermKind::Any`, which accepts everything,
+// so both readings say the same thing — and decisive for every real one: a
+// full-text producer accepts literals and cannot accept an entity seed, so under
+// the wider reading a coverage-floor host had every multimodal request refused.
+// Each test below is a pair, because a quantifier that is too wide fails in the
+// direction where every test still passes.
+// ---------------------------------------------------------------------------
+
+/// A lexical term beside an entity seed: the multimodal request a coverage-floor
+/// host asks for, and the one the wider quantifier refused.
+fn lexical_and_seed_request() -> RetrievalRequest {
+    RetrievalRequest::from_terms(vec![lexical_term(), seed_term()])
+}
+
+/// The declared-mandatory text producer's binding in `plan`, if it has one.
+fn literal_binding(plan: &Plan) -> Option<&purrdf_retrieval::ProducerBinding> {
+    plan.producer_bindings
+        .iter()
+        .find(|binding| binding.producer == ex("pf/literal"))
+}
+
+/// A literal-only producer that renders nothing, so it can be bound to SEVERAL
+/// lexical terms at once — the shape a some-but-not-all edit needs, which a
+/// single-position `Value` placement could not express (two needles would
+/// contend for one argument).
+fn literal_catcher_registry(mandatory: bool) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/literal"),
+        producer(100, "text/", 2),
+        declaration(
+            &ex("stratum/text"),
+            vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(TermKind::Literal),
+                placements: Vec::new(),
+            }],
+            mandatory,
+        ),
+    );
+    registry
+}
+
+fn second_lexical_term() -> RequestTerm {
+    RequestTerm::Lexical {
+        text: "slow green turtle".to_owned(),
+        language: Some("en".to_owned()),
+        predicate: Some(iri(&ex("body"))),
+    }
+}
+
+#[test]
+fn a_mandatory_text_producer_admits_a_request_it_can_only_partly_accept() {
+    // The adopter's exact case. A coverage-floor host declares its full-text
+    // producer mandatory, then issues `Lexical + EntitySeed`. The text producer's
+    // patterns cannot accept a seed — no full-text producer's can — so under the
+    // old quantifier this was `InsufficientBindings` and withdrawing `mandatory`
+    // admitted the identical plan. The declaration was never the problem.
+    let stats = statistics("r1");
+    let registry = literal_only_registry(true);
+    let plan = purrdf_retrieval::plan(&lexical_and_seed_request(), &registry, &stats)
+        .expect("the lexical term reaches the producer, so the request plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    compile(&plan, &env).expect("a term the producer cannot accept is not its business");
+    assert_eq!(
+        literal_binding(&plan)
+            .expect("the text producer is bound")
+            .request_terms,
+        vec![0],
+        "bound to the lexical term only; the seed is no part of what it promised"
+    );
+
+    // And the seed is not quietly lost: nothing in this registry accepts it, and
+    // the plan says so by index rather than by omission.
+    assert_eq!(
+        plan.unserved_evidence(),
+        vec![UnservedTerm {
+            request_term: 1,
+            reason: UnservedReason::NoProducerAccepts,
+        }]
+    );
+}
+
+#[test]
+fn a_mandatory_producer_dropped_from_a_term_it_accepts_is_refused_by_name() {
+    // The protection `mandatory` exists for, on the very plan the test above
+    // admits: the host promised this producer would serve what it can of every
+    // request, and this edit takes the one term it can serve away from it.
+    let stats = statistics("r1");
+    let registry = literal_only_registry(true);
+    let mut plan = purrdf_retrieval::plan(&lexical_and_seed_request(), &registry, &stats)
+        .expect("the request plans");
+    plan.producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == ex("pf/literal"))
+        .expect("the text producer is bound")
+        .request_terms
+        .clear();
+
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let error = compile(&plan, &env).expect_err("the accepted term cannot be taken away");
+    assert_eq!(error.dimension(), "insufficient_bindings");
     match error {
         AdmissionError::InsufficientBindings {
             producer,
@@ -1895,29 +2043,175 @@ fn a_mandatory_producer_is_refused_for_a_request_shape_it_does_not_accept() {
             provided,
         } => {
             assert_eq!(producer.as_str(), ex("pf/literal"));
-            assert_eq!(required, 3, "the request carries three terms");
-            assert_eq!(provided, 1, "only the lexical one matches a declared shape");
+            assert_eq!(required, 1, "one term of the request is a literal");
+            assert_eq!(provided, 0, "and the edit left it bound to none of them");
+        }
+        other => panic!("expected InsufficientBindings, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_mandatory_producer_bound_to_some_of_what_it_accepts_is_refused() {
+    // Two lexical terms and a seed. The producer accepts both literals and
+    // neither the seed, so "every term it accepts" is two — and a plan that
+    // binds it to one of them is the partial coverage the flag forbids.
+    let stats = statistics("r1");
+    let registry = literal_catcher_registry(true);
+    let request =
+        RetrievalRequest::from_terms(vec![lexical_term(), second_lexical_term(), seed_term()]);
+    let plan = purrdf_retrieval::plan(&request, &registry, &stats).expect("both literals reach it");
+    assert_eq!(
+        literal_binding(&plan)
+            .expect("the text producer is bound")
+            .request_terms,
+        vec![0, 1],
+        "the planner binds it to both literals and not to the seed"
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    // The neighbouring valid case first: the unedited plan, which covers every
+    // literal and no seed, is admitted.
+    compile(&plan, &env).expect("full coverage of what it accepts is admitted");
+
+    let mut narrowed = plan;
+    narrowed
+        .producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == ex("pf/literal"))
+        .expect("the text producer is bound")
+        .request_terms
+        .truncate(1);
+    let error = compile(&narrowed, &env).expect_err("half the accepted terms is not all of them");
+    match error {
+        AdmissionError::InsufficientBindings {
+            producer,
+            required,
+            provided,
+        } => {
+            assert_eq!(producer.as_str(), ex("pf/literal"));
+            assert_eq!(required, 2, "two of the three terms are literals");
+            assert_eq!(provided, 1);
         }
         other => panic!("expected InsufficientBindings, got {other:?}"),
     }
 
-    // The neighbouring valid case: a request the producer does accept in full is
-    // admitted by the same mandatory registry.
-    let lexical_only = RetrievalRequest::from_terms(vec![lexical_term()]);
-    let plan =
-        purrdf_retrieval::plan(&lexical_only, &registry, &stats).expect("a lexical request plans");
-    compile(&plan, &env).expect("a request the mandatory producer serves in full is admitted");
-
-    // And the same three-term request is admitted where the host did not make
-    // that claim, so the refusal above is the declaration's, not the shape's.
-    let optional = literal_only_registry(false);
-    let plan = purrdf_retrieval::plan(&mixed_request(), &optional, &stats).expect("plans");
+    // And the same edit is admitted where the host made no such claim, so the
+    // refusal is the declaration's rather than the shape's.
+    let optional = literal_catcher_registry(false);
+    let mut plan = purrdf_retrieval::plan(&request, &optional, &stats).expect("plans");
+    plan.producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == ex("pf/literal"))
+        .expect("the text producer is bound")
+        .request_terms
+        .truncate(1);
     let env = AdmissionEnvironment {
         registry: &optional,
         statistics: &stats,
         fusion_profile: None,
     };
     compile(&plan, &env).expect("an optional producer may cover part of a request");
+}
+
+#[test]
+fn a_mandatory_catch_all_still_answers_for_every_term_of_the_request() {
+    // The one shape where the two quantifiers agree, and the shape every fixture
+    // in this repo declared `mandatory` on — which is exactly why the wider
+    // reading was never exercised here. An `Any` pattern accepts every term, so
+    // "every term it accepts" IS "every term", and the behaviour is unchanged in
+    // both directions.
+    let stats = statistics("r1");
+    let registry = catch_all_registry(true);
+    let plan = purrdf_retrieval::plan(&mixed_request(), &registry, &stats).expect("plans");
+    let catch_all = plan
+        .producer_bindings
+        .iter()
+        .find(|binding| binding.producer == ex("pf/catch-all"))
+        .expect("the catch-all is bound");
+    assert_eq!(
+        catch_all.request_terms,
+        vec![0, 1, 2],
+        "a catch-all accepts every shape the request carries"
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    compile(&plan, &env).expect("full coverage is admitted");
+
+    // Narrowing it is still refused, still with the whole request as `required`.
+    let mut narrowed = plan.clone();
+    narrowed
+        .producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == ex("pf/catch-all"))
+        .expect("the catch-all is bound")
+        .request_terms
+        .truncate(2);
+    match compile(&narrowed, &env).expect_err("a catch-all may not be narrowed") {
+        AdmissionError::InsufficientBindings {
+            producer,
+            required,
+            provided,
+        } => {
+            assert_eq!(producer.as_str(), ex("pf/catch-all"));
+            assert_eq!(required, 3, "an Any pattern accepts all three terms");
+            assert_eq!(provided, 2);
+        }
+        other => panic!("expected InsufficientBindings, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_mandatory_producer_that_accepts_nothing_of_a_request_is_not_required_by_it() {
+    // The same quantifier, read at zero. A request the producer accepts no term
+    // of has no term to have dropped it from, so there is no coverage claim for
+    // the plan to falsify — reporting it missing would be the wider quantifier
+    // again, one layer up, refusing a request the host's own declaration says
+    // nothing about.
+    let stats = statistics("r1");
+    let mut registry = literal_only_registry(true);
+    // Something must survive planning, and it must accept the seed the text
+    // producer cannot; its own stratum, because a stratum carries one producer.
+    registry.register_ranked(
+        ex("pf/iri"),
+        producer(50, "graph/", 1),
+        ranked(
+            &ex("stratum/graph"),
+            vec![TermPattern::of_kind(TermKind::Iri)],
+            false,
+        ),
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    let seed_only = RetrievalRequest::from_terms(vec![seed_term()]);
+    let plan = purrdf_retrieval::plan(&seed_only, &registry, &stats).expect("the seed plans");
+    assert!(
+        literal_binding(&plan).is_none(),
+        "the text producer accepts no term of this request, so it is not bound"
+    );
+    compile(&plan, &env).expect("a request that is no part of its business is admitted");
+
+    // The neighbouring case that must still refuse: add a term it DOES accept,
+    // and drop it from the plan, and the promise bites.
+    let mut plan = purrdf_retrieval::plan(&lexical_and_seed_request(), &registry, &stats)
+        .expect("the request plans");
+    plan.producer_bindings
+        .retain(|binding| binding.producer != ex("pf/literal"));
+    match compile(&plan, &env).expect_err("dropping it from a term it accepts is refused") {
+        AdmissionError::MissingMandatoryProducer { producer } => {
+            assert_eq!(producer.as_str(), ex("pf/literal"));
+        }
+        other => panic!("expected MissingMandatoryProducer, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

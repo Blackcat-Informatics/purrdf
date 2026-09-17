@@ -306,21 +306,45 @@ fn request(terms: Vec<RequestTerm>) -> RetrievalRequest {
     RetrievalRequest::from_terms(terms)
 }
 
-/// Plan and compile `terms` against `registry`, returning the single unit's text.
-fn compile_one(
+/// Plan and compile `terms` against `registry`, returning each stratum's text
+/// keyed by the stratum's local name.
+fn compile_units(
     registry: &PropertyFunctionRegistry,
     stats: &MockStatistics,
     terms: Vec<RequestTerm>,
-) -> String {
+) -> BTreeMap<String, String> {
     let planned = plan(&request(terms), registry, stats).expect("the fixture request plans");
     let env = AdmissionEnvironment {
         registry,
         statistics: stats,
         fusion_profile: None,
     };
-    let compiled = compile(&planned, &env).expect("the plan is admitted");
-    assert_eq!(compiled.units.len(), 1, "the fixture declares one stratum");
-    compiled.units[0].sparql.clone()
+    compile(&planned, &env)
+        .expect("the plan is admitted")
+        .units
+        .into_iter()
+        .map(|unit| {
+            let name = unit
+                .stratum
+                .as_str()
+                .rsplit('/')
+                .next()
+                .expect("a stratum IRI has a last segment")
+                .to_owned();
+            (name, unit.sparql)
+        })
+        .collect()
+}
+
+/// Plan and compile `terms` against `registry`, returning the single unit's text.
+fn compile_one(
+    registry: &PropertyFunctionRegistry,
+    stats: &MockStatistics,
+    terms: Vec<RequestTerm>,
+) -> String {
+    let mut units = compile_units(registry, stats, terms);
+    assert_eq!(units.len(), 1, "the fixture declares one stratum");
+    units.pop_first().expect("the one unit is present").1
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {
@@ -743,7 +767,8 @@ fn a_blank_seed_is_refused_and_an_iri_seed_is_admitted() {
 fn two_terms_conflicting_at_one_position_are_refused_and_agreeing_ones_are_not() {
     // A second producer that places nothing keeps the plan itself viable, so the
     // first producer's own rejection is readable rather than collapsed into
-    // `NoApplicableProducers`.
+    // `NoApplicableProducers`. It stands in its own stratum, because a stratum
+    // carries one producer.
     let (registry, _) = registry_of(vec![
         (
             "any",
@@ -758,12 +783,12 @@ fn two_terms_conflicting_at_one_position_are_refused_and_agreeing_ones_are_not()
         (
             "free",
             Spec::new(
-                "conflict",
+                "spare",
                 vec![alternative(TermPattern::of_kind(TermKind::Any), Vec::new())],
             ),
         ),
     ]);
-    let stats = statistics(&[("conflict", 5)]);
+    let stats = statistics(&[("conflict", 5), ("spare", 5)]);
 
     let planned = plan(
         &request(vec![
@@ -789,7 +814,7 @@ fn two_terms_conflicting_at_one_position_are_refused_and_agreeing_ones_are_not()
         "only the producer that could be invoked is bound"
     );
 
-    let sparql = compile_one(
+    let units = compile_units(
         &registry,
         &stats,
         vec![
@@ -797,6 +822,7 @@ fn two_terms_conflicting_at_one_position_are_refused_and_agreeing_ones_are_not()
             seed(&format!("<{}>", ex("a"))),
         ],
     );
+    let sparql = &units["conflict"];
     assert_eq!(
         sparql.matches(&format!("<{}>", ex("a"))).count(),
         1,
@@ -950,12 +976,16 @@ fn a_directional_literal_seed_round_trips_through_the_emitted_query() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn producers_with_different_candidate_positions_compose_in_one_union() {
+fn producers_with_different_candidate_positions_read_back_under_one_name() {
+    // A stratum carries one producer, so each of these gets its own — which is
+    // what makes the shared projection name load-bearing rather than decorative:
+    // two relations that declare their candidate in DIFFERENT argument positions
+    // must still be read back by the executor under the single name `?candidate`.
     let (registry, _) = registry_of(vec![
         (
             "first",
             Spec::new(
-                "shared",
+                "alpha",
                 vec![alternative(
                     TermPattern::of_kind(TermKind::Any),
                     value_at(1),
@@ -966,7 +996,7 @@ fn producers_with_different_candidate_positions_compose_in_one_union() {
         (
             "second",
             Spec::new(
-                "shared",
+                "beta",
                 vec![alternative(
                     TermPattern::of_kind(TermKind::Any),
                     value_at(2),
@@ -977,37 +1007,50 @@ fn producers_with_different_candidate_positions_compose_in_one_union() {
             .rows(10, 3),
         ),
     ]);
-    let stats = statistics(&[("shared", 4)]);
-    let sparql = compile_one(&registry, &stats, vec![lexical("needle", None)]);
+    let stats = statistics(&[("alpha", 4), ("beta", 4)]);
+    let units = compile_units(&registry, &stats, vec![lexical("needle", None)]);
+    assert_eq!(units.len(), 2, "one unit per stratum, one producer each");
 
     assert!(
-        sparql.contains("(?c0 AS ?candidate)") && sparql.contains("(?c1 AS ?candidate)"),
-        "each branch projects its own declared candidate position: {sparql}"
+        units["alpha"].contains("(?c0 AS ?candidate)"),
+        "the first stratum projects its own declared candidate position: {}",
+        units["alpha"]
     );
-    assert_eq!(
-        sparql.matches("LIMIT 4").count(),
-        3,
-        "two branch bounds plus the unit's own: {sparql}"
+    assert!(
+        units["beta"].contains("(?c1 AS ?candidate)"),
+        "and the second projects its own: {}",
+        units["beta"]
     );
+    for name in ["alpha", "beta"] {
+        assert!(
+            !units[name].contains("UNION"),
+            "one producer is one branch, with nothing to compose it with: {}",
+            units[name]
+        );
+        assert_eq!(
+            units[name].matches("LIMIT 4").count(),
+            2,
+            "the branch bound plus the unit's own: {}",
+            units[name]
+        );
+    }
 
-    // Parsed, prepared and evaluated: the sub-`SELECT` alias inside a `UNION`
-    // branch alongside a property-function call is accepted, and the
-    // parenthesized subject argument list at arity one is routed to the call.
-    let rows = run_query(&sparql, &registry);
+    // Parsed, prepared and evaluated: the sub-`SELECT` alias alongside a
+    // property-function call is accepted, and the parenthesized subject argument
+    // list at arity one is routed to the call.
+    let alpha = run_query(&units["alpha"], &registry);
+    assert_eq!(alpha.len(), 3, "the producer's three rows, under its depth");
     assert_eq!(
-        rows.len(),
-        4,
-        "the branch bounds do not truncate the concatenation; the unit's does"
-    );
-    assert_eq!(
-        rows[0][0].as_ref().expect("candidate bound"),
+        alpha[0][0].as_ref().expect("candidate bound"),
         &TermValue::iri(ex("first/row0/pos0")),
-        "the first branch's rows come first, in emission order"
+        "the rows arrive in the relation's own emission order"
     );
+    let beta = run_query(&units["beta"], &registry);
+    assert_eq!(beta.len(), 3);
     assert_eq!(
-        rows[3][0].as_ref().expect("candidate bound"),
+        beta[0][0].as_ref().expect("candidate bound"),
         &TermValue::iri(ex("second/row0/pos1")),
-        "the second branch contributes into the same candidate variable"
+        "the second stratum reads its candidate out of position 1 under the same name"
     );
 }
 
@@ -1032,65 +1075,10 @@ fn the_branch_limit_reaches_the_relation_as_the_observed_ceiling() {
     );
 }
 
-#[test]
-fn every_branch_limit_of_a_multi_producer_stratum_reaches_its_relation() {
-    // The same claim at the arity the union exists for. A stratum with two producers
-    // emits a `UNION`, and a `UNION` propagates no row bound to either arm — it
-    // interleaves two sequences, so no prefix of one arm bounds the whole's first rows.
-    // What the arms have is each their OWN `LIMIT`, which is a sound bound on that arm's
-    // subtree whatever stands above it; before it was consulted, the outer `LIMIT` had
-    // already claimed the pushdown and every relation in a multi-producer stratum was
-    // asked to rank its whole input in order to return the three rows its branch could
-    // use. The single-producer case above never showed it, because a single-producer
-    // stratum emits no `UNION` at all.
-    let (registry, logs) = registry_of(vec![
-        (
-            "first",
-            Spec::new(
-                "shared",
-                vec![alternative(
-                    TermPattern::of_kind(TermKind::Literal),
-                    value_at(1),
-                )],
-            )
-            .rows(10, 3),
-        ),
-        (
-            "second",
-            Spec::new(
-                "shared",
-                vec![alternative(
-                    TermPattern::of_kind(TermKind::Literal),
-                    value_at(1),
-                )],
-            )
-            .rows(10, 3),
-        ),
-    ]);
-    let stats = statistics(&[("shared", 2)]);
-    let sparql = compile_one(&registry, &stats, vec![lexical("needle", None)]);
-    assert_eq!(
-        sparql.matches("LIMIT 2").count(),
-        3,
-        "two branch bounds plus the unit's own: {sparql}"
-    );
-
-    let rows = run_query(&sparql, &registry);
-    assert_eq!(
-        rows.len(),
-        2,
-        "the answer is the unit's own bound; only the licence below it is at issue"
-    );
-    for producer in ["pf/first", "pf/second"] {
-        let calls = logs[&ex(producer)]
-            .lock()
-            .expect("the fixture log is never poisoned")
-            .clone();
-        assert_eq!(calls.len(), 1, "{producer} is invoked once");
-        assert_eq!(
-            calls[0].ceiling,
-            Some(2),
-            "{producer}'s own branch LIMIT must reach it as its row ceiling"
-        );
-    }
-}
+// The evaluator's own cap-pushdown claim — that each arm of a `UNION` is offered
+// its own `LIMIT` as a row ceiling — used to be pinned from here, by a stratum
+// with two producers. The registry now refuses that configuration, and the claim
+// never depended on retrieval reaching it: it is a fact about the evaluator's
+// descent past a `UNION`, and it is proved in `purrdf-sparql-eval` against
+// hand-written two-arm queries, including the constant-bearing arm this compiler
+// emits.

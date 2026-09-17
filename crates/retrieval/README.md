@@ -79,6 +79,21 @@ Nothing here mints a vocabulary. Producers, strata and weights are
 caller-supplied configuration; the fixtures use `example.org`. There is no
 default registry and no built-in producer.
 
+**One stratum, one producer.** A rank is meaningful only inside the list that
+assigned it, so merging two ranked lists needs either a comparable score — which
+a rank is not — or a fusion rule, and this crate *is* the fusion rule. Two
+producers under one stratum have neither, and their rows could only be
+concatenated: the second producer's best row would surface below the whole of the
+first's output and decay as though it had lost to rows it never competed with. So
+the configuration is refused where it is committed, in `register_ranked`, and the
+refusal names the two ways to express it instead. Producers whose scores are
+already comparable — shards, per-language segments, a partitioned index — merge
+inside **one** producer, which owns that comparability. Producers that score by
+different laws take **a stratum each**, where the weighted sum across strata is
+the design. The first exit is not interchangeable with the second: each stratum
+is a summand, so shards recast as strata would give a candidate they both hold
+two contributions where the host meant one family's worth.
+
 A profile's weights are read as **ratios only**, so the constructor that built
 them matters and nothing can refuse the wrong one: `Fixed::ONE` and
 `Fixed::from_integer(1)` are the number one, while `Fixed::from_raw(1)` is one

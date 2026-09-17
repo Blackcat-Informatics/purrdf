@@ -304,12 +304,12 @@ pub fn plan(
     //    declared row count, capped by a measured cardinality when statistics
     //    offer one; an unbounded declaration with no statistic to bound it has no
     //    finite depth to record.
+    // One entry per stratum, never a worst case across several: the registry
+    // refuses a stratum a second producer declares, so each surviving stratum
+    // was placed by exactly one producer and the bound is that producer's.
     let mut declared_bounds: BTreeMap<Iri, u64> = BTreeMap::new();
     for (stratum, bound) in selected {
-        declared_bounds
-            .entry(stratum)
-            .and_modify(|current| *current = (*current).max(bound))
-            .or_insert(bound);
+        declared_bounds.insert(stratum, bound);
     }
     // Which request terms actually reach each surviving stratum. A selectivity
     // is a statement about the rows a *term* matches, so only the terms a
@@ -424,11 +424,9 @@ fn depth_bounds(
         else {
             continue;
         };
-        let bound = declared_row_bound(descriptor);
-        bounds
-            .entry(stratum.clone())
-            .and_modify(|current| *current = (*current).max(bound))
-            .or_insert(bound);
+        // One producer per stratum, so this key is fresh: see `plan`'s own
+        // `declared_bounds` for why there is no worst case to take here.
+        bounds.insert(stratum.clone(), declared_row_bound(descriptor));
         reaching
             .entry(stratum.clone())
             .or_default()

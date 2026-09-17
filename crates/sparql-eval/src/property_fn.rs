@@ -997,6 +997,9 @@ impl PropertyFunctionRegistry {
     ///   one position renders one value.
     /// * `decl.candidate_position` is also a placement or depth target: a
     ///   position filled with a constant cannot also be the projected candidate.
+    /// * `decl.stratum` is already claimed by another registered producer — one
+    ///   stratum carries one producer; see [`assert_stratum_unclaimed`] for the
+    ///   argument and for the two ways a host splits such a configuration.
     ///
     /// A declaration that cannot be rendered is host misconfiguration, and like a
     /// duplicate registration it is caught where it is committed rather than at
@@ -1029,6 +1032,7 @@ impl PropertyFunctionRegistry {
         );
         if let Some(decl) = decl {
             validate_declaration(&iri, &decl, relation.arity());
+            assert_stratum_unclaimed(&iri, &decl, &self.ranked);
             self.ranked.insert(iri.clone(), decl);
         }
         self.relations.insert(iri, relation);
@@ -1172,6 +1176,79 @@ impl PropertyFunctionRegistry {
         out.sort_by(|a, b| a.iri.cmp(&b.iri));
         Ok(out)
     }
+}
+
+/// Refuse a stratum some already-registered producer serves: one stratum carries
+/// one producer.
+///
+/// # Why a second producer under one stratum has no meaning to fall back on
+///
+/// A rank is meaningful only inside the list that assigned it. Merging two ranked
+/// lists needs either a comparable score — which a rank is not, and which no
+/// projection back out of a rank recovers — or a fusion rule, and the fusion rule is
+/// precisely what a consumer of these declarations *is*. Two producers under one
+/// stratum have neither, so their rows can only be concatenated, and concatenation
+/// is wrong in three visible ways at once: the second producer's best row is ranked
+/// below every row of the first and decays as though it lost to rows it never
+/// competed with; a candidate both produce arrives twice in one list, which an
+/// honest `Unique` declaration says cannot happen; and a first producer that fills
+/// the stratum's depth leaves the second contributing nothing at all.
+///
+/// # Every configuration splits cleanly, which is why this refuses
+///
+/// Co-stratum ranks are well defined iff the two producers' ranks are comparable;
+/// ranks are comparable iff the producers share a scoring law; and producers sharing
+/// a scoring law can merge internally, by their own scores, below this seam. So the
+/// concatenation case is the empty set between two exits, and the message names
+/// **both** of them:
+///
+/// * **same scoring law** — shards, per-language segments, a partitioned index —
+///   merge inside ONE producer, which owns the comparability its own scores already
+///   have;
+/// * **different scoring laws** — separate strata, where the fusion sum across them
+///   is the design rather than an accident.
+///
+/// Naming only the second exit would be a defect rather than a shorter message.
+/// A summing reciprocal-rank fusion treats each stratum as a summand, so a candidate
+/// surfacing in two shards-recast-as-strata collects two contributions where the
+/// host meant one family's worth — a quiet score distortion recommended by the
+/// refusal itself.
+///
+/// # Why scanning the side table keeps its iteration order unobservable
+///
+/// `ranked` is a fixed-key hash map whose iteration order is deliberately not an
+/// output anywhere, and this is the one place it is walked. It stays unobservable,
+/// because the invariant this function establishes holds by induction: at most ONE
+/// registered declaration can name any given stratum, so a search with at most one
+/// match yields the same match in every order. Nothing is written before the scan,
+/// so a refused registration leaves the registry exactly as it was — the discipline
+/// [`PropertyFunctionRegistry::insert`] applies to the duplicate-IRI refusal.
+///
+/// # Panics
+///
+/// Panics if another registered producer already declares `decl.stratum`.
+fn assert_stratum_unclaimed(
+    iri: &str,
+    decl: &RankedDeclaration,
+    ranked: &DetHashMap<String, RankedDeclaration>,
+) {
+    let claimed = ranked
+        .iter()
+        .find(|(_, declared)| declared.stratum == decl.stratum);
+    let Some((holder, _)) = claimed else {
+        return;
+    };
+    panic!(
+        "ranked declaration for <{iri}> claims stratum <{}>, which the registered producer \
+         <{holder}> already serves; one stratum carries one producer, because a rank is \
+         meaningful only inside the list that assigned it and two lists concatenated rank the \
+         second producer's best row below every row of the first. If the two share a scoring \
+         law — shards, per-language segments, a partitioned index, anything whose scores are \
+         already comparable — merge them inside ONE producer, which owns that comparability. \
+         If they score by different laws, give each its own stratum, where the fusion sum \
+         across strata is the design rather than an accident",
+        decl.stratum
+    );
 }
 
 /// Check that `decl` can actually be rendered against a relation of `arity`.

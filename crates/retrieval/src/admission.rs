@@ -17,7 +17,10 @@
 //! the plan against what the registry **declared**:
 //!
 //! * every producer the registry declares **mandatory** is present, is bound to
-//!   the stratum the registry ranks it under, and receives every request term;
+//!   the stratum the registry ranks it under, and receives every request term
+//!   **its own declaration accepts**;
+//! * every stratum carries at most one binding, which is the plan-side face of
+//!   the registry's one-stratum-one-producer rule;
 //! * every stratum depth respects the registry's declared row bound, and — when
 //!   the environment names the fusion profile the answer will be composed under
 //!   — the depth at which that profile's own arithmetic stops ordering ranks;
@@ -74,24 +77,47 @@
 //! binds such a producer to a subset of the request — or drops it entirely — is
 //! admitted, because the registry never said it had to be there.
 //!
+//! That is a claim about *whether* the flag is set, which only the host says.
+//! How far a set flag reaches is a different question, and the next section
+//! answers it — from the producer's own declared patterns, because a promise
+//! cannot extend past what the thing promising can do.
+//!
+//! ## What mandatory quantifies over
+//!
+//! Mandatory means *every request term the producer's own patterns accept*, not
+//! *every request term*. The two readings differ on exactly the configuration a
+//! coverage floor is built from: a real full-text producer accepts literals and
+//! cannot accept an entity seed, so under the wider reading a host that declared
+//! it mandatory had every multimodal request refused — a `Lexical` term beside an
+//! `EntitySeed` yielded [`InsufficientBindings`](AdmissionError::InsufficientBindings)
+//! for a plan in which the text producer was doing precisely its job. That is the
+//! over-refusal mirror of the silent drop, and it hides well: withdrawing
+//! `mandatory` admits the same request, so the declaration looked like the
+//! problem when the quantifier was.
+//!
+//! Dropping a mandatory producer from a term it **does** accept is still the
+//! refusal, and that is the whole of what the flag protects. A term it cannot
+//! accept is not its business, and neither is a request it accepts nothing of:
+//! there is no term to have dropped it from, so no coverage claim the request can
+//! falsify, and the producer is simply not part of that request's answer.
+//!
 //! Declaring a producer mandatory is therefore a claim with teeth, and it bites
 //! in two distinguishable ways:
 //!
-//! * the producer is **not in the plan at all** — never planned, refused at
-//!   placement, or edited out — which is
-//!   [`MissingMandatoryProducer`](AdmissionError::MissingMandatoryProducer);
-//! * the producer is present but the planner could bind it to only *some* of the
-//!   request's terms, because its declared patterns accept only some of the
-//!   request's shapes, which is
-//!   [`InsufficientBindings`](AdmissionError::InsufficientBindings), naming how
-//!   many terms were required and how many arrived.
+//! * the producer accepts at least one of the request's terms and is **not in the
+//!   plan at all** — never planned, refused at placement, or edited out — which
+//!   is [`MissingMandatoryProducer`](AdmissionError::MissingMandatoryProducer);
+//! * the producer is present but bound to only *some* of the terms it accepts,
+//!   which is [`InsufficientBindings`](AdmissionError::InsufficientBindings),
+//!   naming how many of its accepted terms were required and how many arrived.
 //!
-//! Both are refusals of a registry misconfiguration: the host declared that
-//! every request must be served by a producer that cannot serve this one. They
-//! are loud, typed and name the producer, which is the only useful thing to do
-//! with a coverage promise that the request has just falsified. A producer the
-//! registry does **not** declare mandatory and that placement refuses is simply
-//! dropped from the plan, with its reason recorded in the plan's decisions.
+//! Both are refusals of a registry misconfiguration: the host declared that this
+//! producer serves what it can serve of every request, and this plan takes part
+//! of that away. They are loud, typed and name the producer, which is the only
+//! useful thing to do with a coverage promise that the plan has just falsified. A
+//! producer the registry does **not** declare mandatory and that placement
+//! refuses is simply dropped from the plan, with its reason recorded in the
+//! plan's decisions.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -101,7 +127,8 @@ use purrdf_text::Fixed;
 use crate::fusion_profile::FusionProfile;
 use crate::id::PLAN_VERSION;
 use crate::iri::Iri;
-use crate::plan::{Plan, PlanOrigin};
+use crate::matching::pattern_matches;
+use crate::plan::{Plan, PlanOrigin, ProducerBinding};
 use crate::statistics::Statistics;
 
 /// Everything `compile` needs from outside the plan: the live registry, the
@@ -158,8 +185,13 @@ impl core::fmt::Debug for AdmissionEnvironment<'_> {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AdmissionError {
-    /// A producer the registry declares mandatory is absent from the plan
-    /// entirely — never planned, refused at placement, or edited out.
+    /// A producer the registry declares mandatory, and whose declaration accepts
+    /// at least one of the request's terms, is absent from the plan entirely —
+    /// never planned, refused at placement, or edited out.
+    ///
+    /// A mandatory producer whose declaration accepts *none* of the request's
+    /// terms is not reported here: it was never this request's to serve. See
+    /// this module's header on what mandatory quantifies over.
     ///
     /// The producer IRI is boxed because [`Iri`] carries five parsed spans and is
     /// large; boxing keeps `Result<_, AdmissionError>` cheap to move, the same
@@ -171,17 +203,26 @@ pub enum AdmissionError {
     },
 
     /// A producer the registry declares mandatory is present but was not bound
-    /// to every request term, because its declared patterns accept only some of
-    /// the request's shapes.
+    /// to every request term **its own declaration accepts**.
+    ///
+    /// The two counts are both about that accepted set, never about the request
+    /// as a whole: `required` is how many of the plan's request terms the
+    /// producer's declared patterns accept, and `provided` is how many of those
+    /// the plan actually binds it to. A term the producer cannot accept appears
+    /// in neither number, because it was never this producer's to serve — see
+    /// this module's header for why the wider reading refused plans that were
+    /// always legitimate.
     #[error(
-        "the registry's mandatory producer {producer} must receive every request term but is bound to {provided} of {required}"
+        "the registry's mandatory producer {producer} must receive every request term its \
+         declaration accepts but is bound to {provided} of {required}"
     )]
     InsufficientBindings {
         /// The registered producer IRI that was under-bound.
         producer: Box<Iri>,
-        /// How many request terms the producer must receive.
+        /// How many of the plan's request terms the producer's declaration
+        /// accepts, and which it must therefore receive.
         required: usize,
-        /// How many of those it was actually bound to.
+        /// How many of those accepted terms it was actually bound to.
         provided: usize,
     },
 
@@ -359,9 +400,17 @@ impl AdmissionError {
 }
 
 /// The registry facts admission reads once and `compile` reuses to emit units.
-pub(crate) struct AdmittedRegistry {
+pub(crate) struct AdmittedRegistry<'a> {
     /// Every registered relation's self-description, keyed by its IRI.
     pub(crate) descriptors: BTreeMap<String, PfDescriptor>,
+    /// The one binding each stratum carries, keyed by stratum.
+    ///
+    /// Built by the same pass that proves a stratum carries at most one binding,
+    /// so emission cannot reach a second binding admission did not see. `compile`
+    /// emits one unit per stratum from this map rather than re-grouping the
+    /// plan's binding list, for the reason `descriptors` is shared: two
+    /// groupings of one list are two chances to disagree about it.
+    pub(crate) stratum_bindings: BTreeMap<Iri, &'a ProducerBinding>,
     /// The environment registry's declared content fingerprint.
     pub(crate) fingerprint: String,
     /// The environment registry's live instance identity.
@@ -388,34 +437,20 @@ fn ranked_stratum(descriptor: &PfDescriptor) -> Option<Iri> {
 /// Collapsing the two is how a producer that declares no access mode ends up
 /// bounding its stratum at zero and failing every plan that records a depth for
 /// it.
+///
+/// There is deliberately no widening operation over two of these. The registry
+/// refuses a stratum a second producer declares
+/// (`PropertyFunctionRegistry::register_ranked`), so a stratum's bound is one
+/// producer's declaration and never a worst case taken across several — and a
+/// merge that could only ever run against a registry the seam refuses to build
+/// would be unreachable code claiming a policy nothing enforces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowBound {
-    /// Every producer under the stratum that declared a worst case declared a
-    /// finite one, and this is the largest of them.
+    /// The stratum's one producer declared a finite worst-case row count.
     Declared(u64),
-    /// No producer under the stratum declared a worst-case row count at all, so
+    /// The stratum's one producer declared no worst-case row count at all, so
     /// the registry set no bound here and admission enforces none.
     Undeclared,
-}
-
-impl RowBound {
-    /// The worst case of two bounds under one stratum.
-    ///
-    /// [`Undeclared`](Self::Undeclared) is the identity, not the dominant value:
-    /// a producer that declared nothing makes no claim, so it neither raises nor
-    /// erases a claim another producer under the same stratum did make. That
-    /// keeps the check exactly as strong as what the registry declared — the
-    /// same "read, never inferred" rule this module applies to `mandatory`.
-    const fn widen(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Declared(left), Self::Declared(right)) => {
-                Self::Declared(if left > right { left } else { right })
-            }
-            (Self::Declared(bound), Self::Undeclared)
-            | (Self::Undeclared, Self::Declared(bound)) => Self::Declared(bound),
-            (Self::Undeclared, Self::Undeclared) => Self::Undeclared,
-        }
-    }
 }
 
 /// A descriptor's worst-case declared row count across its access modes, or
@@ -428,6 +463,35 @@ fn declared_row_bound(descriptor: &PfDescriptor) -> RowBound {
         .map(|mode| mode.rows_per_invocation)
         .max()
         .map_or(RowBound::Undeclared, RowBound::Declared)
+}
+
+/// Which of the plan's request terms a producer's declaration accepts, as
+/// indices into [`Plan::request_terms`], ascending.
+///
+/// This is the set a mandatory producer is held to. The rule is
+/// [`pattern_matches`] — the planner's own matching function, called here rather
+/// than restated — because admission re-derives the planner's decision and two
+/// spellings of "does this pattern accept this term" would be a divergence no
+/// test on either side could see.
+///
+/// A descriptor that is absent, or present with no ranked declaration, accepts
+/// nothing: a relation that declares nothing is read back as nothing, and the
+/// binding loop further down refuses a plan that binds such a producer anyway.
+fn accepted_request_terms(plan: &Plan, descriptor: Option<&PfDescriptor>) -> Vec<u32> {
+    let Some(declaration) = descriptor.and_then(|descriptor| descriptor.ranked.as_ref()) else {
+        return Vec::new();
+    };
+    plan.request_terms
+        .iter()
+        .enumerate()
+        .filter(|(_, term)| {
+            declaration
+                .accepted_terms
+                .iter()
+                .any(|accepted| pattern_matches(&accepted.pattern, term))
+        })
+        .map(|(index, _)| u32::try_from(index).unwrap_or(u32::MAX))
+        .collect()
 }
 
 /// Parse a registry IRI, mapping a refusal to a malformed-plan error.
@@ -460,10 +524,10 @@ fn describe(registry: &PropertyFunctionRegistry) -> Result<Vec<PfDescriptor>, Ad
 /// revision, mandatory producers and their bindings, per-stratum depth bounds,
 /// then stratum weights. The first violated dimension is returned; admission does
 /// not accumulate refusals.
-pub(crate) fn admit_plan(
-    plan: &Plan,
+pub(crate) fn admit_plan<'a>(
+    plan: &'a Plan,
     env: &AdmissionEnvironment<'_>,
-) -> Result<AdmittedRegistry, AdmissionError> {
+) -> Result<AdmittedRegistry<'a>, AdmissionError> {
     // 1. The plan's layout version must be one this build writes. A plan decoded
     //    through serde bypasses `from_canonical_bytes`'s own gate, so it is
     //    re-checked here rather than assumed.
@@ -527,11 +591,9 @@ pub(crate) fn admit_plan(
     let mut mandatory: Vec<(String, Iri)> = Vec::new();
     for descriptor in described {
         if let Some(stratum) = ranked_stratum(&descriptor) {
-            let bound = declared_row_bound(&descriptor);
-            strata
-                .entry(stratum.clone())
-                .and_modify(|current| *current = current.widen(bound))
-                .or_insert(bound);
+            // One entry, never a merge: the registry refuses a stratum a second
+            // producer declares, so this key is fresh every time.
+            strata.insert(stratum.clone(), declared_row_bound(&descriptor));
             // Read, not derived: the host's own `mandatory` flag and nothing
             // else. A producer whose patterns happen to accept everything is
             // still droppable unless the registry said otherwise.
@@ -547,9 +609,22 @@ pub(crate) fn admit_plan(
     }
 
     // 6. Producers the registry declares mandatory are present, agree on their
-    //    stratum, and receive every request term. A shortfall here is a registry
-    //    misconfiguration made visible, never a silently narrowed answer.
+    //    stratum, and receive every request term **their own declaration
+    //    accepts**. A shortfall here is a registry misconfiguration made
+    //    visible, never a silently narrowed answer.
     for (producer, stratum) in &mandatory {
+        // The accepted set is derived through `matching::pattern_matches` — the
+        // planner's own rule, not a second copy of it — so "the terms it
+        // accepts" means here exactly what it meant when the plan was built.
+        let accepted = accepted_request_terms(plan, descriptors.get(producer));
+        if accepted.is_empty() {
+            // Nothing in this request is this producer's business, so there is
+            // no term to drop it from and no coverage claim to falsify. The
+            // quantifier is the same one the shortfall check below uses: a
+            // producer answers for the shapes it accepts, and a request it
+            // accepts nothing of is not a request it was promised to serve.
+            continue;
+        }
         let producer_iri = registry_iri(producer)?;
         let binding = plan
             .producer_bindings
@@ -568,13 +643,10 @@ pub(crate) fn admit_plan(
                 ),
             });
         }
-        let required = plan.request_terms.len();
-        let provided = (0..required)
-            .filter(|index| {
-                binding
-                    .request_terms
-                    .contains(&u32::try_from(*index).unwrap_or(u32::MAX))
-            })
+        let required = accepted.len();
+        let provided = accepted
+            .iter()
+            .filter(|index| binding.request_terms.contains(index))
             .count();
         if provided < required {
             return Err(AdmissionError::InsufficientBindings {
@@ -586,8 +658,9 @@ pub(crate) fn admit_plan(
     }
 
     // Every recorded binding must name a ranked producer, must be bound to a
-    // stratum the plan itself records a depth for, and every request-term index
-    // it carries must address the plan's own request.
+    // stratum the plan itself records a depth for, must be that stratum's ONLY
+    // binding, and every request-term index it carries must address the plan's
+    // own request.
     //
     // The depth entry is not bookkeeping. `compile` emits one unit per *depth*
     // entry and looks its bindings up from there, so a binding whose stratum has
@@ -597,6 +670,16 @@ pub(crate) fn admit_plan(
     // prevent, so the implication is enforced in both directions — the loop
     // below refuses a binding with no depth, and the depth loop further down
     // refuses a depth that exceeds what the registry declared.
+    //
+    // The single-binding rule is the plan-side face of the registry's own: the
+    // seam refuses a stratum a second producer declares, and the reason —
+    // a rank means nothing outside the list that assigned it, so two lists in
+    // one stratum can only be concatenated — is a fact about ranks, not about
+    // registration. A plan is editable, so it can carry two bindings under one
+    // stratum where the registry carries one producer (the same producer twice,
+    // with two term sets), and that is the identical concatenation with the
+    // identical distortion. It is refused here rather than emitted.
+    let mut stratum_bindings: BTreeMap<Iri, &ProducerBinding> = BTreeMap::new();
     for binding in &plan.producer_bindings {
         let Some(descriptor) = descriptors.get(&binding.producer) else {
             return Err(AdmissionError::MalformedPlan {
@@ -632,6 +715,18 @@ pub(crate) fn admit_plan(
                     ),
                 });
             }
+        }
+        if let Some(held) = stratum_bindings.insert(binding.stratum.clone(), binding) {
+            return Err(AdmissionError::MalformedPlan {
+                reason: format!(
+                    "stratum {} carries two bindings, {} and {}, but one stratum carries one \
+                     producer: their ranks are assigned by different lists and can only be \
+                     concatenated, which ranks the second's best row below every row of the \
+                     first. Merge producers that share a scoring law into one producer, or give \
+                     producers that score differently a stratum each",
+                    binding.stratum, held.producer, binding.producer
+                ),
+            });
         }
     }
 
@@ -755,6 +850,7 @@ pub(crate) fn admit_plan(
 
     Ok(AdmittedRegistry {
         descriptors,
+        stratum_bindings,
         fingerprint,
         instance_id,
     })

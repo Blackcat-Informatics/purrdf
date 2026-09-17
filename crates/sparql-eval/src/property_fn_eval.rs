@@ -1455,6 +1455,59 @@ mod tests {
         );
     }
 
+    /// The same two-arm shape, but with each arm's object position carrying a
+    /// **constant** rather than a free variable.
+    ///
+    /// A bound position is not decoration here: the engine withholds the ceiling
+    /// from calls whose filtering it cannot ask a relation to account for (see
+    /// `a_repeated_variable_withholds_the_ceiling_from_the_relation`), so "the
+    /// arm's own `LIMIT` reaches the relation" has to be asserted separately for
+    /// a call that carries one. This is the arm shape a ranked-retrieval compiler
+    /// emits — the request's needle rendered into the relation's argument — and
+    /// the reason the pushdown defect was first seen from there.
+    fn two_branch_unit_with_constants(branch_limit: u32) -> String {
+        format!(
+            "SELECT ?candidate WHERE {{\n  \
+             {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{PF_SPLIT}> ( <{EX}r0> ) }} \
+             LIMIT {branch_limit} }}\n  \
+             UNION\n  \
+             {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{PF_LOOKUP}> ( <{EX}r0> ) }} \
+             LIMIT {branch_limit} }}\n\
+             }}\nLIMIT {branch_limit}"
+        )
+    }
+
+    #[test]
+    fn a_union_branch_carrying_a_constant_still_offers_its_own_limit() {
+        // The constant is filtered against by the engine, and `CeilingSpy` echoes
+        // bound positions, so every row it emits agrees with the argument it was
+        // handed — the condition under which the licence is offered at all. The
+        // arm's own `LIMIT` must therefore still reach it, exactly as it does for
+        // the all-free call above.
+        let left = three_row_spy();
+        let right = three_row_spy();
+        let registry = registry_of(vec![
+            (PF_SPLIT, left.clone() as Arc<dyn PropertyFunction>),
+            (PF_LOOKUP, right.clone() as Arc<dyn PropertyFunction>),
+        ]);
+        let rows = rows_of(&two_branch_unit_with_constants(2), &registry);
+        assert_eq!(
+            rows.len(),
+            2,
+            "the answer is the outer bound's; only the licence below it is at issue"
+        );
+        assert_eq!(
+            left.ceilings(),
+            vec![Some(2)],
+            "the left arm is opened once, with its own LIMIT 2"
+        );
+        assert_eq!(
+            right.ceilings(),
+            vec![Some(2)],
+            "and so is the right, rather than being asked to rank its whole input"
+        );
+    }
+
     #[test]
     fn a_union_branch_with_no_limit_anywhere_is_offered_no_ceiling() {
         // The neighbouring case that must NOT acquire one. With no `Slice` in the plan

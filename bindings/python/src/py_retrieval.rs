@@ -90,6 +90,16 @@
 //! predicate rather than by constructing a Rust value. Registering several is
 //! how one request fuses across several strata.
 //!
+//! Each of them names a stratum of its **own**. A stratum is served by one
+//! producer, because a rank means nothing outside the list that assigned it: two
+//! producers under one stratum could only have their ranked rows concatenated,
+//! which ranks the second's best row below the whole of the first's output. Two
+//! producers whose scores are already comparable — shards or segments of one
+//! index — belong inside one producer that merges them by score; two that score
+//! differently belong in two strata, where the weighted sum across strata is the
+//! point of the fusion. A `text_producers` map that names one stratum twice is
+//! refused where it is registered.
+//!
 //! # Two identities, and only one of them survives the call
 //!
 //! Registration is **per call** here, exactly as it is on the query surface: the

@@ -21,12 +21,30 @@
 //!
 //! # What a unit contains
 //!
-//! For each stratum the plan declares, the unit is a `SELECT ?candidate` over a
-//! `UNION` of one branch per producer bound to that stratum, in IRI-sorted order
-//! so the text is a pure function of the plan. A branch is a sub-`SELECT` that
+//! For each stratum the plan declares, the unit is a `SELECT ?candidate` over the
+//! one branch of that stratum's one producer. The branch is a sub-`SELECT` that
 //! projects the producer's own declared candidate position under the common name
-//! `?candidate`, so producers that name their candidate in different argument
-//! positions still compose into one union.
+//! `?candidate`, so strata whose producers name their candidate in different
+//! argument positions still read back through one column.
+//!
+//! # One stratum, one branch — there is no union to emit
+//!
+//! A stratum carries exactly one producer, refused at registration by
+//! [`register_ranked`](purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked)
+//! and again at this waist for an edited plan. So there is never a second branch
+//! to compose with, and the `UNION` this emitter once wrote could only ever have
+//! run against a configuration the registry now refuses to build.
+//!
+//! It was also never a *merge*. A `UNION` concatenates: the second producer's
+//! rank-1 row surfaced at stratum rank `n+1`, below the whole of the first
+//! producer's output, and decayed as though it had lost to rows it never competed
+//! with; a candidate both producers named arrived twice in one stratum's stream,
+//! which an honest `Unique` declaration says cannot happen; and a first producer
+//! that filled the depth left the second contributing nothing while the trailer
+//! reported a clean exhaustion. Ranks are comparable only within the list that
+//! assigned them, which is exactly why the merge belongs either inside one
+//! producer (same scoring law) or across strata in the fusion sum (different
+//! scoring laws), and never in a concatenation here.
 //!
 //! # The request is in the text
 //!
@@ -47,18 +65,16 @@
 //! followed by a registered property-function IRI is routed unambiguously to the
 //! argument-list production.
 //!
-//! # Every branch carries the stratum's depth
+//! # The branch carries the stratum's depth, and so does the unit
 //!
 //! A branch whose producer takes no depth argument is bounded by its own
-//! `LIMIT <depth>`, and the unit repeats that `LIMIT` on the outside. Both are
-//! needed. A `LIMIT` on the outer `UNION` alone would truncate the
-//! *concatenation* of the branches, so a stratum's second producer could
-//! contribute zero rows while the answer looked complete — a silently wrong
-//! fusion input. A producer that declares a
-//! [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement) already received the
-//! depth as an argument and bounds itself, so its branch carries no `LIMIT`; the
-//! outer one still applies, because the depth is the stratum's contract with
-//! fusion either way.
+//! `LIMIT <depth>`, and the unit repeats that `LIMIT` on the outside. The inner
+//! one is the producer's licence to stop early — the evaluator offers it to the
+//! relation as a row ceiling — and the outer one is the stratum's contract with
+//! fusion, which holds whatever bounds the branch below it carries. A producer
+//! that declares a [`DepthPlacement`](purrdf_sparql_eval::DepthPlacement) already
+//! received the depth as an argument and bounds itself, so its branch carries no
+//! `LIMIT`; the outer one still applies.
 //!
 //! A stratum whose depth is zero emits `LIMIT 0`. That is an honest empty
 //! stratum — the statistics said there is nothing to rank — and not a failure.
@@ -128,22 +144,9 @@ pub fn compile(
 ) -> Result<CompiledRetrieval, AdmissionError> {
     let admitted = admit_plan(plan, env)?;
 
-    // Group the plan's bindings by stratum once, preserving producer order by IRI
-    // so the emitted text does not depend on the plan's binding order.
-    let mut by_stratum: BTreeMap<Iri, Vec<&ProducerBinding>> = BTreeMap::new();
-    for binding in &plan.producer_bindings {
-        by_stratum
-            .entry(binding.stratum.clone())
-            .or_default()
-            .push(binding);
-    }
-    for bindings in by_stratum.values_mut() {
-        bindings.sort_by(|left, right| left.producer.cmp(&right.producer));
-    }
-
     let mut units = Vec::new();
     for (stratum, depth) in &plan.stratum_depths {
-        let Some(bindings) = by_stratum.get(stratum) else {
+        let Some(binding) = admitted.stratum_bindings.get(stratum) else {
             // A stratum the plan gives a depth but no producer has no relation
             // to run, so there is nothing to emit for it. That is the only case
             // this arm can reach: admission refuses a binding whose stratum the
@@ -153,7 +156,7 @@ pub fn compile(
             // nothing reporting it.
             continue;
         };
-        let sparql = emit_unit(plan, bindings, &admitted.descriptors, *depth)?;
+        let sparql = emit_unit(plan, binding, &admitted.descriptors, *depth)?;
         units.push(StratumUnit {
             stratum: stratum.clone(),
             sparql,
@@ -169,24 +172,20 @@ pub fn compile(
     })
 }
 
-/// Render one stratum's `SELECT` over `bindings` at `depth`.
+/// Render one stratum's `SELECT` over its one `binding` at `depth`.
 fn emit_unit(
     plan: &Plan,
-    bindings: &[&ProducerBinding],
+    binding: &ProducerBinding,
     descriptors: &BTreeMap<String, PfDescriptor>,
     depth: u32,
 ) -> Result<String, AdmissionError> {
-    let mut branches = Vec::with_capacity(bindings.len());
-    for binding in bindings {
-        branches.push(emit_branch(plan, binding, descriptors, depth)?);
-    }
+    let branch = emit_branch(plan, binding, descriptors, depth)?;
     Ok(format!(
-        "SELECT ?{CANDIDATE_NAME} WHERE {{\n  {}\n}}\nLIMIT {depth}",
-        branches.join("\n  UNION\n  ")
+        "SELECT ?{CANDIDATE_NAME} WHERE {{\n  {branch}\n}}\nLIMIT {depth}"
     ))
 }
 
-/// Render one producer's branch of a stratum's union.
+/// Render the stratum's producer as the unit's one branch.
 fn emit_branch(
     plan: &Plan,
     binding: &ProducerBinding,

@@ -104,6 +104,38 @@
 //! rows rank — declarative data, never a function pointer — while every relation
 //! that has nothing to do with ranked retrieval says nothing at all.
 //!
+//! # One stratum, one producer
+//!
+//! A stratum is served by exactly one producer, refused at the point the
+//! configuration is committed
+//! (`purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked`) and again at
+//! the admission waist for an edited plan.
+//!
+//! A rank is meaningful only inside the list that assigned it, so merging two
+//! ranked lists needs either a comparable score — which a rank is not — or a
+//! fusion rule, and this crate **is** the fusion rule. Two producers under one
+//! stratum have neither, so their rows could only be concatenated: the second
+//! producer's best row would surface below the whole of the first's output and
+//! decay as though it had lost to rows it never competed with, a candidate both
+//! produced would appear twice in one stratum's stream, and a first producer that
+//! filled the depth would leave the second contributing nothing.
+//!
+//! The rule costs no configuration, because every configuration splits cleanly.
+//! Co-stratum ranks are well defined iff the producers' ranks are comparable;
+//! ranks are comparable iff the producers share a scoring law; and producers
+//! sharing a scoring law can merge internally, by their own scores, below the
+//! seam. So there are exactly two ways to express what a shared stratum was
+//! reaching for, and the refusal names both:
+//!
+//! * **shards, per-language segments, a partitioned index** — anything whose
+//!   scores are already comparable — merge inside ONE producer, which owns that
+//!   comparability;
+//! * **different scoring laws** — one stratum each, where the weighted sum across
+//!   strata is the design rather than an accident. Taking this exit for shards
+//!   would distort the score rather than merge it, because each stratum is a
+//!   summand: a candidate held by two shards-as-strata would collect two
+//!   contributions where the host meant one family's worth.
+//!
 //! # It mints no vocabulary
 //!
 //! Producers, strata and weights are **caller-supplied configuration**. There is
