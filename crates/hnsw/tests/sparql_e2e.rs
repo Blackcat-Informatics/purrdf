@@ -48,7 +48,7 @@ fn space(rows: usize) -> (Arc<HnswSpace>, Vec<TermValue>) {
         guard,
     )
     .expect("the artifact yields a space");
-    (Arc::new(space), fixture.terms.clone())
+    (Arc::new(space), fixture.terms)
 }
 
 /// A registry with the relation registered under `NEAREST` — the whole of what a host does.
@@ -83,7 +83,7 @@ fn answer(registry: &PropertyFunctionRegistry, query: &str) -> Vec<Vec<Option<Te
     let SparqlResult::Solutions { rows, .. } = result else {
         panic!("a SELECT answers with solutions, got {result:?}");
     };
-    rows.iter().map(|row| row.to_vec()).collect()
+    rows.iter().map(Clone::clone).collect()
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn a_sparql_query_retrieves_neighbours_through_the_registered_predicate() {
             "SELECT ?neighbour ?distance WHERE {{ \
              ?neighbour <{NEAREST}> ( <{}> 5 ?distance ) }}",
             match seed {
-                TermValue::Iri(iri) => iri.to_string(),
+                TermValue::Iri(iri) => iri.clone(),
                 other => panic!("the fixture binds IRIs, got {other:?}"),
             }
         ),

@@ -360,7 +360,7 @@ mod tests {
             "the row count just over the bound must be refused"
         );
         assert!(
-            params.footprint_bytes_32(under, 256).expect("estimates") <= u64::from(u32::MAX),
+            u32::try_from(params.footprint_bytes_32(under, 256).expect("estimates")).is_ok(),
             "the admitted estimate must be within the addressable range"
         );
     }
