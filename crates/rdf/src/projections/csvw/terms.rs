@@ -1620,23 +1620,66 @@ fn validate_datatype(datatype: &CsvwDatatype) -> Result<(), ProjectionError> {
     Ok(())
 }
 
+/// Whether `language` may be carried as a `csvw-terms` language tag.
+///
+/// # Which value space this is, and which two it is not
+///
+/// Every string this guards is a **CSVW metadata language property**. It is
+/// never an `xsd:language`-typed cell value and never a raw RDF literal tag:
+///
+/// * the `language` of a [`CsvwTermsValueMode::Literal`] column, which is
+///   emitted as the CSVW `lang` inherited property — "an atomic property giving
+///   a single string language code as defined by [BCP47]" (CSVW Metadata
+///   §5.7);
+/// * the keys of a [`CsvwNaturalLanguage`] title map, where "the values of
+///   these properties MUST be … language codes as defined by [BCP47]" (CSVW
+///   Metadata §5.2, natural language properties).
+///
+/// BCP 47's `Language-Tag` production is exactly
+/// [`purrdf_iri::langtag::Profile::Rfc5646`], which is what
+/// [`purrdf_iri::langtag::parse`] applies, so that is the whole of the grammar
+/// asked here and the grammar keeps a single owner.
+///
+/// # Why NOT the codec profile
+///
+/// [`purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded`] is what the
+/// RDF codecs hold a `LANGTAG` to, and it is strictly wider: it takes the
+/// concrete-syntax terminal (so `en-fr-jura`, which RFC 5646 has no reading
+/// for, is accepted) and it lifts the §2.1 eight-character ceiling after an `x`
+/// private-use marker (so `x-purrdf-afrikaans` is accepted). Neither widening
+/// belongs here, because the metadata document this projection writes is read
+/// back by [`super::metadata`], which judges `lang` and `@language` at
+/// [`purrdf_iri::langtag::Profile::Rfc5646`] and records an "invalid value
+/// ignored" warning for anything else. Taking the wider language would mint a
+/// `lang` PurRDF's own CSVW reader drops on the way back in.
+///
+/// A literal whose tag only the codec profile accepts is therefore
+/// unrepresentable in this carrier rather than quietly mistyped, and the loss
+/// ledger — not this validator — is where that is recorded.
+///
+/// # The one rule that is local, and it is spelling rather than grammar
+///
+/// [`CsvwTermsValueMode::Literal`] declares an "exact lowercase language tag"
+/// and matches it against a literal's tag byte-for-byte, so a well-formed tag
+/// that is not lowercase is refused rather than case-folded: accepting `en-US`
+/// here would declare a column that can never match. That is a determinism rule
+/// about spelling, and it is the only thing this function decides for itself.
+/// After the parse has succeeded every byte is ASCII alphanumeric or `-`, so
+/// "no ASCII uppercase" is precisely "equal to its own lowercasing".
 fn validate_language(language: &str) -> Result<(), ProjectionError> {
-    let valid = !language.is_empty()
-        && language == language.to_lowercase()
-        && language.split('-').all(|part| {
-            !part.is_empty()
-                && part.len() <= 8
-                && part
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric())
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err(ProjectionError::configuration(format!(
-            "invalid lowercase CSVW terms language tag `{language}`"
-        )))
+    if let Err(error) = purrdf_iri::langtag::parse(language) {
+        return Err(ProjectionError::configuration(format!(
+            "invalid lowercase CSVW terms language tag `{language}` ({}: {error})",
+            error.diagnostic_code()
+        )));
     }
+    if language.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        return Err(ProjectionError::configuration(format!(
+            "invalid lowercase CSVW terms language tag `{language}` (csvw-terms spells \
+             language tags in lowercase so a declared column can match)"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_titles(titles: &CsvwNaturalLanguage) -> Result<(), ProjectionError> {
@@ -2260,5 +2303,128 @@ mod tests {
         .expect("none-only selector");
         assert!(selector_matches(&none_only, &subject, &BTreeMap::new()));
         assert!(!selector_matches(&selector, &subject, &BTreeMap::new()));
+    }
+
+    /// A `csvw-terms` language tag is the BCP 47 `Language-Tag` production plus
+    /// one local spelling rule — checked in BOTH directions, because the
+    /// hand-rolled dialect this replaced was wrong in both.
+    #[test]
+    fn csvw_terms_language_is_the_bcp47_production() {
+        // The over-acceptance being removed, and the reason this is a defect
+        // rather than a wording question: each of these was accepted as a title
+        // map key and written into the projected artifact. The first subtag of
+        // every one of these grammars is ALPHA.
+        for tag in ["1", "9-9", "123-456"] {
+            let refused = validate_language(tag).expect_err("first subtag is not ALPHA");
+            let text = refused.to_string();
+            assert!(
+                text.contains("langtag-language-production-unmatched"),
+                "{tag:?} must name the rule that refused: {text}"
+            );
+            assert!(
+                text.contains(tag),
+                "the payload still quotes the tag: {text}"
+            );
+        }
+        // Empty subtag positions, which no production admits.
+        for tag in ["", "-", "en-", "-en", "en--us"] {
+            let text = validate_language(tag)
+                .expect_err("empty subtag")
+                .to_string();
+            assert!(
+                text.contains("langtag-subtag-length-zero"),
+                "{tag:?} must name the rule that refused: {text}"
+            );
+        }
+
+        // The neighbours that must STILL be accepted, one per shape BCP 47
+        // names: `language`, `language-region`, `language-script-region`,
+        // `langtag` with a trailing `privateuse`, and a whole-tag `privateuse`.
+        for tag in [
+            "en",
+            "en-us",
+            "zh-hans-cn",
+            "de-ch-x-phonebk",
+            "x-gmeow-english",
+            "i-enochian",
+        ] {
+            assert_eq!(validate_language(tag), Ok(()), "{tag:?}");
+        }
+
+        // The local spelling rule, and it is spelling and not grammar: the
+        // uppercase spellings below are well-formed BCP 47, and are refused
+        // here only because a declared column matches a literal's tag
+        // byte-for-byte.
+        for tag in ["EN", "en-US", "zh-Hans-CN"] {
+            assert!(
+                purrdf_iri::langtag::is_well_formed(tag),
+                "{tag:?} is well-formed BCP 47"
+            );
+            let text = validate_language(tag)
+                .expect_err("not lowercase")
+                .to_string();
+            assert!(text.contains("lowercase"), "{text}");
+        }
+
+        // The eight-character subtag ceiling, pinned one character either side.
+        assert_eq!(validate_language("abcdefgh"), Ok(()));
+        assert!(validate_language("abcdefghi").is_err());
+    }
+
+    /// An `xsd:language` CELL VALUE and a CSVW `lang` METADATA PROPERTY are two
+    /// different value spaces, and PurRDF's codecs hold a third. Nothing here is
+    /// incidental, so the divergence is pinned rather than left implicit — it is
+    /// what a byte-identical round trip turns on.
+    #[test]
+    fn xsd_language_value_and_csvw_lang_property_are_different_value_spaces() {
+        use super::super::table::validate_xsd_language;
+
+        // XSD 1.1 Part 2 §3.3.3 gives `language` the flat `pattern` facet
+        // `[a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*`, which has no production
+        // structure, so it takes these. RFC 5646 §2.1 has no reading for either
+        // (`jura` is 4ALPHA where `variant` wants a leading DIGIT; `419` and
+        // `de` cannot both be `region`), so the CSVW metadata property — "a
+        // language code as defined by [BCP47]" — refuses them.
+        for tag in ["en-fr-jura", "de-419-de"] {
+            assert_eq!(validate_xsd_language(tag), Ok(()), "xsd:language {tag:?}");
+            assert!(validate_language(tag).is_err(), "csvw lang {tag:?}");
+        }
+
+        // The mirror asymmetry: the XSD pattern's `[a-zA-Z]` is
+        // case-insensitive, while `CsvwTermsValueMode::Literal` declares an
+        // exact lowercase tag.
+        assert_eq!(validate_xsd_language("EN"), Ok(()));
+        assert!(validate_language("EN").is_err());
+
+        // `x-purrdf-afrikaans` is the tag that makes all three spaces visible
+        // at once. RFC 5646 §2.1 bounds a `privateuse` subtag at `1*8alphanum`
+        // and `afrikaans` is nine, so BCP 47 refuses it; the XSD pattern caps
+        // every subtag at eight with no `x-` carve-out, so the value space
+        // refuses it too; and `Profile::ConcreteSyntaxLangtagBounded` — the
+        // profile every RDF codec in this workspace ingests at — lifts the
+        // ceiling after the marker, so the codecs accept and write it.
+        assert!(purrdf_iri::langtag::is_well_formed_with(
+            "x-purrdf-afrikaans",
+            purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded
+        ));
+        assert!(validate_xsd_language("x-purrdf-afrikaans").is_err());
+        assert!(validate_language("x-purrdf-afrikaans").is_err());
+
+        // Where the specs agree they must agree, in both directions, so the
+        // asymmetries above are the named ones and not a general drift.
+        for tag in [
+            "en",
+            "en-us",
+            "zh-hans-cn",
+            "de-ch-x-phonebk",
+            "x-gmeow-english",
+        ] {
+            assert_eq!(validate_xsd_language(tag), Ok(()), "{tag:?}");
+            assert_eq!(validate_language(tag), Ok(()), "{tag:?}");
+        }
+        for tag in ["1", "9-9", "123-456", "en-", "-en", ""] {
+            assert!(validate_xsd_language(tag).is_err(), "xsd:language {tag:?}");
+            assert!(validate_language(tag).is_err(), "csvw lang {tag:?}");
+        }
     }
 }

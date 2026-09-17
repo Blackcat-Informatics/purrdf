@@ -834,7 +834,7 @@ fn validate_derived_string(value: &str, local: &str) -> Result<(), String> {
         "token" if !valid_xsd_token(value) => {
             Err("token contains uncollapsed whitespace".to_owned())
         }
-        "language" if !valid_language(value) => Err("invalid language value".to_owned()),
+        "language" => validate_xsd_language(value),
         "Name" if !valid_xml_name(value, true) => Err("invalid XML Name value".to_owned()),
         "NCName" if !valid_xml_name(value, false) => Err("invalid XML NCName value".to_owned()),
         "NMTOKEN" if !valid_xml_nmtoken(value) => Err("invalid XML NMTOKEN value".to_owned()),
@@ -895,13 +895,77 @@ fn valid_xml_nmtoken(value: &str) -> bool {
     !value.is_empty() && value.chars().all(is_xml_name_char)
 }
 
-fn valid_language(value: &str) -> bool {
-    let mut parts = value.split('-');
-    parts.next().is_some_and(|part| {
-        part.len() >= 2 && part.len() <= 8 && part.bytes().all(|byte| byte.is_ascii_alphabetic())
-    }) && parts.all(|part| {
-        !part.is_empty() && part.len() <= 8 && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    })
+/// The `{1,8}` repetition XSD 1.1 Part 2 §3.3.3 puts on **every** subtag of an
+/// `xsd:language` value, first one included and private-use ones included.
+///
+/// This is the same number as RFC 5646 §2.1's subtag ceiling, but it is not the
+/// same rule: [`purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded`]
+/// and [`purrdf_iri::langtag::Profile::Rfc5646PrivateUseRelaxed`] both lift the
+/// §2.1 ceiling for subtags that follow an `x`/`X` marker, and the schema
+/// pattern has no such carve-out — it does not know that `x` means anything.
+const XSD_LANGUAGE_SUBTAG_CEILING: usize = 8;
+
+/// Whether `value` lies in the ·value space· of `xsd:language`.
+///
+/// XSD 1.1 Part 2 §3.3.3: "`language` represents formal natural-language
+/// identifiers, as defined by [BCP 47] … The ·lexical space· of `language` is
+/// the set of all strings that conform to the pattern
+/// `[a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*`."
+///
+/// The prose says BCP 47; the normative `pattern` facet is what a schema
+/// processor enforces, and it is a **flat lexical pattern with no production
+/// structure at all**. So `en-fr-jura` and `de-419-de` — neither of which RFC
+/// 5646 has a reading for — are inside this value space, while
+/// `x-purrdf-afrikaans` is outside it, because nine characters is nine
+/// characters whether or not an `x` came first. A CSVW `lang` *property* is the
+/// other question and is judged elsewhere (`super::terms::validate_language`).
+///
+/// # One owner for the grammar, one local bound
+///
+/// That pattern is character-for-character the concrete syntaxes' `LANGTAG`
+/// terminal minus its `@` — `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*` — with a length cap
+/// added. So the shape is asked of [`purrdf_iri::langtag`] at
+/// [`purrdf_iri::langtag::Profile::ConcreteSyntaxLangtag`], the profile that
+/// spells exactly that terminal and bounds nothing, and the only thing decided
+/// here is [`XSD_LANGUAGE_SUBTAG_CEILING`]. The bounded profile cannot be used
+/// instead: its ceiling is the one with the private-use lift, which this value
+/// space does not have.
+///
+/// Every byte of a tag the terminal accepted is ASCII alphanumeric or `-`, so
+/// [`str::len`] on a subtag is its character count and the `{1,8}` repetition
+/// is being counted in the unit the pattern counts in.
+///
+/// # What the hand-rolled dialect this replaced got wrong
+///
+/// It demanded two characters of the first subtag. The pattern says `{1,8}`,
+/// so `a`, `x` and `i-enochian` are all lawful `xsd:language` values and all
+/// three were refused — an over-refusal invisible to every test, because a
+/// refusal looks like strictness.
+///
+/// # Errors
+///
+/// The refusing rule, named: the [`purrdf_iri::langtag::LanguageTagError`]
+/// diagnostic code for a shape the terminal will not take, or the offending
+/// subtag for one that runs past the ceiling.
+pub(super) fn validate_xsd_language(value: &str) -> Result<(), String> {
+    if let Err(error) =
+        purrdf_iri::langtag::parse_with(value, purrdf_iri::langtag::Profile::ConcreteSyntaxLangtag)
+    {
+        return Err(format!(
+            "invalid language value ({}: {error})",
+            error.diagnostic_code()
+        ));
+    }
+    if let Some(subtag) = value
+        .split('-')
+        .find(|subtag| subtag.len() > XSD_LANGUAGE_SUBTAG_CEILING)
+    {
+        return Err(format!(
+            "invalid language value: subtag `{subtag}` runs past the \
+             {XSD_LANGUAGE_SUBTAG_CEILING}-character xsd:language bound"
+        ));
+    }
+    Ok(())
 }
 
 /// Whether `value` lies in the ·value space· of `xsd:Name` (`colon` true) or of
@@ -1736,6 +1800,66 @@ mod tests {
         }
     }
 
+    /// The judgement is REACHABLE: a cell whose column datatype is
+    /// `xsd:language` is routed here by the ordinary datatype path, so this is
+    /// wiring and not a leaf predicate nobody calls.
+    #[test]
+    fn xsd_language_cells_are_judged_through_the_datatype_route() {
+        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+
+        let config = CsvwConfig::new(
+            "https://example.org/catalog/metadata.json",
+            crate::projections::CsvwContext::new(
+                "http://www.w3.org/ns/csvw",
+                BTreeMap::from([("xsd".to_owned(), XSD.to_owned())]),
+            )
+            .expect("context"),
+            "https://example.org/catalog",
+            crate::projections::CsvwVocabulary::new(
+                "http://www.w3.org/ns/csvw#",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                "http://www.w3.org/2000/01/rdf-schema#",
+                XSD,
+            )
+            .expect("vocabulary"),
+            crate::projections::CsvwMode::Minimal,
+            crate::projections::ProjectionLimits::new(16, 1_000_000, 8_000_000, 16_000_000, 16)
+                .expect("limits"),
+            10_000,
+        )
+        .expect("config");
+        let datatype = CsvwDatatype {
+            id: None,
+            base: format!("{XSD}language"),
+            format: None,
+            length: None,
+            min_length: None,
+            max_length: None,
+            minimum: None,
+            maximum: None,
+            min_inclusive: None,
+            max_inclusive: None,
+            min_exclusive: None,
+            max_exclusive: None,
+        };
+
+        for lexical in ["en", "en-us", "en-US", "a", "en-fr-jura"] {
+            assert_eq!(
+                validate_lexical(lexical, &datatype, &config),
+                Ok(()),
+                "{lexical:?} is in the xsd:language value space"
+            );
+        }
+        for lexical in ["1", "9-9", "123-456", "en-", "x-purrdf-afrikaans"] {
+            let refused = validate_lexical(lexical, &datatype, &config)
+                .expect_err("outside the xsd:language value space");
+            assert!(
+                refused.contains("invalid language value"),
+                "{lexical:?}: {refused}"
+            );
+        }
+    }
+
     /// `xsd:token`'s value space names exactly `#x9`, `#xA`, `#xD` and `#x20`.
     #[test]
     fn xsd_token_is_defined_over_xml_s_and_not_unicode_whitespace() {
@@ -1762,6 +1886,83 @@ mod tests {
         // token bearing one was refused.
         assert!('\u{A0}'.is_whitespace());
         assert_eq!("\u{A0}a\u{A0}".trim(), "a");
+    }
+
+    /// `xsd:language` is the schema `pattern` facet, checked in BOTH directions
+    /// because the dialect this replaced was wrong in one of them.
+    #[test]
+    fn xsd_language_is_the_schema_pattern_and_not_bcp47() {
+        // The over-refusal being removed, and it is the whole behavioural
+        // change at this site: `[a-zA-Z]{1,8}` admits a ONE-character first
+        // subtag, and the replaced dialect demanded `part.len() >= 2`.
+        for value in ["a", "x", "i-enochian", "a-b", "x-gmeow-english"] {
+            assert_eq!(validate_xsd_language(value), Ok(()), "{value:?}");
+        }
+
+        // The refusals, kept, with the rule that makes each of them: the first
+        // subtag is `[a-zA-Z]`, so no digit may open a tag…
+        for value in ["1", "9-9", "123-456"] {
+            let refused = validate_xsd_language(value).expect_err("first subtag is not ALPHA");
+            assert!(
+                refused.contains("langtag-terminal-primary-not-alpha"),
+                "{value:?} must name the rule that refused: {refused}"
+            );
+        }
+        // …every subtag position holds at least one character…
+        for value in ["", "-", "en-", "-en", "en--us"] {
+            let refused = validate_xsd_language(value).expect_err("empty subtag");
+            assert!(
+                refused.contains("langtag-subtag-length-zero"),
+                "{value:?} must name the rule that refused: {refused}"
+            );
+        }
+        // …and nothing outside `[a-zA-Z0-9]` participates.
+        for value in ["en-\u{FC}", "en-a!", "en us"] {
+            assert!(validate_xsd_language(value).is_err(), "{value:?}");
+        }
+
+        // The `{1,8}` bound, pinned one character either side so it is the
+        // bound being tested rather than merely its presence.
+        assert_eq!(validate_xsd_language("abcdefgh"), Ok(()));
+        let over = validate_xsd_language("abcdefghi").expect_err("nine characters");
+        assert!(over.contains("abcdefghi") && over.contains('8'), "{over}");
+
+        // The bound has NO private-use carve-out here, which is the one place
+        // this value space parts company with the profile the codecs use:
+        // `Profile::ConcreteSyntaxLangtagBounded` lifts the ceiling after `x`
+        // and the XSD `pattern` facet does not.
+        assert!(
+            purrdf_iri::langtag::is_well_formed_with(
+                "x-purrdf-afrikaans",
+                purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded
+            ),
+            "the codecs write this tag"
+        );
+        assert!(
+            validate_xsd_language("x-purrdf-afrikaans").is_err(),
+            "`afrikaans` is nine characters and the pattern caps every subtag at eight"
+        );
+        // The neighbour one character shorter, so that refusal is the length
+        // and not the `x-` shape.
+        assert_eq!(validate_xsd_language("x-purrdf-afrikaa"), Ok(()));
+
+        // Structure the pattern does not have: BCP 47 refuses both of these and
+        // the `pattern` facet takes them, which is exactly why this site is not
+        // routed at `Profile::Rfc5646`.
+        for value in ["en-fr-jura", "de-419-de"] {
+            assert!(!purrdf_iri::langtag::is_well_formed(value), "{value:?}");
+            assert_eq!(validate_xsd_language(value), Ok(()), "{value:?}");
+        }
+
+        // `[a-zA-Z]` is case-insensitive: an `xsd:language` VALUE is not
+        // required to be lowercase, unlike a `csvw-terms` declaration.
+        for value in ["EN", "en-US", "zh-Hans-CN"] {
+            assert_eq!(validate_xsd_language(value), Ok(()), "{value:?}");
+        }
+        // And the ordinary lowercase neighbours.
+        for value in ["en", "en-us", "zh-hans-cn", "de-ch-x-phonebk"] {
+            assert_eq!(validate_xsd_language(value), Ok(()), "{value:?}");
+        }
     }
 
     /// `xsd:base64Binary` length is counted with XML `S` removed — and FORM FEED
