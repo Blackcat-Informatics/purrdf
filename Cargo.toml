@@ -184,7 +184,9 @@ unicode-normalization = "0.1"
 # text index that retrieves Thai or Devanagari and one that silently does not.
 # Pure Rust, table-driven, wasm32-unknown-unknown-clean.
 unicode-segmentation = "1"
-visual-hashing = "0.1.3"
+# 1.0.0 is the tri-licensed release and a zero-runtime-dependency leaf (its
+# BLAKE3 is in-tree; the blake3 crate remains only as its dev-dependency).
+visual-hashing = "1.0.0"
 # EXACT pin: the `wasm-bindgen` CLI that generates the JS bindings must match
 # the library version byte-for-byte or it refuses to run. `make wasm-pkg` and
 # the CI Node lane install `wasm-bindgen-cli@0.2.125` to match this.
