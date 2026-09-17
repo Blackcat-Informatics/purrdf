@@ -76,8 +76,8 @@ impl Visited {
 /// were actually evaluated.
 #[derive(Debug, Default)]
 struct CacheState {
-    /// `(min(a, b), max(a, b)) -> distance`.
-    entries: BTreeMap<(usize, usize), f64>,
+    /// `row -> distance from this query`.
+    entries: BTreeMap<usize, f64>,
     /// Kernel evaluations that actually ran, as opposed to cache hits.
     ///
     /// Incremented where the kernel is invoked and nowhere else, so it is exactly the
@@ -87,11 +87,15 @@ struct CacheState {
     evaluations: u64,
 }
 
-/// A memoized `(row_a, row_b) -> distance` map owned by one proposal or one query.
+/// A memoized `row -> distance` map owned by one query.
 ///
-/// A `BTreeMap` rather than a hash map: the key is an integer pair, the map is consulted in
-/// a hot loop, and a `BTreeMap` needs no hasher choice at all, which keeps the determinism
-/// argument free of "which `BuildHasher`" entirely.
+/// A `BTreeMap` rather than a hash map: the key is an integer, the map is consulted in a hot
+/// loop, and a `BTreeMap` needs no hasher choice at all, which keeps the determinism argument
+/// free of "which `BuildHasher`" entirely.
+///
+/// The key is a single row, not a pair, because a query's own endpoint does not change while
+/// it is being answered. That also lets the query be a vector that is not in the matrix at
+/// all: a pair key needs two row identities, and an external query has only one.
 ///
 /// The cell is a [`RefCell`], not a mutex, because **no cache is ever shared between
 /// threads**. A build round used to hand every rayon worker one cache behind a
@@ -114,15 +118,15 @@ impl DistanceCache {
         Self::default()
     }
 
-    /// A stored distance, keyed by the unordered pair.
-    fn get(&self, a: usize, b: usize) -> Option<f64> {
-        self.state.borrow().entries.get(&ordered(a, b)).copied()
+    /// A stored distance to `row`.
+    fn get(&self, row: usize) -> Option<f64> {
+        self.state.borrow().entries.get(&row).copied()
     }
 
     /// Record a distance and charge it as one evaluation.
-    fn insert(&self, a: usize, b: usize, distance: f64) {
+    fn insert(&self, row: usize, distance: f64) {
         let mut state = self.state.borrow_mut();
-        state.entries.insert(ordered(a, b), distance);
+        state.entries.insert(row, distance);
         state.evaluations = state.evaluations.saturating_add(1);
     }
 
@@ -136,22 +140,54 @@ impl DistanceCache {
     }
 }
 
-/// Order a pair so `d(a, b)` and `d(b, a)` share one key.
-const fn ordered(a: usize, b: usize) -> (usize, usize) {
-    if a <= b { (a, b) } else { (b, a) }
-}
-
-/// A search's query vector bound to the matrix, kernel, and cache it reads.
+/// A search's query vector bound to the matrix, kernel, and memo it reads.
+///
+/// The vector is a borrowed slice rather than a row index, so a query need not be a member
+/// of the matrix. That is the general case: an embedding search takes free text, embeds it,
+/// and asks for the neighbours of a vector that was never stored. Searching from a stored
+/// row is the special case, where the slice happens to be `matrix.row(seed)`.
 pub(crate) struct Query<'a> {
     matrix: &'a VectorMatrix,
     kernel: Kernel,
     norms: &'a [f64],
     cache: &'a DistanceCache,
-    row: usize,
+    /// The vector every candidate is ranked against.
+    vector: &'a [f64],
+    /// Its L2 norm, or `0.0` for a kernel that does not divide by one.
+    norm: f64,
 }
 
 impl<'a> Query<'a> {
+    /// Bind an arbitrary vector as the search's query.
+    ///
+    /// `vector` must have the matrix's dimension; the caller validates that once rather than
+    /// per candidate.
+    pub(crate) fn from_vector(
+        matrix: &'a VectorMatrix,
+        kernel: Kernel,
+        norms: &'a [f64],
+        cache: &'a DistanceCache,
+        vector: &'a [f64],
+    ) -> Self {
+        let norm = if kernel.needs_norms() {
+            purrdf_sparql_eval::knn::norm(vector)
+        } else {
+            0.0
+        };
+        Self {
+            matrix,
+            kernel,
+            norms,
+            cache,
+            vector,
+            norm,
+        }
+    }
+
     /// Bind `query_row` as the search's seed.
+    ///
+    /// The stored-row case of [`Query::from_vector`], reusing the norm the index computed at
+    /// construction rather than recomputing it.
     pub(crate) fn new(
         matrix: &'a VectorMatrix,
         kernel: Kernel,
@@ -164,7 +200,8 @@ impl<'a> Query<'a> {
             kernel,
             norms,
             cache,
-            row: query_row,
+            vector: matrix.row(query_row),
+            norm: norm_of(norms, query_row),
         }
     }
 
@@ -176,84 +213,32 @@ impl<'a> Query<'a> {
     /// distance that overflowed would still sort — last, confidently — so it is refused
     /// rather than ranked.
     pub(crate) fn of(&self, row: usize) -> Result<f64> {
-        pair_distance(
-            self.matrix,
-            self.kernel,
-            self.norms,
-            self.cache,
-            self.row,
-            row,
-        )
+        if let Some(distance) = self.cache.get(row) {
+            return Ok(distance);
+        }
+        let distance = self
+            .kernel
+            .distance(
+                self.vector,
+                self.norm,
+                self.matrix.row(row),
+                norm_of(self.norms, row),
+            )
+            .ok_or(HnswError::NonFiniteDistance { row })?;
+        self.cache.insert(row, distance);
+        Ok(distance)
     }
 
     /// The cached distance from the query, or `None` if it has not been computed.
     #[cfg(test)]
     pub(crate) fn cached(&self, row: usize) -> Option<f64> {
-        self.cache.get(self.row, row)
+        self.cache.get(row)
     }
 }
 
 /// The L2 norm of `row`, or `0.0` for a kernel that does not divide by one.
 pub(crate) fn norm_of(norms: &[f64], row: usize) -> f64 {
     norms.get(row).copied().unwrap_or(0.0)
-}
-
-/// The memoized distance between any two rows.
-///
-/// A search ranks everything against one query row, but neighbour selection also asks how
-/// far two *candidates* are from each other, so the pair form is the general one and
-/// [`Query::of`] is the case where one endpoint is fixed. Both go through the same cache
-/// and the same kernel, so a distance cannot be computed two ways.
-///
-/// # Errors
-///
-/// [`HnswError::NonFiniteDistance`] if the kernel's result left the finite range. A distance
-/// that overflowed would still sort — last, confidently — so it is refused rather than
-/// ranked.
-pub(crate) fn pair_distance(
-    matrix: &VectorMatrix,
-    kernel: Kernel,
-    norms: &[f64],
-    cache: &DistanceCache,
-    a: usize,
-    b: usize,
-) -> Result<f64> {
-    if let Some(distance) = cache.get(a, b) {
-        return Ok(distance);
-    }
-    let distance = distance_of(matrix, kernel, norms, a, b)?;
-    cache.insert(a, b, distance);
-    Ok(distance)
-}
-
-/// The distance between two rows, straight from the kernel with no memo.
-///
-/// For a caller that asks each pair exactly once, a memo is not a saving: it is a lookup
-/// that always misses followed by an insert nothing will ever read. Neighbour selection is
-/// that caller -- within one call each candidate appears once -- so it takes this path and
-/// leaves the memo to the beam search, where a node really is re-scored across layers.
-///
-/// This is the same `Kernel::distance` the memo calls. There is still exactly one place the
-/// arithmetic happens.
-///
-/// # Errors
-///
-/// [`HnswError::NonFiniteDistance`] if the kernel's result left the finite range.
-pub(crate) fn distance_of(
-    matrix: &VectorMatrix,
-    kernel: Kernel,
-    norms: &[f64],
-    a: usize,
-    b: usize,
-) -> Result<f64> {
-    kernel
-        .distance(
-            matrix.row(a),
-            norm_of(norms, a),
-            matrix.row(b),
-            norm_of(norms, b),
-        )
-        .ok_or(HnswError::NonFiniteDistance { row: b })
 }
 
 /// Greedy descent through layers `from_layer..=to_layer`, nearest-neighbour at each.

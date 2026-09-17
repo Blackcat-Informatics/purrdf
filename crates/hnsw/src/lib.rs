@@ -240,6 +240,64 @@ impl HnswIndex {
         Ok((ranked, cache.evaluations()))
     }
 
+    /// The `k` nearest rows to an arbitrary query vector, in rank order, nearest first.
+    ///
+    /// The general form of [`HnswIndex::search_rows`]. `query` need not be a row of the
+    /// matrix and usually is not: an embedding search takes free text, embeds it, and asks
+    /// for the neighbours of a vector that was never stored. Searching from a stored row is
+    /// the special case where the vector happens to be one the index holds.
+    ///
+    /// This is also the honest case to measure recall on. A stored row is its own nearest
+    /// neighbour at distance zero, so a member query asks the graph only to arrive at a node
+    /// it already sits on; a held-out query is where descent actually has to navigate.
+    ///
+    /// The beam is the declared `ef_search`, exactly as for a member query — nothing about
+    /// the query's provenance changes the artifact's identity.
+    ///
+    /// # Errors
+    ///
+    /// [`HnswError::ParameterValidation`] if `query` does not have the matrix's dimension.
+    /// [`HnswError::NonFiniteDistance`] if a kernel result leaves the finite range, which
+    /// includes a query vector whose own components are extreme enough to overflow the fold.
+    pub fn search_vector(&self, query: &[f64], k: usize) -> Result<Vec<Ranked>> {
+        let cache = DistanceCache::new();
+        let bound = self.bind_vector(query, &cache)?;
+        self.with_scratch(|visited| self.traverse(&bound, k, visited))
+    }
+
+    /// [`HnswIndex::search_vector`] with the candidate distance evaluations it cost.
+    ///
+    /// # Errors
+    ///
+    /// As [`HnswIndex::search_vector`].
+    pub fn search_vector_work(&self, query: &[f64], k: usize) -> Result<(Vec<Ranked>, u64)> {
+        let cache = DistanceCache::new();
+        let bound = self.bind_vector(query, &cache)?;
+        let ranked = self.with_scratch(|visited| self.traverse(&bound, k, visited))?;
+        Ok((ranked, cache.evaluations()))
+    }
+
+    /// Validate a query vector's shape once and bind it to this index's kernel and memo.
+    fn bind_vector<'a>(&'a self, query: &'a [f64], cache: &'a DistanceCache) -> Result<Query<'a>> {
+        if query.len() != self.matrix.dims() {
+            return Err(HnswError::ParameterValidation {
+                description: format!(
+                    "the query has {} component(s) but this index ranks {}-dimensional \
+                     vectors",
+                    query.len(),
+                    self.matrix.dims()
+                ),
+            });
+        }
+        Ok(Query::from_vector(
+            &self.matrix,
+            self.kernel,
+            &self.norms,
+            cache,
+            query,
+        ))
+    }
+
     /// The `k` nearest rows to each of `query_rows`, one result per query in input order.
     ///
     /// The order is the input order, not completion order: the batch is mapped by rayon's
@@ -260,7 +318,7 @@ impl HnswIndex {
             .collect()
     }
 
-    /// One search against caller-supplied scratch.
+    /// One search against caller-supplied scratch, from a stored row.
     fn search_with(
         &self,
         query_row: usize,
@@ -275,6 +333,15 @@ impl HnswIndex {
                 max: rows.saturating_sub(1),
             });
         }
+        let query = Query::new(&self.matrix, self.kernel, &self.norms, cache, query_row);
+        self.traverse(&query, k, visited)
+    }
+
+    /// The traversal both entry points share: greedy descent, then the beam at layer 0.
+    ///
+    /// Takes a bound [`Query`] rather than a row, because the graph does not care whether
+    /// the vector being ranked against is one it holds.
+    fn traverse(&self, query: &Query<'_>, k: usize, visited: &mut Visited) -> Result<Vec<Ranked>> {
         if k == 0 {
             return Ok(Vec::new());
         }
@@ -286,11 +353,9 @@ impl HnswIndex {
         // this index offers candidates and never certifies absence, so a short answer is a
         // legal answer, while a widened beam would silently search a different graph than
         // the guard committed to.
-        let ef = self.params.ef_search().min(rows);
-        let query = Query::new(&self.matrix, self.kernel, &self.norms, cache, query_row);
-        // Greedy descent through the layers above 0, then the beam at layer 0.
-        let (start, _) = greedy_descend(&self.graph, &query, entry, self.graph.max_level(), 1)?;
-        let mut result = search_layer(&self.graph, &query, visited, &[start], 0, ef)?;
+        let ef = self.params.ef_search().min(self.matrix.rows());
+        let (start, _) = greedy_descend(&self.graph, query, entry, self.graph.max_level(), 1)?;
+        let mut result = search_layer(&self.graph, query, visited, &[start], 0, ef)?;
         result.truncate(k);
         Ok(result)
     }
