@@ -3329,35 +3329,35 @@ fn eval_function<D: DatasetView + Sync>(
         Function::Md5 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = md5::Md5::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha1 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha1::Sha1::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha256 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha384 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha512 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
@@ -3368,28 +3368,28 @@ fn eval_function<D: DatasetView + Sync>(
         Function::Sha3_224 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_224::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_256 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_384 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_512 => match string_arg_ref(&vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &hex_lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
@@ -4573,17 +4573,6 @@ fn encode_for_uri(s: &str) -> String {
         }
     }
     out
-}
-
-/// Render a byte slice as lowercase hex.
-fn hex_lower(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-            s.push(char::from_digit(u32::from(*b >> 4), 16).unwrap());
-            s.push(char::from_digit(u32::from(*b & 0xf), 16).unwrap());
-            s
-        })
 }
 
 /// Format a timezone offset in minutes as an `xsd:dayTimeDuration` string,
