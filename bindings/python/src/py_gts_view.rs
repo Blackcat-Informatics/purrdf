@@ -385,8 +385,23 @@ fn term_kind(kind: u8) -> PyResult<TermKind> {
 }
 
 fn validate_terms(terms: &[PyTermRow], term_count: usize) -> PyResult<()> {
-    for (idx, (_, _value, datatype, _lang, _direction, reifier, triple)) in terms.iter().enumerate()
+    for (idx, (_, _value, datatype, lang, _direction, reifier, triple)) in terms.iter().enumerate()
     {
+        // `from_parts` builds a `Graph` WITHOUT going through `reader::read`, so
+        // the reader's language-tag gate (`purrdf_gts::reader`'s `h_terms`) never
+        // sees this row — and `GtsFoldView::nq_token` renders `Term::lang`
+        // straight into an N-Quads `LANGTAG` token. Ask the same grammar, on the
+        // same profile, that the byte path asks. This surface is a constructor,
+        // not a byte reader, so it refuses hard rather than degrading: every
+        // other malformed field in this row already raises here.
+        if let Some(tag) = lang
+            && let Some(code) = purrdf_gts::model::language_tag_refusal(tag)
+        {
+            return Err(PyValueError::new_err(format!(
+                "terms[{idx}].lang: {tag:?} is not a language tag the RDF concrete-syntax \
+                 grammar accepts ({code})"
+            )));
+        }
         validate_optional_term_id(*datatype, term_count, &format!("terms[{idx}].datatype"))?;
         validate_optional_term_id(*reifier, term_count, &format!("terms[{idx}].reifier"))?;
         // A self-describing quoted triple names its own components; every id is

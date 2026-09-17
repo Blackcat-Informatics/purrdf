@@ -351,8 +351,13 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // Subject ground but absent from the dataset, object variable: only the
         // zero-length reflexive pair (subject bound to itself) can ever match.
         (Endpoint::BoundAbsent(sval), Endpoint::Free { .. }) => {
-            if path_is_reflexive(path) {
-                let term = ctx.scratch.intern(dataset, sval);
+            if path_is_reflexive(path)
+                // A ground endpoint absent from the data comes from query text,
+                // which the parser held to this same profile; a term the
+                // interner refuses names no node, so it reaches nothing, not
+                // even itself.
+                && let Some(term) = ctx.scratch.intern(dataset, sval)
+            {
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
@@ -372,8 +377,9 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // Object ground but absent from the dataset, subject variable: symmetric
         // to the subject-absent case above.
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
-            if path_is_reflexive(path) {
-                let term = ctx.scratch.intern(dataset, oval);
+            if path_is_reflexive(path)
+                && let Some(term) = ctx.scratch.intern(dataset, oval)
+            {
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }

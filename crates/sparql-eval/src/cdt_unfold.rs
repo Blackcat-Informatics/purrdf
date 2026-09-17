@@ -343,7 +343,14 @@ fn bind<D: DatasetView + Sync>(
     let (Some(column), Some(value)) = (column, value) else {
         return true;
     };
-    let term = ctx.scratch.intern(ctx.dataset, value);
+    // A produced binding the interner refuses is a binding to something that is
+    // not an RDF term — an `UNFOLD` member lifted out of a composite literal's
+    // lexical form carrying an ungrammatical language tag. The row does not
+    // survive it, exactly as it does not survive disagreeing with a pre-bound
+    // target below: this is a non-match, and a non-match is `false`.
+    let Some(term) = ctx.scratch.intern(ctx.dataset, value) else {
+        return false;
+    };
     match row[column] {
         None => {
             row[column] = Some(term);

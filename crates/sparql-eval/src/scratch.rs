@@ -28,6 +28,16 @@
 //! So [`SolutionTerm`] stays `Copy + Eq + Hash` and every join-key comparison is a
 //! single integer compare. The one lookup cost (`term_id_by_value`) is paid only
 //! when a term is *minted* (BIND/VALUES/aggregate output), never in BGP matching.
+//!
+//! ## The admission rule (why `intern` is fallible)
+//!
+//! Minting is also the evaluator's only ingress for a whole `TermValue` built
+//! OUTSIDE it — by a custom function, a service resolver, a property function or
+//! a custom aggregate — so [`ScratchInterner::intern`] is where a language tag
+//! that never met the IR kernel would otherwise reach a results writer. It asks
+//! the grammar and returns [`None`] instead: see that method's docs for why the
+//! gate belongs at this convergence rather than at each seam, and for the
+//! SPARQL 1.1 §17.2 reading of the [`None`].
 
 use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
 
@@ -183,6 +193,40 @@ fn hash_value(value: &TermValue) -> u64 {
     hasher.finish()
 }
 
+/// The profile every language tag in this workspace is judged on — the parser's,
+/// the codecs', the IR kernel's, and (since `eval_str_lang`) `STRLANG`'s.
+///
+/// Naming the same profile here is the whole point: a value that came out of the
+/// dataset was admitted by `RdfLiteral::validate_components` on THIS profile, so
+/// re-judging it cannot change the verdict, and the gate below therefore costs
+/// the internal callers nothing but a scan. Only a value minted outside the
+/// kernel — which is to say, by an extension — can fail it.
+const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
+    purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
+
+/// Whether every language tag `value` carries is one the RDF concrete syntaxes
+/// would have lexed, recursing through triple-term components.
+///
+/// A value that fails this is not a term any writer in the workspace can
+/// serialize: the results writers spell a tag as `"x"@<tag>` (TSV), as
+/// `"xml:lang": "<tag>"` (JSON) and as `xml:lang="<tag>"` (XML), and every one of
+/// those is bytes no reader takes back. `Iri` and `Blank` carry no tag at all, so
+/// they are a discriminant test; a literal with no tag is one more branch. The
+/// walk is strictly cheaper than the [`hash_value`] the intern path already pays.
+fn language_tags_well_formed(value: &TermValue) -> bool {
+    match value {
+        TermValue::Iri(_) | TermValue::Blank { .. } => true,
+        TermValue::Literal { language, .. } => language
+            .as_deref()
+            .is_none_or(|tag| purrdf_iri::langtag::is_well_formed_with(tag, LANGTAG_PROFILE)),
+        TermValue::Triple { s, p, o } => {
+            language_tags_well_formed(s)
+                && language_tags_well_formed(p)
+                && language_tags_well_formed(o)
+        }
+    }
+}
+
 impl ScratchInterner {
     /// A fresh, empty interner.
     pub fn new() -> Self {
@@ -209,7 +253,92 @@ impl ScratchInterner {
     ///
     /// No dataset may use that scope; `crate::convert`'s `QUERY_BLANK_SCOPE` states
     /// the reservation and is where query text is bound into it.
-    pub fn intern<D: DatasetView>(&mut self, dataset: &D, value: TermValue) -> SolutionTerm<D::Id> {
+    ///
+    /// # The one value that is never interned
+    ///
+    /// This is the arena's **only** door for a whole caller-supplied
+    /// [`TermValue`], which makes it the single place a language tag can enter a
+    /// solution without having come through the dataset. Four public extension
+    /// seams hand the evaluator values it did not build — a `UserFunction`
+    /// (`crate::user_fn`), a `ServiceResolver`'s rows (`crate::row_ingest`), a
+    /// `PropertyFunction`'s rows (`crate::property_fn_eval`), and a
+    /// `CustomAggregate`'s result (`crate::modifier::eval_custom_aggregate`) —
+    /// and none of those traits constrains the language string at all. Gating
+    /// each of them would be complete only until a fifth is added; gating here is
+    /// complete by construction, because there is no other way into `values`.
+    ///
+    /// A value carrying a tag [`LANGTAG_PROFILE`] refuses is therefore **not
+    /// interned** and the call returns [`None`]. That is not a dropped term: it
+    /// is the "expression error" of SPARQL 1.1 §17.2, whose specified outcome is
+    /// an unbound result, which is exactly what `crate::expr::eval_str_lang`
+    /// already returns (`Ok(None)`) when `STRLANG` is handed the same garbage.
+    /// Each caller maps the [`None`] onto the unbound outcome its own position
+    /// requires; none of them may turn it back into a term.
+    ///
+    /// The siblings [`Self::intern_iri`], [`Self::intern_blank`] and
+    /// [`Self::intern_datatyped`] stay infallible, and are not a second door:
+    /// each builds the [`TermValue`] itself out of parts that cannot carry a
+    /// language tag, so there is no tag for them to admit. Between them and this
+    /// method they are the complete set of entries to the private
+    /// [`Self::intern_checked`] body, which owns the one `values.push` in the
+    /// crate.
+    pub fn intern<D: DatasetView>(
+        &mut self,
+        dataset: &D,
+        value: TermValue,
+    ) -> Option<SolutionTerm<D::Id>> {
+        if !language_tags_well_formed(&value) {
+            return None;
+        }
+        Some(self.intern_checked(dataset, value))
+    }
+
+    /// Intern an IRI. Infallible by construction: an IRI carries no language tag,
+    /// so [`Self::intern`]'s gate has nothing to judge.
+    pub fn intern_iri<D: DatasetView>(&mut self, dataset: &D, iri: String) -> SolutionTerm<D::Id> {
+        self.intern_checked(dataset, TermValue::Iri(iri))
+    }
+
+    /// Intern a blank node. Infallible by construction: a blank node carries no
+    /// language tag, so [`Self::intern`]'s gate has nothing to judge.
+    pub fn intern_blank<D: DatasetView>(
+        &mut self,
+        dataset: &D,
+        label: String,
+        scope: purrdf_core::BlankScope,
+    ) -> SolutionTerm<D::Id> {
+        self.intern_checked(dataset, TermValue::Blank { label, scope })
+    }
+
+    /// Intern a datatyped literal from its parts. Infallible by construction: the
+    /// value is built here with `language: None`, so [`Self::intern`]'s gate has
+    /// nothing to judge. This is how the evaluator mints its own `xsd:string` /
+    /// `xsd:integer` / `xsd:boolean` results without inventing a failure branch
+    /// that cannot be taken.
+    pub fn intern_datatyped<D: DatasetView>(
+        &mut self,
+        dataset: &D,
+        lexical_form: String,
+        datatype: String,
+    ) -> SolutionTerm<D::Id> {
+        self.intern_checked(
+            dataset,
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language: None,
+                direction: None,
+            },
+        )
+    }
+
+    /// The promotion + store-once body, on a value whose language tags have
+    /// already been judged (or which provably has none).
+    fn intern_checked<D: DatasetView>(
+        &mut self,
+        dataset: &D,
+        value: TermValue,
+    ) -> SolutionTerm<D::Id> {
         if !is_query_scoped_blank(&value)
             && let Some(id) = dataset.term_id_by_value(&value)
         {
@@ -319,6 +448,13 @@ mod tests {
     use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 
+    /// Every value in the tests below is an IRI or an untagged literal, so
+    /// [`ScratchInterner::intern`]'s language-tag gate has nothing to judge and
+    /// cannot return [`None`]. The gate's own two halves are pinned by
+    /// [`the_language_tag_gate_refuses_only_ungrammatical_tags`] and by
+    /// `tests/language_tag_seams.rs`.
+    const WELL_FORMED: &str = "a value with no language tag always interns";
+
     fn dataset_with_one_iri() -> std::sync::Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri("https://example.org/s");
@@ -332,7 +468,9 @@ mod tests {
     fn existing_value_is_promoted_not_computed() {
         let ds = dataset_with_one_iri();
         let mut scratch = ScratchInterner::new();
-        let term = scratch.intern(&ds, TermValue::Iri("https://example.org/s".to_owned()));
+        let term = scratch
+            .intern(&ds, TermValue::Iri("https://example.org/s".to_owned()))
+            .expect(WELL_FORMED);
         // The value is in the dataset → it MUST resolve to an Existing id, and the
         // scratch table stays empty (the promotion rule).
         assert!(matches!(term, SolutionTerm::Existing(_)));
@@ -349,8 +487,8 @@ mod tests {
             language: None,
             direction: None,
         };
-        let a = scratch.intern(&ds, novel.clone());
-        let b = scratch.intern(&ds, novel);
+        let a = scratch.intern(&ds, novel.clone()).expect(WELL_FORMED);
+        let b = scratch.intern(&ds, novel).expect(WELL_FORMED);
         // Absent from the dataset → Computed, and the two interns share one id.
         assert!(matches!(a, SolutionTerm::Computed(_)));
         assert_eq!(a, b);
@@ -361,11 +499,15 @@ mod tests {
     fn existing_and_computed_are_never_equal() {
         let ds = dataset_with_one_iri();
         let mut scratch = ScratchInterner::new();
-        let existing = scratch.intern(&ds, TermValue::Iri("https://example.org/s".to_owned()));
-        let computed = scratch.intern(
-            &ds,
-            TermValue::Iri("https://example.org/NOT-PRESENT".to_owned()),
-        );
+        let existing = scratch
+            .intern(&ds, TermValue::Iri("https://example.org/s".to_owned()))
+            .expect(WELL_FORMED);
+        let computed = scratch
+            .intern(
+                &ds,
+                TermValue::Iri("https://example.org/NOT-PRESENT".to_owned()),
+            )
+            .expect(WELL_FORMED);
         assert!(matches!(existing, SolutionTerm::Existing(_)));
         assert!(matches!(computed, SolutionTerm::Computed(_)));
         // The whole point of the unification rule: cross-case is unequal.
@@ -378,7 +520,7 @@ mod tests {
         let mut scratch = ScratchInterner::new();
 
         let iri = TermValue::Iri("https://example.org/s".to_owned());
-        let existing = scratch.intern(&ds, iri.clone());
+        let existing = scratch.intern(&ds, iri.clone()).expect(WELL_FORMED);
         assert_eq!(scratch.value_of(&ds, existing), iri);
 
         let lit = TermValue::Literal {
@@ -387,7 +529,7 @@ mod tests {
             language: None,
             direction: None,
         };
-        let computed = scratch.intern(&ds, lit.clone());
+        let computed = scratch.intern(&ds, lit.clone()).expect(WELL_FORMED);
         assert_eq!(scratch.value_of(&ds, computed), lit);
     }
 
@@ -418,5 +560,86 @@ mod tests {
                 direction: None,
             }
         );
+    }
+
+    /// One `TermValue` per tag, straight at the choke point, both halves.
+    ///
+    /// The accepted list is not decoration: `x-purrdf-afrikaans` and
+    /// `x-gmeow-english` are tags this workspace's own artifacts carry, and
+    /// `en-fr-jura` / `fr-be-fbcl` are tags approved W3C corpora carry, so
+    /// refusing any of them would break data that is already valid — the mirror
+    /// bug of the escape this gate closes.
+    #[test]
+    fn the_language_tag_gate_refuses_only_ungrammatical_tags() {
+        let ds = dataset_with_one_iri();
+        let tagged = |tag: &str| TermValue::Literal {
+            lexical_form: "x".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            language: Some(tag.to_owned()),
+            direction: None,
+        };
+
+        for tag in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "abcdefgh",
+            "en-x-cantbethislong",
+        ] {
+            let mut scratch = ScratchInterner::new();
+            assert!(
+                scratch.intern(&ds, tagged(tag)).is_some(),
+                "{tag} is a tag real data carries and must still bind"
+            );
+            assert_eq!(scratch.computed_count(), 1, "{tag} must have been minted");
+        }
+
+        for tag in [
+            "en us",
+            "1",
+            "9-9",
+            "123-456",
+            "en-",
+            "-",
+            "!!!",
+            "abcdefghi",
+            "",
+        ] {
+            let mut scratch = ScratchInterner::new();
+            assert!(
+                scratch.intern(&ds, tagged(tag)).is_none(),
+                "{tag:?} must not become a solution term"
+            );
+            // Refused means NOT interned: the arena is untouched, so a refusal
+            // costs no scratch bytes and mints no id a later row could hit.
+            assert_eq!(scratch.computed_count(), 0, "{tag:?} must mint nothing");
+            assert_eq!(scratch.minted_bytes(), 0, "{tag:?} must charge nothing");
+        }
+    }
+
+    /// A triple term is judged through its components: an ungrammatical tag one
+    /// level down is still a tag that would reach a writer.
+    #[test]
+    fn the_gate_recurses_through_triple_terms() {
+        let ds = dataset_with_one_iri();
+        let quoted = |tag: &str| TermValue::Triple {
+            s: Box::new(TermValue::Iri("https://example.org/s".to_owned())),
+            p: Box::new(TermValue::Iri("https://example.org/p".to_owned())),
+            o: Box::new(TermValue::Literal {
+                lexical_form: "x".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                language: Some(tag.to_owned()),
+                direction: None,
+            }),
+        };
+        let mut scratch = ScratchInterner::new();
+        assert!(scratch.intern(&ds, quoted("en-US")).is_some());
+        assert!(scratch.intern(&ds, quoted("en us")).is_none());
     }
 }

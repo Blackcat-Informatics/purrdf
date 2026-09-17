@@ -66,12 +66,12 @@ pub(crate) fn eval_expr<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match expr {
         // ---- atoms ---------------------------------------------------------
-        Expression::NamedNode(n) => Ok(Some(const_atom(ctx, expr, || {
+        Expression::NamedNode(n) => Ok(const_atom(ctx, expr, || {
             TermValue::Iri(n.as_str().to_owned())
-        }))),
-        Expression::Literal(l) => Ok(Some(const_atom(ctx, expr, || {
+        })),
+        Expression::Literal(l) => Ok(const_atom(ctx, expr, || {
             crate::convert::literal_to_value(l)
-        }))),
+        })),
         Expression::Variable(v) => Ok(lookup(v, row, schema)),
         Expression::Bound(v) => Ok(Some(bool_term(ctx, lookup(v, row, schema).is_some()))),
 
@@ -377,22 +377,48 @@ fn lookup<I: ViewTermId>(
 }
 
 /// Intern a value to a solution term (promoting to an existing dataset id).
+///
+/// [`None`] when the value carries a language tag the grammar refuses — see
+/// [`ScratchInterner::intern`](crate::scratch::ScratchInterner::intern). Every
+/// caller here is inside an expression, so the mapping is the one §17.2 already
+/// states and `eval_str_lang` already performs: the expression is unbound.
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
-) -> SolutionTerm<D::Id> {
+) -> Option<SolutionTerm<D::Id>> {
     ctx.scratch.intern(ctx.dataset, value)
+}
+
+/// Intern an IRI. Infallible: an IRI carries no language tag.
+fn iri_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, iri: String) -> SolutionTerm<D::Id> {
+    ctx.scratch.intern_iri(ctx.dataset, iri)
+}
+
+/// Intern a typed (no-language) literal. Infallible: [`typed`] builds the value
+/// with `language: None`, so there is no tag to judge.
+fn typed_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    lexical: &str,
+    datatype: &str,
+) -> SolutionTerm<D::Id> {
+    ctx.scratch
+        .intern_datatyped(ctx.dataset, lexical.to_owned(), datatype.to_owned())
 }
 
 /// Intern a constant atom (`NamedNode`/`Literal`), memoized per query by the
 /// node's AST address (see [`EvalCtx::const_atom_cache`]). `build` — which owns
 /// the `TermValue` allocation — runs only on a cache miss, so a FILTER/BIND over
 /// N rows pays the `to_owned()` + intern probe once, not N times.
+///
+/// The memoized answer is the WHOLE answer, refusal included: the SPARQL parser
+/// holds a `LANGTAG` written in query text to the same profile the interner does
+/// (`crate::scratch`'s `LANGTAG_PROFILE`), so an atom's verdict is fixed for the
+/// life of the query and caching it cannot go stale.
 fn const_atom<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     expr: &Expression,
     build: impl FnOnce() -> TermValue,
-) -> SolutionTerm<D::Id> {
+) -> Option<SolutionTerm<D::Id>> {
     // Address-keyed memoization is unsound over a per-row substituted-EXISTS
     // temporary (see `EvalCtx::in_substituted_exists`): the node's address can
     // be a dropped-and-reused allocation from an earlier outer row, so a hit
@@ -427,7 +453,7 @@ fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, b: bool) -> Soluti
     if let Some(term) = ctx.cached_bool_terms[slot] {
         return term;
     }
-    let term = intern(ctx, typed(if b { "true" } else { "false" }, XSD_BOOLEAN));
+    let term = typed_term(ctx, if b { "true" } else { "false" }, XSD_BOOLEAN);
     ctx.cached_bool_terms[slot] = Some(term);
     term
 }
@@ -437,7 +463,7 @@ fn string_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     lexical: &str,
 ) -> SolutionTerm<D::Id> {
-    intern(ctx, typed(lexical, XSD_STRING))
+    typed_term(ctx, lexical, XSD_STRING)
 }
 
 /// Intern an `xsd:integer` literal.
@@ -445,7 +471,7 @@ fn integer_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: i64,
 ) -> SolutionTerm<D::Id> {
-    intern(ctx, typed(&value.to_string(), XSD_INTEGER))
+    typed_term(ctx, &value.to_string(), XSD_INTEGER)
 }
 
 /// Build a typed (no-language) literal value.
@@ -3111,9 +3137,7 @@ fn eval_function<D: DatasetView + Sync>(
             Some(_) => Ok(Some(bool_term(ctx, false))),
         },
         Function::Datatype => match arg(&vals, 0) {
-            Some(TermValue::Literal { datatype, .. }) => {
-                Ok(Some(intern(ctx, TermValue::Iri(datatype.clone()))))
-            }
+            Some(TermValue::Literal { datatype, .. }) => Ok(Some(iri_term(ctx, datatype.clone()))),
             _ => Ok(None),
         },
 
@@ -3142,10 +3166,10 @@ fn eval_function<D: DatasetView + Sync>(
 
         // ---- term constructors --------------------------------------------
         Function::Iri | Function::Uri => match arg(&vals, 0) {
-            Some(TermValue::Iri(iri)) => Ok(Some(intern(ctx, TermValue::Iri(iri.clone())))),
+            Some(TermValue::Iri(iri)) => Ok(Some(iri_term(ctx, iri.clone()))),
             Some(TermValue::Literal { lexical_form, .. }) => {
                 match resolve_against_base(ctx.base_iri.as_deref(), lexical_form) {
-                    Some(resolved) => Ok(Some(intern(ctx, TermValue::Iri(resolved)))),
+                    Some(resolved) => Ok(Some(iri_term(ctx, resolved))),
                     // Relative reference with no base to resolve against — a SPARQL
                     // expression error (unbound), not a silent identity pass-through.
                     None => Ok(None),
@@ -3232,32 +3256,26 @@ fn eval_function<D: DatasetView + Sync>(
         },
         Function::Timezone => match arg(&vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => match dt.timezone_minutes() {
-                Some(off_min) => Ok(Some(intern(
+                Some(off_min) => Ok(Some(typed_term(
                     ctx,
-                    typed(
-                        &format_daytime_duration(off_min),
-                        "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
-                    ),
+                    &format_daytime_duration(off_min),
+                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
                 ))),
                 None => Ok(None), // SPARQL §17.4.5.7: no timezone → error
             },
             Some(XsdValue::Date(d)) => match d.timezone_minutes() {
-                Some(off_min) => Ok(Some(intern(
+                Some(off_min) => Ok(Some(typed_term(
                     ctx,
-                    typed(
-                        &format_daytime_duration(off_min),
-                        "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
-                    ),
+                    &format_daytime_duration(off_min),
+                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
                 ))),
                 None => Ok(None),
             },
             Some(XsdValue::Time(t)) => match t.timezone_minutes() {
-                Some(off_min) => Ok(Some(intern(
+                Some(off_min) => Ok(Some(typed_term(
                     ctx,
-                    typed(
-                        &format_daytime_duration(off_min),
-                        "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
-                    ),
+                    &format_daytime_duration(off_min),
+                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
                 ))),
                 None => Ok(None),
             },
@@ -3408,7 +3426,7 @@ fn eval_function<D: DatasetView + Sync>(
         Function::Uuid => {
             let (uuid_iri, _) = make_uuid(ctx);
             let iri_val = format!("urn:uuid:{uuid_iri}");
-            Ok(Some(intern(ctx, TermValue::Iri(iri_val))))
+            Ok(Some(iri_term(ctx, iri_val)))
         }
         Function::StrUuid => {
             let (uuid_str, _) = make_uuid(ctx);
@@ -3448,7 +3466,7 @@ fn eval_function<D: DatasetView + Sync>(
             // nothing, so this falls through exactly as an absent registry used to.
             if let Some(func) = ctx.user_functions.resolve(iri.as_str()) {
                 let result = crate::user_fn::eval_user_function(func, iri.as_str(), &vals, ctx)?;
-                return Ok(result.map(|value| intern(ctx, value)));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             // A caller-injected native (host-Rust closure) function, resolved from
             // the same registry's second table. Checked after the SPARQL-bodied
@@ -3458,7 +3476,7 @@ fn eval_function<D: DatasetView + Sync>(
             // datatype IRI.
             if let Some(native) = ctx.user_functions.resolve_native(iri.as_str()) {
                 let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
-                return Ok(result.map(|value| intern(ctx, value)));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2
             // SPARQL Extensions §7.3's "SPARQL engines SHOULD register a function for
@@ -3470,7 +3488,7 @@ fn eval_function<D: DatasetView + Sync>(
             // ordering, not a precedence rule.
             if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri.as_str()) {
                 let result = crate::user_fn::eval_expr_function(expr_fn, iri.as_str(), &vals, ctx)?;
-                return Ok(result.map(|value| intern(ctx, value)));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
@@ -4062,7 +4080,7 @@ fn map_string<D: DatasetView + Sync>(
     f: impl Fn(&str) -> String,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match string_arg(vals, 0) {
-        Some((s, lang)) => Ok(Some(make_string(ctx, f(&s), lang))),
+        Some((s, lang)) => Ok(make_string(ctx, f(&s), lang)),
         None => Ok(None),
     }
 }
@@ -4073,7 +4091,7 @@ fn make_string<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     lexical: String,
     lang: Option<String>,
-) -> SolutionTerm<D::Id> {
+) -> Option<SolutionTerm<D::Id>> {
     match lang {
         Some(l) => intern(
             ctx,
@@ -4084,7 +4102,7 @@ fn make_string<D: DatasetView + Sync>(
                 direction: None,
             },
         ),
-        None => string_term(ctx, &lexical),
+        None => Some(string_term(ctx, &lexical)),
     }
 }
 
@@ -4096,7 +4114,7 @@ fn make_string_dir<D: DatasetView + Sync>(
     lexical: String,
     lang: Option<String>,
     dir: Option<RdfTextDirection>,
-) -> SolutionTerm<D::Id> {
+) -> Option<SolutionTerm<D::Id>> {
     match (lang, dir) {
         (Some(l), Some(d)) => intern(
             ctx,
@@ -4108,7 +4126,7 @@ fn make_string_dir<D: DatasetView + Sync>(
             },
         ),
         (Some(l), None) => make_string(ctx, lexical, Some(l)),
-        (None, _) => string_term(ctx, &lexical),
+        (None, _) => Some(string_term(ctx, &lexical)),
     }
 }
 
@@ -4134,7 +4152,7 @@ fn eval_concat<D: DatasetView + Sync>(
         }
     }
     match common {
-        Some((lang, dir)) if consistent => Ok(Some(make_string_dir(ctx, out, lang, dir))),
+        Some((lang, dir)) if consistent => Ok(make_string_dir(ctx, out, lang, dir)),
         _ => Ok(Some(string_term(ctx, &out))),
     }
 }
@@ -4167,7 +4185,7 @@ fn eval_substr<D: DatasetView + Sync>(
         .unwrap_or(&[])
         .iter()
         .collect();
-    Ok(Some(make_string(ctx, slice, lang)))
+    Ok(make_string(ctx, slice, lang))
 }
 
 /// SPARQL 1.1 §17.4.1.1 "argument compatibility": whether a string operand
@@ -4214,7 +4232,7 @@ fn eval_str_before_after<D: DatasetView + Sync>(
         // No match → empty (typed xsd:string, no language).
         None => return Ok(Some(string_term(ctx, ""))),
     };
-    Ok(Some(make_string(ctx, result, lang)))
+    Ok(make_string(ctx, result, lang))
 }
 
 /// `REPLACE(str, pattern, replacement[, flags])` via the regex engine.
@@ -4241,7 +4259,7 @@ fn eval_replace<D: DatasetView + Sync>(
         Ok(replaced) => replaced.into_owned(),
         Err(_) => return Ok(None),
     };
-    Ok(Some(make_string(ctx, replaced, lang)))
+    Ok(make_string(ctx, replaced, lang))
 }
 
 /// The compiled pattern for `(pattern, flags)`, from the per-query cache.
@@ -4367,7 +4385,7 @@ fn eval_str_lang<D: DatasetView + Sync>(
     if !well_formed_langtag(&lang) {
         return Ok(None); // not a language tag at all — see `well_formed_langtag`
     }
-    Ok(Some(make_string(ctx, lex, Some(lang.to_ascii_lowercase()))))
+    Ok(make_string(ctx, lex, Some(lang.to_ascii_lowercase())))
 }
 
 /// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
@@ -4402,7 +4420,7 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
         "rtl" => RdfTextDirection::Rtl,
         _ => return Ok(None),
     };
-    Ok(Some(intern(
+    Ok(intern(
         ctx,
         TermValue::Literal {
             lexical_form: lex,
@@ -4410,7 +4428,7 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
             language: Some(lang.to_ascii_lowercase()),
             direction: Some(direction),
         },
-    )))
+    ))
 }
 
 /// `STRDT(lexical, datatypeIri)`.
@@ -4464,7 +4482,7 @@ fn eval_str_dt<D: DatasetView + Sync>(
     if RdfLiteral::validate_components(dt, None, None).is_err() {
         return Ok(None);
     }
-    Ok(Some(intern(ctx, typed(&lex, dt))))
+    Ok(Some(typed_term(ctx, &lex, dt)))
 }
 
 /// `TRIPLE(s, p, o)` — RDF 1.2 triple-term constructor.
@@ -4488,7 +4506,7 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
         p: Box::new(p.clone()),
         o: Box::new(o.clone()),
     };
-    Ok(Some(intern(ctx, triple)))
+    Ok(intern(ctx, triple))
 }
 
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
@@ -4500,7 +4518,7 @@ fn triple_part<D: DatasetView + Sync>(
     match arg(vals, 0) {
         Some(TermValue::Triple { s, p, o }) => {
             let part = pick((**s).clone(), (**p).clone(), (**o).clone());
-            Ok(Some(intern(ctx, part)))
+            Ok(intern(ctx, part))
         }
         _ => Ok(None),
     }
@@ -4520,7 +4538,7 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     v: &XsdValue,
 ) -> SolutionTerm<D::Id> {
-    intern(ctx, xsd_literal_value(v))
+    typed_term(ctx, &v.canonical_lexical(), v.datatype().iri())
 }
 
 /// [`xsd_to_term`]'s value-only half: the canonical typed-literal [`TermValue`] for a
@@ -4618,13 +4636,8 @@ fn mint_bnode<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> SolutionTerm<D
     ctx.bnode_counter += 1;
     let label =
         crate::eval::minted_label(ctx.bnode_mint_prefix.as_deref(), "bnode", ctx.bnode_counter);
-    intern(
-        ctx,
-        TermValue::Blank {
-            label,
-            scope: BlankScope::DEFAULT,
-        },
-    )
+    ctx.scratch
+        .intern_blank(ctx.dataset, label, BlankScope::DEFAULT)
 }
 
 /// Resolve `reference` for the `IRI()`/`URI()` built-in (SPARQL 1.1 §17.4.2.6):

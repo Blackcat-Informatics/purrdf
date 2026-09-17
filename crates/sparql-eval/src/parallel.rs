@@ -1263,7 +1263,12 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
         .map(|cell| match cell {
             None => None,
             Some(PortableTerm::Parent(term)) => Some(term),
-            Some(PortableTerm::Fresh(value)) => Some(main.intern(dataset, value)),
+            // The child's own scratch already put this value through the same
+            // gate to mint the id being re-interned, and the verdict is a pure
+            // function of the value, so this call cannot refuse what the child
+            // accepted. Propagating the `Option` rather than asserting keeps the
+            // cell shape honest if that ever stops being true.
+            Some(PortableTerm::Fresh(value)) => main.intern(dataset, value),
         })
         .collect()
 }
@@ -2158,7 +2163,10 @@ mod tests {
         // input rows would) is something the fork must be able to resolve, and
         // `portable_row` must classify it as `Parent` (sid < base), not `Fresh`.
         let pre_fork_value = lit("already minted");
-        let pre_fork_term = parent.scratch.intern(&ds, pre_fork_value.clone());
+        let pre_fork_term = parent
+            .scratch
+            .intern(&ds, pre_fork_value.clone())
+            .expect("a well-formed value interns");
         let base = parent.scratch.computed_count();
 
         let mut child = parent.fork_for_worker();
@@ -2171,7 +2179,10 @@ mod tests {
         // The child mints a NEW value (not known to the parent at fork time) —
         // `portable_row` must classify this as `Fresh` (sid >= base).
         let fresh_value = lit("hello parallel");
-        let fresh_term = child.scratch.intern(&ds, fresh_value.clone());
+        let fresh_term = child
+            .scratch
+            .intern(&ds, fresh_value.clone())
+            .expect("a well-formed value interns");
         let row: Solution = smallvec::smallvec![None, Some(pre_fork_term), Some(fresh_term)];
 
         let prow = portable_row(&child.scratch, base, &row);
@@ -2205,8 +2216,14 @@ mod tests {
         let mut child_a = parent.fork_for_worker();
         let mut child_b = parent.fork_for_worker();
         let shared_value = lit("same value from two workers");
-        let term_a = child_a.scratch.intern(&ds, shared_value.clone());
-        let term_b = child_b.scratch.intern(&ds, shared_value);
+        let term_a = child_a
+            .scratch
+            .intern(&ds, shared_value.clone())
+            .expect("a well-formed value interns");
+        let term_b = child_b
+            .scratch
+            .intern(&ds, shared_value)
+            .expect("a well-formed value interns");
 
         let row_a: Solution = smallvec::smallvec![Some(term_a)];
         let row_b: Solution = smallvec::smallvec![Some(term_b)];

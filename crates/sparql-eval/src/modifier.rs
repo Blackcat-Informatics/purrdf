@@ -160,10 +160,14 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
         let mut row = smallvec::smallvec![None; width];
         for (i, cell) in binding.iter().enumerate() {
             if let Some(ground) = cell {
-                row[i] = Some(
-                    ctx.scratch
-                        .intern(ctx.dataset, ground_term_to_value(ground)),
-                );
+                // A `VALUES` ground term comes from query text, which the
+                // SPARQL parser already held to this very profile, so the
+                // refusal branch is unreachable here — and if a future front end
+                // ever widened the parser, an unbound cell is what §17.2 asks
+                // for, not a term no results writer could spell.
+                row[i] = ctx
+                    .scratch
+                    .intern(ctx.dataset, ground_term_to_value(ground));
             }
         }
         rows.push(row);
@@ -1167,7 +1171,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             CountAccumulator::default,
             |acc, ()| acc.step(&[]),
         )?;
-        return Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)));
+        return Ok(value.and_then(|v| ctx.scratch.intern(ctx.dataset, v)));
     }
 
     // Every built-in aggregate reaching here is `COUNT(?x)`/`SUM`/`AVG`/`MIN`/
@@ -1296,7 +1300,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             ));
         }
     };
-    Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)))
+    Ok(value.and_then(|v| ctx.scratch.intern(ctx.dataset, v)))
 }
 
 /// [`fold_builtin`]'s per-row step closure for every built-in whose argument
@@ -1513,7 +1517,12 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     drop(force_sequential);
 
     let value = crate::agg_fn::finish_contained(accumulator, iri)?;
-    Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)))
+    // THE custom-aggregate seam. `AggregateAccumulator::finish` returns an
+    // `Option<TermValue>` with no constraint on the language string at all, and
+    // this is where that value would otherwise become a solution term. `and_then`
+    // routes a refused tag onto the same unbound answer an accumulator that
+    // returned `None` gets — see `ScratchInterner::intern`.
+    Ok(value.and_then(|v| ctx.scratch.intern(ctx.dataset, v)))
 }
 
 /// Whether an [`XsdValue`] belongs to the SPARQL numeric tower (integer / decimal /
