@@ -254,7 +254,14 @@ fn install_shape_index(
 /// This step cannot fail: [`install_bodies`] has already proved that every
 /// declaration — not merely every list-parameter one — carries a body, so no
 /// registration can put a call site in reach of a function that answers nothing.
-fn register_expression_bodied_functions(
+///
+/// `pub(crate)` for the prepared-product restore
+/// (`crate::product::certified`), which has to assemble the SAME registry from a
+/// re-derived shapes graph and a host's injected table. Reusing this registration
+/// rather than transcribing it is what keeps the restored call form identical to
+/// the parsed one — a second copy would drift in exactly the arity the caller
+/// never re-tests.
+pub(crate) fn register_expression_bodied_functions(
     custom_fns: &[Arc<CustomFunction>],
     registry: &mut UserFunctionRegistry,
 ) {

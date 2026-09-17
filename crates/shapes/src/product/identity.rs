@@ -141,7 +141,8 @@ use purrdf_core::artifact::identity::{Identity, IdentityMismatch};
 use purrdf_core::ir::pack::bits::write_varint;
 use purrdf_sparql_eval::user_fn::FnPopulation;
 use purrdf_sparql_eval::{
-    EvalError, PropertyFunctionRegistry, agg_fn, property_function_content_fingerprint, user_fn,
+    AggregateRegistry, EvalError, PropertyFunctionRegistry, UserFunctionRegistry, agg_fn,
+    property_function_content_fingerprint, user_fn,
 };
 
 use crate::engine::ClassCatalog;
@@ -374,12 +375,171 @@ pub(crate) fn build_identity(
     property_functions: &PropertyFunctionRegistry,
     classes: &ClassCatalog,
 ) -> Result<Identity, ShapesProductError> {
+    assemble(
+        dataset.as_bytes().as_slice(),
+        shapes,
+        property_functions,
+        classes,
+    )
+}
+
+/// Compare a decoded identity against one rebuilt from the RESTORED shapes graph,
+/// the host's registries and the re-derived class catalog — **without**
+/// re-canonicalizing the shapes dataset.
+///
+/// # Why component 0 is copied rather than recomputed
+///
+/// Row 0 is the shapes dataset's canonical pack digest, and computing it is a
+/// graph-isomorphism canonicalization over the shapes graph's blank nodes — the
+/// COLD tier `super::dataset::certify_dataset` owns. Running it on every restore
+/// would very plausibly cost more than the shapes parse a prepared product exists
+/// to eliminate, so this check takes row 0's value from `declared` verbatim and
+/// every other row from the environment. The dataset section is still protected on
+/// the common path: the artifact envelope's per-section SHA-256 and whole-container
+/// digest both cover its bytes, so the section cannot be swapped without the
+/// container refusing first. What is deliberately NOT established here is that
+/// those bytes CANONICALIZE to the digest row 0 claims — that is the one statement
+/// only certification makes, and `ShapesProductView::certify` is the only place
+/// that makes it.
+///
+/// Copying row 0 means a disagreement can never be reported at position 0 from
+/// here, which is exactly the property `certify_is_not_reachable_from_admit` pins:
+/// a product whose stored canonical digest has been tampered with ADMITS and FAILS
+/// certification.
+///
+/// # Errors
+///
+/// The [`ProductDimension`] at the first disagreeing position, per
+/// [`check_identity`], or a registry dimension when a fingerprint cannot be
+/// computed at all.
+pub(crate) fn check_restored_identity(
+    declared: &Identity,
+    shapes: &Shapes,
+    property_functions: &PropertyFunctionRegistry,
+    classes: &ClassCatalog,
+) -> Result<(), ShapesProductError> {
+    // An identity whose row 0 carries another label has already failed the format's
+    // own rules; the empty value below lands as a position-0 disagreement, which
+    // `check_identity` reports under `DatasetIdentity`. Fail-closed, never skipped.
+    let declared_dataset = declared.component(COMPONENTS[0].0).unwrap_or(&[]);
+    let actual = assemble(declared_dataset, shapes, property_functions, classes)?;
+    check_identity(declared, &actual)
+}
+
+/// The CHEAP half of the restore check: the three components the executing HOST
+/// supplies, compared before anything expensive is decoded.
+///
+/// Rows 7, 8 and 9 are the only ones a caller can get wrong by wiring their own
+/// process differently — every other row is a property of the product's own
+/// content, and re-deriving those means decoding the model first.
+/// [`check_restored_identity`] covers all eleven and is what actually binds the
+/// restore; this runs first so a host that supplied the wrong registries is told so
+/// without paying for a dataset restore and an AST decode it is going to discard.
+///
+/// It is therefore a strictly redundant early exit, and deliberately so: it can
+/// only refuse what the total check would refuse a moment later, so it can never
+/// turn a valid product away. That property is what makes the optimization safe.
+///
+/// # Errors
+///
+/// [`ProductDimension::FunctionRegistry`],
+/// [`ProductDimension::AggregateRegistry`] or
+/// [`ProductDimension::PropertyFunctionRegistry`] when the host's registry is not
+/// the one the product was prepared against, or when a registry cannot state its
+/// own declarations.
+pub(crate) fn check_host_bindings(
+    declared: &Identity,
+    functions: &UserFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    property_functions: &PropertyFunctionRegistry,
+) -> Result<(), ShapesProductError> {
+    // Positions 7, 8 and 9 of `COMPONENTS` — named by index against the one table
+    // that also drives `assemble`, so these can never come to mean other rows.
+    let host: [(usize, Vec<u8>); 3] = [
+        (
+            7,
+            fingerprint(
+                user_fn::content_fingerprint(functions, FnPopulation::Injected),
+                ProductDimension::FunctionRegistry,
+                "host-injected SPARQL function registry",
+            )?,
+        ),
+        (
+            8,
+            fingerprint(
+                agg_fn::content_fingerprint(aggregates),
+                ProductDimension::AggregateRegistry,
+                "custom-aggregate registry",
+            )?,
+        ),
+        (
+            9,
+            fingerprint(
+                property_function_content_fingerprint(property_functions),
+                ProductDimension::PropertyFunctionRegistry,
+                "property-function registry",
+            )?,
+        ),
+    ];
+
+    for (position, computed) in host {
+        let (label, dimension) = COMPONENTS[position];
+        if declared.component(label) != Some(computed.as_slice()) {
+            return Err(ShapesProductError::new(dimension, fix_for(dimension)));
+        }
+    }
+    Ok(())
+}
+
+/// Corroborate a CERTIFIED dataset digest against the one the product's identity
+/// claims — the statement no restore path makes.
+///
+/// [`check_restored_identity`] copies row 0 rather than recomputing it, so this is
+/// the only comparison in the codec that can tell a product whose shapes dataset no
+/// longer canonicalizes to the identity it was written under.
+///
+/// # Errors
+///
+/// [`ProductDimension::DatasetIdentity`] when the certified digest is not the one
+/// the identity records.
+pub(crate) fn certify_dataset_component(
+    declared: &Identity,
+    certified: &PackDigest,
+) -> Result<(), ShapesProductError> {
+    let (label, dimension) = COMPONENTS[0];
+    if declared.component(label) == Some(certified.as_bytes().as_slice()) {
+        return Ok(());
+    }
+    Err(ShapesProductError::new(
+        dimension,
+        format!(
+            "this product's shapes dataset canonicalizes to {}, which is not the identity the \
+             product claims it was prepared from; discard this product and re-prepare it from the \
+             shapes graph, because the section and the binding over it no longer describe one \
+             dataset",
+            certified.to_hex()
+        ),
+    ))
+}
+
+/// Assemble the eleven component values in the fixed order of [`COMPONENTS`].
+///
+/// One body shared by the writer ([`build_identity`], which supplies a CERTIFIED
+/// dataset digest) and the restore check ([`check_restored_identity`], which
+/// supplies the declared one). Two transcriptions of an ordered tuple is exactly
+/// how a writer and a reader drift into disagreeing about what position 6 means.
+fn assemble(
+    dataset: &[u8],
+    shapes: &Shapes,
+    property_functions: &PropertyFunctionRegistry,
+    classes: &ClassCatalog,
+) -> Result<Identity, ShapesProductError> {
     let provenance = shapes.provenance();
 
     // In the fixed order of `COMPONENTS`, which is the order documented at the top
     // of this module and pinned by `identity_component_order_is_the_documented_one`.
     let values: [Vec<u8>; COMPONENTS.len()] = [
-        dataset.as_bytes().to_vec(),
+        dataset.to_vec(),
         encode_optional_str(shapes.shapes_graph.as_deref()),
         encode_prefixes(provenance.doc_prefixes()),
         encode_optional_str(provenance.base()),

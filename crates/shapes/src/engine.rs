@@ -803,22 +803,18 @@ impl PreparedShapes {
     /// forgeable spelling of something they can always re-derive. The one in-crate
     /// consumer is `crate::product::identity`, which digests it so a restored
     /// product's re-derivation can be checked against the digest the product pinned.
-    ///
-    /// The `not(test)` exemption matches `crate::product`'s own: this accessor's
-    /// non-test caller is the container stage, so until that lands nothing in a
-    /// release build reaches it. The test build exercises it, so a genuinely
-    /// unreachable accessor is still caught, and the exemption disappears with the
-    /// container.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the prepared-product container stage is this accessor's non-test caller; \
-                      the test build exercises it, so unreachable code is still caught"
-        )
-    )]
     pub(crate) fn class_catalog(&self) -> Arc<ClassCatalog> {
         Arc::clone(&self.classes)
+    }
+
+    /// The parsed shapes this preparation analyzed.
+    ///
+    /// `pub(crate)` for the same reason [`Self::class_catalog`] is: the prepared
+    /// product writer (`crate::product`) has to read the very shapes it is about
+    /// to encode, and a public accessor would hand callers a second, aliasable
+    /// spelling of a value they already own.
+    pub(crate) fn shapes(&self) -> &Arc<Shapes> {
+        &self.shapes
     }
 
     /// Bind shared shape analysis to a new data holder. All dataset-dependent

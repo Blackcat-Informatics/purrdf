@@ -149,7 +149,8 @@
 //!
 //! # What is NOT written, and why
 //!
-//! [`COVERAGE`] is the machine-readable form of this list, and the RULE 1 gate in
+//! `COVERAGE` (test-only — see its declaration) is the machine-readable form of
+//! this list, and the RULE 1 gate in
 //! this module's tests holds it against the live census, so a model field that
 //! gains no decision here cannot reach a release.
 //!
@@ -203,10 +204,17 @@ use super::error::{ProductDimension, ShapesProductError};
 
 // The census reads `crates/shapes/src/**/*.rs` and the codec-coverage gate below
 // has to compare against it, but `census()` lives in a TEST BINARY the library
-// cannot link and [`encode_ast`] is `pub(crate)`, so neither side can name the
-// other across that boundary. Compiling the census source as a private module of
-// the library's own test build is what closes the loop: the gate consumes the
-// REAL `census()` over the REAL sources, not a copy that could drift from it.
+// cannot link and `encode_ast` is `pub(crate)`, so neither side can name the
+// other across that boundary. Compiling the census source as a module of the
+// library's own test build is what closes the loop: the gate consumes the REAL
+// `census()` over the REAL sources, not a copy that could drift from it.
+//
+// `pub(crate)` rather than private because `super`'s own tests hold the product's
+// pinned STAGE_ID against `live_stage_id()`. That constant has to be a literal —
+// the census computes it from the sources with `syn` at test time, which a release
+// build cannot do — so the ONE thing that keeps it from becoming a hand-maintained
+// number is a test that can see both. Two copies of a digest with nothing
+// comparing them is exactly the drift the census exists to prevent.
 #[cfg(test)]
 #[allow(
     unreachable_pub,
@@ -215,7 +223,7 @@ use super::error::{ProductDimension, ShapesProductError};
               second consumer would make the gate read something other than what CI runs"
 )]
 #[path = "../../tests/product_model_census.rs"]
-mod model_census;
+pub(crate) mod model_census;
 
 // ---------------------------------------------------------------------------
 // Limits and tag spaces
@@ -303,7 +311,11 @@ fn depth_limit() -> ShapesProductError {
 }
 
 /// Translate a `pack::bits` decoding failure into an admission refusal.
-fn from_pack(error: PackBitsError) -> ShapesProductError {
+///
+/// `pub(crate)` because the product's identity section reads the same LEB128
+/// primitives this codec does, and one mapping is what keeps the two sections from
+/// reporting the same byte-level failure under two different dimensions.
+pub(crate) fn from_pack(error: PackBitsError) -> ShapesProductError {
     match error {
         PackBitsError::Truncated { needed, found } => ShapesProductError::new(
             ProductDimension::Truncated,
@@ -363,12 +375,21 @@ pub(crate) struct AstParts {
 // ---------------------------------------------------------------------------
 // The codec's declared coverage of the model census
 // ---------------------------------------------------------------------------
+//
+// This table and its supporting types are `#[cfg(test)]`, and that is a statement
+// rather than a convenience. They are not code the codec runs: they are the
+// codec's DECLARATION about itself, and their only consumer is the RULE 1 gate in
+// this module's tests, which holds them against the live census. A release build
+// has no reader for a declaration, so compiling one in would be an item kept alive
+// by an exemption rather than by a caller — and an exemption is exactly the thing
+// that lets a genuinely unreachable item hide.
 
 /// What this codec does with one field of the declarative model.
 ///
 /// Every role other than [`Self::Encoded`] carries the reason, because "not
 /// written" is a judgement and an unexplained omission is indistinguishable from
 /// the silent drop the census exists to prevent.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AstFieldRole {
     /// Written to the byte stream and read back from it.
@@ -391,10 +412,12 @@ pub(crate) enum AstFieldRole {
 
 /// One variant's coverage: its name as the census spells it, and its fields in
 /// declaration order.
+#[cfg(test)]
 pub(crate) type AstVariantCoverage = (&'static str, &'static [(&'static str, AstFieldRole)]);
 
 /// One model type's coverage: its name, and its variants in declaration order.
 /// A struct has exactly one variant, named `""`, as the census records it.
+#[cfg(test)]
 pub(crate) type AstTypeCoverage = (&'static str, &'static [AstVariantCoverage]);
 
 /// THE CODEC'S COVERAGE DECLARATION: a decision for every type, variant and field
@@ -405,6 +428,7 @@ pub(crate) type AstTypeCoverage = (&'static str, &'static [AstVariantCoverage]);
 /// census enum here is wildcard-free), the sample vectors refuse a new variant
 /// that was given no tag, and this table refuses a new FIELD that was given no
 /// decision.
+#[cfg(test)]
 pub(crate) const COVERAGE: &[AstTypeCoverage] = &[
     (
         "ArgKey",
@@ -938,11 +962,13 @@ pub(crate) const COVERAGE: &[AstTypeCoverage] = &[
 ];
 
 /// The reason both shared-shape-index fields carry, spelled once.
+#[cfg(test)]
 const SHARED_SHAPE_INDEX: &str = "ONE `Arc<OnceLock<..>>` shared by every such site of a shapes graph; `decode_ast` mints a \
      single empty handle and clones it into each, because a per-site default would type-check and \
      give every constraint a private, permanently empty index";
 
 /// The reason every `SparqlCallForm` payload carries, spelled once.
+#[cfg(test)]
 const LOWERING_TABLE: &str = "`SparqlCallForm` is the §5 lowering table, never a value of a parsed `Shapes`; the decoder \
      re-derives the form from the call's local name through `sparql_ns_lowering`, so the table \
      stays the single source of truth for the rendered SPARQL text";
@@ -2853,6 +2879,26 @@ impl FnTable {
 // The public codec
 // ---------------------------------------------------------------------------
 
+/// Every custom node-expression function declaration reachable from `shapes`,
+/// keyed and ordered by IRI — the same table [`encode_ast`] writes.
+///
+/// Exposed because the restore path has to assemble a
+/// [`UserFunctionRegistry`](purrdf_sparql_eval::UserFunctionRegistry) from a
+/// shapes graph it did NOT decode from this codec (the rebuild seam re-derives
+/// its shapes from the carried dataset), and the registration it must reproduce
+/// is a function of exactly this table. Sharing the walk is what keeps the two
+/// paths from disagreeing about which declarations a shapes graph has.
+///
+/// # Errors
+///
+/// [`ProductDimension::DepthLimit`] when the walk nests past [`MAX_DEPTH`];
+/// [`ProductDimension::Malformed`] when one IRI names two separate declarations.
+pub(crate) fn custom_functions(
+    shapes: &Shapes,
+) -> Result<Vec<Arc<CustomFunction>>, ShapesProductError> {
+    FnTable::collect(shapes)
+}
+
 /// Encode the declarative half of a parsed shapes graph.
 ///
 /// # Errors
@@ -2863,7 +2909,7 @@ impl FnTable {
 /// `sh:order`); [`ProductDimension::UnsupportedCapability`] for a
 /// SPARQL-based node expression spelled under a key this build does not know.
 pub(crate) fn encode_ast(shapes: &Shapes) -> Result<Vec<u8>, ShapesProductError> {
-    let functions = FnTable::collect(shapes)?;
+    let functions = custom_functions(shapes)?;
     let fn_index: BTreeMap<String, u64> = functions
         .iter()
         .enumerate()
