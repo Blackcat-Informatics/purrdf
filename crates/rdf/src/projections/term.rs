@@ -410,7 +410,11 @@ impl ProjectionTerm {
 /// The [`ProjectionError::term`] shape is unchanged, and the module's
 /// [`langtag::LanguageTagError`] `Display` is appended so the message names the
 /// production that refused rather than only the tag.
-fn validate_language_tag(tag: &str) -> Result<(), ProjectionError> {
+/// `pub(crate)` rather than private: [`crate::projections::VoidStaticValue`]'s
+/// `language_literal` constructor is a second, serde-reachable ingress for a
+/// caller-authored language tag into the very same projection artifacts, and it
+/// must reach the same verdict. One helper, one profile, or the two doors drift.
+pub(crate) fn validate_language_tag(tag: &str) -> Result<(), ProjectionError> {
     langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded)
         .map(|_| ())
         .map_err(|error| ProjectionError::term(format!("invalid language tag {tag:?}: {error}")))

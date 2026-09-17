@@ -466,6 +466,61 @@ fn a_null_element_produces_a_row_with_an_unbound_column() {
     );
 }
 
+/// An ungrammatical language tag inside a composite's lexical form makes the
+/// WHOLE composite ill-formed, so `UNFOLD` passes the row through with both
+/// targets unbound — never drops it — and the neighbour tag one character away
+/// still expands normally.
+///
+/// Where the refusal actually lands, and why that matters. `purrdf-cdt`'s own
+/// `LANGTAG` scan judges on `langtag::Profile::ConcreteSyntaxLangtagBounded`,
+/// the same profile as everything else in the workspace, so `@abcdefghi` — nine
+/// characters, one subtag past RFC 5646 §2.1's ceiling — fails at the composite
+/// PARSE, before any member reaches the interner. That puts this case under
+/// SEP-0009 §12.3's "neither a well-formed `cdt:List` nor a well-formed
+/// `cdt:Map` literal" clause, whose stated outcome is `{ μ }`: the input row
+/// survives with both targets unbound.
+///
+/// So this is the row-preservation claim for the reachable half of the seam. The
+/// unreachable half — a member that parses but that the INTERNER refuses — is
+/// pinned in `cdt_unfold`'s own unit tests, because `bind` is the one place
+/// where answering `false` to a refusal would drop the row instead of unbinding
+/// the target.
+///
+/// `abcdefgh`, one character shorter, is the accept half: it is a tag the
+/// grammar admits, so the map is well formed and expands to two rows.
+#[test]
+fn an_ungrammatical_tag_makes_the_composite_ill_formed_without_dropping_the_row() {
+    let result = evaluate(
+        &empty(),
+        "SELECT ?k ?v WHERE { BIND(\"{1: \\\"purr\\\"@abcdefghi, 2:20}\"^^cdt:Map AS ?m) \
+         UNFOLD(?m AS ?k, ?v) }",
+    );
+    assert_eq!(
+        rows(&result),
+        vec![row(&[("k", "UNBOUND"), ("v", "UNBOUND")])],
+        "an ill-formed operand passes the row through (§12.3), it does not drop it"
+    );
+
+    // The accept half: one character inside the ceiling, the map is well formed.
+    let result = evaluate(
+        &empty(),
+        "SELECT ?k ?v WHERE { BIND(\"{1: \\\"purr\\\"@abcdefgh, 2:20}\"^^cdt:Map AS ?m) \
+         UNFOLD(?m AS ?k, ?v) }",
+    );
+    let bound = rows(&result);
+    assert_eq!(
+        bound.len(),
+        2,
+        "`abcdefgh` is a tag, so both entries expand"
+    );
+    assert_eq!(bound[0]["k"], "1");
+    assert_ne!(
+        bound[0]["v"], "UNBOUND",
+        "`abcdefgh` is one character inside the ceiling and must still bind"
+    );
+    assert_eq!(bound[1], row(&[("k", "2"), ("v", "20")]));
+}
+
 // ---------------------------------------------------------------------------
 // UNFOLD — decisions the corpus does not pin
 // ---------------------------------------------------------------------------

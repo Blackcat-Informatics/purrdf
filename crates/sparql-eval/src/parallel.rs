@@ -1263,7 +1263,12 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
         .map(|cell| match cell {
             None => None,
             Some(PortableTerm::Parent(term)) => Some(term),
-            Some(PortableTerm::Fresh(value)) => Some(main.intern(dataset, value)),
+            // The child's own scratch already put this value through the same
+            // gate to mint the id being re-interned, and the verdict is a pure
+            // function of the value, so this call cannot refuse what the child
+            // accepted. Propagating the `Option` rather than asserting keeps the
+            // cell shape honest if that ever stops being true.
+            Some(PortableTerm::Fresh(value)) => main.intern_checked(dataset, value),
         })
         .collect()
 }

@@ -39,6 +39,7 @@
 //! up in a user's data. So every refusal below is paired with the neighbour
 //! that must still be accepted.
 
+use purrdf_rdf::native_codecs::jsonld::CompiledJsonLdContext;
 use purrdf_rdf::{NativeRdfFormat, SerializeGraph, parse_dataset, serialize_dataset};
 
 /// The subject and predicate every fixture in this file uses.
@@ -509,6 +510,70 @@ fn every_jsonld_language_site_is_gated_both_ways() {
     }
 }
 
+/// A compaction `@context` is OUTPUT, so its `@language` is judged even when no
+/// value ever uses it.
+///
+/// The escape the value-side funnel cannot see: `CompiledJsonLdContext` is a
+/// public entrance taking a caller's own context, and `carrier.rs` serializes
+/// `canonical_context()` into **every** compacted document. So a context whose
+/// `@language` is never applied to a bare string never reaches `lower_literal`,
+/// the only place the value side asks the grammar — and PurRDF writes
+/// `{"@context":{"@language":"en us"}}`, a document whose own context is
+/// unreadable the moment anything uses it. Both the default `@language` and a
+/// term definition's are on that path, so both are driven.
+///
+/// The accept half is the load-bearing one, as always: a compaction context
+/// tagged `x-purrdf-afrikaans` or `i-enochian` must still compile.
+#[test]
+fn a_compaction_context_language_is_gated_both_ways() {
+    for tag in TREE_MUST_SURVIVE {
+        for (site, context) in [
+            ("@context @language", format!("{{\"@language\":\"{tag}\"}}")),
+            (
+                "term @language",
+                format!("{{\"p\":{{\"@id\":\"{PREDICATE}\",\"@language\":\"{tag}\"}}}}"),
+            ),
+        ] {
+            CompiledJsonLdContext::compile_json(context.as_bytes(), None).unwrap_or_else(|error| {
+                panic!("{site}: {tag:?} must still compile, got {}", error.message)
+            });
+        }
+    }
+
+    for (refused, neighbour) in TREE_MUST_REFUSE {
+        for (site, context) in [
+            (
+                "@context @language",
+                format!("{{\"@language\":\"{refused}\"}}"),
+            ),
+            (
+                "term @language",
+                format!("{{\"p\":{{\"@id\":\"{PREDICATE}\",\"@language\":\"{refused}\"}}}}"),
+            ),
+        ] {
+            let Err(error) = CompiledJsonLdContext::compile_json(context.as_bytes(), None) else {
+                panic!("{site}: {refused:?} must be refused — it would be written back out");
+            };
+            assert!(
+                error.code.starts_with("langtag-"),
+                "{site}: {refused:?} must be refused by the langtag grammar, got code {:?} ({})",
+                error.code,
+                error.message
+            );
+        }
+
+        // The neighbour one edit away still compiles, at both sites.
+        for context in [
+            format!("{{\"@language\":\"{neighbour}\"}}"),
+            format!("{{\"p\":{{\"@id\":\"{PREDICATE}\",\"@language\":\"{neighbour}\"}}}}"),
+        ] {
+            CompiledJsonLdContext::compile_json(context.as_bytes(), None).unwrap_or_else(|error| {
+                panic!("{neighbour:?} must stay accepted, got {}", error.message)
+            });
+        }
+    }
+}
+
 /// The corrupt-output case, pinned on its own because it is the only one that
 /// produced bytes that are not RDF in any syntax.
 ///
@@ -532,4 +597,87 @@ fn a_language_tag_with_a_space_can_no_longer_produce_invalid_nquads() {
             error.message
         );
     }
+}
+
+// -- the fold view assembled in Rust, not read off the wire --------------------
+
+/// Build a one-term GTS graph field by field, the way a caller with no reader in
+/// the loop does. Both `Graph.terms` and `Term::lang` are `pub`, so this needs no
+/// unsafe and no doctored structure — it is the ordinary public API.
+fn assembled_graph(tag: &str) -> purrdf_gts::model::Graph {
+    let mut graph = purrdf_gts::model::Graph::default();
+    graph.terms.push(purrdf_gts::model::Term {
+        kind: purrdf_gts::model::TermKind::Literal,
+        value: Some("Purr".to_owned()),
+        datatype: None,
+        lang: Some(tag.to_owned()),
+        direction: None,
+        reifier: None,
+        triple: None,
+    });
+    graph
+}
+
+/// The Rust twin of the Python `from_parts` door.
+///
+/// The reader gates the wire format's `"l"` field at its single decode point, so
+/// a graph off the wire cannot carry an unreadable tag into a fold view. A graph
+/// a caller assembled can. Gating one binding and not the other would make the
+/// language a fold view renders depend on which language assembled the graph,
+/// which is not a property any caller could reason about.
+#[test]
+fn an_assembled_fold_view_refuses_a_tag_no_parser_reads() {
+    for tag in ["en us", "1", "9-9", "en-", "-", "!!!", "abcdefghi"] {
+        let Err(error) = purrdf_rdf::gts_view::GtsFoldView::new(assembled_graph(tag)) else {
+            panic!(
+                "{tag:?}: a fold view over an unreadable tag renders a token no parser \
+                 reads, so it must refuse to exist"
+            );
+        };
+        assert_eq!(
+            error.code, "gts-unreadable-language-tag",
+            "{tag:?}: got {} ({})",
+            error.code, error.message
+        );
+        assert!(
+            error.message.contains(&format!("{tag:?}")),
+            "the refusal must quote the tag verbatim, got {}",
+            error.message
+        );
+    }
+}
+
+/// The load-bearing half. This gate sits on a constructor every fold view in the
+/// workspace goes through, so an over-refusal here would be felt by every caller
+/// — including the corpus tags that are valid only under the concrete-syntax
+/// profile rather than RFC 5646 §2.1.
+#[test]
+fn an_assembled_fold_view_still_accepts_every_tag_the_corpora_carry() {
+    for tag in [
+        "en",
+        "en-US",
+        "zh-Hans-CN",
+        "de-CH-x-phonebk",
+        "i-enochian",
+        "en-fr-jura",
+        "fr-be-fbcl",
+        "x-purrdf-afrikaans",
+        "x-gmeow-norwegiannynorsk",
+        "abcdefgh",
+        "en-x-cantbethislong",
+    ] {
+        assert!(
+            purrdf_rdf::gts_view::GtsFoldView::new(assembled_graph(tag)).is_ok(),
+            "{tag} is carried by a corpus this workspace reads — refusing it here \
+             would be the mirror of the silent-drop bug"
+        );
+    }
+}
+
+/// A term with no tag at all must not be caught by a tag gate.
+#[test]
+fn an_assembled_fold_view_is_untouched_when_no_term_carries_a_tag() {
+    let mut graph = assembled_graph("en");
+    graph.terms[0].lang = None;
+    assert!(purrdf_rdf::gts_view::GtsFoldView::new(graph).is_ok());
 }

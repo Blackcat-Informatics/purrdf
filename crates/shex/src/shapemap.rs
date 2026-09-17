@@ -107,7 +107,7 @@ use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag, terminals};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
-use crate::lexer::{UcharDefect, decode_uchar};
+use crate::lexer::{LANGTAG_PROFILE, UcharDefect, decode_uchar};
 use crate::statement;
 use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
 
@@ -366,31 +366,34 @@ fn term_key(value: &TermValue) -> String {
 
 // ── the parser ────────────────────────────────────────────────────────────────
 
-/// The acceptance language `[145s] LANGTAG ::= "@" ([a-zA-Z])+ ("-"
-/// ([a-zA-Z0-9])+)*` is decided against, for the body after the `@`.
-///
-/// **This one is deliberately NOT a `PN_CHARS` run and not a Unicode property.**
-/// `LANGTAG` is the one terminal in the ShapeMap grammar that enumerates plain
-/// ASCII letters and digits, and it is position-dependent besides: the primary
-/// subtag is letters only, every later subtag is letters or digits, and neither
-/// may be empty. Answering it with `char::is_alphanumeric` was wrong twice over —
-/// it admitted `"x"@日本語`, which the production does not name at all, and it
-/// treated the structure as a flat character run, so `"x"@en-` and `"x"@1ab` were
-/// accepted as language tags they are not.
-///
-/// The transcription that replaced it was wrong a third way: it was a *private*
-/// one. A shape map names nodes in an RDF dataset, so a literal it spells has to
-/// be the literal the dataset holds — and the dataset was read by codecs holding
-/// the tag to [`langtag::Profile::ConcreteSyntaxLangtagBounded`]. A tag the map
-/// took and the codec refused (`@cantbethislong`) selected a node that can never
-/// exist; one the codec took and the map refused would make a parseable dataset
-/// unaddressable. The judgement therefore comes from the workspace's one
-/// language-tag owner, under the one profile every concrete-syntax surface names.
-///
-/// Every real tag still passes, which is the point: `en`, `en-UK`, `zh-Hans`,
-/// `de-CH-1901`, `x-private`, the grandfathered `i-klingon` and the
-/// terminal-only `en-fr-jura` of the vendored shexTest vectors are all accepted.
-const LANGTAG_PROFILE: langtag::Profile = langtag::Profile::ConcreteSyntaxLangtagBounded;
+// The acceptance language `[145s] LANGTAG ::= "@" ([a-zA-Z])+ ("-"
+// ([a-zA-Z0-9])+)*` is decided against — for the body after the `@` — is
+// `crate::lexer::LANGTAG_PROFILE`, imported at the top of this file. There is no
+// second constant here, because there is no second grammar: `lexer.rs`'s doc says
+// "one named constant, one grammar, two syntaxes", and a same-valued copy in this
+// module would have made that sentence false the moment either side moved.
+//
+// **This one is deliberately NOT a `PN_CHARS` run and not a Unicode property.**
+// `LANGTAG` is the one terminal in the ShapeMap grammar that enumerates plain
+// ASCII letters and digits, and it is position-dependent besides: the primary
+// subtag is letters only, every later subtag is letters or digits, and neither
+// may be empty. Answering it with `char::is_alphanumeric` was wrong twice over —
+// it admitted `"x"@日本語`, which the production does not name at all, and it
+// treated the structure as a flat character run, so `"x"@en-` and `"x"@1ab` were
+// accepted as language tags they are not.
+//
+// The transcription that replaced it was wrong a third way: it was a *private*
+// one. A shape map names nodes in an RDF dataset, so a literal it spells has to
+// be the literal the dataset holds — and the dataset was read by codecs holding
+// the tag to `langtag::Profile::ConcreteSyntaxLangtagBounded`. A tag the map took
+// and the codec refused (`@cantbethislong`) selected a node that can never exist;
+// one the codec took and the map refused would make a parseable dataset
+// unaddressable. The judgement therefore comes from the workspace's one
+// language-tag owner, under the one profile every concrete-syntax surface names.
+//
+// Every real tag still passes, which is the point: `en`, `en-UK`, `zh-Hans`,
+// `de-CH-1901`, `x-private`, the grandfathered `i-klingon` and the terminal-only
+// `en-fr-jura` of the vendored shexTest vectors are all accepted.
 
 /// `[18t] IRIREF ::= "<" ([^#x00-#x20<>"{}|^`\] | UCHAR)* ">"` — the content class,
 /// as the complement of [`terminals::is_iriref_forbidden`].

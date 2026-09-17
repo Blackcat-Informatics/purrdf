@@ -38,8 +38,11 @@ use purrdf_sparql_algebra::{
 /// # Errors
 ///
 /// Returns a [`RdfDiagnostic`] if a literal substitution carries a datatype IRI that
-/// is not a syntactically valid IRI (the only way a [`TermValue`] cannot become a
-/// [`GroundTerm`]).
+/// is not a syntactically valid IRI, or a language tag the RDF concrete syntaxes
+/// would not have lexed (the two ways a [`TermValue`] cannot become a
+/// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
+/// component that cannot be made into a term is reported to the caller rather than
+/// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
 pub(crate) fn apply_substitutions(
     mut query: Query,
     substitutions: &[(String, TermValue)],
@@ -540,6 +543,11 @@ fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic
 
 /// Build an algebra [`Literal`] from a value's components, choosing the plain /
 /// typed / lang / dir-lang constructor that matches its shape.
+///
+/// Both component doors refuse rather than build: a datatype IRI goes through
+/// [`node`], and a language tag through [`lang`]. This is the pre-binding
+/// INGRESS — the one place a caller-supplied [`TermValue`] becomes algebra — and
+/// a caller that hands over a malformed component has to learn that it did.
 fn literal_from_value(
     lexical_form: &str,
     datatype: &str,
@@ -547,9 +555,9 @@ fn literal_from_value(
     direction: Option<RdfTextDirection>,
 ) -> Result<Literal, RdfDiagnostic> {
     match (language, direction) {
-        (Some(lang), dir) => Ok(Literal::new_lang(
+        (Some(language), dir) => Ok(Literal::new_lang(
             lexical_form,
-            lang,
+            lang(language)?,
             dir.map(|d| match d {
                 RdfTextDirection::Ltr => BaseDirection::Ltr,
                 RdfTextDirection::Rtl => BaseDirection::Rtl,
@@ -562,4 +570,36 @@ fn literal_from_value(
 /// Validate-and-wrap an IRI, surfacing a malformed IRI as a diagnostic.
 fn node(iri: &str) -> Result<NamedNode, RdfDiagnostic> {
     NamedNode::new(iri).map_err(|e| RdfDiagnostic::error("native-sparql-subst-iri", e.to_string()))
+}
+
+/// Validate a pre-bound literal's language tag, surfacing an ungrammatical one
+/// as a diagnostic exactly the way [`node`] surfaces a malformed datatype IRI.
+///
+/// The tag is judged on [`crate::scratch::LANGTAG_PROFILE`], the profile the
+/// SPARQL parser holds query text to and the profile `RdfLiteral` holds a
+/// dataset term to, so a pre-binding is admitted on precisely the terms a term
+/// written in the query itself would have been.
+///
+/// # Why this is an ERROR and not an unbound binding
+///
+/// [`Query::substitute_variable`] injects the pre-binding as a single-row
+/// `VALUES` join, and an unbound cell in a `VALUES` row is `UNDEF` — compatible
+/// with every solution. So degrading a refused pre-binding to "unbound" would
+/// not cost the caller a binding, it would delete the CONSTRAINT: the query
+/// would return the whole unrestricted relation, more rows than the caller asked
+/// for, with nothing anywhere saying why. A pre-binding is an instruction to
+/// narrow, and an instruction that cannot be carried out is reported, not
+/// quietly dropped.
+fn lang(tag: &str) -> Result<&str, RdfDiagnostic> {
+    match purrdf_iri::langtag::parse_with(tag, crate::scratch::LANGTAG_PROFILE) {
+        Ok(_) => Ok(tag),
+        Err(error) => Err(RdfDiagnostic::error(
+            "native-sparql-subst-langtag",
+            format!(
+                "a pre-bound literal's language tag {tag:?} is not one this profile lexes: \
+                 {error} [{code}]",
+                code = error.diagnostic_code()
+            ),
+        )),
+    }
 }

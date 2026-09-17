@@ -21,7 +21,7 @@ use crate::codec::{
 };
 use crate::model::{
     AnnotationRow, BlobEntry, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow,
-    Signature, StreamableInfo, Suppression, Term, TermKind, Triple3,
+    Signature, StreamableInfo, Suppression, Term, TermKind, Triple3, language_tag_refusal,
 };
 use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
@@ -808,15 +808,119 @@ impl Folder<'_, '_, '_> {
             let Value::Map(entries) = raw else { continue };
             let kind = TermKind::from_wire(map_get(entries, "k").and_then(as_i128));
             let value = map_get(entries, "v").and_then(as_text).map(str::to_string);
-            let lang = map_get(entries, "l").and_then(as_text).map(str::to_string);
-            let direction = map_get(entries, "dir")
-                .and_then(as_text)
-                .filter(|value| matches!(*value, "ltr" | "rtl"))
-                .map(str::to_string);
-            let dt_raw = map_get(entries, "dt").and_then(as_i128);
-            let rf_raw = map_get(entries, "rf").and_then(as_i128);
+            // This row's id, read before any decode that can raise a diagnostic:
+            // diagnostics land in `self.g.diagnostics`, never in `self.g.terms`,
+            // so the id a refusal quotes is the id this row goes on to take.
             let tid = self.g.terms.len() as i128;
             let term_id = self.g.terms.len();
+            // THE language-tag decode point. `"l"` is the only field of the wire
+            // format that becomes a `LANGTAG` token downstream, and this is the
+            // only place it is read: `h_snapshot` re-enters through this very
+            // function, `reader_union` and `compact` copy already-decoded
+            // `Term`s, and the event bridge (`event_stream::stream_events`)
+            // drives `read_to_sink_with_options`, i.e. this loop. So a tag that
+            // does not pass here reaches neither the fold view's N-Quads token
+            // (`purrdf_rdf::gts_view`'s `render_literal`) nor any `GtsEventSink`.
+            //
+            // Ask the grammar, on the profile every RDF codec and the IR kernel
+            // already name (`model::LANGUAGE_TAG_PROFILE`). A refusal is NOT a
+            // quiet coercion: it is a `DamagedFrame` diagnostic — the registry's
+            // code for a malformed payload, whose stated reader behaviour is
+            // "isolate the damaged item ..., surface a diagnostic, and fold
+            // survivors" (GTS-CONFORMANCE.md §6) — that quotes the term id, the
+            // production that rejected the tag, and the tag verbatim, so nothing
+            // about the refusal has to be guessed. The damaged item is the tag;
+            // the survivor is the literal's lexical form, which folds on under
+            // §7.1's `xsd:string` default. This is the same shape the sibling
+            // `"dir"` field already has directly below, where a value outside
+            // `"ltr" / "rtl"` is likewise not carried through.
+            //
+            // The Baseline Reader cannot answer a malformed tag any other way:
+            // `read` returns a `Graph`, not a `Result` (permissive-read "never
+            // panic ..., return graph state plus diagnostics", §7), and dropping
+            // the whole row is impossible because term ids are positional —
+            // `tid` is `self.g.terms.len()`, so skipping a row would renumber
+            // every later term in the segment.
+            // `lang_refused` distinguishes "there was no tag" from "there was a
+            // tag and the grammar refused it". The base-direction arm below
+            // needs that distinction: the two cases must not fold to the same
+            // outcome, because only one of them is a defect in the input.
+            let (lang, lang_refused) = match map_get(entries, "l").and_then(as_text) {
+                Some(tag) => match language_tag_refusal(tag) {
+                    Some(code) => {
+                        self.diag(
+                            "DamagedFrame",
+                            format!(
+                                "term {tid} carries a language tag the RDF concrete-syntax \
+                                 grammar refuses ({code}): {tag:?}"
+                            ),
+                            Some(index),
+                        );
+                        (None, true)
+                    }
+                    None => (Some(tag.to_string()), false),
+                },
+                None => (None, false),
+            };
+            // Same reasoning as the tag arm above, and the same failure shape. A
+            // value outside the closed `ltr`/`rtl` space cannot be carried
+            // through, and dropping it without saying so is worse than it looks:
+            // the term keeps its lexical form and its language, so an
+            // `rdf:dirLangString` quietly becomes an `rdf:langString` and the
+            // graph asserts a literal the container does not contain — hence the
+            // diagnostic. The writer filters direction before emitting it, so a
+            // value here can only have come from a foreign container, which is
+            // precisely the case a diagnostic is for.
+            let direction = match map_get(entries, "dir").and_then(as_text) {
+                Some(value) if matches!(value, "ltr" | "rtl") => Some(value.to_string()),
+                Some(value) => {
+                    self.diag(
+                        "DamagedFrame",
+                        format!(
+                            "term {tid} carries a base direction outside the RDF 1.2 \
+                             value space (ltr, rtl): {value:?}"
+                        ),
+                        Some(index),
+                    );
+                    None
+                }
+                None => None,
+            };
+            // A refused tag takes the base direction down with it. `direction`
+            // is only ever the second half of an `rdf:dirLangString`, so once
+            // the language is gone it describes nothing: carrying it on would
+            // build a term with a direction and no language, which is outside
+            // RDF 1.2's value space. Leaving it standing is not a harmless
+            // remnant either — it makes the importer downstream refuse with
+            // `gts-direction-without-language`, naming a defect the container
+            // never had and pointing away from the tag that actually failed.
+            //
+            // This is a consequence of a refusal, not a second input error, so
+            // it gets its own diagnostic rather than riding along silently on
+            // the tag's: dropping carried data without saying so is the
+            // documented mirror of over-refusal, and it costs a reader exactly
+            // the field it would need to understand the first diagnostic.
+            //
+            // Only a *refused* tag triggers this. A `"dir"` with no `"l"` at
+            // all is a genuine defect in the container, and the importer's
+            // `gts-direction-without-language` is then the correct name for it
+            // — so that case is left alone to be reported accurately.
+            let direction = if lang_refused && direction.is_some() {
+                self.diag(
+                    "DamagedFrame",
+                    format!(
+                        "term {tid} loses its base direction as well, because a base \
+                         direction is only meaningful alongside a language tag and \
+                         this term's tag was refused"
+                    ),
+                    Some(index),
+                );
+                None
+            } else {
+                direction
+            };
+            let dt_raw = map_get(entries, "dt").and_then(as_i128);
+            let rf_raw = map_get(entries, "rf").and_then(as_i128);
             // Sanitise refs: dt MUST name an already-introduced term, and rf
             // normally does too (§7.5). A quoted-triple term may self-bind
             // its reifier (`rf == term_id`) so the term can be used directly

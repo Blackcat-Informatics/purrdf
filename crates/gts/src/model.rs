@@ -32,6 +32,70 @@ pub fn is_literal_direction(direction: &str) -> bool {
     matches!(direction, "ltr" | "rtl")
 }
 
+/// The profile a container's `"l"` field (§7.1, "literal language tag (BCP 47)")
+/// is held to.
+///
+/// [`ConcreteSyntaxLangtagBounded`](purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded)
+/// is the profile every RDF codec in this workspace and the IR kernel already
+/// name, and a GTS container is read back by exactly those codecs: the fold view
+/// renders `Term::lang` into an N-Quads `LANGTAG` token and the event bridge
+/// hands it to an `RdfEventSink` that will intern it. Choosing any other profile
+/// here would let the reader accept a tag the very next stage refuses — or, worse
+/// (this is the escape this gate closes), emit bytes no N-Quads parser reads.
+///
+/// It is also the only profile that keeps this project's own containers
+/// readable: the workspace writes private-use tags of the form `x-purrdf-<name>`
+/// whose subtags run past the RFC 5646 §2.1 eight-character ceiling
+/// (`x-purrdf-afrikaans`, `x-purrdf-norwegiannynorsk`), and the frozen corpus
+/// carries `x-gmeow-english`. This profile lifts the ceiling inside private use
+/// and nowhere else, so those read while `abcdefghi` — nine characters outside
+/// private use — still does not.
+pub const LANGUAGE_TAG_PROFILE: purrdf_iri::langtag::Profile =
+    purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
+
+/// Judge a wire language tag, returning the grammar's own stable diagnostic code
+/// when it is refused and [`None`] when it is well formed.
+///
+/// The code — [`LanguageTagError::diagnostic_code`](purrdf_iri::langtag::LanguageTagError::diagnostic_code)
+/// — is what the reader quotes in its diagnostic detail, so a refusal names the
+/// production that rejected the tag rather than saying only that something was
+/// wrong.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_gts::model::language_tag_refusal;
+///
+/// // Tags a container legitimately carries — including this project's own
+/// // over-long private-use tags — are not refused.
+/// for good in [
+///     "en",
+///     "en-US",
+///     "zh-Hans-CN",
+///     "de-CH-x-phonebk",
+///     "i-enochian",
+///     "x-purrdf-afrikaans",
+///     "x-gmeow-english",
+///     "en-fr-jura",
+///     "fr-be-fbcl",
+///     "abcdefgh",
+///     "en-x-cantbethislong",
+/// ] {
+///     assert_eq!(language_tag_refusal(good), None, "{good} must still read");
+/// }
+///
+/// // Garbage no RDF concrete syntax would have lexed is refused.
+/// for bad in ["en us", "1", "9-9", "123-456", "en-", "-", "!!!", "abcdefghi", ""] {
+///     assert!(language_tag_refusal(bad).is_some(), "{bad:?} must be refused");
+/// }
+/// ```
+#[must_use]
+pub fn language_tag_refusal(tag: &str) -> Option<&'static str> {
+    purrdf_iri::langtag::parse_with(tag, LANGUAGE_TAG_PROFILE)
+        .err()
+        .map(purrdf_iri::langtag::LanguageTagError::diagnostic_code)
+}
+
 /// The kind of an RDF term, matching the wire `"k"` field (§7.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TermKind {
