@@ -47,6 +47,8 @@ use purrdf_core::DistanceMetric;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, IMPLEMENTATION_ID, INDEX_MEDIA_TYPE, Params, VectorMatrix, profile};
 use purrdf_sparql_eval::knn::{Kernel, Ranked, best, norm};
+use std::fmt::Write as _;
+
 use serde_json::{Value, json};
 
 /// The one kernel both the index and the oracle rank by.
@@ -246,8 +248,11 @@ fn exact_scored(matrix: &VectorMatrix, norms: &[f64], query: usize) -> Vec<Ranke
 /// One run's receipt value plus the two facts the caller asserts on.
 struct Run {
     json: Value,
-    recall: f64,
     missed: bool,
+    /// The exact count of oracle rows the index offered across every query of the run.
+    hits: u64,
+    /// How many rows the run offered in total, so a hit count cannot be read without it.
+    offered: u64,
 }
 
 /// Search one `(fixture, ef, k)` regime exhaustively and return its receipt entry.
@@ -387,8 +392,9 @@ fn run_regime(fixture: &Fixture, index: &HnswIndex, norms: &[f64], ef: usize, k:
     });
     Run {
         json: run,
-        recall,
         missed,
+        hits: hits as u64,
+        offered: offered_total,
     }
 }
 
@@ -468,6 +474,128 @@ fn params(m: usize, m0: usize, ef_construction: usize, ef_search: usize) -> Para
     Params::new(m, m0, ef_construction, ef_search).expect("the regime parameters are valid")
 }
 
+/// The exact recall golden: `(fixture, regime ordinal, k, oracle rows offered, rows offered)`.
+///
+/// Recall is **deterministic** -- it is a pure function of the corpus, the parameters and
+/// the algorithm, and no amount of machine load can move it -- so it is pinned as an exact
+/// equality rather than floored. That is strictly stronger than a threshold: a floor is
+/// silent when a change makes recall BETTER, and a change that improves recall is still a
+/// change to a committed artifact's behaviour. It also matches the discipline this
+/// repository already keeps everywhere else, where a golden is a byte, a lexical or a digest
+/// and "a difference is a real defect, not a tolerance to widen". No threshold is asserted
+/// anywhere in this workspace and none is introduced here.
+///
+/// `hits` counts rows by IDENTITY against the exact oracle's own top-`k`, which is the
+/// strict reading: where several rows sit at exactly the same distance the oracle keeps the
+/// lowest row numbers, and an index that returned equally-near rows with different numbers
+/// is counted as missing them. The fixtures with heavy ties are therefore pessimistic here
+/// by construction, and deliberately so -- the alternative is a metric that cannot see a
+/// tie-break regression.
+///
+/// `offered` sits beside every hit count so no entry can be read without it. A hit count
+/// alone is unfalsifiable: 0 of 0 and 64 of 64 are both "no misses".
+///
+/// To re-pin after a deliberate change, run this test; the failure prints the whole
+/// measured table in this exact form.
+const RECALL_GOLDEN: [(&str, usize, usize, u64, u64); 96] = [
+    ("uniform-64x8", 0, 1, 49, 64),
+    ("uniform-64x8", 0, 5, 62, 64),
+    ("uniform-64x8", 0, 10, 64, 64),
+    ("uniform-64x8", 1, 1, 59, 64),
+    ("uniform-64x8", 1, 5, 244, 256),
+    ("uniform-64x8", 1, 10, 256, 256),
+    ("uniform-64x8", 2, 1, 63, 64),
+    ("uniform-64x8", 2, 5, 314, 320),
+    ("uniform-64x8", 2, 10, 624, 640),
+    ("uniform-64x8", 3, 1, 13, 64),
+    ("uniform-64x8", 3, 5, 46, 64),
+    ("uniform-64x8", 3, 10, 59, 64),
+    ("equidistant-16x16", 0, 1, 15, 16),
+    ("equidistant-16x16", 0, 5, 16, 16),
+    ("equidistant-16x16", 0, 10, 16, 16),
+    ("equidistant-16x16", 1, 1, 15, 16),
+    ("equidistant-16x16", 1, 5, 64, 64),
+    ("equidistant-16x16", 1, 10, 64, 64),
+    ("equidistant-16x16", 2, 1, 16, 16),
+    ("equidistant-16x16", 2, 5, 80, 80),
+    ("equidistant-16x16", 2, 10, 160, 160),
+    ("equidistant-16x16", 3, 1, 6, 16),
+    ("equidistant-16x16", 3, 5, 16, 16),
+    ("equidistant-16x16", 3, 10, 16, 16),
+    ("duplicates-32x8", 0, 1, 32, 32),
+    ("duplicates-32x8", 0, 5, 32, 32),
+    ("duplicates-32x8", 0, 10, 32, 32),
+    ("duplicates-32x8", 1, 1, 32, 32),
+    ("duplicates-32x8", 1, 5, 128, 128),
+    ("duplicates-32x8", 1, 10, 128, 128),
+    ("duplicates-32x8", 2, 1, 32, 32),
+    ("duplicates-32x8", 2, 5, 160, 160),
+    ("duplicates-32x8", 2, 10, 320, 320),
+    ("duplicates-32x8", 3, 1, 0, 32),
+    ("duplicates-32x8", 3, 5, 16, 32),
+    ("duplicates-32x8", 3, 10, 32, 32),
+    ("clusters-64x8", 0, 1, 53, 64),
+    ("clusters-64x8", 0, 5, 64, 64),
+    ("clusters-64x8", 0, 10, 64, 64),
+    ("clusters-64x8", 1, 1, 63, 64),
+    ("clusters-64x8", 1, 5, 254, 256),
+    ("clusters-64x8", 1, 10, 256, 256),
+    ("clusters-64x8", 2, 1, 64, 64),
+    ("clusters-64x8", 2, 5, 320, 320),
+    ("clusters-64x8", 2, 10, 640, 640),
+    ("clusters-64x8", 3, 1, 15, 64),
+    ("clusters-64x8", 3, 5, 44, 64),
+    ("clusters-64x8", 3, 10, 50, 64),
+    ("hub-48x4", 0, 1, 46, 48),
+    ("hub-48x4", 0, 5, 48, 48),
+    ("hub-48x4", 0, 10, 48, 48),
+    ("hub-48x4", 1, 1, 48, 48),
+    ("hub-48x4", 1, 5, 191, 192),
+    ("hub-48x4", 1, 10, 192, 192),
+    ("hub-48x4", 2, 1, 48, 48),
+    ("hub-48x4", 2, 5, 240, 240),
+    ("hub-48x4", 2, 10, 480, 480),
+    ("hub-48x4", 3, 1, 16, 48),
+    ("hub-48x4", 3, 5, 39, 48),
+    ("hub-48x4", 3, 10, 43, 48),
+    ("near-ties-32x4", 0, 1, 15, 32),
+    ("near-ties-32x4", 0, 5, 22, 32),
+    ("near-ties-32x4", 0, 10, 26, 32),
+    ("near-ties-32x4", 1, 1, 27, 32),
+    ("near-ties-32x4", 1, 5, 118, 128),
+    ("near-ties-32x4", 1, 10, 128, 128),
+    ("near-ties-32x4", 2, 1, 32, 32),
+    ("near-ties-32x4", 2, 5, 159, 160),
+    ("near-ties-32x4", 2, 10, 314, 320),
+    ("near-ties-32x4", 3, 1, 10, 32),
+    ("near-ties-32x4", 3, 5, 24, 32),
+    ("near-ties-32x4", 3, 10, 26, 32),
+    ("singular-16x4", 0, 1, 16, 16),
+    ("singular-16x4", 0, 5, 16, 16),
+    ("singular-16x4", 0, 10, 16, 16),
+    ("singular-16x4", 1, 1, 16, 16),
+    ("singular-16x4", 1, 5, 64, 64),
+    ("singular-16x4", 1, 10, 64, 64),
+    ("singular-16x4", 2, 1, 16, 16),
+    ("singular-16x4", 2, 5, 80, 80),
+    ("singular-16x4", 2, 10, 160, 160),
+    ("singular-16x4", 3, 1, 0, 16),
+    ("singular-16x4", 3, 5, 16, 16),
+    ("singular-16x4", 3, 10, 16, 16),
+    ("boundary-1d-16x1", 0, 1, 16, 16),
+    ("boundary-1d-16x1", 0, 5, 16, 16),
+    ("boundary-1d-16x1", 0, 10, 16, 16),
+    ("boundary-1d-16x1", 1, 1, 16, 16),
+    ("boundary-1d-16x1", 1, 5, 64, 64),
+    ("boundary-1d-16x1", 1, 10, 64, 64),
+    ("boundary-1d-16x1", 2, 1, 16, 16),
+    ("boundary-1d-16x1", 2, 5, 80, 80),
+    ("boundary-1d-16x1", 2, 10, 160, 160),
+    ("boundary-1d-16x1", 3, 1, 12, 16),
+    ("boundary-1d-16x1", 3, 5, 16, 16),
+    ("boundary-1d-16x1", 3, 10, 16, 16),
+];
+
 /// The gate: the whole family, every regime, every result against the exact oracle.
 #[test]
 fn every_result_is_compared_to_the_exact_oracle() {
@@ -481,10 +609,11 @@ fn every_result_is_compared_to_the_exact_oracle() {
     let ks = [1_usize, 5, 10];
     let mut runs = Vec::new();
     let mut missed_anywhere = false;
+    let mut measured: Vec<(&str, usize, usize, u64, u64)> = Vec::new();
 
     for fixture in &fixtures {
         let norms = norms_of(&fixture.matrix);
-        for &regime in &regimes {
+        for (ordinal, &regime) in regimes.iter().enumerate() {
             let index = HnswIndex::build(fixture.matrix.clone(), &METRIC, regime)
                 .expect("the fixture builds");
             assert!(
@@ -494,16 +623,30 @@ fn every_result_is_compared_to_the_exact_oracle() {
             );
             for &k in &ks {
                 let run = run_regime(fixture, &index, &norms, regime.ef_search(), k);
-                assert!(
-                    (0.0..=1.0).contains(&run.recall),
-                    "{}: recall is a fraction, got {}",
-                    fixture.name,
-                    run.recall
-                );
+                measured.push((fixture.name, ordinal, k, run.hits, run.offered));
                 missed_anywhere |= run.missed;
                 runs.push(run.json);
             }
         }
+    }
+
+    assert_eq!(
+        measured.len(),
+        RECALL_GOLDEN.len(),
+        "the gate must grade exactly as many regimes as it pins"
+    );
+    if measured.as_slice() != RECALL_GOLDEN.as_slice() {
+        let mut report = String::from(
+            "the measured recall table does not match the pinned golden.\n\nRecall is \
+             deterministic, so a difference here is a real behaviour change, never a \
+             tolerance to widen. If the change was deliberate, re-pin RECALL_GOLDEN with \
+             the table below and say in the commit WHICH rows moved and why.\n\n",
+        );
+        for (actual, expected) in measured.iter().zip(RECALL_GOLDEN.iter()) {
+            let mark = if actual == expected { ' ' } else { '*' };
+            let _ = writeln!(report, "{mark} {actual:?},");
+        }
+        panic!("{report}");
     }
 
     let path = emit("conformance-gate", &receipt("conformance-gate", &runs));
