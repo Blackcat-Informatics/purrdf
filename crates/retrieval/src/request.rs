@@ -29,13 +29,17 @@ pub enum Metric {
 /// One term of a retrieval request.
 ///
 /// The enum is closed: a request term is one of these shapes, and a producer
-/// that accepts none of them is not reached by that term. `Eq` is implemented
-/// by hand because the vector arm carries `f32`: two embeddings are equal iff
-/// their bit patterns are equal, which is the identity a plan's canonical
-/// encoding uses. Callers must not place a NaN in an embedding; the canonical
-/// encoding preserves any bit pattern, so a NaN would only make `PartialEq`
-/// disagree with reflexivity, never corrupt the encoding.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// that accepts none of them is not reached by that term. `PartialEq` (and
+/// therefore `Eq`) is implemented by hand because the vector arm carries
+/// `f32`: two embeddings are equal iff their bit patterns are equal (compared
+/// via [`f32::to_bits`]), which is the identity [`canonical`](crate::canonical)
+/// uses to encode them. Bit-pattern equality means `0.0f32` and `-0.0f32` are
+/// distinct (their bits differ) and a `NaN` embedding equals itself
+/// (`to_bits()` is a total, reflexive function even though `f32`'s `PartialOrd`
+/// is not), so this type's `PartialEq` is a genuine equivalence relation and
+/// `Eq` holds for every value, including deserialized or otherwise untrusted
+/// ones.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RequestTerm {
     /// A lexical (full-text) term.
     Lexical {
@@ -70,6 +74,80 @@ pub enum RequestTerm {
         /// The seed term.
         entity: Term,
     },
+}
+
+impl PartialEq for RequestTerm {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Lexical {
+                    text: left_text,
+                    language: left_language,
+                    predicate: left_predicate,
+                },
+                Self::Lexical {
+                    text: right_text,
+                    language: right_language,
+                    predicate: right_predicate,
+                },
+            ) => {
+                left_text == right_text
+                    && left_language == right_language
+                    && left_predicate == right_predicate
+            }
+            (
+                Self::Vector {
+                    embedding: left_embedding,
+                    metric: left_metric,
+                    index_hint: left_index_hint,
+                },
+                Self::Vector {
+                    embedding: right_embedding,
+                    metric: right_metric,
+                    index_hint: right_index_hint,
+                },
+            ) => {
+                left_metric == right_metric
+                    && left_index_hint == right_index_hint
+                    && left_embedding.len() == right_embedding.len()
+                    && left_embedding
+                        .iter()
+                        .zip(right_embedding)
+                        .all(|(left, right)| left.to_bits() == right.to_bits())
+            }
+            (
+                Self::Spatial {
+                    geometry: left_geometry,
+                    predicate: left_predicate,
+                    max_distance: left_max_distance,
+                },
+                Self::Spatial {
+                    geometry: right_geometry,
+                    predicate: right_predicate,
+                    max_distance: right_max_distance,
+                },
+            ) => {
+                left_geometry == right_geometry
+                    && left_predicate == right_predicate
+                    && left_max_distance == right_max_distance
+            }
+            (
+                Self::EntitySeed {
+                    entity: left_entity,
+                },
+                Self::EntitySeed {
+                    entity: right_entity,
+                },
+            ) => left_entity == right_entity,
+            (
+                Self::Lexical { .. }
+                | Self::Vector { .. }
+                | Self::Spatial { .. }
+                | Self::EntitySeed { .. },
+                _,
+            ) => false,
+        }
+    }
 }
 
 impl Eq for RequestTerm {}

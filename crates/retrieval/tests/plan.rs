@@ -233,6 +233,90 @@ fn truncated_canonical_bytes_are_refused() {
     ));
 }
 
+#[test]
+fn signed_zero_embeddings_are_distinct() {
+    let positive = RequestTerm::Vector {
+        embedding: vec![0.0, 1.0],
+        metric: Metric::Cosine,
+        index_hint: None,
+    };
+    let negative = RequestTerm::Vector {
+        embedding: vec![-0.0, 1.0],
+        metric: Metric::Cosine,
+        index_hint: None,
+    };
+    assert_ne!(
+        positive, negative,
+        "0.0 and -0.0 have different bit patterns"
+    );
+
+    let mut plan_positive = baseline();
+    plan_positive.request_terms = vec![positive];
+    let mut plan_negative = baseline();
+    plan_negative.request_terms = vec![negative];
+    assert_ne!(
+        plan_positive.id(),
+        plan_negative.id(),
+        "equality and canonical identity must agree"
+    );
+}
+
+#[test]
+fn nan_embeddings_are_reflexive() {
+    let term = RequestTerm::Vector {
+        embedding: vec![f32::NAN, 1.0],
+        metric: Metric::Cosine,
+        index_hint: None,
+    };
+    assert_eq!(term, term.clone(), "a NaN embedding equals its own clone");
+
+    let mut plan = baseline();
+    plan.request_terms = vec![term.clone()];
+    let mut plan_clone = baseline();
+    plan_clone.request_terms = vec![term];
+    assert_eq!(plan.id(), plan_clone.id());
+}
+
+#[test]
+fn identical_embeddings_are_equal() {
+    let left = RequestTerm::Vector {
+        embedding: vec![0.25, -1.5, 3.0],
+        metric: Metric::Cosine,
+        index_hint: Some("hint".to_owned()),
+    };
+    let right = RequestTerm::Vector {
+        embedding: vec![0.25, -1.5, 3.0],
+        metric: Metric::Cosine,
+        index_hint: Some("hint".to_owned()),
+    };
+    assert_eq!(left, right, "ordinary finite embeddings remain equal");
+
+    let mut plan_left = baseline();
+    plan_left.request_terms = vec![left];
+    let mut plan_right = baseline();
+    plan_right.request_terms = vec![right];
+    assert_eq!(plan_left.id(), plan_right.id());
+}
+
+#[test]
+fn equal_lexical_plans_have_equal_canonical_bytes() {
+    let mut left = baseline();
+    left.request_terms = vec![RequestTerm::Lexical {
+        text: "quick brown".to_owned(),
+        language: Some("en".to_owned()),
+        predicate: Some(iri("http://example.org/p")),
+    }];
+    let mut right = baseline();
+    right.request_terms = vec![RequestTerm::Lexical {
+        text: "quick brown".to_owned(),
+        language: Some("en".to_owned()),
+        predicate: Some(iri("http://example.org/p")),
+    }];
+    assert_eq!(left, right);
+    assert_eq!(left.canonical_bytes(), right.canonical_bytes());
+    assert_eq!(left.id(), right.id());
+}
+
 /// The grep gate: no function pointer may appear anywhere in this crate's
 /// sources. A function pointer cannot be serialized, compared for equality, or
 /// trusted to describe accepted request language, so the plan is pure data and
