@@ -56,6 +56,7 @@ pub mod build;
 pub mod entail;
 pub mod model;
 pub mod path_syntax;
+pub mod product;
 pub mod regime;
 pub mod rules;
 pub mod shacl;
@@ -66,6 +67,10 @@ pub use build::{
 };
 pub use entail::entail_to_ntriples_string;
 pub use model::{Level, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
+pub use product::{
+    ShapesProductRefusal, admit_shapes_product, certify_shapes_product, explain_shapes_product,
+    pack_shapes_product, prepared_to_product, rebuild_shapes_product, validate_with_shapes_product,
+};
 pub use regime::{
     ABSENT_DL_PROOF, DL_PROOF_BANNER, DL_PROOF_CHECK_BANNER, DL_PROOF_GOLDEN_VECTORS,
     DlProofVector, INCONSISTENT_DOCUMENT, ImportList, PROGRAM_REGIME_NAMES, PROOF_SERVICE_NAMES,

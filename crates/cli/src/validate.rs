@@ -57,6 +57,28 @@
 //! means nothing. This lane carries that through unflattened: on a trip stdout gets NOTHING,
 //! stderr gets the governor receipt, and the exit code is 3.
 //!
+//! # `--shapes-product` is the SAME shapes input, restored rather than parsed
+//!
+//! The shapes side has two spellings and one meaning. `--shapes` reads a document and
+//! parses it; `--shapes-product` restores a preparation `purrdf shacl pack` already made of
+//! one. Everything downstream is identical — [`ShapesPlan`] resolves to a `&Shapes` either
+//! way, and the engine call below it does not branch — which is the only arrangement under
+//! which a cached preparation is allowed to exist: a product that reached a different
+//! verdict than its own source document would be a cache that silently changes answers.
+//!
+//! Those bytes are UNTRUSTED. Nothing in a file on disk is evidence of its own provenance,
+//! so restoring one is an ADMISSION: the container framing, every section digest and the
+//! whole-container digest, then the product's stage id, profile and complete input binding,
+//! all checked before a focus node is resolved. A refusal names its DIMENSION on stderr as
+//! a `shacl dimension <label>` line, because `stage-id` (re-pack), `container-digest` (the
+//! file is corrupt) and `function-registry` (your configuration, not the product) are three
+//! different actions and one exit code cannot carry the difference.
+//!
+//! `--shapes-from`, `--shapes-graph` and `--import` all configure a PARSE, and this route
+//! performs none: the product carries its own base, prefix map and `sh:shapesGraph` IRI,
+//! bound by its identity. They are refused by name rather than accepted and ignored — see
+//! [`refuse_parse_flags_against_a_product`].
+//!
 //! # Reading the two graphs
 //!
 //! The DATA graph is read through the pipeline's own format resolution into the frozen IR —
@@ -130,8 +152,12 @@ pub(crate) struct ValidateOptions<'a> {
     pub(crate) input: &'a str,
     /// The report path `OUT`, or `-` for stdout.
     pub(crate) output: &'a str,
-    /// `--shapes`: the SHACL shapes graph, or `-`.
-    pub(crate) shapes: &'a str,
+    /// `--shapes`: the SHACL shapes graph, or `-`. `None` exactly when
+    /// [`Self::shapes_product`] is `Some` — clap makes the two mutually required.
+    pub(crate) shapes: Option<&'a str>,
+    /// `--shapes-product`: a prepared product to RESTORE instead of parsing a shapes
+    /// document. See [`load_prepared`].
+    pub(crate) shapes_product: Option<&'a str>,
     /// `--shapes-from`: the shapes-graph format override.
     pub(crate) shapes_from: Option<CliRdfFormat>,
     /// `--shapes-graph`: the IRI the shapes graph is exposed under to SHACL-SPARQL paths,
@@ -154,6 +180,36 @@ pub(crate) struct ValidateOptions<'a> {
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
 }
 
+/// The parsed shapes this run validates against, and the owner keeping them alive.
+///
+/// Two arms because there are two spellings of one input — a shapes DOCUMENT to parse or a
+/// prepared PRODUCT to restore — and exactly one thing the engine wants from either: a
+/// `&Shapes`. Making that the enum's only accessor is what keeps the rest of this lane from
+/// branching: everything after [`load_shapes_source`] reads the same borrow whichever route
+/// produced it, so the two routes cannot diverge on anything downstream of the shapes.
+enum ShapesSource {
+    /// A shapes document parsed on this run (`--shapes`).
+    ///
+    /// Boxed because a `Shapes` is two orders of magnitude larger than a
+    /// `PreparedShapes` (which is a pair of `Arc`s), and an enum sized to the larger
+    /// arm would be moved around at that size on both routes.
+    Parsed(Box<Shapes>),
+    /// A preparation restored from a prepared product (`--shapes-product`). The
+    /// preparation owns its shapes; the product bytes it came from are already released,
+    /// because `admit` hands back owned values rather than borrows of the container.
+    Restored(engine::PreparedShapes),
+}
+
+impl ShapesSource {
+    /// The shapes to validate against.
+    fn shapes(&self) -> &Shapes {
+        match self {
+            Self::Parsed(shapes) => shapes,
+            Self::Restored(prepared) => prepared.shapes(),
+        }
+    }
+}
+
 /// Run the `validate` subcommand.
 pub(crate) fn run(
     options: &ValidateOptions<'_>,
@@ -161,6 +217,7 @@ pub(crate) fn run(
 ) -> Result<CliOutcome, CliError> {
     refuse_two_stdins(options)?;
     refuse_inapplicable_flags(options, ledger_target)?;
+    refuse_parse_flags_against_a_product(options)?;
 
     let data_format = format::resolve(options.from, options.input)?;
     // The DATA parse is the only leg `--base` has here: the shapes graph resolves against
@@ -171,20 +228,18 @@ pub(crate) fn run(
         options.base,
         &[format::BaseUse::parse(data_format, "the --from data graph")],
     )?;
-    let shapes_format = format::resolve(options.shapes_from, options.shapes)?;
-    // The shapes document's base is derived ONCE and spent twice: the document parses under
-    // it, and `--shapes-graph` resolves against it. Deriving it separately per consumer is
-    // how the flag would come to name a graph the shapes document cannot.
-    let shapes_base = shapes_document_base(options.shapes, shapes_format)?;
-    // Decided BEFORE either document is read: a `--shapes-graph` that names no graph is a
-    // malformed request, and it should fail against the command line rather than after the
-    // data has been parsed and validated.
-    let shapes_graph = resolve_shapes_graph(options.shapes_graph, shapes_base.as_deref())?;
+
+    // Every DECISION about the shapes side is made here, before a byte of either document
+    // is read: a `--shapes-graph` that names no graph is a malformed request and should
+    // fail against the command line rather than after the data has been parsed and
+    // validated.
+    let plan = ShapesPlan::decide(options)?;
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
-    let shapes = load_shapes(options, shapes_format, shapes_base.as_deref())?;
+    let source = plan.load(options)?;
+    let shapes = source.shapes();
 
-    let Some(report) = validate(&data, &shapes, options, shapes_graph.as_deref())? else {
+    let Some(report) = validate(&data, shapes, options, plan.shapes_graph())? else {
         // A tripped governor: the receipt is already on stderr and there is no report to
         // write, by the engine's own design. Exit 3 carries that to the shell.
         return Ok(CliOutcome::BudgetExhausted);
@@ -299,19 +354,125 @@ fn emit(
 /// the flag and the document agreeing about what a relative IRI denotes.
 fn load_shapes(
     options: &ValidateOptions<'_>,
+    path: &str,
     format: SourceFormat,
     base: Option<&str>,
 ) -> Result<Shapes, CliError> {
-    let root = read_shapes_document(options.shapes, format, base, "--shapes")?;
+    let root = read_shapes_document(path, format, base, "--shapes")?;
     let folded = fold_shapes_imports(root, options)?;
-    purrdf::shapes::shapes::from_dataset_with_prefixes(&folded.dataset, &folded.prefixes).map_err(
-        |error| {
-            CliError::Runtime(format!(
-                "--shapes {shapes}: {error}",
-                shapes = options.shapes
-            ))
-        },
-    )
+    purrdf::shapes::shapes::from_dataset_with_prefixes(&folded.dataset, &folded.prefixes)
+        .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))
+}
+
+/// Everything DECIDED about the shapes side of this run, before either document is read.
+///
+/// The two arms are the two spellings of one input, and they carry different decisions
+/// because they describe different work. A document has a syntax to resolve, a base to
+/// derive and a `--shapes-graph` to resolve against that base; a product has none of those
+/// — it carries the base, the prefix map and the shapes-graph IRI it was PREPARED under,
+/// which is exactly why [`refuse_parse_flags_against_a_product`] refuses the three flags
+/// that would otherwise look like they applied.
+enum ShapesPlan<'a> {
+    /// `--shapes`: a document to read and parse.
+    Document {
+        /// The document path, or `-`.
+        path: &'a str,
+        /// The syntax it is read as.
+        format: SourceFormat,
+        /// The base it parses under, and that `--shapes-graph` resolved against.
+        base: Option<String>,
+        /// `--shapes-graph`, resolved to an absolute IRI.
+        shapes_graph: Option<String>,
+    },
+    /// `--shapes-product`: a prepared product to restore.
+    Product {
+        /// The product path, or `-`.
+        path: &'a str,
+    },
+}
+
+impl<'a> ShapesPlan<'a> {
+    /// Decide the shapes side from the command line, reading no document.
+    ///
+    /// # Errors
+    ///
+    /// Any usage error in `--shapes-from`, `--shapes-graph` or the shapes path.
+    fn decide(options: &ValidateOptions<'a>) -> Result<Self, CliError> {
+        if let Some(path) = options.shapes_product {
+            return Ok(Self::Product { path });
+        }
+        // clap makes exactly one of the two required, so the `else` is unreachable from a
+        // command line; it is reported rather than unwrapped because an unreachable panic
+        // in a CLI is a crash report.
+        let Some(path) = options.shapes else {
+            return Err(CliError::Usage(
+                "one of --shapes (a SHACL shapes document) or --shapes-product (a prepared \
+                 product written by `purrdf shacl pack`) is required"
+                    .to_owned(),
+            ));
+        };
+        let format = format::resolve(options.shapes_from, path)?;
+        // The shapes document's base is derived ONCE and spent twice: the document parses
+        // under it, and `--shapes-graph` resolves against it. Deriving it separately per
+        // consumer is how the flag would come to name a graph the shapes document cannot.
+        let base = shapes_document_base(path, format)?;
+        let shapes_graph = resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
+        Ok(Self::Document {
+            path,
+            format,
+            base,
+            shapes_graph,
+        })
+    }
+
+    /// The shapes-graph IRI to expose to SHACL-SPARQL paths, or `None`.
+    ///
+    /// `None` for a product, and that is not a dropped flag: `--shapes-graph` is refused
+    /// against `--shapes-product`, and the engine still honours the `sh:shapesGraph` the
+    /// product itself recorded — which is what the restored `Shapes` carries.
+    fn shapes_graph(&self) -> Option<&str> {
+        match self {
+            Self::Document { shapes_graph, .. } => shapes_graph.as_deref(),
+            Self::Product { .. } => None,
+        }
+    }
+
+    /// Read whichever input this plan names, into the shapes the engine validates with.
+    ///
+    /// # The product arm is an ADMISSION, not a load
+    ///
+    /// The bytes are acquired through the sealed immutable-input authority and handed to
+    /// [`purrdf_validate::admit_shapes_product`], which verifies the container's framing
+    /// and every section digest, then checks the product's stage id, profile and full
+    /// input binding BEFORE any of it reaches a validator. A refusal names its
+    /// dimension — see [`crate::shacl::admission_error`] — because "these bytes are
+    /// corrupt", "this product is from another build" and "your configuration differs
+    /// from the one it was prepared against" are three different actions, and the flag
+    /// that flattened them into one message would have made the typed boundary
+    /// pointless at exactly the process edge an operator meets it.
+    ///
+    /// # Errors
+    ///
+    /// Any read, parse, import-resolution or admission failure.
+    fn load(&self, options: &ValidateOptions<'_>) -> Result<ShapesSource, CliError> {
+        match *self {
+            Self::Document {
+                path,
+                format,
+                ref base,
+                ..
+            } => load_shapes(options, path, format, base.as_deref())
+                .map(|shapes| ShapesSource::Parsed(Box::new(shapes))),
+            Self::Product { path } => {
+                let owner = source::acquire_product_input(path)?;
+                purrdf_validate::admit_shapes_product(owner.as_bytes())
+                    .map(ShapesSource::Restored)
+                    .map_err(|error| {
+                        crate::shacl::admission_error(&format!("--shapes-product {path}"), &error)
+                    })
+            }
+        }
+    }
 }
 
 /// A shapes document READ but not yet parsed into [`Shapes`]: the frozen graph plus the
@@ -627,11 +788,15 @@ fn shapes_graph_refusal(raw: &str, error: &purrdf_iri::IriError) -> CliError {
 
 /// Refuse a command line that reads standard input twice.
 ///
-/// The data graph and the shapes graph may each be `-`, and at most ONE of them may be: a
+/// The data graph and the shapes input — whichever spelling of it — may each be `-`, and at
+/// most ONE of them may be: a
 /// process has one standard input, so two documents naming it would each get part of one
 /// stream. Refused naming both, exactly as `entails` refuses it, rather than mis-read.
 fn refuse_two_stdins(options: &ValidateOptions<'_>) -> Result<(), CliError> {
-    if options.input == "-" && options.shapes == "-" {
+    if options.input != "-" {
+        return Ok(());
+    }
+    if options.shapes == Some("-") {
         return Err(CliError::Usage(
             "IN and --shapes both read standard input, and there is only one: a process has a \
              single stdin stream, so the data graph and the shapes graph would each get part \
@@ -639,7 +804,66 @@ fn refuse_two_stdins(options: &ValidateOptions<'_>) -> Result<(), CliError> {
                 .to_owned(),
         ));
     }
+    if options.shapes_product == Some("-") {
+        return Err(CliError::Usage(
+            "IN and --shapes-product both read standard input, and there is only one: a \
+             process has a single stdin stream, so the data graph and the prepared product \
+             would each get part of one byte stream. Give one of them a path"
+                .to_owned(),
+        ));
+    }
     Ok(())
+}
+
+/// Refuse the shapes-PARSE flags against `--shapes-product`.
+///
+/// `--shapes-from`, `--shapes-graph` and `--import` all configure a parse of a shapes
+/// DOCUMENT, and `--shapes-product` performs none: the product carries the compiled model
+/// and, in its own authenticated parse provenance, the base, the prefix map and the
+/// `sh:shapesGraph` IRI it was prepared under. Accepting any of the three and quietly
+/// ignoring it is the silent no-op this pipeline refuses everywhere else, and here it would
+/// be worse than usual — an operator who passed `--shapes-graph` and got a validation back
+/// would reasonably believe the shapes graph was exposed under the IRI they named.
+///
+/// `--import` is refused for the additional reason that folding an import closure changes
+/// WHICH shapes graph is validated against. The product's identity binds the graph it was
+/// compiled from; there is no honest way to add documents to it after the fact, so the
+/// remedy is to fold the closure at `shacl pack` time (or to validate from `--shapes`).
+fn refuse_parse_flags_against_a_product(options: &ValidateOptions<'_>) -> Result<(), CliError> {
+    let Some(product) = options.shapes_product else {
+        return Ok(());
+    };
+    let refused = if options.shapes_from.is_some() {
+        Some((
+            "--shapes-from",
+            "names the SYNTAX a shapes document is read as, and a product is not a document: \
+             it carries an already-compiled model in a digest-chained container of its own",
+        ))
+    } else if options.shapes_graph.is_some() {
+        Some((
+            "--shapes-graph",
+            "overrides the `sh:shapesGraph` a shapes DOCUMENT declares, and this product \
+             already recorded the IRI it was prepared under — which its identity binds, so \
+             it cannot be changed without re-preparing. Pass the IRI to `purrdf shacl pack` \
+             instead",
+        ))
+    } else if !options.imports.is_empty() {
+        Some((
+            "--import",
+            "folds an `owl:imports` closure into a shapes DOCUMENT before it is parsed, and \
+             this product's identity binds the shapes graph it was actually compiled from. \
+             Fold the closure when you run `purrdf shacl pack`",
+        ))
+    } else {
+        None
+    };
+    match refused {
+        None => Ok(()),
+        Some((flag, why)) => Err(CliError::Usage(format!(
+            "{flag} {why}. Drop it, or validate from `--shapes` instead of \
+             `--shapes-product {product}`"
+        ))),
+    }
 }
 
 /// Refuse the flags that name something this `--format` does not produce.

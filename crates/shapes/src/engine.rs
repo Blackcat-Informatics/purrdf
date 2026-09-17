@@ -809,11 +809,25 @@ impl PreparedShapes {
 
     /// The parsed shapes this preparation analyzed.
     ///
-    /// `pub(crate)` for the same reason [`Self::class_catalog`] is: the prepared
-    /// product writer (`crate::product`) has to read the very shapes it is about
-    /// to encode, and a public accessor would hand callers a second, aliasable
-    /// spelling of a value they already own.
-    pub(crate) fn shapes(&self) -> &Arc<Shapes> {
+    /// Public because of where a preparation can now come FROM. A caller that
+    /// built one with [`Self::new`] already owns the `Arc<Shapes>` it passed in,
+    /// so for that caller this is a second spelling of a value they hold — which
+    /// is why it used to be `pub(crate)`. A caller that obtained one from
+    /// [`ShapesProductView::admit`] holds no such value: the shapes graph was
+    /// restored from bytes inside the codec and this accessor is its ONLY
+    /// spelling. Without it an admitted product could be restored and then not
+    /// handed to [`validate_dataset_with_shapes_graph`] or
+    /// [`validate_dataset_with_governors`], which is the entire reason the product
+    /// exists.
+    ///
+    /// The borrow is immutable and `Shapes` is immutable, so this hands out no
+    /// authority to change a preparation after the fact.
+    /// [`Self::class_catalog`] stays `pub(crate)`: it is a PURE derivation of these
+    /// shapes, so it really is re-derivable by anyone holding this.
+    ///
+    /// [`ShapesProductView::admit`]: crate::product::ShapesProductView::admit
+    #[must_use]
+    pub fn shapes(&self) -> &Arc<Shapes> {
         &self.shapes
     }
 

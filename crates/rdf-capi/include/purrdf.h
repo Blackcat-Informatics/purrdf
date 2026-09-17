@@ -140,6 +140,15 @@ enum PurrdfStatus
      */
     PURRDF_STATUS_GTS_ERROR = 10,
     /**
+     * The prepared-shapes-product admission boundary refused. The error carries a
+     * named DIMENSION as well as a message — read it with
+     * `purrdf_shapes_product_error_dimension`, because "these bytes are corrupt",
+     * "this product is from another build" and "your configuration is not the one it
+     * was prepared against" are three different actions and this one status cannot
+     * distinguish them.
+     */
+    PURRDF_STATUS_SHAPES_PRODUCT_ERROR = 11,
+    /**
      * A panic was caught at the FFI boundary (should never reach the caller in
      * normal operation).
      */
@@ -587,7 +596,8 @@ typedef struct PurrdfCursor PurrdfCursor;
 typedef struct PurrdfDataset PurrdfDataset;
 
 /**
- * An owned error: a status code plus a NUL-terminated message. Opaque to C.
+ * An owned error: a status code plus a NUL-terminated message, and — for the one
+ * boundary that has one — a named DIMENSION. Opaque to C.
  */
 typedef struct PurrdfError PurrdfError;
 
@@ -2477,6 +2487,135 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const char *data_nt,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfError **out_error);
+
+/**
+ * Compile a Turtle shapes graph into a PREPARED PRODUCT and write its bytes to
+ * `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * The parse-and-analyze work `purrdf_shacl_validate_to_sarif` performs on every call,
+ * done once and written to a container a host can cache on disk or ship between
+ * processes. Byte-deterministic: no clock, no randomness and no hash-iteration order
+ * reach the writer, so two calls over the same shapes graph and base produce identical
+ * bytes and a content-addressed cache key over them is stable.
+ *
+ * `shapes_base_iri` carries the same meaning it does on
+ * `purrdf_shacl_validate_to_sarif` — the shapes document's own base IRI, nullable —
+ * and is RECORDED in the product, so a restore resolves the same relative references
+ * without the document.
+ *
+ * Returns `PURRDF_STATUS_SHAPES_PRODUCT_ERROR` when the shapes graph declares something the
+ * product format cannot carry; the error's dimension is then readable with
+ * `purrdf_shapes_product_error_dimension`, and is NULL when the shapes document simply
+ * did not parse (no product existed to name a dimension of).
+ *
+ * # Safety
+ * `shapes_ttl` must be a non-null, NUL-terminated C string; `shapes_base_iri` must be
+ * null or a NUL-terminated C string; `out_buffer` must be a writable pointer;
+ * `out_error` must be null or writable.
+ */
+int32_t purrdf_shapes_product_encode(const char *shapes_ttl,
+                                     const char *shapes_base_iri,
+                                     PurrdfBuffer **out_buffer,
+                                     PurrdfError **out_error);
+
+/**
+ * OPEN a prepared product — verify its envelope and decode what it says it was
+ * compiled from — and write that description to `*out_buffer` (free with
+ * `purrdf_buffer_free`). Nothing is admitted.
+ *
+ * The description is deterministic UTF-8 `key value` lines: the container format
+ * version, the preparation stage id and whether this build knows it, the identity
+ * digest and every labelled identity component, then the recorded base,
+ * `sh:shapesGraph` IRI and prefix map. It is the identical text the CLI's
+ * `purrdf shacl explain` prints and the WebAssembly host receives.
+ *
+ * This is what makes a named refusal actionable: an admit refused on `prefixes` is
+ * answered by reading which prefix map the product actually carries, rather than
+ * guessing or re-encoding blindly.
+ *
+ * # Safety
+ * `product` must be valid for reads of `product_len` bytes; `out_buffer` must be a
+ * writable pointer; `out_error` must be null or writable.
+ */
+int32_t purrdf_shapes_product_open(const uint8_t *product,
+                                   size_t product_len,
+                                   PurrdfBuffer **out_buffer,
+                                   PurrdfError **out_error);
+
+/**
+ * ADMIT a prepared product, validate `data_nt` (N-Triples) with it, and write the
+ * SARIF 2.1.0 report bytes to `*out_buffer` (free with `purrdf_buffer_free`).
+ *
+ * The point of a product: restore the preparation rather than re-parse the shapes
+ * graph. The verdict is the identical one `purrdf_shacl_validate_to_sarif` reaches
+ * over the shapes document the product was encoded from — the same engine entry point
+ * runs, over the same restored shapes.
+ *
+ * Admission runs first and in full, and the product is restored against the EMPTY
+ * host bindings; see this module's documentation for why a C host cannot supply
+ * others, and why a product that needs them is refused rather than mis-executed.
+ *
+ * A malformed `data_nt` also returns `PURRDF_STATUS_SHAPES_PRODUCT_ERROR`, with a NULL
+ * dimension: the data graph is not a product, so no admission dimension names it, and
+ * borrowing one would claim the product was at fault.
+ *
+ * # Safety
+ * `product` must be valid for reads of `product_len` bytes; `data_nt` must be a
+ * non-null, NUL-terminated C string; `out_buffer` must be a writable pointer;
+ * `out_error` must be null or writable.
+ */
+int32_t purrdf_shapes_product_admit(const uint8_t *product,
+                                    size_t product_len,
+                                    const char *data_nt,
+                                    PurrdfBuffer **out_buffer,
+                                    PurrdfError **out_error);
+
+/**
+ * CERTIFY a prepared product: independently re-derive its shapes dataset's canonical
+ * identity and compare it against the one the product's own binding claims.
+ *
+ * The codec's COLD path, and deliberately unreachable from a restore —
+ * canonicalization is a graph-isomorphism computation over the shapes graph's blank
+ * nodes and can cost more than the shapes parse a product exists to eliminate. Call it
+ * from a build step or a test, never before every validation:
+ * `purrdf_shapes_product_admit` already verifies every section digest and the whole
+ * container.
+ *
+ * There is no out-buffer: the answer is the status. `PURRDF_STATUS_OK` means the product's
+ * dataset canonicalizes to the digest it claims.
+ *
+ * # Safety
+ * `product` must be valid for reads of `product_len` bytes; `out_error` must be null
+ * or writable.
+ */
+int32_t purrdf_shapes_product_certify(const uint8_t *product,
+                                      size_t product_len,
+                                      PurrdfError **out_error);
+
+/**
+ * The prepared-shapes-product admission DIMENSION `err` names, or NULL.
+ *
+ * A borrowed, NUL-terminated string valid until `purrdf_error_free(err)`; the C side
+ * must not free it. It is one of the codec's pinned kebab-case labels — `magic`,
+ * `format-version`, `stage-id`, `profile`, `truncated`, `trailer`, `section-digest`,
+ * `container-digest`, `dataset-identity`, `shapes-graph`, `prefixes`, `base`,
+ * `vocabulary`, `function-registry`, `aggregate-registry`,
+ * `property-function-registry`, `class-catalog`, `unsupported-capability`,
+ * `depth-limit`, `malformed`.
+ *
+ * NULL — never an empty string — when `err` is null, when it is not a product refusal
+ * at all, or when the failure happened before any product existed (a shapes or data
+ * document that did not parse was never admitted). An empty string would be a label a
+ * caller could compare against and believe.
+ *
+ * This is the stable, matchable half of a refusal. Branch on it rather than on
+ * `purrdf_error_message`, whose prose names the fix and may be reworded.
+ *
+ * # Safety
+ * `err` must be null or a pointer returned by a libpurrdf entry point and not yet
+ * freed.
+ */
+const char *purrdf_shapes_product_error_dimension(const PurrdfError *err);
 
 /**
  * Render a single term view to one N-Triples term token (e.g. `<iri>`, `_:b`,

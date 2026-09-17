@@ -797,8 +797,28 @@ pub(crate) enum Command {
     /// the verdict were interleaved into it.
     Validate {
         /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
-        #[arg(long, value_name = "FILE")]
-        shapes: String,
+        /// Exactly one of this and `--shapes-product` is required: they are two spellings of
+        /// the same input, a document to parse or a preparation to restore.
+        #[arg(
+            long,
+            value_name = "FILE",
+            required_unless_present = "shapes_product",
+            conflicts_with = "shapes_product"
+        )]
+        shapes: Option<String>,
+        /// A PREPARED SHACL product `FILE` written by `purrdf shacl pack`, restored instead of
+        /// parsing a shapes document. The product carries its own shapes graph, the base it was
+        /// parsed under, its prefix map and its `sh:shapesGraph` IRI, so `--shapes-from`,
+        /// `--shapes-graph` and `--import` name a parse that does not happen here and are
+        /// refused by name rather than accepted and ignored.
+        ///
+        /// The bytes are UNTRUSTED: the product's stage id, profile and full input binding are
+        /// checked before any of it reaches the validator, and a mismatch is refused on a named
+        /// dimension (written to stderr as `shacl dimension <label>`) rather than validated
+        /// under the wrong configuration. `purrdf shacl explain` reads that binding back
+        /// without admitting it.
+        #[arg(long = "shapes-product", value_name = "FILE")]
+        shapes_product: Option<String>,
         /// Shapes-graph format override; inferred from the shapes path's extension when
         /// omitted. Turtle is read through `purrdf_shapes::engine::parse_shapes`, the exact
         /// boundary every other host uses, which additionally recovers the shapes DOCUMENT's
@@ -989,6 +1009,20 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: PackCommand,
     },
+    /// Prepared SHACL shapes-product utilities.
+    ///
+    /// A shapes graph is parsed, analyzed and compiled before a single focus node is
+    /// looked at, and that work is identical on every validation of the same document.
+    /// `shacl pack` does it once and writes the result as a prepared product; `validate
+    /// --shapes-product` restores it instead of re-parsing. `verify` and `explain` are the
+    /// admission surface for those bytes — a product that comes back from disk is
+    /// untrusted, and both verbs report a refusal's DIMENSION so a caller can tell a
+    /// corrupt cache from a stale artifact from their own misconfiguration.
+    Shacl {
+        /// The shacl subcommand to run.
+        #[command(subcommand)]
+        command: ShaclCommand,
+    },
 }
 
 /// The `--format` choices `validate` accepts: the nine native RDF syntaxes, which serialize
@@ -1102,6 +1136,63 @@ pub(crate) enum PackCommand {
     /// pack in isolation, without running a conversion or query.
     Verify {
         /// Pack path `IN`, or `-` for stdin.
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+    },
+}
+
+/// The `shacl` subcommands: write a prepared shapes product, corroborate one, and read
+/// back what one says it was compiled from.
+#[derive(Subcommand, Debug)]
+pub(crate) enum ShaclCommand {
+    /// Parse a Turtle shapes graph, prepare it, and write the prepared product.
+    ///
+    /// The product carries the compiled model AND the shapes dataset it was derived from,
+    /// both under the container's per-section SHA-256 and whole-container digest, plus the
+    /// binding of every input it was compiled against: the base, the prefix map, the
+    /// `sh:shapesGraph` IRI, the vocabulary configuration, the function/aggregate/property
+    /// registries and the class catalog. Restoring it under different ones is REFUSED, not
+    /// silently executed against a shapes graph nobody asked about.
+    ///
+    /// Byte-deterministic: two runs over the same document and base produce identical
+    /// bytes — no hash-iteration order, no wall clock and no randomness reach the writer.
+    Pack {
+        /// The Turtle shapes graph `FILE`. Turtle because it is the one syntax carrying a
+        /// `@prefix`/`PREFIX` map recoverable from source text, which is the fallback
+        /// prefix environment every SHACL-AF `sh:select` body resolves against and which
+        /// the product records.
+        #[arg(long, value_name = "FILE", required = true)]
+        shapes: String,
+        /// Base IRI the shapes document's relative IRI references resolve against, RECORDED
+        /// in the product so a restore resolves them identically without the document.
+        /// Omitted, the document's own `file://` retrieval IRI is derived — the same base
+        /// `validate --shapes` parses it under.
+        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+        base: Option<String>,
+        /// Product path `OUT`, or `-` for stdout.
+        #[arg(long, value_name = "OUT", required = true)]
+        out: String,
+    },
+    /// Corroborate a prepared product's shapes dataset against the identity it claims.
+    ///
+    /// The codec's COLD path, and deliberately not reachable from a restore: it
+    /// canonicalizes the shapes graph's blank nodes, which can cost more than the shapes
+    /// parse the product exists to eliminate. Prints the product's identity digest and
+    /// exits 0; a refusal names its dimension on stderr and exits 1.
+    Verify {
+        /// Product path `IN`, or `-` for stdin.
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+    },
+    /// Print what a prepared product says it was compiled from, WITHOUT admitting it.
+    ///
+    /// Deterministic `key value` lines on stdout: the container format version, the
+    /// preparation stage id and whether this build knows it, the identity digest and every
+    /// labelled identity component, and the recorded parse inputs (base, `sh:shapesGraph`
+    /// IRI, prefix map). This is what makes a named refusal actionable — a restore refused
+    /// on `prefixes` is answered by reading which prefix map the product actually carries.
+    Explain {
+        /// Product path `IN`, or `-` for stdin.
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
     },

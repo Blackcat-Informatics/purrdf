@@ -20,6 +20,7 @@
 
 abi-version 0.7.0
 const char *purrdf_error_message(const PurrdfError *err)
+const char *purrdf_shapes_product_error_dimension(const PurrdfError *err)
 int32_t purrdf_abi_version(PurrdfAbiVersion *out)
 int32_t purrdf_buffer_data(const PurrdfBuffer *buf, const uint8_t **out_ptr, size_t *out_len)
 int32_t purrdf_cancellation_cancel(const PurrdfCancellation *cancellation)
@@ -82,6 +83,10 @@ int32_t purrdf_serialize(const PurrdfDataset *dataset, const char *media_type, c
 int32_t purrdf_serialize_jsonld_configured(const PurrdfDataset *dataset, const char *media_type, const char *base_iri, const uint8_t *options_json, size_t options_len, const PurrdfJsonLdContext *context, const char *yaml_schema_url, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl, const char *shapes_base_iri, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_shapes_product_admit(const uint8_t *product, size_t product_len, const char *data_nt, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_shapes_product_certify(const uint8_t *product, size_t product_len, PurrdfError **out_error)
+int32_t purrdf_shapes_product_encode(const char *shapes_ttl, const char *shapes_base_iri, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_shapes_product_open(const uint8_t *product, size_t product_len, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_term_to_ntriples(const PurrdfDataset *dataset, const PurrdfTermView *view, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_to_gts(const PurrdfDataset *dataset, const char *profile, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_update_governed(PurrdfDataset *dataset, const char *request, const char *base_iri, const char *aggregate_namespace, const PurrdfQueryGovernors *governors, int32_t *out_outcome, PurrdfGovernorEvidence *out_evidence, PurrdfError **out_error)

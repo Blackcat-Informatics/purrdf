@@ -1385,4 +1385,80 @@ export function shaclValidateToSarif(
   dataNt: string,
   shapesBase?: string,
 ): string;
+
+/**
+ * A refusal from the prepared-shapes-product admission boundary, thrown by every
+ * `shaclProduct*` function and by `shaclPackProduct`.
+ *
+ * `dimension` is the stable, matchable half — one of the codec's pinned kebab-case
+ * labels — and `undefined` when the failure happened before any product existed (a
+ * shapes or data document that did not parse was never admitted). Branch on it:
+ * `stage-id` means re-pack, `container-digest` means the bytes are corrupt in place,
+ * and `function-registry` means the caller's own configuration differs from the one
+ * the product was prepared against, which re-packing will not fix.
+ *
+ * `message` is prose that names the fix; do not match on it. Like every other class
+ * in this package the instance owns wasm memory — call `free()` when done.
+ */
+export class ShaclProductRefusal {
+  readonly dimension: string | undefined;
+  readonly message: string;
+  toString(): string;
+  free(): void;
+}
+
+/**
+ * Compile a Turtle shapes graph into a prepared product: the parse-and-analyze work
+ * `shaclValidateToSarif` performs on every call, done ONCE and written to a
+ * digest-chained container that `shaclProductValidateToSarif` restores.
+ *
+ * `shapesBase` is recorded in the product, so a restore resolves the document's
+ * relative IRI references identically without the document. Byte-deterministic:
+ * identical inputs produce identical bytes, so a content-addressed cache key over
+ * the result is stable.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclPackProduct(
+  shapesTtl: string,
+  shapesBase?: string,
+): Uint8Array;
+
+/**
+ * What a prepared product says it was compiled from, as deterministic `key value`
+ * lines, WITHOUT admitting it: the format version, the stage id and whether this
+ * build knows it, the identity digest and every labelled identity component, then
+ * the recorded base, `sh:shapesGraph` IRI and prefix map.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductExplain(product: Uint8Array): string;
+
+/**
+ * Corroborate a prepared product's carried shapes dataset against the canonical
+ * identity its own binding claims. The codec's COLD path — canonicalization over
+ * blank nodes can cost more than the shapes parse a product exists to eliminate — so
+ * call it from a build step or a test, never before each validation.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductCertify(product: Uint8Array): void;
+
+/**
+ * Restore a prepared product and validate an N-Triples data graph with it, returning
+ * the SARIF 2.1.0 log `shaclValidateToSarif` would have returned for the shapes graph
+ * the product was packed from.
+ *
+ * Admission runs first and in full: framing, every section digest, the whole-container
+ * digest, then the stage id, profile and complete input binding. A product prepared
+ * under a different prefix map, base, vocabulary or registry is refused rather than
+ * validated into a report about a shapes graph nobody asked for.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductValidateToSarif(
+  product: Uint8Array,
+  dataNt: string,
+): string;
+
 export function version(): string;
