@@ -150,7 +150,6 @@ pub(crate) struct Query<'a> {
     norms: &'a [f64],
     cache: &'a DistanceCache,
     row: usize,
-    norm: f64,
 }
 
 impl<'a> Query<'a> {
@@ -168,7 +167,6 @@ impl<'a> Query<'a> {
             norms,
             cache,
             row: query_row,
-            norm: norm_of(norms, query_row),
         }
     }
 
@@ -180,20 +178,14 @@ impl<'a> Query<'a> {
     /// distance that overflowed would still sort — last, confidently — so it is refused
     /// rather than ranked.
     pub(crate) fn of(&self, row: usize) -> Result<f64> {
-        if let Some(distance) = self.cache.get(self.row, row) {
-            return Ok(distance);
-        }
-        let distance = self
-            .kernel
-            .distance(
-                self.matrix.row(self.row),
-                self.norm,
-                self.matrix.row(row),
-                norm_of(self.norms, row),
-            )
-            .ok_or(HnswError::NonFiniteDistance { row })?;
-        self.cache.insert(self.row, row, distance);
-        Ok(distance)
+        pair_distance(
+            self.matrix,
+            self.kernel,
+            self.norms,
+            self.cache,
+            self.row,
+            row,
+        )
     }
 
     /// The cached distance from the query, or `None` if it has not been computed.
@@ -206,6 +198,41 @@ impl<'a> Query<'a> {
 /// The L2 norm of `row`, or `0.0` for a kernel that does not divide by one.
 pub(crate) fn norm_of(norms: &[f64], row: usize) -> f64 {
     norms.get(row).copied().unwrap_or(0.0)
+}
+
+/// The memoized distance between any two rows.
+///
+/// A search ranks everything against one query row, but neighbour selection also asks how
+/// far two *candidates* are from each other, so the pair form is the general one and
+/// [`Query::of`] is the case where one endpoint is fixed. Both go through the same cache
+/// and the same kernel, so a distance cannot be computed two ways.
+///
+/// # Errors
+///
+/// [`HnswError::NonFiniteDistance`] if the kernel's result left the finite range. A distance
+/// that overflowed would still sort — last, confidently — so it is refused rather than
+/// ranked.
+pub(crate) fn pair_distance(
+    matrix: &VectorMatrix,
+    kernel: Kernel,
+    norms: &[f64],
+    cache: &DistanceCache,
+    a: usize,
+    b: usize,
+) -> Result<f64> {
+    if let Some(distance) = cache.get(a, b) {
+        return Ok(distance);
+    }
+    let distance = kernel
+        .distance(
+            matrix.row(a),
+            norm_of(norms, a),
+            matrix.row(b),
+            norm_of(norms, b),
+        )
+        .ok_or(HnswError::NonFiniteDistance { row: b })?;
+    cache.insert(a, b, distance);
+    Ok(distance)
 }
 
 /// Greedy descent through layers `from_layer..=to_layer`, nearest-neighbour at each.

@@ -62,6 +62,7 @@ use crate::graph::{Edge, Graph, VectorMatrix};
 use crate::level::{level_cap, level_from_index};
 use crate::params::Params;
 use crate::search::{DistanceCache, Query, Visited, greedy_descend, norm_of, search_layer};
+use crate::select::select_neighbors;
 
 /// One node's proposal: per layer, the selected neighbours in rank order.
 type NodeProposal = Vec<(u32, Vec<Ranked>)>;
@@ -405,11 +406,14 @@ fn propose_node(
             layer,
             round.params.ef_construction(),
         )?;
-        let selected: Vec<Ranked> = beam
-            .iter()
-            .take(round.params.degree_bound(layer))
-            .copied()
-            .collect();
+        let selected = select_neighbors(
+            &beam,
+            round.params.degree_bound(layer),
+            round.matrix,
+            round.kernel,
+            round.norms,
+            round.cache,
+        )?;
         // The next (lower) layer starts from the whole beam, as standard HNSW does; the
         // degree bound applies to what is *linked*, not to what seeds the next search.
         entry_points = beam.iter().map(|ranked| ranked.row).collect();

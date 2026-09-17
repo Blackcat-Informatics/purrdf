@@ -42,13 +42,13 @@ use rayon::ThreadPoolBuilder;
 /// `scripts/check-hnsw-determinism.sh` reads this constant out of this file by name rather
 /// than restating it, so there is exactly one copy in the tree and the native assertion
 /// and the wasm assertion cannot drift apart.
-const GOLDEN_DIGEST: u64 = 0x18ce_1c71_0f98_da21;
+const GOLDEN_DIGEST: u64 = 0x0c71_b169_ebb4_4d7e;
 
 /// The pinned digest of the serial-insert build (`batch = 1`).
 ///
 /// It is deliberately different from [`GOLDEN_DIGEST`]: the round structure changes the
 /// graph, and that difference is asserted rather than assumed.
-const GOLDEN_SERIAL_DIGEST: u64 = 0x815a_bf0d_fc35_ced6;
+const GOLDEN_SERIAL_DIGEST: u64 = 0x7e11_7799_b79a_b829;
 
 /// The digest is a property of the input alone, not of a schedule: one, two, four and
 /// eight rayon workers all fold the same bytes.

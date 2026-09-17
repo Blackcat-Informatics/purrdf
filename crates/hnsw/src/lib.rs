@@ -50,6 +50,7 @@
 mod builder;
 mod graph;
 mod search;
+mod select;
 
 pub mod determinism;
 pub mod error;
