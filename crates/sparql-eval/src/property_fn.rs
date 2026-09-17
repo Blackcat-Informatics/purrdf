@@ -450,7 +450,7 @@ impl RetrievalCapability {
     pub fn canonical_description(&self) -> String {
         let mut out = String::new();
         match self {
-            Self::NotRanked => out.push('n'),
+            Self::NotRanked => out.push_str(NOT_RANKED_CANONICAL),
             Self::Ranked {
                 stratum,
                 accepted_terms,
@@ -470,6 +470,183 @@ impl RetrievalCapability {
             }
         }
         out
+    }
+}
+
+/// The canonical description of "this relation does not participate in ranked
+/// retrieval" — the one byte a non-ranked producer contributes to a registry's
+/// content fingerprint, named once so the ranked and non-ranked spellings can
+/// never drift apart.
+pub(crate) const NOT_RANKED_CANONICAL: &str = "n";
+
+/// Which facet of a request term a placement renders into an argument position.
+///
+/// A request term is not always one value at the call site. A lexical search
+/// for an English needle is a needle *and* a language tag, and a producer that
+/// takes them in two different argument positions needs both rendered, or the
+/// position left free answers a narrower question than the caller asked — the
+/// silent widening this enum exists to make impossible to express by accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RequestFacet {
+    /// The term's own value — the needle, the vector, the IRI.
+    Value,
+    /// The term's language tag.
+    Language,
+    /// The predicate IRI the term is associated with.
+    Predicate,
+    /// The maximum distance the term's match may lie at.
+    MaxDistance,
+}
+
+impl RequestFacet {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::Language => "language",
+            Self::Predicate => "predicate",
+            Self::MaxDistance => "max-distance",
+        }
+    }
+}
+
+/// Where one facet of an accepted request term binds, and how it is rendered.
+///
+/// `position` is a **flattened** argument position in the sense [`PfArity`]
+/// documents: the subject-side arguments first, in written order, then the
+/// object-side arguments, 0-based across both.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TermPlacement {
+    /// The facet of the request term this position receives.
+    pub facet: RequestFacet,
+    /// The flattened argument position the facet is rendered into.
+    pub position: usize,
+    /// If set, the literal datatype IRI the rendered value carries. No
+    /// vocabulary is minted here: an absent datatype is an absent datatype, and
+    /// a producer that needs one says which.
+    pub datatype: Option<String>,
+}
+
+/// One accepted request-term shape, with where its facets bind.
+///
+/// The pattern is the *matching* half — which incoming terms this producer will
+/// take — and the placements are the *rendering* half — where each facet of a
+/// matched term goes. They are paired rather than carried as two lists, so a
+/// reader cannot mis-align a placement with the shape it renders.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AcceptedTerm {
+    /// The declarative shape of request term this entry accepts.
+    pub pattern: TermPattern,
+    /// Where each facet of a matched term binds, in the order the producer
+    /// declared them. The order is identity-bearing and is never sorted.
+    pub placements: Vec<TermPlacement>,
+}
+
+/// Where a producer takes its per-stratum depth as an argument, if it does.
+///
+/// Some producers are bounded by the consumer's `LIMIT`; others take the depth
+/// as an argument and are *refused* at prepare time when it is left free,
+/// because an unbounded generator cannot be admitted against a row ceiling. A
+/// declaration says which, rather than leaving a consumer to guess.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DepthPlacement {
+    /// The flattened argument position the depth is rendered into.
+    pub position: usize,
+    /// The literal datatype IRI the rendered depth carries. Required, not
+    /// optional: a fabricated default would be a minted vocabulary IRI.
+    pub datatype: String,
+}
+
+/// A producer's ranked-retrieval declaration, supplied at registration.
+///
+/// This is caller-supplied configuration about a relation, not a property *of*
+/// the relation's Rust type: the same generic relation can be wired up as a
+/// ranked producer in one host and as an ordinary row source in another, and
+/// only the host wiring it knows which. So it is supplied where the producer is
+/// registered ([`PropertyFunctionRegistry::register_ranked`]) and read back by
+/// IRI ([`PropertyFunctionRegistry::ranked_declaration`]), and every relation
+/// that has nothing to do with ranked retrieval says nothing at all.
+///
+/// Every field is owned, declarative data, so the whole value is
+/// `Clone + PartialEq + Eq + Debug` and has a canonical description; there is
+/// deliberately no function pointer anywhere in this type. It is not `Hash`
+/// because [`Iri`] is not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankedDeclaration {
+    /// The caller-supplied stratum label these rows are ranked within. No
+    /// vocabulary is minted here; the caller names its own strata.
+    pub stratum: Iri,
+    /// The request-term shapes this producer accepts, each with the positions
+    /// its facets render into. Matching is a lookup over these declarations,
+    /// never inference. Caller order is identity-bearing.
+    pub accepted_terms: Vec<AcceptedTerm>,
+    /// Where the per-stratum depth binds, or `None` when this producer is
+    /// bounded by the consumer's row ceiling instead of by an argument.
+    pub depth_placement: Option<DepthPlacement>,
+    /// The flattened argument position the ranked candidate is projected from.
+    pub candidate_position: usize,
+    /// The producer's ordering guarantee.
+    pub ordering: RankOrdering,
+    /// The producer's duplicate handling.
+    pub duplicates: DuplicatePolicy,
+    /// Whether a request that reaches this producer must actually be served by
+    /// it. Declared by the host, never inferred by a consumer: admission
+    /// enforces whatever the registry declared and adds nothing of its own.
+    pub mandatory: bool,
+}
+
+impl RankedDeclaration {
+    /// A canonical, injective, length-framed description of this declaration.
+    ///
+    /// A pure function of the value: it does not depend on registration order,
+    /// on iteration order, or on the host that built it. Every string is
+    /// length-prefixed and every optional string carries an explicit
+    /// present/absent byte, so an absent field and an empty one stay
+    /// distinguishable; every list is preceded by its own length, so a reader
+    /// knows exactly how many elements to consume.
+    #[must_use]
+    pub fn canonical_description(&self) -> String {
+        let mut out = String::new();
+        out.push('r');
+        push_canonical_field(&mut out, self.stratum.as_str());
+        push_canonical_field(&mut out, self.ordering.as_str());
+        push_canonical_field(&mut out, self.duplicates.as_str());
+        push_canonical_field(&mut out, &self.candidate_position.to_string());
+        out.push(if self.mandatory { '1' } else { '0' });
+        out.push(';');
+        match self.depth_placement.as_ref() {
+            None => out.push('0'),
+            Some(depth) => {
+                out.push('1');
+                push_canonical_field(&mut out, &depth.position.to_string());
+                push_canonical_field(&mut out, &depth.datatype);
+            }
+        }
+        out.push(';');
+        out.push_str(&self.accepted_terms.len().to_string());
+        out.push(':');
+        for term in &self.accepted_terms {
+            out.push('\u{1}');
+            term.pattern.push_canonical(&mut out);
+            out.push_str(&term.placements.len().to_string());
+            out.push(':');
+            for placement in &term.placements {
+                out.push('\u{6}');
+                push_canonical_field(&mut out, placement.facet.as_str());
+                push_canonical_field(&mut out, &placement.position.to_string());
+                push_canonical_option(&mut out, placement.datatype.as_deref());
+            }
+        }
+        out
+    }
+
+    /// Every placement of every accepted term, in declaration order.
+    fn placements(&self) -> impl Iterator<Item = &TermPlacement> {
+        self.accepted_terms
+            .iter()
+            .flat_map(|term| term.placements.iter())
     }
 }
 
@@ -576,16 +753,32 @@ pub trait PropertyFunction: Send + Sync {
     /// composition layer over the property-function seam reads to decide which
     /// request terms reach this producer and how its rows rank.
     ///
-    /// This is **required**, not defaulted. A defaulted `NotRanked` would let a
-    /// genuinely ranked producer silently fall out of fusion with no compile
-    /// error and no declaration to read, which is exactly the silent omission
-    /// the hard-fail doctrine forbids. A relation that does not fuse says so
-    /// explicitly by returning [`RetrievalCapability::NotRanked`].
+    /// # Superseded by the registry's side table
+    ///
+    /// Whether a relation is a ranked producer, and of what, is caller-supplied
+    /// configuration about the wiring rather than a property of the relation's
+    /// Rust type, so it is declared where the wiring happens:
+    /// [`PropertyFunctionRegistry::register_ranked`] takes a
+    /// [`RankedDeclaration`] and [`PropertyFunctionRegistry::ranked_declaration`]
+    /// reads it back. As a method on this universal trait it obliged every
+    /// relation that has nothing to do with ranked retrieval — path relations,
+    /// charge points, validation engines, admission gates — to restate that
+    /// fact, which is an interface every implementor pays for and almost none
+    /// uses.
+    ///
+    /// The defaulted body is scaffolding that carries existing implementations
+    /// across to the registry side table, and is deleted together with this
+    /// method.
     ///
     /// The method is host code exactly as `arity`/`modes`/`volatility` are, so
     /// every read of it goes through [`declaration_contained`] like the rest of
     /// the declaration surface.
-    fn retrieval_capability(&self) -> RetrievalCapability;
+    #[deprecated(
+        note = "declare ranked retrieval through PropertyFunctionRegistry::register_ranked"
+    )]
+    fn retrieval_capability(&self) -> RetrievalCapability {
+        RetrievalCapability::NotRanked
+    }
 
     /// Begin one invocation, returning its row cursor.
     ///
@@ -764,6 +957,12 @@ pub struct PfDescriptor {
     /// layer over the seam; [`RetrievalCapability::NotRanked`] is the explicit
     /// "does not fuse" declaration.
     pub retrieval: RetrievalCapability,
+    /// The ranked declaration the host supplied for this IRI at registration
+    /// ([`PropertyFunctionRegistry::register_ranked`]), or `None` when the
+    /// relation was registered without one — which is what "does not
+    /// participate in ranked retrieval" looks like when the declaration lives
+    /// beside the registry rather than on the relation trait.
+    pub ranked: Option<RankedDeclaration>,
 }
 
 /// A caller-injected table of property functions, keyed by predicate IRI.
@@ -803,6 +1002,15 @@ pub struct PfDescriptor {
 pub struct PropertyFunctionRegistry {
     id: crate::registry_id::RegistryId,
     relations: DetHashMap<String, Arc<dyn PropertyFunction>>,
+    /// The ranked declarations supplied at registration, keyed by the same IRI
+    /// as `relations`. A side table rather than a field of the relation,
+    /// because a producer's participation in ranked retrieval is host wiring,
+    /// not a property of the relation's Rust type.
+    ///
+    /// Never iterated: every ordered surface reads it **by key** while
+    /// iterating the already-sorted `relations`, so a fixed-key hash map's
+    /// iteration order can never reach an output.
+    ranked: DetHashMap<String, RankedDeclaration>,
 }
 
 impl core::fmt::Debug for PropertyFunctionRegistry {
@@ -813,9 +1021,12 @@ impl core::fmt::Debug for PropertyFunctionRegistry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut iris: Vec<&str> = self.relations.keys().map(String::as_str).collect();
         iris.sort_unstable();
+        let mut ranked: Vec<&str> = self.ranked.keys().map(String::as_str).collect();
+        ranked.sort_unstable();
         f.debug_struct("PropertyFunctionRegistry")
             .field("id", &self.id)
             .field("relations", &iris)
+            .field("ranked", &ranked)
             .finish()
     }
 }
@@ -842,6 +1053,7 @@ impl PropertyFunctionRegistry {
     pub const EMPTY: Self = Self {
         id: crate::registry_id::RegistryId::EMPTY,
         relations: DetHashMap::with_hasher(crate::DetHasher::new()),
+        ranked: DetHashMap::with_hasher(crate::DetHasher::new()),
     };
 
     /// Register `relation` under `iri`.
@@ -851,14 +1063,74 @@ impl PropertyFunctionRegistry {
     /// Panics if `iri` is already registered — see the type's docs for why a relation
     /// may not be silently shadowed.
     pub fn register(&mut self, iri: impl Into<String>, relation: Arc<dyn PropertyFunction>) {
-        let iri = iri.into();
+        self.insert(iri.into(), relation, None);
+    }
+
+    /// Register `relation` under `iri` as a ranked producer described by `decl`.
+    ///
+    /// The declaration is stored beside the relation, keyed by the same IRI, and
+    /// read back with [`Self::ranked_declaration`]. Registering with this method
+    /// and registering with [`Self::register`] are the same registration in every
+    /// other respect: the relation resolves, describes and evaluates identically.
+    ///
+    /// # Panics
+    ///
+    /// Panics, leaving the registry untouched, if:
+    ///
+    /// * `iri` is already registered — the same refusal, and the same message,
+    ///   [`Self::register`] raises.
+    /// * `decl.candidate_position` is not a position `relation` declares.
+    /// * any placement of any accepted term binds outside `relation`'s positions.
+    /// * `decl.depth_placement` binds outside `relation`'s positions.
+    /// * `decl.depth_placement` and a term placement target the same position —
+    ///   one position renders one value.
+    /// * `decl.candidate_position` is also a placement or depth target: a
+    ///   position filled with a constant cannot also be the projected candidate.
+    ///
+    /// A declaration that cannot be rendered is host misconfiguration, and like a
+    /// duplicate registration it is caught where it is committed rather than at
+    /// the first query that reaches it.
+    pub fn register_ranked(
+        &mut self,
+        iri: impl Into<String>,
+        relation: Arc<dyn PropertyFunction>,
+        decl: RankedDeclaration,
+    ) {
+        self.insert(iri.into(), relation, Some(decl));
+    }
+
+    /// The one path both registration methods take, so the duplicate-IRI refusal
+    /// and the order the two tables are written in cannot drift apart.
+    ///
+    /// `relations` is written LAST: a declaration that fails validation panics
+    /// before anything is inserted, leaving the registry exactly as it was.
+    fn insert(
+        &mut self,
+        iri: String,
+        relation: Arc<dyn PropertyFunction>,
+        decl: Option<RankedDeclaration>,
+    ) {
         assert!(
             !self.relations.contains_key(&iri),
             "IRI <{iri}> is already registered as a property function; a relation may not be \
              silently shadowed, because both spellings of the call are identical and the only \
              observable difference is which rows the query returns"
         );
+        if let Some(decl) = decl {
+            validate_declaration(&iri, &decl, relation.arity());
+            self.ranked.insert(iri.clone(), decl);
+        }
         self.relations.insert(iri, relation);
+    }
+
+    /// The ranked declaration supplied for `iri` at registration, if any.
+    ///
+    /// `None` is the whole of "this relation does not participate in ranked
+    /// retrieval": a relation registered with [`Self::register`] declares
+    /// nothing, and nothing is what a consumer reads back.
+    #[must_use]
+    pub fn ranked_declaration(&self, iri: &str) -> Option<&RankedDeclaration> {
+        self.ranked.get(iri)
     }
 
     /// Resolve a predicate IRI to its registered relation, if any.
@@ -964,6 +1236,9 @@ impl PropertyFunctionRegistry {
             let arity = declaration_contained(iri, "arity", || relation.arity())?;
             let volatility =
                 declaration_contained(iri, "determinism class", || relation.volatility())?;
+            // Scaffolding read of the deprecated trait method: it is deleted in
+            // the follow-on step that moves every producer onto `register_ranked`.
+            #[allow(deprecated)]
             let retrieval = declaration_contained(iri, "retrieval capability", || {
                 relation.retrieval_capability()
             })?;
@@ -984,10 +1259,74 @@ impl PropertyFunctionRegistry {
                 volatility,
                 modes: described_modes,
                 retrieval,
+                // Read BY KEY out of the side table while iterating `relations`,
+                // never by iterating `ranked`: the fixed-key map's order stays
+                // unobservable, and the output is sorted by IRI below.
+                ranked: self.ranked.get(iri).cloned(),
             });
         }
         out.sort_by(|a, b| a.iri.cmp(&b.iri));
         Ok(out)
+    }
+}
+
+/// Check that `decl` can actually be rendered against a relation of `arity`.
+///
+/// Every failure here is host misconfiguration committed at registration, so it
+/// panics and names the offending value rather than deferring to the first query
+/// that tries to render the declaration and finds it cannot.
+///
+/// # Panics
+///
+/// See [`PropertyFunctionRegistry::register_ranked`] for the full list.
+fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
+    let total = arity.total();
+    assert!(
+        decl.candidate_position < total,
+        "ranked declaration for <{iri}> projects its candidate from position {} but the relation \
+         declares only {total} argument position(s) ({arity})",
+        decl.candidate_position
+    );
+    for placement in decl.placements() {
+        assert!(
+            placement.position < total,
+            "ranked declaration for <{iri}> binds the {} facet of an accepted term at position {} \
+             but the relation declares only {total} argument position(s) ({arity})",
+            placement.facet.as_str(),
+            placement.position
+        );
+        assert!(
+            placement.position != decl.candidate_position,
+            "ranked declaration for <{iri}> binds the {} facet of an accepted term at position {} \
+             and also projects its candidate from there; a position filled with a request value \
+             cannot also be the projected candidate",
+            placement.facet.as_str(),
+            placement.position
+        );
+    }
+    if let Some(depth) = decl.depth_placement.as_ref() {
+        assert!(
+            depth.position < total,
+            "ranked declaration for <{iri}> binds its per-stratum depth at position {} but the \
+             relation declares only {total} argument position(s) ({arity})",
+            depth.position
+        );
+        assert!(
+            depth.position != decl.candidate_position,
+            "ranked declaration for <{iri}> binds its per-stratum depth at position {} and also \
+             projects its candidate from there; a position filled with a request value cannot \
+             also be the projected candidate",
+            depth.position
+        );
+        for placement in decl.placements() {
+            assert!(
+                placement.position != depth.position,
+                "ranked declaration for <{iri}> binds both its per-stratum depth and the {} facet \
+                 of an accepted term at position {}; one argument position renders one value",
+                placement.facet.as_str(),
+                depth.position
+            );
+        }
     }
 }
 

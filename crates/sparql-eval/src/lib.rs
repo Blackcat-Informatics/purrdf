@@ -188,9 +188,9 @@ pub use purrdf_sparql_algebra::ParserOptions;
 // relation into the engine without naming the module path.
 pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
 pub use property_fn::{
-    DuplicatePolicy, MemoryRelation, PfArgs, PfArity, PfCursor, PfDescriptor, PfMode, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RetrievalCapability, TermKind,
-    TermPattern,
+    AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PfArgs, PfArity, PfCursor,
+    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankOrdering,
+    RankedDeclaration, RequestFacet, RetrievalCapability, TermKind, TermPattern, TermPlacement,
 };
 // The registry instance identity, re-exported alongside the registry that mints
 // it: a composition layer must be able to tell two independently built registries
