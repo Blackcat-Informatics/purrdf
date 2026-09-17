@@ -657,8 +657,63 @@ impl PropertyFunctionRegistry {
     /// module and so cannot reach the private `id` field directly. See the type's
     /// docs' "Instance identity" section for why this exists and why `Clone`
     /// inherits rather than re-mints it.
-    pub(crate) const fn instance_id(&self) -> crate::registry_id::RegistryId {
+    ///
+    /// Public because the distinction between instance identity and declared
+    /// contents is exactly what a composition layer over the registry seam needs:
+    /// two registries that describe themselves identically (same IRIs, arities,
+    /// volatilities, modes, row bounds) but were built independently MUST remain
+    /// distinguishable, and [`Self::content_fingerprint`] deliberately cannot tell
+    /// them apart. A host that needs "are these the same registry instance?"
+    /// compares [`RegistryId`](crate::registry_id::RegistryId) values; a host that
+    /// needs "do these registries declare the same shape?" compares
+    /// [`Self::content_fingerprint`] values.
+    pub const fn instance_id(&self) -> crate::registry_id::RegistryId {
         self.id
+    }
+
+    /// A durable, instance-independent fingerprint of this registry's *declared*
+    /// contents: every registered IRI's subject/object arity, its declared
+    /// volatility, and each declared mode with its row bound, IRI-sorted.
+    ///
+    /// # Durable and cross-process, unlike [`Self::instance_id`]
+    ///
+    /// The instance id is ephemeral — a per-process counter, meaningful only while
+    /// the process that minted it is alive (see
+    /// [`RegistryId`](crate::registry_id::RegistryId)'s docs). This method
+    /// deliberately **excludes** it, so two independently constructed registries
+    /// that declare the same relations under the same IRIs produce the *identical*
+    /// fingerprint, here or in another process. That is what makes it usable as a
+    /// durable identity — to compare a registry a caller built against one decoded
+    /// from a persisted configuration, or to address a registry's declared shape in
+    /// a cache key that outlives the process.
+    ///
+    /// # What it does and does not capture
+    ///
+    /// This is a pure function of [`Self::describe`]'s output, which is already
+    /// IRI-sorted, so it does not depend on registration order. It captures the
+    /// declarations a plan's rewrite and an execution's parallel-safety depend on.
+    /// It does **not** capture which trait-object implementation answers an IRI —
+    /// two registries registering the same IRI to different implementations with
+    /// identical declarations share a content fingerprint by design, and only
+    /// `property_fn_plan::registry_fingerprint` (which folds the instance id in
+    /// ahead of this content digest, and is what the plan cache and governed
+    /// receipts use) can tell them apart.
+    ///
+    /// # The empty registry
+    ///
+    /// Returns the empty string when no relation is registered — matching
+    /// `property_fn_plan::registry_fingerprint`'s own empty short-circuit, so the
+    /// canonical [`Self::EMPTY`] and a freshly built [`Self::new`] registry
+    /// fingerprint identically (they are observationally interchangeable; see
+    /// [`RegistryId`](crate::registry_id::RegistryId)).
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Function`] if any registered relation's declaration methods
+    /// panic — [`Self::describe`]'s own failure, propagated unchanged. Never
+    /// raised for an empty registry, which returns before any declaration is read.
+    pub fn content_fingerprint(&self) -> Result<String, EvalError> {
+        crate::property_fn_plan::content_fingerprint(self)
     }
 
     /// Describe every registered relation, sorted by IRI.

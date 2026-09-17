@@ -58,7 +58,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// that can only ever answer identically are the same registry instance for every
 /// purpose a plan's identity cares about, so they keep the same id.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct RegistryId(u64);
+pub struct RegistryId(u64);
 
 impl RegistryId {
     /// Mint a fresh identity, distinct from every other identity minted by this
