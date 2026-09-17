@@ -156,6 +156,25 @@ weight, and `K` is the profile's smoothing constant. An item appearing in
 several strata **sums** its contributions, and the final order is by
 fused score descending with a declared, total tie-break.
 
+**Where the weight enters is a declared rule, not an implementation
+detail.** Evaluating `recip` first and applying the weight afterwards
+rounds twice, and the inner rounding is a ceiling the weight cannot
+lift: `trunc(S / D)` with `S = 10^12` stops strictly decreasing once
+`D² > S`, so under that rule *every* weight at or above one shares one
+monotone range ending near a million ranks, and a stratum that must be
+read deeper than that cannot be. Folding the weight into the numerator
+computes the same quantity with one exactly-rounded division —
+`trunc(w_raw / D)`, where a weight's raw integer is already `w · S` —
+and its monotone range runs to about `10^6 · sqrt(w)`. Both are §5 laws;
+neither needs a transcendental; the profile names which one it runs
+under and carries that choice in its identity, so the second rule adds a
+capability without moving any number a previously issued profile ever
+produced. The relation reads in both directions, and a profile author
+needs both: a weight caps the depth that stays ordered, and a required
+depth therefore sets a floor under the weight — `w ≳ (depth / 10^6)²`.
+Weights are only ever compared with each other, so scaling the whole
+vector buys depth without changing any fused order.
+
 The arithmetic is exact for the same reason `purrdf-text`'s is, and the
 reasoning transfers where the kNN module's deliberately does not. The kNN
 kernels stay in binary64 because every operation they need is correctly

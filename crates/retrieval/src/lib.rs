@@ -67,14 +67,27 @@
 //! an intermediate that does not fit is a loud [`FusionError::Overflow`], never
 //! a wrapped score masquerading as an order.
 //!
-//! The law's weight, the fixed-point scale and a stratum's depth are one coupled
-//! quantity: past a depth those first two decide, adjacent ranks stop producing
-//! distinct contributions and the fused score stops separating them. Nothing
-//! errors there and nothing becomes nondeterministic — it simply stops being
-//! rank-ordered, which is exactly the kind of quiet degradation this crate
-//! refuses to leave unsaid. [`FusionProfile::monotone_depth`] reports the exact
-//! bound, and admission refuses a depth beyond it whenever the environment names
-//! the profile the answer will be fused under.
+//! The law's decay rule, its weights, the fixed-point scale and a stratum's
+//! depth are one coupled quantity: past a depth those first three decide,
+//! adjacent ranks stop producing distinct contributions and the fused score
+//! stops separating them. Nothing errors there and nothing becomes
+//! nondeterministic — it simply stops being rank-ordered, which is exactly the
+//! kind of quiet degradation this crate refuses to leave unsaid.
+//! [`FusionProfile::monotone_depth`] reports the exact bound, and admission
+//! refuses a depth beyond it whenever the environment names the profile the
+//! answer will be fused under.
+//!
+//! Which rule a profile names decides how much depth a weight can buy.
+//! [`DecayRule::ReciprocalRank`] truncates the reciprocal before applying the
+//! weight, so every weight at or above one shares a bound near a million ranks.
+//! [`DecayRule::WeightedReciprocalRank`] folds the weight into the numerator —
+//! the same quantity, one exactly-rounded division instead of two truncations —
+//! and its bound runs to roughly `10^6 · sqrt(w)`, so a stratum that must be
+//! read fourteen million ranks deep is admissible at a weight of two hundred.
+//! Read in reverse, that relation is a requirement: under the weighted rule a
+//! deep stratum *needs* a heavy enough weight, and a profile that underweights
+//! one has its plans refused rather than silently unordered. See
+//! [`FusionProfile`] for the derivation in both directions.
 //!
 //! # A composition outside the kernel
 //!
@@ -166,7 +179,7 @@ pub use plan::{
 };
 pub use planner::plan;
 pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
-pub use reciprocal_rank::contribution;
+pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
 pub use request::{Metric, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
 pub use statistics::Statistics;

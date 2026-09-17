@@ -23,19 +23,49 @@ use crate::reciprocal_rank::monotone_depth;
 
 // Canonical discriminators. One tag space per enum, never reused.
 const DECAY_RECIPROCAL_RANK: u8 = 0;
+const DECAY_WEIGHTED_RECIPROCAL_RANK: u8 = 1;
 const TIE_BREAK_SCORE_DESC_STRATUM_RANK_ASC_CANONICAL_TERM: u8 = 0;
 const ROUNDING_TRUNCATE_TOWARD_ZERO: u8 = 0;
 const ITEM_ENCODING_CANONICAL_LEXICAL: u8 = 0;
 
 /// How a candidate's contribution decays with its rank within a stratum.
 ///
-/// The enum is closed and today holds one variant. Further monotone decay rules
-/// are additive variants, and because the rule is part of the profile's
-/// canonical bytes, adding one never re-opens a previously-issued identity.
+/// The enum is closed. Further monotone decay rules are additive variants, and
+/// because the rule is part of the profile's canonical bytes, adding one never
+/// re-opens a previously-issued identity: a profile built on
+/// [`ReciprocalRank`](Self::ReciprocalRank) encodes tag zero and hashes to the
+/// value it always did, whatever else the enum grows.
+///
+/// # The two rules compute the same quantity to different accuracies
+///
+/// Both express `w / (K + r)` at the layer's declared scale
+/// `S = 10^SCALE_DIGITS`, truncating toward zero, and neither needs a
+/// transcendental. They differ in where the weight enters, and that decides how
+/// deep a stratum can be read before the arithmetic stops separating ranks:
+///
+/// * [`ReciprocalRank`](Self::ReciprocalRank) rounds the reciprocal first —
+///   `trunc(w_raw · trunc(S / D) / S)` with `D = K + r`. The inner truncation is
+///   a ceiling no weight can lift, so the monotone range ends just past
+///   `D = sqrt(S) = 10^6` for **every** weight at or above one.
+/// * [`WeightedReciprocalRank`](Self::WeightedReciprocalRank) folds the weight
+///   into the numerator — `trunc(w_raw / D)`, one exactly-rounded division. Its
+///   value is never below the other's and never more than `⌊w⌋ + 1` raw units above
+///   it, and its monotone range runs to roughly `10^6 · sqrt(w)`, so a heavier
+///   stratum is legitimately readable deeper.
+///
+/// Neither is a default. A profile names the rule it runs under, and the choice
+/// is part of what its identity fixes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DecayRule {
-    /// `reciprocal_rank(K + rank)`, with `K >= 1`.
+    /// `weight · reciprocal(K + rank)`, with the reciprocal truncated to the
+    /// declared scale before the weight is applied, and `K >= 1`.
     ReciprocalRank {
+        /// The smoothing constant `K`.
+        k: u32,
+    },
+    /// `weight / (K + rank)` as a single exactly-rounded division at the
+    /// declared scale, with `K >= 1`.
+    WeightedReciprocalRank {
         /// The smoothing constant `K`.
         k: u32,
     },
@@ -46,14 +76,25 @@ impl DecayRule {
     #[must_use]
     pub const fn k(self) -> u32 {
         match self {
-            Self::ReciprocalRank { k } => k,
+            Self::ReciprocalRank { k } | Self::WeightedReciprocalRank { k } => k,
         }
     }
 
     /// The canonical discriminator byte for this rule.
-    fn tag(self) -> u8 {
+    const fn tag(self) -> u8 {
         match self {
             Self::ReciprocalRank { .. } => DECAY_RECIPROCAL_RANK,
+            Self::WeightedReciprocalRank { .. } => DECAY_WEIGHTED_RECIPROCAL_RANK,
+        }
+    }
+
+    /// The rule a canonical discriminator byte names, or `None` for a tag this
+    /// build does not write.
+    const fn from_tag(tag: u8, k: u32) -> Option<Self> {
+        match tag {
+            DECAY_RECIPROCAL_RANK => Some(Self::ReciprocalRank { k }),
+            DECAY_WEIGHTED_RECIPROCAL_RANK => Some(Self::WeightedReciprocalRank { k }),
+            _ => None,
         }
     }
 }
@@ -99,10 +140,13 @@ impl TieBreak {
 ///
 /// # Weight, scale and depth are one coupled quantity
 ///
-/// Three declared quantities decide how deep a stratum's ranks stay *ordered*:
-/// the stratum's **weight** `w`, the fixed-point **scale** `S = 10^SCALE_DIGITS`
-/// the whole layer computes in, and the **per-stratum depth** the plan records.
-/// A contribution at 1-based rank `r` is formed as
+/// Four declared quantities decide how deep a stratum's ranks stay *ordered*:
+/// the **decay rule**, the stratum's **weight** `w`, the fixed-point **scale**
+/// `S = 10^SCALE_DIGITS` the whole layer computes in, and the **per-stratum
+/// depth** the plan records.
+///
+/// Under [`DecayRule::ReciprocalRank`] a contribution at 1-based rank `r` is
+/// formed as
 ///
 /// ```text
 /// trunc( w · trunc(S / (K + r)) / S )
@@ -116,12 +160,55 @@ impl TieBreak {
 /// `D = sqrt(S) = 10^6` **whatever the weight is** — a weight of a thousand buys
 /// no more depth than a weight of one. Below one the weight does bind, and
 /// distinctness is guaranteed while `w · trunc(S / (D · (D + 1))) ≥ S`, which is
-/// roughly `(K + r)² ≲ w · S`. That guarantee is only sufficient, never
-/// necessary — two contributions often differ when it fails, because the outer
-/// truncations can straddle an integer — so the exact first-collision rank is
-/// what [`FusionProfile::monotone_depth`] reports, and the refusal at admission
-/// is against that exact value rather than against a conservative closed form
-/// that would refuse legitimate depths.
+/// roughly `(K + r)² ≲ w · S`.
+///
+/// Under [`DecayRule::WeightedReciprocalRank`] the weight is folded into the
+/// numerator instead — `trunc(w_raw / (K + r))`, where `w_raw = w · S` — so
+/// there is one truncation rather than two and no inner ceiling at all.
+/// Adjacent values then differ by `w_raw / (D · (D + 1))`, and distinctness is
+/// guaranteed exactly while `D · (D + 1) ≤ w_raw`.
+///
+/// Either way the guarantee is only sufficient, never necessary — two
+/// contributions often differ when it fails, because a truncation can straddle
+/// an integer — so the exact first-collision rank is what
+/// [`FusionProfile::monotone_depth`] reports, and the refusal at admission is
+/// against that exact value rather than against a conservative closed form that
+/// would refuse legitimate depths.
+///
+/// # A deep stratum requires a heavy one — the coupling read the other way
+///
+/// The paragraph above reads the coupling as a limit: *given* a weight, here is
+/// the depth past which ordering degrades. Under
+/// [`DecayRule::WeightedReciprocalRank`] it reads just as usefully in reverse,
+/// and a profile author needs the reverse reading to choose a weight at all.
+///
+/// The relation is
+///
+/// ```text
+/// depth ≲ 10^6 · sqrt(w)
+/// ```
+///
+/// — a weight of one admits about one million ranks, a weight of one hundred
+/// about ten million, and a weight of two hundred about fourteen million.
+/// Squaring it gives the requirement directly: a stratum that
+/// must be read `depth` ranks deep needs `w ≳ (depth / 10^6)²`. A weight is
+/// therefore not only "how much this stratum counts relative to its neighbours";
+/// under this rule it is also the budget that buys ordered depth, and a profile
+/// that weights a deep stratum lightly will have its plans **refused** at
+/// admission with
+/// [`AdmissionError::DepthBeyondMonotoneRange`](crate::AdmissionError::DepthBeyondMonotoneRange)
+/// rather than quietly returning rows the fusion cannot separate.
+///
+/// The two readings do not conflict, because weights are only ever compared with
+/// each other: scaling every stratum's weight by one hundred leaves every
+/// relative ratio, every fused order and every tie-break untouched, while
+/// multiplying every monotone range by ten. A profile that needs depth raises
+/// the whole weight vector, not one stratum's share of it. (It does raise
+/// [`FusionProfile::ceiling`] by the same factor, and that is checked against
+/// the fixed-point range at construction, so the scaling is bounded by
+/// arithmetic rather than by a rule.) Under
+/// [`DecayRule::ReciprocalRank`] the same scaling buys nothing, which is the
+/// whole difference between the rules.
 ///
 /// Beyond that depth nothing errors and nothing becomes nondeterministic: the
 /// tie-break is total, so the answer stays a pure function of its inputs. What
@@ -175,6 +262,29 @@ impl FusionProfile {
         k: u32,
         max_contributions: u32,
     ) -> Result<Self, FusionError> {
+        Self::with_decay(weights, DecayRule::ReciprocalRank { k }, max_contributions)
+    }
+
+    /// Build a profile that names its decay rule explicitly.
+    ///
+    /// [`new`](Self::new) is this constructor with
+    /// [`DecayRule::ReciprocalRank`] supplied, and is kept because that rule is
+    /// what every profile issued so far runs under. A caller that needs a
+    /// stratum read deeper than the truncated reciprocal can order — see this
+    /// type's own documentation for the `depth ≲ 10^6 · sqrt(w)` relation —
+    /// names [`DecayRule::WeightedReciprocalRank`] here. The choice is part of
+    /// the profile's canonical bytes, so it is part of its identity and never
+    /// changes the numbers under a name already in circulation.
+    ///
+    /// # Errors
+    ///
+    /// The same refusals [`new`](Self::new) makes.
+    pub fn with_decay(
+        weights: BTreeMap<Iri, Fixed>,
+        decay: DecayRule,
+        max_contributions: u32,
+    ) -> Result<Self, FusionError> {
+        let k = decay.k();
         if k == 0 {
             return Err(FusionError::InvalidK { k });
         }
@@ -201,10 +311,10 @@ impl FusionProfile {
         // is bounded but not free.
         let monotone_depths = weights
             .iter()
-            .map(|(stratum, weight)| (stratum.clone(), monotone_depth(*weight, k)))
+            .map(|(stratum, weight)| (stratum.clone(), monotone_depth(decay, *weight)))
             .collect();
         Ok(Self {
-            decay: DecayRule::ReciprocalRank { k },
+            decay,
             weights,
             tie_break: TieBreak::default(),
             max_contributions,
@@ -321,14 +431,14 @@ impl FusionProfile {
         let decay_tag = reader
             .u8()
             .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
-        if decay_tag != DECAY_RECIPROCAL_RANK {
-            return Err(FusionError::MalformedProfile(format!(
-                "unknown decay rule tag {decay_tag}"
-            )));
-        }
         let k = reader
             .u32()
             .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
+        let Some(decay) = DecayRule::from_tag(decay_tag, k) else {
+            return Err(FusionError::MalformedProfile(format!(
+                "unknown decay rule tag {decay_tag}"
+            )));
+        };
         let count = reader
             .count()
             .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
@@ -387,7 +497,7 @@ impl FusionProfile {
             .finish()
             .map_err(|error| FusionError::MalformedProfile(error.to_string()))?;
 
-        Self::new(weights, k, max_contributions)
+        Self::with_decay(weights, decay, max_contributions)
     }
 
     /// The profile's content identity.

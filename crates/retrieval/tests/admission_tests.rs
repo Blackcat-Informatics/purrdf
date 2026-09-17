@@ -17,10 +17,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, Fixed, FusionProfile, Iri, Metric,
-    Plan, PlanOrigin, ProducerDecision, ProducerStatus, RankedStreamImpl, RejectionReason,
-    RequestTerm, RetrievalRequest, Statistics, Term, UnservedReason, UnservedTerm, Weight, compile,
-    contribution, execute,
+    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
+    Metric, Plan, PlanOrigin, ProducerDecision, ProducerStatus, RankedStreamImpl, RejectionReason,
+    RequestTerm, RetrievalRequest, SCALE_DIGITS, Statistics, Term, UnservedReason, UnservedTerm,
+    Weight, compile, contribution, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -759,6 +759,158 @@ fn a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range() {
         fusion_profile: Some(&profile),
     };
     compile(&admitted, &env).expect("an unweighted stratum's depth is not this profile's business");
+}
+
+// ---------------------------------------------------------------------------
+// 4c. The other direction of the same coupling: a deep stratum, admitted
+//
+// The registry's row bound and the profile's monotone range are independent, and
+// under `DecayRule::WeightedReciprocalRank` the second one is bought with
+// weight: the range runs to roughly `10^6 * sqrt(w)`, so a stratum that must be
+// read fourteen million ranks deep needs a weight of about two hundred. These
+// two tests are the criterion and its neighbour — the deep plan is admitted
+// through the real admission path, and the depth one rank past the profile's own
+// range is still refused by name.
+// ---------------------------------------------------------------------------
+
+/// The depth an operator requires of the deep stratum.
+const REQUIRED_DEPTH: u32 = 14_000_000;
+
+/// The weight that buys it. `(14e6 / 1e6)^2 = 196`, so two hundred clears the
+/// requirement with room; the assertion below checks the bound rather than
+/// trusting the arithmetic in this comment.
+const DEEP_WEIGHT_UNITS: i128 = 200;
+
+/// A registry whose one ranked producer declares enough rows for the deep plan.
+///
+/// The declared row count is a claim about the relation, not an allocation: the
+/// mock emits three rows whatever it declares, so the fixture states a bound of
+/// twenty million without producing one.
+fn deep_registry() -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/any"),
+        producer(20_000_000, "universal/", 3),
+        ranked(
+            &ex("stratum/universal"),
+            vec![TermPattern::of_kind(TermKind::Any)],
+            true,
+        ),
+    );
+    registry
+}
+
+/// A profile on the weighted rule, heavy enough to order the deep stratum.
+fn deep_profile() -> FusionProfile {
+    FusionProfile::with_decay(
+        BTreeMap::from([(
+            iri(&ex("stratum/universal")),
+            Fixed::from_raw(DEEP_WEIGHT_UNITS * 10_i128.pow(SCALE_DIGITS)),
+        )]),
+        DecayRule::WeightedReciprocalRank { k: 1 },
+        1,
+    )
+    .expect("a strictly positive weight is a valid profile")
+}
+
+#[test]
+fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_profile() {
+    let registry = deep_registry();
+    let stats = statistics("r1");
+    let profile = deep_profile();
+    let stratum = iri(&ex("stratum/universal"));
+    let monotone = profile
+        .monotone_depth(&stratum)
+        .expect("the profile weights this stratum");
+    assert!(
+        monotone >= u64::from(REQUIRED_DEPTH),
+        "a weight of {DEEP_WEIGHT_UNITS} must order {REQUIRED_DEPTH} ranks, got {monotone}"
+    );
+
+    let mut plan = fresh_plan(&registry, &stats);
+    plan.stratum_depths.insert(stratum.clone(), REQUIRED_DEPTH);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: Some(&profile),
+    };
+    let compiled = compile(&plan, &env).expect("a depth of fourteen million is admitted");
+    assert_eq!(compiled.units.len(), 1, "one unit for the one deep stratum");
+    assert!(
+        compiled.units[0].sparql.contains("LIMIT 14000000"),
+        "the admitted depth reaches the emitted text: {}",
+        compiled.units[0].sparql
+    );
+
+    // The same plan under the same weight on the *first* rule is refused, which
+    // is what makes the rule the load-bearing choice rather than the weight.
+    let truncated = FusionProfile::with_decay(
+        BTreeMap::from([(
+            stratum,
+            Fixed::from_raw(DEEP_WEIGHT_UNITS * 10_i128.pow(SCALE_DIGITS)),
+        )]),
+        DecayRule::ReciprocalRank { k: 1 },
+        1,
+    )
+    .expect("valid");
+    let shallow_env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: Some(&truncated),
+    };
+    assert_eq!(
+        compile(&plan, &shallow_env)
+            .expect_err("the truncated rule cannot order fourteen million ranks")
+            .dimension(),
+        "depth_beyond_monotone_range"
+    );
+}
+
+#[test]
+fn a_depth_past_the_weighted_profiles_own_range_is_still_refused() {
+    // The neighbouring refusal. Buying depth with weight must not become "any
+    // depth at all": one rank past this profile's exact range is refused, by
+    // name, reporting the stratum and the bound it was drawn at.
+    let registry = deep_registry();
+    let stats = statistics("r1");
+    let profile = deep_profile();
+    let stratum = iri(&ex("stratum/universal"));
+    let monotone = profile
+        .monotone_depth(&stratum)
+        .expect("the profile weights this stratum");
+    let requested = u32::try_from(monotone + 1).expect("the bound is inside a u32");
+    assert!(
+        u64::from(requested) <= 20_000_000,
+        "the refusal must come from the profile, not from the registry's row bound"
+    );
+
+    let mut plan = fresh_plan(&registry, &stats);
+    plan.stratum_depths.insert(stratum.clone(), requested);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: Some(&profile),
+    };
+    match compile(&plan, &env).expect_err("a depth past the range is refused") {
+        AdmissionError::DepthBeyondMonotoneRange {
+            stratum: named,
+            monotone: reported,
+            requested: asked,
+        } => {
+            assert_eq!(*named, stratum, "the refusal names the stratum");
+            assert_eq!(reported, monotone, "and the bound it was drawn at");
+            assert_eq!(asked, requested);
+        }
+        other => panic!("expected DepthBeyondMonotoneRange, got {other:?}"),
+    }
+
+    // And the neighbour that must still pass: the depth exactly on the bound.
+    let mut admitted = plan;
+    admitted.stratum_depths.insert(
+        stratum,
+        u32::try_from(monotone).expect("the bound is inside a u32"),
+    );
+    compile(&admitted, &env).expect("a depth exactly at the bound is admitted");
 }
 
 #[test]

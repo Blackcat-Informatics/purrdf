@@ -15,8 +15,9 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, PlanId, ProducerReceipt,
-    ProducerStatus, ProtocolError, RECIP_K, RankedStream, Term, TopK, contribution,
+    DecayRule, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult, FusionStream, Iri,
+    PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankedStream, SCALE_DIGITS,
+    Term, TopK, contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -1709,5 +1710,189 @@ fn a_same_stream_duplicate_still_in_the_frontier_is_refused() {
         fused.rows[0].contributions.len(),
         2,
         "one candidate, two strata, no duplicate"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 21. A second decay rule, added without moving the first one's numbers.
+//
+// `DecayRule` is additive-variant-extensible and its tag is folded into the
+// profile's canonical bytes, so a new variant must leave every previously
+// issued identity exactly where it was. The tests below pin that in the only
+// way that is worth anything — against a spelling of the encoding written out
+// by hand rather than read back from the writer under test — and then pin what
+// the new rule buys: depth, in exchange for weight.
+// ---------------------------------------------------------------------------
+
+/// The canonical encoding of a `ReciprocalRank` profile, spelled out field by
+/// field from the documented layout.
+///
+/// Written independently of `Writer` on purpose. A golden captured by calling
+/// the encoder proves only that the encoder agrees with itself; this one fails
+/// if a field is reordered, widened, or given a new tag.
+fn hand_spelled_profile_bytes(strata: &[(&str, i128)], k: u32, max_contributions: u32) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    // version: u16 le
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    // decay tag: ReciprocalRank is discriminator zero
+    bytes.push(0);
+    // K: u32 le
+    bytes.extend_from_slice(&k.to_le_bytes());
+    // weight count: u64 le
+    bytes.extend_from_slice(&(strata.len() as u64).to_le_bytes());
+    for (name, weight_raw) in strata {
+        let text = format!("http://example.org/stratum/{name}");
+        bytes.extend_from_slice(&(text.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(text.as_bytes());
+        bytes.extend_from_slice(&weight_raw.to_le_bytes());
+    }
+    // tie-break tag, then max contributions
+    bytes.push(0);
+    bytes.extend_from_slice(&max_contributions.to_le_bytes());
+    // declared scale, rounding direction, item encoding
+    bytes.extend_from_slice(&12_u32.to_le_bytes());
+    bytes.push(0);
+    bytes.push(0);
+    bytes
+}
+
+#[test]
+fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
+    let existing = profile(
+        &[("text", Fixed::ONE), ("vector", Fixed::from_raw(500))],
+        K,
+        8,
+    );
+    let expected =
+        hand_spelled_profile_bytes(&[("text", 1_000_000_000_000), ("vector", 500)], K, 8);
+    assert_eq!(
+        existing.canonical_bytes(),
+        expected,
+        "adding a decay variant must not move the encoding of the first one"
+    );
+    assert_eq!(
+        existing.id(),
+        FusionProfileId::from_canonical(&expected),
+        "the identity is the digest of exactly those bytes"
+    );
+    assert_eq!(
+        existing.id().to_hex(),
+        "f2c94415651aaa0353a242643c707cc27f1db97c95bb87155bbb908ae067633d",
+        "the digest of an already-issued profile is frozen"
+    );
+    assert_eq!(
+        existing.decay(),
+        DecayRule::ReciprocalRank { k: K },
+        "a profile built through `new` runs under the rule it always did"
+    );
+
+    // And the numbers themselves: `contribution` is the tag-zero arithmetic,
+    // unchanged at every rank a caller might have recorded.
+    for (rank, raw) in [
+        (1_u64, 16_393_442_622_i128),
+        (2, 16_129_032_258),
+        (10, 14_285_714_285),
+        (1_000, 943_396_226),
+        (1_000_000, 999_940),
+    ] {
+        assert_eq!(
+            contribution(Fixed::ONE, rank, K).expect("fits").into_raw(),
+            raw,
+            "the truncated rule's value at rank {rank} is frozen"
+        );
+    }
+}
+
+#[test]
+fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
+    let weights: BTreeMap<Iri, Fixed> = BTreeMap::from([(stratum("text"), Fixed::ONE)]);
+    let truncated =
+        FusionProfile::with_decay(weights.clone(), DecayRule::ReciprocalRank { k: K }, 8)
+            .expect("valid");
+    let folded = FusionProfile::with_decay(weights, DecayRule::WeightedReciprocalRank { k: K }, 8)
+        .expect("valid");
+
+    assert_eq!(
+        truncated.canonical_bytes(),
+        profile(&[("text", Fixed::ONE)], K, 8).canonical_bytes(),
+        "`new` is `with_decay` under the first rule"
+    );
+    assert_ne!(
+        truncated.id(),
+        folded.id(),
+        "a different rule is a different law and therefore a different identity"
+    );
+    assert_eq!(truncated.canonical_bytes()[2], 0, "tag zero");
+    assert_eq!(folded.canonical_bytes()[2], 1, "tag one");
+
+    assert_eq!(
+        FusionProfile::from_canonical_bytes(&folded.canonical_bytes()).expect("round-trips"),
+        folded
+    );
+
+    // An unassigned tag is refused rather than read as a rule this build knows.
+    let mut unknown = folded.canonical_bytes();
+    unknown[2] = 2;
+    assert!(
+        FusionProfile::from_canonical_bytes(&unknown).is_err(),
+        "an unknown decay tag is refused"
+    );
+}
+
+/// The weight the deep fixtures run at: two hundred, which under the weighted
+/// rule buys a monotone range above fourteen million ranks.
+const DEEP_WEIGHT_UNITS: i128 = 200;
+
+fn deep_weight() -> Fixed {
+    Fixed::from_raw(DEEP_WEIGHT_UNITS * 10_i128.pow(SCALE_DIGITS))
+}
+
+#[test]
+fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
+    let folded = FusionProfile::with_decay(
+        BTreeMap::from([(stratum("text"), deep_weight())]),
+        DecayRule::WeightedReciprocalRank { k: 1 },
+        1,
+    )
+    .expect("a strictly positive weight is a valid profile");
+    let bound = folded
+        .monotone_depth(&stratum("text"))
+        .expect("the profile weights this stratum");
+    assert!(
+        bound >= 14_000_000,
+        "a weight of {DEEP_WEIGHT_UNITS} must order past fourteen million ranks, got {bound}"
+    );
+
+    // Two-sided, the shape the other monotone fixtures use: adjacent ranks stay
+    // strictly ordered up to the bound, and the first pair beyond it collides.
+    let weight = deep_weight();
+    let at = |rank: u64| contribution_under(folded.decay(), weight, rank).expect("fits");
+    for rank in [1_u64, 2, 13_999_999, 14_000_000, bound - 2, bound - 1] {
+        assert!(
+            at(rank) > at(rank + 1),
+            "ranks {rank} and {} must stay ordered inside the bound {bound}",
+            rank + 1
+        );
+    }
+    assert_eq!(
+        at(bound),
+        at(bound + 1),
+        "the bound is the last ordered depth, not one short of it"
+    );
+
+    // The same weight under the first rule collides four hundred times sooner,
+    // which is the defect this rule exists to answer.
+    let truncated = FusionProfile::with_decay(
+        BTreeMap::from([(stratum("text"), deep_weight())]),
+        DecayRule::ReciprocalRank { k: 1 },
+        1,
+    )
+    .expect("valid");
+    let shallow = truncated
+        .monotone_depth(&stratum("text"))
+        .expect("weighted");
+    assert!(
+        shallow < 1_100_000,
+        "the truncated rule's bound is set by sqrt(S), not by the weight, got {shallow}"
     );
 }

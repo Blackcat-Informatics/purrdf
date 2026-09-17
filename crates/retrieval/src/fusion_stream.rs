@@ -508,7 +508,7 @@ impl<S: RankedStream> FusionStream<S> {
                 })?
         };
         let expected =
-            crate::reciprocal_rank::contribution(weight, rank, self.profile.k_parameter())?;
+            crate::reciprocal_rank::contribution_under(self.profile.decay(), weight, rank)?;
         if producer_contribution != expected {
             return Err(ProtocolError::ContributionMismatch {
                 expected,

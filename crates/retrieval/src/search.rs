@@ -137,14 +137,14 @@ use crate::compile::compile;
 use crate::error::{FusionError, PlanError};
 use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute};
 use crate::fuse::{TopK, fuse};
-use crate::fusion_profile::FusionProfile;
+use crate::fusion_profile::{DecayRule, FusionProfile};
 use crate::fusion_stream::{FusedRow, FusionTrailer};
 use crate::id::{FusionProfileId, PlanId};
 use crate::iri::{Iri, Term};
 use crate::plan::UnservedTerm;
 use crate::planner::plan;
 use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
-use crate::reciprocal_rank::contribution;
+use crate::reciprocal_rank::contribution_under;
 use crate::request::RetrievalRequest;
 use crate::statistics::Statistics;
 
@@ -442,8 +442,8 @@ pub struct RankedStreamAdapter {
     inner: RankedStreamImpl,
     /// The profile's weight for this stream's stratum.
     weight: Fixed,
-    /// The profile's smoothing constant.
-    k: u32,
+    /// The profile's decay rule, carrying its smoothing constant.
+    decay: DecayRule,
     /// The pinned plan these rows descend from, when the caller named one.
     plan_id: Option<PlanId>,
 }
@@ -467,7 +467,7 @@ impl RankedStreamAdapter {
         Some(Self {
             inner: stream,
             weight: profile.weight(stratum)?,
-            k: profile.k_parameter(),
+            decay: profile.decay(),
             plan_id: None,
         })
     }
@@ -519,7 +519,7 @@ impl RankedStream for RankedStreamAdapter {
         // protocol error rather than asserted with a panic, because a wrong
         // argument here would abort the caller's process instead of failing its
         // request. Fusion re-verifies the value regardless.
-        let value = contribution(self.weight, rank, self.k).map_err(|error| {
+        let value = contribution_under(self.decay, self.weight, rank).map_err(|error| {
             ProtocolError::UncomputableContribution {
                 rank,
                 reason: error.to_string(),
