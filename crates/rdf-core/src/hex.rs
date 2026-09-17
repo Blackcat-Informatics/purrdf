@@ -21,7 +21,7 @@
 //!
 //! [`lower`] is for call sites that render a handful of digests per operation —
 //! an error `Display`, a content address, a cache key. It is deliberately NOT
-//! the answer for every hex-shaped need in the workspace, and two kinds of call
+//! the answer for every hex-shaped need in the workspace. These kinds of call
 //! site correctly do something else:
 //!
 //! * **Hot paths** that render inside a fixpoint's inner loop, where per-byte
@@ -37,13 +37,27 @@
 //!   first-party dependency, the zero-dependency events crate; giving it an edge
 //!   to the IR kernel to share four lines would invert the layering that puts
 //!   `purrdf-rdf` above both. It keeps one renderer of its own, in `wire`.
-//! * **Different operations.** `crate::ir::skolem` emits `-{byte:02x}` for
-//!   non-alphanumerics only, and the SPARQL shape-label builder appends into an
-//!   already-prefixed accumulator. Neither turns a slice into a hex string.
+//! * **Selective escapes, which are not this operation.** `crate::ir::skolem`
+//!   and `purrdf_shapes::rules`'s focus tag both emit `-{byte:02x}` for
+//!   non-alphanumeric bytes ONLY, passing the rest through. That is an escape,
+//!   not a rendering: most input bytes never become hex at all.
+//! * **Renderers that append into a caller's accumulator.**
+//!   `purrdf_shapes::schema_import`'s property-shape label does render every
+//!   byte — it is this operation — but it writes into one `String` already
+//!   holding a prefix and shared across several parts, so calling a function
+//!   that *returns* a `String` would add a temporary allocation per part for no
+//!   gain. Reach for [`lower`] when you want the value; write in place when you
+//!   are building one buffer out of many pieces.
 //!
 //! Anything else that turns a `&[u8]` into an owned lowercase-hex [`String`]
 //! should call [`lower`]. It is the only transcription of the loop that should
-//! exist outside those four categories — check this list before adding another.
+//! exist outside the cases above — check this list before adding another, and
+//! add to the list rather than leaving a new copy unexplained.
+//!
+//! This list is deliberately not numbered. An earlier revision of it said "two
+//! kinds" above four bullets, and the pull request that introduced this module
+//! carried a count of the copies it had folded that was stale one commit later.
+//! A tally in prose has no gate behind it.
 
 use core::fmt::Write as _;
 

@@ -33,6 +33,7 @@ use crate::nesting::guard_xml_nesting;
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
+use purrdf_iri::langtag;
 use purrdf_iri::terminals::is_ws;
 
 /// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
@@ -192,12 +193,19 @@ fn term_element(
         Some("plainLiteral") => {
             let lexical = element_text(element);
             match attr_xml_lang(element) {
-                Some(lang) if !lang.is_empty() => Ok(TrixTerm::Literal(RdfLiteral {
-                    lexical_form: lexical,
-                    datatype: None,
-                    language: Some(lang.to_owned()),
-                    direction: None,
-                })),
+                // The empty-attribute guard stays where it was: `xml:lang=""`
+                // means "no language in scope" in XML, not "a language that is
+                // the empty string", and still yields a plain literal.
+                // Validating it would refuse documents that carry no language.
+                Some(lang) if !lang.is_empty() => {
+                    validate_language_tag(lang)?;
+                    Ok(TrixTerm::Literal(RdfLiteral {
+                        lexical_form: lexical,
+                        datatype: None,
+                        language: Some(lang.to_owned()),
+                        direction: None,
+                    }))
+                }
                 _ => Ok(TrixTerm::Literal(RdfLiteral::simple(lexical))),
             }
         }
@@ -348,6 +356,39 @@ fn attr_xml_lang<'a>(element: Node<'a, '_>) -> Option<&'a str> {
                 && attr.namespace() == Some("http://www.w3.org/XML/1998/namespace")
         })
         .map(|attr| attr.value())
+}
+
+/// The `xml:lang` contract on `<plainLiteral>`: the concrete syntaxes' `LANGTAG`
+/// terminal under the RFC 5646 §2.1 eight-character subtag ceiling, decided by
+/// [`purrdf_iri::langtag`].
+///
+/// There was NO contract here before. A non-empty `xml:lang` was moved into the
+/// literal unexamined, so this reader admitted `1`, `9-9`, `123-456`, `en-`, `-`
+/// and `!!!` — and `en us`, whose embedded space is not expressible in `LANGTAG`
+/// at all, which converted to N-Quads with exit 0 and produced a line no parser
+/// can read back.
+///
+/// The profile is [`langtag::Profile::ConcreteSyntaxLangtagBounded`], the one
+/// acceptance language every codec in this crate names — `text_parse`'s two
+/// parsers, `rdfxml`, `jsonld`'s expander and the term projection in
+/// `projections::term` all name the same one. It has to be shared, and TriX
+/// makes the point twice over: its own writer emits a dataset's `@lang` into
+/// `xml:lang` verbatim, so a tag this reader refuses but another accepts is a
+/// TriX file this codec writes and cannot read back.
+///
+/// The failure reports the module's
+/// [`langtag::LanguageTagError::diagnostic_code`], so the user learns which
+/// production refused. TriX parse diagnostics carry no line/column — the
+/// `roxmltree` DOM this walks is not a span-recording tokenizer, as this
+/// module's header says — which this does not change.
+fn validate_language_tag(language: &str) -> Result<(), RdfDiagnostic> {
+    match langtag::parse_with(language, langtag::Profile::ConcreteSyntaxLangtagBounded) {
+        Ok(_) => Ok(()),
+        Err(error) => Err(RdfDiagnostic::error(
+            error.diagnostic_code(),
+            format!("TriX: invalid language tag {language:?}: {error}"),
+        )),
+    }
 }
 
 /// Validate a `<uri>` against the shared IRI layer.
