@@ -1623,22 +1623,17 @@ pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
     hex_lower(&hasher.finalize())
 }
 
-/// Lowercase hexadecimal rendering of `bytes`, built with the same `write!`
-/// discipline the rest of this module uses (never `format!` + `push_str`).
+/// Lowercase hexadecimal rendering of `bytes`: the workspace's one one-shot hex
+/// renderer, re-exported here under the name this crate has always used for it.
 ///
-/// This crate's one general-purpose (variable-length, one-shot) hex renderer —
+/// This is a re-export, not a second implementation — the single transcription lives in
+/// [`purrdf_core::hex::lower`], reached by every crate downstream of the IR kernel.
 /// [`crate::cache::ContractHash::to_hex`] reuses it rather than carrying its own copy.
 /// [`crate::chase`]'s witness-label renderer deliberately does NOT: it is called once per
 /// invented witness inside the chase's fixpoint loop, so it keeps its own lookup-table
 /// implementation rather than paying this function's per-byte `write!` formatting overhead
 /// on a hot path.
-pub(crate) fn hex_lower(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        write!(out, "{byte:02x}").expect("writing to a String never fails");
-    }
-    out
-}
+pub(crate) use purrdf_core::hex::lower as hex_lower;
 
 // ── The DlClause lowering adapter ───────────────────────────────────────────────
 

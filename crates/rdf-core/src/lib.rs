@@ -82,6 +82,11 @@ pub mod governor;
 // FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
 // never hash order).
 pub mod hash;
+// The workspace's one one-shot lowercase-hex renderer (`&[u8]` -> `String`).
+// `pub` because its consumers are other crates — `purrdf-rdf`'s GTS bridges and
+// `purrdf-datalog`'s proof keys — not `purrdf-core` internals. Pure
+// `core`/`alloc`, dependency-free and wasm-clean.
+pub mod hex;
 // The immutable, value-interned RDF 1.2 dataset IR (C1).
 pub mod ir;
 // Generic provenance sidecar for the immutable RDF 1.2 dataset (S2):

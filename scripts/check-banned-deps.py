@@ -14,6 +14,15 @@ Two independent rules, matched to how each dependency was actually replaced:
   reintroduction through a dev-dependency or a transitive edge is caught the
   same way as a direct one.
 
+  It reads **every** ``Cargo.lock`` tracked by git, not just the root one.
+  The repository commits more than one: directories in the root manifest's
+  ``exclude`` list (``crates/geo/determinism``, and ``crates/gts/fuzz`` if it
+  ever gains a lock) are their own workspace roots with their own resolution,
+  so a root-only scan is blind to exactly the corners least likely to be
+  noticed — an excluded crate's lock drifted to a stale resolution carrying
+  ``oxilangtag`` and nothing said so. Each failure names the lock it came
+  from, so the message points at the file to fix.
+
 * **Direct-edge ban** (``BANNED_DIRECT_ONLY``): ``hex`` was removed only from
   PurRDF's own first-party surface (``core::fmt::LowerHex`` replaced it). A
   third-party crate that itself depends on ``hex`` transitively is not this
@@ -25,7 +34,9 @@ Two independent rules, matched to how each dependency was actually replaced:
   ``[dev-dependencies]``, ``[build-dependencies]``, and their
   ``[target.'cfg(...)'.*]`` equivalents) plus the root
   ``[workspace.dependencies]`` table, and only fails if one of them names the
-  package directly.
+  package directly. Widening the tier-1 scan to every committed lock does NOT
+  widen this one: tier 2 still never opens a lockfile, so the over-refusal the
+  tier split exists to prevent stays prevented.
 
 **Substitution.** A ``[patch]``/``[replace]`` override that redirects a
 banned name to a different source is scanned for too: ``[[patch.unused]]``
@@ -48,6 +59,7 @@ never lies about the present.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -80,6 +92,80 @@ REPLACE_KEY_RE = re.compile(r'^replace = "([^:"]+):', re.MULTILINE)
 PATCH_UNUSED_BLOCK_RE = re.compile(
     r"^\[\[patch\.unused\]\]\n((?:(?!^\[\[).)*)", re.MULTILINE | re.DOTALL
 )
+
+
+class LockfileDiscoveryError(RuntimeError):
+    """Raised when the set of committed lockfiles cannot be established.
+
+    Never downgraded to "scan the root one and hope": a gate that silently
+    narrows its own scope is the exact failure this discovery step exists to
+    fix, so an unusable ``git`` is a hard error, not a degraded mode.
+    """
+
+
+def lockfile_paths_from_ls_files(listing: str) -> list[str]:
+    """The ``Cargo.lock`` paths in a NUL-separated ``git ls-files -z`` listing.
+
+    Matching is on the **basename**, so near-miss names that are not actually
+    lockfiles (``Cargo.lock.bak``, a ``Cargo.lock.md`` write-up, a
+    ``vendor/Cargo.lock.orig``) are not scanned. Returned in sorted order so
+    the failure output is deterministic regardless of git's listing order.
+    """
+    return sorted(
+        path
+        for path in listing.split("\0")
+        if path and path.rsplit("/", 1)[-1] == "Cargo.lock"
+    )
+
+
+def committed_lockfiles(root: Path) -> list[Path]:
+    """Every ``Cargo.lock`` tracked by git under ``root``.
+
+    Uses git rather than a filesystem glob on purpose: "committed" is the
+    property that matters (an untracked lock in a scratch directory or a
+    ``target/`` tree is not something a reviewer can be held to), and git is
+    the only authority on it.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise LockfileDiscoveryError(
+            f"could not list git-tracked files under {root} to find every "
+            f"committed Cargo.lock: {exc}"
+        ) from exc
+    return [root / path for path in lockfile_paths_from_ls_files(completed.stdout)]
+
+
+def lock_failures(display_path: str, lock_text: str) -> list[str]:
+    """Tier-1 failure messages for one lockfile, each naming ``display_path``.
+
+    ``display_path`` is repository-relative so the message points at the file
+    to fix — which lock a banned name came back through is the whole question
+    once more than one is scanned.
+    """
+    any_edge = set(any_edge_offenders(lock_text))
+    substitution = set(substitution_offenders(lock_text))
+    failures: list[str] = []
+    for name in sorted(any_edge | substitution):
+        replacement = BANNED_ANY_EDGE[name]
+        if name in any_edge:
+            failures.append(
+                f"FAIL: `{name}` is back in {display_path}; it was replaced by "
+                f"{replacement} and must not be reintroduced through any "
+                "runtime, build, or test edge"
+            )
+        else:
+            failures.append(
+                f"FAIL: `{name}` reappears via a patch/replace override in "
+                f"{display_path} with no plain resolved entry; it was replaced "
+                f"by {replacement} and must not be reintroduced under any source"
+            )
+    return failures
 
 
 def any_edge_offenders(lock_text: str) -> list[str]:
@@ -253,6 +339,92 @@ def self_test() -> int:
     if substitution_offenders(benign_lock):
         failures.append("an unrelated [[patch.unused]] entry was flagged")
 
+    # --- (C) discovery: a `git ls-files -z` listing is filtered down to real
+    #     lockfiles by BASENAME, so nested and excluded-directory locks are
+    #     found while near-miss names are left alone.
+    listing = "\0".join(
+        [
+            "Cargo.toml",
+            "Cargo.lock",
+            "crates/geo/determinism/Cargo.lock",
+            "crates/gts/fuzz/Cargo.lock",
+            # Near misses that are NOT lockfiles and must not be scanned.
+            "docs/Cargo.lock.md",
+            "vendor/Cargo.lock.bak",
+            "notes/not-a-Cargo.lock-really.txt",
+            "scripts/check-banned-deps.py",
+        ]
+    )
+    discovered = lockfile_paths_from_ls_files(listing)
+    expected_discovered = [
+        "Cargo.lock",
+        "crates/geo/determinism/Cargo.lock",
+        "crates/gts/fuzz/Cargo.lock",
+    ]
+    if discovered != expected_discovered:
+        failures.append(
+            f"lockfile discovery picked {discovered}, expected {expected_discovered}"
+        )
+    if lockfile_paths_from_ls_files(""):
+        failures.append("an empty git listing produced lockfile paths")
+
+    # --- (C) THE OVER-REFUSAL CHECK for the widened scan: matching on the
+    #     basename means the wider scan reads lockfiles and ONLY lockfiles. The
+    #     repository legitimately names `oxilangtag` in prose and in a frozen
+    #     differential-vector corpus (`crates/iri/tests/PROVENANCE.md`,
+    #     `crates/iri/tests/langtag_differential_vectors.txt`), which record
+    #     which engine a vector came from. Those are not `Cargo.lock`, so
+    #     scanning every committed lock must never reach them.
+    prose_paths = "\0".join(
+        [
+            "crates/iri/tests/PROVENANCE.md",
+            "crates/iri/tests/langtag_differential_vectors.txt",
+        ]
+    )
+    if lockfile_paths_from_ls_files(prose_paths):
+        failures.append(
+            "a non-lockfile that legitimately names a banned crate was picked "
+            "up by lockfile discovery (over-refusal)"
+        )
+
+    # --- (C) a tier-1 failure names the lockfile it came from, so a violation
+    #     in a non-root lock points at the right file.
+    nested_failures = lock_failures(
+        "crates/geo/determinism/Cargo.lock",
+        'name = "oxilangtag"\nversion = "0.1.6"\n',
+    )
+    if len(nested_failures) != 1 or "crates/geo/determinism/Cargo.lock" not in (
+        nested_failures[0]
+    ):
+        failures.append(
+            f"a non-root lock violation did not name its file: {nested_failures}"
+        )
+    if lock_failures("Cargo.lock", 'name = "serde"\n'):
+        failures.append("a clean lock produced a failure message")
+
+    # --- (C) discovery works on THIS repository and finds more than the root
+    #     lock. Pins the regression this rule was written for: a gate that
+    #     quietly narrows back to `REPO_ROOT / "Cargo.lock"` fails here.
+    try:
+        repo_locks = committed_lockfiles(REPO_ROOT)
+    except LockfileDiscoveryError as exc:
+        failures.append(f"could not discover this repository's lockfiles: {exc}")
+    else:
+        relative = sorted(
+            lock.relative_to(REPO_ROOT).as_posix() for lock in repo_locks
+        )
+        if "Cargo.lock" not in relative:
+            failures.append(f"the root Cargo.lock was not discovered: {relative}")
+        if len(relative) < 2:
+            failures.append(
+                "only one committed lockfile was discovered in this repository; "
+                "the excluded-directory locks are exactly what this scan exists "
+                f"to reach (found {relative})"
+            )
+        for lock in repo_locks:
+            if not lock.is_file():
+                failures.append(f"discovered lockfile does not exist: {lock}")
+
     if failures:
         for message in failures:
             print(f"SELF-TEST FAIL: {message}")
@@ -265,25 +437,25 @@ def main() -> int:
     if "--self-test" in sys.argv[1:]:
         return self_test()
 
-    lock_text = (REPO_ROOT / "Cargo.lock").read_text(encoding="utf-8")
     failures: list[str] = []
 
-    any_edge = set(any_edge_offenders(lock_text))
-    substitution = set(substitution_offenders(lock_text))
-    for name in sorted(any_edge | substitution):
-        replacement = BANNED_ANY_EDGE[name]
-        if name in any_edge:
-            failures.append(
-                f"FAIL: `{name}` is back in Cargo.lock; it was replaced by "
-                f"{replacement} and must not be reintroduced through any "
-                "runtime, build, or test edge"
-            )
-        else:
-            failures.append(
-                f"FAIL: `{name}` reappears via a Cargo.lock patch/replace "
-                f"override with no plain resolved entry; it was replaced by "
-                f"{replacement} and must not be reintroduced under any source"
-            )
+    try:
+        lockfiles = committed_lockfiles(REPO_ROOT)
+    except LockfileDiscoveryError as exc:
+        print(f"FAIL: {exc}")
+        return 1
+    if not lockfiles:
+        print(
+            "FAIL: no committed Cargo.lock found; the any-edge ban has nothing "
+            "to read, which is a broken gate rather than a clean workspace"
+        )
+        return 1
+
+    for lockfile in lockfiles:
+        display_path = lockfile.relative_to(REPO_ROOT).as_posix()
+        failures.extend(
+            lock_failures(display_path, lockfile.read_text(encoding="utf-8"))
+        )
 
     direct = direct_edge_offenders(REPO_ROOT)
     for name in sorted(direct):

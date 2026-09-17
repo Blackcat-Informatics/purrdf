@@ -59,12 +59,7 @@ impl ContentDigest {
 
     /// The lowercase-hex rendering of the digest (64 chars).
     pub fn to_hex(&self) -> String {
-        let mut s = String::with_capacity(64);
-        for b in &self.0 {
-            use fmt::Write as _;
-            let _ = write!(s, "{b:02x}");
-        }
-        s
+        crate::hex::lower(&self.0)
     }
 
     /// Parse a 64-char hex digest. Returns `None` on any malformed input

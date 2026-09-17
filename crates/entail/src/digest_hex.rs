@@ -10,18 +10,17 @@
 //! for the golden-tested `digest_hex()` accessors. Three copies of one operation is the
 //! DUPLICATE shape the workspace's standing goals forbid, so it is consolidated here.
 //!
-//! `[u8; 32]` has no inherent [`std::fmt::LowerHex`] implementation, so [`hex`] does not
-//! hand-roll nibble extraction either — it splits the digest into two `u128`s, which DO
-//! implement `LowerHex`, and lets `format!` do the rendering. This is a one-shot operation
-//! (called at most a handful of times per proof, never inside a fixpoint's inner loop), so
-//! there is no hot-path reason to prefer a lookup table here the way
-//! `purrdf_datalog::chase`'s witness-label renderer does for its own, much hotter, call site.
+//! The rendering itself is [`purrdf_core::hex::lower`], the workspace's one
+//! `&[u8]` → lowercase-hex helper. This module keeps only the digest-shaped signature its
+//! three callers want; consolidating three copies into a fourth private implementation
+//! would have traded one duplicate for another. This is a one-shot operation (called at
+//! most a handful of times per proof, never inside a fixpoint's inner loop), so there is no
+//! hot-path reason to prefer a lookup table here the way `purrdf_datalog::chase`'s
+//! witness-label renderer does for its own, much hotter, call site.
 
 /// Render a 32-byte digest as 64 lowercase hex characters.
 pub(crate) fn hex(digest: [u8; 32]) -> String {
-    let hi = u128::from_be_bytes(digest[..16].try_into().expect("first 16 bytes of 32"));
-    let lo = u128::from_be_bytes(digest[16..].try_into().expect("last 16 bytes of 32"));
-    format!("{hi:032x}{lo:032x}")
+    purrdf_core::hex::lower(&digest)
 }
 
 #[cfg(test)]
