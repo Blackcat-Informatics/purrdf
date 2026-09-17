@@ -138,6 +138,44 @@ pub(super) fn require_canonical_package(
     Ok(())
 }
 
+/// Size of [`render_hex_blocks`]'s stack staging block, in rendered characters.
+const HEX_BLOCK_BYTES: usize = 8_192;
+
+/// Render `value` as lowercase hexadecimal — two characters per byte, zero
+/// padded, leading zero bytes preserved — handing the rendered characters to
+/// `emit` one fixed stack block at a time.
+///
+/// This is the single transcription of the nibble-table encoder for the LPG
+/// carriers, and it sits beside [`hex_decode`], the inverse it must agree with.
+/// It is deliberately NOT `purrdf_core::hex::lower`: that renders into an
+/// owned [`String`], and both call sites here are byte sinks on a per-item
+/// projection path (a streaming artifact writer and a bounded `Vec<u8>`), so
+/// routing them through it would add one heap allocation *and* one copy per
+/// rendered value for output they never keep as a `String`. `purrdf-core`'s hex
+/// module names exactly this case — an allocation-free renderer writing into a
+/// fixed inline buffer — as the call-site class that correctly does something
+/// else.
+///
+/// Blocking rather than emitting per byte keeps the sink call count proportional
+/// to the payload size divided by [`HEX_BLOCK_BYTES`], not to the byte count.
+pub(super) fn render_hex_blocks(
+    value: &[u8],
+    mut emit: impl FnMut(&[u8]) -> Result<(), ProjectionError>,
+) -> Result<(), ProjectionError> {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut block = [0u8; HEX_BLOCK_BYTES];
+    // Two output characters per source byte, so a block holds half its size in
+    // source bytes and `source.len() * 2` can never exceed `block.len()`.
+    for source in value.chunks(HEX_BLOCK_BYTES / 2) {
+        for (index, byte) in source.iter().copied().enumerate() {
+            block[index * 2] = DIGITS[usize::from(byte >> 4)];
+            block[index * 2 + 1] = DIGITS[usize::from(byte & 0x0f)];
+        }
+        emit(&block[..source.len() * 2])?;
+    }
+    Ok(())
+}
+
 pub(super) struct BoundedText {
     bytes: Vec<u8>,
     limit: usize,
@@ -185,12 +223,11 @@ impl BoundedText {
             ProjectionError::limit(format!("{} byte count overflow", self.description))
         })?;
         self.ensure_additional(added)?;
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        for byte in value {
-            self.bytes.push(HEX[usize::from(byte >> 4)]);
-            self.bytes.push(HEX[usize::from(byte & 0x0f)]);
-        }
-        Ok(())
+        self.bytes.reserve(added);
+        render_hex_blocks(value, |block| {
+            self.bytes.extend_from_slice(block);
+            Ok(())
+        })
     }
 
     fn ensure_additional(&self, added: usize) -> Result<(), ProjectionError> {

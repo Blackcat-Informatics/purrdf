@@ -1025,8 +1025,11 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
     Ok(())
 }
 
-/// The `xml:lang` contract: the RFC 5646 `Language-Tag` production, decided by
-/// [`purrdf_iri::langtag`].
+/// The `xml:lang` contract: the concrete syntaxes' `LANGTAG` terminal under the
+/// RFC 5646 §2.1 eight-character subtag ceiling, decided by
+/// [`purrdf_iri::langtag`]. That is deliberately *wider* than §2.1 — it takes
+/// `en-fr-jura` and `de-419-DE`, which the `langtag` production does not — and
+/// the paragraph below says why every codec in this crate must share it.
 ///
 /// The predicate this replaced was "non-empty, hyphen-separated, every subtag
 /// ASCII alphanumeric" and had NO grammar and NO length bound at all, so it

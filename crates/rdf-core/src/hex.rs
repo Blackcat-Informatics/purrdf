@@ -28,13 +28,22 @@
 //!   [`write!`] formatting is measurable. `purrdf_datalog::chase`'s Skolem
 //!   witness-label renderer keeps its own lookup table for this reason; that is
 //!   a performance decision backed by its own rationale, not a stray copy.
-//! * **Allocation-free renderers** that write into a fixed inline buffer rather
-//!   than a heap [`String`] (`crate::ir::canon`'s `HashHex`). They render the
-//!   same characters but do not produce this function's return type, so routing
-//!   them through it would *add* the allocation they exist to avoid.
+//! * **Allocation-free renderers** that write into a fixed inline buffer or a
+//!   caller-supplied byte sink rather than a heap [`String`] — `crate::ir::canon`'s
+//!   `HashHex`, and the LPG projection's block renderer. They render the same
+//!   characters but do not produce this function's return type, so routing them
+//!   through it would *add* the allocation they exist to avoid.
+//! * **Crates that cannot reach this one.** `purrdf-gts` declares exactly one
+//!   first-party dependency, the zero-dependency events crate; giving it an edge
+//!   to the IR kernel to share four lines would invert the layering that puts
+//!   `purrdf-rdf` above both. It keeps one renderer of its own, in `wire`.
+//! * **Different operations.** `crate::ir::skolem` emits `-{byte:02x}` for
+//!   non-alphanumerics only, and the SPARQL shape-label builder appends into an
+//!   already-prefixed accumulator. Neither turns a slice into a hex string.
 //!
 //! Anything else that turns a `&[u8]` into an owned lowercase-hex [`String`]
-//! should call [`lower`] rather than growing a fifth copy of the loop.
+//! should call [`lower`]. It is the only transcription of the loop that should
+//! exist outside those four categories — check this list before adding another.
 
 use core::fmt::Write as _;
 
