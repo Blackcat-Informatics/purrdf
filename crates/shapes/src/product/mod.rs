@@ -52,6 +52,21 @@
 //! [`FormatVersion`]: error::ProductDimension::FormatVersion
 //! [`FunctionRegistry`]: error::ProductDimension::FunctionRegistry
 
+// The AST codec is `pub(crate)` and its caller — the container writer/reader that
+// frames this section — is a later stage, so in a NON-TEST build nothing in the
+// crate calls it yet and every item is transitively unused. The allow is
+// deliberately `not(test)` only: the test build exercises the whole surface, so
+// genuinely unreachable code still fails there, and this exemption disappears the
+// moment the container lands.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the AST codec's in-crate caller is the container stage; the test build exercises \
+                  every item, so unreachable code is still caught"
+    )
+)]
+pub(crate) mod ast;
 pub mod error;
 
 pub use error::{ProductDimension, ShapesProductError};
