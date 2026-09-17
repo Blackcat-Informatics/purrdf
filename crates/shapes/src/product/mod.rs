@@ -67,6 +67,19 @@
     )
 )]
 pub(crate) mod ast;
+// Same exemption, same reason, same expiry as `ast` above: the dataset section's
+// in-crate caller is the container stage, so in a NON-TEST build nothing calls
+// `encode_dataset`/`open_dataset`/`certify_dataset` yet. The test build exercises
+// all three, so genuinely unreachable code still fails there.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "the dataset section's in-crate caller is the container stage; the test build \
+                  exercises every item, so unreachable code is still caught"
+    )
+)]
+pub(crate) mod dataset;
 pub mod error;
 
 pub use error::{ProductDimension, ShapesProductError};
