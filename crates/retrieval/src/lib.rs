@@ -35,6 +35,12 @@
 //! the verified ranked-stream protocol ([`RankedStream`], [`FusionStream`],
 //! [`FusionProfile`]).
 //!
+//! [`search`] is those four stages run as one — `fuse ∘ execute ∘ compile ∘
+//! plan` — returning a [`SearchResult`] that names both the pinned plan and the
+//! fusion profile. It adds no policy of its own: a caller that wants to stop
+//! between stages calls the stage functions directly, and [`SearchError`] carries
+//! whichever stage refused.
+//!
 //! # Fusion is a law, not a knob
 //!
 //! A [`FusionProfile`] fixes the decay rule and its smoothing constant, every
@@ -89,6 +95,7 @@ mod planner;
 mod ranked_stream;
 mod reciprocal_rank;
 mod request;
+mod search;
 mod statistics;
 
 pub use admission::{AdmissionEnvironment, AdmissionError};
@@ -110,6 +117,7 @@ pub use planner::plan;
 pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
 pub use reciprocal_rank::contribution;
 pub use request::{Metric, RequestTerm, RetrievalRequest};
+pub use search::{SearchError, SearchResult, search};
 pub use statistics::Statistics;
 
 // The exact fixed-point type stratum weights and fused scores are expressed in,
