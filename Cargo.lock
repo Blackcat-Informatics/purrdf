@@ -1322,6 +1322,7 @@ dependencies = [
  "purrdf-events",
  "purrdf-geo",
  "purrdf-gts",
+ "purrdf-hnsw",
  "purrdf-iri",
  "purrdf-json",
  "purrdf-markdown",

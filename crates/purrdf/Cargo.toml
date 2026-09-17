@@ -57,6 +57,12 @@ purrdf-geo = { workspace = true }
 # evaluator's property-function seam, and must be able to name `TextIndex`,
 # `TextIndexConfig` and `Scored` while depending on `purrdf` alone.
 purrdf-text = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: a consumer who
+# wants approximate nearest-neighbour retrieval registers this crate's relation
+# against the evaluator's property-function seam, and must be able to name
+# `HnswIndex`, `HnswSpace`, `Params` and `HnswRelation` while depending on
+# `purrdf` alone.
+purrdf-hnsw = { workspace = true }
 purrdf-validate = { workspace = true }
 # Part of the published surface, so the umbrella re-exports it: a consumer who
 # slices a Markdown document must be able to name `Profile`, `Vocabulary`,

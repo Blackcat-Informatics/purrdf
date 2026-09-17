@@ -249,6 +249,16 @@ pub mod text {
     pub use purrdf_text::*;
 }
 
+/// A deterministic HNSW index ([`purrdf_hnsw`]): an approximate nearest-neighbour
+/// graph over a PURREMB embedding matrix, byte-identical across thread counts and
+/// across `wasm32`, registered on [`sparql`]'s property-function seam under the
+/// caller's own IRI. It stands beside the exact kNN relation and never replaces
+/// it: every answer carries a declared approximation naming its oracle, and an
+/// empty offer is never evidence of absence.
+pub mod hnsw {
+    pub use purrdf_hnsw::*;
+}
+
 /// The SARIF 2.1.0 reporting boundary ([`purrdf_validate`]): validate a
 /// shapes+data pair to a source-traced, byte-deterministic SARIF log.
 pub mod validate {
