@@ -9,12 +9,12 @@ use std::sync::Arc;
 use ::purrdf::TermValue;
 use purrdf_sparql_algebra::{Query, SparqlParser};
 use purrdf_sparql_eval::{
-    Arity, EvalError, ExprFnCall, NodeKind as EvalNodeKind, TypeConstraint, UserFnBody,
-    UserFnParam, UserFunction, UserFunctionRegistry,
+    EvalError, ExprFnCall, NodeKind as EvalNodeKind, TypeConstraint, UserFnBody, UserFnParam,
+    UserFunction, UserFunctionRegistry,
 };
 
 use crate::data::ShaclData;
-use crate::expression::{CustomFnKind, CustomFunction, RecursionGuard, eval_custom_function_call};
+use crate::expression::{CustomFunction, RecursionGuard, eval_custom_function_call};
 use crate::model::{rdf, sh};
 use crate::sparql::enter_call_depth_scope;
 use crate::term::{Term, term_value_to_native};
@@ -32,6 +32,12 @@ impl Parser<'_> {
     /// Hard-fails on a malformed declaration — a parameter without a predicate,
     /// two parameters whose derived variable names collide, a missing/ambiguous
     /// body, or an unparsable body query.
+    ///
+    /// The registry this returns is INCOMPLETE on purpose: the custom
+    /// node-expression functions SHACL 1.2 SPARQL Extensions §7.3 also asks for are
+    /// added by [`crate::shapes::link::link_shapes`], which is the one place that
+    /// can add them — registering a declaration is only sound once its body is
+    /// installed, and installing bodies is that pass's own first step.
     pub(crate) fn parse_sparql_functions(&self) -> Result<UserFunctionRegistry, String> {
         let mut fn_ids: Vec<Term> = self
             .quads_with(None, Some(rdf::TYPE), Some(sh::SPARQL_FUNCTION))
@@ -58,60 +64,7 @@ impl Parser<'_> {
             let func = self.parse_one_sparql_function(&id)?;
             registry.insert(iri.as_str().to_owned(), func);
         }
-        self.register_expression_bodied_functions(&mut registry)?;
         Ok(registry)
-    }
-
-    /// Register every custom LIST parameter function as a callable SPARQL function,
-    /// into the SAME [`UserFunctionRegistry`] the `sh:select`/`sh:ask` bodies go
-    /// into.
-    ///
-    /// SHACL 1.2 SPARQL Extensions §7.3: "SPARQL engines SHOULD register a function
-    /// for any SHACL instance of `sh:ListParameterExpressionFunction` from any
-    /// provided shapes graph." Only that class is registered — a
-    /// `sh:NamedParameterExpressionFunction` keys its arguments by parameter IRI and
-    /// has no positional call form, so §7.3 does not name it and there is no
-    /// well-defined `ex:f(?x, ?y)` for it to answer.
-    ///
-    /// Each registration is a dataset-aware closure
-    /// ([`purrdf_sparql_eval::ExprFnBody`]): the body is a node expression, so it is
-    /// evaluated over the graph the CALLING QUERY supplies rather than over anything
-    /// captured here. That is what makes a call inside a rules fixpoint read the
-    /// current round's facts.
-    ///
-    /// # Errors
-    ///
-    /// Hard-fails when a declaration's body was never installed — an internal
-    /// inconsistency that would otherwise register a function which silently answers
-    /// nothing.
-    fn register_expression_bodied_functions(
-        &self,
-        registry: &mut UserFunctionRegistry,
-    ) -> Result<(), String> {
-        for func in self.custom_fns.iter() {
-            if !matches!(func.kind, CustomFnKind::ListParameter) {
-                continue;
-            }
-            // Registering a function whose body never arrived would put a call site
-            // in reach of a function that answers nothing; refuse at load instead.
-            func.body()?;
-            let arity = if func.required == func.params.len() {
-                Arity::Exact(func.required)
-            } else {
-                Arity::Range {
-                    min: func.required,
-                    max: func.params.len(),
-                }
-            };
-            let declared = Arc::clone(func);
-            let iri = declared.iri.as_str().to_owned();
-            registry.register_expr(
-                iri,
-                arity,
-                Arc::new(move |call: &ExprFnCall<'_>| invoke_expression_function(&declared, call)),
-            );
-        }
-        Ok(())
     }
 
     /// Parse a single `sh:SPARQLFunction` declaration node into a [`UserFunction`].
@@ -249,7 +202,7 @@ impl Parser<'_> {
         // §6.1/§6.2). It is not parsed here — a node-expression body belongs to the
         // declaring class that carries it, and `Parser::discover_custom_functions`
         // has already interned that declaration and
-        // `install_custom_function_bodies` has already parsed the body — so reaching
+        // `parse_custom_function_bodies` has already parsed the body — so reaching
         // this point with one means the node declared an expression body WITHOUT one
         // of the two classes that give it meaning. That is a body nothing would ever
         // evaluate, so it is refused rather than loaded green.
@@ -327,7 +280,7 @@ impl Parser<'_> {
 }
 
 /// Evaluate one SPARQL call of a custom LIST parameter function — the body of the
-/// closure `register_expression_bodied_functions` installs.
+/// closure [`crate::shapes::link::link_shapes`] installs.
 ///
 /// SHACL 1.2 SPARQL Extensions §7.3 in three moves:
 ///
@@ -345,7 +298,7 @@ impl Parser<'_> {
 ///
 /// The recursion guard is SEEDED from `call.depth`, so a cycle that passed through
 /// SPARQL to get here keeps counting rather than restarting.
-fn invoke_expression_function(
+pub(crate) fn invoke_expression_function(
     func: &Arc<CustomFunction>,
     call: &ExprFnCall<'_>,
 ) -> Result<Option<TermValue>, EvalError> {

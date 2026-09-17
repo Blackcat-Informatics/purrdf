@@ -27,6 +27,7 @@ use crate::provenance::ParseProvenance;
 use crate::report::Severity;
 use crate::term::{NamedNode, Term};
 
+pub(crate) mod link;
 mod parser;
 
 // ── Public types ───────────────────────────────────────────────────────────────
@@ -907,52 +908,29 @@ impl<'s> Parser<'s> {
 
         // The custom functions' own bodies. Deferred to here because a body is a
         // node expression that may call any declared function — itself included —
-        // so it can only be parsed once every declaration is interned.
+        // so it can only be parsed once every declaration is interned. They are
+        // INSTALLED by the linking pass below, together with the shape index.
         let custom_fns = self.custom_fns.clone();
-        self.install_custom_function_bodies(&custom_fns)?;
+        let bodies = self.parse_custom_function_bodies(&custom_fns)?;
 
-        let functions = self.parse_sparql_functions()?;
+        let mut functions = self.parse_sparql_functions()?;
 
-        // Fill the shared `sh:nodeByExpression` resolution table (§7.2) now that
-        // every top-level shape is parsed. The handle was created before parsing
-        // began and every such constraint already holds a clone of it, so this one
-        // write makes the shapes visible to all of them at once.
-        //
-        // A shapes graph WITHOUT any `sh:nodeByExpression` never hands the handle
-        // out, so the extra reference count is exactly the "is anyone going to read
-        // this?" test — and the shape clones are skipped entirely in that (normal)
-        // case rather than being built and thrown away.
-        if Arc::strong_count(&self.node_shape_index) > 1 {
-            let index: FastMap<String, Shape> = node_shapes
-                .iter()
-                .map(|shape| (shape.id.to_string(), shape.clone()))
-                .collect();
-            if self.node_shape_index.set(index).is_err() {
-                return Err(
-                    "internal error: the sh:nodeByExpression shape index was already filled"
-                        .to_owned(),
-                );
-            }
-            // Resolve NOW every shape IRI a `sh:nodeByExpression` already names.
-            // The constraint otherwise resolves per value node during validation,
-            // so a shape that targets nothing — or whose path yields no value node
-            // — would ship a constraint naming a shape that does not exist: green
-            // load, green report, nothing checked. Against the very index the
-            // validator uses, so this refuses only what validation would refuse.
-            let index = self.node_shape_index.get().ok_or_else(|| {
-                "internal error: the shape index vanished after being set".to_owned()
-            })?;
-            for (shape_id, named) in &self.node_by_expr_constants {
-                if !index.contains_key(&named.to_string()) {
-                    return Err(format!(
-                        "sh:nodeByExpression on shape {shape_id} names {named}, which is not a \
-                         shape of this shapes graph; the constraint would resolve it only when a \
-                         value node reached it, so a shape with no targets would load and \
-                         validate green while checking nothing"
-                    ));
-                }
-            }
-        }
+        // The post-tree linking pass: install the bodies, fill the one shared
+        // `sh:nodeByExpression` resolution table (§7.2), register the
+        // expression-bodied functions — and PROVE the sharing topology, which is
+        // the part no downstream test could observe. See `shapes::link`.
+        let declarations: Vec<Arc<crate::expression::CustomFunction>> =
+            custom_fns.iter().map(Arc::clone).collect();
+        link::link_shapes(
+            &node_shapes,
+            &self.node_shape_index,
+            &declarations,
+            bodies,
+            &mut functions,
+        )
+        .map_err(|error| error.to_string())?;
+
+        self.check_node_by_expression_constants()?;
 
         Ok(Shapes {
             node_shapes,
@@ -977,6 +955,41 @@ impl<'s> Parser<'s> {
                 self.shapes_graph.clone(),
             ),
         })
+    }
+
+    /// Resolve NOW every shape IRI a `sh:nodeByExpression` already names, against
+    /// the index [`link::link_shapes`] has just filled.
+    ///
+    /// The constraint otherwise resolves per value node during validation, so a
+    /// shape that targets nothing — or whose path yields no value node — would ship
+    /// a constraint naming a shape that does not exist: green load, green report,
+    /// nothing checked. The check runs against the very index the validator uses, so
+    /// it refuses only what validation would refuse.
+    ///
+    /// An UNFILLED index means no live constraint ever took a handle, so there is
+    /// nothing a recorded constant could be checked for — the constraint that
+    /// recorded it was discarded during parsing and will never fire. Refusing there
+    /// would be over-refusal of a shapes graph that is correct.
+    ///
+    /// # Errors
+    ///
+    /// Hard-fails when a constant names a node that is not a top-level shape of this
+    /// shapes graph.
+    fn check_node_by_expression_constants(&self) -> Result<(), String> {
+        let Some(index) = self.node_shape_index.get() else {
+            return Ok(());
+        };
+        for (shape_id, named) in &self.node_by_expr_constants {
+            if !index.contains_key(&named.to_string()) {
+                return Err(format!(
+                    "sh:nodeByExpression on shape {shape_id} names {named}, which is not a shape \
+                     of this shapes graph; the constraint would resolve it only when a value node \
+                     reached it, so a shape with no targets would load and validate green while \
+                     checking nothing"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// A handle on the shared top-level-shape index for a `sh:nodeByExpression`
