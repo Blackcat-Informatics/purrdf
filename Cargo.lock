@@ -1498,6 +1498,7 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-xsd",
  "rayon",
+ "serde_json",
 ]
 
 [[package]]
