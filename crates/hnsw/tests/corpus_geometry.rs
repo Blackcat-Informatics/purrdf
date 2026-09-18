@@ -165,12 +165,12 @@ fn mean_centroid_cosine(structured: &Structured) -> f64 {
 /// averaging over rows does not touch it. This is the quantity a width-invariance claim has to
 /// be made about, and making it about a single draw instead is how a bound came to sit below
 /// its own noise floor.
-fn mean_cosine_over_seeds(dims: usize) -> f64 {
+fn mean_cosine_over_seeds(dims: usize, intended: f64) -> f64 {
     let total: f64 = SEEDS
         .into_iter()
         .map(|seed| {
-            let structured =
-                embedding_like_structured(tightness_shape(dims, 0.75), seed).expect("generates");
+            let structured = embedding_like_structured(tightness_shape(dims, intended), seed)
+                .expect("generates");
             mean_centroid_cosine(&structured)
         })
         .sum();
@@ -241,26 +241,31 @@ fn the_intended_cluster_cosine_is_the_cosine_the_corpus_achieves() {
     //
     // Measured against the centroid each row was DRAWN AROUND, which is the relationship the
     // parameter actually names, and pinned exactly at each rung so the whole curve is held.
+    // Averaged over [`SEEDS`], for the same reason the width sweep is and for a reason this
+    // rung learned the hard way. A single corpus's achieved cosine carries the bias of ONE
+    // projection draw, sd about 0.012 at this width -- so judging it against a tolerance sized
+    // for an eight-seed mean is the same mistake as bounding a span below its own noise floor.
+    // Measured: at the single seed this ladder used to run, the rho = 0.35 rung reads a
+    // shortfall of 0.0015 while the generator's real shortfall is 0.0124, understating it
+    // eightfold, and 32.8% of seeds would have failed the assertion the rung was passing.
     let intended = [0.05, 0.35, 0.75, 0.95];
     let achieved: Vec<i64> = intended
         .into_iter()
-        .map(|cosine| {
-            let structured = embedding_like_structured(tightness_shape(256, cosine), 0xC051_5EED)
-                .expect("generates");
-            pinned(mean_centroid_cosine(&structured))
-        })
+        .map(|cosine| pinned(mean_cosine_over_seeds(256, cosine)))
         .collect();
 
     assert_eq!(
         achieved,
-        vec![61_455, 351_538, 751_847, 951_277],
+        vec![51_529, 339_538, 743_098, 949_511],
         "the achieved within-cluster cosine moved; it is a pure function of the generator, \
          so this is a real change in the corpus every recall figure is measured over"
     );
 
     // The claim itself, stated as a claim rather than as a pin: the parameter is an INTENDED
-    // cosine, so the corpus must actually achieve it. Every rung lands within 0.012 of what
-    // it asked for; the bound is what separates "honoured" from "correlated with".
+    // cosine, so the corpus must actually achieve it. Measured deviations are +0.0015,
+    // -0.0105, -0.0069 and -0.0005 -- the generator runs slightly LOOSE of what is asked, most
+    // at the middle of the range, and that systematic shortfall is visible only once the
+    // projection draw is averaged out.
     for (asked, got) in intended.into_iter().zip(&achieved) {
         let got = *got as f64 / 1e6;
         assert!(
@@ -351,8 +356,9 @@ const FIXED_AMPLITUDE_SIGMA: f64 = 0.110_24;
 /// Set ABOVE the statistic's measured residual scatter rather than below it, which is the whole
 /// difference between a bound that tests something and one that fits three numbers. The
 /// seed-averaged figures span far less than this across a sixty-fourfold range of widths; a
-/// single-seed figure would not, and the previous value of 20,000 sat under a one-corpus spread
-/// of about 26,700.
+/// single-seed figure would not: one corpus's achieved cosine has sd 11,870 at `d = 256` over
+/// 64 seeds, so the previous value of 20,000 sat under the scatter of the very quantity it
+/// bounded.
 ///
 /// Used in BOTH directions by FOUR tests, which is what makes it a bracket rather than a
 /// ceiling. Under it: the real generator across [`WIDTHS`], and the latent fixed-amplitude
@@ -662,7 +668,7 @@ fn cluster_tightness_is_the_same_at_every_width() {
     // each figure averaged over the per-corpus projection draw rather than taken from one of them.
     let achieved: Vec<i64> = WIDTHS
         .into_iter()
-        .map(|dims| pinned(mean_cosine_over_seeds(dims)))
+        .map(|dims| pinned(mean_cosine_over_seeds(dims, 0.75)))
         .collect();
 
     assert_eq!(
@@ -679,15 +685,38 @@ fn cluster_tightness_is_the_same_at_every_width() {
     // -- fits inside [`WIDTH_SPAN_BOUND`] and passes a span test with the message "must not
     // track the width". Demonstrated by injecting exactly that drift.
     //
-    // The anchor has no noise-floor problem to trade against, which is why it can be tight
-    // where the span bound cannot: [`SEEDS`] is fixed and the statistic is a pure function of
-    // it, so this is an exact deterministic quantity rather than a draw. Tightest current
-    // margin is 0.0127 at `d = 128`, 63% of the allowance.
+    // What this anchor is and is not. The VALUE is deterministic -- `SEEDS` is fixed and the
+    // generator is a pure function of it -- but the quantity being bounded is its DISTANCE from
+    // 0.75, and that is a population bias plus the draw of eight seeds, standard error about
+    // 0.004. Reproducible is not the same as accurate, and treating it as such is how a bound
+    // ends up under its own scatter. So this is a regression line for THIS pinned seed set,
+    // not a statement about the generator in general: resample the eight and roughly one block
+    // in sixty-four exceeds it.
+    //
+    // Tightest current margin is 0.0127 at `d = 128`, 63% of the allowance, of which about
+    // three quarters is the draw: the population deviation there is -0.0093 and these eight
+    // land 0.0034 further low.
     //
     // It also covers the widths nothing else reaches. The only other assertion that the
     // achieved cosine is NEAR the intended one runs at `d = 256` and at the default shape;
     // every bench rung in this crate is 4,096, where -- until this assertion -- nothing checked
     // the value at all, only that it resembled its neighbours.
+    //
+    // WHAT STILL GETS THROUGH, measured rather than waved at. A monotone width-tracking drift
+    // passes if it stays inside both this window and the span bound: measured, 0.0139 downward
+    // and 0.0261 upward (0.0262 reds at `d = 4096`). The asymmetry is not an oversight -- the
+    // generator's achieved cosine sits 0.004 to 0.010 BELOW 0.75, so a window centred on 0.75
+    // spends its downward half on that shortfall and hands the surplus upward. Downward is the
+    // direction the failure this file exists to catch travels in, and 0.0139 is inside the
+    // 0.02 line above; upward means clusters TIGHTER than asked, which no recall figure here
+    // is endangered by.
+    //
+    // The band is not closed further because the honest instrument is not available. A
+    // zero-tolerance "the values must not be monotone in width" assertion would catch any
+    // drift at all, and it would be WRONG: over 64 seeds this generator shows a real weak rise
+    // of about 0.006 with width, so that assertion would fail on a larger seed set for a
+    // property the generator genuinely has. A residual band is the price of not asserting
+    // something false.
     for (dims, got) in WIDTHS.into_iter().zip(&achieved) {
         let measured = *got as f64 / 1e6;
         assert!(
