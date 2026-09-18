@@ -491,8 +491,9 @@ pub fn write_entity_iri(out: &mut String, seed: u64, entity: u64) {
                 h
             );
         }
-        // Very long: ~512 bytes of index-derived segments; length itself is
-        // the stress (arena growth, bucket boundaries, wire framing).
+        // Very long: ~628 bytes of index-derived segments (measured, not
+        // designed to a round number); length itself is the stress (arena
+        // growth, bucket boundaries, wire framing).
         _ => {
             out.push_str("https://example.org/long");
             let mut v = h | 1;
@@ -1525,5 +1526,226 @@ mod tests {
                 "manifest must carry row kind {name}"
             );
         }
+    }
+
+    /// Classifies a row's SUBJECT-position IRI text by which entity-IRI class
+    /// (or the reifier shape) produced it. A text-shape classification only —
+    /// never a re-derivation of [`class_of`] — used solely to bucket the
+    /// byte-length bands below.
+    fn iri_class_of_text(iri: &str) -> Option<&'static str> {
+        if iri.starts_with("https://example.org/e/") {
+            Some("plain")
+        } else if iri.starts_with("https://example.org/n/") {
+            Some("numeric-long")
+        } else if iri.contains("/中文/") {
+            Some("chinese")
+        } else if iri.starts_with("https://s") && iri.contains(".example.org/x/") {
+            Some("irregular")
+        } else if iri.starts_with("https://example.org/long/") {
+            Some("very-long")
+        } else if iri.starts_with("https://example.org/r/") {
+            Some("reifier")
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn subject_iri_byte_length_bands_match_measurement() {
+        // GAP M3: the doc comment on the very-long class claimed "~512 bytes"
+        // when the true figure is ~628 — a claim nothing here ever checked.
+        // This is the test that would have caught it: every class's emitted
+        // subject-IRI byte length is pinned to a band with headroom, and the
+        // bands below come from an ACTUAL measurement over SHARE_SAMPLE rows
+        // at this module's SEED (plain 23-27, numeric-long exactly 58,
+        // chinese 41-45, irregular 54-58, very-long 627-630, reifier 38-42),
+        // never from the prose.
+        let text = share_corpus();
+        let mut bands: std::collections::BTreeMap<&'static str, (usize, usize)> =
+            std::collections::BTreeMap::new();
+        for row in text.lines() {
+            if !row.starts_with('<') {
+                continue; // a blank-node-subject row has no subject IRI to measure
+            }
+            let end = row
+                .find("> ")
+                .expect("a subject IRI must be closed by '> '");
+            let subject = &row[1..end];
+            let Some(class) = iri_class_of_text(subject) else {
+                continue;
+            };
+            let len = subject.len();
+            bands
+                .entry(class)
+                .and_modify(|(lo, hi)| {
+                    *lo = (*lo).min(len);
+                    *hi = (*hi).max(len);
+                })
+                .or_insert((len, len));
+        }
+
+        // (class, headroom-widened lower bound, headroom-widened upper bound).
+        let expected: &[(&str, usize, usize)] = &[
+            ("plain", 18, 32),
+            ("numeric-long", 55, 61),
+            ("chinese", 36, 50),
+            ("irregular", 48, 63),
+            ("very-long", 600, 650),
+            ("reifier", 33, 47),
+        ];
+        for (class, lo, hi) in expected {
+            let (measured_lo, measured_hi) = bands
+                .get(class)
+                .unwrap_or_else(|| panic!("class {class} must be exercised"));
+            assert!(
+                measured_lo >= lo && measured_hi <= hi,
+                "class {class}: measured band [{measured_lo}, {measured_hi}] must fall inside \
+                 [{lo}, {hi}] — bands come from measurement, not from doc prose"
+            );
+        }
+        assert_eq!(
+            bands.len(),
+            expected.len(),
+            "every class band must be observed exactly once; observed {bands:?}"
+        );
+    }
+
+    /// Compares a (possibly zero-padded) decimal digit string against a
+    /// bound's decimal digits, WITHOUT parsing either into a fixed-width
+    /// integer: parsing a 36-digit numeral into `u64` would overflow by
+    /// construction. Both operands are bare ASCII digit runs (no sign).
+    fn digit_string_exceeds(digits: &str, bound: &str) -> bool {
+        let trimmed = digits.trim_start_matches('0');
+        let trimmed = if trimmed.is_empty() { "0" } else { trimmed };
+        match trimmed.len().cmp(&bound.len()) {
+            std::cmp::Ordering::Greater => true,
+            std::cmp::Ordering::Less => false,
+            std::cmp::Ordering::Equal => trimmed > bound,
+        }
+    }
+
+    #[test]
+    fn numeric_long_class_emits_exactly_36_digits_beyond_u64_and_2_53() {
+        // The doc claims "36 digits... beyond u64 and 2^53"; nothing checked
+        // the digit WIDTH or the MAGNITUDE before. `u64::MAX` has 20 decimal
+        // digits and `2^53` has 16; comparing digit STRINGS (never parsing
+        // into `u64`, which would overflow by construction at 36 digits) is
+        // the only safe way to assert "exceeds" here.
+        const U64_MAX_DIGITS: &str = "18446744073709551615";
+        const TWO_POW_53_DIGITS: &str = "9007199254740992";
+        let mut checked = 0u64;
+        let mut saw_leading_zero = false;
+        for entity in 0..SHARE_SAMPLE {
+            if class_of(SEED, entity) != 1 {
+                continue; // not the numeric-long class
+            }
+            let mut iri = String::new();
+            write_entity_iri(&mut iri, SEED, entity);
+            let digits = iri
+                .strip_prefix("https://example.org/n/")
+                .expect("numeric-long IRI must carry the /n/ prefix");
+            assert_eq!(
+                digits.len(),
+                36,
+                "numeric-long entity {entity} must emit exactly 36 digits: {digits:?}"
+            );
+            assert!(
+                digits.bytes().all(|b| b.is_ascii_digit()),
+                "numeric-long entity {entity} must be all decimal digits: {digits:?}"
+            );
+            saw_leading_zero |= digits.starts_with('0');
+            assert!(
+                digit_string_exceeds(digits, U64_MAX_DIGITS),
+                "numeric-long entity {entity} value {digits} must exceed u64::MAX"
+            );
+            assert!(
+                digit_string_exceeds(digits, TWO_POW_53_DIGITS),
+                "numeric-long entity {entity} value {digits} must exceed 2^53"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "the numeric-long class must be exercised");
+        assert!(
+            saw_leading_zero,
+            "at least one numeric-long value must carry a leading zero that survives verbatim \
+             (identity, not number)"
+        );
+    }
+
+    #[test]
+    fn generated_terms_survive_the_strict_reader_intact() {
+        // `every_row_parses_as_strict_nquads` pins a COUNT identity across the
+        // quad/reifier/annotation tables; it says nothing about whether an
+        // individual TERM survives the round trip with its distinctive shape
+        // intact. This resolves actual terms out of the parsed dataset and
+        // checks every stress shape the corpus promises: a raw-Han IRI, a
+        // @zh language-tagged literal, a named-graph name, and — the one
+        // most likely to surprise — a reserved-octet percent-escape that a
+        // normalizer must NOT silently decode.
+        let text = share_corpus();
+        let dataset = purrdf_rdf::parse_dataset(text.as_bytes(), "application/n-quads", None)
+            .expect("generated corpus must satisfy the strict reader");
+
+        let mut saw_raw_han_iri = false;
+        let mut saw_zh_literal = false;
+        let mut saw_named_graph = false;
+        let mut saw_intact_percent_escape = false;
+        let mut percent_escape_example: Option<String> = None;
+
+        for quad in dataset.quad_refs() {
+            for term in [quad.s, quad.p, quad.o] {
+                if let purrdf_rdf::TermRef::Iri(iri) = term {
+                    if iri.contains("中文") {
+                        saw_raw_han_iri = true;
+                    }
+                    for octet in RESERVED_OCTETS {
+                        let upper = format!("%{octet:02X}");
+                        let lower = format!("%{octet:02x}");
+                        if iri.contains(&upper) || iri.contains(&lower) {
+                            saw_intact_percent_escape = true;
+                            percent_escape_example.get_or_insert_with(|| iri.to_string());
+                        }
+                    }
+                }
+                if let purrdf_rdf::TermRef::Literal {
+                    lexical,
+                    language: Some(lang),
+                    ..
+                } = term
+                    && lang == "zh"
+                {
+                    saw_zh_literal = true;
+                    assert!(
+                        lexical
+                            .chars()
+                            .any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)),
+                        "a @zh literal's lexical form must survive as Han characters: {lexical:?}"
+                    );
+                }
+            }
+            if let Some(purrdf_rdf::TermRef::Iri(graph)) = quad.g
+                && graph.starts_with("https://example.org/g/")
+            {
+                saw_named_graph = true;
+            }
+        }
+
+        assert!(
+            saw_raw_han_iri,
+            "a raw-Han IRI must survive un-escaped through the strict reader"
+        );
+        assert!(
+            saw_zh_literal,
+            "a @zh language-tagged literal must survive with its tag intact"
+        );
+        assert!(
+            saw_named_graph,
+            "a named graph name must survive through the strict reader"
+        );
+        assert!(
+            saw_intact_percent_escape,
+            "a reserved-octet percent-escape must survive verbatim, not silently decoded; \
+             found no such term (example seen: {percent_escape_example:?})"
+        );
     }
 }
