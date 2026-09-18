@@ -27,6 +27,7 @@ pub use context::{
     JsonLdTypeMapping,
 };
 
+use purrdf_core::sink::TextSink;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
@@ -260,7 +261,11 @@ impl RdfCodec for JsonLdCodec {
         parse_jsonld_into_scope(text.as_bytes(), base)
     }
 
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
         // Built whole, then appended. Unlike the four text formats, this one's document
         // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
         // cannot emit a prefix before it knows what follows, and appending would mean
@@ -294,7 +299,11 @@ impl RdfCodec for YamlLdCodec {
         parse_jsonld_into_scope(json.as_bytes(), base)
     }
 
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
         // Built whole, then appended. Unlike the four text formats, this one's document
         // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
         // cannot emit a prefix before it knows what follows, and appending would mean

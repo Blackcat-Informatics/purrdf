@@ -270,17 +270,18 @@ pub fn serialize_dataset_with<D: DatasetView>(
         egress_base(format, base_iri)?,
     )?;
 
-    let text = match options.jsonld_options {
+    let bytes = match options.jsonld_options {
         // Dispatch to the format's codec (the single `codec_for` chokepoint): the
         // line/Turtle family walks the shared `ser_model` writers, and RDF/XML, TriX and
         // HexTuples walk the SAME `SerGraph` through their in-repo emitters.
-        None => super::codec::codec_for(format).serialize(&graph)?,
+        None => super::codec::serialize(super::codec::codec_for(format), &graph)?,
         Some(configured) => match format {
             NativeRdfFormat::JsonLd => {
-                super::jsonld::serialize_ser_graph_with_options(&graph, configured)?
+                super::jsonld::serialize_ser_graph_with_options(&graph, configured)?.into_bytes()
             }
             NativeRdfFormat::YamlLd => {
                 super::jsonld::serialize_ser_graph_to_yamlld_with_options(&graph, configured)?
+                    .into_bytes()
             }
             // Unreachable: the guard at the top of this function already refused
             // every other format. It is spelled out rather than left as a catch-all
@@ -315,7 +316,7 @@ pub fn serialize_dataset_with<D: DatasetView>(
     };
 
     Ok(SerializeOutcome {
-        bytes: text.into_bytes(),
+        bytes,
         statement_rows_dropped,
         directional_literals_dropped,
         named_graph_rows_dropped,

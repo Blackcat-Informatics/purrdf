@@ -16,6 +16,7 @@
 //! surface: a triple term in a serialize request is a HARD error rather than silent
 //! loss.
 
+use purrdf_core::sink::TextSink;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -54,7 +55,11 @@ impl RdfCodec for TriXCodec {
         super::parse::catch_codec_panic(NativeRdfFormat::TriX, || parse_trix_to_dataset(text, base))
     }
 
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
         // Built whole, then appended. Unlike the four text formats, this one's document
         // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
         // cannot emit a prefix before it knows what follows, and appending would mean

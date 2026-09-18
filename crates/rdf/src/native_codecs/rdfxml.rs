@@ -35,6 +35,7 @@
 //! expansion, node/property striping, base-IRI resolution, and `xmlns` prefix
 //! scoping.
 
+use purrdf_core::sink::TextSink;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -70,7 +71,11 @@ impl RdfCodec for RdfXmlCodec {
         super::parse::parse_rdfxml_without_panicking(text, base)
     }
 
-    fn serialize_into(&self, graph: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
         // Built whole, then appended. Unlike the four text formats, this one's document
         // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
         // cannot emit a prefix before it knows what follows, and appending would mean
