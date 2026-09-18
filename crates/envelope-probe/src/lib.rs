@@ -23,14 +23,16 @@
 //! the envelope.
 //!
 //! The 32-bit boundary workload (logical IDs above `2^32` through bounded
-//! local buffers) is deliberately absent: it lands with the B2 fallible
-//! read-session seams it exists to exercise.
+//! local buffers) is absent because it has nothing to measure yet: it exercises
+//! the fallible read-session seams, and it is meaningful only once those seams
+//! carry the bounded local buffers it is built to stress.
 
 use std::sync::Arc;
 
 use purrdf_core::{
-    FallibleDatasetView, InMemoryPageProvider, PagedDataset, PagedQueryLimits, RdfDataset,
-    RdfLookaside, ResourceDimension, SparqlRequest, ViewOperationStatus,
+    DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider, PagedDataset,
+    PagedQueryLimits, RdfDataset, RdfLookaside, ResourceDimension, SparqlRequest, TermValue,
+    ViewOperationStatus,
 };
 use purrdf_rdf::gts_fixtures::{keystone_base, keystone_contribution};
 use purrdf_rdf::{
@@ -420,12 +422,23 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         }
     }
 
-    // Measure what a single-graph query actually materializes today. This is
-    // a B2 audit datum, recorded rather than assumed: with no per-page graph
-    // index in the sealed metadata, even a graph-selective pattern may touch
-    // every page.
+    // A graph-selective query's page footprint, measured rather than assumed, and
+    // paired with the footprint the sealed metadata PREDICTS. Recording only the
+    // measured count would make pruning indistinguishable from a query that simply
+    // found nothing; asserting the two against each other makes the narrowing
+    // positively evidenced.
     let single_graph_query =
         "SELECT ?o WHERE { GRAPH <https://example.org/page/0> { ?s <https://example.org/p> ?o } }";
+    let predicate_id = paged
+        .term_id_by_value(&TermValue::iri("https://example.org/p"))
+        .ok_or_else(|| "the single-graph query's predicate is not interned".to_owned())?;
+    let graph_id = paged
+        .term_id_by_value(&TermValue::iri("https://example.org/page/0"))
+        .ok_or_else(|| "the single-graph query's graph is not interned".to_owned())?;
+    let predicted = paged
+        .pages_for_pattern(None, Some(predicate_id), None, GraphMatch::Named(graph_id))
+        .len() as u64;
+    metrics.push(("single_graph_pages_predicted", predicted));
     let measured = paged.query_view(PagedQueryLimits::UNBOUNDED);
     let first = engine.query_governed_fallible_view(
         &measured,
@@ -447,11 +460,19 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
     };
     let touched = evidence.consumed_pages;
     metrics.push(("single_graph_pages_touched", touched));
+    if predicted != touched {
+        return Err(format!(
+            "the sealed metadata predicted {predicted} pages for the single-graph query              but it consumed {touched}"
+        ));
+    }
 
-    // Refusal pair at the measured boundary: one page fewer refuses, the
-    // exact consumption completes. Both sides of the boundary are executed,
-    // so a tightened budget cannot silently over-refuse.
-    if touched > 1 {
+    // Refusal pair at the measured boundary: one page fewer refuses, the exact
+    // consumption completes. Both sides are executed, so a tightened budget cannot
+    // silently over-refuse. The guard admits a one-page footprint, where the starved
+    // side is a zero-page budget — a valid hard limit, not a degenerate one — because
+    // a boundary that stops being exercised exactly when the narrowing starts working
+    // would delete the evidence it exists to produce.
+    if touched >= 1 {
         let starved = paged.query_view(PagedQueryLimits::new(touched - 1, profile.paged_max_bytes));
         let refused = engine.query_governed_fallible_view(
             &starved,
