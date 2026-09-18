@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Drives the DOCUMENTED `make scale-corpus` entry point (`docs/BENCHMARKS.md`), never
-//! `scripts/scale-corpus.sh` directly.
+//! Drives the DOCUMENTED `make scale-corpus` entry point (`docs/BENCHMARKS.md`) rather than
+//! `scripts/scale-corpus.sh` directly — with one deliberate exception, below.
 //!
 //! `crates/bench/tests/corpus_cli.rs` already pins the built `bench-corpus` binary and every
 //! test in the rest of this crate drives either the library or the script directly — and that
@@ -19,6 +19,13 @@
 //! Neither defect is visible from the script: `bash scripts/scale-corpus.sh` reads its
 //! parameters from already-parsed shell variables, never from a `make` recipe line. Only
 //! `Command::new("make")` can see a `make`-level regression, so that is what this file drives.
+//!
+//! THE EXCEPTION: the idiom `docs/BENCHMARKS.md` documents for PIPING this lane into a consumer
+//! is `SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader`, because that is the only
+//! form whose payload is byte-exact on every supported GNU make — `make`'s automatic sub-make
+//! `-w` banner cannot be cancelled from inside a makefile before 4.4. Pinning a documented idiom
+//! means running the idiom, so one test here runs the script. Every `make`-level defect above is
+//! still covered by the `make`-driven tests, which are the rest of this file.
 //!
 //! `SCALE_BIN` is set to the already-built `CARGO_BIN_EXE_bench-corpus` so `make` never spawns
 //! its own `cargo build --release` — the shards become pure execs of a binary this crate's own
@@ -73,11 +80,12 @@ fn run_make(args: &[&str]) -> (i32, Vec<u8>, String) {
     // Entering directory '...'` / `Leaving directory '...'` banners onto the SAME stdout stream
     // `SCALE_MODE=pipe` uses for corpus bytes.
     //
-    // The repository `Makefile` now sets `MAKEFLAGS += --no-print-directory` at its top, which
-    // suppresses those banners at every recursion depth — that is what
-    // `make_scale_corpus_pipe_mode_is_clean_even_when_the_child_thinks_it_is_a_sub_make`
-    // pins. This helper still scrubs all three variables because its job is to reproduce the
-    // documented invocation exactly, not to lean on the global setting.
+    // The repository `Makefile` sets `MAKEFLAGS += --no-print-directory` at its top, which
+    // suppresses those banners at every recursion depth FROM GNU MAKE 4.4 ONWARD; before 4.4 the
+    // automatic `-w` is decided at startup, ahead of any makefile text. The three tests around
+    // `documented_pipe_idiom_is_banner_free_under_a_wrapper_make_on_every_make_version` pin that
+    // boundary exactly. This helper scrubs all three variables because its job is to reproduce
+    // the documented invocation exactly, not to lean on the global setting.
     run_make_with(args, true)
 }
 
@@ -126,6 +134,88 @@ fn run_make_retrying_etxtbsy(args: &[&str]) -> (i32, Vec<u8>, String) {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     run_make(args)
+}
+
+/// Runs `bash scripts/scale-corpus.sh` from the repository root — the DOCUMENTED pipe idiom —
+/// with every knob handed over as environment bytes, exactly as the `Makefile` hands them over.
+///
+/// `wrapper_make` puts the child in the state a wrapper `Makefile`'s recipe line puts it in: a
+/// nonzero `MAKELEVEL` plus a propagated `MAKEFLAGS`. The script has no opinion about either, and
+/// that is the entire point — the guarantee it keeps does not depend on a `make` version.
+fn run_lane_script(knobs: &[(&str, &str)], wrapper_make: Option<&str>) -> (i32, Vec<u8>, String) {
+    let mut command = Command::new("bash");
+    command
+        .current_dir(repo_root())
+        .arg("scripts/scale-corpus.sh")
+        .env("SCALE_BIN", BENCH);
+    match wrapper_make {
+        Some(flags) => {
+            command
+                .env("MAKELEVEL", "1")
+                .env("MAKEFLAGS", flags)
+                .env("MFLAGS", flags);
+        }
+        None => {
+            command
+                .env_remove("MAKELEVEL")
+                .env_remove("MAKEFLAGS")
+                .env_remove("MFLAGS");
+        }
+    }
+    for (key, value) in knobs {
+        command.env(key, value);
+    }
+    let output = command.output().expect("spawn scripts/scale-corpus.sh");
+    (
+        output
+            .status
+            .code()
+            .expect("the lane script exited normally"),
+        output.stdout,
+        String::from_utf8(output.stderr).expect("utf-8 stderr"),
+    )
+}
+
+/// The `(major, minor)` version of the `make` on `PATH`, parsed from `make --version`.
+///
+/// The banner guarantee the `make scale-corpus` form can keep DEPENDS on this number, so the
+/// test that pins it reads the number instead of assuming one. GNU make prints
+/// `GNU Make 4.4.1` (or `GNU Make 4.3`) as its first line.
+fn gnu_make_version() -> (u32, u32) {
+    let output = Command::new("make")
+        .arg("--version")
+        .output()
+        .expect("spawn make --version");
+    let banner = String::from_utf8_lossy(&output.stdout);
+    let first = banner.lines().next().unwrap_or_default();
+    let number = first
+        .split_whitespace()
+        .last()
+        .expect("`make --version` must print a version on its first line");
+    let mut parts = number.split('.');
+    let major = parts
+        .next()
+        .and_then(|part| part.parse().ok())
+        .unwrap_or_else(|| panic!("unparseable `make --version` first line: {first:?}"));
+    let minor = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    (major, minor)
+}
+
+/// Strips GNU make's `Entering directory` / `Leaving directory` banner lines from `payload`,
+/// returning what is left.
+///
+/// Used ONLY to state precisely what a pre-4.4 `make` does to the `make scale-corpus` form: the
+/// banner is prepended and appended, and nothing else about the payload changes.
+fn without_directory_banners(payload: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(payload);
+    let mut kept = String::new();
+    for line in text.split_inclusive('\n') {
+        if line.contains("Entering directory") || line.contains("Leaving directory") {
+            continue;
+        }
+        kept.push_str(line);
+    }
+    kept.into_bytes()
 }
 
 /// Runs the built `bench-corpus` binary directly (not through `make`) with the given whole-run
@@ -493,21 +583,84 @@ fn make_scale_corpus_rejects_an_unrunnable_sink_with_a_lane_diagnostic() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The pipe payload survives a caller that believes it is a sub-make, with NO cooperation.
+// THE PIPE PAYLOAD SURVIVES A CALLER THAT BELIEVES IT IS A SUB-MAKE — ON EVERY SUPPORTED `make`.
 //
 // GNU make turns `-w` on by itself whenever an inherited `MAKELEVEL` is nonzero — NOT from
 // `MAKEFLAGS`, which a real nested `$(MAKE)` leaves EMPTY. The banner then lands on the same
-// stdout the corpus bytes use. `MAKEFLAGS += --no-print-directory` at the top of the repository
-// `Makefile` is what makes the payload immune; requiring every wrapper to remember a flag would
-// be optionality pushed onto the consumer.
+// stdout the corpus bytes use.
+//
+// `MAKEFLAGS += --no-print-directory` at the top of the repository `Makefile` cancels that, but
+// ONLY from GNU make 4.4 onward. On 4.3 and earlier — which is what ubuntu-24.04 runners ship —
+// the decision is taken at STARTUP from the inherited `MAKELEVEL`, before any makefile text is
+// read, so a makefile-internal assignment arrives too late and the banner is emitted anyway.
+// There is no makefile-side fix available on 4.3; a test that demanded one was asserting a
+// version-lucky property rather than a true one, and it passed on 4.4 and failed in CI.
+//
+// So the guarantee the lane actually makes — the one that is true everywhere — is pinned against
+// the DOCUMENTED pipe idiom, `SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader`. No
+// `make` runs, so no `make` version can put a banner in front of the payload, and a wrapper
+// `Makefile` gets the same bytes as a plain shell without remembering anything. The
+// `make scale-corpus SCALE_MODE=pipe` form stays documented for interactive use and is pinned
+// here too, in the two pieces that are actually separable: the explicitly suppressed form (true
+// on every version) and the bare form (true from 4.4 only, and conditioned on the detected
+// version so the assertion says which world it is in).
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn make_scale_corpus_pipe_mode_is_clean_even_when_the_child_thinks_it_is_a_sub_make() {
+fn documented_pipe_idiom_is_banner_free_under_a_wrapper_make_on_every_make_version() {
+    let (quads, iris, seed, shards) = (600u64, 70u64, 42u64, 3u64);
+    let expected = whole(quads, iris, seed);
+    let knobs = [
+        ("SCALE_QUADS", quads.to_string()),
+        ("SCALE_IRIS", iris.to_string()),
+        ("SCALE_SEED", seed.to_string()),
+        ("SCALE_SHARDS", shards.to_string()),
+        ("SCALE_MODE", "pipe".to_string()),
+    ];
+    let knobs: Vec<(&str, &str)> = knobs
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+
+    // Three callers that differ only in the `make` recursion state they leak into the child: a
+    // plain shell, a wrapper whose `make` suppresses banners, and a wrapper whose `make` prints
+    // them. The last is precisely what a GNU make 4.3 runner does by default at `MAKELEVEL=1`,
+    // which is the CI failure this test replaces, reproduced on any version.
+    for wrapper in [
+        None,
+        Some("--no-print-directory"),
+        Some("--print-directory"),
+    ] {
+        let described = wrapper.unwrap_or("(no wrapper make)");
+        let (code, stdout, stderr) = run_lane_script(&knobs, wrapper);
+        assert_eq!(
+            code, 0,
+            "the documented pipe idiom must succeed under {described}; stderr:\n{stderr}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&stdout).contains("Entering directory"),
+            "no directory banner may share the payload's stdout under {described}"
+        );
+        assert_eq!(
+            stdout, expected,
+            "`SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader` must be byte-identical \
+             to a whole (unsharded) run under {described}. This is the idiom \
+             `docs/BENCHMARKS.md` prescribes for a consumer precisely because no `make` runs in \
+             it, so no `make` version and no inherited `MAKELEVEL` can prepend anything"
+        );
+    }
+}
+
+#[test]
+fn make_scale_corpus_pipe_mode_is_banner_free_at_level_one_when_suppression_is_explicit() {
+    // The `make`-side statement that holds on EVERY version, including 4.3: passing
+    // `--no-print-directory` on the command line beats the automatic `-w`, because it is parsed
+    // at startup alongside it rather than from makefile text read afterwards.
     let (quads, iris, seed, shards) = (600u64, 70u64, 42u64, 3u64);
     let expected = whole(quads, iris, seed);
 
     let (code, stdout, stderr) = run_make_at_level_one(&[
+        "--no-print-directory",
         "scale-corpus",
         &format!("SCALE_QUADS={quads}"),
         &format!("SCALE_IRIS={iris}"),
@@ -521,14 +674,72 @@ fn make_scale_corpus_pipe_mode_is_clean_even_when_the_child_thinks_it_is_a_sub_m
     );
     assert!(
         !String::from_utf8_lossy(&stdout).contains("Entering directory"),
-        "no directory banner may share the payload's stdout"
+        "an explicit `--no-print-directory` must keep the banner off the payload's stdout at \
+         MAKELEVEL=1, on every GNU make version"
     );
     assert_eq!(
         stdout, expected,
-        "at MAKELEVEL=1 — the state a wrapper `Makefile` puts this lane in — the piped payload \
-         must STILL be byte-identical to a whole run, without the caller passing \
-         `--no-print-directory`"
+        "`make --no-print-directory scale-corpus ... SCALE_MODE=pipe` at MAKELEVEL=1 must be \
+         byte-identical to a whole run"
     );
+}
+
+#[test]
+fn make_scale_corpus_pipe_mode_at_level_one_is_bare_banner_free_only_from_gnu_make_4_4() {
+    // THE VERSION BOUNDARY, ASSERTED AS A BOUNDARY. `MAKEFLAGS += --no-print-directory` in the
+    // repository `Makefile` is worth keeping — from 4.4 it makes the bare form clean at any
+    // recursion depth — but it is NOT a universal immunity, and this test refuses to pretend
+    // otherwise. It reads the version off the `make` that is actually running it and asserts the
+    // claim that is true for that version:
+    //
+    //   * 4.4+ : the bare `make scale-corpus ... SCALE_MODE=pipe` at MAKELEVEL=1 is byte-exact.
+    //   * < 4.4: it is NOT, and cannot be made so from inside the makefile — but the corruption
+    //            is EXACTLY make's own banner and nothing else, which is why the documented
+    //            idiom (the test above) is the one a consumer is told to pipe.
+    let (quads, iris, seed, shards) = (600u64, 70u64, 42u64, 3u64);
+    let expected = whole(quads, iris, seed);
+
+    let (code, stdout, stderr) = run_make_at_level_one(&[
+        "scale-corpus",
+        &format!("SCALE_QUADS={quads}"),
+        &format!("SCALE_IRIS={iris}"),
+        &format!("SCALE_SEED={seed}"),
+        &format!("SCALE_SHARDS={shards}"),
+        "SCALE_MODE=pipe",
+    ]);
+    assert_eq!(
+        code, 0,
+        "the lane must succeed at MAKELEVEL=1 on every version; stderr:\n{stderr}"
+    );
+
+    let version = gnu_make_version();
+    if version >= (4, 4) {
+        assert!(
+            !String::from_utf8_lossy(&stdout).contains("Entering directory"),
+            "GNU make {}.{} honours the makefile's `MAKEFLAGS += --no-print-directory` for the \
+             automatic sub-make `-w`, so no banner may reach the payload here",
+            version.0,
+            version.1
+        );
+        assert_eq!(
+            stdout, expected,
+            "on GNU make {}.{} (>= 4.4) the bare `make scale-corpus ... SCALE_MODE=pipe` at \
+             MAKELEVEL=1 must be byte-identical to a whole run",
+            version.0, version.1
+        );
+    } else {
+        assert_eq!(
+            without_directory_banners(&stdout),
+            expected,
+            "on GNU make {}.{} (< 4.4) the automatic sub-make `-w` is decided at startup, before \
+             the makefile's `MAKEFLAGS` assignment is read, so the bare form at MAKELEVEL=1 may \
+             carry a directory banner — and NOTHING ELSE may differ. Strip the banner lines and \
+             the payload must still be byte-identical to a whole run; a consumer pipes the \
+             documented `SCALE_MODE=pipe bash scripts/scale-corpus.sh` idiom instead",
+            version.0,
+            version.1
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1220,16 +1431,16 @@ fn make_scale_corpus_leaves_no_shard_manifest_behind_a_failed_run() {
     ]);
     assert_ne!(code, 0, "the run must fail; stderr:\n{stderr}");
 
-    let certificates: Vec<_> = std::fs::read_dir(&out_dir)
+    let manifest_files: Vec<_> = std::fs::read_dir(&out_dir)
         .expect("read the out directory")
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect();
     assert!(
-        certificates.is_empty(),
+        manifest_files.is_empty(),
         "a failed run certifies NOTHING: no shard manifest and no whole-run manifest may survive \
-         it. The arena still holds {certificates:?}"
+         it. The arena still holds {manifest_files:?}"
     );
     assert!(
         stderr.contains("removed the shard manifest"),
@@ -1258,7 +1469,7 @@ fn make_scale_corpus_keeps_every_shard_manifest_of_a_run_that_succeeded() {
         &format!("SCALE_BIN={BENCH}"),
     ]);
     assert_eq!(code, 0, "the run must succeed; stderr:\n{stderr}");
-    let certificates = std::fs::read_dir(&out_dir)
+    let manifest_count = std::fs::read_dir(&out_dir)
         .expect("read the out directory")
         .filter_map(Result::ok)
         .filter(|entry| {
@@ -1269,7 +1480,7 @@ fn make_scale_corpus_keeps_every_shard_manifest_of_a_run_that_succeeded() {
         })
         .count() as u64;
     assert_eq!(
-        certificates, shards,
+        manifest_count, shards,
         "every shard that produced its file must keep its manifest"
     );
 

@@ -731,23 +731,34 @@ suites are a different layer, and this one produces bytes rather than timings.
 ```sh
 make scale-corpus                                   # stream 10^6 rows over 8 shards, keep nothing
 make scale-corpus SCALE_QUADS=10000000 SCALE_SHARDS=32
-make scale-corpus SCALE_MODE=pipe | your-loader     # ordered whole run, nothing stored
 make scale-corpus SCALE_MODE=files SCALE_OUT=/mnt/big/corpus
 ```
 
-`SCALE_MODE=pipe` puts corpus bytes on standard output, so **nothing may share
-that stream**. The repository's `Makefile` sets `MAKEFLAGS +=
---no-print-directory` at its top for exactly this reason, which makes the
-payload byte-exact at any recursion depth with **no cooperation required from
-the caller**: `$(MAKE) scale-corpus SCALE_MODE=pipe | your-loader` from inside
-another `Makefile` produces the same bytes as a plain shell invocation. The
-setting is repository-global, so every other target loses its directory banners
-too.
+### Piping the corpus into a consumer
 
-The background, because the trap is easy to misdiagnose elsewhere: whenever
-`-w`/`--print-directory` is in effect, `make` writes `make: Entering directory
-'...'` (and a matching `Leaving directory` line) to standard output before the
-recipe runs. That flag can be inherited explicitly via a propagated
+`SCALE_MODE=pipe` puts corpus bytes on standard output, so **nothing may share
+that stream**. Run the lane script, from the repository root:
+
+```sh
+SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader   # ordered whole run, nothing stored
+SCALE_MODE=pipe SCALE_QUADS=10000000 SCALE_SHARDS=32 bash scripts/scale-corpus.sh | your-loader
+```
+
+That is the **documented pipe idiom**, and it is the same lane `make
+scale-corpus` runs: every knob in the table below is read from the environment,
+so `make` is doing nothing here but forwarding them. Skipping it is deliberate.
+The payload is then byte-identical to an unsharded whole run on every GNU make
+version, at every recursion depth, and from inside another `Makefile`'s recipe —
+with **nothing for the caller to remember**.
+
+`make scale-corpus ... SCALE_MODE=pipe` remains the right form **interactively**,
+at a terminal, where a directory banner is a line you read rather than a line a
+loader parses.
+
+The reason the two differ, because the trap is easy to misdiagnose elsewhere:
+whenever `-w`/`--print-directory` is in effect, `make` writes `make: Entering
+directory '...'` (and a matching `Leaving directory` line) to standard output
+before the recipe runs. That flag can be inherited explicitly via a propagated
 `MAKEFLAGS`, but GNU make also turns it on **automatically** for any invocation
 it detects as a sub-make — i.e. whenever `MAKELEVEL` in the environment is
 already nonzero — regardless of what `MAKEFLAGS` says; the banner then reads
@@ -755,9 +766,22 @@ already nonzero — regardless of what `MAKEFLAGS` says; the banner then reads
 A real nested `$(MAKE)` shows an **empty `MAKEFLAGS` with `MAKELEVEL=1`**, and
 the banner appears anyway, so checking `MAKEFLAGS` and finding it clean proves
 nothing. Piped into a loader, that banner arrives as a corrupt first line the
-loader cannot parse as a corpus row. A wrapper around some *other* `Makefile`
-that lacks the global setting has to pass the flag itself, e.g.
-`$(MAKE) --no-print-directory some-lane | your-loader`.
+loader cannot parse as a corpus row.
+
+This repository's `Makefile` sets `MAKEFLAGS += --no-print-directory` at its
+top, which cancels that automatic `-w` — **on GNU make 4.4 or newer**. It does
+**not** on GNU make 4.3 or earlier, which decides `-w` at startup from the
+inherited `MAKELEVEL`, before a single line of makefile text is read; the
+assignment arrives too late, and no makefile-internal fix exists on those
+versions. The version boundary matters in practice: ubuntu-24.04 runners ship
+GNU make 4.3. So if you must pipe through `make` — this repository's or anyone
+else's — pass the flag yourself, which is parsed alongside the automatic `-w`
+and therefore works on every version:
+
+```sh
+make --no-print-directory scale-corpus SCALE_MODE=pipe | your-loader
+$(MAKE) --no-print-directory some-lane | your-loader                   # from a wrapper Makefile
+```
 
 ### Parameters
 

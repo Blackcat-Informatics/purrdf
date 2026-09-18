@@ -53,6 +53,22 @@ cargo run -p purrdf-bench --release -- --quads 1000000 --iris 100000 --shard 3 -
 documented in [`docs/BENCHMARKS.md`](../../docs/BENCHMARKS.md), which owns the
 parameters, the manifest-plus-digest capture rule and the storage arithmetic.
 
+To **pipe** the corpus into a consumer, run the script rather than `make`, from
+the repository root:
+
+```sh
+SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader
+```
+
+Every knob is read from the environment, so this is the same lane `make
+scale-corpus` runs with nothing between the payload and the consumer. It is the
+form to use because it is byte-exact on every GNU make version: `make` prints a
+`Entering directory` banner onto that same stdout for any invocation it thinks
+is a sub-make, and the repository `Makefile`'s `MAKEFLAGS +=
+--no-print-directory` only cancels that from GNU make 4.4 onward. Through
+`make`, pass `--no-print-directory` yourself. `make scale-corpus
+SCALE_MODE=pipe` stays the convenient form interactively.
+
 It is one of three comparison lanes, and the other two measure PurRDF against
 the workloads the literature uses rather than generating a corpus:
 

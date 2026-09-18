@@ -35,21 +35,30 @@
 #           cannot outrun its consumer, so this mode trades the concurrency for
 #           the ordering; `stream` is the one that uses the cores.
 #
-#           TRAP for a wrapper `Makefile` that shells out to `make
-#           scale-corpus SCALE_MODE=pipe`: GNU make turns `-w`/`--print-
-#           directory` on BY ITSELF for any invocation it detects as a
-#           sub-make, which it decides from a nonzero inherited `MAKELEVEL` --
-#           NOT from `MAKEFLAGS`. A nested `$(MAKE)` shows an EMPTY `MAKEFLAGS`
-#           and `MAKELEVEL=1`, and the banner appears anyway, so an operator who
-#           inspects `MAKEFLAGS`, finds it clean and concludes the pipe is safe
-#           has checked the wrong variable. `make` then writes `make[1]:
-#           Entering directory '...'` to standard output before this script's
-#           payload does, corrupting the loader's first line. A plain shell
-#           invocation has no recursion state at all and never sees this.
-#           THIS REPOSITORY'S `Makefile` SETS `MAKEFLAGS += --no-print-directory`
-#           AT ITS TOP so the payload is already clean at any `MAKELEVEL`; a
-#           wrapper around some OTHER `Makefile` has to pass
-#           `--no-print-directory` (or `-s`) itself, e.g.
+#           PIPE IT THIS WAY, from the repository root:
+#
+#             SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader
+#
+#           i.e. run THIS SCRIPT, not `make`. Every knob is read from the
+#           environment, so the form above is the `make scale-corpus` lane with
+#           nothing between the payload and the consumer.
+#
+#           TRAP, and the reason the documented idiom skips `make`: GNU make
+#           turns `-w`/`--print-directory` on BY ITSELF for any invocation it
+#           detects as a sub-make, which it decides from a nonzero inherited
+#           `MAKELEVEL` -- NOT from `MAKEFLAGS`. A nested `$(MAKE)` shows an
+#           EMPTY `MAKEFLAGS` and `MAKELEVEL=1`, and the banner appears anyway,
+#           so an operator who inspects `MAKEFLAGS`, finds it clean and
+#           concludes the pipe is safe has checked the wrong variable. `make`
+#           then writes `make[1]: Entering directory '...'` to standard output
+#           before this script's payload does, corrupting the loader's first
+#           line. THIS REPOSITORY'S `Makefile` SETS `MAKEFLAGS +=
+#           --no-print-directory` at its top, which cancels that -- but only on
+#           GNU make 4.4 or newer. GNU make 4.3 and earlier decide `-w` at
+#           startup, before any makefile text is read, so the assignment cannot
+#           help and no makefile-internal fix exists there. Running this script
+#           directly sidesteps the whole question on every version; if you must
+#           go through `make`, pass the flag yourself:
 #           `$(MAKE) --no-print-directory scale-corpus SCALE_MODE=pipe | your-loader`.
 #           `docs/BENCHMARKS.md` states the same rule at length.
 #   files   opt-in materialization. Each shard is written to its own

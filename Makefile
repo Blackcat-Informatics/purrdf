@@ -2,18 +2,35 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 # REPOSITORY-GLOBAL: no `make: Entering directory '...'` banners, from ANY
-# target, at any recursion depth.
+# target — at any recursion depth ON GNU MAKE 4.4 OR NEWER.
 #
-# This is here because `scale-corpus`'s headline idiom pipes make's STANDARD
-# OUTPUT into a loader (`make scale-corpus SCALE_MODE=pipe | your-loader`): on
-# that lane stdout is a PAYLOAD, and make's directory banner lands on the same
-# stream ahead of it as a corrupt first line the loader cannot parse. GNU make
-# turns `-w` on automatically whenever it detects a sub-make (a nonzero
-# inherited `MAKELEVEL`), so any wrapper that shells out to this lane inherits
-# the corruption without asking for it. Suppressing the banner HERE makes the
-# payload byte-exact with no cooperation required from the consumer; the
-# target-specific form (`scale-corpus: MAKEFLAGS += ...`) does not work, because
-# make emits the banner before target-specific variables apply.
+# This is here because `make scale-corpus SCALE_MODE=pipe` puts a PAYLOAD on
+# make's standard output, and make's directory banner lands on the same stream
+# ahead of it as a corrupt first line a loader cannot parse. GNU make turns `-w`
+# on automatically whenever it detects a sub-make (a nonzero inherited
+# `MAKELEVEL`), so a wrapper that shells out to this lane inherits the
+# corruption without asking for it.
+#
+# WHAT THIS LINE DOES AND DOES NOT BUY, precisely, because the difference used
+# to be misstated here as immunity:
+#
+#   * GNU make >= 4.4: it cancels the automatic sub-make `-w`, so the bare
+#     `make scale-corpus SCALE_MODE=pipe` is byte-exact at any `MAKELEVEL`.
+#   * GNU make <= 4.3 (what ubuntu-24.04 runners ship): it does NOT. That make
+#     decides `-w` at STARTUP from the inherited `MAKELEVEL`, before a single
+#     line of makefile text is read, so this assignment arrives too late and the
+#     banner is printed anyway. There is no makefile-internal fix on 4.3. The
+#     target-specific form (`scale-corpus: MAKEFLAGS += ...`) is no better on
+#     any version: make emits the banner before target-specific variables apply.
+#
+# So this line is a convenience that is real from 4.4, not the lane's guarantee.
+# The guarantee lives in the idiom `docs/BENCHMARKS.md` documents for piping:
+# `SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader`, which runs no
+# make at all and is therefore byte-exact on every version and at every
+# `MAKELEVEL`. An explicit `make --no-print-directory` on the command line also
+# works everywhere: the GNU make manual documents that option as cancelling the
+# `-w` make turns on by itself in a sub-make, and it is parsed at startup
+# alongside that `-w` rather than after it.
 #
 # The trade, stated plainly: every other target loses its directory banners too.
 # Nothing in this file parses them, and the recipes that change directory say so
