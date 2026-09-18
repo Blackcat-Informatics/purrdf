@@ -18,8 +18,8 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement, Volatility,
 };
 
 // ---------------------------------------------------------------------------
@@ -110,7 +110,6 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         accepted_terms: accepted(patterns),
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
         mandatory,
     }
@@ -166,7 +165,6 @@ fn pair_registry() -> PropertyFunctionRegistry {
             ],
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         },
@@ -383,6 +381,36 @@ fn canonical_json(plan: &Plan) -> String {
 // 1. Golden tests
 // ---------------------------------------------------------------------------
 
+/// NOT part of the normal test run (`#[ignore]`): (re)writes both committed
+/// planner goldens from the planner's current output.
+///
+/// A golden here is a **measurement**, not a preference: it pins the planner's
+/// rendering *and* `registry_content_fingerprint`, which is a digest of the
+/// registry's declarations. Neither can be reasoned out by hand, so whenever an
+/// intentional, reviewed change alters what the planner emits or what the
+/// fingerprint covers, produce the new goldens by running the planner:
+///
+/// ```text
+/// cargo test -p purrdf-retrieval --test planner_golden regenerate_planner_goldens -- --ignored
+/// ```
+///
+/// then commit the updated fixtures alongside the change that caused them to
+/// differ. Editing a fingerprint by hand — or resolving a merge by picking one
+/// side of one — records a value no run ever produced.
+#[test]
+#[ignore = "regenerates the committed golden fixtures; run explicitly with -- --ignored"]
+fn regenerate_planner_goldens() {
+    let registry = mixed_registry();
+    let statistics = fixture_statistics();
+    for (name, request) in [
+        ("mixed_request.json", mixed_request()),
+        ("lexical_request.json", lexical_request()),
+    ] {
+        let plan = plan(&request, &registry, &statistics).expect("plans");
+        std::fs::write(golden_path(name), canonical_json(&plan)).expect("writes the golden");
+    }
+}
+
 #[test]
 fn golden_mixed_request_matches() {
     let registry = mixed_registry();
@@ -515,7 +543,6 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
             }],
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         },
@@ -637,7 +664,6 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
             }],
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         },
@@ -872,7 +898,6 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
             }],
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         },

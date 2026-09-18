@@ -38,17 +38,17 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, ExecutionError, ExecutionResult,
-    Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanError, PlanId,
-    PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedStream,
-    RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest, SearchError,
-    SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK, UnservedReason,
-    UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, ExecutionError,
+    ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan,
+    PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError,
+    RankedStream, RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest,
+    SearchError, SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK,
+    UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankOrdering,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -121,18 +121,19 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         accepted_terms: accepted(patterns),
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
         mandatory,
     }
 }
 
 /// The contract every fixture producer here declares, and the one a hand-built
-/// stream in this file states: strictly descending ranks, no repeats. It is
-/// spelled once so the registered declaration above and the streams below cannot
-/// drift into describing two different promises.
-fn strict_unique() -> StreamContract {
-    StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique)
+/// stream in this file states: no repeats. It is spelled once so the registered
+/// declaration above and the streams below cannot drift into describing two
+/// different promises. The contiguous, ascending ranks these streams emit are
+/// not part of it — that law holds for every stream and is checked rank by rank
+/// rather than declared.
+fn unique_items() -> StreamContract {
+    StreamContract::new(DuplicatePolicy::Unique)
 }
 
 fn lexical_term() -> RequestTerm {
@@ -278,8 +279,11 @@ fn single_statistics(stratum_iri: &str, cardinality: u64) -> MockStatistics {
 
 /// A profile weighting exactly one stratum.
 fn single_profile(stratum_iri: &str) -> FusionProfile {
-    FusionProfile::new(BTreeMap::from([(iri(stratum_iri), Fixed::ONE)]), K)
-        .expect("the fixture profile is valid")
+    FusionProfile::with_decay(
+        BTreeMap::from([(iri(stratum_iri), Fixed::ONE)]),
+        DecayRule::ReciprocalRank { k: K },
+    )
+    .expect("the fixture profile is valid")
 }
 
 /// A profile weighting the named strata, which is also what leaves room for
@@ -290,7 +294,8 @@ fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
         .iter()
         .map(|(name, weight)| (stratum(name), *weight))
         .collect();
-    FusionProfile::new(map, k).expect("fixture profile is valid")
+    FusionProfile::with_decay(map, DecayRule::ReciprocalRank { k })
+        .expect("fixture profile is valid")
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +392,7 @@ impl RankedStream for ScriptedStream {
     }
 
     fn contract(&self) -> StreamContract {
-        strict_unique()
+        unique_items()
     }
 }
 
@@ -738,7 +743,7 @@ impl RankedStream for LazyStream {
     }
 
     fn contract(&self) -> StreamContract {
-        strict_unique()
+        unique_items()
     }
 }
 
@@ -754,7 +759,8 @@ fn frontier_fixture(
         .iter()
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid");
     let streams = FRONTIER_STRATA
         .iter()
         .enumerate()
@@ -922,7 +928,8 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
     // Two strata, so a candidate takes at most two contributions.
-    let tie_profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
+    let tie_profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid");
     let streams: Vec<(Iri, LazyStream)> = TIE_STRATA
         .iter()
         .enumerate()
@@ -1429,7 +1436,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     assert!(
         RankedStreamAdapter::new(
             RankedStreamImpl::new(vec![(1, Term::new("a"))]),
-            strict_unique(),
+            unique_items(),
             &elsewhere,
             &stratum("resume"),
         )
@@ -1551,7 +1558,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(vec![(0, Term::new("a"))]),
-        strict_unique(),
+        unique_items(),
         &profile,
         &stratum("resume"),
     )
@@ -1571,7 +1578,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // ordinary row carrying the profile's own contribution.
     let mut adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(vec![(1, Term::new("a"))]),
-        strict_unique(),
+        unique_items(),
         &profile,
         &stratum("resume"),
     )

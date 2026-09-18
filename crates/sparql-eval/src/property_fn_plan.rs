@@ -1405,7 +1405,7 @@ mod content_fingerprint_tests {
     use crate::error::EvalError;
     use crate::property_fn::{
         DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
-        PropertyFunctionRegistry, RankOrdering, RankedDeclaration,
+        PropertyFunctionRegistry, RankedDeclaration,
     };
     use crate::user_fn::Volatility;
 
@@ -1496,7 +1496,6 @@ mod content_fingerprint_tests {
             accepted_terms: Vec::new(),
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         }

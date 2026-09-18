@@ -108,8 +108,7 @@ use purrdf_core::{
 use crate::error::EvalError;
 use crate::property_fn::{
     AcceptedTerm, DepthPlacement, DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, RankOrdering, RankedDeclaration, RequestFacet, TermKind, TermPattern,
-    TermPlacement,
+    PropertyFunction, RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
 };
 use crate::user_fn::Volatility;
 
@@ -721,11 +720,13 @@ impl EmbeddingKnnRelation {
     /// answerable — and it comes from the caller rather than being invented
     /// here.
     ///
-    /// # Ordering and duplicates
+    /// # Ranks and duplicates
     ///
     /// Rows are emitted nearest-first under the space's declared metric, ranked
     /// exactly, with equal distances broken by ascending row number — a total
-    /// order, so every row has an unambiguous 1-based rank. Terms are distinct
+    /// order, so the ranks this relation numbers its rows with are 1-based,
+    /// contiguous and ascending, which is the one rank law
+    /// [`RankedDeclaration`] holds every ranked producer to. Terms are distinct
     /// within a space and a search returns distinct rows, so no item repeats.
     #[must_use]
     pub fn ranked_declaration(
@@ -749,7 +750,6 @@ impl EmbeddingKnnRelation {
                 datatype: depth_datatype,
             }),
             candidate_position: Self::NEIGHBOUR,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         }

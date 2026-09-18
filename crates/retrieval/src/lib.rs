@@ -59,16 +59,25 @@
 //! contribution bound the fused top-k stopped reading it at.
 //!
 //! That includes what each producer declared about its *own* rows. A ranked
-//! producer states its rank ordering and its duplicate handling where it is
-//! registered, and fusion is the consumer both declarations were written for, so
-//! they are carried from the registry to that consumer as a [`StreamContract`] —
-//! read at the admission waist into [`StratumUnit`], tagged onto every
-//! [`StratumStream`], reported through [`RankedStream::contract`]. A producer
-//! that declared [`DuplicatePolicy::Allowed`] is de-duplicated, which is what
-//! that policy says its consumer must do; one that declared
-//! [`DuplicatePolicy::Unique`] is believed and costs no per-stream identity set
-//! at all. A [`RankOrdering::StrictlyDescending`] stream is held to strict
-//! descent and a [`RankOrdering::NonIncreasing`] one is not.
+//! producer states its duplicate handling where it is registered, and fusion is
+//! the consumer that declaration was written for, so it is carried from the
+//! registry to that consumer as a [`StreamContract`] — read at the admission
+//! waist into [`StratumUnit`], tagged onto every [`StratumStream`], reported
+//! through [`RankedStream::contract`]. A producer that declared
+//! [`DuplicatePolicy::Allowed`] is de-duplicated, which is what that policy says
+//! its consumer must do; one that declared [`DuplicatePolicy::Unique`] is
+//! believed and costs no per-stream identity set at all.
+//!
+//! Rank order is not carried there, because it is not a per-producer variable.
+//! Every ranked stream owes its consumer the same law — 1-based, contiguous,
+//! ascending ranks — and [`FusionStream`] enforces it row by row against the
+//! next rank it expects from that stream, refusing a lower rank as
+//! [`ProtocolError::OutOfOrderRanks`] and a higher one as
+//! [`ProtocolError::NonContiguousRanks`]. The only other quantity fusion can
+//! observe is the contribution, which it computes itself and refuses on
+//! mismatch, so the producer supplies no term of it; a rank claim read in
+//! contribution space would instead refuse conforming streams for the
+//! consumer's own quantization.
 //!
 //! # Fusion is a law, not a knob
 //!
@@ -78,7 +87,7 @@
 //! surface at most once per stratum. Weights are read as ratios and never as
 //! absolute quantities, so a map built with two different [`Fixed`]
 //! constructors is a silent factor-of-`10^12` error that refuses nothing — see
-//! [`FusionProfile::new`] before writing one.
+//! [`FusionProfile::with_decay`] before writing one.
 //! It is content-addressed, so an answer names exactly which law produced it.
 //! Contributions are exact [`Fixed`] values computed with checked arithmetic;
 //! an intermediate that does not fit is a loud [`FusionError::Overflow`], never
@@ -88,11 +97,12 @@
 //! depth are one coupled quantity: past a depth those first three decide,
 //! adjacent ranks stop producing distinct contributions and the fused score
 //! stops separating them. Nothing errors there and nothing becomes
-//! nondeterministic — it simply stops being rank-ordered, which is exactly the
-//! kind of quiet degradation this crate refuses to leave unsaid.
-//! [`FusionProfile::monotone_depth`] reports the exact bound, and admission
-//! refuses a depth beyond it whenever the environment names the profile the
-//! answer will be fused under.
+//! nondeterministic — the declared tie-break is total, so the order simply falls
+//! through to its later keys — which is exactly the kind of quiet degradation
+//! this crate refuses to leave unsaid. It is said rather than refused:
+//! [`FusionProfile::monotone_depth`] reports the exact bound before a plan runs,
+//! and the fused trailer reports, per stratum, how deep the answer in hand was
+//! actually read against it.
 //!
 //! Which rule a profile names decides how much depth a weight can buy.
 //! [`DecayRule::ReciprocalRank`] truncates the reciprocal before applying the
@@ -101,9 +111,9 @@
 //! the same quantity, one exactly-rounded division instead of two truncations —
 //! and its bound runs to roughly `10^6 · sqrt(w)`, so a stratum that must be
 //! read fourteen million ranks deep is admissible at a weight of two hundred.
-//! Read in reverse, that relation is a requirement: under the weighted rule a
-//! deep stratum *needs* a heavy enough weight, and a profile that underweights
-//! one has its plans refused rather than silently unordered. See
+//! Read in reverse, that relation is a design calculus: under the weighted rule
+//! a deep stratum *needs* a heavy enough weight, and a profile that underweights
+//! one answers at a coarser rank resolution, which it reports. See
 //! [`FusionProfile`] for the derivation in both directions.
 //!
 //! # A composition outside the kernel
@@ -235,13 +245,15 @@ mod search;
 mod statistics;
 
 pub use admission::{AdmissionEnvironment, AdmissionError};
-pub use compile::{CompiledRetrieval, StratumUnit, compile};
+pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, compile};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{FusionError, PlanError};
 pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, execute};
 pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
-pub use fusion_stream::{CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus};
+pub use fusion_stream::{
+    CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus, StratumResolution,
+};
 pub use id::{
     FUSION_PROFILE_ID_BYTES, FUSION_PROFILE_ID_DOMAIN, FUSION_PROFILE_VERSION, FusionProfileId,
     PLAN_ID_BYTES, PLAN_ID_DOMAIN, PLAN_VERSION, PlanId,
@@ -253,6 +265,7 @@ pub use plan::{
 };
 pub use planner::plan;
 pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
+pub use reciprocal_rank::{ClassWidth, MonotoneDepth, ToleratedDepth};
 pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
 pub use request::{Metric, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
@@ -268,7 +281,7 @@ pub use purrdf_text::SCALE_DIGITS;
 // reason: `Plan::registry_instance_id` is a value a caller compares against a
 // live Registry.
 pub use purrdf_sparql_eval::RegistryId;
-// The two halves of a producer's declared stream contract. Re-exported because
-// `StreamContract` is built from them and a caller assembling a stream of its
-// own must be able to name them without depending on the evaluator crate.
-pub use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering};
+// The producer's declared stream contract. Re-exported because `StreamContract`
+// is built from it and a caller assembling a stream of its own must be able to
+// name it without depending on the evaluator crate.
+pub use purrdf_sparql_eval::DuplicatePolicy;

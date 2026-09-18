@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor,
-    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement, Volatility,
 };
 
 const EX_REL: &str = "http://example.org/ns#ranked";
@@ -92,7 +92,6 @@ fn ranked_declaration() -> RankedDeclaration {
         }],
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
         mandatory: true,
     }
@@ -140,7 +139,7 @@ fn the_ranked_declaration_participates_in_the_content_fingerprint() {
 fn a_changed_declaration_changes_the_fingerprint() {
     let base = registry_declaring(Some(ranked_declaration()));
     let changed = registry_declaring(Some(RankedDeclaration {
-        ordering: RankOrdering::NonIncreasing,
+        duplicates: DuplicatePolicy::Allowed,
         ..ranked_declaration()
     }));
     assert_ne!(
@@ -162,4 +161,44 @@ fn declaration_types_contain_no_function_pointers() {
         !SOURCE.contains("fn("),
         "property_fn.rs contains a function pointer; ranked declarations must be owned data"
     );
+}
+
+/// The digest the fixture registry's declarations fold into, hex digit for hex
+/// digit.
+///
+/// A plan carries the fingerprint of the registry it was admitted against and a
+/// host compares it against a live one, so this digest is a compatibility
+/// boundary: two runs of the same build, and two builds of the same source, must
+/// produce this exact string or plans stop matching registries that did not
+/// change. Pinning it is what makes a drift visible as a failure here rather
+/// than as a mismatch in a caller's plan cache.
+///
+/// It is a MEASUREMENT: it covers the framed declaration bytes under their
+/// domain separator, so it moves whenever either the declared fields or the
+/// framing change. Never edit it to match a run — re-run this test and record
+/// what it reports.
+const FIXTURE_FINGERPRINT: &str =
+    "1e7e04a44497fe601c9b0924e0008927ae7fbee52b491ee0785451d7a76aee0d";
+
+#[test]
+fn the_fingerprint_is_the_same_string_every_time_the_registry_is_rebuilt() {
+    let first = registry_declaring(Some(ranked_declaration()))
+        .content_fingerprint()
+        .expect("declarations are readable");
+    assert_eq!(
+        first, FIXTURE_FINGERPRINT,
+        "the fingerprint is a pure function of what was registered, so it is pinnable"
+    );
+    // Rebuilt from scratch: a fresh registry, a fresh relation, a fresh
+    // declaration. Nothing of the first instance survives into the second, so an
+    // address, an allocation order or a construction counter leaking into the
+    // bytes would separate them here.
+    for _ in 0..4 {
+        assert_eq!(
+            registry_declaring(Some(ranked_declaration()))
+                .content_fingerprint()
+                .expect("declarations are readable"),
+            FIXTURE_FINGERPRINT,
+        );
+    }
 }
