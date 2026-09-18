@@ -16,8 +16,8 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult,
-    FusionStream, Iri, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
-    RankedStream, StreamContract, Term, TopK, contribution, contribution_under,
+    FusionStream, Iri, MonotoneDepth, PlanId, ProducerReceipt, ProducerStatus, ProtocolError,
+    RECIP_K, RankedStream, StreamContract, Term, TopK, contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -2319,5 +2319,532 @@ fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
     assert!(
         shallow < 1_100_000,
         "the truncated rule's bound is set by sqrt(S), not by the weight, got {shallow}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 22. The decay's own quantization is not a protocol violation
+//
+// A contribution is computed by the consumer from the decay rule, K, the
+// stratum weight and the rank, re-derived on arrival and refused on mismatch.
+// Ranks are separately held contiguous and ascending. So when two adjacent ranks
+// carry one contribution, the producer supplied no term of it: the profile's
+// fixed-point arithmetic stopped separating those ranks at that depth. Fusion
+// measures that and carries on.
+//
+// Every test below that claims to read past a collision proves it with a witness
+// that does not come from the instrument under test. Asserting
+// `ranks_pulled > separation` would pass vacuously if either derived number were
+// wrong — reintroducing, inside the evidence channel, exactly the false
+// all-clear these tests exist to prevent. The witnesses used instead are the
+// directly observed collision count, the producer's own receipt, and bare
+// arithmetic on the decay rule.
+// ---------------------------------------------------------------------------
+
+/// A profile over one stratum named `deep`, at `weight` under `decay`.
+fn deep_profile(decay: DecayRule, weight: Fixed) -> FusionProfile {
+    FusionProfile::with_decay(BTreeMap::from([(stratum("deep"), weight)]), decay)
+        .expect("a strictly positive weight is a valid profile")
+}
+
+/// `rows` well-formed rows: contiguous ranks from one, distinct items, and the
+/// exact contribution the profile computes for each rank.
+fn deep_stream(decay: DecayRule, weight: Fixed, rows: u64) -> MockStream {
+    let steps = (1..=rows)
+        .map(|rank| {
+            Step::Row(
+                rank,
+                contribution_under(decay, weight, rank).expect("fixture contribution fits"),
+                Term::new(format!("d{rank:07}")),
+            )
+        })
+        .collect();
+    MockStream::new(steps, exhausted(rows))
+}
+
+/// The first rank whose contribution equals its successor's, found by walking.
+/// Independent of `monotone_depth`, so a test can cross-check it.
+fn first_collision_by_walking(decay: DecayRule, weight: Fixed, limit: u64) -> Option<u64> {
+    (1..limit).find(|&rank| {
+        let here = contribution_under(decay, weight, rank).expect("fits");
+        let next = contribution_under(decay, weight, rank + 1).expect("fits");
+        here == next
+    })
+}
+
+#[test]
+fn a_strictly_descending_stream_fuses_past_the_decay_collision() {
+    // The issue's own middle row: a weight of 1e6 raw units collides near rank
+    // 972, well inside a 1400-row stream, and every one of those rows is well
+    // formed in every respect a producer controls.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+    let profile = deep_profile(decay, weight);
+
+    // Witness one, and the reason this fixture tests anything: bare arithmetic
+    // on the decay rule says these ranks really do collide inside the stream.
+    let collision = first_collision_by_walking(decay, weight, 1_400)
+        .expect("this fixture must collide inside the stream it fuses");
+    assert_eq!(
+        collision, 972,
+        "the issue's measured collision rank for this weight"
+    );
+
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("deep"), deep_stream(decay, weight, 1_400))],
+        &profile,
+        TopK::new(1_400),
+    ))
+    .expect("a well-formed stream fuses past the depth its decay still separates");
+    assert_eq!(fused.rows.len(), 1_400, "every row is in the answer");
+
+    // Witness two: the producer's own receipt, validated against the rows fusion
+    // actually pulled. It could not say 1400 if fusion had stopped early.
+    assert_eq!(
+        fused.trailer.statuses[&stratum("deep")],
+        ProducerStatus::Exhausted {
+            rows_emitted: 1_400
+        }
+    );
+
+    // Witness three: the collisions fusion observed directly, on the comparison
+    // it performs per row. Not inferred from a depth against a bound.
+    let measured = fused.trailer.resolution[&stratum("deep")];
+    assert!(
+        measured.collisions_observed > 0,
+        "this run must have entered the range where the score stops ordering"
+    );
+    assert_eq!(measured.ranks_pulled, 1_400);
+    assert_eq!(measured.separation, MonotoneDepth::SeparatesTo(collision));
+
+    // And the answer is still the producer's order, because the tie-break's
+    // second key is best stratum rank ascending.
+    let entities: Vec<&str> = fused.rows.iter().map(|row| row.entity.as_str()).collect();
+    let expected: Vec<String> = (1..=1_400_u64).map(|rank| format!("d{rank:07}")).collect();
+    assert_eq!(
+        entities,
+        expected.iter().map(String::as_str).collect::<Vec<_>>(),
+        "past the collision the total tie-break recovers the producer's own rank order"
+    );
+}
+
+#[test]
+fn a_small_top_k_certifies_early_and_never_reaches_the_collision() {
+    // The trap this issue records, pinned as a positive test rather than left as
+    // a warning. The identical stream and profile as the test above, bounded at
+    // five: fusion certifies the top five and never pulls to the collision, so a
+    // regression test written this way reports a false all-clear.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+    let profile = deep_profile(decay, weight);
+
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("deep"), deep_stream(decay, weight, 1_400))],
+        &profile,
+        TopK::new(5),
+    ))
+    .expect("a bounded fusion answers");
+    assert_eq!(fused.rows.len(), 5);
+
+    let measured = fused.trailer.resolution[&stratum("deep")];
+    assert_eq!(
+        measured.collisions_observed, 0,
+        "a small bound never reaches the collision, which is why asserting only \
+         `is_ok()` here would prove nothing about the depth"
+    );
+    assert!(
+        measured.ranks_pulled < 972,
+        "and it stopped far short of the colliding rank, at {}",
+        measured.ranks_pulled
+    );
+}
+
+#[test]
+fn two_ranks_fuse_at_the_weight_that_used_to_refuse_them() {
+    // The issue's first row: one thousand raw units collides immediately, so the
+    // shortest possible stream already carries a repeated contribution. This is
+    // the exact case that was refused as `RepeatedContribution` at rank two.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000);
+    let profile = deep_profile(decay, weight);
+
+    let first = contribution_under(decay, weight, 1).expect("fits");
+    let second = contribution_under(decay, weight, 2).expect("fits");
+    assert_eq!(first, second, "1000/61 and 1000/62 both truncate to 16");
+    assert_eq!(first.into_raw(), 16, "the issue's measured value");
+
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("deep"), deep_stream(decay, weight, 2))],
+        &profile,
+        TopK::new(2),
+    ))
+    .expect("two well-formed ranks fuse");
+    assert_eq!(fused.rows.len(), 2);
+    assert_eq!(
+        fused.trailer.resolution[&stratum("deep")].collisions_observed,
+        1,
+        "exactly one adjacent pair collided, and it was observed rather than inferred"
+    );
+}
+
+#[test]
+fn the_issue_measurement_table_fuses_at_every_weight() {
+    // The issue's table, end to end. The three weights differ only in how soon
+    // the decay stops separating ranks; none of them is a protocol violation and
+    // all three answer. The first two used to be refused.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    for raw in [1_000_i128, 1_000_000, 100_000_000] {
+        let weight = Fixed::from_raw(raw);
+        let profile = deep_profile(decay, weight);
+        let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+            vec![(stratum("deep"), deep_stream(decay, weight, 1_400))],
+            &profile,
+            TopK::new(1_400),
+        ))
+        .unwrap_or_else(|error| panic!("weight {raw} raw units must fuse, got {error:?}"));
+        assert_eq!(fused.rows.len(), 1_400, "weight {raw} answers in full");
+
+        // The heaviest weight orders the whole stream; the two lighter ones do
+        // not, and say so. Both are correct answers.
+        let measured = fused.trailer.resolution[&stratum("deep")];
+        let collided = first_collision_by_walking(decay, weight, 1_400).is_some();
+        assert_eq!(
+            measured.collisions_observed > 0,
+            collided,
+            "the observed count must agree with the arithmetic at weight {raw}"
+        );
+    }
+}
+
+#[test]
+fn both_decay_rules_fuse_past_their_own_collision() {
+    // The issue exercises only the truncated rule. The weighted rule has its own
+    // boundary, near `sqrt(w_raw) - k` rather than near `sqrt(S)`, and the same
+    // law applies there: a collision is quantization, not a violation.
+    let weight = Fixed::from_raw(1_000_000);
+    for decay in [
+        DecayRule::ReciprocalRank { k: K },
+        DecayRule::WeightedReciprocalRank { k: K },
+    ] {
+        let profile = deep_profile(decay, weight);
+        let collision = first_collision_by_walking(decay, weight, 1_400)
+            .unwrap_or_else(|| panic!("{decay:?} must collide inside this fixture"));
+
+        let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+            vec![(stratum("deep"), deep_stream(decay, weight, 1_400))],
+            &profile,
+            TopK::new(1_400),
+        ))
+        .unwrap_or_else(|error| panic!("{decay:?} must fuse, got {error:?}"));
+
+        assert_eq!(fused.rows.len(), 1_400);
+        let measured = fused.trailer.resolution[&stratum("deep")];
+        assert!(measured.collisions_observed > 0, "{decay:?} crossed");
+        assert_eq!(measured.separation, MonotoneDepth::SeparatesTo(collision));
+    }
+}
+
+#[test]
+fn a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch() {
+    // Removing an over-refusal must not create an under-refusal. On a plateau,
+    // where equality between adjacent ranks is now legal, a value the profile
+    // did not compute is still refused — the equality arm was the only thing
+    // removed, and it was never what checked the value.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000);
+    let profile = deep_profile(decay, weight);
+    let plateau = contribution_under(decay, weight, 1).expect("fits");
+    assert_eq!(
+        plateau,
+        contribution_under(decay, weight, 2).expect("fits"),
+        "this fixture needs ranks one and two on one plateau"
+    );
+
+    // THE INVALID CASE: rank two carries a value that is neither rising nor the
+    // profile's own.
+    let forged = Fixed::from_raw(plateau.into_raw() - 1);
+    let streams = vec![(
+        stratum("deep"),
+        MockStream::new(
+            vec![
+                Step::Row(1, plateau, Term::new("a")),
+                Step::Row(2, forged, Term::new("b")),
+            ],
+            exhausted(2),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams,
+        &profile,
+        TopK::new(2),
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ContributionMismatch { .. })
+        ),
+        "a value the profile did not compute is refused even on a plateau, got {result:?}"
+    );
+
+    // THE NEIGHBOURING VALID CASE: the same shape with the profile's own value,
+    // which is exactly equal to its predecessor's. This is what the fix
+    // legalizes, and it must succeed.
+    let streams = vec![(
+        stratum("deep"),
+        MockStream::new(
+            vec![
+                Step::Row(1, plateau, Term::new("a")),
+                Step::Row(2, plateau, Term::new("b")),
+            ],
+            exhausted(2),
+        ),
+    )];
+    assert_eq!(
+        block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+            streams,
+            &profile,
+            TopK::new(2)
+        ))
+        .expect("the profile's own value on a plateau fuses")
+        .rows
+        .len(),
+        2
+    );
+}
+
+#[test]
+fn a_zero_top_k_still_reports_one_rank_pulled() {
+    // A trailer asserts a terminal status per producer, which requires reading
+    // each stream's first row. So `ranks_pulled` is one even here, never zero —
+    // surprising enough that a caller testing `== 0` for "untouched" would be
+    // wrong, and therefore worth pinning.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000);
+    let profile = deep_profile(decay, weight);
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(stratum("deep"), deep_stream(decay, weight, 10))],
+        &profile,
+        TopK::new(0),
+    ))
+    .expect("a zero bound still reports");
+    assert_eq!(fused.rows.len(), 0, "a bound of zero admits no rows");
+    assert_eq!(fused.trailer.resolution[&stratum("deep")].ranks_pulled, 1);
+    assert_eq!(
+        fused.trailer.resolution[&stratum("deep")].collisions_observed,
+        0,
+        "one row has no adjacent pair to collide with"
+    );
+}
+
+#[test]
+fn fusion_past_the_collision_is_deterministic() {
+    // The claim the whole change rests on: past the separating depth the answer
+    // is still a pure function of its inputs, because the declared tie-break is
+    // total. Two runs over identical inputs, compared row for row including
+    // every score and every provenance entry.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000);
+    let profile = deep_profile(decay, weight);
+    let run = || {
+        block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+            vec![
+                (stratum("deep"), deep_stream(decay, weight, 200)),
+                (stratum("other"), deep_stream(decay, weight, 200)),
+            ],
+            &FusionProfile::with_decay(
+                BTreeMap::from([(stratum("deep"), weight), (stratum("other"), weight)]),
+                decay,
+            )
+            .expect("valid"),
+            TopK::new(400),
+        ))
+        .expect("fuses")
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(first.rows, second.rows, "two runs agree row for row");
+    assert!(
+        profile
+            .class_width(&stratum("deep"), 200)
+            .expect("weighted")
+            > 1,
+        "this fixture must sit on a plateau, or it proves nothing about ties"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 23. The resolution algebra, and the one refusal it is allowed to make
+//
+// A refusal is a claim, so the refusal `weight_for_depth` makes is paired with
+// its neighbouring valid case in the same test. It is also exact rather than
+// conservative, which is the difference between an honest wall and the
+// over-refusal this section of the crate exists to have removed: under the
+// truncated rule the reciprocal is rounded *before* the weight is applied, so
+// once two adjacent ranks collide there they are equal for every weight.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn weight_for_depth_names_the_smallest_weight_that_reaches_it() {
+    // THE VALID CASE, both rules. What comes back must actually work, and the
+    // weight one raw unit below it must not — that pair is what "smallest"
+    // means, and asserting only the first would pass for any over-estimate.
+    for decay in [
+        DecayRule::ReciprocalRank { k: K },
+        DecayRule::WeightedReciprocalRank { k: K },
+    ] {
+        for depth in [2_u64, 10, 500, 5_000] {
+            let weight = decay
+                .weight_for_depth(depth)
+                .unwrap_or_else(|error| panic!("{decay:?} depth {depth}: {error:?}"));
+
+            let reaches = |candidate: Fixed| {
+                (1..depth).all(|rank| {
+                    let here = contribution_under(decay, candidate, rank).expect("fits");
+                    let next = contribution_under(decay, candidate, rank + 1).expect("fits");
+                    here > next
+                })
+            };
+            assert!(
+                reaches(weight),
+                "{decay:?}: the weight it named must separate every rank up to {depth}"
+            );
+            let lighter = Fixed::from_raw(weight.into_raw() - 1);
+            assert!(
+                !reaches(lighter),
+                "{decay:?}: one raw unit lighter must fail, or {weight:?} is not minimal \
+                 and the answer overstates what depth {depth} costs"
+            );
+        }
+    }
+}
+
+#[test]
+fn weight_for_depth_refuses_only_where_no_weight_can_reach() {
+    // THE INVALID CASE and its neighbour, one rank apart. The truncated rule
+    // saturates; the refusal must land exactly on that boundary and not one rank
+    // early, because a bound drawn conservatively here would refuse depths the
+    // arithmetic in fact delivers.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let saturation = deep_profile(decay, Fixed::ONE)
+        .monotone_depth(&stratum("deep"))
+        .expect("weighted")
+        .rank()
+        .expect("the truncated rule always saturates inside the expressible range");
+
+    // The neighbour that must still succeed: the deepest reachable rank.
+    let weight = decay
+        .weight_for_depth(saturation)
+        .expect("the saturation depth itself is reachable");
+    assert!(weight.into_raw() > 0);
+
+    // And one rank past it, which no weight reaches.
+    match decay.weight_for_depth(saturation + 1) {
+        Err(FusionError::DepthUnreachable {
+            depth,
+            saturates_at,
+        }) => {
+            assert_eq!(depth, saturation + 1);
+            assert_eq!(saturates_at, MonotoneDepth::SeparatesTo(saturation));
+        }
+        other => panic!("expected DepthUnreachable past saturation, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_truncated_rule_saturates_where_no_weight_can_lift_it() {
+    // The issue's unit-weight extrapolation, asserted symbolically rather than
+    // by enumerating a million rows. The inner truncation is a ceiling: raising
+    // the weight far above one buys no depth at all under this rule, which is
+    // why `weight_for_depth` has a wall to report and why a caller that needs
+    // more depth must change the rule rather than the weight.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let unit = deep_profile(decay, Fixed::ONE)
+        .monotone_depth(&stratum("deep"))
+        .expect("weighted")
+        .rank()
+        .expect("saturates");
+    assert!(
+        (1_000_000..1_100_000).contains(&unit),
+        "a unit weight orders about a million ranks, got {unit}"
+    );
+
+    let heavy = Fixed::from_integer(1_000_000).expect("representable");
+    let heavier = deep_profile(decay, heavy)
+        .monotone_depth(&stratum("deep"))
+        .expect("weighted")
+        .rank()
+        .expect("saturates");
+    assert_eq!(
+        heavier, unit,
+        "a weight a million times larger buys no depth under the truncated rule"
+    );
+
+    // The weighted rule is the one where weight does buy depth, which is the
+    // whole reason both rules exist.
+    let folded = DecayRule::WeightedReciprocalRank { k: K };
+    let bought = deep_profile(folded, heavy)
+        .monotone_depth(&stratum("deep"))
+        .expect("weighted")
+        .rank();
+    assert!(
+        bought.is_none_or(|rank| rank > unit),
+        "the weighted rule must order deeper at the same weight, got {bought:?}"
+    );
+}
+
+#[test]
+fn class_width_is_the_curve_the_bound_is_one_point_of() {
+    // `monotone_depth` is where the width first exceeds one. The width itself
+    // keeps growing past it, and reporting only "crossed / did not cross" would
+    // flatten a curve spanning orders of magnitude into one bit.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+    let profile = deep_profile(decay, weight);
+    let stratum = stratum("deep");
+    let bound = profile
+        .monotone_depth(&stratum)
+        .expect("weighted")
+        .rank()
+        .expect("saturates");
+
+    // Strictly inside the bound every rank is its own class.
+    for rank in [1_u64, 2, bound / 2, bound - 1] {
+        assert_eq!(
+            profile.class_width(&stratum, rank),
+            Some(1),
+            "rank {rank} is inside the separating range, so it stands alone"
+        );
+    }
+    // The bound itself is the first rank that shares a contribution — with its
+    // successor, which a read to this depth never reaches. That is why the
+    // separating *depth* is this rank and not the one before it.
+    assert_eq!(
+        profile.class_width(&stratum, bound),
+        Some(2),
+        "the bound is where the first collision begins"
+    );
+
+    // Past it the classes are wider, and they keep widening.
+    let near = profile.class_width(&stratum, bound + 1).expect("weighted");
+    let far = profile.class_width(&stratum, bound * 4).expect("weighted");
+    assert!(near > 1, "past the bound ranks share a contribution");
+    assert!(
+        far > near,
+        "and the class widens with depth: {near} at the boundary, {far} deeper"
+    );
+
+    // Which is exactly what `deepest_rank_within_width` inverts.
+    let deepest = profile
+        .deepest_rank_within_width(&stratum, near)
+        .expect("weighted");
+    assert!(
+        deepest >= bound,
+        "tolerating a class of {near} must reach at least as deep as demanding one"
+    );
+    assert_eq!(
+        profile.deepest_rank_within_width(&stratum, 1),
+        Some(bound),
+        "a tolerance of one is the separating bound itself"
     );
 }

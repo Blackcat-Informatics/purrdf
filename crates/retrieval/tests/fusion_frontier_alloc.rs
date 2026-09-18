@@ -211,6 +211,10 @@ struct LazyStream {
     /// the two against identical rows measures exactly what the declaration
     /// costs.
     duplicates: DuplicatePolicy,
+    /// The stratum weight this stream's contributions are computed at. Read from
+    /// the fixture's own profile, so the rows always carry the value that
+    /// profile would re-derive for them.
+    weight: Fixed,
 }
 
 // The trait's methods are `async`; this fixture's body is synchronous because it
@@ -227,7 +231,7 @@ impl RankedStream for LazyStream {
         self.emitted += 1;
         self.pulls.fetch_add(1, Ordering::SeqCst);
         let rank = self.emitted;
-        let value = contribution(Fixed::ONE, rank, K).expect("the contribution fits");
+        let value = contribution(self.weight, rank, K).expect("the contribution fits");
         let index = permuted_index(self.stream_index, rank);
         Ok(Some((
             rank,
@@ -256,11 +260,9 @@ fn fixture(
     total: u64,
     duplicates: DuplicatePolicy,
     pulls: &Arc<AtomicUsize>,
+    weight: Fixed,
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
-    let weights: BTreeMap<Iri, Fixed> = STRATA
-        .iter()
-        .map(|name| (stratum(name), Fixed::ONE))
-        .collect();
+    let weights: BTreeMap<Iri, Fixed> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
     let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
         .expect("the fixture profile is valid");
     assert_eq!(
@@ -280,6 +282,7 @@ fn fixture(
                     total,
                     pulls: Arc::clone(pulls),
                     duplicates,
+                    weight,
                 },
             )
         })
@@ -301,6 +304,10 @@ struct Measurement {
     /// rather than at exhaustion — the evidence the bound stopped the reading
     /// and not merely the returning.
     bounded: usize,
+    /// Adjacent ranks whose contributions the profile could not separate,
+    /// summed across the three strata — the evidence a run really entered the
+    /// regime where certification has to wait on a plateau.
+    collisions: u64,
 }
 
 /// Fuse [`CERTIFIED_ROWS`] rows out of three streams of `total` rows each
@@ -309,11 +316,28 @@ fn measure(total: u64, duplicates: DuplicatePolicy) -> Measurement {
     measure_rows(total, CERTIFIED_ROWS, duplicates)
 }
 
+/// The same measurement at a weight whose contributions collide, so the fusion
+/// is driven through the plateau regime rather than around it.
+fn measure_at_weight(total: u64, duplicates: DuplicatePolicy, weight: Fixed) -> Measurement {
+    measure_rows_at_weight(total, CERTIFIED_ROWS, duplicates, weight)
+}
+
 /// Fuse `rows` rows out of three streams of `total` rows each through the
 /// shipped [`fuse`], measuring the peak heap it held while doing it.
 fn measure_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measurement {
+    measure_rows_at_weight(total, rows, duplicates, Fixed::ONE)
+}
+
+/// Fuse `rows` rows out of three streams of `total` rows each, at `weight`,
+/// through the shipped [`fuse`], measuring the peak heap it held.
+fn measure_rows_at_weight(
+    total: u64,
+    rows: usize,
+    duplicates: DuplicatePolicy,
+    weight: Fixed,
+) -> Measurement {
     let pulls = Arc::new(AtomicUsize::new(0));
-    let (profile, streams) = fixture(total, duplicates, &pulls);
+    let (profile, streams) = fixture(total, duplicates, &pulls, weight);
 
     // The baseline is taken after the fixture is built, so what is measured is
     // the fusion's own working set and not the fixture's.
@@ -339,6 +363,12 @@ fn measure_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measure
         .values()
         .filter(|status| matches!(status, ProducerStatus::CeilingReached { .. }))
         .count();
+    let collisions = result
+        .trailer
+        .resolution
+        .values()
+        .map(|measured| measured.collisions_observed)
+        .sum::<u64>();
     // The peak was read before this: what is measured is what the *fusion* held,
     // not what the caller then chose to keep.
     drop(result);
@@ -347,6 +377,7 @@ fn measure_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measure
         pulls,
         contributions,
         bounded,
+        collisions,
     }
 }
 
@@ -498,5 +529,79 @@ fn a_unique_declaration_is_what_keeps_a_deep_answer_affordable() {
         "reading eight times as deep must cost a `Unique` stream less than an \
          `Allowed` one; unique grew {unique_growth} bytes against allowed's \
          {allowed_growth}"
+    );
+}
+
+/// **The bound survives the regime that removing a refusal made reachable.**
+///
+/// Fusion used to refuse a stream whose adjacent ranks carried one contribution.
+/// That refusal is gone, and it was — accidentally — also the guard on this:
+/// certification requires a candidate's score to be strictly above the threshold
+/// over the stream heads, and on a plateau the next head carries the *same*
+/// contribution, so nothing certifies while the plateau lasts and the frontier
+/// accumulates. `select_emittable` already names exact ties as the thing that
+/// would otherwise make the frontier grow with the input; quantization is a
+/// second source of them, and unlike symmetric disagreement it arrives
+/// systematically with depth.
+///
+/// So the claim the whole change rests on — that reading past the separating
+/// depth costs resolution and *nothing else* — is measured here rather than
+/// assumed. The weight is a thousand raw units, at which adjacent ranks collide
+/// from the very first pair, so every certified row in this fixture is decided
+/// inside the plateau regime.
+#[test]
+fn the_frontier_stays_bounded_past_the_collision() {
+    // A thousand raw units is `10^-9`, not the number one thousand: at this
+    // weight ranks one and two already share a contribution.
+    let colliding = Fixed::from_raw(1_000);
+    let short = measure_at_weight(1_000, DuplicatePolicy::Unique, colliding);
+    let long = measure_at_weight(1_000_000, DuplicatePolicy::Unique, colliding);
+
+    // First, the crossing guard. Without it every assertion below could hold
+    // because the run never entered the regime at all — the same false all-clear
+    // a too-small row bound produces.
+    assert!(
+        short.collisions > 0 && long.collisions > 0,
+        "this fixture must fuse inside the plateau regime, saw {} and {} collisions",
+        short.collisions,
+        long.collisions
+    );
+
+    // Second, the measurement is live, so the comparison is not vacuous.
+    assert!(
+        short.peak_bytes > 0,
+        "the fusion allocated nothing, so this measures nothing"
+    );
+    assert!(
+        short.contributions > 0 && long.contributions > 0,
+        "the certified rows carried no provenance, so the frontier was never populated"
+    );
+
+    // Third, the claim: a thousand-fold longer stream, the same certified rows,
+    // and a peak that does not follow the input.
+    assert_eq!(
+        short.peak_bytes, long.peak_bytes,
+        "peak heap tracked the stream length inside the plateau regime: {} bytes over 1e3 \
+         rows against {} over 1e6 — the removed refusal was load-bearing after all",
+        short.peak_bytes, long.peak_bytes
+    );
+    assert!(
+        long.peak_bytes < 64 * 1024,
+        "a bounded frontier should not cost {} bytes",
+        long.peak_bytes
+    );
+
+    // And the reading is bounded too, not merely the returning: a run that
+    // drained a million rows to answer thirty-two would have a bounded frontier
+    // and an unbounded cost.
+    assert_eq!(
+        short.pulls, long.pulls,
+        "the plateau must not make a longer stream get read further: {} pulls against {}",
+        short.pulls, long.pulls
+    );
+    assert_eq!(
+        long.bounded,
+        STRATA.len(),
+        "every stream still held rows, so each closes at a contribution bound"
     );
 }

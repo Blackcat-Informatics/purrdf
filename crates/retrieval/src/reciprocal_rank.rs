@@ -331,16 +331,67 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> u64 {
     last.saturating_sub(first).saturating_add(1)
 }
 
-/// The deepest rank whose indifference class is still no wider than
-/// `max_width`.
+/// The deepest **depth** that can be read with every rank in it sitting in a
+/// class no wider than `max_width`.
 ///
-/// The class width is non-decreasing in the rank under both rules, so the
-/// boundary is found exactly by the same non-increasing-predicate search every
-/// other bound in this module uses. A `max_width` below one is read as one: a
-/// class always contains its own rank.
+/// This is a depth, not a rank property, and the distinction is load-bearing at
+/// the boundary. If the first collision is at rank `r`, then reading to depth `r`
+/// yields `r` mutually distinct contributions — rank `r + 1`, the one it collides
+/// with, was never read. So depth `r` is fully separated even though rank `r`'s
+/// class in the unbounded sequence has width two. Asking instead for the deepest
+/// rank whose own class is a singleton answers `r - 1`, understating by one what
+/// the arithmetic in fact delivers; a conservative bound here would discourage a
+/// depth that orders perfectly, which is the same defect as refusing it.
+///
+/// With `max_width` of one this therefore agrees exactly with
+/// [`monotone_depth`].
+///
+/// # Why this walks rather than bisects
+///
+/// The class width is **not** monotone in the rank, so a binary search over
+/// "is this rank's class narrow enough" is unsound and silently over-reports.
+/// The trend grows, but locally the floors straddle: under the truncated rule at
+/// a weight of `10^6` raw units, rank 972 already shares its contribution with
+/// 973, while rank 1038 is alone again. Bisecting that predicate answers 1039
+/// for a tolerance of one — claiming a depth fully separated when it passed a
+/// collision sixty ranks earlier. That is a false claim about the quality of an
+/// answer, which is worse than declining to make one.
+///
+/// So the run lengths are counted exactly. The walk starts at
+/// [`monotone_depth`] rather than at rank one, because every class below that
+/// point has width one by its definition and cannot be what exceeds
+/// `max_width`. A `max_width` below one is read as one: a class always contains
+/// its own rank.
 pub(crate) fn deepest_rank_within_width(decay: DecayRule, weight: Fixed, max_width: u64) -> u64 {
     let ceiling = max_width.max(1);
-    largest_rank_satisfying(|rank| rank == 0 || class_width(decay, weight, rank) <= ceiling)
+    let start = monotone_depth(decay, weight);
+    if ceiling == 1 || start >= MAX_DEPTH {
+        return start;
+    }
+
+    // Walk forward, counting consecutive ranks that carry one contribution. The
+    // first run longer than `ceiling` ends the range at the rank that run began,
+    // because reading that far would put `ceiling + 1` ranks in one class.
+    let Ok(mut current) = contribution_under(decay, weight, start) else {
+        return start;
+    };
+    let mut run_start = start;
+    let mut rank = start;
+    while rank < MAX_DEPTH {
+        let Ok(next) = contribution_under(decay, weight, rank + 1) else {
+            return rank;
+        };
+        if next == current {
+            if rank + 1 - run_start + 1 > ceiling {
+                return run_start;
+            }
+        } else {
+            current = next;
+            run_start = rank + 1;
+        }
+        rank += 1;
+    }
+    MAX_DEPTH
 }
 
 /// The smallest weight whose contributions still separate every adjacent pair
