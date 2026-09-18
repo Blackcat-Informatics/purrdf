@@ -1479,7 +1479,7 @@ fn paged_named_graphs_match_a_single_merged_dataset() {
     );
 }
 
-// ── `reifier_quads_in_graph` / `annotation_quads_in_graph` narrowing (Task 6b) ──
+// ── `reifier_quads_in_graph` / `annotation_quads_in_graph` narrowing ──
 
 /// Populate `b` with page A's content: a reifier row + an annotation row in a named
 /// graph `g_owns` that genuinely owns rows, a SECOND reifier row + annotation row in
@@ -1631,7 +1631,7 @@ fn reifier_and_annotation_quads_in_graph_match_the_filtered_whole_table_on_every
     );
 }
 
-/// Part A (Task 6): a page that mentions a reifier term ONLY in its base-quad table
+/// Part A: a page that mentions a reifier term ONLY in its base-quad table
 /// (role-agnostic term-table presence via `PageTranslation::to_local` alone would pass
 /// it) must be skipped by `reifier_quads_of` — never materialized — while a page that
 /// genuinely owns a reifier row for the same term is admitted and still yields it.
@@ -1747,7 +1747,7 @@ fn annotations_of_with_graph_skips_a_page_that_only_mentions_the_term_in_the_rei
     );
 }
 
-// ── Row: `Named(g)` — cross-page (Task 9a) ──────────────────────────────────────
+// ── `Named(g)` — cross-page ──────────────────────────────────────────────────────
 
 /// The cross-page half of the `Named(g)` refusal row: a page that DECLARES `<g>`
 /// empty must be skipped for `<g>` (never materialized), while a DIFFERENT page that
@@ -1802,7 +1802,7 @@ fn named_graph_query_skips_the_page_that_declares_it_empty_and_admits_the_page_t
     );
 }
 
-// ── Row: `Named(g)` side table (Task 9a) ────────────────────────────────────────
+// ── `Named(g)` side table ─────────────────────────────────────────────────────────
 
 /// The side-table half of the `Named(g)` refusal row: a page whose ONLY content in
 /// graph `<g>` is a reifier row (no base quad ever names `<g>`) must be skipped by

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Task 9b: a differential proptest proving the page-admission law is a SOUND
+//! A differential proptest proving the page-admission law is a SOUND
 //! filter — `PagedDataset::quads_for_pattern` and `PagedQueryView::quads_for_pattern`
 //! must equal a per-page reference, row-for-row and order-for-order, not merely as
 //! sets — plus a parity/determinism suite and a pinned-literal whole-dataset

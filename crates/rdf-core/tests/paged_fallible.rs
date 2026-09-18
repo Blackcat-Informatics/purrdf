@@ -120,7 +120,7 @@ fn inclusive_limits_and_cache_accounting_are_exact() {
     assert_eq!(evidence.consumed_bytes, 0);
 }
 
-/// Row: page budget (Task 9a). A single-page dataset that owns the only page a
+/// Page-budget refusal boundary. A single-page dataset that owns the only page a
 /// graph-selective query needs: a ZERO page budget refuses it (the owning page is the
 /// very first request, and the budget is already exhausted), while a budget of
 /// EXACTLY ONE completes it on a fresh view — the inclusive ceiling admitting the
@@ -163,7 +163,7 @@ fn page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it() {
     );
 }
 
-/// Row: byte budget (Task 9a). A single-page dataset with an explicit deterministic
+/// Byte-budget refusal boundary. A single-page dataset with an explicit deterministic
 /// byte charge: a budget ONE BYTE below that charge refuses the one-graph query,
 /// while a budget EXACTLY EQUAL to it completes the query — the inclusive ceiling
 /// documented on [`PagedQueryLimits`].

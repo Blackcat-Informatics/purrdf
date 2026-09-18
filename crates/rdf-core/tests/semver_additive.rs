@@ -158,8 +158,8 @@ fn describe_freeze_error(error: &PagedFreezeError) -> String {
             format!("page-count-mismatch: metadata {metadata}, provider {provider}")
         }
         PagedFreezeError::QuadOverlap(overlap) => format!("quad-overlap: {overlap:?}"),
-        // Additive (this branch), not pinned by field shape: intentionally not named
-        // away, per the module docs above.
+        // Additive: matched by name, not pinned by field shape — intentionally not
+        // named away, per the module docs above.
         PagedFreezeError::SummaryDrift { page, message } => {
             format!("summary-drift: page {page:?}, message {message}")
         }
