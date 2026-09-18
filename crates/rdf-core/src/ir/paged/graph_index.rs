@@ -18,14 +18,6 @@
 //! [`compact`](super::PagedDataset::compact) by simply being rebuilt from the
 //! resulting pages, rather than needing its own remap pass.
 
-#![allow(
-    dead_code,
-    reason = "the narrow read accessors (`keys`, `pages_for_named`, `pages_for_default`) are \
-              this index's consumer-facing API; their production callers are the page-admission \
-              predicate and the composed `named_graphs()` surface in `mod.rs` and `query.rs`, \
-              and this attribute is removed once those call sites exist"
-)]
-
 use std::collections::BTreeMap;
 
 use super::PageSlot;
@@ -119,6 +111,12 @@ impl GraphPageIndex {
     /// deduplicated (declared-empty graphs included) — the composed
     /// `named_graphs()` answer.
     #[inline]
+    #[allow(
+        dead_code,
+        reason = "the page-admission law (admission.rs) narrows candidate pages via \
+                  pages_for_named/pages_for_default, never by enumerating keys; this \
+                  accessor's only caller in this crate is this file's own test"
+    )]
     pub(crate) fn keys(&self) -> &[GlobalTermId] {
         &self.keys
     }

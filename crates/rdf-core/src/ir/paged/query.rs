@@ -16,9 +16,10 @@ use crate::dataset_view::{DatasetView, FallibleDatasetView, GraphMatch, ViewOper
 use crate::governor::{ResourceDimension, ResourceVector, StopCause};
 use crate::ir::{GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 
+use super::admission::{self, PageAdmission};
 use super::{
     PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagedDataset,
-    map_quad_to_global, translate_pattern,
+    map_quad_to_global,
 };
 
 /// Exact resource ceilings for one [`PagedQueryView`].
@@ -615,16 +616,27 @@ impl DatasetView for PagedQueryView<'_> {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        self.dataset.pages.iter().flat_map(move |slot| {
-            translate_pattern(&slot.translation, s, p, o, g)
-                .into_iter()
-                .flat_map(move |(local_s, local_p, local_o, local_g)| {
+        // Narrow the candidate page set from the graph axis first (zero allocation),
+        // then apply the full per-axis admission law before `self.page` — the only
+        // materialization, and the only thing that can charge this operation's page/byte
+        // budget or advance its evidence — runs for a candidate.
+        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
+        admission::candidate_pages(self.dataset.graph_index(), page_count, g).flat_map(
+            move |page_id| {
+                let index = usize::try_from(page_id.0).expect("page id fits usize");
+                let slot = &self.dataset.pages[index];
+                let admitted = match admission::admit_pattern(&slot.translation, s, p, o, g) {
+                    PageAdmission::Skip(_) => None,
+                    PageAdmission::Admit(local) => Some(local),
+                };
+                admitted.into_iter().flat_map(move |local| {
                     self.page(slot.id).into_iter().flat_map(move |page| {
-                        page.quads_for_pattern_indexed(local_s, local_p, local_o, local_g)
+                        page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
                             .map(move |quad| map_quad_to_global(&slot.translation, quad))
                     })
                 })
-        })
+            },
+        )
     }
 
     fn term_id_by_value(&self, value: &TermValue) -> Option<GlobalTermId> {
@@ -666,20 +678,27 @@ impl DatasetView for PagedQueryView<'_> {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> usize {
+        // Candidate narrowing mirrors `quads_for_pattern`; the materialization policy
+        // below is unchanged by this task — an admitted page's estimate is read from an
+        // ALREADY-cached materialization if one exists, and the sealed quad count
+        // (never a fresh materialization) otherwise, so planning still never spends this
+        // operation's page/byte budget.
+        let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
         let mut total = 0_usize;
-        for slot in &self.dataset.pages {
-            let Some((local_s, local_p, local_o, local_g)) =
-                translate_pattern(&slot.translation, s, p, o, g)
+        for page_id in admission::candidate_pages(self.dataset.graph_index(), page_count, g) {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.dataset.pages[index];
+            let PageAdmission::Admit(local) =
+                admission::admit_pattern(&slot.translation, s, p, o, g)
             else {
                 continue;
             };
-            let index = usize::try_from(slot.id.0).expect("page id fits usize");
             let estimate = self.pages[index]
                 .materialization
                 .get()
                 .and_then(|result| result.as_ref().ok())
                 .map_or(slot.quad_count, |page| {
-                    page.cardinality_estimate(local_s, local_p, local_o, local_g)
+                    page.cardinality_estimate(local.s, local.p, local.o, local.g)
                 });
             // Planning must not materialize provider pages: doing so would consume
             // operation budgets and make requested-page evidence depend on whether

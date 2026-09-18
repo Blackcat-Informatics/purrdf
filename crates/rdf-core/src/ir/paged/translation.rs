@@ -162,14 +162,11 @@ impl PageTranslation {
     }
 
     /// This page's exact per-term and per-graph row counts (LOCAL `TermId` space).
+    /// Read by [`admit_pattern`](super::admission::admit_pattern), the page-admission
+    /// law both `quads_for_pattern` and `cardinality_estimate` apply in `mod.rs` and
+    /// `query.rs`.
     #[must_use]
     #[inline]
-    #[allow(
-        dead_code,
-        reason = "read by the page-admission predicate and the cardinality estimate in \
-                  `mod.rs` and `query.rs`; this attribute is removed once those call \
-                  sites exist"
-    )]
     pub(crate) fn summary(&self) -> &PageSummary {
         &self.summary
     }

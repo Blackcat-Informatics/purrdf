@@ -49,6 +49,7 @@
 //! records first page requests in evaluation order and charges each admitted page
 //! exactly once.
 
+pub(crate) mod admission;
 pub(crate) mod graph_index;
 pub mod provider;
 pub mod query;
@@ -62,6 +63,7 @@ use std::sync::{Arc, OnceLock};
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
+use admission::PageAdmission;
 use graph_index::GraphPageIndex;
 
 pub use provider::{
@@ -276,13 +278,9 @@ pub struct PagedDataset {
     total_quads: usize,
     /// The dataset-level "which pages carry graph G" index, DERIVED (never
     /// persisted) from the completed `pages` in every constructor — see
-    /// [`GraphPageIndex::derive`].
-    #[allow(
-        dead_code,
-        reason = "read only via `graph_index()`, whose own production callers are the \
-                  page-admission predicate and the composed `named_graphs()` surface in \
-                  `mod.rs` and `query.rs`; this attribute is removed once those call sites exist"
-    )]
+    /// [`GraphPageIndex::derive`]. Read via [`graph_index`](Self::graph_index) by
+    /// the page-admission candidate selection (`admission::candidate_pages`) in
+    /// both `quads_for_pattern` and `cardinality_estimate` below.
     graph_index: GraphPageIndex,
 }
 
@@ -749,12 +747,6 @@ impl PagedDataset {
     /// The dataset-level "which pages carry graph G" index (read-only). See
     /// [`GraphPageIndex`] — derived at every constructor, never persisted.
     #[must_use]
-    #[allow(
-        dead_code,
-        reason = "its production callers are the page-admission predicate and the composed \
-                  `named_graphs()` surface in `mod.rs` and `query.rs`; this attribute is \
-                  removed once those call sites exist"
-    )]
     pub(crate) fn graph_index(&self) -> &GraphPageIndex {
         &self.graph_index
     }
@@ -819,45 +811,6 @@ impl PagedDataset {
     }
 }
 
-/// Translate a whole `(s, p, o, g)` global pattern to this page's local id space, or
-/// `None` if ANY bound id (including a `Named` graph) is absent on the page — in which
-/// case the page cannot match and is skipped. An unbound axis (`None`) stays unbound;
-/// a bound axis present on the page becomes its local `TermId`.
-#[allow(clippy::type_complexity)]
-fn translate_pattern(
-    translation: &PageTranslation,
-    s: Option<GlobalTermId>,
-    p: Option<GlobalTermId>,
-    o: Option<GlobalTermId>,
-    g: GraphMatch<GlobalTermId>,
-) -> Option<(
-    Option<TermId>,
-    Option<TermId>,
-    Option<TermId>,
-    GraphMatch<TermId>,
-)> {
-    // For each bound axis, `?` short-circuits to `None` (skip the page) when the term
-    // is absent; an unbound axis passes through as `None`.
-    let s = match s {
-        None => None,
-        Some(global) => Some(translation.to_local(global)?),
-    };
-    let p = match p {
-        None => None,
-        Some(global) => Some(translation.to_local(global)?),
-    };
-    let o = match o {
-        None => None,
-        Some(global) => Some(translation.to_local(global)?),
-    };
-    let g = match g {
-        GraphMatch::Any => GraphMatch::Any,
-        GraphMatch::Default => GraphMatch::Default,
-        GraphMatch::Named(gid) => GraphMatch::Named(translation.to_local(gid)?),
-    };
-    Some((s, p, o, g))
-}
-
 /// Map a page-local [`QuadIds`] back to the shared global id space.
 fn map_quad_to_global(translation: &PageTranslation, q: QuadIds<TermId>) -> QuadIds<GlobalTermId> {
     QuadIds {
@@ -909,20 +862,27 @@ impl DatasetView for PagedDataset {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        // Stream across pages, skipping any page that cannot match a bound id (incl. a
-        // Named graph) BEFORE it is materialized: `translate_pattern` returning `None`
-        // yields an empty inner iterator, so `self.page` — the only materialization —
-        // never runs for a skipped page (the lazy hook is preserved by construction).
-        self.pages.iter().flat_map(move |slot| {
-            translate_pattern(&slot.translation, s, p, o, g)
-                .into_iter()
-                .flat_map(move |(ls, lp, lo, lg)| {
-                    let page = self
-                        .page(slot.id)
-                        .expect("sealed page must re-materialize deterministically");
-                    page.quads_for_pattern_indexed(ls, lp, lo, lg)
-                        .map(move |q| map_quad_to_global(&slot.translation, q))
-                })
+        // Narrow the candidate page set from the graph axis first (zero allocation:
+        // either every page, or a graph-index posting list — both ascending), then
+        // apply the full per-axis admission law to each candidate BEFORE it is
+        // materialized: a `Skip` verdict yields an empty inner iterator, so `self.page`
+        // — the only materialization — never runs for a skipped page (the lazy hook is
+        // preserved by construction).
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        admission::candidate_pages(self.graph_index(), page_count, g).flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.pages[index];
+            let admitted = match admission::admit_pattern(&slot.translation, s, p, o, g) {
+                PageAdmission::Skip(_) => None,
+                PageAdmission::Admit(local) => Some(local),
+            };
+            admitted.into_iter().flat_map(move |local| {
+                let page = self
+                    .page(slot.id)
+                    .expect("sealed page must re-materialize deterministically");
+                page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
+                    .map(move |q| map_quad_to_global(&slot.translation, q))
+            })
         })
     }
 
@@ -967,17 +927,25 @@ impl DatasetView for PagedDataset {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> usize {
-        // The Merge-scope summation: Σ over non-skipped pages of each page's own
-        // O(log n) estimate on the translated pattern.
+        // The Merge-scope summation: Σ over admitted pages of each page's own
+        // O(log n) estimate on the pattern translated to that page's local id space.
+        // The candidate page set narrows on the graph axis exactly as in
+        // `quads_for_pattern`; the materialization policy (every admitted page is
+        // materialized here) is unchanged.
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
         let mut total = 0usize;
-        for slot in &self.pages {
-            let Some((ls, lp, lo, lg)) = translate_pattern(&slot.translation, s, p, o, g) else {
+        for page_id in admission::candidate_pages(self.graph_index(), page_count, g) {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.pages[index];
+            let PageAdmission::Admit(local) =
+                admission::admit_pattern(&slot.translation, s, p, o, g)
+            else {
                 continue;
             };
             let page = self
                 .page(slot.id)
                 .expect("sealed page must re-materialize deterministically");
-            total += page.cardinality_estimate(ls, lp, lo, lg);
+            total += page.cardinality_estimate(local.s, local.p, local.o, local.g);
         }
         total
     }
