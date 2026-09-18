@@ -20,7 +20,7 @@
 //! automatically. It is NEVER a numeric offset remap — a page's local id space is
 //! meaningless outside that page (C0.8).
 
-use super::summary::PageSummary;
+use super::summary::{PageSummary, SummaryDefect};
 use crate::ir::{GlobalDictionary, GlobalTermId, RdfDataset, TermId};
 
 /// The local↔global term-id map for a single page of a
@@ -59,8 +59,31 @@ impl PageTranslation {
     /// `dict` contains a global id for every term on the page — the invariant that
     /// makes the paged view's value lookups correct for terms on not-yet-requeried
     /// pages.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `page`'s own rows name a term or a named graph absent from its own
+    /// frozen tables — structurally impossible for an `RdfDataset`, whose only
+    /// producer is `RdfDatasetBuilder::freeze`. Callers holding PROVIDER-supplied
+    /// content use [`try_build`](Self::try_build) instead and report the typed
+    /// refusal on their own surface.
     #[must_use]
     pub fn build(page: &RdfDataset, dict: &mut GlobalDictionary) -> Self {
+        match Self::try_build(page, dict) {
+            Ok(translation) => translation,
+            Err(defect) => panic!("page_translation: {defect}"),
+        }
+    }
+
+    /// [`build`](Self::build), returning the typed refusal instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// [`SummaryDefect`] if the page cannot be summarized honestly.
+    pub(crate) fn try_build(
+        page: &RdfDataset,
+        dict: &mut GlobalDictionary,
+    ) -> Result<Self, SummaryDefect> {
         let term_count = page.term_count();
         let mut local_to_global: Vec<GlobalTermId> = Vec::with_capacity(term_count);
         let mut global_to_local: Vec<(GlobalTermId, TermId)> = Vec::with_capacity(term_count);
@@ -84,13 +107,14 @@ impl PageTranslation {
         // table has distinct terms, so the keys are unique.
         global_to_local.sort_unstable_by_key(|&(g, _)| g);
         // The page's exact per-term/per-graph row counts, in LOCAL id space — built
-        // once here, the only call site of `PageSummary::seal`.
-        let summary = PageSummary::seal(page);
-        Self {
+        // once here, the only place a summary is KEPT (the certification paths seal or
+        // digest a page to compare against this one, then drop the result).
+        let summary = PageSummary::seal(page)?;
+        Ok(Self {
             local_to_global: local_to_global.into_boxed_slice(),
             global_to_local: global_to_local.into_boxed_slice(),
             summary,
-        }
+        })
     }
 
     /// The shared [`GlobalTermId`] for a page-local [`TermId`] (`O(1)`).

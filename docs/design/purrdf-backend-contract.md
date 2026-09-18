@@ -379,9 +379,10 @@ before and after materialization and verifies the returned generation, byte char
 term layout and values, quad count, and capabilities against the seal metadata.
 Status checkpoints also verify generation even when a query reads no page.
 
-Under debug assertions the admission also re-derives and compares the page's whole
-sealed summary (G10); the explicitly paid certification pass that reads every page,
-including those the admission law would skip, is the only place that check is complete.
+Admission also re-derives the page's sealed summary digest and compares it, in every
+build profile (G10); the explicitly paid certification pass that reads every page,
+including those the admission law would skip, extends that same guarantee to the pages
+no query touches and names the field that disagrees.
 
 The first operational failure is sticky and no later read yields data. Provider,
 stale-generation, cancellation, deadline, and invalid-data failures remain distinct;
@@ -522,22 +523,46 @@ its own is indistinguishable from a query that simply found nothing.
 
 The summary authorizes skipping, so an under-reporting summary would skip a page
 holding matching rows and return a short answer wrapped in a completeness certificate.
-The asymmetry that decides how to guard this: **a skipped page is never materialized**,
-so a check running at admission can only ever observe the over-reporting direction,
-where the page is admitted and yields nothing — the harmless one. Guarding only there
-would place the check exactly where it is not needed.
+The asymmetry that shapes the guard: **a skipped page is never materialized**, so no
+check can speak for a page nothing read. What a check at admission *can* speak for is
+every page a read actually touches — and there it must be complete in both directions,
+because the cheap sealed-metadata comparisons of G9 (term count, term values, quad
+count, byte charge, capabilities) compare totals and leave the per-term and per-graph
+row **split** unexamined, which is the very thing the pruning law reads.
 
-Admission therefore keeps the cheap sealed-metadata checks of G9 and adds a
-debug-assertion that re-derives the whole summary and compares. The gate compiles with
-debug assertions on, so that full check runs across the entire test and conformance
-surface while release admission stays on its existing cost path. The explicitly paid
-counterpart materializes every page and certifies every summary, and it is the only
-thing that can reach a page the admission law skips. A consumer reloading a persisted
-warm restart calls it once, out of band, to prove the index honest rather than paying
-a full scan on every restart — the same split the P-clauses draw between opening a
-pack and verifying one. A consumer that warm-restarts from an index it does not
-control and never certifies it retains the under-reporting risk in release builds;
-that is a stated term of this clause, not an oversight.
+A summary therefore seals, alongside its counts, a digest: one fixed-width value mixed
+over every count the summary holds — the graph list, all five per-term columns, all
+three per-graph columns, and the three default-graph scalars, each preceded by its
+field tag and its length. The mixing function is written from fixed constants and
+reads no address, clock, thread identity, or per-process hash seed, so the digest is
+the same number on every run and every platform, `wasm32-unknown-unknown` included.
+Every step of the mixer is a bijection, so a count that changes in one position always
+changes the finished digest; a drift touching several positions collides only at the
+rate the digest width allows.
+
+Admission compares that digest **unconditionally, in every build profile**: it
+re-derives the digest from the freshly materialized page and refuses when it differs
+from the sealed one. Because the digest covers the row split, an under-reporting drift
+— the page now holds more rows for a term or a graph than its summary claims — changes
+it and is caught at admission, as a typed invalid-data fault on both surfaces (a page
+fault on the direct dataset, the sticky terminal error on the operation-scoped view),
+never an assertion: the content is provider-supplied, so it is refused, not aborted on.
+Re-deriving a fresh page's counts costs one pass, which is irreducible — there is no
+way to learn that a page holds more rows in a graph than it claims without counting
+that graph's rows — but it costs only that pass: no summary is built and no
+field-by-field comparison is made.
+
+The explicitly paid counterpart materializes every page and certifies every summary in
+full. It adds two things the admission check cannot: **reach**, because it reads pages
+a pruning decision would have skipped, which is still the only way to certify a page no
+query touches; and **detail**, because having re-derived the whole summary it names the
+field that disagrees rather than only reporting that the digests do. A consumer
+reloading a persisted warm restart calls it once, out of band, to prove the whole index
+honest rather than paying a full scan on every restart — the same split the P-clauses
+draw between opening a pack and verifying one. A consumer that warm-restarts from an
+index it does not control and never certifies it no longer carries an under-reporting
+risk on the pages it reads: those are certified as they are admitted, in release builds
+as in debug ones. What it forgoes is advance notice about the pages it does not read.
 
 ---
 

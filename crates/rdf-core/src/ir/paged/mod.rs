@@ -60,11 +60,15 @@
 //! derived at every constructor and never persisted, so page and global renumbering
 //! are both picked up automatically.
 //!
-//! The summary authorizes SKIPPING, and a skipped page is never materialized, so a
-//! check at admission can only ever observe the harmless over-reporting direction.
-//! Admission therefore carries a `debug_assertions` re-derivation, and
-//! [`PagedDataset::verify_parts`] is the explicitly paid pass that reads every page
-//! and is the only place the check is complete.
+//! The summary authorizes SKIPPING, so an under-reporting one would skip a page that
+//! holds matching rows and return a short answer wrapped in a completeness
+//! certificate. Every page that is materialized is therefore certified as it is
+//! admitted, in EVERY build profile, by comparing the `O(1)` digest sealed into its
+//! [`PageSummary`] against the digest re-derived from the materialized content; a
+//! drift in either direction changes that digest and is refused as typed invalid
+//! data. [`PagedDataset::verify_parts`] remains the explicitly paid pass: it reaches
+//! the pages a pruning decision would have skipped, and it re-derives the whole
+//! summary so it can name the field that disagrees.
 //!
 //! # Determinism
 //!
@@ -162,12 +166,14 @@ pub enum PagedFreezeError {
     ///
     /// The pruning law (the `admit_pattern` law, over the dataset-level
     /// graph-to-page index) trusts the sealed summary to authorize SKIPPING a page
-    /// without materializing it. An UNDER-reporting drift (the sealed summary claims
-    /// fewer rows, in fewer places, than the page actually holds) is exactly the
-    /// direction no materialization-time check can ever observe, because a page the
-    /// pruning law skips is never materialized in the first place — only
-    /// [`PagedDataset::verify_parts`], which materializes every page
-    /// unconditionally, can reach it. Raised only there.
+    /// without materializing it. A page that IS materialized has its sealed summary
+    /// digest re-checked as it is admitted, in every build profile, and reports the
+    /// drift on its own surface ([`PageFault::invalid_data`] or
+    /// [`PagedQueryError::InvalidData`]); this variant is the freeze-time surface's
+    /// counterpart, raised by [`PagedDataset::verify_parts`] — which materializes
+    /// every page unconditionally and so also reaches the pages a pruning decision
+    /// would have skipped — and by [`PagedDataset::from_provider`] when a page cannot
+    /// be summarized honestly at all.
     SummaryDrift {
         /// The page whose materialized content no longer matches its sealed summary.
         page: PageId,
@@ -420,7 +426,13 @@ impl PagedDataset {
             // This must happen for every page before any query so the dictionary is
             // complete (value lookups are correct for terms on not-yet-requeried
             // pages).
-            let translation = PageTranslation::build(&page, &mut dictionary);
+            let translation =
+                PageTranslation::try_build(&page, &mut dictionary).map_err(|defect| {
+                    PagedFreezeError::SummaryDrift {
+                        page: id,
+                        message: defect.to_string(),
+                    }
+                })?;
             let page_caps = page.capabilities();
             let page_quads = page.quad_count();
             // G3: map each of this page's quads (primary + side tables) to the shared id
@@ -900,30 +912,25 @@ impl PagedDataset {
                 "page capabilities changed after sealing",
             ));
         }
-        // Debug-only full certification: re-derive the WHOLE `PageSummary` from the
-        // materialized page and assert it equals the one sealed for this slot. The
-        // O(1) checks above only ever catch OVER-reporting (a page admitted for
-        // nothing, which is harmless): a page the pruning law skips on an
-        // under-reporting summary is never materialized at all, so no check that
-        // runs here — on the admit path — can ever observe that direction (see
-        // `PagedFreezeError::SummaryDrift` and `verify_parts`, the only thing that
-        // can). This assertion exists purely to catch a broken-invariant BUG in this
-        // crate's own seal/admission machinery on every already-exercised test and
-        // conformance page, at zero cost in a release build: `make check` compiles
-        // with `debug-assertions = on` at opt-level 3 (see `AGENTS.md` section 4), so
-        // this full re-derive runs across the entire test surface for free, while a
-        // release build — which never sets `debug_assertions` — never pays the
-        // O(page size) cost on this hot admission path.
-        #[cfg(debug_assertions)]
-        {
-            let fresh = PageSummary::seal(&materialization.dataset);
-            assert_eq!(
-                &fresh,
-                slot.translation.summary(),
-                "page {}: materialized content's re-derived PageSummary disagrees with the \
-                 summary it was sealed with",
-                id.0
-            );
+        // UNCONDITIONAL certification, in every build profile: recompute the page's
+        // O(1) summary digest from the freshly materialized content and compare it to
+        // the digest sealed for this slot. The checks above compare only totals, so
+        // they see just the harmless OVER-reporting direction; the digest is mixed
+        // over every per-term and per-graph count the summary holds, so a page that
+        // now carries MORE rows for a term or a graph than its summary claims — the
+        // under-reporting drift that authorizes skipping real rows — changes it too.
+        // A consumer warm-restarting from an index it does not control therefore no
+        // longer has to call `verify_parts` to avoid a short answer wrapped in a
+        // completeness certificate: every page it actually reads is certified as it is
+        // admitted. This is a typed fault, never an assertion — the content is
+        // provider-supplied, exactly like the four checks above.
+        let digest = PageSummary::digest_of(&materialization.dataset)
+            .map_err(|defect| PageFault::invalid_data(id, defect.to_string()))?;
+        if digest != slot.translation.summary().digest() {
+            return Err(PageFault::invalid_data(
+                id,
+                summary_drift_message(slot.translation.summary(), digest, &materialization.dataset),
+            ));
         }
         let _ = slot.resident.set(materialization.dataset);
         Ok(slot
@@ -941,14 +948,18 @@ impl PagedDataset {
     /// graphs, than the page actually holds) can silently authorize skipping a page
     /// that in fact holds matching rows — the worst failure mode in this codebase,
     /// because the short answer still comes wrapped in a completeness certificate.
-    /// Nothing on the admission or query path can ever observe that direction: a
-    /// skipped page is never read. `verify_parts` is the only thing that can, because
-    /// it reads every page regardless of what any pruning decision would have done.
+    /// Every page a read actually TOUCHES is already certified as it is admitted, in
+    /// every build profile, by the `O(1)` sealed-digest comparison the cached per-page
+    /// getter runs; what `verify_parts` adds is reach and detail. Reach,
+    /// because it reads every page regardless of what any pruning decision would have
+    /// done, so it also certifies the pages a query would have skipped. Detail,
+    /// because it re-derives the whole summary and can therefore NAME the field that
+    /// disagrees rather than only reporting that the digests do.
     ///
     /// Call this once, out of band, when a consumer reloads a persisted warm-restart
-    /// index via [`from_parts`](Self::from_parts) and wants to prove the reloaded
-    /// index is honest before trusting its pruning — rather than paying an
-    /// `O(all pages)` scan on every ordinary restart. Contrast with
+    /// index via [`from_parts`](Self::from_parts) and wants the whole reloaded index
+    /// proven honest up front — rather than paying an `O(all pages)` scan on every
+    /// ordinary restart. Contrast with
     /// [`from_provider`](Self::from_provider), which already certifies every page's
     /// summary AS it seals (each page is materialized once there specifically to
     /// build its summary), so a dataset built that way never needs this pass.
@@ -969,15 +980,21 @@ impl PagedDataset {
                     actual: materialization.generation,
                 });
             }
-            let fresh = PageSummary::seal(&materialization.dataset);
-            if &fresh != slot.translation.summary() {
+            let fresh = PageSummary::seal(&materialization.dataset).map_err(|defect| {
+                PagedFreezeError::SummaryDrift {
+                    page: slot.id,
+                    message: defect.to_string(),
+                }
+            })?;
+            let sealed = slot.translation.summary();
+            if let Some(field) = sealed.first_disagreeing_field(&fresh) {
                 return Err(PagedFreezeError::SummaryDrift {
                     page: slot.id,
                     message: format!(
                         "page {}: the summary sealed at construction time does not match the \
-                         summary re-derived from the page's current materialized content — a \
-                         pruning decision trusting the sealed summary could skip or misroute \
-                         rows this page actually holds",
+                         summary re-derived from the page's current materialized content — the \
+                         fields disagree first at `{field}`, and a pruning decision trusting the \
+                         sealed summary could skip or misroute rows this page actually holds",
                         slot.id.0
                     ),
                 });
@@ -985,6 +1002,52 @@ impl PagedDataset {
         }
         Ok(())
     }
+}
+
+/// The diagnostic for an admission-time summary-drift refusal: always the two
+/// digests, plus — when the build can afford the full re-derive — the name of the
+/// first field that moved.
+///
+/// Both halves are shared verbatim by the two admission surfaces
+/// ([`PagedDataset::page`] and [`PagedQueryView`]'s materialization validator) so the
+/// same drift reads the same way whichever one catches it.
+pub(crate) fn summary_drift_message(
+    sealed: &PageSummary,
+    observed: u64,
+    page: &RdfDataset,
+) -> String {
+    let mut message = format!(
+        "materialized content no longer matches the summary it was sealed with: the sealed \
+         summary digests to {:#018x}, the materialized page to {observed:#018x}",
+        sealed.digest()
+    );
+    if let Some(field) = disagreeing_field(sealed, page) {
+        message.push_str(" (the summaries disagree first at `");
+        message.push_str(field);
+        message.push_str("`)");
+    }
+    message
+}
+
+/// Name the first summary field the materialized `page` disagrees with `sealed` on.
+///
+/// The gate compiles with `debug-assertions = on` at opt-level 3 (see `AGENTS.md`
+/// section 4), so this richer `O(page size)` re-derive runs across the whole test and
+/// conformance surface; a release build skips it and keeps the digests alone. It is a
+/// DIAGNOSTIC refinement only — the refusal itself is already decided by the digest
+/// comparison, which runs in every build profile, so a release build loses the field
+/// name and never the check.
+///
+/// Gated with `cfg!`, not `#[cfg]`: the body is then type-checked in every profile,
+/// so a release build cannot break on code a debug build never compiled, and the
+/// constant-false branch folds away at opt-level 3 exactly as an attribute would.
+fn disagreeing_field(sealed: &PageSummary, page: &RdfDataset) -> Option<&'static str> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    PageSummary::seal(page)
+        .ok()
+        .and_then(|fresh| sealed.first_disagreeing_field(&fresh))
 }
 
 /// Map a page-local [`QuadIds`] back to the shared global id space.

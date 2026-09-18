@@ -17,12 +17,10 @@ use crate::governor::{ResourceDimension, ResourceVector, StopCause};
 use crate::ir::{GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 
 use super::admission::{self, PageAdmission};
-use super::summary::PageStream;
-#[cfg(debug_assertions)]
-use super::summary::PageSummary;
+use super::summary::{PageStream, PageSummary};
 use super::{
     PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagedDataset,
-    map_quad_to_global,
+    map_quad_to_global, summary_drift_message,
 };
 
 /// Exact resource ceilings for one [`PagedQueryView`].
@@ -545,30 +543,29 @@ impl<'dataset> PagedQueryView<'dataset> {
                 });
             }
         }
-        // Debug-only full certification: re-derive the WHOLE `PageSummary` from the
-        // materialized page and assert it equals the one sealed for this slot. The
-        // checks above only ever catch OVER-reporting (a page admitted for nothing,
-        // which is harmless): a page the pruning law skips on an under-reporting
-        // summary is never requested at all, so nothing on this admit path — however
-        // thorough — can ever observe that direction (see
-        // `PagedFreezeError::SummaryDrift` and `PagedDataset::verify_parts`, the only
-        // thing that can). This assertion exists purely to catch a broken-invariant
-        // BUG in this crate's own seal/admission machinery on every already-exercised
-        // test and conformance query, at zero cost in a release build: `make check`
-        // compiles with `debug-assertions = on` at opt-level 3 (see `AGENTS.md`
-        // section 4), so this full re-derive runs across the entire fallible-query
-        // test surface for free, while a release build never pays the O(page size)
-        // cost on this hot admission path.
-        #[cfg(debug_assertions)]
-        {
-            let fresh = PageSummary::seal(&materialization.dataset);
-            assert_eq!(
-                &fresh,
-                slot.translation.summary(),
-                "page {}: materialized content's re-derived PageSummary disagrees with the \
-                 summary it was sealed with",
-                id.0
-            );
+        // UNCONDITIONAL certification, in every build profile: recompute the page's
+        // O(1) summary digest from the freshly materialized content and compare it to
+        // the digest sealed for this slot. The checks above compare totals and term
+        // VALUES, which leaves the per-term and per-graph row SPLIT unexamined — and
+        // that split is what the pruning law reads when it authorizes skipping a page
+        // without materializing it. A page now carrying more rows for a term or a
+        // graph than its summary claims therefore digests differently and is refused
+        // here, so an operation over a warm-restart index the consumer does not
+        // control cannot certify a short answer as complete. Typed, and latched
+        // sticky by the caller, exactly like every other refusal above: the content is
+        // provider-supplied and must never abort the process.
+        let digest = PageSummary::digest_of(&materialization.dataset).map_err(|defect| {
+            PagedQueryError::InvalidData {
+                page: id,
+                message: defect.to_string(),
+            }
+        })?;
+        let sealed = slot.translation.summary();
+        if digest != sealed.digest() {
+            return Err(PagedQueryError::InvalidData {
+                page: id,
+                message: summary_drift_message(sealed, digest, &materialization.dataset),
+            });
         }
         Ok(())
     }

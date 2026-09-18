@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_core::{
     CountingDemandProvider, DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
     PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PageProvider,
-    PagedDataset, PagedFreezeError, PagedQuadTable, PagedQueryLimits, RdfDataset,
+    PagedDataset, PagedFreezeError, PagedQuadTable, PagedQueryError, PagedQueryLimits, RdfDataset,
     RdfDatasetBuilder, RdfLiteral, StopCause, TermId, TermRef, TermValue, ViewOperationStatus,
     render_canonical_turtle,
 };
@@ -1108,9 +1108,9 @@ fn verify_parts_rejects_a_summary_that_disagrees_with_page_content() {
 
 /// The neighbouring valid case the repo's over-refusal rule requires: the SAME
 /// fixture, served HONESTLY (content never drifts), must still complete ordinary
-/// reads and return exactly the right rows — the debug-only full-summary
-/// re-derive added to the hot admission path (`PagedDataset::page`) must never
-/// refuse, nor alter the result of, a legitimate page.
+/// reads and return exactly the right rows — the sealed-digest certification on the
+/// hot admission path (`PagedDataset::page`) must never refuse, nor alter the result
+/// of, a legitimate page.
 #[test]
 fn graph_drift_fixture_with_an_honest_provider_still_returns_the_right_rows() {
     let (honest, _drifted, g1, g2) = graph_drift_fixture();
@@ -1148,6 +1148,152 @@ fn graph_drift_fixture_with_an_honest_provider_still_returns_the_right_rows() {
 /// for the single-value case).
 fn row_key_pair(pair: &(TermValue, TermValue)) -> String {
     format!("{pair:?}")
+}
+
+/// Seal the graph-drift fixture through `provider`, round-trip it through
+/// `to_parts`/`from_parts` (the warm-restart path a consumer takes when it reloads a
+/// persisted index), and hand back the reconstituted snapshot. Neither `to_parts` nor
+/// `from_parts` materializes anything, so the provider has served exactly its first
+/// page materialization when this returns.
+fn warm_restart(provider: Arc<dyn PageProvider>) -> PagedDataset {
+    let eager = PagedDataset::from_provider(Arc::clone(&provider)).expect("seal honest page");
+    let (dictionary, sealed_generation, parts) = eager.to_parts();
+    PagedDataset::from_parts(dictionary, provider, sealed_generation, parts)
+        .expect("matching warm snapshot")
+}
+
+/// An ordinary QUERY — not `verify_parts` — over a warm-restart snapshot whose
+/// provider has drifted underneath it must refuse with a TYPED invalid-data error,
+/// stay refused, and never panic.
+///
+/// The sealed summary says `g1` owns both base rows, so this pattern ADMITS page 0 and
+/// the drifted content really is materialized and read. Every cheap admission check
+/// passes on it — same term count, same term values in the same local order, same quad
+/// count, same byte charge, same capabilities — and only the per-graph row split
+/// disagrees, which is precisely the direction that authorizes skipping rows a page
+/// actually holds. The sealed `PageSummary` digest is compared in every build profile,
+/// so the refusal does not depend on `debug_assertions` and is a `PagedQueryError`
+/// rather than an abort: the content is provider-supplied.
+#[test]
+fn a_query_over_a_drifted_warm_restart_refuses_with_typed_sticky_invalid_data() {
+    let (honest, drifted, g1, _g2) = graph_drift_fixture();
+    let generation = PageGeneration(3);
+    let provider = Arc::new(GraphDriftProvider {
+        honest,
+        drifted,
+        generation,
+        calls: AtomicUsize::new(0),
+    });
+    let warm = warm_restart(provider.clone() as Arc<dyn PageProvider>);
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        1,
+        "the honest content (call 0) is what the warm metadata was sealed from"
+    );
+
+    let g1_id = warm.term_id_by_value(&g1).expect("g1 interned");
+    let view = warm.query_view(PagedQueryLimits::UNBOUNDED);
+
+    assert_eq!(
+        view.quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
+            .count(),
+        0,
+        "a refused page yields no row"
+    );
+    let first_status = view.operation_status();
+    let (error, evidence) = match first_status.clone() {
+        ViewOperationStatus::Ready { evidence } => {
+            panic!("drifted content must not certify as complete; got ready evidence: {evidence:?}")
+        }
+        ViewOperationStatus::Failed { error, evidence } => (error, evidence),
+    };
+    match &error {
+        PagedQueryError::InvalidData {
+            page: PageId(0),
+            message,
+        } => assert!(
+            message.contains("no longer matches the summary it was sealed with"),
+            "the refusal must say what drifted, got: {message}"
+        ),
+        other => panic!("expected a typed invalid-data refusal naming page 0, got: {other}"),
+    }
+    assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+    assert_eq!(
+        evidence.consumed_pages, 0,
+        "a page refused at validation is never charged"
+    );
+    assert_eq!(evidence.consumed_bytes, 0);
+
+    // The terminal error latches: every later read stops at it with the same root
+    // cause rather than retrying the provider.
+    assert_eq!(
+        view.quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
+            .count(),
+        0,
+        "the sticky failure stops every later read"
+    );
+    assert_eq!(
+        view.operation_status(),
+        first_status,
+        "root cause stays stable"
+    );
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        2,
+        "one seal call and one refused operation call; no retry after failure"
+    );
+}
+
+/// The neighbouring VALID case the repo's over-refusal rule requires: the SAME query
+/// shape, over the SAME fixture content, served by an honest provider through the SAME
+/// warm-restart path, must COMPLETE and return exactly the rows `g1` holds.
+///
+/// Certifying the sealed summary digest on every admission is a refusal added to the
+/// hot path, so it is proven in both directions — a check that rejected this query
+/// would be the mirror bug of the silent short answer, and it would look like correct
+/// strictness while doing it.
+#[test]
+fn the_same_query_over_an_honest_warm_restart_still_completes() {
+    let (honest, _drifted, g1, g2) = graph_drift_fixture();
+    let generation = PageGeneration(3);
+    let provider = Arc::new(InMemoryPageProvider::with_generation(
+        vec![honest],
+        generation,
+    ));
+    let warm = warm_restart(provider as Arc<dyn PageProvider>);
+
+    let g1_id = warm.term_id_by_value(&g1).expect("g1 interned");
+    let g2_id = warm.term_id_by_value(&g2).expect("g2 interned");
+    let view = warm.query_view(PagedQueryLimits::UNBOUNDED);
+
+    let mut rows: Vec<_> = view
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
+        .map(|q| (to_value(&view, q.s), to_value(&view, q.o)))
+        .collect();
+    rows.sort_by_key(row_key_pair);
+    assert_eq!(
+        rows,
+        vec![(iri("alice"), iri("bob")), (iri("bob"), iri("carol"))],
+        "an honest page must still return both of g1's rows"
+    );
+    assert!(
+        view.quads_for_pattern(None, None, None, GraphMatch::Named(g2_id))
+            .next()
+            .is_none(),
+        "g2 is declared but owns no base rows"
+    );
+
+    match view.operation_status() {
+        ViewOperationStatus::Ready { evidence } => {
+            assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+            assert_eq!(evidence.consumed_pages, 1);
+        }
+        ViewOperationStatus::Failed { error, .. } => {
+            panic!("an honest warm restart must certify as complete, got: {error}")
+        }
+    }
+    warm.verify_parts()
+        .expect("and the explicitly-paid pass agrees");
 }
 
 struct MismatchedGenerationProvider {
