@@ -160,6 +160,40 @@ impl DecayRule {
         class_width(self, weight, rank)
     }
 
+    /// The deepest depth that can be read with every rank in it sitting in a
+    /// class no wider than `max_width`.
+    ///
+    /// The resolution algebra with no stratum in it, exactly as
+    /// [`Self::class_width`] is: this arithmetic is a property of the rule,
+    /// its smoothing constant, the weight and the tolerance, and of nothing
+    /// else, so a caller asking about arithmetic rather than about a
+    /// configured stratum asks here. [`FusionProfile::deepest_rank_within_width`]
+    /// is the same answer looked up by stratum, for a caller that already
+    /// holds a law and means one of the strata that law weights.
+    ///
+    /// `max_width` of one agrees exactly with the depth
+    /// [`Self::weight_for_depth`]'s inverse would report: the deepest rank
+    /// still separated from both its neighbours. Larger values answer the
+    /// question a caller reading deeply actually has — not "where does this
+    /// stop being exact" but "how far can I read and still have ranks ordered
+    /// to within the resolution I can live with".
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero,
+    /// and [`FusionError::Overflow`] when a contribution leaves the
+    /// fixed-point range. A refusal is reported and never rendered as a
+    /// depth: the rank the walk stopped at is where the arithmetic gave out,
+    /// not a depth this rule was measured to deliver, and returning it as one
+    /// would quote a resolution nothing established.
+    pub fn deepest_rank_within_width(
+        self,
+        weight: Fixed,
+        max_width: u64,
+    ) -> Result<u64, FusionError> {
+        deepest_rank_within_width(self, weight, max_width)
+    }
+
     /// The canonical discriminator byte for this rule.
     const fn tag(self) -> u8 {
         match self {
@@ -660,7 +694,9 @@ impl FusionProfile {
         let Some(weight) = self.weights.get(stratum) else {
             return Ok(None);
         };
-        deepest_rank_within_width(self.decay, *weight, max_width).map(Some)
+        self.decay
+            .deepest_rank_within_width(*weight, max_width)
+            .map(Some)
     }
 
     /// The profile's canonical, length-framed bytes.

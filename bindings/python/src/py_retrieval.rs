@@ -1447,6 +1447,54 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
+/// The deepest depth that can be read with every rank in it sitting in a
+/// class no wider than `max_width`, for a weight of `weight_raw` **under the
+/// rule `decay` names**.
+///
+/// This inverts [`class_width`]: name the tolerance you can live with, get the
+/// depth it buys. `max_width` of one agrees exactly with the depth
+/// `retrieval.weight_for_depth` prices — the deepest rank still separated from
+/// both its neighbours. Larger values answer the question a caller reading
+/// deeply actually has: not "where does this stop being exact" but "how far
+/// can I read and still have ranks ordered to within the resolution I can
+/// live with".
+///
+/// This asks a question about arithmetic and takes no stratum, exactly as
+/// [`class_width`] does: the answer is a property of the rule, its smoothing
+/// constant, the weight and the tolerance, and of nothing else. `weight_raw`
+/// is in raw fixed-point units, where `retrieval.SCALE` is one whole unit.
+///
+/// The curve belongs to the rule, so the depth the two rules report at one
+/// weight and one tolerance legitimately differs, and `decay` —
+/// `"reciprocal_rank"` or `"weighted_reciprocal_rank"` — says which curve was
+/// read.
+///
+/// An operand the law cannot evaluate raises `ValueError` rather than
+/// returning a depth: a smoothing constant of zero; an unknown `decay`
+/// spelling; and a weight that is not strictly positive, which a fusion law
+/// refuses where it is declared and which therefore has no resolution to
+/// report here either.
+#[pyfunction]
+#[pyo3(signature = (weight_raw, k, max_width, *, decay))]
+fn deepest_rank_within_width(
+    weight_raw: i128,
+    k: u32,
+    max_width: u64,
+    decay: &str,
+) -> PyResult<u64> {
+    if weight_raw <= 0 {
+        return Err(PyValueError::new_err(format!(
+            "a stratum weight is strictly positive, and {weight_raw} raw fixed-point units is \
+             not; a fusion law refuses a non-positive weight where it is declared, so there is \
+             no rank resolution to report for one here"
+        )));
+    }
+    decay_rule(decay, k)
+        .map_err(PyValueError::new_err)?
+        .deepest_rank_within_width(Fixed::from_raw(weight_raw), max_width)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
 /// Register the `purrdf-retrieval` surface on a Python module. Called by the
 /// unified `purrdf_native` cdylib to populate the `purrdf_native.retrieval`
 /// submodule.
@@ -1458,6 +1506,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(search, m)?)?;
     m.add_function(wrap_pyfunction!(weight_for_depth, m)?)?;
     m.add_function(wrap_pyfunction!(class_width, m)?)?;
+    m.add_function(wrap_pyfunction!(deepest_rank_within_width, m)?)?;
     Ok(())
 }
 

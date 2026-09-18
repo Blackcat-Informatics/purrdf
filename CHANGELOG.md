@@ -31,8 +31,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   than whichever side of an oscillation a probe happened to land on.
   `MonotoneDepth` spells the saturation point as a
   distinct case so it cannot be mistaken for a measured depth. The same surface
-  is exposed to Python as `retrieval.weight_for_depth` and
-  `retrieval.class_width`.
+  is exposed to Python as `retrieval.weight_for_depth`,
+  `retrieval.class_width` and `retrieval.deepest_rank_within_width`.
 
   Its three refusals are three separate facts and carry three separate variants.
   `FusionError::DepthUnreachable` means the decay rule itself stopped separating
@@ -54,6 +54,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   altitude; the width now sits beside it. The profile-level call remains, is
   unchanged for callers with a real stratum in hand, and now reaches the same
   arithmetic through it rather than through a second path that could drift.
+- **retrieval:** `DecayRule::deepest_rank_within_width`, the inverse of
+  `DecayRule::class_width` asked at the same altitude: name the tolerance, get
+  the deepest depth that stays inside it. `FusionProfile::deepest_rank_within_width`
+  now reaches this rather than a private function of its own, so the two
+  arithmetic-only entry points -- `class_width` and its inverse -- sit beside
+  `weight_for_depth` the same way on `DecayRule`, and a caller holding only a
+  weight and a tolerance, with no stratum to name, asks here. Bound to Python
+  as `retrieval.deepest_rank_within_width`, alongside `retrieval.class_width`
+  and `retrieval.weight_for_depth`: it takes the same required `decay` keyword
+  they do, with no default rule, and raises `ValueError` rather than answering
+  where the arithmetic could not.
 - **retrieval:** Rank-resolution evidence on the answer. `CompiledRetrieval`
   carries a `PlannedResolution` per weighted stratum, so the cost of a planned
   depth is knowable before executing anything, and `FusionTrailer` carries a

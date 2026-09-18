@@ -2023,3 +2023,24 @@ class retrieval:
     # `decay` spelling, or a weight that is not strictly positive.
     @staticmethod
     def class_width(weight_raw: int, k: int, rank: int, *, decay: str) -> int: ...
+    # The deepest depth that can be read with every rank in it sitting in a
+    # class no wider than `max_width`, for a weight of `weight_raw` under the
+    # rule `decay` names.
+    #
+    # This inverts `class_width`: name the tolerance you can live with, get the
+    # depth it buys. `max_width` of one agrees exactly with the depth
+    # `weight_for_depth` prices — the deepest rank still separated from both its
+    # neighbours. The curve belongs to the rule — the two answer differently at
+    # the same weight and tolerance.
+    #
+    # No stratum is taken, because the answer is a property of the rule, its
+    # smoothing constant, the weight and the tolerance and of nothing else.
+    # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
+    #
+    # An operand the law cannot evaluate raises `ValueError` rather than
+    # returning a depth: a smoothing constant of zero, an unknown `decay`
+    # spelling, or a weight that is not strictly positive.
+    @staticmethod
+    def deepest_rank_within_width(
+        weight_raw: int, k: int, max_width: int, *, decay: str
+    ) -> int: ...
