@@ -24,6 +24,7 @@
 //! [`ResultProvenance`] is trimmed and signalled via
 //! [`SerializeOutcome::provenance_dropped`].
 
+use purrdf_core::sink::TextOut;
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
@@ -50,6 +51,25 @@ pub fn to_tsv(
     result: &SparqlResult,
     provenance: &ResultProvenance,
 ) -> Result<SerializeOutcome, Error> {
+    let mut out = String::new();
+    write_tsv(result, provenance, &mut out)?;
+    Ok(SerializeOutcome {
+        bytes: out.into_bytes(),
+        provenance_dropped: !provenance.is_empty(),
+    })
+}
+
+/// The ONE TSV body. The whole-`String` spelling above is this function over a
+/// `String`; the streaming entry point is the same function over a bounded sink.
+pub(crate) fn write_tsv<W: TextOut + ?Sized>(
+    result: &SparqlResult,
+    provenance: &ResultProvenance,
+    out: &mut W,
+) -> Result<(), Error> {
+    // TSV has no provenance extension point at all; the caller's request is
+    // reported as dropped by the outcome rather than emitted here.
+    let _ = provenance;
+
     let (variables, rows) = match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -70,11 +90,6 @@ pub fn to_tsv(
 
     // Cheap lower-bound pre-size (capacity is unobservable): one line
     // terminator per line plus a modest per-cell estimate.
-    let mut out = String::with_capacity(
-        rows.len()
-            .saturating_add(1)
-            .saturating_mul(variables.len().saturating_mul(16).saturating_add(1)),
-    );
 
     // Every structural refusal is decided BEFORE the first byte. Eagerly a rejected
     // variable name or over-wide row left a partial document to be discarded; an
@@ -93,7 +108,7 @@ pub fn to_tsv(
         if i > 0 {
             out.push('\t');
         }
-        push_var_header(var, &mut out);
+        push_var_header(var, out);
     }
     out.push('\n');
 
@@ -110,10 +125,7 @@ pub fn to_tsv(
         out.push('\n');
     }
 
-    Ok(SerializeOutcome {
-        bytes: out.into_bytes(),
-        provenance_dropped: !provenance.is_empty(),
-    })
+        Ok(())
 }
 
 /// Append one `?`-prefixed TSV header field.
@@ -152,7 +164,7 @@ fn check_row_width(row_len: usize, variable_count: usize) -> Result<(), Error> {
 
 /// Emit one `?`-prefixed header field. Validity was decided by
 /// [`check_var_header`] before emission began.
-fn push_var_header(var: &str, out: &mut String) {
+fn push_var_header<W: TextOut + ?Sized>(var: &str, out: &mut W) {
     out.push('?');
     out.push_str(var);
 }

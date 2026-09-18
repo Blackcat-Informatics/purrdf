@@ -15,6 +15,7 @@
 //! [`ResultProvenance`] is trimmed and the drop is signalled via
 //! [`SerializeOutcome::provenance_dropped`] (the no-silent-cap contract).
 
+use purrdf_core::sink::TextOut;
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::model::ResultProvenance;
@@ -55,6 +56,24 @@ pub fn to_csv(
     result: &SparqlResult,
     provenance: &ResultProvenance,
 ) -> Result<SerializeOutcome, Error> {
+    let mut out = String::new();
+    write_csv(result, provenance, &mut out)?;
+    Ok(SerializeOutcome {
+        bytes: out.into_bytes(),
+        provenance_dropped: !provenance.is_empty(),
+    })
+}
+
+/// The ONE TO_CSV body. The whole-`String` spelling above is this function
+/// over a `String`; the streaming entry point is the same function over a bounded
+/// sink, which is what makes their bytes equal by construction.
+pub(crate) fn write_csv<W: TextOut + ?Sized>(
+    result: &SparqlResult,
+    provenance: &ResultProvenance,
+    out: &mut W,
+) -> Result<(), Error> {
+    let _ = provenance;
+
     let (variables, rows) = match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -73,13 +92,6 @@ pub fn to_csv(
         }
     };
 
-    // Cheap lower-bound pre-size (capacity is unobservable): one line
-    // terminator per line plus a modest per-cell estimate.
-    let mut out = String::with_capacity(
-        rows.len()
-            .saturating_add(1)
-            .saturating_mul(variables.len().saturating_mul(16).saturating_add(2)),
-    );
 
     // The over-wide-row refusal is decided BEFORE the first byte. Eagerly the partial
     // document was discarded; an incremental sink has already sent it. The scan picks
@@ -100,7 +112,7 @@ pub fn to_csv(
         if i > 0 {
             out.push(',');
         }
-        push_field(var, &mut out);
+        push_field(var, out);
     }
     out.push_str("\r\n");
 
@@ -110,17 +122,14 @@ pub fn to_csv(
                 out.push(',');
             }
             if let Some(Some(value)) = row.get(column) {
-                push_field(cell_value(value)?.as_ref(), &mut out);
+                push_field(cell_value(value)?.as_ref(), out);
             }
             // None or missing column → empty field (nothing emitted between separators).
         }
         out.push_str("\r\n");
     }
 
-    Ok(SerializeOutcome {
-        bytes: out.into_bytes(),
-        provenance_dropped: !provenance.is_empty(),
-    })
+        Ok(())
 }
 
 /// The bare CSV "value" for a bound term.
@@ -151,7 +160,7 @@ fn cell_value(value: &TermValue) -> Result<std::borrow::Cow<'_, str>, Error> {
 /// Append a single CSV field, applying RFC-4180 quoting only when required:
 /// a value containing `"`, `,`, `\n`, or `\r` is wrapped in double quotes with
 /// internal `"` doubled; otherwise it is emitted raw.
-fn push_field(value: &str, out: &mut String) {
+fn push_field<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     let needs_quoting = value
         .chars()
         .any(|c| c == '"' || c == ',' || c == '\n' || c == '\r');

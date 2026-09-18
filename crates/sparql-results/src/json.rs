@@ -47,6 +47,7 @@
 //! `"its:dir"` on directional-literal bindings, and [`crate::json_read`] prefers
 //! that spelling on read.
 
+use purrdf_core::sink::TextOut;
 use crate::SerializeOutcome;
 use crate::error::Error;
 use crate::graph::dataset_to_nquads;
@@ -120,11 +121,11 @@ pub fn to_json(
 /// downstream. The former `Error::Internal` guard checked that the branch just
 /// called had ended with `}`; that is now a property of the split rather than a
 /// runtime assertion, so the arm is gone.
-fn write_srj(
+pub(crate) fn write_srj<W: TextOut + ?Sized>(
     result: &SparqlResult,
     provenance: &ResultProvenance,
     namespace: Option<&ProvenanceNamespace>,
-    out: &mut String,
+    out: &mut W,
 ) -> Result<(), Error> {
     write_base_body(result, out)?;
 
@@ -144,7 +145,7 @@ fn write_srj(
 /// Write the pure-W3C SRJ object (no provenance extension at the top level). This
 /// is the byte-identity contract with the legacy rdf-capi emitter, save for the
 /// `Graph` branch and the additive per-literal SPARQL 1.2 `"its:dir"` key.
-fn write_base_body(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
+fn write_base_body<W: TextOut + ?Sized>(result: &SparqlResult, out: &mut W) -> Result<(), Error> {
     match result {
         SparqlResult::Boolean(value) => {
             out.push_str("{\"head\":{},\"boolean\":");
@@ -216,11 +217,11 @@ fn write_base_body(result: &SparqlResult, out: &mut String) -> Result<(), Error>
 /// resolve this member by namespace identity instead of trusting that the
 /// top-level key it happens to be spelled under (`namespace.prefix()`, a bare
 /// string with no uniqueness guarantee) was never reused by an unrelated caller.
-fn write_provenance_body(
+fn write_provenance_body<W: TextOut + ?Sized>(
     result: &SparqlResult,
     provenance: &ResultProvenance,
     namespace: &ProvenanceNamespace,
-    out: &mut String,
+    out: &mut W,
 ) {
     out.push_str("{\"namespace\":");
     json_string(namespace.iri(), out);
@@ -290,8 +291,7 @@ const fn json_trigger_byte(b: u8) -> bool {
 }
 
 /// Append a JSON-escaped string literal (including the surrounding quotes).
-fn json_string(value: &str, out: &mut String) {
-    use core::fmt::Write as _;
+fn json_string<W: TextOut + ?Sized>(value: &str, out: &mut W) {
 
     out.push('"');
     let mut rest = value;
@@ -326,8 +326,7 @@ fn json_string(value: &str, out: &mut String) {
 
 /// The original per-`char` escaper, kept as the oracle for [`json_string`].
 #[cfg(test)]
-fn json_string_reference(value: &str, out: &mut String) {
-    use core::fmt::Write as _;
+fn json_string_reference<W: TextOut + ?Sized>(value: &str, out: &mut W) {
 
     out.push('"');
     for ch in value.chars() {
@@ -356,7 +355,7 @@ fn json_string_reference(value: &str, out: &mut String) {
 /// Returns [`crate::error::Error::MalformedTerm`] if a [`TermValue::Triple`]
 /// arm's predicate is not an IRI. RDF predicates must be IRIs; emitting a
 /// non-IRI predicate would produce structurally invalid SRJ output.
-fn json_binding(value: &TermValue, out: &mut String) -> Result<(), Error> {
+fn json_binding<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(), Error> {
     match value {
         TermValue::Iri(iri) => {
             out.push_str("{\"type\":\"uri\",\"value\":");

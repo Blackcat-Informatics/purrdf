@@ -34,6 +34,12 @@ pub enum Error {
     InvalidNamespace(String),
     /// An internal invariant failed. Used sparingly; prefer a specific variant.
     Internal(String),
+    /// The destination a streaming serialization was writing into failed.
+    ///
+    /// Carries the failure's description rather than the `io::Error` itself,
+    /// because this enum is `Clone + PartialEq + Eq` and an `io::Error` is none of
+    /// those. That trade costs the `source()` chain, which terminates here.
+    Write(String),
 }
 
 impl fmt::Display for Error {
@@ -43,6 +49,7 @@ impl fmt::Display for Error {
             Self::Format(msg) => write!(f, "result format error: {msg}"),
             Self::InvalidNamespace(msg) => write!(f, "invalid provenance namespace: {msg}"),
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
+            Self::Write(msg) => write!(f, "result write error: {msg}"),
         }
     }
 }

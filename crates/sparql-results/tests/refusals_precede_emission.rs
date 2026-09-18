@@ -165,3 +165,85 @@ fn srx_refuses_a_graph_and_spares_the_kinds_it_defines() {
     .expect("utf-8");
     assert!(select_text.contains("<uri>https://example.org/1</uri>"));
 }
+
+/// The streamed serialization equals the eager one, byte for byte, for every
+/// format and every result kind each format admits.
+///
+/// Both spellings are the same writer over a different append target, so this
+/// exists to catch a future change that reintroduces a second path rather than to
+/// establish the property.
+#[test]
+fn streamed_results_are_byte_identical_to_eager() {
+    use purrdf_sparql_results::{SparqlResultsFormat, serialize, serialize_into};
+
+    let wide = solutions(
+        &["a", "b", "c"],
+        (0..500)
+            .map(|i| {
+                vec![
+                    iri(&format!("https://example.org/row/{i}/with/a/long/path")),
+                    None,
+                    iri(&format!(
+                        "https://example.org/object/{i}/padded/so/the/document/crosses/the/\
+                         sink/staging/window/many/times/over"
+                    )),
+                ]
+            })
+            .collect(),
+    );
+    let cases = [
+        ("boolean-true", SparqlResult::Boolean(true)),
+        ("boolean-false", SparqlResult::Boolean(false)),
+        ("empty-vars", solutions(&[], vec![])),
+        ("one-row", solutions(&["a"], vec![vec![iri("https://example.org/1")]])),
+        ("wide", wide),
+    ];
+
+    let namespace =
+        purrdf_sparql_results::ProvenanceNamespace::new("ex", "https://example.org/prov#")
+            .expect("valid namespace");
+
+    for (name, result) in &cases {
+        for format in [
+            SparqlResultsFormat::Json,
+            SparqlResultsFormat::Xml,
+            SparqlResultsFormat::Csv,
+            SparqlResultsFormat::Tsv,
+        ] {
+            for (ns_label, ns) in [("no-ns", None), ("ns", Some(&namespace))] {
+                let provenance = ResultProvenance::default();
+                let eager = serialize(result, format, &provenance, ns);
+                let mut streamed_bytes: Vec<u8> = Vec::new();
+                let streamed =
+                    serialize_into(result, format, &provenance, ns, &mut streamed_bytes);
+                let label = format!("{name} / {format:?} / {ns_label}");
+
+                match (eager, streamed) {
+                    (Ok(eager), Ok(outcome)) => {
+                        assert_eq!(eager.bytes, streamed_bytes, "bytes diverged for {label}");
+                        assert_eq!(
+                            outcome.bytes_written as usize,
+                            streamed_bytes.len(),
+                            "byte count disagrees with what was written for {label}"
+                        );
+                        assert_eq!(
+                            eager.provenance_dropped, outcome.provenance_dropped,
+                            "provenance_dropped diverged for {label}"
+                        );
+                    }
+                    (Err(eager), Err(streamed)) => assert_eq!(
+                        eager.to_string(),
+                        streamed.to_string(),
+                        "the two spellings refused differently for {label}"
+                    ),
+                    (eager, streamed) => panic!(
+                        "one spelling succeeded and the other did not for {label}: \
+                         eager_ok={} streamed_ok={}",
+                        eager.is_ok(),
+                        streamed.is_ok()
+                    ),
+                }
+            }
+        }
+    }
+}
