@@ -193,11 +193,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   depth ceiling no weight can lift. Call sites name `with_decay` explicitly, which
   preserves every previously computed profile identity byte for byte.
 
-  Every removal above except the ordering declaration is confined to
-  `purrdf-retrieval`, which has not yet been published, so touches no released
-  API. The ordering declaration reached `purrdf-sparql-eval`, so `RankOrdering`,
-  `RankedDeclaration::ordering` and the fingerprint bytes they contributed are
-  a breaking change there.
+  Every removal above, including the ordering declaration, touches no released
+  API: `RankOrdering`, `RankedDeclaration::ordering` and the producer-side field
+  they gave `purrdf-sparql-eval` were themselves added earlier in this same
+  unreleased cycle and never reached a release. What the ordering declaration's
+  removal does change is the registry content fingerprint, within this cycle: a
+  plan pinned against an intermediate build of it no longer matches a registry
+  built by this one and must be re-planned.
 
 ### Changed
 
