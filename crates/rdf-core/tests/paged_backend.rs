@@ -1994,3 +1994,387 @@ fn named_graph_side_table_only_content_is_skipped_by_quads_for_pattern_but_still
         "the surfaced reifier row's graph slot is gReifierOnly"
     );
 }
+
+// ── cross-stream graph narrowing: each walk reads ITS OWN stream's postings ───────
+
+/// The cross-stream trap for the REIFIER walk, as a refusal pair.
+///
+/// Invalid case: a page whose only content in `<g>` is a BASE quad owns zero reifier
+/// rows there, so `reifier_quads_in_graph(Named(g))` must skip it — never materialize
+/// it. Neighbouring valid case: a page with ZERO base quads in `<g>` but a genuine
+/// reifier row in `<g>` must still be visited and must still yield that row.
+///
+/// The second half is what makes this more than a duplicate of the base-quad law: a
+/// narrowing that consulted the BASE postings for a REIFIER walk would pass the first
+/// assertion and silently drop the second page's row.
+#[test]
+fn reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_only_row_in_g_is_a_reifier_row()
+ {
+    let g = iri("g");
+
+    // Page 0: a base quad in `<g>` and nothing else — zero reifier rows anywhere.
+    let base_only_in_g = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let g_id = intern_value(&mut b, &g);
+        b.push_quad(s, p, o, Some(g_id));
+        b.freeze().expect("base-only page freeze")
+    };
+    // Page 1: its base quad sits in the DEFAULT graph, so it owns zero base rows in
+    // `<g>`; its one reifier row is in `<g>`.
+    let reifier_only_in_g = {
+        let mut b = RdfDatasetBuilder::new();
+        let x = b.intern_iri("http://example.org/x");
+        let p = b.intern_iri("http://example.org/p");
+        let y = b.intern_iri("http://example.org/y");
+        b.push_quad(x, p, y, None);
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        let g_id = intern_value(&mut b, &g);
+        b.push_reifier_in_graph(r, triple, Some(g_id));
+        b.freeze().expect("reifier-in-g page freeze")
+    };
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(move || base_only_in_g.clone()),
+        Box::new(move || reifier_only_in_g.clone()),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let g_id = paged.term_id_by_value(&g).expect("g interned");
+
+    let rows: Vec<_> = paged
+        .reifier_quads_in_graph(GraphMatch::Named(g_id))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the page whose only row in g is a REIFIER row must still yield it"
+    );
+    assert_eq!(
+        to_value(&paged, rows[0].s),
+        iri("r"),
+        "the yielded row is page 1's reifier binding"
+    );
+    assert_eq!(rows[0].g, Some(g_id), "and it carries g's graph slot");
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the base-only page owns zero REIFIER rows in g and must never be materialized"
+    );
+
+    // The base-only page is not a page with nothing in g — it genuinely owns g's one
+    // base quad. The reifier walk skipping it is a stream verdict, not a graph one.
+    assert_eq!(
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        1,
+        "the skipped page's own base row in g is still reachable on the base surface"
+    );
+}
+
+/// The annotation twin of
+/// `reifier_quads_in_graph_skips_a_base_only_page_and_still_yields_a_page_whose_only_row_in_g_is_a_reifier_row`.
+///
+/// Invalid case: a page whose only content in `<g>` is a REIFIER row owns zero
+/// annotation rows there, so `annotation_quads_in_graph(Named(g))` must skip it.
+/// Neighbouring valid case: a page with zero base AND zero reifier rows in `<g>`, but
+/// a genuine annotation row in `<g>`, must still yield it.
+#[test]
+fn annotation_quads_in_graph_skips_a_reifier_only_page_and_still_yields_a_page_whose_only_row_in_g_is_an_annotation_row()
+ {
+    let g = iri("g");
+
+    // Page 0: one reifier row in `<g>`, no annotation row anywhere.
+    let reifier_only_in_g = {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        let g_id = intern_value(&mut b, &g);
+        b.push_reifier_in_graph(r, triple, Some(g_id));
+        b.freeze().expect("reifier-in-g page freeze")
+    };
+    // Page 1: one annotation row in `<g>`; its reifier row sits in the DEFAULT graph,
+    // so it owns zero base and zero reifier rows in `<g>`.
+    let annotation_only_in_g = {
+        let mut b = RdfDatasetBuilder::new();
+        let x = b.intern_iri("http://example.org/x");
+        let p = b.intern_iri("http://example.org/p");
+        let y = b.intern_iri("http://example.org/y");
+        let triple = b.intern_triple(x, p, y);
+        let r2 = b.intern_iri("http://example.org/r2");
+        b.push_reifier_in_graph(r2, triple, None);
+        let conf = b.intern_iri("http://example.org/confidence");
+        let high = b.intern_iri("http://example.org/high");
+        let g_id = intern_value(&mut b, &g);
+        b.push_annotation_in_graph(r2, conf, high, Some(g_id));
+        b.freeze().expect("annotation-in-g page freeze")
+    };
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(move || reifier_only_in_g.clone()),
+        Box::new(move || annotation_only_in_g.clone()),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let g_id = paged.term_id_by_value(&g).expect("g interned");
+
+    let rows: Vec<_> = paged
+        .annotation_quads_in_graph(GraphMatch::Named(g_id))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the page whose only row in g is an ANNOTATION row must still yield it"
+    );
+    assert_eq!(
+        (to_value(&paged, rows[0].p), to_value(&paged, rows[0].o)),
+        (iri("confidence"), iri("high")),
+        "the yielded row is page 1's annotation"
+    );
+    assert_eq!(rows[0].g, Some(g_id), "and it carries g's graph slot");
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the reifier-only page owns zero ANNOTATION rows in g and must never be \
+         materialized"
+    );
+
+    // Neighbouring valid case on the other stream: the skipped page's reifier row in
+    // g is still reachable on the reifier surface.
+    assert_eq!(
+        paged
+            .reifier_quads_in_graph(GraphMatch::Named(g_id))
+            .count(),
+        1,
+        "the skipped page's own reifier row in g is still reachable"
+    );
+}
+
+// ── `pages_for_graph` and the graph-scoped eviction it informs ────────────────────
+
+/// A five-page fixture exercising every way a page can relate to a named graph:
+/// base rows, side-table-only rows, an unrelated graph, and a declared-empty graph.
+///
+/// * page 0 — one base quad in `gA`.
+/// * page 1 — one base quad in `gB` plus a REIFIER row in `gA` (zero base rows in `gA`).
+/// * page 2 — an ANNOTATION row in `gA` (zero base and zero reifier rows in `gA`).
+/// * page 3 — one base quad in `gB` only; nothing at all in `gA`.
+/// * page 4 — declares `gEmpty`, and `gA`, with no row in either.
+fn multi_graph_page_thunks() -> Vec<Box<dyn Fn() -> Arc<RdfDataset> + Send + Sync>> {
+    let ga = iri("gA");
+    let gb = iri("gB");
+    let g_empty = iri("gEmpty");
+
+    let page0 = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s0");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o0");
+        let ga_id = intern_value(&mut b, &ga);
+        b.push_quad(s, p, o, Some(ga_id));
+        b.freeze().expect("page 0 freeze")
+    };
+    let page1 = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s1");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o1");
+        let gb_id = intern_value(&mut b, &gb);
+        b.push_quad(s, p, o, Some(gb_id));
+        let triple = b.intern_triple(s, p, o);
+        let r = b.intern_iri("http://example.org/r1");
+        let ga_id = intern_value(&mut b, &ga);
+        b.push_reifier_in_graph(r, triple, Some(ga_id));
+        b.freeze().expect("page 1 freeze")
+    };
+    let page2 = {
+        let mut b = RdfDatasetBuilder::new();
+        let r = b.intern_iri("http://example.org/r2");
+        let conf = b.intern_iri("http://example.org/confidence");
+        let high = b.intern_iri("http://example.org/high");
+        let ga_id = intern_value(&mut b, &ga);
+        b.push_annotation_in_graph(r, conf, high, Some(ga_id));
+        b.freeze().expect("page 2 freeze")
+    };
+    let page3 = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s3");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o3");
+        let gb_id = intern_value(&mut b, &gb);
+        b.push_quad(s, p, o, Some(gb_id));
+        b.freeze().expect("page 3 freeze")
+    };
+    let page4 = {
+        let mut b = RdfDatasetBuilder::new();
+        let g_empty_id = intern_value(&mut b, &g_empty);
+        b.declare_named_graph(g_empty_id);
+        let ga_id = intern_value(&mut b, &ga);
+        b.declare_named_graph(ga_id);
+        b.freeze().expect("page 4 freeze")
+    };
+
+    vec![
+        Box::new(move || page0.clone()),
+        Box::new(move || page1.clone()),
+        Box::new(move || page2.clone()),
+        Box::new(move || page3.clone()),
+        Box::new(move || page4.clone()),
+    ]
+}
+
+/// `pages_for_graph(g)` is exactly `pages_for_pattern(None, None, None, Named(g))`
+/// for EVERY graph the dataset knows — including a declared-empty graph and a graph
+/// named only by a side-table row, the two cases where "the dataset knows this graph"
+/// and "a page owns a base quad in it" come apart.
+#[test]
+fn pages_for_graph_equals_the_graph_only_pattern_for_every_known_graph() {
+    let provider = Arc::new(CountingDemandProvider::new(multi_graph_page_thunks()));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let graphs: Vec<_> = paged.named_graphs().collect();
+    assert_eq!(
+        graphs.len(),
+        3,
+        "sanity: the fixture knows gA, gB and the declared-empty gEmpty"
+    );
+    for g in graphs {
+        assert_eq!(
+            paged.pages_for_graph(g),
+            paged.pages_for_pattern(None, None, None, GraphMatch::Named(g)),
+            "pages_for_graph({:?}) must equal the graph-only pattern",
+            to_value(&paged, g)
+        );
+    }
+
+    // The declared-empty graph and the annotation-only graph slot both answer "no
+    // base-quad page", which is the honest answer and not an empty-by-accident one.
+    let g_empty = paged
+        .term_id_by_value(&iri("gEmpty"))
+        .expect("gEmpty known");
+    assert!(
+        paged.pages_for_graph(g_empty).is_empty(),
+        "a declared-empty graph owns no base-quad page"
+    );
+    let ga = paged.term_id_by_value(&iri("gA")).expect("gA known");
+    assert_eq!(
+        paged.pages_for_graph(ga),
+        vec![PageId(0)],
+        "only page 0 owns a BASE quad in gA"
+    );
+
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction,
+        "every page-set prediction reads sealed metadata only"
+    );
+}
+
+/// `retain_graph(g)` evicts exactly the pages that hold nothing in `g` in ANY stream,
+/// keeps every page that does, materializes no page, and leaves every read scoped to
+/// `g` answering identically.
+#[test]
+fn retain_graph_keeps_every_page_carrying_the_graph_in_any_stream_and_materializes_none() {
+    let provider = Arc::new(CountingDemandProvider::new(multi_graph_page_thunks()));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+
+    let ga = paged.term_id_by_value(&iri("gA")).expect("gA known");
+    let gb = paged.term_id_by_value(&iri("gB")).expect("gB known");
+
+    // The answers gA must still give after eviction, taken BEFORE it.
+    let base_before: Vec<_> = paged
+        .quads_for_pattern(None, None, None, GraphMatch::Named(ga))
+        .collect();
+    let reifier_before: Vec<_> = paged
+        .reifier_quads_in_graph(GraphMatch::Named(ga))
+        .collect();
+    let annotation_before: Vec<_> = paged
+        .annotation_quads_in_graph(GraphMatch::Named(ga))
+        .collect();
+    assert_eq!(base_before.len(), 1, "sanity: gA owns one base quad");
+    assert_eq!(reifier_before.len(), 1, "sanity: gA owns one reifier row");
+    assert_eq!(
+        annotation_before.len(),
+        1,
+        "sanity: gA owns one annotation row"
+    );
+
+    let hits_before_eviction = provider.hits();
+    let retained = paged.retain_graph(ga);
+    assert_eq!(
+        retained.page_count(),
+        3,
+        "pages 0 (base), 1 (reifier) and 2 (annotation) all carry gA; pages 3 and 4 \
+         hold nothing in it"
+    );
+    assert_eq!(
+        provider.hits(),
+        hits_before_eviction,
+        "retain_graph selects pages from sealed metadata and materializes none"
+    );
+
+    // The surviving pages keep the original dictionary, so the retained dataset's row
+    // ids are directly comparable with the pre-eviction ones.
+    assert_eq!(
+        retained
+            .quads_for_pattern(None, None, None, GraphMatch::Named(ga))
+            .collect::<Vec<_>>(),
+        base_before,
+        "eviction must not change gA's base answer"
+    );
+    assert_eq!(
+        retained
+            .reifier_quads_in_graph(GraphMatch::Named(ga))
+            .collect::<Vec<_>>(),
+        reifier_before,
+        "eviction must not drop gA's reifier row (page 1 owns no base quad in gA)"
+    );
+    assert_eq!(
+        retained
+            .annotation_quads_in_graph(GraphMatch::Named(ga))
+            .collect::<Vec<_>>(),
+        annotation_before,
+        "eviction must not drop gA's annotation row (page 2 owns nothing else in gA)"
+    );
+
+    // The neighbouring graph: gB's carriers are pages 1 and 3, a different set — so
+    // the selection is a real per-graph decision, not a constant.
+    let retained_b = paged.retain_graph(gb);
+    assert_eq!(retained_b.page_count(), 2, "pages 1 and 3 carry gB");
+    assert_eq!(
+        retained_b
+            .quads_for_pattern(None, None, None, GraphMatch::Named(gb))
+            .collect::<Vec<_>>(),
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(gb))
+            .collect::<Vec<_>>(),
+        "eviction must not change gB's base answer"
+    );
+
+    // A term that is interned but names no graph carries nothing anywhere.
+    let not_a_graph = paged
+        .term_id_by_value(&iri("s0"))
+        .expect("s0 is interned as a subject");
+    assert_eq!(
+        paged.retain_graph(not_a_graph).page_count(),
+        0,
+        "a term that names no graph is carried by no page"
+    );
+}

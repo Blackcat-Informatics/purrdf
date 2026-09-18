@@ -860,6 +860,54 @@ impl PagedDataset {
         self.pages_for_pattern(None, None, None, GraphMatch::Named(g))
     }
 
+    /// Produce a variant retaining only the pages that CARRY named graph `g`, evicting
+    /// the rest — the graph-scoped page-eviction primitive, built on
+    /// [`pages_for_graph`](Self::pages_for_graph) and
+    /// [`with_pages`](Self::with_pages).
+    ///
+    /// "Carries `g`" means *owns at least one row in `g` in ANY of the three sealed
+    /// streams*: the base quads [`pages_for_graph`](Self::pages_for_graph) names, PLUS
+    /// the RDF 1.2 reifier and annotation side tables, whose rows carry their own graph
+    /// slot and are data in their own right. A page whose only content in `g` is a
+    /// reifier or annotation row — with no base quad there at all — is therefore
+    /// RETAINED; evicting it on the base-quad answer alone would silently drop rows
+    /// that belong to `g`.
+    ///
+    /// Retention is a SUPERSET of `g`, not a projection onto it: a retained page keeps
+    /// every row it holds, including its rows in OTHER graphs. What this method
+    /// guarantees is the eviction direction — a page is dropped only when the sealed
+    /// per-stream graph postings PROVE it holds nothing in `g`, so no read scoped to
+    /// `g` can see a different answer afterwards. There is deliberately no
+    /// drop-shaped twin: a page carrying `g` usually carries other graphs too, so
+    /// "drop the pages of `g`" would destroy unrelated rows.
+    ///
+    /// Materializes NOTHING: page selection reads sealed metadata only, and
+    /// [`with_pages`](Self::with_pages) copies seal-time state. The result keeps the
+    /// original (now possibly oversized) dictionary, exactly as
+    /// [`with_pages`](Self::with_pages) does; [`compact`](Self::compact) reclaims the
+    /// evicted pages' dead ids. A `g` that names no graph this dataset knows carries
+    /// nothing anywhere, so the result has no pages.
+    #[must_use]
+    pub fn retain_graph(&self, g: GlobalTermId) -> Self {
+        // `BTreeSet<PageId>`: ascending and deduplicated by construction, so the
+        // retained order is the ascending `PageId` order every other page-set surface
+        // egresses — no hash iteration reaches the result.
+        let mut keep: BTreeSet<PageId> = self.pages_for_graph(g).into_iter().collect();
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        for stream in [PageStream::Reifier, PageStream::Annotation] {
+            keep.extend(admission::candidate_pages_for_stream(
+                self.graph_index(),
+                page_count,
+                GraphMatch::Named(g),
+                stream,
+            ));
+        }
+        let keep: Vec<PageId> = keep.into_iter().collect();
+        // Every id came from this dataset's own page list, so `with_pages`'s
+        // out-of-range assertion cannot fire here.
+        self.with_pages(&keep)
+    }
+
     /// The cached, fallible per-page getter: fast-path the resident [`OnceLock`],
     /// otherwise re-materialize through the provider and cache it. Deterministic per
     /// the [`PageProvider`] contract.
