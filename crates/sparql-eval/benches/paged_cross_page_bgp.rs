@@ -20,6 +20,12 @@
 //! single frozen dataset by construction, so a naive "paged should be faster/slower"
 //! assertion would be meaningless.
 //!
+//! A third case, `bench_graph_selective_bgp`, wraps the same BGP in
+//! `GRAPH <g> { ... }` over a many-page [`PagedDataset`] whose pages each hold exactly
+//! one named graph — the graph-pruned admission path this crate's paged summary work
+//! added, alongside the whole-dataset case above (whose default-graph query has no
+//! graph component to prune on).
+//!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench paged_cross_page_bgp` (the
 //! `make bench` lane) — excluded from `make check`.
 
@@ -130,6 +136,100 @@ SELECT ?x ?n ?a WHERE {
   FILTER(?a > 30)
 }";
 
+/// Number of named graphs in the graph-selective corpus below, each pinned to its own
+/// page — so a `GRAPH <g> { ... }` query naming ONE graph is exactly the case the
+/// paged view's page-admission law (its internal graph-page index, consulted before
+/// any page is materialized) exists to prune: every page but the one page carrying
+/// `g` should never be materialized.
+const GRAPH_COUNT: usize = 6;
+
+/// Entities per named graph in the graph-selective corpus, kept smaller than
+/// [`ENTITIES`] so the total corpus (`GRAPH_COUNT * GRAPH_ENTITIES` entities) stays
+/// comparable in scale to the whole-dataset corpus above.
+const GRAPH_ENTITIES: usize = 60;
+
+/// Read a query's row count regardless of `SparqlResult` shape (`SELECT` is the only
+/// shape either bench issues; the other arms are unreachable in practice but keep the
+/// helper total).
+fn row_count(r: &purrdf_core::SparqlResult) -> usize {
+    match r {
+        purrdf_core::SparqlResult::Solutions { rows, .. } => rows.len(),
+        purrdf_core::SparqlResult::Boolean(_) | purrdf_core::SparqlResult::Graph(_) => 0,
+    }
+}
+
+/// Build one named graph's entity corpus: the same ring-of-`knows` shape as
+/// [`corpus`], but with entity names scoped by `graph_index` so distinct graphs never
+/// share a subject/object term — mirroring how distinct named graphs (e.g. per-tenant
+/// data) rarely share entities in practice, and keeping each page's content wholly
+/// specific to its one graph.
+fn graph_corpus(graph_index: usize, entity_count: usize) -> Vec<Triple> {
+    let mut triples = Vec::with_capacity(entity_count * 3);
+    for i in 0..entity_count {
+        let s = iri(&format!("g{graph_index}_person{i}"));
+        let next = iri(&format!("g{graph_index}_person{}", (i + 1) % entity_count));
+        triples.push((s.clone(), iri("knows"), next));
+        triples.push((
+            s.clone(),
+            iri("name"),
+            TermValue::simple_literal(format!("Name{graph_index}_{i}")),
+        ));
+        let age = TermValue::typed_literal((18 + i % 60).to_string(), XSD_INTEGER);
+        triples.push((s, iri("age"), age));
+    }
+    triples
+}
+
+/// Freeze one page holding every triple of `triples`, all inside the SAME named graph
+/// `graph` — the "one page, one named graph" shape the graph-selective bench pages
+/// its `PagedDataset` with.
+fn build_graph_page(triples: &[Triple], graph: &TermValue) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let g = intern_value(&mut b, graph);
+    for (s, p, o) in triples {
+        let s = intern_value(&mut b, s);
+        let p = intern_value(&mut b, p);
+        let o = intern_value(&mut b, o);
+        b.push_quad(s, p, o, Some(g));
+    }
+    b.freeze().expect("graph page freeze")
+}
+
+/// Freeze ONE dataset holding every `(graph, triples)` pair's quads together, all in
+/// their respective named graphs — the whole-dataset baseline for the graph-selective
+/// bench (every graph co-resident, same as `single` is for the default-graph bench
+/// above).
+fn build_multi_graph_dataset(graphs: &[(TermValue, Vec<Triple>)]) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    for (graph, triples) in graphs {
+        let g = intern_value(&mut b, graph);
+        for (s, p, o) in triples {
+            let s = intern_value(&mut b, s);
+            let p = intern_value(&mut b, p);
+            let o = intern_value(&mut b, o);
+            b.push_quad(s, p, o, Some(g));
+        }
+    }
+    b.freeze().expect("multi-graph dataset freeze")
+}
+
+/// The `GRAPH <g> { ... }`-wrapped variant of [`QUERY`], scoped to exactly one named
+/// graph.
+fn graph_query(graph: &str) -> String {
+    format!(
+        "\
+PREFIX ex: <{EX}>
+SELECT ?x ?n ?a WHERE {{
+  GRAPH <{graph}> {{
+    ?p ex:knows ?x .
+    ?x ex:name ?n .
+    ?x ex:age ?a .
+    FILTER(?a > 30)
+  }}
+}}"
+    )
+}
+
 fn bench_cross_page_bgp(c: &mut Criterion) {
     let corpus = corpus();
 
@@ -159,10 +259,6 @@ fn bench_cross_page_bgp(c: &mut Criterion) {
     let paged_rows = engine
         .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
         .expect("paged query");
-    let row_count = |r: &purrdf_core::SparqlResult| match r {
-        purrdf_core::SparqlResult::Solutions { rows, .. } => rows.len(),
-        purrdf_core::SparqlResult::Boolean(_) | purrdf_core::SparqlResult::Graph(_) => 0,
-    };
     assert!(
         row_count(&single_rows) > 0,
         "single-dataset query must return rows"
@@ -240,5 +336,114 @@ fn bench_paged_full_scan(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cross_page_bgp, bench_paged_full_scan);
+/// Graph-selective BGP evaluation latency: the SAME 3-pattern join + `FILTER` query as
+/// `bench_cross_page_bgp`, wrapped in `GRAPH <g> { ... }` naming exactly ONE named
+/// graph, evaluated (a) over a single frozen `RdfDataset` holding every graph and (b)
+/// over a many-page `PagedDataset` whose pages each hold exactly one named graph — so
+/// the paged case exercises the page-admission law's graph pruning (candidate pages
+/// narrowed to the one page carrying `g` before any page is materialized), which the
+/// whole-dataset case above never exercises (its default-graph query has no graph
+/// component to prune on).
+///
+/// Report-only, same as every bench in this file: do NOT add a timing threshold or an
+/// `assert!` on a duration here. The machine running `cargo bench` is not quiet, and
+/// pruning fewer pages is not the same claim as "faster wall-clock time" — a
+/// deterministic page-count assertion (e.g. that only one page was admitted) belongs
+/// in the test suite, not here. This bench is evidence for a human reader comparing
+/// the two groups, nothing more.
+fn bench_graph_selective_bgp(c: &mut Criterion) {
+    // Each named graph gets its own entity ring (`graph_corpus` scopes entity names by
+    // graph index, so no two graphs share a subject/object term).
+    let per_graph_corpus: Vec<Vec<Triple>> = (0..GRAPH_COUNT)
+        .map(|i| graph_corpus(i, GRAPH_ENTITIES))
+        .collect();
+    let graphs: Vec<TermValue> = (0..GRAPH_COUNT)
+        .map(|i| iri(&format!("graph{i}")))
+        .collect();
+
+    // (1) The whole-dataset baseline: every named graph's triples in ONE frozen
+    // `RdfDataset`.
+    let multi: Vec<(TermValue, Vec<Triple>)> = graphs
+        .iter()
+        .cloned()
+        .zip(per_graph_corpus.iter().cloned())
+        .collect();
+    let single = build_multi_graph_dataset(&multi);
+
+    // (2) The paged view: ONE named graph per page (`GRAPH_COUNT` pages total), so a
+    // `GRAPH <g>` query for a single graph should admit exactly one page.
+    let pages: Vec<Arc<RdfDataset>> = graphs
+        .iter()
+        .zip(per_graph_corpus.iter())
+        .map(|(g, triples)| build_graph_page(triples, g))
+        .collect();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal graph pages");
+    assert_eq!(paged.page_count(), GRAPH_COUNT, "one page per named graph");
+
+    let target_graph = match &graphs[0] {
+        TermValue::Iri(s) => s.clone(),
+        TermValue::Blank { .. } | TermValue::Literal { .. } | TermValue::Triple { .. } => {
+            unreachable!("graph iri is always an IRI")
+        }
+    };
+    let query_text = graph_query(&target_graph);
+
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(&query_text, None).expect("prepare");
+
+    // Sanity pass: both backends must do real work scoped to the one named graph (a
+    // broken fixture would silently benchmark a no-op).
+    let single_rows = engine
+        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+        .expect("single graph query");
+    let paged_rows = engine
+        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .expect("paged graph query");
+    assert!(
+        row_count(&single_rows) > 0,
+        "single-dataset graph query must return rows"
+    );
+    assert_eq!(
+        row_count(&single_rows),
+        row_count(&paged_rows),
+        "single and paged backends must agree on row count"
+    );
+
+    let mut group = c.benchmark_group("graph_selective_bgp");
+    group.bench_function("single", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared(
+                    criterion::black_box(&single),
+                    criterion::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("single graph query");
+            criterion::black_box(result);
+        });
+    });
+    group.bench_function("paged", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared_view(
+                    criterion::black_box(&paged),
+                    criterion::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("paged graph query");
+            criterion::black_box(result);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_cross_page_bgp,
+    bench_paged_full_scan,
+    bench_graph_selective_bgp
+);
 criterion_main!(benches);
