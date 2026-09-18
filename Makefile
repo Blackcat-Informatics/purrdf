@@ -13,7 +13,7 @@ endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -326,6 +326,31 @@ cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetche
 benchmark-acquire: ## Fetch the pinned LUBM and WatDiv comparison-workload artifacts by digest into target/ (network; nothing is vendored; not a CI gate).
 	python3 scripts/benchmark-acquire.py --self-test
 	python3 scripts/benchmark-acquire.py
+
+# The LUBM comparison lane's knobs. Overridable exactly like SCALE_* above:
+# `make lubm LUBM_UNIVERSITIES=5`. The default is ONE university (~103k triples),
+# which is small enough to run in seconds and is the size whose per-query answers
+# the LUBM literature publishes, so a first run can be checked against it.
+#
+# LUBM_DOC_BASE is the base each generated document's own two header triples
+# resolve against. It has a default because leaving it unset would silently embed
+# the scratch directory's `file://` path and destroy reproducibility; example.org
+# is RFC 2606's reserved documentation domain and this repository's fixture
+# convention, standing in for a publication IRI a local corpus does not have.
+LUBM_UNIVERSITIES ?= 1
+LUBM_SEED ?= 0
+LUBM_INDEX ?= 0
+LUBM_ONTO ?= http://swat.cse.lehigh.edu/onto/univ-bench.owl
+LUBM_DOC_BASE ?= http://example.org/lubm/
+LUBM_ENTAIL_SLICE ?= 3000
+LUBM_OUT ?= target/lubm
+LUBM_BIN ?=
+
+lubm: ## Run the LUBM comparison workload end to end - acquire, generate, convert through the purrdf CLI, and run the 14 queries per entailment regime (report-only, never a gate). See docs/BENCHMARKS.md.
+	LUBM_UNIVERSITIES=$(LUBM_UNIVERSITIES) LUBM_SEED=$(LUBM_SEED) LUBM_INDEX=$(LUBM_INDEX) \
+	LUBM_ONTO=$(LUBM_ONTO) LUBM_DOC_BASE=$(LUBM_DOC_BASE) \
+	LUBM_ENTAIL_SLICE=$(LUBM_ENTAIL_SLICE) LUBM_OUT=$(LUBM_OUT) LUBM_BIN=$(LUBM_BIN) \
+	bash scripts/lubm-lane.sh
 
 # `purrdf-bench` is unpublished tooling rather than a release crate, and it is in
 # this list anyway: its library half documents itself as portable, and a
