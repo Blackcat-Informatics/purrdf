@@ -405,8 +405,10 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
-    if result.is_err() {
-        return Err("bounded paged scan failed under the profile budget".to_owned());
+    if let Err(diagnostic) = result {
+        return Err(format!(
+            "bounded paged scan failed under the profile budget: {diagnostic}"
+        ));
     }
     match bounded.operation_status() {
         ViewOperationStatus::Ready { evidence } => {
@@ -435,8 +437,10 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
-    if first.is_err() {
-        return Err("the single-graph query failed unbounded".to_owned());
+    if let Err(diagnostic) = first {
+        return Err(format!(
+            "the single-graph query failed unbounded: {diagnostic}"
+        ));
     }
     let ViewOperationStatus::Ready { evidence } = measured.operation_status() else {
         return Err("unbounded single-graph query left the view failed".to_owned());
@@ -478,9 +482,10 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
-    if neighbor.is_err() {
+    if let Err(diagnostic) = neighbor {
         return Err(format!(
-            "the single-graph query was refused at its own measured {touched}-page budget: over-refusal"
+            "the single-graph query was refused at its own measured {touched}-page budget: \
+             over-refusal ({diagnostic})"
         ));
     }
     metrics.push(("paged_neighbor_ok", 1));

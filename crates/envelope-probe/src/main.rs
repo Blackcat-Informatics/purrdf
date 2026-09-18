@@ -104,7 +104,22 @@ fn rss_kb() -> u64 {
 }
 
 fn json_escape(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('"', "\\\"")
+    use std::fmt::Write as _;
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            control if (control as u32) < 0x20 => {
+                let _ = write!(escaped, "\\u{:04x}", control as u32);
+            }
+            ordinary => escaped.push(ordinary),
+        }
+    }
+    escaped
 }
 
 struct WorkloadRow {
@@ -200,5 +215,18 @@ fn main() -> ExitCode {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::json_escape;
+
+    #[test]
+    fn json_escape_covers_control_characters() {
+        assert_eq!(
+            json_escape("a\"b\\c\nd\te\r\u{1}"),
+            "a\\\"b\\\\c\\nd\\te\\r\\u0001"
+        );
     }
 }
