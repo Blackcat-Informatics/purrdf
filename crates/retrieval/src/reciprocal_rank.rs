@@ -69,6 +69,37 @@ fn denominator(rank: u64, k: u32) -> Result<u128, FusionError> {
     Ok(u128::from(k) + u128::from(rank))
 }
 
+/// A rule's smoothing constant, or the refusal that says the rule is not a law.
+///
+/// `K = 0` makes a rank-one contribution the whole weight rather than a fraction
+/// of it, which is why [`FusionProfile::with_decay`](crate::FusionProfile::with_decay)
+/// refuses it where a profile is declared. Everything below is reachable beneath
+/// that check, so every entry point reads its constant through here **before it
+/// reads the question it was asked**.
+///
+/// It is a separate step rather than a consequence of [`denominator`] because
+/// the arithmetic is not always reached. A depth of one has no adjacent pair to
+/// separate and a tolerance of one does no walking, so both would return from a
+/// short-circuit without ever forming a denominator — and the number they would
+/// return is the most favourable one the function can produce, quoted for a rule
+/// that cannot be evaluated. That is the vacuous answer a depth of zero is
+/// already refused for, wearing the same shape.
+///
+/// It is also why an unusable constant is refused *as* an unusable constant.
+/// Past the short-circuit the walk would fail somewhere inside the search and
+/// the failure would be told as whatever that point reports — for a depth of two
+/// or more, that the decay rule ran out of separation at depth one. The rule did
+/// not run out of anything: it was never a rule. A malformed law, a saturated
+/// rule and a depth no plan can carry are three different facts about three
+/// different things, and each carries its own variant.
+fn usable_k(decay: DecayRule) -> Result<u32, FusionError> {
+    let k = decay.k();
+    if k == 0 {
+        return Err(FusionError::InvalidK { k });
+    }
+    Ok(k)
+}
+
 /// The contribution of a stratum weight at a 1-based rank under smoothing `K`,
 /// under [`DecayRule::ReciprocalRank`].
 ///
@@ -259,24 +290,35 @@ impl MonotoneDepth {
 ///
 /// # Errors
 ///
-/// Whatever the selected rule refuses at a rank the walk reads: in practice
-/// [`FusionError::Overflow`] alone, for a contribution that leaves the
+/// [`FusionError::InvalidK`] when the rule's smoothing constant is zero. That
+/// is a malformed law rather than a weight that fails to separate, so it is
+/// refused before a rank is read — see [`usable_k`] for why answering it with
+/// the smallest ordered range would be a vacuous answer wearing a measurement's
+/// shape.
+///
+/// Otherwise whatever the selected rule refuses at a rank the walk reads: in
+/// practice [`FusionError::Overflow`] alone, for a contribution that leaves the
 /// fixed-point range.
 ///
-/// No profile reaches that arm today. The two operands that could — a zero
-/// smoothing constant and a non-positive weight — are short-circuited below
-/// before any rank is read, and
-/// [`FusionProfile::with_decay`](crate::FusionProfile::with_decay) refuses both
-/// outright; past those guards the walk reads ranks at or above one under a
-/// constant at or above one, where neither rule's arithmetic can leave the
-/// range. The refusal is nonetheless carried rather than rendered as a
-/// separation bound, so that moving a guard surfaces the failure instead of
+/// No profile reaches that last arm today. The one operand that could — a
+/// non-positive weight — is short-circuited below before any rank is read, and
+/// [`FusionProfile::with_decay`](crate::FusionProfile::with_decay) refuses it
+/// and the zero constant outright; past those guards the walk reads ranks at or
+/// above one under a constant at or above one, where neither rule's arithmetic
+/// can leave the range. The refusal is nonetheless carried rather than rendered
+/// as a separation bound, so that moving a guard surfaces the failure instead of
 /// quietly converting it into the most flattering depth available.
 pub(crate) fn monotone_depth(decay: DecayRule, weight: Fixed) -> Result<u64, FusionError> {
-    let k = decay.k();
-    // Both are fixed by a validated profile; neither has a meaningful answer,
-    // and a single rank is the smallest range that is trivially ordered.
-    if k == 0 || weight <= Fixed::ZERO {
+    // The law before the measurement. An unusable constant is refused rather
+    // than answered with the smallest ordered range, because that range would be
+    // a real measurement's shape carrying no measurement.
+    let k = usable_k(decay)?;
+    // A weight of zero maps every rank to zero, so the first adjacent pair
+    // already collides and a single rank is the *measured* answer rather than a
+    // stand-in for one. A negative weight is not a weight a profile can hold —
+    // `FusionProfile::with_decay` refuses one — and is read the same way here so
+    // that the short-circuit covers the whole non-positive half.
+    if weight <= Fixed::ZERO {
         return Ok(1);
     }
     let weight_raw = weight.into_raw().unsigned_abs();
@@ -356,10 +398,14 @@ fn first_collision(
 ///
 /// # Errors
 ///
-/// Whatever [`contribution_under`] refuses, at the anchor rank or at any rank
-/// the two searches probe: [`FusionError::InvalidK`] for a zero smoothing
-/// constant, [`FusionError::InvalidRank`] for a rank of zero, and
-/// [`FusionError::Overflow`] for a product that leaves the fixed-point range.
+/// [`FusionError::InvalidK`] when the rule's smoothing constant is zero,
+/// refused before the anchor is formed because it is a malformed law rather
+/// than a rank this law cannot resolve.
+///
+/// Then whatever [`contribution_under`] refuses, at the anchor rank or at any
+/// rank the two searches probe: [`FusionError::InvalidRank`] for a rank of
+/// zero, and [`FusionError::Overflow`] for a product that leaves the
+/// fixed-point range.
 ///
 /// A refusal is reported and never rendered as a width. A width of one is the
 /// claim "this rank is separated from both its neighbours", which is the most
@@ -367,6 +413,11 @@ fn first_collision(
 /// it because the arithmetic failed would be a false claim about the quality of
 /// an answer, made exactly where no answer was computed at all.
 pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<u64, FusionError> {
+    // The law before the question, and stated here rather than left to the
+    // anchor's own arithmetic: the three entry points over this file must agree
+    // about what an unusable constant is, and agreeing by accident of which
+    // inner step happens to be reached first is not agreeing.
+    usable_k(decay)?;
     let value = contribution_under(decay, weight, rank)?;
     // Rank zero is not a rank; it anchors both searches so the predicate is
     // non-increasing over the whole `0..=MAX_DEPTH` span the search covers.
@@ -465,8 +516,12 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<
 ///
 /// # Errors
 ///
-/// Whatever [`contribution_under`] refuses at any rank the walk reads:
-/// [`FusionError::InvalidK`] for a zero smoothing constant and
+/// [`FusionError::InvalidK`] when the rule's smoothing constant is zero,
+/// refused before anything is measured or walked. A tolerance of one does no
+/// walking at all, so leaving this to the walk would let the widest tolerance
+/// refuse and the narrowest one answer under the very same unusable rule.
+///
+/// Then whatever [`contribution_under`] refuses at any rank the walk reads:
 /// [`FusionError::Overflow`] for a product that leaves the fixed-point range.
 /// The walk starts at rank one or deeper, so it never forms the zero rank
 /// [`FusionError::InvalidRank`] names.
@@ -480,6 +535,12 @@ pub(crate) fn deepest_rank_within_width(
     weight: Fixed,
     max_width: u64,
 ) -> Result<u64, FusionError> {
+    // The law before the question. [`monotone_depth`] below refuses an unusable
+    // constant too, so this is not what makes the refusal reachable; it is what
+    // keeps it reachable if a short-circuit is ever hoisted above the
+    // measurement, which is exactly how a tolerance of one came to answer for a
+    // rule that could not be evaluated.
+    usable_k(decay)?;
     let ceiling = max_width.max(1);
     let start = monotone_depth(decay, weight)?;
     if ceiling == 1 || start >= MAX_DEPTH {
@@ -795,6 +856,11 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
 ///
 /// # Errors
 ///
+/// * [`FusionError::InvalidK`] when the rule's smoothing constant is zero. That
+///   is a malformed law rather than a request this rule cannot meet, so it is
+///   refused first, before the depth is read at all — see [`usable_k`]. The
+///   three refusals below are the rule declining a *depth*; this one says there
+///   was no rule to decline it.
 /// * [`FusionError::InvalidRank`] when `depth == 0`. A depth counts 1-based
 ///   ranks read from rank one, so zero names no rank and there is nothing for a
 ///   weight to separate; answering the lightest weight there is would be a
@@ -813,6 +879,22 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
 ///   the weight is applied, so every weight maps them to one value and the depth
 ///   is unreachable by construction. The saturation rank is therefore exact, and
 ///   is reported.
+///
+///   [`DecayRule::WeightedReciprocalRank`] cannot raise it at all, and that is
+///   settled by reading the two places it is raised rather than by trusting the
+///   shape of the arithmetic. [`Lap::Unreachable`] descends only from
+///   [`Separation::Impossible`], which [`separation_at`] returns from the
+///   truncated arm alone — the folded arm has no branch that can produce it. The
+///   `separates_to < depth` guard is the other, and under the folded rule
+///   `sufficient` is `(K + depth)²`: with `w = (K + depth)²` and any denominator
+///   `a` in `[K + 1, K + depth]`, the quotient `q = ⌊w/a⌋` is at least `K + depth`
+///   and hence at least `a`, while the remainder `s = w mod a` is below `a`, so
+///   `s < q` — which is exactly this rule's separation condition. Every pair in
+///   the range is therefore distinct at `sufficient`, `separates_to` exceeds
+///   `depth`, and the guard does not fire. Both statements hold only because
+///   `K >= 1` is enforced at the top of this function; a zero constant would
+///   reach the guard with a measured depth of one and report saturation for a
+///   rule that was never evaluated.
 /// * [`FusionError::Overflow`] is carried by the signature but cannot be
 ///   provoked once `depth` is inside the plan's range: the sufficient weight is
 ///   then at most `(u32::MAX + u32::MAX)²`, far inside an `i128`. The checked
@@ -869,6 +951,14 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
 /// candidate steps between the bound and it are correspondingly fine and there
 /// are a great many of them.
 pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<Fixed, FusionError> {
+    // The law before the question. A rule with a zero smoothing constant is not
+    // a rule to price a depth under, and the two ways this reads without the
+    // check are both wrong in the same direction: a depth of one takes the
+    // short-circuit below and answers the lightest weight there is — a real
+    // price for a law that does not exist — while a deeper one walks into the
+    // search and comes back saying the *rule saturated at depth one*, which
+    // tells a story about arithmetic that was never run.
+    let k = usable_k(decay)?;
     // Zero is not a depth. The `u64` signature admits it, and answering it with
     // the lightest weight there is would be a vacuous answer wearing the shape
     // of a real one: nothing was separated, because no rank was named.
@@ -928,7 +1018,6 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
     // `depth` is at or below `MAX_DEPTH` here — the range check above refuses
     // anything deeper — so the widest denominator is under 2^33 and the sweep's
     // cursor arithmetic is exact.
-    let k = decay.k();
     let narrowest = u64::from(k) + 1;
     let widest = u64::from(k) + constraints;
 
@@ -1598,6 +1687,93 @@ mod tests {
         }
     }
 
+    /// **A zero smoothing constant is a malformed law, and all three resolution
+    /// questions say so — including the two that answer from a short-circuit
+    /// without ever touching the rule's arithmetic.**
+    ///
+    /// The hole this closes was not that the constant went unchecked
+    /// everywhere. It was that whether it was checked at all depended on the
+    /// *other* argument. A depth of one has no adjacent pair to separate and a
+    /// tolerance of one does no walking, so both returned before a denominator
+    /// was formed and quoted a real number under a rule that cannot be
+    /// evaluated. One step further along either axis did refuse — but refused
+    /// with [`FusionError::DepthUnreachable`], reporting that the decay rule had
+    /// separated to depth one and no further. It had not separated anything. It
+    /// was never a rule.
+    ///
+    /// So both halves are asserted: the variant, and the sentence a caller
+    /// actually reads. A refusal that names the wrong cause sends the caller to
+    /// the wrong remedy — saturation's remedy is the other decay rule, and
+    /// switching rules does not make a zero constant usable.
+    ///
+    /// Every case is executed at the neighbouring constant of one, the smallest
+    /// usable law there is, which must still answer.
+    #[test]
+    fn a_zero_smoothing_constant_is_refused_as_a_malformed_law_on_every_path() {
+        let weight = Fixed::from_raw(1_000_000);
+        for rule in [truncated as fn(u32) -> DecayRule, folded] {
+            // Read a refusal both ways: the variant it carries, and the story it
+            // tells. `1` is the short-circuiting argument on both axes and the
+            // larger values walk.
+            let refuses_as_malformed_law = |what: &str, argument: u64, got: &FusionError| {
+                assert!(
+                    matches!(got, FusionError::InvalidK { k: 0 }),
+                    "{:?} {what} {argument}: a zero constant is a malformed law, got {got:?}",
+                    rule(0)
+                );
+                let told = got.to_string();
+                assert!(
+                    told.contains("K must be at least 1"),
+                    "{:?} {what} {argument}: the message must name the constant, got {told:?}",
+                    rule(0)
+                );
+                assert!(
+                    !told.contains("no further"),
+                    "{:?} {what} {argument}: this is not the decay rule saturating, got {told:?}",
+                    rule(0)
+                );
+            };
+
+            for depth in [1_u64, 2, 64] {
+                let refused = minimum_weight_for_depth(rule(0), depth)
+                    .expect_err("a zero constant prices no depth");
+                refuses_as_malformed_law("depth", depth, &refused);
+                assert!(
+                    minimum_weight_for_depth(rule(1), depth).is_ok(),
+                    "{:?} depth {depth}: the smallest usable constant still prices it",
+                    rule(1)
+                );
+            }
+
+            for rank in [1_u64, 2, 64] {
+                let refused =
+                    class_width(rule(0), weight, rank).expect_err("a zero constant has no width");
+                refuses_as_malformed_law("rank", rank, &refused);
+                assert_eq!(
+                    class_width(rule(1), weight, rank)
+                        .expect("the smallest usable constant measures a width"),
+                    1,
+                    "{:?} rank {rank}: this weight separates it from both neighbours",
+                    rule(1)
+                );
+            }
+
+            for tolerance in [1_u64, 2, 64] {
+                let refused = deepest_rank_within_width(rule(0), weight, tolerance)
+                    .expect_err("a zero constant reads to no depth");
+                refuses_as_malformed_law("tolerance", tolerance, &refused);
+                assert!(
+                    deepest_rank_within_width(rule(1), weight, tolerance)
+                        .expect("the smallest usable constant measures a depth")
+                        > 1,
+                    "{:?} tolerance {tolerance}: the smallest usable constant reads past \
+                     a single rank",
+                    rule(1)
+                );
+            }
+        }
+    }
+
     /// Both resolution measurements hand back the decay rule's own refusal
     /// rather than a number, and the numbers they would otherwise have handed
     /// back are the two most flattering ones there are: a width of one is
@@ -1738,25 +1914,31 @@ mod tests {
         );
     }
 
-    /// The guards that keep the walk's refusal unreachable are the explicit
-    /// short-circuits, not the walk giving out mid-stride.
+    /// The two unusable operands [`monotone_depth`] can be handed are handled
+    /// differently on purpose, and the difference is which of them names a
+    /// measurement.
     ///
-    /// A smoothing constant of zero and a non-positive weight both reach
-    /// [`monotone_depth`] — `FusionProfile::with_decay` refuses them, but this
-    /// function is below that check — and both are answered with the smallest
-    /// range there is rather than walked. Removing either guard sends the
-    /// operand into [`first_collision`], which refuses it; this test pins the
-    /// short-circuit so that change fails loudly instead of changing what a
-    /// bound means. Each case is paired with its usable neighbour, which must
-    /// still measure a deeper range.
+    /// A smoothing constant of zero is refused before anything is read. It
+    /// describes no law, so there is nothing to measure and a depth of one would
+    /// be the shape of a measurement carrying none.
+    ///
+    /// A weight of zero is measured and the measurement is one: every rank's
+    /// contribution is zero, so the first adjacent pair already collides and one
+    /// is the exact first-collision rank rather than a stand-in for it. The
+    /// negative half is short-circuited alongside it — `FusionProfile::with_decay`
+    /// refuses a negative weight where one is declared — so the walk is never
+    /// entered with a weight whose contributions do not decrease.
+    ///
+    /// Each case is paired with its usable neighbour, which must still measure a
+    /// deeper range.
     #[test]
-    fn the_unusable_operands_are_short_circuited_before_the_walk_rather_than_refused_inside_it() {
+    fn an_unusable_constant_is_refused_while_a_zero_weight_measures_the_single_rank_it_orders() {
         let weight = Fixed::from_raw(1_000_000);
         for rule in [truncated as fn(u32) -> DecayRule, folded] {
             let unusable_k = monotone_depth(rule(0), weight);
             assert!(
-                matches!(unusable_k, Ok(1)),
-                "an unusable smoothing constant orders a single rank and is not walked, \
+                matches!(unusable_k, Err(FusionError::InvalidK { k: 0 })),
+                "an unusable smoothing constant is no law to measure under, \
                  got {unusable_k:?}"
             );
             assert!(

@@ -1997,14 +1997,18 @@ class retrieval:
     # ratios and an over-estimate would silently re-scale that stratum's share of
     # every fused score.
     #
-    # Raises `ValueError` for four distinct reasons and the message says which:
-    # an unknown `decay` spelling; a `depth` of zero, which names no rank to
-    # separate; a `depth` past `2 ** 32 - 1`, which is deeper than a plan can
-    # record and is the only refusal "weighted_reciprocal_rank" makes; and a
-    # depth no weight reaches, which only "reciprocal_rank" raises because it
-    # rounds the reciprocal before the weight lands. That last message names the
-    # exact depth it does reach, and its remedy is reachable from this same
-    # call: ask again under "weighted_reciprocal_rank".
+    # Raises `ValueError` for five distinct reasons and the message says which:
+    # an unknown `decay` spelling; a `k` of zero, which describes no law and is
+    # refused before `depth` is read, so a `depth` of one is refused rather than
+    # priced; a `depth` of zero, which names no rank to separate; a `depth` past
+    # `2 ** 32 - 1`, which is deeper than a plan can record and is the only one
+    # of the two walls "weighted_reciprocal_rank" ever meets; and a depth no
+    # weight reaches, which only "reciprocal_rank" raises because it rounds the
+    # reciprocal before the weight lands. That last message names the exact
+    # depth it does reach — the deepest any weight reaches, not the depth of one
+    # particular weight — and its remedy is reachable from this same call: ask
+    # again under "weighted_reciprocal_rank". A `k` of zero is deliberately not
+    # told that way, because switching rules does not make it usable.
     @staticmethod
     def weight_for_depth(depth: int, k: int, *, decay: str) -> int: ...
     # How many consecutive ranks around `rank` a weight of `weight_raw` cannot
@@ -2041,7 +2045,11 @@ class retrieval:
     #
     # An operand the law cannot evaluate raises `ValueError` rather than
     # returning a depth: a smoothing constant of zero, an unknown `decay`
-    # spelling, or a weight that is not strictly positive.
+    # spelling, or a weight that is not strictly positive. The constant is
+    # checked before anything is measured, so the refusal does not depend on
+    # `max_width`; a tolerance of one does no walking, and letting it answer
+    # where a larger tolerance refuses would make one unusable rule usable or
+    # not according to the question asked of it.
     #
     # The answer is walked rank by rank — the class width is not monotone in the
     # rank, so bisecting it would silently over-report — from the separating

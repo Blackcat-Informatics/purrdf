@@ -260,6 +260,16 @@ pub enum FusionError {
     /// coarser rank resolution. It is only a refusal to claim a depth the
     /// arithmetic cannot deliver.
     ///
+    /// `saturates_at` is a **maximum over every weight**, not a reading taken at
+    /// one of them. No weight was named in the question and none is named in the
+    /// answer: the depth is quoted for the best weight there is, which under
+    /// [`DecayRule::ReciprocalRank`](crate::DecayRule::ReciprocalRank) is any
+    /// weight at or above one — below one the weight binds and the separating
+    /// depth is shorter, at and above one the inner truncation binds instead and
+    /// every such weight shares the same depth. Reading it as a property of some
+    /// particular weight would invite the repair that does not exist, which is to
+    /// raise that weight.
+    ///
     /// `saturates_at` is always a measured rank and never a saturating case
     /// standing in for one: the rule was observed to stop separating, so there
     /// is an exact rank to report, and it is strictly below the depth asked
@@ -273,9 +283,13 @@ pub enum FusionError {
     DepthUnreachable {
         /// The depth that was asked for.
         depth: u64,
-        /// The exact 1-based depth this rule separates every adjacent pair
-        /// within, at any weight. The pair immediately past it carries one
-        /// contribution whatever weight is applied.
+        /// The deepest 1-based depth **any** weight separates every adjacent
+        /// pair within under this rule: the maximum of the per-weight
+        /// separating depths, not the depth of some one weight. Exact rather
+        /// than conservative, and the pair immediately past it carries one
+        /// contribution whatever weight is applied — so no heavier weight
+        /// reaches further, which is why the remedy is the other decay rule and
+        /// never a larger number here.
         saturates_at: u64,
     },
 

@@ -103,7 +103,17 @@ impl DecayRule {
     ///
     /// # Errors
     ///
-    /// Three refusals, and they are three different facts.
+    /// Four refusals, and they are four different facts.
+    ///
+    /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero.
+    /// That is the rule being unusable rather than the depth being unreachable,
+    /// and it is refused before `depth` is read at all — including at a depth of
+    /// one, which has no adjacent pair to separate and would otherwise answer
+    /// the lightest weight there is, quoting a real price under a law that
+    /// cannot be evaluated. [`FusionProfile::with_decay`] refuses such a rule
+    /// where a profile is declared; this is the same fact reached one level
+    /// lower, and it is deliberately *not* told as the rule saturating at depth
+    /// one, because the rule's arithmetic never ran.
     ///
     /// [`FusionError::InvalidRank`] when `depth` is zero. A depth counts 1-based
     /// ranks read from rank one, so zero names no rank to separate.
@@ -114,12 +124,18 @@ impl DecayRule {
     /// adjacent ranks collide there they are equal for every weight. The error
     /// carries the exact rank where the rule saturates.
     /// [`Self::WeightedReciprocalRank`] has no such wall at all — its reachable
-    /// depth grows with the weight — so it never raises this.
+    /// depth grows with the weight — so it never raises this, and that is a
+    /// proof rather than an expectation: the folded rule's own arithmetic is the
+    /// single division `trunc(w_raw / D)`, whose adjacent values differ by
+    /// `w_raw / (D · (D + 1))`, so the weight `(K + depth)²` this search bounds
+    /// itself by separates every pair in the range outright. The saturation
+    /// condition the other rule meets — two ranks equal *before* the weight
+    /// arrives — has no counterpart here to detect.
     ///
     /// [`FusionError::DepthBeyondPlanRange`] when `depth` is deeper than a plan
-    /// can record, which a plan does as a `u32`. This is the only refusal
-    /// [`Self::WeightedReciprocalRank`] makes, and it is a limit of that
-    /// encoding rather than of the rule: the folded arithmetic separates ranks
+    /// can record, which a plan does as a `u32`. Of the two walls, this is the
+    /// only one [`Self::WeightedReciprocalRank`] ever meets, and it is a limit of
+    /// that encoding rather than of the rule: the folded arithmetic separates ranks
     /// past `u32::MAX` given a heavy enough weight, and at `u32::MAX` itself it
     /// answers. Nothing downstream could carry a deeper depth, so quoting a
     /// weight for one would price a plan that cannot be written.

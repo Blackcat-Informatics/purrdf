@@ -34,16 +34,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   is exposed to Python as `retrieval.weight_for_depth`,
   `retrieval.class_width` and `retrieval.deepest_rank_within_width`.
 
-  Its three refusals are three separate facts and carry three separate variants.
+  Its four refusals are four separate facts and carry four separate variants.
   `FusionError::DepthUnreachable` means the decay rule itself stopped separating
   adjacent ranks at any weight, and it reports the exact depth it does reach --
+  the deepest any weight reaches, not the depth of one particular weight, and
   only the truncated rule can raise it. `FusionError::DepthBeyondPlanRange`
   means the depth is deeper than a plan can record, a plan carrying a
   per-stratum depth as a 32-bit rank; that is a limit of the encoding and not of
   the arithmetic, so the message names the encoding and the folded rule still
   answers at the deepest depth a plan can hold. A depth of zero names no rank
   and is refused as `FusionError::InvalidRank` rather than answered with the
-  lightest weight there is.
+  lightest weight there is. And a smoothing constant of zero describes no law at
+  all: all three functions refuse it as `FusionError::InvalidK` before they read
+  the question they were asked, so the refusal no longer depends on the other
+  argument -- a depth of one, or a tolerance of one, previously answered from a
+  short-circuit and quoted a real number under a rule that cannot be evaluated,
+  while one step further along either axis reported the decay rule as having
+  saturated at depth one. A malformed law is not a saturated rule, and telling
+  it as one sent a caller to a remedy -- switch decay rules -- that cannot help.
 - **retrieval:** `DecayRule::class_width`, the same resolution curve
   `FusionProfile::class_width` reports but asked of a weight rather than of a
   stratum. A width is a property of the rule, its smoothing constant, the weight

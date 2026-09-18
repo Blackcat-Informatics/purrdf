@@ -665,6 +665,66 @@ def test_a_depth_the_truncated_rule_refuses_is_answered_by_the_folded_one() -> N
     assert retrieval.class_width(cured, 60, saturates_at, decay=FOLDED) == 1
 
 
+def test_a_zero_smoothing_constant_is_one_refusal_across_all_three_functions() -> None:
+    """``k = 0`` describes no law, and every resolution question says exactly that.
+
+    The three functions are one algebra read from three directions, so they must
+    agree about what an invalid law is — and agreement is not "all three raise
+    something". Two of them answer from a short-circuit for the smallest
+    argument on their own axis: a ``depth`` of one has no adjacent pair to
+    separate, and a ``max_width`` of one does no walking. Neither reaches the
+    arithmetic that would notice ``k``, so both once handed back a real number
+    priced under a rule that cannot be evaluated, while the very same call one
+    step along the axis refused — and refused by reporting that the decay rule
+    had *saturated* at depth one.
+
+    That is the wrong cause told confidently. Saturation's remedy is the other
+    decay rule; a constant of zero is not cured by switching rules, so a caller
+    that followed the message would ask the same impossible question again.
+
+    So this pins the cause and not merely the failure: the message names the
+    constant and does not tell the saturation story. Both rules, both the
+    short-circuiting argument and the walking one, and every case paired with
+    ``k = 1`` — the smallest usable law there is — which must still answer.
+    """
+    weight = 1000 * retrieval.SCALE
+    for decay in (TRUNCATED, FOLDED):
+        for depth in (1, 2, 64):
+            with pytest.raises(ValueError, match="K must be at least 1") as refused:
+                retrieval.weight_for_depth(depth, 0, decay=decay)
+            assert "no further" not in str(refused.value), (
+                f"{decay}, depth {depth}: a malformed law is not a saturated rule"
+            )
+            assert retrieval.weight_for_depth(depth, 1, decay=decay) > 0, (
+                f"{decay}, depth {depth}: the smallest usable constant prices it"
+            )
+
+        for rank in (1, 2, 64):
+            with pytest.raises(ValueError, match="K must be at least 1") as refused:
+                retrieval.class_width(weight, 0, rank, decay=decay)
+            assert "no further" not in str(refused.value), (
+                f"{decay}, rank {rank}: a malformed law is not a saturated rule"
+            )
+            assert retrieval.class_width(weight, 1, rank, decay=decay) == 1, (
+                f"{decay}, rank {rank}: this weight separates it from both neighbours"
+            )
+
+        for max_width in (1, 2, 64):
+            with pytest.raises(ValueError, match="K must be at least 1") as refused:
+                retrieval.deepest_rank_within_width(weight, 0, max_width, decay=decay)
+            assert "no further" not in str(refused.value), (
+                f"{decay}, max_width {max_width}: a malformed law is not a "
+                "saturated rule"
+            )
+            assert (
+                retrieval.deepest_rank_within_width(weight, 1, max_width, decay=decay)
+                > 1
+            ), (
+                f"{decay}, max_width {max_width}: the smallest usable constant "
+                "reads past a single rank"
+            )
+
+
 def test_the_decay_rule_must_be_named_and_is_named_by_its_own_spelling() -> None:
     """No hidden default, and an unknown spelling names the accepted ones."""
     common: dict[str, Any] = {

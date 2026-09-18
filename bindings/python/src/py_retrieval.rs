@@ -1381,17 +1381,27 @@ fn search<'py>(
 /// `"reciprocal_rank"` or `"weighted_reciprocal_rank"`; an unknown spelling
 /// raises `ValueError` naming both.
 ///
-/// Raises `ValueError` for three further reasons, and the message says which.
+/// Raises `ValueError` for four further reasons, and the message says which.
+///
+/// A `k` of zero describes no law at all — the rule is refused before `depth` is
+/// read, including at a `depth` of one, which has no adjacent pair to separate
+/// and would otherwise hand back a real price under a rule that cannot be
+/// evaluated. `retrieval.class_width` and `retrieval.deepest_rank_within_width`
+/// refuse it identically, and none of the three reports it as the decay rule
+/// running out of separation: switching rules is the remedy for a rule that
+/// saturated, and it does nothing for a constant of zero.
+///
 /// A `depth` of zero names no rank to separate, so it is rejected rather than
 /// answered. A `depth` past `2**32 - 1` is deeper than a plan can record — a
 /// plan carries a per-stratum depth as a 32-bit rank — which is a limit of that
-/// encoding and not of the arithmetic, and it is the only refusal
-/// `"weighted_reciprocal_rank"` makes. And no weight at all reaches the depth,
-/// which only `"reciprocal_rank"` raises and which is a real wall rather than a
-/// budget: that rule rounds the reciprocal before the weight is applied, so once
-/// two adjacent ranks collide there no weight can part them again. The message
-/// reports the exact depth it does reach, and the remedy it points at is
-/// reachable from right here — ask the same depth again under
+/// encoding and not of the arithmetic, and of the two walls below it is the only
+/// one `"weighted_reciprocal_rank"` ever meets. And no weight at all reaches the
+/// depth, which only `"reciprocal_rank"` raises and which is a real wall rather
+/// than a budget: that rule rounds the reciprocal before the weight is applied,
+/// so once two adjacent ranks collide there no weight can part them again. The
+/// message reports the exact depth it does reach — the deepest any weight
+/// reaches, not the depth of some particular one — and the remedy it points at
+/// is reachable from right here: ask the same depth again under
 /// `"weighted_reciprocal_rank"`, whose reachable depth grows with the weight.
 ///
 /// Remember that weights are read as *ratios*. Raising one stratum to reach a
@@ -1476,7 +1486,10 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64
 /// returning a depth: a smoothing constant of zero; an unknown `decay`
 /// spelling; and a weight that is not strictly positive, which a fusion law
 /// refuses where it is declared and which therefore has no resolution to
-/// report here either.
+/// report here either. The constant is checked before anything is measured, so
+/// the refusal does not depend on `max_width` — a tolerance of one does no
+/// walking, and letting it answer where a larger tolerance refuses would make
+/// the same unusable rule usable or not according to a question asked of it.
 ///
 /// # What it costs to ask
 ///
