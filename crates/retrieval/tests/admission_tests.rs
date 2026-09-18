@@ -1149,6 +1149,50 @@ fn admission_rejects_stale_statistics() {
     }
 }
 
+/// **A plan whose layout version this build does not write is refused, and the
+/// version this build does write is admitted.**
+///
+/// [`Plan::from_canonical_bytes`] has a version gate of its own, but a plan
+/// decoded through serde never passes through it, so admission re-checks the
+/// dimension rather than assume it. That check is the *first* thing admission
+/// looks at, which is precisely why it has to be executed in both directions: a
+/// gate set one value too wide at step one would refuse every plan there is, and
+/// every later dimension's refusal test would still pass while doing so.
+#[test]
+fn a_plan_version_this_build_does_not_write_is_refused_while_the_current_version_admits() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    // THE NEIGHBOURING CASE, stated first because it is what the refusal must
+    // not reach: the version this build writes is admitted and compiles units.
+    let current = fresh_plan(&registry, &stats);
+    assert_eq!(
+        current.version,
+        Plan::VERSION,
+        "a freshly planned request carries this build's layout version"
+    );
+    let compiled = compile(&current, &env).expect("the current plan version is admitted");
+    assert_eq!(compiled.units.len(), 3, "one unit per declared stratum");
+
+    // The violation: the same plan, carrying a version this build's field order
+    // does not define. One version either side, and nothing else changed.
+    for moved in [Plan::VERSION.wrapping_add(1), Plan::VERSION.wrapping_sub(1)] {
+        let mut tampered = fresh_plan(&registry, &stats);
+        tampered.version = moved;
+        let error = compile(&tampered, &env).expect_err("a foreign plan version is refused");
+        assert_eq!(error.dimension(), "invalid_plan_version");
+        match error {
+            AdmissionError::InvalidPlanVersion { version } => assert_eq!(version, moved),
+            other => panic!("expected InvalidPlanVersion, got {other:?}"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 7. Registry identity
 // ---------------------------------------------------------------------------

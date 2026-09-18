@@ -17,7 +17,8 @@ use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult,
     FusionStream, Iri, MonotoneDepth, PlanId, ProducerReceipt, ProducerStatus, ProtocolError,
-    RECIP_K, RankedStream, StreamContract, Term, TopK, contribution, contribution_under,
+    RECIP_K, RankedStream, RankedStreamImpl, StreamContract, Term, TopK, contribution,
+    contribution_under,
 };
 
 const K: u32 = 60;
@@ -3940,5 +3941,379 @@ fn cut_on_a_tie_turns_on_the_bound_and_on_nothing_else() {
     assert_eq!(
         cut.trailer.resolution, whole.trailer.resolution,
         "the two halves differ in their bound and in nothing else"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 26. The refusals `fuse` makes before a row is pulled, and the profile bounds
+//     it makes before a stream exists, each executed beside the valid case next
+//     door to it.
+//
+// A refusal is a claim, and the claim is not "this input is strange" but "this
+// exact input is wrong and the one beside it is right". Every test below runs
+// both halves and changes exactly one thing between them, because a refusal
+// that also swallowed its neighbour looks identical from inside the error.
+// ---------------------------------------------------------------------------
+
+/// **Two streams may not share a stratum; two streams under distinct strata are
+/// the ordinary case.**
+///
+/// `fuse` refuses a repeated stratum tag before it pulls a row, because the
+/// profile weights a stratum once and two streams under one tag would let a
+/// single candidate collect that weight twice. The refusal is about the *tag*,
+/// not about the rows: the neighbour below is the same two producers emitting
+/// the same candidate at the same rank, differing only in the stratum the second
+/// one is tagged with — and it must fuse into exactly the cross-stratum sum the
+/// whole engine exists to compute.
+#[test]
+fn two_streams_tagged_with_one_stratum_are_refused_while_two_distinct_strata_fuse() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let producers = || {
+        (
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        )
+    };
+
+    // The violation: both streams claim the stratum `text`.
+    let (first, second) = producers();
+    let repeated = vec![(stratum("text"), first), (stratum("text"), second)];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        repeated, &profile, TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::DuplicateStratum { stratum: named })
+                if *named == stratum("text").as_str()
+        ),
+        "expected DuplicateStratum naming `text`, got {result:?}"
+    );
+
+    // THE NEIGHBOURING CASE: the same rows, with the second stream tagged with
+    // the stratum it actually came from. One candidate, two contributions.
+    let (first, second) = producers();
+    let distinct = vec![(stratum("text"), first), (stratum("vector"), second)];
+    let fused = block_on(run_fuse(distinct, &profile));
+    assert_eq!(fused.rows.len(), 1, "one candidate, named by both strata");
+    assert_eq!(fused.rows[0].entity, Term::new("a"));
+    assert_eq!(
+        fused.rows[0].contributions.len(),
+        2,
+        "distinct strata contribute once each rather than being refused"
+    );
+    let per_stratum = contribution(Fixed::ONE, 1, K).expect("fits");
+    assert_eq!(
+        fused.rows[0].score,
+        per_stratum.checked_add(per_stratum).expect("fits"),
+        "and the score is the checked sum of both"
+    );
+}
+
+/// **A stratum the profile never weights is refused; the same stream under a
+/// profile that weights it fuses.**
+///
+/// The refusal is a statement about the *profile*, not about the producer: a
+/// weight is "how much does this count", and a profile that never named the
+/// stratum has stated no answer, so fusing the stream would mean inventing one.
+/// The two halves below therefore hold the streams fixed and vary only the
+/// profile, which is the single thing the refusal is about.
+#[test]
+fn a_stream_whose_stratum_the_profile_never_weights_is_refused_while_the_weighted_neighbour_fuses()
+{
+    let streams = || {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)),
+            ),
+        ]
+    };
+
+    // The violation: the profile weights `text` and says nothing about
+    // `vector`, which is the stratum the second stream is tagged with.
+    let partial = profile(&[("text", Fixed::ONE)], K);
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams(),
+        &partial,
+        TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::UnknownStratum { stratum: named })
+                if *named == stratum("vector").as_str()
+        ),
+        "expected UnknownStratum naming `vector`, got {result:?}"
+    );
+
+    // THE NEIGHBOURING CASE: the identical streams under a profile that does
+    // declare the second stratum. Both producers reach the answer.
+    let complete = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let fused = block_on(run_fuse(streams(), &complete));
+    assert_eq!(
+        fused
+            .rows
+            .iter()
+            .map(|fused_row| fused_row.entity.clone())
+            .collect::<Vec<_>>(),
+        vec![Term::new("a"), Term::new("b")],
+        "a weighted stratum contributes rather than being refused"
+    );
+    assert_eq!(
+        fused.trailer.statuses.len(),
+        2,
+        "and both producers report their own status"
+    );
+}
+
+/// **A failure is a protocol violation only once rows have gone out.**
+///
+/// `ErrorAfterRows` is the producer's own vocabulary for "I broke mid-stream",
+/// and the refusal it triggers is narrow on purpose. A producer that fails
+/// *before* emitting anything has an honest terminal receipt to return and no
+/// rows to contradict it, so it is not refused at all: it reports
+/// `ExecutionFailed` and the trailer carries the reason verbatim. And the same
+/// stream that broke, with the break removed, fuses every row it emitted. Both
+/// neighbours run here, because a refusal that reached either of them would
+/// convert an ordinary empty answer — or an ordinary complete one — into a
+/// failed request.
+#[test]
+fn a_failure_after_rows_is_refused_while_a_producer_that_fails_before_any_row_is_reported() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+
+    // The violation: a row went out, and then the producer broke. A clean
+    // receipt can no longer describe what this stream did.
+    let broke_mid_stream = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                Step::Fail(ProtocolError::ErrorAfterRows { rows_before: 1 }),
+            ],
+            exhausted(0),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        broke_mid_stream,
+        &profile,
+        TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ErrorAfterRows { rows_before: 1 })
+        ),
+        "expected ErrorAfterRows, got {result:?}"
+    );
+
+    // THE FIRST NEIGHBOUR: the same single row, with the break removed. One
+    // variable, and the row must reach the answer.
+    let intact = vec![(
+        stratum("text"),
+        MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+    )];
+    let fused = block_on(run_fuse(intact, &profile));
+    assert_eq!(
+        fused
+            .rows
+            .iter()
+            .map(|fused_row| fused_row.entity.clone())
+            .collect::<Vec<_>>(),
+        vec![Term::new("a")],
+        "a stream that did not break is read to its end"
+    );
+
+    // THE SECOND NEIGHBOUR: the same failure, before any row went out. There is
+    // nothing for it to contradict, so it is a receipt rather than a violation
+    // and the answer is an ordinary empty one.
+    let failed_before_rows = vec![(
+        stratum("text"),
+        MockStream::new(
+            Vec::new(),
+            ProducerReceipt::ExecutionFailed {
+                reason: "the index was unavailable".to_owned(),
+            },
+        ),
+    )];
+    let fused = block_on(run_fuse(failed_before_rows, &profile));
+    assert_eq!(
+        fused.rows,
+        Vec::new(),
+        "a producer that could not run emits no rows"
+    );
+    assert_eq!(
+        fused.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::ExecutionFailed {
+            reason: "the index was unavailable".to_owned(),
+        }),
+        "and the reason it could not run is carried verbatim, not refused"
+    );
+}
+
+/// **A stream that will not describe its own end is refused; the same rows with
+/// a declared end are not.**
+///
+/// `NeverEndingSource` is the one refusal this crate raises about a producer's
+/// *silence* rather than about a row, and it has an in-crate author:
+/// [`RankedStreamImpl`] returns it when a receipt is asked for before the rows
+/// are drained, because a completeness claim from a partially read stream is
+/// exactly the falsifiable status the protocol forbids. Both halves are executed
+/// on one stream here — the same producer, asked the same question, before and
+/// after it has actually finished — so the refusal cannot be mistaken for a
+/// property of the stream rather than of the moment it was asked.
+#[test]
+fn a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end_fuse() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+
+    // The violation, at the fusion boundary: the producer emits a row and then
+    // reports that it has no end to declare.
+    let never_ending = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                Step::Fail(ProtocolError::NeverEndingSource),
+            ],
+            exhausted(0),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        never_ending,
+        &profile,
+        TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::NeverEndingSource)
+        ),
+        "expected NeverEndingSource, got {result:?}"
+    );
+
+    // THE NEIGHBOURING CASE: the same rows, from a producer that does declare
+    // its end. It fuses, and the trailer reports the count it declared.
+    let terminating = vec![(
+        stratum("text"),
+        MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+    )];
+    let fused = block_on(run_fuse(terminating, &profile));
+    assert_eq!(fused.rows.len(), 1);
+    assert_eq!(
+        fused.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 1 })
+    );
+
+    // And the same pair on the in-crate producer that actually mints the
+    // refusal. Asked too early it refuses; asked after its rows ran out — one
+    // more pull, nothing else changed — it answers with the count it emitted.
+    let mut stream = RankedStreamImpl::new(vec![(1, Term::new("a")), (2, Term::new("b"))]);
+    assert!(
+        block_on(stream.next())
+            .expect("the first row pulls")
+            .is_some()
+    );
+    assert!(
+        matches!(
+            block_on(stream.receipt()),
+            Err(ProtocolError::NeverEndingSource)
+        ),
+        "a partially read stream may not describe its own completeness"
+    );
+    assert!(
+        block_on(stream.next())
+            .expect("the second row pulls")
+            .is_some()
+    );
+    assert!(
+        block_on(stream.next()).expect("the stream ends").is_none(),
+        "the rows ran out"
+    );
+    assert_eq!(
+        block_on(stream.receipt()).expect("a drained stream has a receipt"),
+        ProducerReceipt::Exhausted { rows_emitted: 2 },
+        "the very same stream, asked once its rows had run out, answers"
+    );
+}
+
+/// **The two profile bounds are refused at zero and admitted at one.**
+///
+/// `K >= 1` and "at least one stratum weight" are both stated as minimums, and a
+/// minimum is the refusal most likely to be set one too high: the whole
+/// difference between a law and an over-refusal is whether the boundary value
+/// itself is admitted. So each is executed at the value it rejects and at the
+/// smallest value it must accept, and the admitted profile is not merely
+/// constructed — it computes a contribution, and it fuses a stream.
+#[test]
+fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused() {
+    let one_weight = || BTreeMap::from([(stratum("text"), Fixed::ONE)]);
+
+    // The violation: a smoothing constant of zero. Rank one would then carry the
+    // whole weight and the reciprocal would be undefined at rank zero.
+    for decay in [
+        DecayRule::ReciprocalRank { k: 0 },
+        DecayRule::WeightedReciprocalRank { k: 0 },
+    ] {
+        let result = FusionProfile::with_decay(one_weight(), decay);
+        assert!(
+            matches!(result, Err(FusionError::InvalidK { k: 0 })),
+            "expected InvalidK for {decay:?}, got {result:?}"
+        );
+    }
+
+    // THE NEIGHBOURING CASE: `K = 1`, the smallest constant the law admits,
+    // under both rules. Each must construct and each must compute.
+    for decay in [
+        DecayRule::ReciprocalRank { k: 1 },
+        DecayRule::WeightedReciprocalRank { k: 1 },
+    ] {
+        let smallest = FusionProfile::with_decay(one_weight(), decay)
+            .expect("K = 1 is the smallest constant the law admits");
+        assert_eq!(smallest.k_parameter(), 1);
+        assert_eq!(smallest.decay(), decay);
+        let value = contribution_under(smallest.decay(), Fixed::ONE, 1)
+            .expect("the admitted constant computes a contribution at rank one");
+        assert!(
+            value > Fixed::ZERO,
+            "a profile at the boundary produces a real contribution, got {value:?}"
+        );
+    }
+
+    // The violation: no stratum weights at all. Checked under a valid `K`, so
+    // the dimension under test is the only one that can fail.
+    let result = FusionProfile::with_decay(BTreeMap::new(), DecayRule::ReciprocalRank { k: K });
+    assert!(
+        matches!(result, Err(FusionError::EmptyWeights)),
+        "expected EmptyWeights, got {result:?}"
+    );
+
+    // THE NEIGHBOURING CASE: exactly one weight, which is the smallest set that
+    // is not empty. It constructs, it derives a contribution maximum of one, and
+    // it fuses a stream under the stratum it names.
+    let single = FusionProfile::with_decay(one_weight(), DecayRule::ReciprocalRank { k: K })
+        .expect("one stratum weight is a profile");
+    assert_eq!(
+        single.max_contributions(),
+        1,
+        "one stratum, one contribution maximum"
+    );
+    assert_eq!(single.weight(&stratum("text")), Some(Fixed::ONE));
+    let fused = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+        )],
+        &single,
+    ));
+    assert_eq!(fused.rows.len(), 1, "a one-stratum profile fuses");
+    assert_eq!(
+        fused.rows[0].score,
+        contribution(Fixed::ONE, 1, K).expect("fits")
     );
 }
