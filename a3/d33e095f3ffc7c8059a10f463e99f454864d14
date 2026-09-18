@@ -1,0 +1,17 @@
+ghprsq PR head backlink metadata
+
+parent_hashes: a3d33e095f3ffc7c8059a10f463e99f454864d14
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 321
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/321
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: c7162796256d25e382fdcd7a3b6f673dc0eaefe9
+GhpRsq-Head-Ref: paudley/319-design-a-composition-layer-over-the
+GhpRsq-Head-OID: a3d33e095f3ffc7c8059a10f463e99f454864d14
+GhpRsq-Result-Tree: 03fda7005f0ccfd9b13b70880d89f25d748c18d7
+GhpRsq-Result-Commit: 24d35262240b25de90135142a092b68ce317b7d1
+GhpRsq-Parent-Hashes: a3d33e095f3ffc7c8059a10f463e99f454864d14
+GhpRsq-Squash-Notes-SHA256: 1feff11e854d4b4a9205c2b7734077433a35e3613ed9698c96b8e00a0e6cfa72
