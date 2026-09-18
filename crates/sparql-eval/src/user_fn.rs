@@ -961,6 +961,10 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
             child.expression_barrier.record(certificate.tripped());
             ctx.bnode_counter = child.bnode_counter;
             ctx.rng_state = child.rng_state;
+            // The body's attestations survive the truncation for the same reason the
+            // minted identity state does: a relation the body invoked really did serve
+            // this query, and the caller's receipt is the only place that fact can land.
+            ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
             return Ok(None);
         }
     };
@@ -1003,6 +1007,10 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     ctx.bnode_counter = child.bnode_counter;
     ctx.rng_state = child.rng_state;
     ctx.constructed.append(&mut child.constructed);
+    // And the body's relation attestations: a SHACL-AF function body is SPARQL like any
+    // other and may invoke a registered relation, so what that relation attested belongs
+    // on the CALLING query's receipt — there is no second receipt for a function body.
+    ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
 
     // `sh:returnType` is informational (SHACL-AF §5.3): it documents/casts the
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a

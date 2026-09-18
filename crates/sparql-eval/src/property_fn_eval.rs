@@ -92,7 +92,8 @@ use crate::eval::EvalCtx;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::property_fn::{
-    PfArgs, PfArity, PropertyFunction, next_contained, open_contained, take_work_contained,
+    PfArgs, PfArity, PropertyFunction, ServiceLevel, generation_contained, next_contained,
+    open_contained, service_level_contained, take_work_contained,
 };
 use crate::row_ingest::{GovernedRowIngest, RowAdmission};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -494,17 +495,31 @@ fn eval_call_over<D: DatasetView + Sync>(
             .map(|ceiling| u64::try_from(ceiling.saturating_sub(rows.len())).unwrap_or(u64::MAX));
         let mut cursor =
             open_contained(relation.as_ref(), &call.iri, &pf_args, invocation_ceiling)?;
+        // The generation, read HERE and once: an index-backed relation pins its snapshot
+        // when it opens, so this is the instant at which "which version is answering" is
+        // true of every row this cursor will go on to emit. See `PfCursor::generation`.
+        let generation = generation_contained(&*cursor, &call.iri)?;
+        // Whether the pull loop below is ending this INVOCATION or the whole input loop.
+        // The outer break is deferred by one statement rather than taken from inside the
+        // pull loop, because every exit from it — exhausted, ceiling, governor, stop
+        // signal — is the end of an invocation and owes the attestation read afterwards.
+        // That is what gives a relation which discovers a missing shard on its
+        // four-hundredth pull somewhere to say so, instead of only one which knew at
+        // `open`.
+        let mut stop_input = false;
 
         loop {
             if let Some(governor) = ctx.stop_check() {
                 tripped = Some(governor);
-                break 'input;
+                stop_input = true;
+                break;
             }
             // The semantic ceiling: rows past it cannot reach the query's answer, so
             // this node stops producing. It is a plan licence, not a governor, so it
             // ends the work without certifying a truncation.
             if ceiling.is_some_and(|ceiling| rows.len() >= ceiling) {
-                break 'input;
+                stop_input = true;
+                break;
             }
             let pulled = next_contained(&mut *cursor, &call.iri)?;
             // The `property-function-work` charge point. Read after EVERY pull, the
@@ -517,7 +532,8 @@ fn eval_call_over<D: DatasetView + Sync>(
             let work = take_work_contained(&mut *cursor, &call.iri)?;
             if let Err(governor) = ctx.charge_occurrences(ChargePoint::PropertyFunctionWork, work) {
                 tripped = Some(governor);
-                break 'input;
+                stop_input = true;
+                break;
             }
             let Some(emitted) = pulled else {
                 break;
@@ -541,7 +557,8 @@ fn eval_call_over<D: DatasetView + Sync>(
             match ingest.admit(ctx, rows.len()) {
                 RowAdmission::Abandoned(governor) => {
                     tripped = governor;
-                    break 'input;
+                    stop_input = true;
+                    break;
                 }
                 RowAdmission::Admitted => {}
             }
@@ -561,6 +578,31 @@ fn eval_call_over<D: DatasetView + Sync>(
                 row[column] = ctx.scratch.intern_checked(ctx.dataset, value);
             }
             rows.push(row);
+        }
+
+        // The invocation has ENDED — drained, or stopped by this engine at a ceiling, a
+        // governor, or a stop signal. Every one of those is a moment at which the
+        // relation may know something the engine never can: that the index it just served
+        // from was not whole. `PfCursor::service_level` is read here, and only here, so
+        // that a shortfall discovered late still has a channel.
+        let service = service_level_contained(&*cursor, &call.iri)?;
+        // Witnessed or fatal. An entry point that carries a `RelationWitness` labels the
+        // short bag and hands it back; one that does not cannot, so it refuses rather
+        // than return rows indistinguishable from a complete answer. See
+        // `EvalError::RelationIncomplete` for why there is no third option, and
+        // `EvalCtx::witnessing` for why this is a property of the entry point rather than
+        // a caller's choice.
+        if !ctx.witnessing
+            && let ServiceLevel::Incomplete { reason } = &service
+        {
+            return Err(EvalError::relation_incomplete(&call.iri, reason));
+        }
+        // One record per invocation that entered host code — the same executions the
+        // `property-function-invocation` charge point prices, so the receipt and the
+        // meter cannot come to describe different runs.
+        ctx.witness.record(&call.iri, generation, service);
+        if stop_input {
+            break 'input;
         }
     }
 

@@ -249,7 +249,11 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         crate::governor::ChargePoint::RowExpressionEvaluation,
     );
     let rows = if ctx.may_fork_row_loop(expr) {
-        crate::parallel::par_chunk_try_map_init(
+        // Harvesting, not plain: a predicate can reach a property function through an
+        // embedded `EXISTS`, and that call's attestation is recorded on the WORKER's
+        // context. Dropping it would make a governed receipt depend on whether the row
+        // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
+        let (rows, witnesses) = crate::parallel::par_chunk_try_map_init(
             &seq.rows,
             || ctx.fork_for_worker(),
             |child, acc, row| {
@@ -258,7 +262,10 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
                 }
                 Ok(())
             },
-        )?
+            |child| core::mem::take(&mut child.witness),
+        )?;
+        ctx.absorb_worker_witnesses(witnesses);
+        rows
     } else {
         let mut rows = Vec::new();
         for row in seq.rows {
@@ -321,7 +328,10 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
         // never observed here — no per-row `current_row` bookkeeping is needed.
         let base = ctx.scratch.computed_count();
-        let minted = crate::parallel::par_chunk_try_map_init(
+        // Harvesting, for `eval_filter`'s reason: a `BIND` expression can reach a
+        // property function through an embedded `EXISTS`, and the worker's attestation
+        // must reach the parent's receipt.
+        let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
             &seq.rows,
             || ctx.fork_for_worker(),
             |child, acc, in_row| {
@@ -332,7 +342,9 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 Ok(())
             },
+            |child| core::mem::take(&mut child.witness),
         )?;
+        ctx.absorb_worker_witnesses(witnesses);
         minted
             .into_iter()
             .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))

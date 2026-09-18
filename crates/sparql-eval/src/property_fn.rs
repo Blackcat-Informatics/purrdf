@@ -204,6 +204,123 @@ impl<'a> PfArgs<'a> {
 /// filter, and echoing the input is simply the case where nothing is ever dropped.
 pub type PfRow = Vec<TermValue>;
 
+// ---------------------------------------------------------------------------
+// What a cursor attests about the index behind it
+// ---------------------------------------------------------------------------
+
+/// Which version of a relation's backing index answered one invocation.
+///
+/// # Why the engine cannot mint this
+///
+/// A relation is host code over host state. Two runs of the same query, over the same
+/// dataset, under the same registry, can legitimately give different rows because the
+/// index behind a relation was rebuilt between them — and nothing the evaluator can
+/// observe changes. The query text is the same, the dataset snapshot is the same, the
+/// registry fingerprint (`crate::property_fn_plan::registry_fingerprint`) is the same,
+/// because a rebuild changes no declaration. The one party that knows a rebuild
+/// happened is the cursor, so the generation has to travel from there or not at all.
+///
+/// # Caller-declared, recorded verbatim
+///
+/// [`Self::Declared`] carries the host's own spelling of its generation, byte-for-byte,
+/// and the engine never parses, orders by meaning, or interprets it. It is emphatically
+/// **not** minted here from a clock, a wall time, a counter, or an RNG: a value this
+/// crate invented would be a different number on every run and on every machine, which
+/// would make every receipt disagree with every other one and prove nothing. It would
+/// also be untrue — the engine has no idea when the index was built. (`purrdf-retrieval`
+/// has a sibling notion in its `Statistics::revision`, and the relationship is
+/// deliberately one of analogy only: this crate takes no dependency on that one, and a
+/// host that has such a revision passes its spelling in here itself.)
+///
+/// # Why `Undeclared` is a first-class value
+///
+/// Most relations are not index-backed at all — an in-memory table, a computation over
+/// its arguments, a walk over the dataset already being queried. Asking those to invent
+/// a generation would be asking them to fabricate evidence. [`Self::Undeclared`] is the
+/// honest absence, and it is what the default [`PfCursor::generation`] returns, so a
+/// relation written before this seam existed keeps saying the true thing.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IndexGeneration {
+    /// The relation declared no generation: it is not index-backed, or its index is
+    /// unversioned. An absence, never a claim that the index was current.
+    Undeclared,
+    /// The relation's own spelling of the generation that answered, recorded verbatim.
+    Declared(String),
+}
+
+/// Whether a relation served an invocation from a WHOLE index, said so far as it can
+/// say anything: the one fact only the relation knows, and the one it is asked for.
+///
+/// # Why there is no `Whole` variant, and never will be
+///
+/// The obvious third variant — a relation certifying that its index was complete — is
+/// absent by design, because the seam that would carry it cannot distinguish the two
+/// situations it would have to distinguish.
+///
+/// The first is the module header's argument: "I stopped early" and "I am exhausted"
+/// are the same empty cursor. Nothing the engine sees on the way out of a drained
+/// invocation tells it which of the two happened, which is exactly why the row ceiling
+/// [`PropertyFunction::open`] receives is documented as a licence and not a contract
+/// (see [`PropertyFunction`]'s "The ceiling is a licence, not a contract"). A relation
+/// that stopped at the engine's ceiling is **not** incomplete — it answered the
+/// question it was licensed to answer, in full — so it must not be recorded as such;
+/// and it equally could not honestly certify wholeness, because it never looked at the
+/// rows it was licensed to skip.
+///
+/// So the seam asks the narrower question, the one with an honest answer on every path:
+/// *was your index NOT whole?* A shard that failed to load, a segment still being
+/// rebuilt, a replica that has not caught up — those are facts the relation holds
+/// directly and can state without inspecting anything it skipped.
+///
+/// # `Undeclared` is silence, not a completeness claim
+///
+/// [`Self::Undeclared`] means the relation said nothing, and a reader must not upgrade
+/// it to "the index was whole". It is the default for every relation that never
+/// overrides [`PfCursor::service_level`], which is every relation written before this
+/// seam existed — reading silence as certification would retroactively put a claim in
+/// each of their mouths that none of them made.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ServiceLevel {
+    /// The relation declared nothing about its index's wholeness. The default, and an
+    /// absence rather than a certificate of completeness.
+    Undeclared,
+    /// The relation declares that its index was **not** whole when it served this
+    /// invocation, and states why in its own words.
+    Incomplete {
+        /// The relation's own description of what was missing — a shard name, a
+        /// rebuild phase, a replica lag. Recorded verbatim and never parsed, for the
+        /// same reason [`IndexGeneration::Declared`]'s string is.
+        reason: String,
+    },
+}
+
+/// The pair of facts one invocation attests about the index behind it: which version
+/// answered, and whether that version was whole.
+///
+/// Carried as one value rather than two loose fields because the two are read at
+/// different instants of the same invocation (see [`PfCursor::generation`] and
+/// [`PfCursor::service_level`]) and are only meaningful together: a generation without
+/// a service level says which index answered but not whether it was all there, and a
+/// service level without a generation says an index was short without saying which one
+/// a caller would have to rebuild.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PfAttestation {
+    /// The generation read immediately after the cursor opened.
+    pub generation: IndexGeneration,
+    /// The service level read when the invocation ended.
+    pub service: ServiceLevel,
+}
+
+impl PfAttestation {
+    /// The attestation of a relation that declared neither fact — what every cursor
+    /// that overrides neither method attests, named once so the "said nothing" value
+    /// has one spelling everywhere instead of being re-assembled at each site.
+    pub const UNDECLARED: Self = Self {
+        generation: IndexGeneration::Undeclared,
+        service: ServiceLevel::Undeclared,
+    };
+}
+
 /// The row stream of one invocation, drained by the engine.
 ///
 /// A cursor is opened, drained, and dropped inside a single invocation, so it never
@@ -280,6 +397,47 @@ pub trait PfCursor {
     /// buy the same execution.
     fn take_work(&mut self) -> u64 {
         0
+    }
+
+    /// Which version of the backing index is answering this invocation.
+    ///
+    /// Read by the evaluator **immediately after [`open_contained`] returns**, and once
+    /// per invocation. That instant is not an implementation convenience: an index-backed
+    /// relation pins its snapshot when it opens, so "which generation is answering" is
+    /// true from that moment and stays true for every row this cursor goes on to emit.
+    /// Reading it later would let a rebuild that landed mid-drain be reported as the
+    /// generation that produced rows it did not produce.
+    ///
+    /// # Default
+    ///
+    /// [`IndexGeneration::Undeclared`] — the same defaulting precedent
+    /// [`Self::take_work`] set, and for the same reason: every relation written before
+    /// this method existed keeps compiling, keeps answering, and says the one true thing
+    /// about itself rather than being made to invent a version it does not have. See
+    /// [`IndexGeneration`] for why this value is never minted engine-side.
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::Undeclared
+    }
+
+    /// Whether the index behind this cursor was **not** whole while it served this
+    /// invocation.
+    ///
+    /// Read by the evaluator when the invocation **ENDS** — after this cursor has
+    /// returned `Ok(None)`, and equally when the engine stopped pulling at its own row
+    /// ceiling, at a governor trip, or at a stop signal. The end, not the beginning,
+    /// because a shard discovered missing on the four-hundredth pull is exactly the case
+    /// this channel exists for, and a reading taken at `open` would have no way to carry
+    /// it. A cursor that knew at `open` that it was short simply answers the same way at
+    /// both instants; one that learns late still has somewhere to say so.
+    ///
+    /// # Default
+    ///
+    /// [`ServiceLevel::Undeclared`], by the same defaulting precedent as
+    /// [`Self::take_work`] and [`Self::generation`]. Note carefully what the default is
+    /// NOT: it is silence, not a certificate that the index was whole — see
+    /// [`ServiceLevel`] for why no such certificate is askable at this seam at all.
+    fn service_level(&self) -> ServiceLevel {
+        ServiceLevel::Undeclared
     }
 }
 
@@ -584,7 +742,12 @@ impl RankedDeclaration {
 }
 
 /// Append a length-framed canonical field to `out`.
-fn push_canonical_field(out: &mut String, value: &str) {
+///
+/// `pub(crate)` rather than private because [`crate::witness`] encodes its own
+/// canonical record with the identical framing: one length-framed-field discipline for
+/// the whole crate means two encodings written years apart cannot come to disagree
+/// about what "framed" means.
+pub(crate) fn push_canonical_field(out: &mut String, value: &str) {
     out.push_str(&value.len().to_string());
     out.push(':');
     out.push_str(value);
@@ -788,6 +951,44 @@ pub fn take_work_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<u64, 
             "property function <{iri}> panicked while reporting its work"
         ))),
     }
+}
+
+/// Read `cursor`'s [`PfCursor::generation`] with the host call contained.
+///
+/// The fourth member of the [`open_contained`]/[`next_contained`]/[`take_work_contained`]
+/// family, for the fourth thing a cursor can be asked. A generation read is host code
+/// exactly as `next` is — a lazily-formatted version string that indexes a slice out of
+/// bounds, an assertion left in by mistake — and it runs on whichever worker drove the
+/// invocation, so it crosses the same boundary. The message is fixed and payload-free
+/// for the determinism reason the shared containment helper states: a query's reported
+/// text must not depend on which thread panicked.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the declared generation.
+pub fn generation_contained(
+    cursor: &dyn PfCursor,
+    iri: &str,
+) -> Result<IndexGeneration, EvalError> {
+    declaration_contained(iri, "index generation", || cursor.generation())
+}
+
+/// Read `cursor`'s [`PfCursor::service_level`] with the host call contained.
+///
+/// The [`generation_contained`] twin, for the other attested fact and the other instant
+/// it is read at (the end of the invocation rather than its start — see
+/// [`PfCursor::service_level`]). Same containment, same fixed payload-free message
+/// shape, for the same reason.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of the declared service
+/// level.
+pub fn service_level_contained(
+    cursor: &dyn PfCursor,
+    iri: &str,
+) -> Result<ServiceLevel, EvalError> {
+    declaration_contained(iri, "service level", || cursor.service_level())
 }
 
 /// Read one of a relation's DECLARATIONS — `arity`, `modes`, `volatility`, or
