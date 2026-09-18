@@ -716,6 +716,9 @@ impl BaseScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use proptest::test_runner::{Config, TestRunner};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn base_requires_a_scheme() {
@@ -841,5 +844,219 @@ mod tests {
         assert!(absolute.iter().all(|r| empty.check(r).is_ok()));
         assert!(relative.iter().all(|r| empty.check(r).is_err()));
         assert!(relative.iter().all(|r| rooted.check(r).is_ok()));
+    }
+
+    /// A generated-reference strategy for [`check_agrees_with_resolve_over_generated_references`].
+    ///
+    /// The 14 references above were hand-chosen to hit each branch once; this
+    /// generator exists to hit the same branches from thousands of different
+    /// angles instead of the one angle a human thought of. A strategy that just
+    /// throws `".*"` at the parser would overwhelmingly produce early syntax
+    /// errors that `resolve` and `check` both refuse identically for a boring
+    /// reason, which is a property test that never exercises the interesting
+    /// disagreement surface (an absolute reference `check` fast-paths past
+    /// `resolve`'s classification). So each arm below targets one shape the
+    /// grammar treats specially — absolute IRIs (hierarchical and opaque),
+    /// scheme-relative and rooted-relative forms, dot-segment relative paths,
+    /// the query-only/fragment-only/empty same-document forms, percent-encodings
+    /// (both well-formed and truncated/invalid), IPv6 literal authorities
+    /// (valid and malformed), non-ASCII IRI characters, and the gen-delims/
+    /// sub-delims/control-character boundary — with the absolute and rooted arms
+    /// weighted heavily enough that a real fraction of generated cases resolve
+    /// successfully rather than refuse.
+    fn generated_reference() -> impl Strategy<Value = String> {
+        let scheme = prop::sample::select(vec!["http", "https", "ftp", "urn", "mailto", "tag"]);
+        let host = "[a-z][a-z0-9-]{0,10}(\\.[a-z][a-z0-9-]{0,10}){0,2}";
+        let seg = "[a-zA-Z0-9._~!$&'()*+,;=-]{0,8}";
+        let segs = prop::collection::vec(seg, 0..4);
+        let part = "[a-zA-Z0-9._~!$&'()*+,;=:@/?-]{0,10}";
+        let dot_form = prop::sample::select(vec![
+            ".",
+            "..",
+            "./",
+            "../",
+            "a/./b",
+            "a/../b",
+            "./a",
+            "../a",
+            "a/b/../../c",
+            "..%2fa",
+            "a/..",
+            "a/.",
+        ]);
+        let ipv6 = prop::sample::select(vec![
+            "//[::1]/x",
+            "//[2001:db8::1]:8080/x",
+            "//[::1",
+            "//[fe80::1%25eth0]/x",
+            "//[::1]:port/x",
+            "//[gggg::1]/x",
+        ]);
+        let non_ascii = prop::sample::select(vec!["café", "北京", "🎉", "naïve", "Ω", "e\u{0301}"]);
+        let boundary_char = prop::sample::select(vec![
+            ' ', '<', '>', '"', '{', '}', '|', '\\', '^', '`', '\u{0}', '\u{7f}',
+        ]);
+        let percent_bad = prop::sample::select(vec!["%zz", "%a", "%", "%1", "%gg", "%-1"]);
+
+        prop_oneof![
+            // Absolute, hierarchical IRIs with an authority, optional query and
+            // fragment, and occasional dot segments that must survive verbatim
+            // (RDF Concepts §3.2) rather than being resolved away.
+            6 => (
+                scheme.clone(),
+                host,
+                segs.clone(),
+                prop::option::of(part),
+                prop::option::of(part)
+            )
+                .prop_map(|(s, h, segs, q, f)| {
+                    let mut out = format!("{s}://{h}");
+                    for seg in &segs {
+                        out.push('/');
+                        out.push_str(seg);
+                    }
+                    if let Some(q) = q {
+                        out.push('?');
+                        out.push_str(&q);
+                    }
+                    if let Some(f) = f {
+                        out.push('#');
+                        out.push_str(&f);
+                    }
+                    out
+                }),
+            // Absolute, opaque (no-authority) IRIs: `scheme:opaque-part`.
+            3 => (scheme.clone(), seg).prop_map(|(s, o)| format!("{s}:{o}")),
+            // Network-path reference: `//host/path...` — relative, has no scheme.
+            4 => (
+                "[a-z][a-z0-9-]{0,10}(\\.[a-z][a-z0-9-]{0,10}){0,2}",
+                segs.clone()
+            )
+                .prop_map(|(h, segs)| {
+                    let mut out = format!("//{h}");
+                    for seg in &segs {
+                        out.push('/');
+                        out.push_str(seg);
+                    }
+                    out
+                }),
+            // Rooted-relative: `/path...`.
+            4 => segs.clone().prop_map(|segs| {
+                let mut out = String::new();
+                for seg in &segs {
+                    out.push('/');
+                    out.push_str(seg);
+                }
+                if out.is_empty() {
+                    out.push('/');
+                }
+                out
+            }),
+            // Dot-segment-only relative-path references.
+            3 => dot_form.prop_map(str::to_owned),
+            // The empty, same-document reference.
+            1 => Just(String::new()),
+            // Fragment-only and query-only same-document references.
+            2 => part.prop_map(|f| format!("#{f}")),
+            2 => part.prop_map(|q| format!("?{q}")),
+            // Percent-encoding stress: a well-formed octet or a malformed one,
+            // spliced into a path segment.
+            3 => (prop::bool::ANY, seg).prop_map(|(valid, s)| {
+                let pct = if valid { "%41" } else { "%zz" };
+                format!("/{s}{pct}")
+            }),
+            2 => percent_bad.prop_map(|p| format!("/{p}")),
+            // IPv6 literal authorities, valid and malformed.
+            3 => ipv6.prop_map(str::to_owned),
+            // Non-ASCII / IRI characters (RFC-3987 `ucschar`), which the RFC-3986
+            // URI grammar rejects and the RFC-3987 IRI grammar admits.
+            3 => (non_ascii, segs.clone()).prop_map(|(n, segs)| {
+                let mut out = format!("/{n}");
+                for seg in &segs {
+                    out.push('/');
+                    out.push_str(seg);
+                }
+                out
+            }),
+            // Boundary/delimiter and control characters the grammar treats
+            // specially, spliced into an otherwise plausible path.
+            3 => (boundary_char, seg).prop_map(|(c, s)| format!("/{s}{c}{s}")),
+            // A fully-unstructured fallback so nothing the structured arms above
+            // happen to miss is systematically excluded.
+            2 => ".{0,30}",
+        ]
+    }
+
+    /// [`check_agrees_with_resolve_on_every_reference`] proves agreement on 14
+    /// hand-chosen references. This proves the same agreement — acceptance AND,
+    /// on refusal, [`IriError::diagnostic_code`] — across thousands of GENERATED
+    /// ones drawn from [`generated_reference`], under the same two scopes.
+    ///
+    /// The accepted/refused counts are asserted non-trivially non-zero at the
+    /// end for the same reason the hand-written test counts its fixed cases: a
+    /// generator that only ever produces syntax garbage would make this
+    /// property vacuously true without ever reaching the accept path `check`
+    /// fast-paths past `resolve`.
+    #[test]
+    fn check_agrees_with_resolve_over_generated_references() {
+        let rooted = BaseScope::rooted(
+            BaseIri::parse("http://example.org/a/b").unwrap(),
+            BaseOrigin::Caller,
+        );
+        let empty = BaseScope::empty();
+
+        let accepted = AtomicUsize::new(0);
+        let rejected = AtomicUsize::new(0);
+
+        let mut runner = TestRunner::new(Config {
+            cases: 4096,
+            failure_persistence: None,
+            ..Config::default()
+        });
+        runner
+            .run(&generated_reference(), |reference| {
+                for (name, scope) in [("rooted", &rooted), ("empty", &empty)] {
+                    let resolved = scope.resolve(&reference);
+                    let checked = scope.check(&reference);
+                    if resolved.is_ok() {
+                        accepted.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        rejected.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if resolved.is_ok() != checked.is_ok() {
+                        return Err(TestCaseError::fail(format!(
+                            "{name}: check and resolve disagree on accepting {reference:?}: \
+                             resolve_ok={} check_ok={}",
+                            resolved.is_ok(),
+                            checked.is_ok()
+                        )));
+                    }
+                    if let (Err(expected), Err(actual)) = (&resolved, &checked)
+                        && expected.diagnostic_code() != actual.diagnostic_code()
+                    {
+                        return Err(TestCaseError::fail(format!(
+                            "{name}: check and resolve refuse {reference:?} for different \
+                             reasons: resolve={} check={}",
+                            expected.diagnostic_code(),
+                            actual.diagnostic_code()
+                        )));
+                    }
+                }
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("{error}"));
+
+        let accepted = accepted.load(Ordering::Relaxed);
+        let rejected = rejected.load(Ordering::Relaxed);
+        assert!(
+            accepted > 100,
+            "generator produced too few accepted references ({accepted}) to prove agreement \
+             on the accept path check short-circuits"
+        );
+        assert!(
+            rejected > 100,
+            "generator produced too few rejected references ({rejected}) to prove agreement \
+             on the refuse path, including which diagnostic_code() is reported"
+        );
     }
 }
