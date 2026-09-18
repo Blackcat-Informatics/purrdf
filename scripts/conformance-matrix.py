@@ -1070,7 +1070,7 @@ def native_suites() -> list[SuiteResult]:
                 "dimension against a uniform control, and the achieved within-cluster "
                 "cosine -- measured against the centroid each row was drawn around, "
                 "pinned across a ladder of intended values, pinned again for the default "
-                "shape every figure in this crate uses, and held flat across a sixteenfold "
+                "shape every figure in this crate uses, and held flat across a sixty-fourfold "
                 "range of widths, which is the property that separates an intended cosine "
                 "from a fixed noise amplitude whose tightness collapses as the width "
                 "grows. The cross-target digest is a separate gate "

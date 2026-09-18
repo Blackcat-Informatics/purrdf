@@ -209,6 +209,15 @@ fn pinned(cosine: f64) -> i64 {
     (cosine * 1e6).round() as i64
 }
 
+/// How far the achieved cosine may sit from the intended one before the parameter is not being
+/// honoured.
+///
+/// One constant for both tests that judge it, because they are judging the same thing: the
+/// ladder asks whether `rho` is achieved at one width across four values, and the invariance
+/// test asks whether it is achieved at every width for one value. Two thresholds would let the
+/// same corpus be honoured by one test and not the other.
+const INTENDED_COSINE_TOLERANCE: f64 = 0.02;
+
 /// The shape the tightness tests vary, with everything but the cosine held fixed.
 fn tightness_shape(dims: usize, cosine: f64) -> CorpusShape {
     CorpusShape {
@@ -255,7 +264,7 @@ fn the_intended_cluster_cosine_is_the_cosine_the_corpus_achieves() {
     for (asked, got) in intended.into_iter().zip(&achieved) {
         let got = *got as f64 / 1e6;
         assert!(
-            (got - asked).abs() < 0.02,
+            (got - asked).abs() < INTENDED_COSINE_TOLERANCE,
             "a corpus asked for an intended cosine of {asked} achieved {got}"
         );
     }
@@ -296,11 +305,17 @@ const WIDTHS: [usize; 6] = [64, 128, 256, 512, 1024, 4096];
 /// NOT a sampling nicety -- it is what makes the invariance bound mean anything. The achieved
 /// cosine of one corpus is a draw: the projection and the centroids are sampled ONCE per corpus
 /// and bias every row in it identically, so the statistic has a per-corpus spread that more rows
-/// cannot reduce (measured flat at 512, 2,048 and 8,192 rows). At one seed that spread is about
-/// 26,700 at six decimals -- larger than the 20,000 bound this file used to hold widths to, so
-/// the invariance assertion was comparing a number against a tolerance below its own noise
-/// floor and could not have told invariance from luck. Averaging the draw is the fix; averaging
-/// the rows is not.
+/// cannot reduce (measured flat at 512, 2,048 and 8,192 rows: sd 13,768 / 12,428 / 11,959 at
+/// six decimals for a sixteenfold increase in rows).
+///
+/// The spread of ONE corpus, over 64 seeds, is sd 11,870 at `d = 256` and 7,998 at `d = 1024`,
+/// with observed 64-draw spans of 59,241 and 34,581. That is why the 20,000 bound this file
+/// used to hold widths to could not have told invariance from luck: it sat below the scatter of
+/// the quantity it bounded. Quoting the spread as an eight-draw SPAN, as an earlier version of
+/// this comment did, understates it about twofold -- a span is a low-biased, n-dependent
+/// estimator, which is the same small-sample mistake that produced the old bound, one level up.
+///
+/// Averaging the draw is the fix; averaging the rows is not.
 const SEEDS: [u64; 8] = [
     0xC051_5EED,
     0x0000_0001,
@@ -544,7 +559,7 @@ fn latent_fixed_amplitude_noise_is_width_invariant_and_still_not_what_we_want() 
     );
 
     let span =
-        achieved.iter().max().expect("three widths") - achieved.iter().min().expect("three widths");
+        achieved.iter().max().expect("six widths") - achieved.iter().min().expect("six widths");
     assert!(
         span < WIDTH_SPAN_BOUND,
         "the latent variant must be width-invariant; if it ever tracks the width then the \
@@ -571,9 +586,10 @@ fn the_latent_variants_tightness_moves_with_everything_except_the_thing_you_want
     // of these would be flat at the intended cosine by construction -- that is what `rho` buys.
     //
     // One seed per rung, unlike the width-invariance tests: those assert a span is SMALL and so
-    // must out-resolve the per-corpus scatter of about 26,700, while these assert a span is
-    // LARGE, and 185,144 and 483,406 clear that scatter by 7x and 18x. A claim of no-difference
-    // needs the noise floor beaten; a claim of difference this size does not.
+    // must out-resolve the per-corpus scatter, while these assert a span is LARGE. At the
+    // d = 1024 these sweeps run at, one corpus's observed 64-draw span is 34,581; the sweeps
+    // measure 185,144 and 483,406, clearing it by 5.4x and 14x. A claim of no-difference needs
+    // the noise floor beaten; a claim of difference this size does not.
     let by_intrinsic: Vec<i64> = [8, 32, 128]
         .into_iter()
         .map(|intrinsic| {
@@ -655,6 +671,33 @@ fn cluster_tightness_is_the_same_at_every_width() {
         "the achieved within-cluster cosine moved at one or more widths"
     );
 
+    // THE ANCHOR, and the span bound below is not safe without it. A span is a RELATIVE
+    // statement: it says the widths agree with each other, never that they agree with the
+    // number the caller asked for. A corpus whose cosine drifts monotonically downward by 0.044
+    // across this range -- twice what the ladder above calls the line between "honoured" and
+    // "correlated with", and landing at 0.70, which the ambient control presents as the DEFECT
+    // -- fits inside [`WIDTH_SPAN_BOUND`] and passes a span test with the message "must not
+    // track the width". Demonstrated by injecting exactly that drift.
+    //
+    // The anchor has no noise-floor problem to trade against, which is why it can be tight
+    // where the span bound cannot: [`SEEDS`] is fixed and the statistic is a pure function of
+    // it, so this is an exact deterministic quantity rather than a draw. Tightest current
+    // margin is 0.0127 at `d = 128`, 63% of the allowance.
+    //
+    // It also covers the widths nothing else reaches. The only other assertion that the
+    // achieved cosine is NEAR the intended one runs at `d = 256` and at the default shape;
+    // every bench rung in this crate is 4,096, where -- until this assertion -- nothing checked
+    // the value at all, only that it resembled its neighbours.
+    for (dims, got) in WIDTHS.into_iter().zip(&achieved) {
+        let measured = *got as f64 / 1e6;
+        assert!(
+            (measured - 0.75).abs() < INTENDED_COSINE_TOLERANCE,
+            "at width {dims} the achieved cosine {measured} is further than \
+             {INTENDED_COSINE_TOLERANCE} from the intended 0.75; the parameter is not being \
+             honoured at this width, however well the widths agree with one another"
+        );
+    }
+
     // The bound is not a tolerance widened to fit a measurement, and that is now a measured
     // statement rather than a claim: the control above runs the rejected parameterisation over
     // the same widths and the same statistic, and its span must EXCEED this bound for that
@@ -662,8 +705,8 @@ fn cluster_tightness_is_the_same_at_every_width() {
     // must come in under it, the rejected one must not -- and neither side is a number anybody
     // typed into a comment.
     let (low, high) = (
-        *achieved.iter().min().expect("three widths"),
-        *achieved.iter().max().expect("three widths"),
+        *achieved.iter().min().expect("six widths"),
+        *achieved.iter().max().expect("six widths"),
     );
     assert!(
         high - low < WIDTH_SPAN_BOUND,
