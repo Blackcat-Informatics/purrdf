@@ -20,12 +20,16 @@ unoptimized default it used to. It is still not a bench: `make bench` runs under
 `bench`/`release`, which additionally carries fat LTO and `codegen-units = 1`.
 Quote a criterion number, not a test's wall clock.
 
-There are two benchmark layers:
+There are three benchmark layers. The third is not a timing layer at all: it
+produces the *input* the other measurements are taken over, and it is here
+because a capacity number whose corpus nobody can regenerate is a number nobody
+can check.
 
 | Layer | What it measures | How to run |
 | --- | --- | --- |
 | **Rust criterion suites** | The native engine hot paths — IR layout, codecs, SPARQL evaluation, SHACL validation, GTS authoring, and wasm wrapper overhead. | `make bench` |
 | **Python compat harness** | `purrdf.compat.rdflib` (the native-backed drop-in) vs. the real `rdflib` 7.x, on the operations a drop-in user actually calls. | `make bench-python` |
+| **Scale corpus** | Nothing, by itself. It *generates* the deterministic mixed corpus (`purrdf-scale-mixed-v1`) that a capacity capture is measured against, and reports what it produced. | `make scale-corpus` |
 
 ## Native-layer benchmarks (criterion)
 
@@ -682,3 +686,143 @@ The takeaway is not a single multiplier but a shape: the shim's advantage is in
 native bulk work, and its cost is boundary-crossing per Python object. Which
 matters for *your* workload is exactly what `make bench-python` is for — run it
 on your host with a corpus close to your data before drawing conclusions.
+
+## Scale corpus (`purrdf-scale-mixed-v1`)
+
+The other two layers measure code. This one produces **input**: a deterministic,
+shardable N-Quads corpus whose IRI shapes are deliberately adversarial, so a
+capacity number measured over it cannot have been flattered by a corpus that
+front-codes perfectly. It times nothing and gates nothing. What it gives a
+reader is the ability to regenerate, byte for byte, the exact corpus a capacity
+claim was measured over.
+
+The generator is `crates/bench` (`bench-corpus`, unpublished tooling); the lane
+that drives it across shards is `scripts/scale-corpus.sh`, run as
+`make scale-corpus`. It is deliberately **not** part of `make bench`: criterion
+suites are a different layer, and this one produces bytes rather than timings.
+
+```sh
+make scale-corpus                                   # stream 10^6 rows over 8 shards, keep nothing
+make scale-corpus SCALE_QUADS=10000000 SCALE_SHARDS=32
+make scale-corpus SCALE_MODE=pipe | your-loader     # ordered whole run, nothing stored
+make scale-corpus SCALE_MODE=files SCALE_OUT=/mnt/big/corpus
+```
+
+### Parameters
+
+Every knob is an overridable `make` variable, in the same style as `BENCH_ARGS`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SCALE_QUADS` | `1000000` | Total rows across all shards. One slot emits exactly one line, so this is also the line count. |
+| `SCALE_IRIS` | `100000` | Distinct-IRI target: entity IRIs are minted from indexes `0..iris`, drawn with a `sqrt`-CDF skew. |
+| `SCALE_SEED` | `1592642302` | The `splitmix64` seed folded into every derivation (the generator's own default, in decimal). |
+| `SCALE_SHARDS` | `8` | How many independent shards the row sequence is cut into. |
+| `SCALE_MODE` | `stream` | `stream` (parallel shards, each piped to a sink, nothing retained), `pipe` (ordered whole run on stdout), `files` (opt-in materialization). |
+| `SCALE_OUT` | *(unset)* | Output directory; **required** by `SCALE_MODE=files`, which refuses to run without it. |
+| `SCALE_SINK` | *(unset)* | Replaces the built-in digest sink in `stream` mode with any command that reads standard input. |
+| `SCALE_MANIFEST` | *(unset)* | Writes the manifest to this path instead of the mode's default destination. |
+
+### What a capture records
+
+A capture of this lane is **the manifest plus the digest of the output** —
+neither half is evidence on its own. The manifest (`bench-corpus --manifest`,
+emitted by every mode) carries the profile id, the seed, the quad and IRI
+counts, the shard's row range, and both mixes: `class_mix_per_mille` over the
+entity space (plain 400, numeric-long 200, chinese 200, irregular 150,
+very-long 50) and `row_mix_per_mille` over the emitted rows (entity-edge 500,
+plain-literal 150, zh-literal 100, typed-literal 100, long-text-literal 50,
+reified 60, blank-node 40). The digest says which bytes were actually consumed.
+A manifest without a digest describes a corpus nobody proved was produced; a
+digest without a manifest is a number with no parameters attached.
+
+### Density, and why full scale is streamed rather than stored
+
+Measured, not estimated: at `--quads 2000000 --iris 1000000 --seed 31337` the
+corpus is 354,824,007 bytes over 2,000,000 rows — **177.4 bytes per row**. That
+figure is a property of the profile and its parameters rather than of the host —
+the same specification produces the same bytes on every target — and it moves by
+a byte or two with `SCALE_IRIS`, because a smaller entity space means shorter
+indexes inside the IRIs (the default 10^5-IRI lane reports 175.2). The lane
+prints the density it actually observed on every run, so a change to the mixes
+shows up in the report instead of silently invalidating this paragraph.
+
+The arithmetic that follows is the whole design constraint:
+
+| Rows | Approximate N-Quads bytes |
+| ---: | ---: |
+| 10^6 | 177 MB |
+| 10^9 | 177 GB |
+| 10^10 | **1.77 TB** |
+
+So a run at 10^10 rows is a **1.77 TB** corpus. That is an operator-driven,
+off-CI activity, and it should be **streamed into whatever consumes it rather
+than stored**: `SCALE_MODE=pipe` hands a loader the same bytes an unsharded run
+would have produced, and the default `stream` mode hands each shard to a sink
+and keeps nothing at all. `SCALE_MODE=files` exists for the operator who has a
+filesystem that can hold the run and a reason to keep it; it is opt-in, it
+demands an explicit `SCALE_OUT`, and no continuous-integration runner has the
+disk for it.
+
+### Sharding: what is a property of the algorithm, and what is not
+
+Every IRI is minted **purely from its index** under a fixed seed. Nothing in
+shard `k` depends on anything shard `j` computed, so the shards are independent
+processes over disjoint slices of one row sequence and need no coordination —
+no shared dictionary, no ordering barrier, no merge step. That independence is a
+property of the **algorithm**, and it holds at any scale, because it is a
+statement about what the generator reads (an index) rather than about how big
+the run is.
+
+What has actually been *run* is a different and smaller claim, and the two
+should not be confused. The driver runs shards concurrently, and byte-exact
+stitching is verified at sizes a disk can hold: a whole unsharded run and a
+sharded run of the same specification produce identical bytes, both through
+`SCALE_MODE=pipe` and through `cat` of the `SCALE_MODE=files` output. A
+10^10-row run has a 1.77 TB storage requirement and is nobody's smoke test; the
+table above is the honest reason it is described as arithmetic rather than
+reported as a demonstration.
+
+In `files` mode each shard is written as:
+
+```
+purrdf-scale-mixed-v1.seed<SEED>.quads<QUADS>.iris<IRIS>.shard-00003-of-00016.nq
+```
+
+The shard index and shard count are zero-padded to at least five digits (wider
+counts widen the field), so the files sort lexicographically into shard order
+and `cat <prefix>.shard-*.nq` reproduces a whole run byte for byte. The
+whole-run manifest is written beside them as `<prefix>.manifest.json`, and each
+shard gets its own `<shard>.manifest.json` recording that shard's row range.
+
+### What the corpus covers, and what it does not
+
+It covers, at pinned shares: five IRI classes chosen to defeat a single
+dictionary trick (front-codable plain, 36-digit zero-padded numerics beyond
+machine integer widths, raw-Han Chinese, host-scattered irregular with
+reserved-octet escapes, and very-long at ~628 bytes); entity-to-entity edges;
+plain, language-tagged (`@zh`), long-text and `xsd:`-typed literals over four
+datatypes with lexical forms valid for their datatype; blank nodes in subject
+and object position; RDF 1.2 reifier rows binding a triple term; 8 predicates;
+and a sixth of rows spread over 16 named graphs, drawn independently of row
+kind so literals appear inside named graphs at the corpus-wide rate. The entity
+draw is skewed (`sqrt`-CDF), so the corpus has hot subjects rather than a flat
+distribution.
+
+It does **not** cover: any workload. There is no query mix, no update stream,
+no schema or shapes, and no ingest timing here — this layer generates bytes, and
+the harness that consumes them is what records a capacity number. It is also a
+single synthetic profile: its mixes are pinned constants chosen to be
+adversarial, not a model of any real dataset's shape, and a corpus of your own
+data remains the only thing that answers a question about your own data.
+
+### Continuous integration
+
+`.github/workflows/benchmarks.yaml` runs a **smoke** of this lane — 10^6 rows
+(~177 MB) streamed through a digest with nothing retained — before the long
+bench steps, so a generator that stopped working is reported in a minute rather
+than after two hours. It is a liveness check on the generator and its driver,
+not a measurement, and like everything else in that workflow it does not gate a
+merge. Full scale never runs there: the runners do not have the disk, and a step
+that wrote a large file would be a bug in this document's arithmetic, not a
+better test.

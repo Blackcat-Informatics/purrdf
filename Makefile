@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -227,6 +227,26 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 bench: ## Run criterion benchmarks (report-only; never a gate).
 	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
 
+# The scale-corpus lane's knobs. Overridable exactly like BENCH_ARGS above:
+# `make scale-corpus SCALE_QUADS=10000000 SCALE_SHARDS=16`. The defaults are a
+# small streamed run because the profile emits ~177 bytes per row — a 10^10-row
+# run is ~1.77 TB, which is streamed, not stored. SCALE_MODE=files is the only
+# mode that writes anything, and it refuses to run without SCALE_OUT.
+SCALE_QUADS ?= 1000000
+SCALE_IRIS ?= 100000
+SCALE_SEED ?= 1592642302
+SCALE_SHARDS ?= 8
+SCALE_MODE ?= stream
+SCALE_OUT ?=
+SCALE_SINK ?=
+SCALE_MANIFEST ?=
+
+scale-corpus: ## Generate the deterministic scale corpus across shards (streams and retains nothing by default; report-only, never a gate). See docs/BENCHMARKS.md.
+	SCALE_QUADS=$(SCALE_QUADS) SCALE_IRIS=$(SCALE_IRIS) SCALE_SEED=$(SCALE_SEED) \
+	SCALE_SHARDS=$(SCALE_SHARDS) SCALE_MODE=$(SCALE_MODE) SCALE_OUT=$(SCALE_OUT) \
+	SCALE_SINK=$(SCALE_SINK) SCALE_MANIFEST=$(SCALE_MANIFEST) \
+	bash scripts/scale-corpus.sh
+
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
 
@@ -296,6 +316,12 @@ cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetche
 	python3 scripts/cnschema-probe.py --self-test
 	python3 scripts/cnschema-probe.py
 
+# `purrdf-bench` is unpublished tooling rather than a release crate, and it is in
+# this list anyway: its library half documents itself as portable, and a
+# portability claim that no gate builds is carried by whoever last ran the build
+# by hand. Only the LIBRARY is built here (this recipe passes `--lib`); the
+# `bench-corpus` binary is std-only — files, process arguments, an exit code —
+# and stays deliberately out of the wasm surface.
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
@@ -304,7 +330,8 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
 			-p purrdf-geo -p purrdf-text -p purrdf-retrieval \
-			-p purrdf-validate -p purrdf -p purrdf-wasm; \
+			-p purrdf-validate -p purrdf -p purrdf-wasm \
+			-p purrdf-bench; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	elif ! command -v rustup >/dev/null 2>&1; then \

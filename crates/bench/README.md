@@ -35,5 +35,19 @@ cargo run -p purrdf-bench -- --quads 1000000 --iris 100000 --manifest
 cargo run -p purrdf-bench --release -- --quads 1000000 --iris 100000 --shard 3 --shards 16
 ```
 
+## The lane that drives it
+
+`scripts/scale-corpus.sh` (`make scale-corpus`) runs the shards and is
+documented in [`docs/BENCHMARKS.md`](../../docs/BENCHMARKS.md), which owns the
+parameters, the manifest-plus-digest capture rule and the storage arithmetic.
+
+Index-pure minting means shard `k` needs no coordination with shard `j` — no
+shared dictionary, no ordering barrier, no merge — so shards are independent
+processes at any scale. That is a property of the algorithm, and it is not the
+same as a claim that any particular run has been performed: the corpus is
+**177.4 bytes per row** measured, so 10^10 rows is ~1.77 TB. A run that size is
+streamed into whatever consumes it, not stored, which is why the lane's default
+mode keeps nothing and writing shard files is opt-in.
+
 The comparison-workload drivers (externally specified suites) will join this
 crate once their upstream artifacts clear the acquisition/licensing review.

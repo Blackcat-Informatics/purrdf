@@ -142,6 +142,7 @@ make check      # the full local gate: fmt, clippy, build, tests, hygiene
 make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
 make bench      # criterion benchmarks (report-only; not a gate)
+make scale-corpus  # generate the deterministic scale corpus (streams; stores nothing by default)
 make build-profile-hygiene  # prove the gate is compiled the way it claims
 ```
 
