@@ -335,6 +335,87 @@ impl ToleratedDepth {
     }
 }
 
+/// How many consecutive ranks one indifference class runs to.
+///
+/// This is a **count of ranks**, not a depth, which is why it is neither
+/// [`MonotoneDepth`] nor [`ToleratedDepth`] and cannot borrow either of their
+/// cases. `MonotoneDepth::SeparatesTo` asserts that every adjacent pair up to a
+/// depth is distinct and `ToleratedDepth::ReadsTo` asserts that a read stopping
+/// at a depth stays inside a tolerance; a width asserts neither of those things
+/// about anything. It says only how many ranks one contribution covers, and a
+/// variant that carried a depth claim alongside it would assert something the
+/// measurement never established — the precise defect that kept the two depth
+/// types apart from each other.
+///
+/// The saturating case is spelled for the reason both siblings spell theirs. A
+/// plan records a per-stratum depth as a `u32`, so the widest class that can be
+/// counted end to end is one that ends inside that range; a class still running
+/// at the last expressible rank has no counted end, and `u32::MAX` there is the
+/// search's ceiling rather than a width anybody measured. Under the truncated
+/// rule at a raw weight of one every contribution truncates to zero, so the run
+/// is unbounded — and at a raw weight of fifty, fifty times heavier, it is
+/// unbounded too. A bare number says those two classes are the same width and
+/// invites a caller to log it, plot it, or divide by it; the saturating case
+/// says only what is true, which is that neither class ends inside any plan's
+/// reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClassWidth {
+    /// The class is exactly this many consecutive ranks wide, both of its ends
+    /// found inside the range a plan can express. One means the rank is
+    /// separated from both of its neighbours. Exact, not a conservative
+    /// estimate.
+    SpansTo(u64),
+    /// The class is still running at the deepest rank a plan is able to
+    /// express, so no end was found inside that range and there is no width to
+    /// report — not an enormous one. This claims that the far end was not
+    /// found, which is all the search establishes; whether the class stops at
+    /// that last rank or runs on past it is a question about ranks no plan can
+    /// carry, and one the probe never asked.
+    ExceedsAnyPlan,
+}
+
+impl ClassWidth {
+    /// Read a counted class, given the 1-based ranks that bound it, as the
+    /// saturating quantity it is.
+    ///
+    /// `last` at or past [`MAX_DEPTH`] is the search's ceiling rather than the
+    /// class's end: the probe never looks deeper, so what it found is "still
+    /// equal at the last rank a plan can express" and not "equal up to here and
+    /// different after".
+    #[must_use]
+    pub(crate) const fn from_bounds(first: u64, last: u64) -> Self {
+        if last >= MAX_DEPTH {
+            Self::ExceedsAnyPlan
+        } else {
+            Self::SpansTo(last.saturating_sub(first).saturating_add(1))
+        }
+    }
+
+    /// Whether this class is no wider than `max_width`.
+    ///
+    /// A class with no end inside any plan's reach is never within a tolerance,
+    /// which is the opposite polarity to [`MonotoneDepth::covers`] and
+    /// [`ToleratedDepth::covers`] and is so for a reason: saturating there means
+    /// "no bound was ever exceeded", while saturating here means "the bound was
+    /// exceeded before the range ran out".
+    #[must_use]
+    pub const fn fits_within(self, max_width: u64) -> bool {
+        match self {
+            Self::ExceedsAnyPlan => false,
+            Self::SpansTo(width) => width <= max_width,
+        }
+    }
+
+    /// The width as a number, when there is one to report.
+    #[must_use]
+    pub const fn width(self) -> Option<u64> {
+        match self {
+            Self::ExceedsAnyPlan => None,
+            Self::SpansTo(width) => Some(width),
+        }
+    }
+}
+
 /// The largest 1-based depth at which `weight`'s contributions are still
 /// **strictly** decreasing with rank under `decay`.
 ///
@@ -475,6 +556,13 @@ fn first_collision(
 /// hundred at ten million, and ten thousand at a hundred million. Reporting only
 /// whether the bound was crossed would flatten that into one bit.
 ///
+/// The growth has an end, which is why the answer is a [`ClassWidth`] rather
+/// than a number. A class that is still running at the deepest rank a plan can
+/// express has no counted width — under the truncated rule at a raw weight of
+/// one every contribution truncates to zero, so rank one's class is the whole
+/// expressible range, and so it is at a raw weight of fifty. That case is
+/// [`ClassWidth::ExceedsAnyPlan`], not the ceiling handed back as a count.
+///
 /// Both ends are found with [`largest_rank_satisfying_checked`] rather than by
 /// walking: contributions are non-increasing in the rank, so "is this rank's
 /// contribution at least `v`" and "is it strictly above `v`" are both
@@ -497,7 +585,11 @@ fn first_collision(
 /// favourable thing this function can say about a profile's resolution; saying
 /// it because the arithmetic failed would be a false claim about the quality of
 /// an answer, made exactly where no answer was computed at all.
-pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<u64, FusionError> {
+pub(crate) fn class_width(
+    decay: DecayRule,
+    weight: Fixed,
+    rank: u64,
+) -> Result<ClassWidth, FusionError> {
     // The law before the question, and stated here rather than left to the
     // anchor's own arithmetic: the three entry points over this file must agree
     // about what an unusable constant is, and agreeing by accident of which
@@ -519,7 +611,9 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<
         Ok(contribution_under(decay, weight, probe)? > value)
     })?;
     let first = before_first.saturating_add(1);
-    Ok(last.saturating_sub(first).saturating_add(1))
+    // `last` at the ceiling is where the search stopped looking, not where the
+    // class stopped. Counting to it would quote the walk's own limit as a width.
+    Ok(ClassWidth::from_bounds(first, last))
 }
 
 /// The deepest **depth** that can be read with every rank in it sitting in a
@@ -535,25 +629,31 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<
 /// depth that orders perfectly, which is the same defect as refusing it.
 ///
 /// With `max_width` of one this therefore agrees exactly with
-/// [`monotone_depth`] — and [`class_width`] at the returned depth reports at
-/// least two, never one, for exactly that reason: the class the *unbounded*
-/// curve puts that rank in also looks at rank `r + 1`, the one rank the bounded
-/// read never reaches.
+/// [`monotone_depth`] — and [`class_width`] at the returned depth never reports
+/// a class of one, for exactly that reason: the class the *unbounded* curve puts
+/// that rank in also looks at rank `r + 1`, the one rank the bounded read never
+/// reaches.
 ///
 /// That offset is a law at every tolerance. The walk returns `D` only once
 /// `run_start..=D + 1` — `max_width + 1` consecutive ranks, `D` among them —
 /// have been observed to share one contribution, and `class_width(D)` measures
 /// the whole maximal run containing `D`. So `class_width` at this function's
-/// answer is **never** `max_width` and never one; it is at least
-/// `max_width + 1`. It is exactly `max_width + 1` when the run that ended the
-/// walk is exactly one rank longer than the tolerance, which is the ordinary
-/// case wherever the curve is smooth at that depth, and it is wider where the
-/// run is longer still: under the truncated rule at a raw weight of `10^3` a
-/// tolerance of two lands on a depth whose full class is four, and a tolerance
-/// of 4096 lands on a depth whose class runs to the end of the expressible
-/// range, because there every deeper contribution has truncated to the same
-/// value. The two functions are agreeing in all of those cases, not
-/// disagreeing; they are answering a depth question and a rank question.
+/// answer is **never** `max_width` and never one; where it counts a width at all
+/// that width is at least `max_width + 1`. It is exactly `max_width + 1` when
+/// the run that ended the walk is exactly one rank longer than the tolerance,
+/// which is the ordinary case wherever the curve is smooth at that depth, and it
+/// is wider — sometimes far wider — where the run is longer still. Under the
+/// truncated rule at a raw weight of `10^3` a tolerance of two lands on a depth
+/// whose full class is four; at a raw weight of `10^2` a tolerance of one lands
+/// on depth one, whose full class is forty, so the bound is the only claim that
+/// holds across weights and the `max_width + 1` equality is the smooth case
+/// rather than the rule. Where the run reaches the end of the expressible range
+/// — a tolerance of 4096 at a raw weight of `10^3`, or any tolerance at a raw
+/// weight of one, where every contribution has truncated to the same value —
+/// there is no width to compare at all and [`class_width`] answers
+/// [`ClassWidth::ExceedsAnyPlan`]. The two functions are agreeing in all of
+/// those cases, not disagreeing; they are answering a depth question and a rank
+/// question.
 ///
 /// The same truncation argument generalizes to any `max_width`. Suppose a run
 /// of mutually colliding ranks begins at `run_start`, and the first depth at
@@ -1289,9 +1389,9 @@ fn weighted_guarantee(weight_raw: u128, k: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_DEPTH, MonotoneDepth, ToleratedDepth, class_width, contribution, contribution_under,
-        deepest_rank_within_width, first_collision, minimum_weight_for_depth, monotone_depth,
-        shortfall_at, weighted_contribution, weighted_guarantee,
+        ClassWidth, MAX_DEPTH, MonotoneDepth, ToleratedDepth, class_width, contribution,
+        contribution_under, deepest_rank_within_width, first_collision, minimum_weight_for_depth,
+        monotone_depth, shortfall_at, weighted_contribution, weighted_guarantee,
     };
     use crate::error::FusionError;
     use crate::fusion_profile::DecayRule;
@@ -1868,7 +1968,7 @@ mod tests {
                 assert_eq!(
                     class_width(rule(1), weight, rank)
                         .expect("the smallest usable constant measures a width"),
-                    1,
+                    ClassWidth::SpansTo(1),
                     "{:?} rank {rank}: this weight separates it from both neighbours",
                     rule(1)
                 );
@@ -1921,7 +2021,7 @@ mod tests {
 
         assert_eq!(
             class_width(truncated(1), weight, 4).expect("a constant of one is usable"),
-            1,
+            ClassWidth::SpansTo(1),
             "rank four is inside the separating range at this weight"
         );
         assert!(
@@ -2112,7 +2212,7 @@ mod tests {
             );
             assert_eq!(
                 class_width(decay, Fixed::ONE, 1).expect("rank one is a rank"),
-                1,
+                ClassWidth::SpansTo(1),
                 "{decay:?}: rank one is separated from its neighbour at a unit weight"
             );
         }

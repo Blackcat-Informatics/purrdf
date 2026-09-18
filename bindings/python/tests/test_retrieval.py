@@ -114,6 +114,22 @@ def _measured_depth(depth: int | None) -> int:
     return depth
 
 
+def _counted_width(width: int | None) -> int:
+    """A class width that was counted end to end rather than run off the range.
+
+    ``retrieval.class_width`` answers ``None`` when the class is still running
+    at the deepest rank a plan can express, which is a saturation point and not
+    a count. Every call below that is meant to land on a counted class says so
+    through here, so a case that silently starts saturating fails where it is
+    asked rather than being compared as a number.
+    """
+    assert width is not None, (
+        "this call was expected to count a class that ends inside a plan's "
+        "range, and reported that it has no end there at all"
+    )
+    return width
+
+
 NOTE_ONLY = _producers((NOTE_PRODUCER, NOTE_STRATUM, NOTE))
 BOTH = _producers(
     (NOTE_PRODUCER, NOTE_STRATUM, NOTE),
@@ -811,8 +827,8 @@ def test_class_width_asks_about_arithmetic_and_needs_no_stratum() -> None:
     # and still exact under the folded one at the same rank.
     heavy = 1000 * retrieval.SCALE
     deep = 16 * _truncated_saturation(60)
-    coarse = retrieval.class_width(heavy, 60, deep, decay=TRUNCATED)
-    fine = retrieval.class_width(heavy, 60, deep, decay=FOLDED)
+    coarse = _counted_width(retrieval.class_width(heavy, 60, deep, decay=TRUNCATED))
+    fine = _counted_width(retrieval.class_width(heavy, 60, deep, decay=FOLDED))
     assert coarse > 1, "the truncated rule has lost resolution by this depth"
     assert fine < coarse, "and the folded rule has not"
 
@@ -828,7 +844,47 @@ def test_class_width_asks_about_arithmetic_and_needs_no_stratum() -> None:
 
     with pytest.raises(ValueError, match="strictly positive"):
         retrieval.class_width(0, 60, 4, decay=TRUNCATED)
-    assert retrieval.class_width(1, 60, 4, decay=TRUNCATED) >= 1
+    # A raw weight of one IS evaluable — the refusal above is about the zero and
+    # nothing else — and what it evaluates to is the saturating case, because
+    # every contribution at that weight has truncated to zero. It is `None`, not
+    # a number: see the test below for why that distinction is load-bearing.
+    assert retrieval.class_width(1, 60, 4, decay=TRUNCATED) is None
+
+
+def test_a_class_with_no_end_inside_a_plans_range_is_none_and_not_a_number() -> None:
+    """The wall the width curve runs into, told as a wall.
+
+    A plan records a per-stratum depth as a 32-bit rank, so the search for the
+    class's far end stops there. A class still running at that rank has no
+    counted end, and ``2 ** 32 - 1`` would be the search's own ceiling handed
+    back as a measurement — a number a caller can log, plot or divide by, quoted
+    where nothing was counted.
+
+    Raw weights of one and fifty are **fifty times apart** and both saturate:
+    under either rule every contribution has truncated to the same value, so the
+    class at rank one is the whole expressible range in both cases. A bare
+    number reported them as the identical width ``4294967295``.
+    """
+    for raw in (1, 50):
+        for decay in (TRUNCATED, FOLDED):
+            for rank in (1, 4, 1000):
+                assert retrieval.class_width(raw, 60, rank, decay=decay) is None, (
+                    f"{decay}, raw {raw}, rank {rank}: this class has no end "
+                    "inside a plan's range to count to"
+                )
+
+    # The neighbouring weights whose classes DO end inside the range still
+    # report counts, so the saturating case is about the measurement and not
+    # about light weights in general. Every magnitude here was executed.
+    for raw, decay, measured in (
+        (99, TRUNCATED, 38),
+        (99, FOLDED, 39),
+        (100, TRUNCATED, 40),
+        (100, FOLDED, 40),
+    ):
+        assert retrieval.class_width(raw, 60, 1, decay=decay) == measured, (
+            f"{decay}, raw {raw}: this class ends inside the range and is counted"
+        )
 
 
 def test_deepest_rank_within_width_asks_about_arithmetic_and_needs_no_stratum() -> None:
@@ -979,10 +1035,11 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
     claim "the deepest rank still separated from both its neighbours" would
     predict at a tolerance of one, and that claim was wrong in exactly this way.
     The relation is an inequality and not an equality because the run that ends
-    the walk can be longer than the tolerance by more than a rank: it is exactly
-    ``max_width + 1`` at every case executed here, and two wider than the
-    tolerance under the truncated rule at a raw weight of ``10 ** 6`` with a
-    tolerance of fifty.
+    the walk can be longer than the tolerance by more than a rank. At the heavy
+    weight below it happens to be exactly ``max_width + 1``, which is why the
+    light weights are executed here too: at a raw weight of ``10 ** 2`` a
+    tolerance of one lands on depth one and the class there is **forty** ranks
+    wide, so equality is the smooth case rather than the law.
 
     That is the same "depth, not a rank property" distinction this function's
     own documentation draws, and it means the class at ``D`` and at ``D + 1``
@@ -1005,8 +1062,12 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
             depth = _measured_depth(
                 retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=decay)
             )
-            at_depth = retrieval.class_width(heavy, 60, depth, decay=decay)
-            one_deeper = retrieval.class_width(heavy, 60, depth + 1, decay=decay)
+            at_depth = _counted_width(
+                retrieval.class_width(heavy, 60, depth, decay=decay)
+            )
+            one_deeper = _counted_width(
+                retrieval.class_width(heavy, 60, depth + 1, decay=decay)
+            )
             assert at_depth >= max_width + 1, (
                 f"{decay}, max_width {max_width}: the reported depth already sits "
                 "in an over-tolerance class on the unbounded curve, which also "
@@ -1033,3 +1094,32 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
                 f"{named_depth} must itself separate to exactly that depth, "
                 f"got {round_tripped}"
             )
+
+    # The same law where it is NOT trivially true. These raw weights are four
+    # orders of magnitude lighter than `heavy`, their contributions collapse
+    # within the first handful of ranks, and a tolerance of one therefore lands
+    # on depth ONE with a class tens of ranks wide. ">= max_width + 1" is all
+    # that holds here; "two at a tolerance of one" is false by a factor of
+    # twenty. Every magnitude below was executed.
+    for raw, decay, measured in (
+        (100, TRUNCATED, 40),
+        (100, FOLDED, 40),
+        (121, TRUNCATED, 60),
+        (121, FOLDED, 61),
+        (200, TRUNCATED, 6),
+        (1000, TRUNCATED, 2),
+    ):
+        depth = _measured_depth(
+            retrieval.deepest_rank_within_width(raw, 60, 1, decay=decay)
+        )
+        assert depth == 1, (
+            f"{decay}, raw {raw}: these weights stop separating immediately"
+        )
+        at_depth = _counted_width(retrieval.class_width(raw, 60, depth, decay=decay))
+        assert at_depth == measured, (
+            f"{decay}, raw {raw}: the class at the reported depth, measured"
+        )
+        assert at_depth >= 2, (
+            f"{decay}, raw {raw}: the reported depth is never the one a "
+            "'separated from both neighbours' reading would predict"
+        )

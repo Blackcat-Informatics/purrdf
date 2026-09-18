@@ -158,9 +158,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::retrieval::{
-    AdmissionEnvironment, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri, Metric, Plan,
-    PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason, RequestTerm,
-    RetrievalRequest, SearchResult, Statistics, Term, ToleratedDepth, TopK, UnservedReason,
+    AdmissionEnvironment, ClassWidth, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri,
+    Metric, Plan, PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason,
+    RequestTerm, RetrievalRequest, SearchResult, Statistics, Term, ToleratedDepth, TopK,
+    UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
@@ -1424,6 +1425,16 @@ fn weight_for_depth(depth: u64, k: u32, decay: &str) -> PyResult<i128> {
 /// width of `w` means `w` consecutive ranks share a contribution, so their order
 /// in the answer is settled by the declared tie-break rather than by relevance.
 ///
+/// The answer is `None` when the class is still running at the deepest rank a
+/// plan can express, exactly as `retrieval.deepest_rank_within_width` reports
+/// its own saturation. A plan records a per-stratum depth as a 32-bit rank, so
+/// there is no end inside its reach to count to, and `2**32 - 1` would be the
+/// search's ceiling wearing a width's shape: under `"reciprocal_rank"` with a
+/// raw weight of one every contribution truncates to zero and rank one's class
+/// is the whole expressible range, and at a raw weight of fifty — fifty times
+/// heavier — it still is. An `int` there would say those two classes are the
+/// same size and invite a caller to log it, plot it, or divide by it.
+///
 /// This is the resolution curve, not the single point where it first exceeds
 /// one: knowing a depth is coarse by four ranks rather than ten thousand is the
 /// difference between an answer that is usable and one that is not. The curve
@@ -1446,7 +1457,7 @@ fn weight_for_depth(depth: u64, k: u32, decay: &str) -> PyResult<i128> {
 /// point no resolution was computed.
 #[pyfunction]
 #[pyo3(signature = (weight_raw, k, rank, *, decay))]
-fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64> {
+fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<Option<u64>> {
     if weight_raw <= 0 {
         return Err(PyValueError::new_err(format!(
             "a stratum weight is strictly positive, and {weight_raw} raw fixed-point units is \
@@ -1457,6 +1468,10 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64
     decay_rule(decay, k)
         .map_err(PyValueError::new_err)?
         .class_width(Fixed::from_raw(weight_raw), rank)
+        // The saturating case is rendered the way every other wall on this
+        // surface is: `None`, because the class has no end inside any plan's
+        // reach to count to, not an enormous width.
+        .map(ClassWidth::width)
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
@@ -1469,13 +1484,17 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64
 /// deepest depth a read can stop at with every rank it *actually read*
 /// separated from both of its neighbours within that read. It is a depth, not a
 /// rank property, and the difference is one call away: `retrieval.class_width`
-/// at that rank reports at least `max_width + 1` — two at a tolerance of one,
-/// never the one a "still separated from both neighbours" reading would predict
-/// — because the unbounded curve it walks also looks at the one rank the
-/// bounded read never reaches. It is exactly `max_width + 1` where the run that
-/// ends the walk is one rank longer than the tolerance, and wider where that
-/// run is longer still. The two agree; they are answering a depth question and
-/// a rank question. Larger tolerances
+/// at that rank never reports the one a "still separated from both neighbours"
+/// reading would predict, because the unbounded curve it walks also looks at the
+/// one rank the bounded read never reaches. Where it counts a width at all that
+/// width is at least `max_width + 1`, and it is exactly `max_width + 1` only
+/// where the run that ends the walk is one rank longer than the tolerance — the
+/// smooth case, not the rule. A light weight is where the difference shows:
+/// under `"reciprocal_rank"` with `k` of 60 and a raw weight of `10**2`, a
+/// tolerance of one lands on depth one, whose class is forty ranks wide. Where
+/// that run reaches the end of the expressible range `retrieval.class_width` is
+/// `None` there, having no width to compare. The two agree; they are answering
+/// a depth question and a rank question. Larger tolerances
 /// answer the question a caller reading deeply actually has: not "where does
 /// this stop being exact" but "how far can I read and still have ranks ordered
 /// to within the resolution I can live with".

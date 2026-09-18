@@ -21,7 +21,7 @@ use crate::error::FusionError;
 use crate::id::{FUSION_PROFILE_VERSION, FusionProfileId};
 use crate::iri::Iri;
 use crate::reciprocal_rank::{
-    MonotoneDepth, ToleratedDepth, class_width, deepest_rank_within_width,
+    ClassWidth, MonotoneDepth, ToleratedDepth, class_width, deepest_rank_within_width,
     minimum_weight_for_depth, monotone_depth,
 };
 
@@ -155,12 +155,19 @@ impl DecayRule {
     /// same answer looked up by stratum, for a caller that already holds a law
     /// and means one of the strata that law weights.
     ///
-    /// One means `rank` is still separated from both its neighbours by score
-    /// alone. A width of `w` means `w` consecutive ranks share a contribution,
-    /// so their relative order in a fused answer falls through to the declared
-    /// tie-break's later keys rather than being decided by relevance. This is
-    /// the resolution curve, of which [`Self::weight_for_depth`] prices a single
-    /// point.
+    /// [`ClassWidth::SpansTo`] of one means `rank` is still separated from both
+    /// its neighbours by score alone. A width of `w` means `w` consecutive ranks
+    /// share a contribution, so their relative order in a fused answer falls
+    /// through to the declared tie-break's later keys rather than being decided
+    /// by relevance. This is the resolution curve, of which
+    /// [`Self::weight_for_depth`] prices a single point.
+    ///
+    /// [`ClassWidth::ExceedsAnyPlan`] is a class still running at the deepest
+    /// rank a plan can express, which has no width to report rather than a huge
+    /// one. Under this rule at a raw weight of one every contribution truncates
+    /// to zero and rank one's class is the whole expressible range; at a raw
+    /// weight of fifty, fifty times heavier, it still is. A number there would
+    /// say those two classes are the same width.
     ///
     /// # Errors
     ///
@@ -173,7 +180,7 @@ impl DecayRule {
     /// one is the most favourable claim this algebra can make about a
     /// resolution, and making it where the arithmetic produced nothing would be
     /// a false claim at exactly the point no answer exists.
-    pub fn class_width(self, weight: Fixed, rank: u64) -> Result<u64, FusionError> {
+    pub fn class_width(self, weight: Fixed, rank: u64) -> Result<ClassWidth, FusionError> {
         class_width(self, weight, rank)
     }
 
@@ -192,13 +199,18 @@ impl DecayRule {
     /// read can stop at with every rank it **actually read** separated from
     /// both of its neighbours *within that read*. It is a depth, not a rank
     /// property, and the difference is visible one call away:
-    /// [`Self::class_width`] at that rank reports at least `max_width + 1` —
-    /// two at a tolerance of one, never the one a "still separated from both
-    /// neighbours" reading would predict — because the unbounded curve it walks
-    /// also looks at the one rank the bounded read never reaches. It is exactly
-    /// `max_width + 1` where the run that ends the walk is one rank longer than
-    /// the tolerance, and wider where that run is longer still. The two agree
-    /// in every such case; they are answering a depth question and a rank
+    /// [`Self::class_width`] at that rank never reports the one a "still
+    /// separated from both neighbours" reading would predict, because the
+    /// unbounded curve it walks also looks at the one rank the bounded read
+    /// never reaches. Where it counts a width at all that width is at least
+    /// `max_width + 1`, and it is exactly `max_width + 1` only where the run
+    /// that ends the walk is one rank longer than the tolerance — the smooth
+    /// case, not the rule. A light weight is where the difference shows: under
+    /// [`Self::ReciprocalRank`] with `k` of 60 at a raw weight of `10^2`, a
+    /// tolerance of one lands on depth one, whose class is forty ranks wide.
+    /// Where the run reaches the end of the expressible range there is no width
+    /// at all and the answer is [`ClassWidth::ExceedsAnyPlan`]. The two agree in
+    /// every such case; they are answering a depth question and a rank
     /// question. Larger tolerances answer the question a caller reading deeply
     /// actually has — not "where does this stop being exact" but "how far can I
     /// read and still have ranks ordered to within the resolution I can live
@@ -683,15 +695,22 @@ impl FusionProfile {
     /// How many consecutive ranks around `rank` this profile cannot tell apart
     /// in `stratum`.
     ///
-    /// One means `rank` is still separated from both neighbours. A width of `w`
-    /// means `w` consecutive ranks share a contribution, so their relative order
-    /// in the fused answer is decided by the tie-break's later keys — best
-    /// stratum rank ascending, then canonical term bytes — rather than by score.
+    /// [`ClassWidth::SpansTo`] of one means `rank` is still separated from both
+    /// neighbours. A width of `w` means `w` consecutive ranks share a
+    /// contribution, so their relative order in the fused answer is decided by
+    /// the tie-break's later keys — best stratum rank ascending, then canonical
+    /// term bytes — rather than by score.
     ///
     /// This is the resolution curve [`Self::monotone_depth`] reports a single
     /// point of. Past that point the width grows rather than jumping to
     /// nonsense, and knowing it is four ranks rather than ten thousand is the
     /// difference between an answer a caller can use and one it cannot.
+    ///
+    /// The growth ends at the range a plan can express, and a class still
+    /// running there is [`ClassWidth::ExceedsAnyPlan`] rather than the ceiling
+    /// counted as a width. Two weights fifty times apart both arrive there under
+    /// a light enough stratum — where every contribution has truncated to the
+    /// same value — and a bare number would say their classes are the same size.
     ///
     /// The width itself is [`DecayRule::class_width`], which takes a weight
     /// rather than a stratum. This is the same arithmetic reached by the name a
@@ -718,7 +737,7 @@ impl FusionProfile {
     /// assumed away, because the alternative is to report the most favourable
     /// width there is at exactly the point the arithmetic produced no width at
     /// all.
-    pub fn class_width(&self, stratum: &Iri, rank: u64) -> Result<Option<u64>, FusionError> {
+    pub fn class_width(&self, stratum: &Iri, rank: u64) -> Result<Option<ClassWidth>, FusionError> {
         let Some(weight) = self.weights.get(stratum) else {
             return Ok(None);
         };
@@ -731,11 +750,15 @@ impl FusionProfile {
     /// `max_width` of one is [`Self::monotone_depth`]: the separating depth
     /// itself, the deepest depth a read can stop at with every rank it
     /// **actually read** separated from both of its neighbours within that
-    /// read. [`Self::class_width`] at that rank reports at least `max_width + 1`
-    /// rather than one — two at a tolerance of one, and wider than
-    /// `max_width + 1` where the run that ends the walk is longer than the
-    /// tolerance by more than a rank — because the unbounded curve it walks
-    /// also looks at the one rank the bounded read never reaches; the two are
+    /// read. [`Self::class_width`] at that rank never reports one, because the
+    /// unbounded curve it walks also looks at the one rank the bounded read
+    /// never reaches. Where it counts a width at all that width is at least
+    /// `max_width + 1`; it is exactly `max_width + 1` only where the run that
+    /// ends the walk is one rank longer than the tolerance, and it is wider —
+    /// forty ranks at a tolerance of one, for a stratum light enough that its
+    /// separating depth is rank one — wherever that run is longer still. Where
+    /// the run reaches the end of the expressible range there is no width to
+    /// compare and the answer is [`ClassWidth::ExceedsAnyPlan`]. The two are
     /// answering a depth question and a rank question, and they agree. Larger tolerances answer
     /// the question a caller reading deeply actually has: not "where does this
     /// stop being exact" but "how far can I read and still have ranks ordered

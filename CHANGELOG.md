@@ -30,8 +30,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   without ever skipping one, so the weight it returns is the true minimum rather
   than whichever side of an oscillation a probe happened to land on.
   `MonotoneDepth` spells the separating depth's saturation point as a
-  distinct case so it cannot be mistaken for a measured depth, and
-  `ToleratedDepth` does the same for the depth a tolerance buys. The same
+  distinct case so it cannot be mistaken for a measured depth, `ToleratedDepth`
+  does the same for the depth a tolerance buys, and `ClassWidth` does the same
+  for a class that never ends inside the range a plan can express. The same
   surface is exposed to Python as `retrieval.weight_for_depth`,
   `retrieval.class_width` and `retrieval.deepest_rank_within_width`.
 
@@ -206,6 +207,43 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **retrieval:** `DecayRule::class_width` and `FusionProfile::class_width`
+  answer with the new `ClassWidth` rather than a bare `u64`, and the Python
+  `retrieval.class_width` answers `int | None` rather than `int`. The search for
+  a class's far end stops at the deepest rank a plan can express, so a class
+  still running there has no counted end -- and it now says that, as
+  `ClassWidth::ExceedsAnyPlan` and as `None`, rather than handing back
+  `2**32 - 1` as though it were a width somebody measured. Raw weights of one
+  and fifty are fifty times apart and both saturate under either rule, because
+  every contribution has truncated to the same value; the bare number reported
+  them as the identical width `4294967295`, a number a caller can log, plot or
+  divide by, quoted precisely where nothing was counted. It also contradicted
+  the function's own stated meaning, which is that a width of `w` is `w`
+  consecutive ranks the fused score treats as equal. `ClassWidth` is a third
+  type rather than a reuse of `MonotoneDepth` or `ToleratedDepth` because a
+  width is a count of ranks and neither of those cases is: `SeparatesTo` asserts
+  that every adjacent pair up to a depth is distinct and `ReadsTo` asserts that
+  a read stopping at a depth stays inside a tolerance, and a width establishes
+  neither. Its saturating case is also the opposite polarity -- a class with no
+  end is inside no tolerance, where a depth that never collides is inside every
+  one -- which `ClassWidth::fits_within` spells out beside `covers`. Confined to
+  `purrdf-retrieval` and its binding, which have not yet been published, so no
+  released API changes.
+- **retrieval:** The documented relationship between a tolerance and the class
+  at the depth it buys no longer claims an equality that does not hold. Four
+  places -- `DecayRule::deepest_rank_within_width`,
+  `FusionProfile::deepest_rank_within_width`, the Python docstring and
+  `__init__.pyi` -- said the width there is "at least `max_width + 1`, two at a
+  tolerance of one". The bound is right; the parenthetical is not. Under the
+  truncated rule with `k` of 60 at a raw weight of `10^2` a tolerance of one
+  lands on depth one, whose class is **forty** ranks wide, and at `10^2 + 21` it
+  is sixty. Equality holds only where the run that ends the walk is one rank
+  longer than the tolerance, which is the smooth case and is exactly the regime
+  the two accompanying tests pinned -- a raw weight of `10^6` in Rust and
+  `1000 * SCALE` in Python -- so neither could fail on it. The four sites now
+  state only the bound, and a light-weight case is executed at both Rust
+  altitudes and on the Python surface so that the corrected claim is held by a
+  test that can fail.
 - **retrieval:** `DecayRule::deepest_rank_within_width` and
   `FusionProfile::deepest_rank_within_width` answer with the new
   `ToleratedDepth` rather than a bare `u64`, and the Python

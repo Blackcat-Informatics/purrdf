@@ -15,10 +15,10 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult,
-    FusionStream, Iri, MonotoneDepth, PlanId, ProducerReceipt, ProducerStatus, ProtocolError,
-    RECIP_K, RankedStream, RankedStreamImpl, StreamContract, Term, ToleratedDepth, TopK,
-    contribution, contribution_under,
+    ClassWidth, DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId,
+    FusionResult, FusionStream, Iri, MonotoneDepth, PlanId, ProducerReceipt, ProducerStatus,
+    ProtocolError, RECIP_K, RankedStream, RankedStreamImpl, StreamContract, Term, ToleratedDepth,
+    TopK, contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -3094,11 +3094,11 @@ fn fusion_past_the_collision_is_deterministic() {
     let second = run();
     assert_eq!(first.rows, second.rows, "two runs agree row for row");
     assert!(
-        profile
+        !profile
             .class_width(&stratum("deep"), 200)
             .expect("the arithmetic evaluates")
             .expect("weighted")
-            > 1,
+            .fits_within(1),
         "this fixture must sit on a plateau, or it proves nothing about ties"
     );
 }
@@ -3432,7 +3432,7 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
             profile
                 .class_width(&stratum, rank)
                 .expect("the arithmetic evaluates"),
-            Some(1),
+            Some(ClassWidth::SpansTo(1)),
             "rank {rank} is inside the separating range, so it stands alone"
         );
     }
@@ -3443,19 +3443,26 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
         profile
             .class_width(&stratum, bound)
             .expect("the arithmetic evaluates"),
-        Some(2),
+        Some(ClassWidth::SpansTo(2)),
         "the bound is where the first collision begins"
     );
 
-    // Past it the classes are wider, and they keep widening.
+    // Past it the classes are wider, and they keep widening. Both are counted
+    // widths at this weight — the run ends well inside the expressible range —
+    // so the comparison below is between two measurements and not between two
+    // readings of the same ceiling.
     let near = profile
         .class_width(&stratum, bound + 1)
         .expect("the arithmetic evaluates")
-        .expect("weighted");
+        .expect("weighted")
+        .width()
+        .expect("this weight's classes end inside the expressible range");
     let far = profile
         .class_width(&stratum, bound * 4)
         .expect("the arithmetic evaluates")
-        .expect("weighted");
+        .expect("weighted")
+        .width()
+        .expect("this weight's classes end inside the expressible range");
     assert!(near > 1, "past the bound ranks share a contribution");
     assert!(
         far > near,
@@ -3614,7 +3621,9 @@ fn the_class_at_the_reported_depth_is_the_run_the_bounded_read_never_finishes() 
         let width = profile
             .class_width(&stratum, depth)
             .expect("the arithmetic evaluates")
-            .expect("weighted");
+            .expect("weighted")
+            .width()
+            .expect("this fixture's classes end inside the expressible range");
         assert!(
             width > max_width,
             "max_width {max_width}: the unbounded class at the reported depth {depth} must be \
@@ -3625,6 +3634,67 @@ fn the_class_at_the_reported_depth_is_the_run_the_bounded_read_never_finishes() 
         assert_eq!(
             width, measured_width,
             "max_width {max_width}: the width this fixture measures at depth {depth}"
+        );
+    }
+}
+
+#[test]
+fn the_bound_at_the_reported_depth_holds_where_the_width_is_nowhere_near_the_tolerance() {
+    // The same law as the test above, executed where it is NOT trivially true.
+    // At a raw weight of 1_000_000 the run that ends the walk is one or two
+    // ranks longer than the tolerance, so `max_width + 1` and the measured width
+    // very nearly coincide, and a reader could mistake the inequality for an
+    // equality. These weights are three and four orders of magnitude lighter.
+    // Their contributions collapse within the first handful of ranks, so a
+    // tolerance of one lands on depth ONE and the class there is tens of ranks
+    // wide: `>= max_width + 1` is all that holds, and "two at a tolerance of
+    // one" is false by a factor of twenty.
+    //
+    // Every magnitude here was executed against this fixture.
+    for (raw, decay, measured_width) in [
+        (100_i128, DecayRule::ReciprocalRank { k: K }, 40_u64),
+        (100, DecayRule::WeightedReciprocalRank { k: K }, 40),
+        (121, DecayRule::ReciprocalRank { k: K }, 60),
+        (121, DecayRule::WeightedReciprocalRank { k: K }, 61),
+        (200, DecayRule::ReciprocalRank { k: K }, 6),
+        (1_000, DecayRule::ReciprocalRank { k: K }, 2),
+    ] {
+        let weight = Fixed::from_raw(raw);
+        let profile = deep_profile(decay, weight);
+        let stratum = stratum("deep");
+
+        let depth = profile
+            .deepest_rank_within_width(&stratum, 1)
+            .expect("the arithmetic evaluates")
+            .expect("weighted")
+            .rank()
+            .expect("a light weight's separating depth is inside a plan's range");
+        assert_eq!(
+            depth, 1,
+            "{decay:?} raw {raw}: these weights stop separating immediately"
+        );
+
+        let width = profile
+            .class_width(&stratum, depth)
+            .expect("the arithmetic evaluates")
+            .expect("weighted");
+        assert_eq!(
+            width,
+            ClassWidth::SpansTo(measured_width),
+            "{decay:?} raw {raw}: the width this fixture measures at depth {depth}"
+        );
+        assert!(
+            !width.fits_within(1),
+            "{decay:?} raw {raw}: the class at the reported depth is never the one a \
+             'separated from both neighbours' reading would predict"
+        );
+        // And the same call at the arithmetic altitude, with no stratum in it.
+        assert_eq!(
+            decay
+                .class_width(weight, depth)
+                .expect("the arithmetic evaluates"),
+            ClassWidth::SpansTo(measured_width),
+            "{decay:?} raw {raw}: the rule answers the width the profile does"
         );
     }
 }
@@ -3765,7 +3835,7 @@ fn an_operand_the_decay_rule_refuses_is_propagated_rather_than_measured_as_a_cla
         profile
             .class_width(&stratum, 1)
             .expect("rank one is a rank and evaluates"),
-        Some(1),
+        Some(ClassWidth::SpansTo(1)),
         "rank one is inside the separating range, so it stands alone"
     );
 }
@@ -3784,7 +3854,7 @@ fn the_decay_rule_reports_a_class_width_with_no_stratum_in_the_question() {
         decay
             .class_width(weight, 1)
             .expect("rank one is a rank and evaluates"),
-        1,
+        ClassWidth::SpansTo(1),
         "rank one is inside the separating range, so it stands alone"
     );
 
@@ -3825,15 +3895,100 @@ fn the_decay_rule_reports_a_class_width_with_no_stratum_in_the_question() {
         .rank()
         .expect("the truncated rule saturates at every weight")
         * 4;
+    let folded_width = folded
+        .class_width(heavy, deep)
+        .expect("the arithmetic evaluates")
+        .width()
+        .expect("a heavy folded weight's class ends inside the expressible range");
+    let truncated_width = decay
+        .class_width(heavy, deep)
+        .expect("the arithmetic evaluates")
+        .width()
+        .expect("the truncated rule's class at this rank ends inside the expressible range");
     assert!(
-        folded
-            .class_width(heavy, deep)
-            .expect("the arithmetic evaluates")
-            < decay
-                .class_width(heavy, deep)
-                .expect("the arithmetic evaluates"),
+        folded_width < truncated_width,
         "the folded rule keeps resolution the truncated rule has already lost at rank {deep}"
     );
+}
+
+#[test]
+fn a_class_with_no_end_inside_a_plans_range_is_a_saturation_point_and_not_a_width() {
+    // The wall the width curve runs into, told as a wall. A plan records a
+    // per-stratum depth as a 32-bit rank, so the search for the class's far end
+    // stops there; a class still running at that rank has no counted end, and
+    // `u32::MAX` would be the search's own ceiling handed back as a measurement.
+    //
+    // Raw weights of one and fifty are FIFTY TIMES APART and both saturate:
+    // under either rule every contribution has truncated to the same value by
+    // rank one, so the class is the whole expressible range in both cases. A
+    // bare number reported them as the identical width 4_294_967_295, which a
+    // caller could log, plot, or divide by.
+    for raw in [1_i128, 50] {
+        for decay in [
+            DecayRule::ReciprocalRank { k: K },
+            DecayRule::WeightedReciprocalRank { k: K },
+        ] {
+            let weight = Fixed::from_raw(raw);
+            assert_eq!(
+                decay
+                    .class_width(weight, 1)
+                    .expect("rank one is a rank and evaluates"),
+                ClassWidth::ExceedsAnyPlan,
+                "{decay:?} raw {raw}: this class has no end inside a plan's range to count to"
+            );
+            assert_eq!(
+                deep_profile(decay, weight)
+                    .class_width(&stratum("deep"), 1)
+                    .expect("the arithmetic evaluates"),
+                Some(ClassWidth::ExceedsAnyPlan),
+                "{decay:?} raw {raw}: the profile reports the same wall the rule does"
+            );
+            assert!(
+                decay
+                    .class_width(weight, 1)
+                    .expect("rank one is a rank and evaluates")
+                    .width()
+                    .is_none(),
+                "{decay:?} raw {raw}: there is no number to hand a caller here"
+            );
+            assert!(
+                !decay
+                    .class_width(weight, 1)
+                    .expect("rank one is a rank and evaluates")
+                    .fits_within(u64::MAX),
+                "{decay:?} raw {raw}: a class with no end is inside no tolerance, however \
+                 generous -- the opposite polarity to a separating depth that never collides"
+            );
+        }
+    }
+
+    // The neighbouring weights whose classes DO end inside the range still
+    // report counts, so the saturating case is about the measurement and not
+    // about light weights in general. A raw weight of 99 is one unit below the
+    // 100 whose class is forty ranks; both are far lighter than the 1_000_000
+    // the rest of these tests use, and neither saturates.
+    for (raw, decay, measured_width) in [
+        (99_i128, DecayRule::ReciprocalRank { k: K }, 38_u64),
+        (99, DecayRule::WeightedReciprocalRank { k: K }, 39),
+        (100, DecayRule::ReciprocalRank { k: K }, 40),
+        (100, DecayRule::WeightedReciprocalRank { k: K }, 40),
+    ] {
+        let weight = Fixed::from_raw(raw);
+        assert_eq!(
+            decay
+                .class_width(weight, 1)
+                .expect("rank one is a rank and evaluates"),
+            ClassWidth::SpansTo(measured_width),
+            "{decay:?} raw {raw}: this class ends inside the range and is counted"
+        );
+        assert_eq!(
+            deep_profile(decay, weight)
+                .class_width(&stratum("deep"), 1)
+                .expect("the arithmetic evaluates"),
+            Some(ClassWidth::SpansTo(measured_width)),
+            "{decay:?} raw {raw}: and the profile counts it the same way"
+        );
+    }
 }
 
 #[test]
@@ -3866,13 +4021,13 @@ fn the_decay_rules_stratum_free_class_width_refuses_the_operands_it_cannot_evalu
         decay
             .class_width(weight, 1)
             .expect("rank one is a rank and evaluates"),
-        1
+        ClassWidth::SpansTo(1)
     );
     assert_eq!(
         DecayRule::ReciprocalRank { k: 1 }
             .class_width(weight, 4)
             .expect("a smoothing constant of one is usable"),
-        1,
+        ClassWidth::SpansTo(1),
         "rank four is inside the separating range at this weight, and the refusal above was \
          about the constant being zero and nothing else"
     );

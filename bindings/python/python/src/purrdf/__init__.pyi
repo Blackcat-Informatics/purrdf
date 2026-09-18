@@ -2020,6 +2020,15 @@ class retrieval:
     # `weight_for_depth` prices a single point, and the curve belongs to the
     # rule — the two answer differently at the same weight and rank.
     #
+    # `None` means the class is still running at the deepest rank a plan can
+    # express, exactly as `deepest_rank_within_width` renders its own saturation.
+    # A plan records a per-stratum depth as a 32-bit rank, so there is no end
+    # inside its reach to count to, and `2 ** 32 - 1` would be the search's
+    # ceiling wearing a width's shape: under `"reciprocal_rank"` a raw weight of
+    # one truncates every contribution to zero, so rank one's class is the whole
+    # expressible range, and at a raw weight of fifty — fifty times heavier — it
+    # still is. An `int` there would say those two classes are the same size.
+    #
     # No stratum is taken, because a width is a property of the rule, its
     # smoothing constant, the weight and the rank and of nothing else.
     # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
@@ -2028,7 +2037,9 @@ class retrieval:
     # returning a width: a rank of zero, a smoothing constant of zero, an unknown
     # `decay` spelling, or a weight that is not strictly positive.
     @staticmethod
-    def class_width(weight_raw: int, k: int, rank: int, *, decay: str) -> int: ...
+    def class_width(
+        weight_raw: int, k: int, rank: int, *, decay: str
+    ) -> int | None: ...
     # The deepest depth that can be read with every rank in it sitting in a
     # class no wider than `max_width`, for a weight of `weight_raw` under the
     # rule `decay` names.
@@ -2037,15 +2048,19 @@ class retrieval:
     # depth it buys. `max_width` of one is the separating depth itself — the
     # deepest depth a read can stop at with every rank it *actually read*
     # separated from both of its neighbours within that read. It is a depth, not
-    # a rank property: `class_width` at that rank reports at least
-    # `max_width + 1` — two at a tolerance of one, never the one a "still
-    # separated from both neighbours" reading would predict — because the
+    # a rank property: `class_width` at that rank never reports the one a "still
+    # separated from both neighbours" reading would predict, because the
     # unbounded curve it walks also looks at the one rank the bounded read never
-    # reaches. It is exactly `max_width + 1` where the run that ends the walk is
-    # one rank longer than the tolerance, and wider where that run is longer
-    # still. The two agree by answering a depth question and a rank question.
-    # The curve belongs to the rule — the two answer differently at the same
-    # weight and tolerance.
+    # reaches. Where it counts a width at all that width is at least
+    # `max_width + 1`, and it is exactly `max_width + 1` only where the run that
+    # ends the walk is one rank longer than the tolerance — the smooth case, not
+    # the rule. A light weight is where the difference shows: under
+    # `"reciprocal_rank"` with `k` of 60 and a raw weight of `10 ** 2`, a
+    # tolerance of one lands on depth one, whose class is forty ranks wide.
+    # Where that run reaches the end of the expressible range `class_width` is
+    # `None` there, having no width to compare. The two agree by answering a
+    # depth question and a rank question. The curve belongs to the rule — the
+    # two answer differently at the same weight and tolerance.
     #
     # `None` means no depth a plan can express ever exceeds the tolerance,
     # exactly as `"separates_to"` is `None` on a `search` answer for a law that
