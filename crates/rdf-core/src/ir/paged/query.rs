@@ -550,10 +550,13 @@ impl<'dataset> PagedQueryView<'dataset> {
         // that split is what the pruning law reads when it authorizes skipping a page
         // without materializing it. A page now carrying more rows for a term or a
         // graph than its summary claims therefore digests differently and is refused
-        // here, so an operation over a warm-restart index the consumer does not
-        // control cannot certify a short answer as complete. Typed, and latched
-        // sticky by the caller, exactly like every other refusal above: the content is
-        // provider-supplied and must never abort the process.
+        // here. That reaches every page this operation READS; it cannot reach a page
+        // the pruning law skipped, which is never materialized and so is observed by
+        // nothing on this path — an under-reporting summary there still yields a short
+        // answer under a Ready status, and only the cold `verify_parts` pass can find
+        // it (clause G10). Typed, and latched sticky by the caller, exactly like every
+        // other refusal above: the content is provider-supplied and must never abort
+        // the process.
         let digest = PageSummary::digest_of(&materialization.dataset).map_err(|defect| {
             PagedQueryError::InvalidData {
                 page: id,

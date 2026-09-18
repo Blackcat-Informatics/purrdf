@@ -541,6 +541,23 @@ impl PagedDataset {
     /// dataset (e.g. [`to_parts`](Self::to_parts)) whose pages were disjoint; the read
     /// path relies on that invariant exactly as `from_provider`'s output does.
     ///
+    /// # Summary drift on a warm restart
+    ///
+    /// The same applies to the sealed per-page summaries, and it is the reason this
+    /// constructor is where the caveat belongs. Every page this dataset actually READS
+    /// is certified as it is admitted: its content is re-digested and a disagreement is
+    /// refused as invalid data. But the summaries also authorize SKIPPING a page, and a
+    /// skipped page is never materialized, so nothing on the read path can observe that
+    /// it drifted. An under-reporting summary on a page no query touches therefore still
+    /// produces a short answer under a Ready status — a completeness certificate over
+    /// missing rows.
+    ///
+    /// A caller reconstituting parts it produced itself carries no new risk. A caller
+    /// reconstituting parts it does NOT control, and that wants the guarantee to cover
+    /// the pages it never reads, must call [`verify_parts`](Self::verify_parts) once:
+    /// it materializes every page regardless of what a pruning decision would have done,
+    /// which is the only way to reach a skipped page. Clause G10 states this split.
+    ///
     /// # Errors
     ///
     /// Returns [`PagedFreezeError::PageCountMismatch`] if the metadata and provider
@@ -967,11 +984,15 @@ impl PagedDataset {
         // over every per-term and per-graph count the summary holds, so a page that
         // now carries MORE rows for a term or a graph than its summary claims — the
         // under-reporting drift that authorizes skipping real rows — changes it too.
-        // A consumer warm-restarting from an index it does not control therefore no
-        // longer has to call `verify_parts` to avoid a short answer wrapped in a
-        // completeness certificate: every page it actually reads is certified as it is
-        // admitted. This is a typed fault, never an assertion — the content is
-        // provider-supplied, exactly like the four checks above.
+        // What this reaches is exactly the pages that are READ: every page admitted is
+        // certified as it is admitted. It cannot speak for a page the pruning law
+        // SKIPPED, because a skipped page is never materialized and nothing here ever
+        // observes it — so an under-reporting summary on a skipped page still yields a
+        // short answer under a Ready status. Closing that needs the cold pass, which
+        // materializes every page regardless of what a pruning decision would have
+        // done; see `verify_parts` and clause G10. This is a typed fault, never an
+        // assertion — the content is provider-supplied, exactly like the four checks
+        // above.
         let digest = PageSummary::digest_of(&materialization.dataset)
             .map_err(|defect| PageFault::invalid_data(id, defect.to_string()))?;
         if digest != slot.translation.summary().digest() {
