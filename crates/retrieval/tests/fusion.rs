@@ -2227,6 +2227,62 @@ fn the_existing_decay_rules_identity_bytes_are_where_they_always_were() {
     }
 }
 
+/// Deriving a profile's per-stratum separation bounds reports the decay rule's
+/// own refusal rather than rendering one as a bound, and nothing a caller can
+/// declare provokes that refusal: every weight and smoothing constant that built
+/// a profile before still builds one, under both rules.
+///
+/// The mirror of a swallowed refusal is an over-refusal, and it is the failure
+/// this test exists to catch. A derivation that refused where it used to answer
+/// would reject a profile whose ranks in fact order perfectly — as severe a
+/// defect as a wrong answer, and invisible in fixtures that all happen to use
+/// the same middling weight. So the acceptance surface is asserted across the
+/// range directly, and the identity each profile carries is asserted to be the
+/// digest of its declared bytes, which the derived bounds are absent from.
+#[test]
+fn every_profile_the_separation_derivation_accepted_before_still_builds_with_its_identity() {
+    for k in [1_u32, 60, u32::MAX] {
+        for raw in [
+            1_i128,
+            1_000,
+            500_000_000_000,
+            1_000_000_000_000,
+            200_000_000_000_000,
+        ] {
+            for decay in [
+                DecayRule::ReciprocalRank { k },
+                DecayRule::WeightedReciprocalRank { k },
+            ] {
+                let weights = BTreeMap::from([
+                    (stratum("text"), Fixed::from_raw(raw)),
+                    (stratum("vector"), Fixed::from_raw(1)),
+                ]);
+                let profile =
+                    FusionProfile::with_decay(weights.clone(), decay).unwrap_or_else(|error| {
+                        panic!("{decay:?} at weight raw {raw} must still build: {error}")
+                    });
+                assert!(
+                    profile.monotone_depth(&stratum("text")).is_some(),
+                    "{decay:?} at weight raw {raw}: a weighted stratum reports a bound"
+                );
+                assert_eq!(
+                    profile.id(),
+                    FusionProfileId::from_canonical(&profile.canonical_bytes()),
+                    "{decay:?} at weight raw {raw}: the identity is the digest of the \
+                     declared bytes, and the derived bounds are not among them"
+                );
+                assert_eq!(
+                    profile.id(),
+                    FusionProfile::with_decay(weights, decay)
+                        .expect("the same declaration builds twice")
+                        .id(),
+                    "{decay:?} at weight raw {raw}: one declaration is one identity"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn the_weighted_rule_is_a_separate_identity_and_round_trips() {
     let weights: BTreeMap<Iri, Fixed> = BTreeMap::from([(stratum("text"), Fixed::ONE)]);

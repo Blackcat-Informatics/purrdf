@@ -446,10 +446,17 @@ impl FusionProfile {
         // Derived once, here, rather than on every admission: a profile is
         // immutable and is routinely reused across many searches, and the search
         // is bounded but not free.
+        //
+        // The derivation carries the decay rule's own refusal rather than
+        // rendering one as a depth. The two operands that could provoke one are
+        // already refused above — a zero smoothing constant and a non-positive
+        // weight — so no profile this constructor accepts reaches it; it is
+        // propagated so that relaxing either check surfaces the failure instead
+        // of quoting a separation nothing measured.
         let monotone_depths = weights
             .iter()
-            .map(|(stratum, weight)| (stratum.clone(), monotone_depth(decay, *weight)))
-            .collect();
+            .map(|(stratum, weight)| Ok((stratum.clone(), monotone_depth(decay, *weight)?)))
+            .collect::<Result<BTreeMap<Iri, u64>, FusionError>>()?;
         Ok(Self {
             decay,
             weights,

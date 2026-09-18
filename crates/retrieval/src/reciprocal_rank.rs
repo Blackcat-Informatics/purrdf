@@ -256,12 +256,28 @@ impl MonotoneDepth {
 /// weight, and the walk is bounded by the point where the guarantee alone
 /// reaches [`MAX_DEPTH`] and no walk runs at all — under sixty thousand steps at
 /// the worst weight, each one division.
-pub(crate) fn monotone_depth(decay: DecayRule, weight: Fixed) -> u64 {
+///
+/// # Errors
+///
+/// Whatever the selected rule refuses at a rank the walk reads: in practice
+/// [`FusionError::Overflow`] alone, for a contribution that leaves the
+/// fixed-point range.
+///
+/// No profile reaches that arm today. The two operands that could — a zero
+/// smoothing constant and a non-positive weight — are short-circuited below
+/// before any rank is read, and
+/// [`FusionProfile::with_decay`](crate::FusionProfile::with_decay) refuses both
+/// outright; past those guards the walk reads ranks at or above one under a
+/// constant at or above one, where neither rule's arithmetic can leave the
+/// range. The refusal is nonetheless carried rather than rendered as a
+/// separation bound, so that moving a guard surfaces the failure instead of
+/// quietly converting it into the most flattering depth available.
+pub(crate) fn monotone_depth(decay: DecayRule, weight: Fixed) -> Result<u64, FusionError> {
     let k = decay.k();
     // Both are fixed by a validated profile; neither has a meaningful answer,
     // and a single rank is the smallest range that is trivially ordered.
     if k == 0 || weight <= Fixed::ZERO {
-        return 1;
+        return Ok(1);
     }
     let weight_raw = weight.into_raw().unsigned_abs();
     let value: fn(Fixed, u64, u32) -> Result<Fixed, FusionError>;
@@ -276,7 +292,7 @@ pub(crate) fn monotone_depth(decay: DecayRule, weight: Fixed) -> u64 {
         }
     };
     if guaranteed >= MAX_DEPTH {
-        return MAX_DEPTH;
+        return Ok(MAX_DEPTH);
     }
     // Start on the last rank the guarantee covers rather than just past it: the
     // repeated pair costs one division and the walk can then only ever find a
@@ -287,29 +303,35 @@ pub(crate) fn monotone_depth(decay: DecayRule, weight: Fixed) -> u64 {
 /// The first rank at or after `start` whose contribution equals its successor's,
 /// found exactly by walking.
 ///
-/// A rank whose contribution cannot be computed ends the range there: there is
-/// no value to order against, so the last rank that had one is the bound.
+/// # Errors
+///
+/// Whatever `value` refuses, at the first rank the walk reads it at:
+/// [`FusionError::InvalidK`] for a zero smoothing constant,
+/// [`FusionError::InvalidRank`] for a `start` of zero, and
+/// [`FusionError::Overflow`] for a value that leaves the fixed-point range.
+///
+/// A refusal is reported and never rendered as a bound. The rank the walk
+/// stopped at is where the arithmetic gave out, not a rank this weight was
+/// measured to separate; handing it back as one would make the most favourable
+/// claim this function can make — "every adjacent pair below here is distinct" —
+/// at exactly the point where no pair was compared at all.
 fn first_collision(
     weight: Fixed,
     k: u32,
     start: u64,
     value: fn(Fixed, u64, u32) -> Result<Fixed, FusionError>,
-) -> u64 {
+) -> Result<u64, FusionError> {
     let mut rank = start;
-    let Ok(mut current) = value(weight, rank, k) else {
-        return rank;
-    };
+    let mut current = value(weight, rank, k)?;
     while rank < MAX_DEPTH {
-        let Ok(next) = value(weight, rank + 1, k) else {
-            return rank;
-        };
+        let next = value(weight, rank + 1, k)?;
         if next == current {
-            return rank;
+            return Ok(rank);
         }
         current = next;
         rank += 1;
     }
-    MAX_DEPTH
+    Ok(MAX_DEPTH)
 }
 
 /// The number of consecutive ranks around `rank` that carry one contribution.
@@ -430,7 +452,7 @@ pub(crate) fn deepest_rank_within_width(
     max_width: u64,
 ) -> Result<u64, FusionError> {
     let ceiling = max_width.max(1);
-    let start = monotone_depth(decay, weight);
+    let start = monotone_depth(decay, weight)?;
     if ceiling == 1 || start >= MAX_DEPTH {
         return Ok(start);
     }
@@ -865,7 +887,7 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
     // plan's range, so a value below it is a real rank the rule reached and
     // stopped at — never the saturating case, which is only ever at or above
     // `MAX_DEPTH`. That is what makes it honest to report as an exact number.
-    let separates_to = monotone_depth(decay, Fixed::from_raw(sufficient));
+    let separates_to = monotone_depth(decay, Fixed::from_raw(sufficient))?;
     let unreachable = || FusionError::DepthUnreachable {
         depth,
         saturates_at: separates_to,
@@ -1034,8 +1056,8 @@ fn weighted_guarantee(weight_raw: u128, k: u32) -> u64 {
 mod tests {
     use super::{
         MAX_DEPTH, class_width, contribution, contribution_under, deepest_rank_within_width,
-        minimum_weight_for_depth, monotone_depth, shortfall_at, weighted_contribution,
-        weighted_guarantee,
+        first_collision, minimum_weight_for_depth, monotone_depth, shortfall_at,
+        weighted_contribution, weighted_guarantee,
     };
     use crate::error::FusionError;
     use crate::fusion_profile::DecayRule;
@@ -1061,11 +1083,22 @@ mod tests {
         DecayRule::WeightedReciprocalRank { k }
     }
 
+    /// The separation bound, with the decay rule's refusal surfaced as a panic.
+    ///
+    /// Every fixture that reads a bound below names a usable smoothing constant
+    /// and a positive weight, so a refusal here would be a broken fixture rather
+    /// than a case under test. The refusal itself is exercised directly against
+    /// [`first_collision`], which is where it is raised.
+    fn measured_bound(decay: DecayRule, weight: Fixed) -> u64 {
+        monotone_depth(decay, weight)
+            .expect("a usable smoothing constant and a positive weight measure a bound")
+    }
+
     /// The property the bound is defined by, asserted on both sides of it: every
     /// adjacent pair at or below the bound is strictly ordered, and the pair
     /// immediately beyond it is not.
     fn assert_bound_is_exact(weight: Fixed, k: u32) {
-        let bound = monotone_depth(truncated(k), weight);
+        let bound = measured_bound(truncated(k), weight);
         assert!(bound >= 1, "a single rank is always in range");
         assert!(
             bound < MAX_DEPTH,
@@ -1113,10 +1146,10 @@ mod tests {
     /// Every weight at or above one therefore shares one bound.
     #[test]
     fn a_weight_above_one_buys_no_depth_under_the_truncated_rule() {
-        let unit = monotone_depth(truncated(60), Fixed::ONE);
+        let unit = measured_bound(truncated(60), Fixed::ONE);
         for raw in [SCALE, SCALE * 2, SCALE * 1_000, SCALE * 1_000_000] {
             assert_eq!(
-                monotone_depth(truncated(60), Fixed::from_raw(raw)),
+                measured_bound(truncated(60), Fixed::from_raw(raw)),
                 unit,
                 "weight raw {raw} must share the unit weight's bound"
             );
@@ -1135,10 +1168,10 @@ mod tests {
     /// the bound tracks `sqrt(w · S)`.
     #[test]
     fn a_weight_above_one_buys_depth_under_the_weighted_rule() {
-        let unit = monotone_depth(folded(60), Fixed::ONE);
+        let unit = measured_bound(folded(60), Fixed::ONE);
         let mut previous = unit;
         for weight_units in [4_i128, 100, 10_000] {
-            let bound = monotone_depth(folded(60), Fixed::from_raw(weight_units * SCALE));
+            let bound = measured_bound(folded(60), Fixed::from_raw(weight_units * SCALE));
             assert!(
                 bound > previous,
                 "weight {weight_units} must buy depth over {previous}, got {bound}"
@@ -1176,9 +1209,9 @@ mod tests {
     #[test]
     fn a_weight_below_one_lowers_the_bound() {
         for decay in [truncated(1), folded(1)] {
-            let mut previous = monotone_depth(decay, Fixed::ONE);
+            let mut previous = measured_bound(decay, Fixed::ONE);
             for raw in [SCALE / 100, SCALE / 10_000, SCALE / 1_000_000, 100, 1] {
-                let bound = monotone_depth(decay, Fixed::from_raw(raw));
+                let bound = measured_bound(decay, Fixed::from_raw(raw));
                 assert!(
                     bound < previous,
                     "weight raw {raw} under {decay:?} must lower the bound below {previous}, got {bound}"
@@ -1194,9 +1227,9 @@ mod tests {
     #[test]
     fn a_weight_that_truncates_to_nothing_has_a_bound_of_one() {
         let weight = Fixed::from_raw(1);
-        assert_eq!(monotone_depth(truncated(60), weight), 1);
+        assert_eq!(measured_bound(truncated(60), weight), 1);
         assert_eq!(value(weight, 1, 60), value(weight, 2, 60));
-        assert_eq!(monotone_depth(folded(60), weight), 1);
+        assert_eq!(measured_bound(folded(60), weight), 1);
         assert_eq!(weighted(weight, 1, 60), weighted(weight, 2, 60));
     }
 
@@ -1207,10 +1240,10 @@ mod tests {
     fn the_smoothing_constant_shifts_the_bound_one_for_one() {
         let weight = Fixed::from_raw(1_000_000);
         for rule in [truncated as fn(u32) -> DecayRule, folded] {
-            let base = monotone_depth(rule(1), weight);
+            let base = measured_bound(rule(1), weight);
             for k in [2_u32, 10, 60, 500] {
                 assert_eq!(
-                    monotone_depth(rule(k), weight) + u64::from(k),
+                    measured_bound(rule(k), weight) + u64::from(k),
                     base + 1,
                     "the bound plus K is the first colliding denominator, whatever K is"
                 );
@@ -1234,7 +1267,7 @@ mod tests {
                         .find(|rank| at(*rank) == at(rank + 1))
                         .expect("every weight collides at some rank");
                     assert_eq!(
-                        monotone_depth(decay, weight),
+                        measured_bound(decay, weight),
                         expected,
                         "weight raw {raw} under {decay:?}"
                     );
@@ -1486,7 +1519,7 @@ mod tests {
                     let named = minimum_weight_for_depth(decay, depth)
                         .expect("these depths are reachable under both rules");
                     let expected = (1..=named.into_raw())
-                        .find(|raw| monotone_depth(decay, Fixed::from_raw(*raw)) >= depth)
+                        .find(|raw| measured_bound(decay, Fixed::from_raw(*raw)) >= depth)
                         .expect("the named weight itself reaches the depth");
                     assert_eq!(
                         named.into_raw(),
@@ -1590,6 +1623,116 @@ mod tests {
                 1,
                 "{decay:?}: rank one is separated from its neighbour at a unit weight"
             );
+        }
+    }
+
+    /// The separation walk reports the decay rule's refusal rather than the rank
+    /// at which the arithmetic stopped.
+    ///
+    /// The rank a failed probe stands on is the most flattering number the walk
+    /// could name — "every adjacent pair below here is distinct" — and nothing
+    /// compared a pair at all. Both unusable operands are exercised at the walk
+    /// itself, because [`monotone_depth`] short-circuits them before the walk
+    /// runs; each is paired with the neighbouring usable operand, which must
+    /// still measure a real bound.
+    #[test]
+    fn the_separation_walk_propagates_an_unusable_operand_rather_than_naming_the_rank_it_failed_at()
+    {
+        let weight = Fixed::from_raw(1_000_000);
+        assert!(
+            matches!(
+                first_collision(weight, 0, 1, contribution),
+                Err(FusionError::InvalidK { k: 0 })
+            ),
+            "a bound walked under an unusable constant is no bound at all"
+        );
+        assert!(
+            matches!(
+                first_collision(weight, 60, 0, weighted_contribution),
+                Err(FusionError::InvalidRank { rank: 0 })
+            ),
+            "and a walk anchored on a rank that is not a rank measures nothing"
+        );
+
+        assert!(
+            first_collision(weight, 1, 1, contribution).expect("a constant of one is usable") > 1,
+            "the neighbouring usable constant still separates more than a single rank"
+        );
+        assert!(
+            first_collision(weight, 60, 1, weighted_contribution).expect("rank one is a rank") > 1,
+            "and the neighbouring 1-based anchor still walks to a real collision"
+        );
+    }
+
+    /// The guards that keep the walk's refusal unreachable are the explicit
+    /// short-circuits, not the walk giving out mid-stride.
+    ///
+    /// A smoothing constant of zero and a non-positive weight both reach
+    /// [`monotone_depth`] — `FusionProfile::with_decay` refuses them, but this
+    /// function is below that check — and both are answered with the smallest
+    /// range there is rather than walked. Removing either guard sends the
+    /// operand into [`first_collision`], which refuses it; this test pins the
+    /// short-circuit so that change fails loudly instead of changing what a
+    /// bound means. Each case is paired with its usable neighbour, which must
+    /// still measure a deeper range.
+    #[test]
+    fn the_unusable_operands_are_short_circuited_before_the_walk_rather_than_refused_inside_it() {
+        let weight = Fixed::from_raw(1_000_000);
+        for rule in [truncated as fn(u32) -> DecayRule, folded] {
+            let unusable_k = monotone_depth(rule(0), weight);
+            assert!(
+                matches!(unusable_k, Ok(1)),
+                "an unusable smoothing constant orders a single rank and is not walked, \
+                 got {unusable_k:?}"
+            );
+            assert!(
+                measured_bound(rule(1), weight) > 1,
+                "and the neighbouring constant of one still measures a deeper range"
+            );
+
+            for raw in [0_i128, -1, -1_000_000] {
+                let unusable_weight = monotone_depth(rule(60), Fixed::from_raw(raw));
+                assert!(
+                    matches!(unusable_weight, Ok(1)),
+                    "a weight of raw {raw} orders a single rank and is not walked, \
+                     got {unusable_weight:?}"
+                );
+            }
+            assert!(
+                measured_bound(rule(60), weight) > 1,
+                "and the neighbouring positive weight still measures a deeper range"
+            );
+        }
+    }
+
+    /// Every operand a validated profile can present is measured rather than
+    /// refused, across the whole weight range up to the heaviest representable
+    /// one and both rules.
+    ///
+    /// This is the other half of the refusal above: now that the walk carries
+    /// the decay rule's refusal, an over-refusal would surface here as a profile
+    /// that no longer builds. Nothing in this range may refuse.
+    #[test]
+    fn every_positive_weight_under_a_usable_constant_measures_a_bound_rather_than_refusing() {
+        for k in [1_u32, 60, u32::MAX] {
+            for raw in [
+                1_i128,
+                1_000,
+                SCALE / 2,
+                SCALE,
+                SCALE * 1_000_000,
+                i128::MAX / 2,
+                i128::MAX,
+            ] {
+                let weight = Fixed::from_raw(raw);
+                for decay in [truncated(k), folded(k)] {
+                    let depth = monotone_depth(decay, weight);
+                    assert!(
+                        matches!(depth, Ok(rank) if rank >= 1),
+                        "{decay:?} at weight raw {raw} must measure a bound, got {depth:?}"
+                    );
+                }
+            }
         }
     }
 
