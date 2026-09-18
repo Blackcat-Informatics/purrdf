@@ -53,6 +53,24 @@ cargo run -p purrdf-bench --release -- --quads 1000000 --iris 100000 --shard 3 -
 documented in [`docs/BENCHMARKS.md`](../../docs/BENCHMARKS.md), which owns the
 parameters, the manifest-plus-digest capture rule and the storage arithmetic.
 
+It is one of three comparison lanes, and the other two measure PurRDF against
+the workloads the literature uses rather than generating a corpus:
+
+* `make lubm` — the LUBM comparison workload end to end (acquire, generate,
+  convert through the `purrdf` CLI, answer the 14 published queries, each row
+  carrying the entailment regime it was answered under). Needs a JRE and a
+  network fetch; the GPL-2.0-or-later generator is run, never vendored.
+* `make watdiv` — the WatDiv comparison workload over upstream's digest-pinned
+  frozen 10M dataset, with the 20 published templates instantiated
+  deterministically. Pure basic graph patterns, no entailment. Needs a network
+  fetch; WatDiv is citation-ware and no byte of it lives in this tree.
+
+All three are REPORT-ONLY and none is a gate. They share one implementation of
+the laws that make their numbers evidence — `scripts/lane-common.sh`: how a lane
+dies, how its scratch directory is cleaned up, how the executable that certifies
+every number is validated, and the rule that a certificate never outlives the
+run that wrote it.
+
 Index-pure minting means shard `k` needs no coordination with shard `j` — no
 shared dictionary, no ordering barrier, no merge — so shards are independent
 processes at any scale. That is a property of the algorithm, and it is not the

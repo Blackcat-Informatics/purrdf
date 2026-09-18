@@ -51,14 +51,22 @@ above are left alone as the unrelated compound words they are; only the bare
 phrase and its ``'s``/``-author`` forms are rejected.
 
 **Hazard / finding labels** — a bare ``H12``, or an ``F6``/``N3``-shaped token
-used AS A LABEL (``F6:`` at the start of a clause, or wrapped alone in
-parentheses, ``(F1)``). These are identifiers from a review thread — meaningful
-only to the reviewer who assigned them, not to the codebase. A bare ``H<N>`` is
-banned outright (no legitimate first-party use collides with that shape); an
-``F<N>``/``N<N>`` shape is only banned in the specific label positions above,
-because those two letters are also legitimate technical vocabulary elsewhere
-(``F32``/``F64`` float widths, ``N3`` the RDF serialization, ``N802`` a linter
-code) that must not be flagged.
+used AS A LABEL (``F6:`` opening a clause, ``F6 —`` opening one with a dash
+instead of a colon, or wrapped alone in parentheses, ``(F1)``). These are
+identifiers from a review thread — meaningful only to the reviewer who assigned
+them, not to the codebase. A bare ``H<N>`` is banned outright (no legitimate
+first-party use collides with that shape); an ``F<N>``/``N<N>`` shape is only
+banned in the specific label positions above, because those two letters are also
+legitimate technical vocabulary elsewhere (``F32``/``F64`` float widths, ``N3``
+the RDF serialization, ``N802`` a linter code) that must not be flagged.
+
+The DASH form is the one this gate was blind to, and the blindness is the worst
+kind: the rule was written, the scan ran, and eleven labels reading ``F1 —``
+sat in two tracked test files while the gate printed OK, because the separator
+was an em-dash rather than the colon the pattern required. A punctuation mark
+is not what makes a label a label. All three separators are matched now — the
+colon, an em/en dash, and the ASCII ``-``/``--`` a plain-text comment uses for
+the same purpose.
 
 **Development gap/remediation tags** — a bare ``G12:``/``R9:`` label opening a
 clause (mirroring the hazard-label shape above but for the ``G<N>``/``R<N>``
@@ -203,11 +211,14 @@ acceptance-criterion label ``AC`` followed by exactly one digit (``AC1``);
 single-digit labels this repository's planning documents have used.
 
 The hazard-label token patterns are a bare ``H`` followed by 1-3 digits
-(``H12``), and an ``F``/``N`` followed by 1-3 digits either immediately
-followed by a colon (``F6:``) or wrapped alone in parentheses (``(F1)``,
-``(N3)``) — the two shapes every real finding label in this repository's
-history has taken. The narrower ``F``/``N`` shape leaves every other use of
-those letters (a float width, a serialization name, a linter code) alone.
+(``H12``), and an ``F``/``N`` followed by 1-3 digits that is either immediately
+followed by a colon (``F6:``), separated by whitespace from an em/en dash
+(``F1 —``), separated by whitespace from an ASCII ``-``/``--`` that is itself
+followed by whitespace (``F1 - ``, ``F1 -- ``), or wrapped alone in parentheses
+(``(F1)``, ``(N3)``). The narrower ``F``/``N`` shape leaves every other use of
+those letters (a float width, a serialization name, a linter code) alone, and
+the trailing-whitespace requirement on the ASCII form keeps ``F1 -1`` — a label
+shape followed by a negative number — out of the match.
 
 The gap-tag token patterns are, all case-insensitive on the word "gap": the
 literal collocation ``gap R`` followed by 1-2 digits (``gap R9``), the
@@ -287,7 +298,10 @@ TOKEN_RE = re.compile(
     r"(?:['’]s)?(?![A-Za-z0-9_-])))"
     rf"|(?P<issue_normative>{_NOT_AFTER_WORD}issue-normative{_NOT_BEFORE_WORD})"
     rf"|(?P<hazard>{_NOT_AFTER_WORD}H\d{{1,3}}{_NOT_BEFORE_WORD})"
-    rf"|(?P<hazard_label>{_NOT_AFTER_WORD}[FN]\d{{1,3}}:|\([FHN]\d{{1,3}}\))"
+    rf"|(?P<hazard_label>{_NOT_AFTER_WORD}[FN]\d{{1,3}}:"
+    rf"|{_NOT_AFTER_WORD}[FN]\d{{1,3}}\s+[—–]"
+    rf"|{_NOT_AFTER_WORD}[FN]\d{{1,3}}\s+--(?=\s)"
+    rf"|\([FHN]\d{{1,3}}\))"
     rf"|(?P<plan_ref>{_NOT_AFTER_WORD}the plan(?:[\'’]s{_NOT_BEFORE_WORD}|\s+§))"
     rf"|(?P<ac_label>{_NOT_AFTER_WORD}AC\d{_NOT_BEFORE_WORD})"
     rf"|(?P<gap_tag>(?i:gap)\s+R\d{{1,2}}{_NOT_BEFORE_WORD}"
@@ -296,6 +310,12 @@ TOKEN_RE = re.compile(
     rf"|{_NOT_AFTER_WORD}G\d{{1,2}}:"
     rf"|{_NOT_AFTER_WORD}R\d{{1,2}}:)"
 )
+
+# A finding label in the one position that is unambiguous: OPENING a comment
+# line, after nothing but the comment's own punctuation. See the block comment
+# in ``scan_comments`` for why the position rather than the punctuation after it
+# is the signal.
+LABEL_OPENING_RE = re.compile(r"^[ \t/*#!>-]*([FHN]\d{1,3})(?=[ \t])")
 
 # Where a rendered book tree's files live in the source tree, for register
 # lookups in ``--rendered-tree`` mode (see ``main``).
@@ -374,6 +394,12 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf/tests/gts_certify.rs", "Task 6"),
         ("crates/rdf/tests/gts_certify.rs", "the plan's"),
         ("crates/shapes/src/instance.rs", "Task 6"),
+        # Surfaced by the clause-opening label rule (see ``LABEL_OPENING_RE``),
+        # which reads the label's POSITION rather than the punctuation after it.
+        # `F6:` in this same file was already registered; these are the same
+        # debt spelled `F1 (variant)`, `F1 rows:` and `F<N> regression:`, which
+        # a colon-or-dash pattern could not see.
+        ("crates/shapes/src/json_schema.rs", "F1"),
         ("crates/shapes/src/json_schema.rs", "F6:"),
         ("crates/shapes/src/json_schema.rs", "Task 3"),
         ("crates/shapes/src/json_schema.rs", "Task 4"),
@@ -383,6 +409,9 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/sparql-conformance/tests/owl2_rl_conformance.rs", "the plan's"),
         ("crates/sparql-eval/src/parallel_determinism_gate.rs", "Task 7"),
         ("crates/sparql-eval/src/stat_agg.rs", "the plan's"),
+        ("crates/xsd/src/temporal.rs", "F1"),
+        ("crates/xsd/src/temporal.rs", "F2"),
+        ("crates/xsd/src/temporal.rs", "F3"),
     }
 )
 
@@ -800,6 +829,7 @@ def scan_comments(
     meaning there and a ``#NNN`` token inside them is still flagged.
     """
     violations: list[tuple[int, int, str, str, str]] = []
+    seen_labels: set[tuple[int, int]] = set()
 
     for start_line, start_col, text in comments:
         text_lines = text.split("\n")
@@ -817,8 +847,42 @@ def scan_comments(
                     continue
             line = start_line + rel_line - 1
             col = start_col + rel_col - 1 if rel_line == 1 else rel_col
+            if kind == "hazard_label":
+                seen_labels.add((line, col))
             violations.append(
                 (line, col, match.group(), snippet(text, offset, match.end()), kind)
+            )
+
+        # A FINDING LABEL OPENS A CLAUSE, and the punctuation after it is not
+        # what makes it one. `F6:`, `F1 —` and `F1 (the vacuous-total variant)`
+        # are one shape wearing three different marks, and a pattern written
+        # around the marks catches whichever ones it happened to enumerate:
+        # eleven `F1 —` labels shipped past a rule that required a colon. The
+        # position is the durable signal, so a label-shaped token that OPENS a
+        # comment line is reported whatever follows it.
+        #
+        # This is deliberately position-anchored rather than general. `F32`,
+        # `N3` and `N802` are ordinary technical vocabulary mid-sentence, and a
+        # rule that flagged them everywhere would be one nobody could live with;
+        # a comment line that BEGINS `N3 ` is a label, not a sentence about the
+        # serialization.
+        for rel_line, line_text in enumerate(text_lines, start=1):
+            opening = LABEL_OPENING_RE.match(line_text)
+            if opening is None:
+                continue
+            rel_col = opening.start(1) + 1
+            line = start_line + rel_line - 1
+            col = start_col + rel_col - 1 if rel_line == 1 else rel_col
+            if (line, col) in seen_labels:
+                continue
+            violations.append(
+                (
+                    line,
+                    col,
+                    opening.group(1),
+                    line_text.strip()[:60],
+                    "hazard_label",
+                )
             )
 
     return violations
@@ -1460,6 +1524,86 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
     # ASCII lookaround is the same boundary `\b` was wherever `\b` worked, and
     # the clean Chinese sentence at the end proves the widened match fires on
     # tokens, not on Chinese.
+    # The finding-label separators. The colon form was matched from the start;
+    # the dash forms were not, and eleven labels spelled with an em-dash sat in
+    # tracked Rust comments while this gate reported clean. Each separator is
+    # asserted here, with the technical vocabulary that shares those letters
+    # asserted clean beside it.
+    (
+        "a finding label opening a clause with a colon",
+        ".rs",
+        "// F6: the manifest is written before the corpus exists.\n",
+        "F6:",
+    ),
+    (
+        "a finding label opening a clause with an em-dash (the shape that shipped)",
+        ".rs",
+        "// F1 — the lane certifies output it never produced.\n",
+        "F1 —",
+    ),
+    (
+        "a finding label opening a clause with an en-dash",
+        ".md",
+        "N3 – the shard manifest outlives its shard.\n",
+        "N3 –",
+    ),
+    (
+        "a finding label opening a clause with an ASCII double hyphen",
+        ".rs",
+        "// F4 -- the stamp survives a failed run.\n",
+        "F4 --",
+    ),
+    (
+        "a finding label wrapped alone in parentheses",
+        ".rs",
+        "// The guard added for (F1) is exercised below.\n",
+        "(F1)",
+    ),
+    (
+        # The shape no punctuation rule reaches: the label OPENS the clause and
+        # what follows it is a parenthetical, not a separator.
+        "a finding label opening a clause with a parenthetical",
+        ".rs",
+        "// F1 (the value-restriction variant): the guard rejects a bare node.\n",
+        "F1",
+    ),
+    (
+        "a finding label opening a clause with a bare word",
+        ".rs",
+        "// F2 regression: magnitudes past the old wrap point.\n",
+        "F2",
+    ),
+    (
+        # The counter-check to the two above. Mid-sentence, these letters are
+        # ordinary technical vocabulary and the rule must leave them alone.
+        "a serialization name and a float width mid-sentence (spared)",
+        ".rs",
+        "// The N3 grammar and the F64 lane are both handled here.\n",
+        None,
+    ),
+    (
+        "a float width followed by a dash is not a finding label",
+        ".rs",
+        "// The F64-to-F32 narrowing is checked by the caller.\n",
+        None,
+    ),
+    (
+        "a label shape followed by a negative number is not a finding label",
+        ".md",
+        "The F1 -1 offset is the sentinel for an absent frame.\n",
+        None,
+    ),
+    (
+        # The reason the ASCII separator is the DOUBLE hyphen and not the single
+        # one. A linter suppression spells its code, a single hyphen, and a
+        # reason -- which is lexically a label followed by a dash, and thirty of
+        # them ship in the RDFLib compatibility layer. Rejecting those would be
+        # the mirror of missing the em-dash: a rule nobody can live with.
+        "a linter suppression code followed by a single hyphen (spared)",
+        ".py",
+        "    value = obj  # noqa: N802 - RDFLib API name\n",
+        None,
+    ),
     ("a hazard id glued to CJK", ".md", "风险H12点已处理。\n", "H12"),
     ("a hazard id spaced from CJK (house typography)", ".md", "风险 H12 点已处理。\n", "H12"),
     ("a hazard id in English prose", ".md", "risk H12 handled.\n", "H12"),

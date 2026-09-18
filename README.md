@@ -779,7 +779,16 @@ above.
 make metadata   # regenerate + verify generated artifacts
 make check      # fmt, build, tests, hygiene gates
 make bench      # criterion benchmarks
+make scale-corpus  # the deterministic scale corpus, across shards
+make lubm       # the LUBM comparison workload, per entailment regime
+make watdiv     # the WatDiv comparison workload over a frozen dataset
 ```
+
+The last three are **comparison lanes**, not gates: nothing they print is
+asserted anywhere, and `lubm`/`watdiv` fetch their pinned artifacts over the
+network at the moment of use (nothing is vendored — the LUBM generator is
+GPL-2.0-or-later and WatDiv is citation-ware). `lubm` additionally needs a JRE.
+See [`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md).
 
 Releases are tag-driven with OIDC trusted publishing (crates.io and PyPI), with
 build-provenance attestations and SPDX SBOMs — see [`docs/RELEASE.md`](./docs/RELEASE.md).

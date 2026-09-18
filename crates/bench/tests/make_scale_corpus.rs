@@ -204,7 +204,7 @@ fn scratch(label: &str) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------------------------
-// F1 — `make scale-corpus ... SCALE_MODE=pipe` must emit ONLY corpus bytes on stdout.
+// `make scale-corpus ... SCALE_MODE=pipe` must emit ONLY corpus bytes on stdout.
 // ---------------------------------------------------------------------------------------------
 
 #[test]
@@ -243,7 +243,7 @@ fn make_scale_corpus_pipe_mode_matches_a_direct_whole_run_byte_for_byte() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// F2 — `SCALE_SINK`, `SCALE_MANIFEST` and `SCALE_OUT` must survive `make`'s word-splitting.
+// `SCALE_SINK`, `SCALE_MANIFEST` and `SCALE_OUT` must survive `make`'s word-splitting.
 // ---------------------------------------------------------------------------------------------
 
 #[test]
@@ -276,7 +276,7 @@ fn make_scale_corpus_sink_argument_survives_the_make_entry_point() {
 
 #[test]
 fn make_scale_corpus_manifest_path_with_a_space_survives_the_make_entry_point() {
-    let arena = std::env::temp_dir().join(format!("purrdf-bench scale audit {}", unique_tag()));
+    let arena = std::env::temp_dir().join(format!("purrdf-bench scale spaced {}", unique_tag()));
     std::fs::create_dir_all(&arena).expect("create a space-containing arena directory");
     let manifest_path = arena.join("m.json");
 
@@ -338,7 +338,7 @@ fn make_scale_corpus_out_path_with_a_space_survives_the_make_entry_point() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// F3 — a path knob is DATA. Nothing in it may be executed, and nothing in it may be expanded
+// A PATH KNOB IS DATA. Nothing in it may be executed, and nothing in it may be expanded
 // away: writing to a different path than the operator asked for and reporting success is the
 // swallowed-error shape `.goals` forbids.
 //
@@ -493,7 +493,7 @@ fn make_scale_corpus_rejects_an_unrunnable_sink_with_a_lane_diagnostic() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// F4 — the pipe payload survives a caller that believes it is a sub-make, with NO cooperation.
+// The pipe payload survives a caller that believes it is a sub-make, with NO cooperation.
 //
 // GNU make turns `-w` on by itself whenever an inherited `MAKELEVEL` is nonzero — NOT from
 // `MAKEFLAGS`, which a real nested `$(MAKE)` leaves EMPTY. The banner then lands on the same
@@ -532,7 +532,7 @@ fn make_scale_corpus_pipe_mode_is_clean_even_when_the_child_thinks_it_is_a_sub_m
 }
 
 // ---------------------------------------------------------------------------------------------
-// F5 — A SHARD THAT FAILS MUST FAIL THE RUN, IN EVERY MODE.
+// A SHARD THAT FAILS MUST FAIL THE RUN, IN EVERY MODE.
 //
 // The script's own header promises it ("Any shard that fails fails the whole run, loudly ... a
 // driver that let either pass would report a corpus that was never generated") and
@@ -742,7 +742,7 @@ fn make_scale_corpus_files_mode_sorted_cat_matches_a_direct_whole_run_byte_for_b
 }
 
 // ---------------------------------------------------------------------------------------------
-// F6 — `SCALE_BIN` is a path knob like every other, and it names the executable that CERTIFIES
+// `SCALE_BIN` IS A PATH KNOB LIKE EVERY OTHER, and it names the executable that CERTIFIES
 // THE BYTES.
 //
 // It was the one knob the script read that the `Makefile` never passed through `lane-env`, so it
@@ -916,7 +916,7 @@ fn make_scale_corpus_accepts_empty_and_absolute_path_knobs() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// F7 — A DIGEST IS A CERTIFICATE. It must never be emitted for output that is empty or that
+// A DIGEST IS A CERTIFICATE. It must never be emitted for output that is empty or that
 // failed to be produced.
 //
 // `SCALE_BIN=/bin/true` exits 0 and writes nothing. The lane checked the manifest command's exit
@@ -927,7 +927,7 @@ fn make_scale_corpus_accepts_empty_and_absolute_path_knobs() {
 //
 // This is the same class as the LUBM lane's `sha256(lubm-data.nq) = e3b0c442...` on a corpus that
 // did not exist. It is pinned here in every mode, because a fix that lands in one mode and not
-// its siblings is the failure this whole audit is about.
+// its siblings is the whole shape of this defect.
 // ---------------------------------------------------------------------------------------------
 
 /// The SHA-256 of the empty string. If this ever appears in a lane's output as a digest, the lane
@@ -977,7 +977,8 @@ fn make_scale_corpus_never_certifies_a_corpus_a_binary_did_not_produce() {
              stdout:\n{stdout}"
         );
         assert!(
-            combined.contains("did not produce a usable whole-run manifest"),
+            combined.contains("printed NOTHING")
+                && combined.contains("The manifest is this lane's CERTIFICATE"),
             "SCALE_MODE={mode}: the failure must be a LANE diagnostic saying the binary produced \
              no manifest, not a bare blank line where the specification belongs; \
              output:\n{combined}"
@@ -993,100 +994,454 @@ fn make_scale_corpus_never_certifies_a_corpus_a_binary_did_not_produce() {
     std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
 }
 
+// ---------------------------------------------------------------------------------------------
+// A MANIFEST IS A CLAIM; THE COUNT OF WHAT LEFT THE LANE IS THE EVIDENCE.
+//
+// Refusing a binary that produces no MANIFEST (above) is a different law from refusing a run that
+// produced no CORPUS, and only the first of them was enforced on every path. A binary that emits
+// a perfectly valid whole-run manifest and then zero corpus bytes exited 0 through `pipe` with the
+// manifest published on stderr claiming `"quads": 2000, "emitted_lines": 2000` and NOT ONE PAYLOAD
+// BYTE on stdout; the same binary with `SCALE_SINK='cat >/dev/null'` exited 0 with the manifest
+// published and every shard reporting nothing. A truncated final row exited 0 with 116 bytes of
+// unterminated N-Quads.
+//
+// These tests reach the ACCOUNTING guard specifically. The `/bin/true` fixture above cannot: it is
+// stopped by the manifest validator several steps earlier, so it proves nothing about what happens
+// once the specification IS valid.
+// ---------------------------------------------------------------------------------------------
+
+/// Builds a stand-in for `bench-corpus` that answers `--manifest` with the REAL binary — so the
+/// whole-run specification is valid and the lane proceeds — and emits `payload` instead of a
+/// corpus. `payload` is shell run with `$out` bound to the `--out` path when one was given and
+/// empty otherwise, so one fixture body serves every mode.
+fn valid_manifest_binary(dir: &Path, label: &str, payload: &str) -> PathBuf {
+    write_executable(
+        dir.join(format!("bench-corpus-{label}")),
+        &format!(
+            r#"#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "--manifest" ]; then exec "{BENCH}" "$@"; fi
+done
+out=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--out" ]; then out="$a"; fi
+  prev="$a"
+done
+{payload}
+exit 0
+"#
+        ),
+    )
+}
+
+/// Emits `text` to `$out` when the lane asked for a file and to stdout otherwise.
+fn emit_payload(text: &str) -> String {
+    format!(r#"if [ -n "$out" ]; then printf '%s' '{text}' >"$out"; else printf '%s' '{text}'; fi"#)
+}
+
+#[test]
+fn make_scale_corpus_refuses_a_run_that_produced_less_than_its_manifest_certifies() {
+    let dir = scratch("accounting");
+    let row = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .";
+
+    // Three ways to produce less than the manifest certifies, each with the phrase the lane must
+    // use for it. The manifest is VALID in all three, so every one of them reaches the accounting
+    // guard and nothing else.
+    let cases: [(&str, String, &str); 3] = [
+        (
+            "nothing-at-all",
+            // An empty `--out` file, so `files` mode reaches accounting too rather than failing
+            // earlier on a shard that wrote no file at all.
+            r#"if [ -n "$out" ]; then : >"$out"; fi"#.to_string(),
+            "the run produced 0 rows",
+        ),
+        (
+            "one-row-per-shard",
+            emit_payload(&format!("{row}\n")),
+            "but its manifest certifies",
+        ),
+        ("truncated-final-row", emit_payload(row), "do not end on a"),
+    ];
+
+    for (label, payload, expected) in &cases {
+        let stand_in = valid_manifest_binary(&dir, label, payload);
+        let out_dir = scratch(&format!("accounting-{label}"));
+        for mode in ["stream", "pipe", "files", "sink"] {
+            let mut args = vec![
+                "scale-corpus".to_string(),
+                "SCALE_QUADS=2000".to_string(),
+                "SCALE_IRIS=200".to_string(),
+                "SCALE_SHARDS=4".to_string(),
+                format!("SCALE_BIN={}", stand_in.display()),
+            ];
+            match mode {
+                "files" => {
+                    args.push("SCALE_MODE=files".to_string());
+                    args.push(format!("SCALE_OUT={}", out_dir.display()));
+                }
+                // `SCALE_SINK` is the path that had no accounting at all: the bytes leave the
+                // lane into a command of the operator's choosing, so the lane can only count them
+                // on the way past.
+                "sink" => {
+                    args.push("SCALE_MODE=stream".to_string());
+                    args.push("SCALE_SINK=cat >/dev/null".to_string());
+                }
+                other => args.push(format!("SCALE_MODE={other}")),
+            }
+            let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+            let (code, stdout, stderr) = run_make(&borrowed);
+            let stdout = String::from_utf8_lossy(&stdout).into_owned();
+            let combined = format!("{stdout}\n{stderr}");
+
+            assert_ne!(
+                code, 0,
+                "{label} in {mode} mode must FAIL: the manifest certifies 2000 rows and the run \
+                 did not deliver them. output:\n{combined}"
+            );
+            assert!(
+                combined.contains(expected),
+                "{label} in {mode} mode must say {expected:?} in the lane's own voice; \
+                 output:\n{combined}"
+            );
+            assert!(
+                !combined.contains("reproduces a whole run byte for byte"),
+                "{label} in {mode} mode must not print the byte-for-byte guarantee over a corpus \
+                 that was not produced; output:\n{combined}"
+            );
+            // The certificate must not survive, by any of these routes.
+            if mode == "files" {
+                let leftovers: Vec<_> = std::fs::read_dir(&out_dir)
+                    .expect("read the out directory")
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect();
+                assert!(
+                    leftovers.is_empty(),
+                    "{label}: no manifest may outlive a run that produced less than it certifies; \
+                     the arena still holds {leftovers:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+
+    std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
+}
+
+#[test]
+fn make_scale_corpus_fails_the_shard_when_a_binary_exits_zero_without_writing_its_file() {
+    // The route that leaves a shard CERTIFICATE beside no shard at all: the corpus write exits 0,
+    // creates nothing, and the manifest write after it succeeds. The existence test now runs
+    // BETWEEN them, so the certificate is never written; the run-level sweep is the backstop.
+    let dir = scratch("no-file");
+    let out_dir = scratch("no-file-arena");
+    let stand_in = valid_manifest_binary(&dir, "writes-no-file", ":");
+
+    let (code, _stdout, stderr) = run_make(&[
+        "scale-corpus",
+        "SCALE_QUADS=2000",
+        "SCALE_IRIS=200",
+        "SCALE_SHARDS=4",
+        "SCALE_MODE=files",
+        &format!("SCALE_OUT={}", out_dir.display()),
+        &format!("SCALE_BIN={}", stand_in.display()),
+    ]);
+    assert_ne!(
+        code, 0,
+        "exiting 0 is not writing the shard file; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("exited 0 but wrote no file at"),
+        "the shard must say the file was never written; stderr:\n{stderr}"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(&out_dir)
+        .expect("read the out directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "no certificate — whole-run or per-shard — may outlive a run that wrote no shard; the \
+         arena still holds {leftovers:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
+    std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
+}
+
+#[test]
+fn make_scale_corpus_leaves_no_shard_manifest_behind_a_failed_run() {
+    // A shard manifest is a certificate exactly as the whole-run manifest is, and a failed `files`
+    // run used to leave four of them in the arena. `file_shard` removed one only when the corpus
+    // WRITE failed, and the EXIT trap swept only the whole-run manifest.
+    let out_dir = scratch("shard-manifest-outlives");
+    let (quads, iris, seed, shards) = (2000u64, 200u64, 1_592_642_302u64, 4u64);
+    let prefix = format!("purrdf-scale-mixed-v1.seed{seed}.quads{quads}.iris{iris}");
+
+    // A leftover directory where shard 3's corpus file belongs: shards 0..2 write their file and
+    // their manifest, and then the run fails.
+    std::fs::create_dir(out_dir.join(format!("{prefix}.shard-00003-of-00004.nq")))
+        .expect("occupy the last shard file's path");
+
+    let (code, _stdout, stderr) = run_make(&[
+        "scale-corpus",
+        &format!("SCALE_QUADS={quads}"),
+        &format!("SCALE_IRIS={iris}"),
+        &format!("SCALE_SEED={seed}"),
+        &format!("SCALE_SHARDS={shards}"),
+        "SCALE_MODE=files",
+        &format!("SCALE_OUT={}", out_dir.display()),
+        &format!("SCALE_BIN={BENCH}"),
+    ]);
+    assert_ne!(code, 0, "the run must fail; stderr:\n{stderr}");
+
+    let certificates: Vec<_> = std::fs::read_dir(&out_dir)
+        .expect("read the out directory")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        certificates.is_empty(),
+        "a failed run certifies NOTHING: no shard manifest and no whole-run manifest may survive \
+         it. The arena still holds {certificates:?}"
+    );
+    assert!(
+        stderr.contains("removed the shard manifest"),
+        "each removal must be ANNOUNCED — a certificate silently vanishing is its own puzzle; \
+         stderr:\n{stderr}"
+    );
+
+    std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
+}
+
+#[test]
+fn make_scale_corpus_keeps_every_shard_manifest_of_a_run_that_succeeded() {
+    // The over-refusal counter-check to the test above: a run that DID produce its shards must
+    // keep every certificate, because that is the provenance a capture records.
+    let out_dir = scratch("shard-manifest-kept");
+    let (quads, iris, seed, shards) = (600u64, 70u64, 42u64, 3u64);
+
+    let (code, _stdout, stderr) = run_make(&[
+        "scale-corpus",
+        &format!("SCALE_QUADS={quads}"),
+        &format!("SCALE_IRIS={iris}"),
+        &format!("SCALE_SEED={seed}"),
+        &format!("SCALE_SHARDS={shards}"),
+        "SCALE_MODE=files",
+        &format!("SCALE_OUT={}", out_dir.display()),
+        &format!("SCALE_BIN={BENCH}"),
+    ]);
+    assert_eq!(code, 0, "the run must succeed; stderr:\n{stderr}");
+    let certificates = std::fs::read_dir(&out_dir)
+        .expect("read the out directory")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".nq.manifest.json")
+        })
+        .count() as u64;
+    assert_eq!(
+        certificates, shards,
+        "every shard that produced its file must keep its manifest"
+    );
+
+    std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
+}
+
 #[test]
 fn make_scale_corpus_still_runs_a_legitimately_tiny_corpus() {
-    // THE OVER-REFUSAL COUNTER-CHECK to the test above, and the reason the non-empty guard is at
-    // RUN level rather than shard level.
+    // THE OVER-REFUSAL COUNTER-CHECK to the accounting guard, and the reason that guard is at RUN
+    // level rather than shard level.
     //
     // With `--quads 1 --shards 8` the generator gives shard 7 the single row and shards 0..6 an
     // EMPTY RANGE, so seven of the eight shards legitimately produce zero bytes and digest to the
-    // SHA-256 of the empty string. A shard-level guard would refuse this real run; the run-level
-    // guard must not. `SCALE_QUADS` is validated positive, so an empty RUN is never legitimate.
-    let out_dir = scratch("tiny-but-real");
+    // SHA-256 of the empty string. At 40 shards, thirty-nine of them do. A shard-level guard would
+    // refuse both of these REAL runs; the run-level guard must not. `SCALE_QUADS` is validated
+    // positive, so an empty RUN is never legitimate.
+    //
+    // The pipe and sink paths are checked at the same shard counts, because those are the two
+    // paths that now count bytes on their way OUT of the lane — the arithmetic that had to grow a
+    // legitimate empty shard into a legitimate empty run without rejecting either.
     let expected = whole(1, 10, 1_592_642_302);
     assert!(
         !expected.is_empty(),
         "a one-quad whole run really does produce a row"
     );
 
-    let (code, stdout, stderr) = run_make(&[
-        "scale-corpus",
-        "SCALE_QUADS=1",
-        "SCALE_IRIS=10",
-        "SCALE_SHARDS=8",
-        "SCALE_MODE=stream",
-        &format!("SCALE_BIN={BENCH}"),
-    ]);
-    let stdout_text = String::from_utf8_lossy(&stdout).into_owned();
-    assert_eq!(
-        code, 0,
-        "a one-quad run across eight shards is small but REAL and must succeed; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout_text.contains("total rows=1"),
-        "the tiny run must report its single row; stdout:\n{stdout_text}"
-    );
-    assert!(
-        stdout_text.contains(EMPTY_STRING_SHA256),
-        "the seven legitimately-empty shards must still be REPORTED, digest and all — the guard \
-         is about the run, not about a shard whose range is empty by arithmetic; \
-         stdout:\n{stdout_text}"
-    );
+    for shards in [8u64, 40u64] {
+        let out_dir = scratch(&format!("tiny-but-real-{shards}"));
+        let (code, stdout, stderr) = run_make(&[
+            "scale-corpus",
+            "SCALE_QUADS=1",
+            "SCALE_IRIS=10",
+            &format!("SCALE_SHARDS={shards}"),
+            "SCALE_MODE=stream",
+            &format!("SCALE_BIN={BENCH}"),
+        ]);
+        let stdout_text = String::from_utf8_lossy(&stdout).into_owned();
+        assert_eq!(
+            code, 0,
+            "a one-quad run across {shards} shards is small but REAL and must succeed; \
+             stderr:\n{stderr}"
+        );
+        assert!(
+            stdout_text.contains("total rows=1"),
+            "the tiny run must report its single row; stdout:\n{stdout_text}"
+        );
+        assert!(
+            stdout_text.contains(EMPTY_STRING_SHA256),
+            "the legitimately-empty shards must still be REPORTED, digest and all — the guard is \
+             about the run, not about a shard whose range is empty by arithmetic; \
+             stdout:\n{stdout_text}"
+        );
 
-    // The same run in `files` mode: empty shard FILES are legitimate, an empty run is not.
-    let (code, _stdout, stderr) = run_make(&[
-        "scale-corpus",
-        "SCALE_QUADS=1",
-        "SCALE_IRIS=10",
-        "SCALE_SHARDS=8",
-        "SCALE_MODE=files",
-        &format!("SCALE_OUT={}", out_dir.display()),
-        &format!("SCALE_BIN={BENCH}"),
-    ]);
-    assert_eq!(
-        code, 0,
-        "a one-quad files run must succeed even though seven shard files are empty; \
-         stderr:\n{stderr}"
-    );
-    let mut shard_files: Vec<PathBuf> = std::fs::read_dir(&out_dir)
-        .expect("read the out directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "nq"))
-        .collect();
-    shard_files.sort();
-    let mut concatenated = Vec::new();
-    for path in &shard_files {
-        concatenated.extend_from_slice(&std::fs::read(path).expect("read a shard file"));
+        // The same run through a SINK, which is the path with no accounting at all before this.
+        // A sink that retains nothing must still be a successful run.
+        let (code, _stdout, stderr) = run_make(&[
+            "scale-corpus",
+            "SCALE_QUADS=1",
+            "SCALE_IRIS=10",
+            &format!("SCALE_SHARDS={shards}"),
+            "SCALE_MODE=stream",
+            "SCALE_SINK=cat >/dev/null",
+            &format!("SCALE_BIN={BENCH}"),
+        ]);
+        assert_eq!(
+            code, 0,
+            "a one-quad run across {shards} shards through a sink must succeed — counting what \
+             left the lane must not turn an empty shard into a failed run; stderr:\n{stderr}"
+        );
+
+        // The same run in `files` mode: empty shard FILES are legitimate, an empty run is not.
+        let (code, _stdout, stderr) = run_make(&[
+            "scale-corpus",
+            "SCALE_QUADS=1",
+            "SCALE_IRIS=10",
+            &format!("SCALE_SHARDS={shards}"),
+            "SCALE_MODE=files",
+            &format!("SCALE_OUT={}", out_dir.display()),
+            &format!("SCALE_BIN={BENCH}"),
+        ]);
+        assert_eq!(
+            code, 0,
+            "a one-quad files run across {shards} shards must succeed even though all but one \
+             shard file is empty; stderr:\n{stderr}"
+        );
+        let mut shard_files: Vec<PathBuf> = std::fs::read_dir(&out_dir)
+            .expect("read the out directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "nq"))
+            .collect();
+        shard_files.sort();
+        assert_eq!(
+            shard_files.len() as u64,
+            shards,
+            "every shard must have produced a file, empty or not; found {shard_files:?}"
+        );
+        let mut concatenated = Vec::new();
+        for path in &shard_files {
+            concatenated.extend_from_slice(&std::fs::read(path).expect("read a shard file"));
+        }
+        assert_eq!(
+            concatenated, expected,
+            "the sorted `cat` of a one-quad {shards}-shard run must still be byte-identical to a \
+             whole run"
+        );
+
+        // The `pipe` half, in bytes.
+        let (code, stdout, stderr) = run_make(&[
+            "scale-corpus",
+            "SCALE_QUADS=1",
+            "SCALE_IRIS=10",
+            &format!("SCALE_SHARDS={shards}"),
+            "SCALE_MODE=pipe",
+            &format!("SCALE_BIN={BENCH}"),
+        ]);
+        assert_eq!(
+            code, 0,
+            "a one-quad pipe run across {shards} shards must succeed; stderr:\n{stderr}"
+        );
+        assert_eq!(
+            stdout, expected,
+            "the piped one-quad {shards}-shard run must be byte-identical to a direct whole run"
+        );
+
+        std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
     }
-    assert_eq!(
-        concatenated, expected,
-        "the sorted `cat` of a one-quad sharded run must still be byte-identical to a whole run"
-    );
+}
 
-    // The `pipe` half, in bytes.
-    let (code, stdout, stderr) = run_make(&[
-        "scale-corpus",
-        "SCALE_QUADS=1",
-        "SCALE_IRIS=10",
-        "SCALE_SHARDS=8",
-        "SCALE_MODE=pipe",
-        &format!("SCALE_BIN={BENCH}"),
-    ]);
-    assert_eq!(
-        code, 0,
-        "a one-quad pipe run must succeed; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, expected,
-        "the piped one-quad run must be byte-identical to a direct whole run"
-    );
+#[test]
+fn make_scale_corpus_reproduces_a_whole_run_at_uneven_and_oversized_shard_counts() {
+    // The accounting law is `rows == SCALE_QUADS`, so the shapes where the rows do NOT divide
+    // evenly across the shards are exactly where an arithmetic mistake in it would show. A shard
+    // count that does not divide the row count, and a shard count LARGER than the row count, are
+    // both legitimate configurations and both must still reproduce a whole run byte for byte.
+    for (quads, shards) in [(7u64, 3u64), (600, 7), (3, 8), (1, 2)] {
+        let expected = whole(quads, 70, 42);
+        let out_dir = scratch(&format!("uneven-{quads}-{shards}"));
 
-    std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
+        let (code, stdout, stderr) = run_make(&[
+            "scale-corpus",
+            &format!("SCALE_QUADS={quads}"),
+            "SCALE_IRIS=70",
+            "SCALE_SEED=42",
+            &format!("SCALE_SHARDS={shards}"),
+            "SCALE_MODE=pipe",
+            &format!("SCALE_BIN={BENCH}"),
+        ]);
+        assert_eq!(
+            code, 0,
+            "SCALE_QUADS={quads} SCALE_SHARDS={shards} is a legal run; stderr:\n{stderr}"
+        );
+        assert_eq!(
+            stdout, expected,
+            "the piped run at {quads} quads over {shards} shards must be byte-identical to a \
+             direct whole run"
+        );
+
+        let (code, _stdout, stderr) = run_make(&[
+            "scale-corpus",
+            &format!("SCALE_QUADS={quads}"),
+            "SCALE_IRIS=70",
+            "SCALE_SEED=42",
+            &format!("SCALE_SHARDS={shards}"),
+            "SCALE_MODE=files",
+            &format!("SCALE_OUT={}", out_dir.display()),
+            &format!("SCALE_BIN={BENCH}"),
+        ]);
+        assert_eq!(
+            code, 0,
+            "the files run at {quads} quads over {shards} shards must succeed; stderr:\n{stderr}"
+        );
+        let mut shard_files: Vec<PathBuf> = std::fs::read_dir(&out_dir)
+            .expect("read the out directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "nq"))
+            .collect();
+        shard_files.sort();
+        let mut concatenated = Vec::new();
+        for path in &shard_files {
+            concatenated.extend_from_slice(&std::fs::read(path).expect("read a shard file"));
+        }
+        assert_eq!(
+            concatenated, expected,
+            "the sorted `cat` at {quads} quads over {shards} shards must be byte-identical to a \
+             direct whole run"
+        );
+
+        std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
-// F8 — ONE LAW, ONE IMPLEMENTATION: every manifest write is status-checked.
+// ONE LAW, ONE IMPLEMENTATION: every manifest write is status-checked.
 //
 // The `SCALE_MANIFEST` branch of `emit_manifest` emitted a three-line lane diagnostic for an
 // unwritable destination. The default-destination branch thirteen lines below it had a bare
@@ -1138,7 +1493,7 @@ fn make_scale_corpus_names_the_knob_when_the_whole_run_manifest_cannot_be_writte
 }
 
 // ---------------------------------------------------------------------------------------------
-// F9 — A MANIFEST IS A CERTIFICATE, SO ONE MUST NEVER OUTLIVE THE RUN IT CERTIFIES.
+// A MANIFEST IS A CERTIFICATE, SO ONE MUST NEVER OUTLIVE THE RUN IT CERTIFIES.
 //
 // The law was stated and applied at SHARD level and not at RUN level. After a shard failure the
 // arena held three of four shard corpus files beside a whole-run manifest certifying

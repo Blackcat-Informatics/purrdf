@@ -143,8 +143,18 @@ make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
 make bench      # criterion benchmarks (report-only; not a gate)
 make scale-corpus  # generate the deterministic scale corpus (streams; stores nothing by default)
+make lubm       # the LUBM comparison workload, per entailment regime (report-only; network + JRE)
+make watdiv     # the WatDiv comparison workload over a frozen dataset (report-only; network)
 make build-profile-hygiene  # prove the gate is compiled the way it claims
 ```
+
+`scale-corpus`, `lubm` and `watdiv` are the three comparison lanes. None is a
+gate and none runs in `make check`: `lubm` needs a JRE and fetches a
+GPL-2.0-or-later generator, `watdiv` fetches a 58 MB frozen dataset that expands
+past a gigabyte, and neither vendors a byte. They share one implementation of
+the laws that make their numbers evidence — `scripts/lane-common.sh` — so a
+repair to one is a repair to all three. `docs/BENCHMARKS.md` owns the
+parameters, the knobs and the comparison rules.
 
 Toolchain: `rust-toolchain.toml` names a **floating nightly** for development and
 for every CI gate. That is an analysis decision, not a licence: nightly clippy

@@ -26,6 +26,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `n` emits exactly its slice, and concatenating every shard is byte-identical
   to one whole run, pinned by a golden digest. `make scale-corpus` is the lane
   that drives it across shards, in streaming, piped, or opt-in file modes.
+- **bench:** Two comparison lanes against the workloads the RDF literature
+  publishes against, `make lubm` and `make watdiv`. Both are REPORT-ONLY, neither
+  is a gate, and neither vendors a byte: every artifact is fetched by digest into
+  an ignored cache under `target/` at the moment of use, because the LUBM
+  generator is GPL-2.0-or-later and WatDiv is citation-ware. `make lubm`
+  generates LUBM(N), converts it to N-Quads through the `purrdf` CLI itself and
+  answers the 14 published queries, printing the entailment regime and the
+  dataset rung every row was answered under — eleven of the fourteen have no
+  answers at all without inference, so a row without its regime is not
+  comparable with anything. `make watdiv` consumes upstream's digest-pinned
+  frozen 10M dataset (WatDiv's own generator is time-seeded and has no seed
+  flag, so a dataset is reproducible only as a frozen output) and instantiates
+  the 20 published templates deterministically from it, publishing a query-set
+  digest: the same dataset and the same seed reproduce the workload byte for
+  byte, and a different seed is a different workload rather than a re-run. All
+  three lanes share one implementation of the laws that make their numbers
+  evidence — `scripts/lane-common.sh` — including the rule that a certificate
+  (a manifest, a reuse stamp, a published digest) is never written for output
+  that was not produced and never outlives the run that wrote it.
 - **envelope-probe:** A new unpublished tooling crate,
   `purrdf-envelope-probe`: the capture side of the micro-hardware validation
   envelope. A fixed, deterministic workload set runs per named profile over the

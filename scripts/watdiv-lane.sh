@@ -81,6 +81,15 @@
 
 set -euo pipefail
 
+# The laws every lane in this repository shares — how it dies, how its scratch
+# directory is cleaned up, how the certificates it wrote are revoked when it
+# fails, and how the executable that certifies every number is validated — live
+# in ONE implementation that all three lanes source. See scripts/lane-common.sh.
+LANE="watdiv-lane"
+LANE_BINARY="purrdf binary"
+# shellcheck source=scripts/lane-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lane-common.sh"
+
 SCALE="${WATDIV_SCALE:-10M}"
 SEED="${WATDIV_SEED:-0}"
 OUT="${WATDIV_OUT:-target/watdiv}"
@@ -89,56 +98,35 @@ BIN="${WATDIV_BIN:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="${REPO_ROOT}/target/bench-artifacts"
 
-die() {
-  echo "watdiv-lane: $*" >&2
-  exit 1
-}
-
-TMP="$(mktemp -d)"
-trap 'rm -rf "${TMP}"' EXIT
-
-# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP. `$1` is the destination,
-# `$2` the role, and the rest is the command whose stdout becomes the file, so an
-# unopenable destination is a LANE failure naming the file — never a bare
-# `scripts/watdiv-lane.sh: line N: ...: Is a directory`.
+# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP, and `lane_write_checked`
+# is where every redirection in all three lanes goes. `$1` is the destination,
+# `$2` the role, and the rest is the command whose stdout becomes the file.
 write_checked() {
   local destination="$1" role="$2"
   shift 2
-  local write_error
-  if ! write_error="$({ "$@" >"${destination}"; } 2>&1)"; then
-    die "cannot write ${role} to '${destination}'
-  ${write_error}
-  Check that WATDIV_OUT names a directory that exists and is writable."
-  fi
+  lane_write_checked "${destination}" "${role}" \
+    "'${destination}' (under WATDIV_OUT='${OUT}')" "$@"
 }
 
 # `WATDIV_OUT` is a knob, so an arena that cannot be created is a LANE failure
 # quoting the bytes back, not a bare `mkdir: cannot create directory ...`.
 mkdir_checked() {
-  local directory="$1" mkdir_error
-  if ! mkdir_error="$(mkdir -p "${directory}" 2>&1)"; then
-    die "cannot create '${directory}' under WATDIV_OUT='${OUT}'
-  ${mkdir_error}
-  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Check that its parent directory exists and is writable."
-  fi
+  lane_mkdir_checked "$1" "WATDIV_OUT='${OUT}'"
 }
 
 # EXISTING IS NOT BEING PRODUCED. An artifact this lane goes on to digest, load,
 # query or report a size for must be a regular, non-empty file; a zero-byte one
 # reports as a very fast engine and digests to the SHA-256 of the empty string.
 require_nonempty_file() {
-  local path="$1" role="$2"
-  [[ -f "${path}" ]] ||
-    die "${role} was not produced at '${path}' even though the step before it reported success"
-  # The SHA-256 of the empty string is deliberately NOT quoted here: it is the
-  # digest this lane must never publish, so it is described and never emitted.
-  [[ -s "${path}" ]] ||
-    die "${role} at '${path}' is EMPTY.
-  An empty artifact is a failure wearing a success's clothes: it loads cleanly,
-  answers every query 0, and digests to the SHA-256 of the empty string. No digest
-  and no size is published for it."
+  lane_require_nonempty_file "$1" "$2"
 }
+
+# The 8-byte magic every native pack begins with. NON-EMPTY IS NOT "IS A PACK":
+# a CLI that wrote eight bytes of something else and exited 0 passed an emptiness
+# test, was STAMPED as this dataset's pack, and every later run then reported
+# "reusing the one already stamped with this dataset digest and this binary" and
+# queried those eight bytes.
+readonly PACK_MAGIC="PURRPCK1"
 
 step() {
   echo ""
@@ -167,51 +155,52 @@ TARBALL="watdiv.${SCALE}.tar.bz2"
 DATASET_NAME="watdiv.${SCALE}.nt"
 
 # `WATDIV_BIN` NAMES THE EXECUTABLE EVERY NUMBER IN THIS REPORT IS ABOUT, and it
-# is validated the way `SCALE_BIN` and `LUBM_BIN` are — the same three tests, in
-# the same order, for the same reason, and then made to prove it RUNS.
+# is validated by the SAME implementation `SCALE_BIN` and `LUBM_BIN` are:
+# `lane_require_executable` for the path, `lane_run_probe` for whether it runs,
+# `lane_require_probe_said_something` for whether it produced anything.
 #
 # `[[ -x ]]` ALONE IS NOT A CHECK FOR AN EXECUTABLE: a DIRECTORY carries the
 # execute bit, so `WATDIV_BIN=/tmp` reached the version probe and was refused
 # there with "is not a working purrdf binary" — true, but silent about WHY. The
 # tests below name the fault.
 #
-# `$1` is how to name the binary in a diagnostic; `$2` is the knob to point at,
-# empty when this lane built the binary itself. Sets `PURRDF_VERSION`.
+# AND RUNNING IS NOT LOADING. A CLI that answers `--version` and then writes eight
+# bytes of something that is not a pack passed every check this lane had, was
+# STAMPED as this dataset's pack, and was reused by every later run. So the probe
+# here is a ROUND TRIP, exactly as `scale-corpus.sh` round-trips a manifest: the
+# binary is handed one triple of N-Triples and must hand back something that
+# begins with the bytes every pack begins with.
+#
+# `$1` is how to name the binary in a diagnostic; `$2` is 1 when `WATDIV_BIN`
+# supplied the path and 0 when this lane built it. Sets `PURRDF_VERSION`.
 validate_purrdf_bin() {
-  local provenance="$1" knob="$2"
-  if [[ -n "${knob}" ]]; then
-    [[ -e "${BIN}" ]] ||
-      die "${knob}='${BIN}' does not exist
-  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Leave ${knob} unset to have this lane build the purrdf CLI itself."
-    [[ -f "${BIN}" ]] ||
-      die "${knob}='${BIN}' is not a regular file (a directory carries the execute
-  bit too, so an executability test alone would have accepted it)"
-    [[ -x "${BIN}" ]] || die "${knob}='${BIN}' is not executable"
-  else
-    [[ -x "${BIN}" ]] ||
-      die "the release build produced no executable purrdf binary at '${BIN}' (set WATDIV_BIN to point at one)"
-  fi
+  local provenance="$1" from_knob="$2"
+  lane_require_executable WATDIV_BIN "${from_knob}" "${BIN}" "the purrdf CLI"
 
-  local status=0
-  PURRDF_VERSION="$("${BIN}" --version 2>"${TMP}/version.err")" || status=$?
-  if ((status != 0)); then
-    local detail=""
-    if [[ -s "${TMP}/version.err" ]]; then
-      detail="$(sed 's/^/  /' "${TMP}/version.err")
-"
-    fi
-    die "${provenance} is not a working purrdf binary: it exited ${status} when asked for its version
-${detail}  Nothing was fetched, extracted, loaded or queried."
-  fi
+  lane_run_probe "${provenance}" "for its version" "${BIN}" --version
   # `PURRDF_VERSION` is half of `PACK_KEY`, the stamp that decides whether a
   # LATER run may reuse this run's pack. An empty version (`/bin/true` exits 0
   # and prints nothing) would make that stamp certify a pack built by an unknown
   # binary.
-  [[ -n "${PURRDF_VERSION}" ]] ||
-    die "${provenance} exited 0 when asked for its version but printed NOTHING.
-  That string is half of this lane's pack stamp, so accepting it would let a
-  later run reuse a pack with no record of what built it."
+  lane_require_probe_said_something "${provenance}" "for its version" \
+    "A binary that says nothing is not the purrdf CLI, and this lane records what it
+  printed as half of the stamp that lets a later run reuse this run's pack."
+  PURRDF_VERSION="${LANE_PROBE_OUT}"
+
+  # One triple, in the reserved documentation domain this repository's fixtures
+  # use. It exercises the same `--from ntriples --to pack` path step 5 uses on the
+  # frozen dataset, and nothing about it depends on WatDiv.
+  local probe_in="${LANE_TMP}/probe.nt" probe_out="${LANE_TMP}/probe.pack"
+  printf '%s\n' \
+    '<http://example.org/lane-probe/s> <http://example.org/lane-probe/p> <http://example.org/lane-probe/o> .' \
+    >"${probe_in}"
+  rm -f "${probe_out}"
+  lane_run_probe "${provenance}" \
+    "to load a one-triple N-Triples document into a pack" \
+    "${BIN}" convert --from ntriples --to pack "${probe_in}" "${probe_out}"
+  lane_require_magic "${probe_out}" \
+    "the pack ${provenance} produced from a one-triple document" \
+    "${PACK_MAGIC}" "a purrdf pack"
 }
 
 # VALIDATED HERE, BEFORE STEP 1. A knob error is not worth a 58 MB download and a
@@ -222,7 +211,7 @@ ${detail}  Nothing was fetched, extracted, loaded or queried."
 BIN_FROM_KNOB=0
 if [[ -n "${BIN}" ]]; then
   BIN_FROM_KNOB=1
-  validate_purrdf_bin "WATDIV_BIN='${BIN}'" WATDIV_BIN
+  validate_purrdf_bin "WATDIV_BIN='${BIN}'" 1
 fi
 
 # Milliseconds since the epoch. `bc` is not assumed present, so every duration is
@@ -255,6 +244,14 @@ PACK="${ARENA}/${DATASET_NAME%.nt}.pack"
 DATA_STAMP="${ARENA}/.dataset-stamp"
 PACK_STAMP="${ARENA}/.pack-stamp"
 
+# AND SO IS THE ARENA. `WATDIV_OUT` is a knob exactly as `WATDIV_BIN` is, and a
+# knob error is not worth a download either: an unusable arena discovered at step 3
+# has already cost a 58 MB fetch, and an operator reading the failure has to work
+# out which of the two knobs it was about. The arena is created here instead, once,
+# before step 1.
+mkdir_checked "${ARENA}"
+
+
 # ── 1. Artifacts ────────────────────────────────────────────────────────────────
 
 step "1/7 artifacts (pinned, fetched by digest, never vendored)"
@@ -284,7 +281,7 @@ if ((BIN_FROM_KNOB == 0)); then
   cargo build --locked --release -p purrdf-cli >&2 ||
     die "cargo build -p purrdf-cli failed"
   BIN="${REPO_ROOT}/target/release/purrdf"
-  validate_purrdf_bin "the binary this lane built, '${BIN}'" ""
+  validate_purrdf_bin "the binary this lane built, '${BIN}'" 0
 fi
 echo "purrdf: ${BIN}  (${PURRDF_VERSION})"
 
@@ -316,6 +313,10 @@ else
   require_nonempty_file "${CENSUS}" \
     "saved.txt (the entity census the candidate scrape is checked against), which ${TARBALL} must contain,"
   write_checked "${DATA_STAMP}" "the dataset stamp" printf '%s\n' "${TARBALL_SHA}"
+  # A STAMP IS A CERTIFICATE THIS RUN WROTE, so it does not survive this run
+  # failing: the next run would otherwise skip the extraction on the strength of
+  # a certificate written by a run that never finished.
+  lane_certify "${DATA_STAMP}" "the dataset stamp"
   extracted="extracted"
 fi
 extract_ms=$(($(now_ms) - extract_start))
@@ -429,14 +430,26 @@ else
   input    ${DATASET}
   output   ${PACK}
   Whatever the CLI printed is above this line."
-  # EXITING 0 IS NOT LOADING. The stamp is written only once the pack exists and
-  # is non-empty, so a stamp never certifies a pack that was not produced.
-  require_nonempty_file "${PACK}" "the pack the CLI reported it had written"
+  # EXITING 0 IS NOT LOADING, AND NON-EMPTY IS NOT A PACK. The stamp is written
+  # only once the pack has been checked for BEING a pack, so a stamp never
+  # certifies an artifact that is not the one it names. Eight bytes of something
+  # else passed the emptiness test, got stamped, survived the failure that
+  # followed, and were reused by every later run as this dataset's pack.
+  lane_require_magic "${PACK}" "the pack the CLI reported it had written" \
+    "${PACK_MAGIC}" "a purrdf pack"
   write_checked "${PACK_STAMP}" "the pack stamp" printf '%s\n' "${PACK_KEY}"
+  # And the stamp does not survive this run failing: every later run consults it
+  # INSTEAD of loading, so a stamp left behind by a run that did not finish is a
+  # certificate for a pack nothing ever finished certifying.
+  lane_certify "${PACK_STAMP}" "the pack stamp"
   loaded="loaded"
 fi
 load_ms=$(($(now_ms) - load_start))
-require_nonempty_file "${PACK}" "the pack, after loading reported success,"
+# Both branches end here, so BOTH are checked: a pack that was reused on the
+# strength of a stamp is checked for being a pack exactly as a freshly written
+# one is. A stamp written before this check existed is not evidence.
+lane_require_magic "${PACK}" "the pack, after loading reported success," \
+  "${PACK_MAGIC}" "a purrdf pack"
 pack_bytes=$(wc -c <"${PACK}")
 echo "pack: ${pack_bytes} bytes (${loaded} in ${load_ms} ms)"
 

@@ -77,6 +77,15 @@
 
 set -euo pipefail
 
+# The laws every lane in this repository shares — how it dies, how its scratch
+# directory is cleaned up, how the certificates it wrote are revoked when it
+# fails, and how the executable that certifies every number is validated — live
+# in ONE implementation that all three lanes source. See scripts/lane-common.sh.
+LANE="lubm-lane"
+LANE_BINARY="purrdf binary"
+# shellcheck source=scripts/lane-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lane-common.sh"
+
 UNIVERSITIES="${LUBM_UNIVERSITIES:-1}"
 SEED="${LUBM_SEED:-0}"
 INDEX="${LUBM_INDEX:-0}"
@@ -92,6 +101,15 @@ BIN="${LUBM_BIN:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="${REPO_ROOT}/target/bench-artifacts"
+
+# THIS LANE PERSISTS NO CERTIFICATE, and that is a property worth stating rather
+# than a gap. `scale-corpus.sh` writes manifests and `watdiv-lane.sh` writes reuse
+# stamps; both register them with `lane_certify` so the shared EXIT trap revokes
+# them when the run fails. Every step below instead begins with `rm -rf` and
+# rebuilds its own inputs, so nothing this lane writes is ever consulted by a
+# LATER run and the registry stays empty. The trap is installed all the same, by
+# the same `source` line the siblings use, so the day this lane does keep
+# something across runs it is already covered by the same law.
 
 # `LUBM_OUT` IS HONOURED AS WRITTEN. An absolute path is the arena, verbatim; a
 # relative one is resolved against the repository root, which is what the
@@ -109,60 +127,32 @@ case "${OUT}" in
   *) ARENA_ROOT="${REPO_ROOT}/${OUT}" ;;
 esac
 
-die() {
-  echo "lubm-lane: $*" >&2
-  exit 1
-}
-
-TMP="$(mktemp -d)"
-trap 'rm -rf "${TMP}"' EXIT
-
-# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP. Every redirection in this
-# lane that builds a dataset goes through here, so an unopenable destination is a
-# LANE failure naming the file and the role — never a bare
-# `scripts/lubm-lane.sh: line N: ...: No such file or directory` that names
-# neither the lane, the knob, nor purrdf. `$1` is the destination, `$2` the role,
-# and the rest is the command whose stdout becomes the file.
+# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP, and `lane_write_checked`
+# is where every redirection in all three lanes goes. `$1` is the destination,
+# `$2` the role, and the rest is the command whose stdout becomes the file; the
+# third argument of the shared function names WHERE the bytes were going, and
+# this lane spells it as the path plus its knob.
 write_checked() {
   local destination="$1" role="$2"
   shift 2
-  local write_error
-  if ! write_error="$({ "$@" >"${destination}"; } 2>&1)"; then
-    die "cannot write ${role} to '${destination}'
-  ${write_error}
-  Check that LUBM_OUT names a directory that exists and is writable."
-  fi
+  lane_write_checked "${destination}" "${role}" \
+    "'${destination}' (under LUBM_OUT='${OUT}')" "$@"
 }
 
 # `LUBM_OUT` is a knob, so an arena that cannot be created is a LANE failure that
 # quotes the bytes back — not a bare `mkdir: cannot create directory ...` with no
 # hint which knob supplied the path.
 mkdir_checked() {
-  local directory="$1" mkdir_error
-  if ! mkdir_error="$(mkdir -p "${directory}" 2>&1)"; then
-    die "cannot create '${directory}' under LUBM_OUT='${OUT}'
-  ${mkdir_error}
-  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Check that its parent directory exists and is writable."
-  fi
+  lane_mkdir_checked "$1" "LUBM_OUT='${OUT}'"
 }
 
 # A DATASET IS THE THING EVERY NUMBER BELOW IS ABOUT, so an empty one is a hard
-# failure and never a row in the report. See the digest law at step 5.
+# failure and never a row in the report. An empty dataset converts cleanly,
+# answers every one of the 14 queries 0, and digests to the SHA-256 of the empty
+# string. See the digest law at step 5, and `lane_require_nonempty_file` for why
+# that digest is described in the diagnostic and never printed.
 require_nonempty_file() {
-  local path="$1" role="$2"
-  [[ -f "${path}" ]] ||
-    die "${role} was not produced at '${path}' even though the step before it reported success"
-  # The SHA-256 of the empty string is deliberately NOT quoted here. It is the
-  # digest this lane must never publish, and printing it inside the diagnostic
-  # would put it in the lane's output anyway -- so an operator grepping a log for
-  # it would hit the very message saying it was refused. Described, never emitted.
-  [[ -s "${path}" ]] ||
-    die "${role} at '${path}' is EMPTY.
-  An empty dataset converts cleanly, answers every one of the 14 queries 0, and
-  digests to the SHA-256 of the empty string. That is a failure wearing a
-  success's clothes, so this lane stops here rather than publishing a certificate
-  for a corpus that does not exist."
+  lane_require_nonempty_file "$1" "$2"
 }
 
 step() {
@@ -190,8 +180,9 @@ require_uint LUBM_INDEX "${INDEX}"
 [[ "${ONTO}" == *://* ]] || die "LUBM_ONTO must be an absolute IRI (got '${ONTO}')"
 
 # `LUBM_BIN` NAMES THE EXECUTABLE EVERY NUMBER IN THIS REPORT IS ABOUT, so it is
-# validated the way `SCALE_BIN` already was, with the same three tests in the
-# same order, and then made to prove it RUNS.
+# validated by the SAME implementation `SCALE_BIN` and `WATDIV_BIN` are:
+# `lane_require_executable` for the path, `lane_run_probe` for whether it runs,
+# `lane_require_probe_said_something` for whether it produced anything.
 #
 # `[[ -x ]]` ALONE IS NOT A CHECK FOR AN EXECUTABLE: a DIRECTORY carries the
 # execute bit, so `LUBM_BIN=/tmp` passed it. And the execute bit is not proof the
@@ -201,40 +192,57 @@ require_uint LUBM_INDEX "${INDEX}"
 # parses, and the fault was in the knob — and an operator following it would go
 # hunting a parser bug that does not exist.
 #
-# `$1` is how to name the binary in a diagnostic; `$2` is the knob to point at,
-# empty when this lane built the binary itself. Sets `PURRDF_VERSION`.
+# AND RUNNING IS NOT CONVERTING. A CLI that answers `--version` and then writes an
+# empty file for every conversion is the shape that reached step 5, converted all
+# 15 files to nothing, passed its own `converted == owl_count` check 15 of 15,
+# and published `sha256(lubm-data.nq)` — the SHA-256 of the empty string — as the
+# provenance of a corpus that did not exist. So the probe here is a ROUND TRIP,
+# exactly as `scale-corpus.sh` round-trips a manifest: the binary is handed a
+# one-triple RDF/XML document and must hand back N-Quads. That is what makes the
+# empty-conversion refusal reachable before step 1, with no JRE, no network and
+# no generated corpus to mistake the fault for.
+#
+# `$1` is how to name the binary in a diagnostic; `$2` is 1 when `LUBM_BIN`
+# supplied the path and 0 when this lane built it. Sets `PURRDF_VERSION`.
 validate_purrdf_bin() {
-  local provenance="$1" knob="$2"
-  if [[ -n "${knob}" ]]; then
-    [[ -e "${BIN}" ]] ||
-      die "${knob}='${BIN}' does not exist
-  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Leave ${knob} unset to have this lane build the purrdf CLI itself."
-    [[ -f "${BIN}" ]] ||
-      die "${knob}='${BIN}' is not a regular file (a directory carries the execute
-  bit too, so an executability test alone would have accepted it)"
-    [[ -x "${BIN}" ]] || die "${knob}='${BIN}' is not executable"
-  else
-    [[ -x "${BIN}" ]] ||
-      die "the release build produced no executable purrdf binary at '${BIN}' (set LUBM_BIN to point at one)"
-  fi
+  local provenance="$1" from_knob="$2"
+  lane_require_executable LUBM_BIN "${from_knob}" "${BIN}" "the purrdf CLI"
 
-  local status=0
-  PURRDF_VERSION="$("${BIN}" --version 2>"${TMP}/version.err")" || status=$?
-  if ((status != 0)); then
-    local detail=""
-    if [[ -s "${TMP}/version.err" ]]; then
-      detail="$(sed 's/^/  /' "${TMP}/version.err")
-"
-    fi
-    die "${provenance} is not a working purrdf binary: it exited ${status} when asked for its version
-${detail}  Nothing was fetched, generated or converted, so no failure downstream can be
-  mistaken for a problem with LUBM's data."
-  fi
-  [[ -n "${PURRDF_VERSION}" ]] ||
-    die "${provenance} exited 0 when asked for its version but printed NOTHING.
-  A binary that says nothing is not the purrdf CLI, and a lane that accepted it
-  would go on to report a corpus it never converted."
+  lane_run_probe "${provenance}" "for its version" "${BIN}" --version
+  lane_require_probe_said_something "${provenance}" "for its version" \
+    "A binary that says nothing is not the purrdf CLI, and this lane records what it
+  printed beside every number in the report as the provenance of that number."
+  PURRDF_VERSION="${LANE_PROBE_OUT}"
+
+  # One triple, in the reserved documentation domain this repository's fixtures
+  # use. It exercises the same `--from rdfxml --to nquads --base` path step 5
+  # uses on LUBM's own files, and nothing about it depends on LUBM.
+  local probe_in="${LANE_TMP}/probe.rdf" probe_out="${LANE_TMP}/probe.nq"
+  cat >"${probe_in}" <<'PROBE_RDFXML'
+<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:ex="http://example.org/lane-probe#">
+  <rdf:Description rdf:about="http://example.org/lane-probe/s">
+    <ex:p rdf:resource="http://example.org/lane-probe/o"/>
+  </rdf:Description>
+</rdf:RDF>
+PROBE_RDFXML
+  rm -f "${probe_out}"
+  lane_run_probe "${provenance}" \
+    "to convert a one-triple RDF/XML document to N-Quads" \
+    "${BIN}" convert --from rdfxml --to nquads \
+    --base "http://example.org/lane-probe/probe.rdf" "${probe_in}" "${probe_out}"
+  [[ -s "${probe_out}" ]] ||
+    die "${provenance} exited 0 converting a one-triple RDF/XML document and produced
+  NO N-QUADS AT ALL.
+  A CLI that converts everything to nothing converts LUBM's files to nothing too,
+  one empty file at a time, and every one of those conversions exits 0. The lane
+  would then publish a digest as the provenance of a corpus that does not exist.
+  It stops here instead, before a byte is fetched and before the generator runs."
+  # And what it DID produce has to be N-Quads, by the same check the converted
+  # dataset gets at step 5. One law, one implementation.
+  lane_require_nquads "${probe_out}" \
+    "the N-Quads ${provenance} produced from a one-triple document"
 }
 
 # VALIDATED HERE, BEFORE STEP 1. A knob error is not worth a download, a JRE, a
@@ -245,8 +253,16 @@ ${detail}  Nothing was fetched, generated or converted, so no failure downstream
 BIN_FROM_KNOB=0
 if [[ -n "${BIN}" ]]; then
   BIN_FROM_KNOB=1
-  validate_purrdf_bin "LUBM_BIN='${BIN}'" LUBM_BIN
+  validate_purrdf_bin "LUBM_BIN='${BIN}'" 1
 fi
+
+# AND SO IS THE ARENA. `LUBM_OUT` is a knob exactly as `LUBM_BIN` is, and a knob
+# error is not worth a download either: an unusable arena discovered at step 3 has
+# already cost a network fetch, and an operator reading the failure has to work
+# out which of the two knobs it was about. The arena is created here instead, once,
+# and every later `mkdir_checked` under it is then a subdirectory of a path already
+# proved usable.
+mkdir_checked "${ARENA_ROOT}"
 
 # Milliseconds since the epoch. `bc` is not assumed present, so every duration is
 # integer arithmetic over nanoseconds.
@@ -274,7 +290,7 @@ if ((BIN_FROM_KNOB == 0)); then
   cargo build --locked --release -p purrdf-cli >&2 ||
     die "cargo build -p purrdf-cli failed"
   BIN="${REPO_ROOT}/target/release/purrdf"
-  validate_purrdf_bin "the binary this lane built, '${BIN}'" ""
+  validate_purrdf_bin "the binary this lane built, '${BIN}'" 0
 fi
 echo "purrdf: ${BIN}  (${PURRDF_VERSION})"
 
@@ -420,6 +436,30 @@ onto_rows=$(wc -l <"${ONTO_NQ}")
   die "the converted univ-bench ontology at ${ONTO_NQ} has no rows; eleven of the
   14 queries have answers only under a regime that needs it."
 
+# NON-EMPTY IS NOT "IS WHAT IT CLAIMS TO BE", and the digest below is published
+# for THIS file. The check is the same one the binary's own probe passed before
+# step 1, by the same implementation.
+lane_require_nquads "${DATA}" "the LUBM dataset"
+lane_require_nquads "${ONTO_NQ}" "the converted univ-bench ontology"
+
+# CONVERTING IS NOT THE SAME AS READING THE INPUT, and a row count alone cannot
+# tell them apart: a CLI that truncated every conversion turned 8,280,209 bytes of
+# RDF/XML into `converted 15 rows, 1935 bytes` and put that on a SUCCESS line,
+# under a published digest, with all 14 queries reporting CANNOT-EXECUTE and an
+# exit status of 0.
+#
+# The floor is deliberately generous, because it has to be right rather than
+# tight: N-Quads repeats every IRI in full while RDF/XML abbreviates with
+# namespace prefixes, so the conversion of a LUBM corpus is LARGER than its input
+# — 17,435,822 bytes out of 8,280,209 in, a ratio of 2.1, for LUBM(1, 0). One
+# eighth of the input is therefore some sixteen times below anything a real
+# conversion produces, and no legitimate run comes near it.
+((data_bytes * 8 >= owl_bytes)) ||
+  die "the conversion produced ${data_bytes} bytes of N-Quads from ${owl_bytes} bytes of
+  RDF/XML. N-Quads is LARGER than the RDF/XML it came from (a real LUBM conversion
+  runs about twice the input), so this is not a conversion of that corpus — it is a
+  fraction of one. No digest is published for it and no query is run against it."
+
 data_sha=$(python3 -c '
 import hashlib, sys
 print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
@@ -528,7 +568,7 @@ else:
 # regime, not of the query, so probing per query would repeat an identical failure
 # fourteen times and multiply the run time by the number of queries that share a
 # regime.
-probe_query="${TMP}/probe.rq"
+probe_query="${LANE_TMP}/probe.rq"
 write_checked "${probe_query}" "the regime probe query" \
   printf 'SELECT ?s WHERE { ?s ?p ?o } LIMIT 1\n'
 
@@ -578,6 +618,7 @@ printf '%s\n' "-----------------------------------------------------------------
 query_total_ms=0
 executed=0
 unexecuted=0
+nonempty=0
 declare -a NOTES=()
 
 while IFS=$'\t' read -r id regime cli file; do
@@ -601,6 +642,7 @@ while IFS=$'\t' read -r id regime cli file; do
   if [[ "${status}" == "OK" ]]; then
     executed=$((executed + 1))
     query_total_ms=$((query_total_ms + ms))
+    ((rows == 0)) || nonempty=$((nonempty + 1))
   else
     unexecuted=$((unexecuted + 1))
     NOTES+=("${id}: ${detail}")
@@ -616,6 +658,27 @@ if ((${#NOTES[@]} > 0)); then
   echo ""
 fi
 
+# A LANE IN WHICH NOTHING RAN HAS MEASURED NOTHING WHILE LOOKING EXACTLY LIKE A
+# FAST ENGINE, and this lane used to exit 0 from precisely that state: fourteen
+# CANNOT-EXECUTE rows, a published digest above them, and a SUCCESS line for a
+# dataset that was fifteen rows long. `watdiv-lane.sh` has had this guard since it
+# was written; a law that holds in one lane and not its siblings is not a law.
+((executed > 0)) ||
+  die "not one of the 14 queries executed; this lane measured nothing.
+  Every row above says why it could not run. A report whose every row is
+  CANNOT-EXECUTE is a failed run, not a fast one."
+# LUBM's own answers are the other half. Q1 and Q14 are answered with NO
+# entailment over the full dataset, and both have matching individuals in any
+# real LUBM corpus at any scale, so a run in which every executed query matched
+# nothing is a run over something that is not LUBM. (A zero on an individual
+# query is a real answer and always reported as one: Q2 is legitimately 0, and a
+# rung below 'full' legitimately answers 0 for individuals outside its subset.)
+((nonempty > 0)) ||
+  die "all ${executed} queries executed and every one matched zero rows.
+  That is vacuous, not fast: Q1 and Q14 are answered without entailment over the
+  full ${data_rows}-row dataset and have matching individuals in any real LUBM
+  corpus. Suspect the conversion, the dataset, or the query normalisation."
+
 cat <<REPORT
 SUMMARY
   dataset            LUBM(${UNIVERSITIES}, ${INDEX}) seed=${SEED}
@@ -623,6 +686,7 @@ SUMMARY
   converted          ${data_rows} rows, ${data_bytes} bytes, ${conv_ms} ms
   sha256             ${data_sha}
   queries executed   ${executed} of 14 (${query_total_ms} ms total)
+  matched nothing    $((executed - nonempty))
   not executed       ${unexecuted}
 
 HOW TO READ THIS

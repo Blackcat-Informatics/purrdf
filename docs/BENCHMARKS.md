@@ -904,7 +904,18 @@ no shard sizes and no byte-for-byte guarantee, and leaves no
 `<shard>.manifest.json` certifying a shard whose corpus file was not written —
 including one left behind by an earlier, successful run into the same
 directory. A shard manifest is a certificate; it never outlives the shard it
-certifies.
+certifies, and neither does the whole-run manifest: a failed run removes both,
+and says so.
+
+**Every mode counts what actually left the lane**, and the run fails unless that
+count is the row count its manifest certifies. The manifest is produced by asking
+the binary what it intends to emit, so on its own it is a claim; the count is the
+evidence. In `stream` the built-in sink reports it, in `files` each shard file is
+measured, and in `pipe` and under `SCALE_SINK` the payload is copied through a
+counter on its way out — the two paths where the bytes leave for something
+outside the lane, and where the only place to count them is in passing. A run
+that delivers nothing, delivers less than the manifest says, or stops mid-row is
+a failed run, and no manifest is published for it.
 
 ### What the corpus covers, and what it does not
 

@@ -5,10 +5,10 @@
 //! comparison lanes SHARE.
 //!
 //! `crates/bench/tests/make_scale_corpus.rs` pins the `scale-corpus` lane and nothing pinned the
-//! other two, which is exactly how a fix landed in `scale-corpus.sh` and `watdiv-lane.sh` and not
-//! in `lubm-lane.sh` while the commit message claimed all three were touched. A law that holds in
-//! one lane and not its siblings is not a law, so every test here runs against BOTH of the other
-//! lanes and names them in one table.
+//! other two, which is exactly how a repair reached `scale-corpus.sh` and `watdiv-lane.sh` and
+//! left `lubm-lane.sh` carrying the defect. A law that holds in one lane and not its siblings is
+//! not a law, so every test here runs against BOTH of the other lanes and names them in one
+//! table.
 //!
 //! WHY THESE TESTS COST NOTHING, AND WHAT THAT BUYS
 //! ================================================
@@ -18,15 +18,32 @@
 //! required either would put a network dependency and a JRE dependency inside `make check`, which
 //! is not a trade this repository makes for a report-only lane.
 //!
-//! So the lanes now validate `LUBM_BIN` / `WATDIV_BIN` BEFORE step 1 — before a byte is fetched,
+//! So the lanes validate `LUBM_BIN` / `WATDIV_BIN` BEFORE step 1 — before a byte is fetched,
 //! before the JRE is looked for, before eight megabytes of RDF/XML are generated on the binary's
 //! behalf. That ordering is worth having on its own (a knob error should not cost a download),
-//! and it is what lets every refusal below be exercised OFFLINE, in milliseconds, on a machine
-//! with no `java` and no cache at all.
+//! and it is what lets every test in this file run OFFLINE, in milliseconds, on a machine with no
+//! `java` and no cache at all.
 //!
-//! The over-refusal counter-check is the other half and cannot be free: proving a REAL binary is
-//! ACCEPTED means letting the lane run, which means the artifacts. That one test states its
-//! precondition and says so out loud when it cannot run; the refusals above never skip.
+//! NO TEST HERE SKIPS, AND THAT IS A DESIGN CONSTRAINT RATHER THAN A PREFERENCE
+//! ===========================================================================
+//!
+//! Two tests in this file used to `return` early when `java` was absent or when
+//! `target/release/purrdf` had not been built — and one of them was the direct regression test for
+//! the digest-over-a-nonexistent-corpus defect. No continuous-integration job installs a JRE or
+//! builds the CLI before `cargo test --workspace`, so both were unconditional no-ops there. They
+//! announced it with `eprintln!`, which libtest CAPTURES for a passing test: the announcement was
+//! invisible and the suite reported two more passes than it had run.
+//!
+//! A test that cannot run in an environment is restructured so it does not NEED that environment.
+//! Both of the laws in question are about the BINARY, and the binary is validated before step 1,
+//! so both are reachable with a stand-in and an arena that cannot be created — no JRE, no network,
+//! no build. The stand-ins are shell scripts that behave the way the lane requires: they answer
+//! `--version`, and they either perform the lane's conversion probe or deliberately fail it. That
+//! is what a wrapper an operator writes does too, which is why accepting them is the over-refusal
+//! counter-check rather than a weakening.
+//!
+//! The REAL `purrdf` binary is proved acceptable by `make lubm` and `make watdiv` themselves,
+//! which is where a real binary belongs; this file pins the laws, not the build.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -114,11 +131,12 @@ fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------------------------
-// F2 — `[[ -x ]]` IS NOT A CHECK FOR AN EXECUTABLE, BECAUSE A DIRECTORY CARRIES THE EXECUTE BIT.
+// `[[ -x ]]` IS NOT A CHECK FOR AN EXECUTABLE, BECAUSE A DIRECTORY CARRIES THE EXECUTE BIT.
 //
 // `LUBM_BIN=/tmp` passed `lubm-lane.sh`'s only test and the lane went on to generate 8.2 MB of
-// RDF/XML on that "binary"'s behalf. `scale-corpus.sh` and `watdiv-lane.sh` had already been
-// fixed; `lubm-lane.sh` had not, while the commit claimed all three lanes were touched.
+// RDF/XML on that "binary"'s behalf. `scale-corpus.sh` and `watdiv-lane.sh` already refused it;
+// `lubm-lane.sh` did not. All three now share one implementation of the check, in
+// `scripts/lane-common.sh`.
 // ---------------------------------------------------------------------------------------------
 
 #[test]
@@ -208,7 +226,7 @@ fn every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest() {
         // digest — on a SUCCESS line, for a corpus that did not exist. A digest is a
         // certificate: it must never be emitted for output that is empty or unproduced.
         assert!(
-            !combined.contains("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            !combined.contains(EMPTY_STRING_SHA256),
             "make {lane} must NEVER publish the SHA-256 of the empty string as a digest — that \
              is a certificate for a corpus that does not exist; output:\n{combined}"
         );
@@ -228,7 +246,7 @@ fn every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// F1 (THE FINDING ITSELF) — THE LUBM LANE CERTIFIED A DIGEST FOR A CORPUS THAT DID NOT EXIST.
+// EACH LANE CERTIFIED AN ARTIFACT ITS BINARY NEVER PRODUCED.
 //
 // With a `LUBM_BIN` that exits 0 and writes nothing, `scripts/lubm-lane.sh` printed
 // `data:     0 rows, 0 bytes, converted in 56 ms` as a SUCCESS line, published
@@ -237,94 +255,161 @@ fn every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest() {
 // `converted == owl_count` guard 15 of 15, ran on through step 6, and EXITED 0 with a full
 // report of fourteen BAD-RESULTS rows.
 //
-// This is the direct regression test for that. It needs a binary that is CREDIBLE — it answers
-// `--version` like the real CLI — and silently drops every conversion, which is the only shape
-// that reaches step 5. Reaching step 5 means the LUBM generator, hence a JRE and the pinned
-// artifacts; the test says so rather than pretending to have checked when it cannot run.
+// `scripts/watdiv-lane.sh` had the same shape one artifact over: a CLI that wrote eight bytes of
+// something that was not a pack passed the lane's `-s` check, was STAMPED as this dataset's pack,
+// and every later run then printed "reusing the one already stamped with this dataset digest and
+// this binary" and queried those eight bytes.
+//
+// Both are now refused BEFORE step 1, because each lane's binary check is a ROUND TRIP rather than
+// a `--version` call: the binary is handed one triple and must hand back the artifact the lane is
+// about. That is what makes this test reachable with no JRE, no network and no build — the fault
+// is in the binary, and the binary is checked before anything is fetched.
 // ---------------------------------------------------------------------------------------------
 
-#[test]
-fn the_lubm_lane_refuses_an_empty_conversion_and_publishes_no_digest() {
-    let Some(real) = prebuilt_purrdf() else {
-        eprintln!(
-            "NOT RUN: target/release/purrdf is not built, so no credible --version can be \
-             delegated. Run `cargo build --release -p purrdf-cli` and re-run."
-        );
-        return;
-    };
-    if Command::new("java").arg("-version").output().is_err() {
-        eprintln!(
-            "NOT RUN: no `java` on PATH, so the LUBM generator cannot produce the RDF/XML \
-                   this law is about."
-        );
-        return;
-    }
-
-    let dir = scratch("silent-drop");
-    // Credible at `--version`, and every conversion produces an EMPTY file. This is exactly what
-    // a CLI that silently drops its input looks like from outside.
-    let stand_in = write_executable(
-        dir.join("silent-drop-purrdf"),
+/// A stand-in `purrdf` that answers `--version` and performs `convert` by writing `payload` to
+/// the last argument. `payload` is a `printf` format string run through `/bin/sh`, so `""` is the
+/// silent-drop shape and `PURRPCK1...` is a credible pack.
+fn convert_stand_in(path: PathBuf, payload: &str) -> PathBuf {
+    write_executable(
+        path,
         &format!(
-            "#!/bin/sh\n\
-             if [ \"$1\" = \"--version\" ]; then exec \"{}\" --version; fi\n\
-             for a in \"$@\"; do last=\"$a\"; done\n\
-             case \"$last\" in *.nq) : >\"$last\" ;; esac\n\
-             exit 0\n",
-            real.display()
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo 'purrdf 9.9.9 (stand-in)'; exit 0; fi
+for a in "$@"; do last="$a"; done
+printf '%s' '{payload}' >"$last"
+exit 0
+"#
         ),
-    );
+    )
+}
 
-    let arena = scratch("silent-drop-arena");
-    let (code, stdout, stderr) = run_make(&[
-        "lubm",
-        &format!("LUBM_BIN={}", stand_in.display()),
-        &format!("LUBM_OUT={}", arena.display()),
-    ]);
-    let combined = format!("{stdout}\n{stderr}");
+/// A stand-in that converts CREDIBLY for both lanes: one N-Quads row for `lubm`, a pack whose
+/// magic is the real one for `watdiv`. Chosen by the destination's extension, exactly as the
+/// lane's own probe names it.
+fn credible_stand_in(path: PathBuf) -> PathBuf {
+    write_executable(
+        path,
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo 'purrdf 9.9.9 (stand-in)'; exit 0; fi
+for a in "$@"; do last="$a"; done
+case "$last" in
+  *.pack) printf '{PACK_MAGIC}and then some payload bytes' >"$last" ;;
+  *) printf '%s\n' '<http://example.org/s> <http://example.org/p> <http://example.org/o> .' >"$last" ;;
+esac
+exit 0
+"#
+        ),
+    )
+}
 
-    if combined.contains("artifact acquisition failed") {
-        eprintln!(
-            "NOT RUN past step 1: the pinned LUBM artifacts are neither cached nor reachable."
-        );
-    } else {
+/// The 8-byte magic every native pack begins with, as `scripts/watdiv-lane.sh` spells it.
+const PACK_MAGIC: &str = "PURRPCK1";
+
+/// The SHA-256 of the empty string. If this ever appears in a lane's output as a digest, the lane
+/// has certified nothing at all.
+const EMPTY_STRING_SHA256: &str =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+#[test]
+fn every_lane_refuses_a_binary_that_converts_everything_to_nothing_and_publishes_no_digest() {
+    // Credible at `--version`, and every conversion produces an EMPTY file. This is exactly what a
+    // CLI that silently drops its input looks like from outside, and it is the shape that reached
+    // step 5 of the LUBM lane and published a digest for a corpus that was never written.
+    //
+    // It needs NO JRE, NO network and NO built binary: the lane's own conversion probe runs before
+    // step 1, so the refusal happens on the knob rather than six steps later.
+    let dir = scratch("silent-drop");
+    let stand_in = convert_stand_in(dir.join("silent-drop-purrdf"), "");
+
+    for (lane, bin_knob, out_knob) in LANES {
+        let (code, combined) =
+            run_lane_with_bin(lane, bin_knob, out_knob, &stand_in.display().to_string());
+
         assert_ne!(
             code, 0,
-            "a CLI that converts everything to nothing must FAIL the lane. Before the fix this \
-             exited 0 with a full report. output:\n{combined}"
+            "make {lane}: a CLI that converts everything to nothing must FAIL the lane. Before \
+             the fix the LUBM lane exited 0 with a full report. output:\n{combined}"
         );
         assert!(
-            combined.contains("is EMPTY"),
-            "the lane must say the conversion was empty, in its own voice and naming the file; \
+            combined.contains(&format!("{bin_knob}='{}'", stand_in.display())),
+            "make {lane}: the refusal must name the knob and quote the bytes it used; \
+             output:\n{combined}"
+        );
+        // Refused BEFORE step 1: nothing fetched, no JRE looked for, no corpus generated on the
+        // strength of a binary that produces nothing.
+        assert!(
+            !combined.contains("1/7 artifacts"),
+            "make {lane}: a binary that cannot convert must be refused before a byte is fetched; \
              output:\n{combined}"
         );
         // THE LOAD-BEARING ASSERTIONS: no success line, and above all no digest.
         assert!(
             !combined.contains("0 rows, 0 bytes"),
-            "`data: 0 rows, 0 bytes, converted in N ms` must never be printed as a SUCCESS line; \
-             output:\n{combined}"
+            "make {lane}: `data: 0 rows, 0 bytes, converted in N ms` must never be printed as a \
+             SUCCESS line; output:\n{combined}"
         );
         assert!(
             !combined.contains("sha256(lubm-data.nq)"),
-            "NO DIGEST may be published for a dataset that does not exist — a digest is a \
-             certificate; output:\n{combined}"
+            "make {lane}: NO DIGEST may be published for a dataset that does not exist — a digest \
+             is a certificate; output:\n{combined}"
         );
         assert!(
-            !combined.contains("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-            "the SHA-256 of the empty string must never appear as a dataset's provenance; \
-             output:\n{combined}"
+            !combined.contains(EMPTY_STRING_SHA256),
+            "make {lane}: the SHA-256 of the empty string must never appear as an artifact's \
+             provenance; output:\n{combined}"
         );
         assert!(
             !combined.contains("SUMMARY"),
-            "no report may be printed at all for a run with no corpus; output:\n{combined}"
+            "make {lane}: no report may be printed at all for a run with no corpus; \
+             output:\n{combined}"
         );
         // And the death must be the lane's, not a bare `cat: '': No such file or directory` six
         // steps later that names neither the lane, the knob, nor purrdf.
         assert!(
-            combined.contains("lubm-lane:"),
-            "the failure must carry the lane's voice; output:\n{combined}"
+            combined.contains(&format!("{lane}-lane:")),
+            "make {lane}: the failure must carry the lane's voice; output:\n{combined}"
         );
     }
+
+    std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
+}
+
+#[test]
+fn the_watdiv_lane_refuses_a_pack_that_is_not_a_pack_and_stamps_nothing() {
+    // NON-EMPTY IS NOT "IS A PACK". Eight bytes of something else passed the lane's emptiness
+    // check, got a `.pack-stamp`, survived the failure that followed, and were reused by every
+    // later run under "reusing the one already stamped with this dataset digest and this binary".
+    let dir = scratch("not-a-pack");
+    let stand_in = convert_stand_in(dir.join("eight-byte-purrdf"), "NOTAPACK");
+    let arena = scratch("not-a-pack-arena");
+
+    let (code, stdout, stderr) = run_make(&[
+        "watdiv",
+        &format!("WATDIV_BIN={}", stand_in.display()),
+        &format!("WATDIV_OUT={}", arena.display()),
+    ]);
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert_ne!(
+        code, 0,
+        "eight bytes that are not a pack must FAIL the lane; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("is not a purrdf pack"),
+        "the refusal must say the artifact is not what it claims to be, not merely that it is \
+         small; output:\n{combined}"
+    );
+    assert!(
+        !combined.contains("1/7 artifacts"),
+        "a binary that cannot produce a pack must be refused before the 58 MB download; \
+         output:\n{combined}"
+    );
+    assert!(
+        !arena.join(".pack-stamp").exists(),
+        "NO STAMP may be written for an artifact that is not a pack — a stamp is what a LATER run \
+         consults instead of loading"
+    );
 
     std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
     let _ = std::fs::remove_dir_all(&arena);
@@ -351,104 +436,96 @@ fn every_lane_refuses_a_binary_knob_that_does_not_exist_and_quotes_the_bytes_bac
 // OVER-REFUSAL — "a refusal is a claim too, prove it" (`CLAUDE.md`).
 //
 // Everything above tightens validation, which is exactly where over-refusal appears: a lane that
-// refuses whatever it is given passes every test above and is useless. So a REAL `purrdf` must
-// still be accepted when it is reached by an awkward but perfectly legal path.
+// refuses whatever it is given passes every test above and is useless. So a binary that BEHAVES
+// like the CLI must still be accepted, including when it is reached by an awkward but perfectly
+// legal path — a relative, space-containing symlink is the shape an operator actually produces.
 //
-// This is the one test here that cannot be free. Proving acceptance means letting the lane past
-// validation, and past validation is the artifact fetch. It therefore states its precondition
-// and reports loudly when it cannot run, rather than pretending to have checked.
+// Acceptance is observed as "the lane got PAST the binary check and on to the NEXT knob". Both
+// lanes validate the binary and then create the arena, both before step 1, so pointing the arena
+// knob at an uncreatable path stops the run between the two: a failure that names the ARENA is
+// proof the BINARY was accepted. Nothing is fetched, so this costs no network and no artifacts —
+// which matters, because letting the run reach step 1 would put a 58 MB download inside
+// `cargo test --workspace`.
+//
+// The REAL `purrdf` binary is exercised by `make lubm` and `make watdiv` themselves, which is
+// where a real binary belongs. These tests pin the LAW.
 // ---------------------------------------------------------------------------------------------
 
-/// The `purrdf` CLI this repository builds, if it is already built. Not built on demand: a test
-/// that triggers a release build of the CLI would dominate the suite's runtime.
-fn prebuilt_purrdf() -> Option<PathBuf> {
-    let candidate = repo_root().join("target/release/purrdf");
-    candidate.is_file().then_some(candidate)
-}
-
 #[test]
-fn the_lubm_lane_accepts_a_real_binary_reached_by_an_awkward_but_legal_path() {
-    let Some(real) = prebuilt_purrdf() else {
-        eprintln!(
-            "NOT RUN: target/release/purrdf is not built, so there is no real binary to prove \
-             acceptance with. Run `cargo build --release -p purrdf-cli` (or `make lubm` once) \
-             and re-run. The refusal tests in this file do not skip and have run."
-        );
-        return;
-    };
+fn every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path() {
+    let dir = scratch("awkward-path");
+    let real = credible_stand_in(dir.join("purrdf-stand-in"));
 
-    // One path that is a SYMLINK, is RELATIVE to the repository root (the lane's own working
-    // directory), and contains a SPACE — all three properties at once, so a single lane run
-    // covers all three counter-checks.
-    let arena = repo_root().join(format!("target/lane over refusal {}", unique_tag()));
-    std::fs::create_dir_all(&arena).expect("create the space-containing arena");
-    let link = arena.join("purrdf link");
-    std::os::unix::fs::symlink(&real, &link).expect("symlink the real binary");
-    let relative = link
-        .strip_prefix(repo_root())
-        .expect("the arena is under the repository root")
-        .to_path_buf();
+    for (lane, bin_knob, out_knob) in LANES {
+        // One path that is a SYMLINK, is RELATIVE to the repository root (the lane's own working
+        // directory), and contains a SPACE — all three properties at once, so a single lane run
+        // covers all three counter-checks.
+        let arena = repo_root().join(format!("target/lane over refusal {}", unique_tag()));
+        std::fs::create_dir_all(&arena).expect("create the space-containing arena");
+        let link = arena.join("purrdf link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink the stand-in");
+        let relative = link
+            .strip_prefix(repo_root())
+            .expect("the arena is under the repository root")
+            .to_path_buf();
 
-    let (code, stdout, stderr) = run_make(&[
-        "lubm",
-        &format!("LUBM_BIN={}", relative.display()),
-        &format!("LUBM_OUT={}", arena.join("run").display()),
-    ]);
-    let combined = format!("{stdout}\n{stderr}");
+        // The arena is pointed somewhere uncreatable so the run stops on the NEXT knob rather
+        // than entering step 1 and its download.
+        let unusable = format!("/nonexistent-arena-{}/deeper/arena", unique_tag());
+        let (code, stdout, stderr) = run_make(&[
+            lane,
+            &format!("{bin_knob}={}", relative.display()),
+            &format!("{out_knob}={unusable}"),
+        ]);
+        let combined = format!("{stdout}\n{stderr}");
 
-    if combined.contains("artifact acquisition failed") {
-        eprintln!(
-            "NOT RUN past step 1: the pinned LUBM artifacts are neither cached nor reachable, \
-             so the lane could not proceed to prove acceptance. Validation itself was passed — \
-             no knob diagnostic was emitted."
-        );
-    } else {
-        assert_eq!(
-            code, 0,
-            "a REAL purrdf reached through a relative, space-containing SYMLINK is a legal way \
-             to name the binary and the lane must run; refusing it would be the mirror of \
-             accepting a directory. output:\n{combined}"
+        assert!(
+            combined.contains(&format!("{out_knob}='{unusable}'")),
+            "make {lane}: a binary that answers --version and performs the lane's conversion, \
+             reached through a relative, space-containing SYMLINK, is a legal way to name it; the \
+             run must get past it and fail on the ARENA instead. Refusing the path would be the \
+             mirror of accepting a directory. exit {code}, output:\n{combined}"
         );
         assert!(
-            stdout.contains("queries executed   14 of 14"),
-            "the accepted binary must actually have answered the workload; stdout:\n{stdout}"
+            !combined.contains(&format!("{bin_knob}=")),
+            "make {lane}: no knob diagnostic may be emitted for a credible binary at a legal \
+             path; output:\n{combined}"
         );
+        assert!(
+            !combined.contains("is not a working purrdf binary"),
+            "make {lane}: a credible binary reached by symlink must be recognised as one; \
+             output:\n{combined}"
+        );
+        assert!(
+            !combined.contains("printed NOTHING"),
+            "make {lane}: this stand-in DID print a version; output:\n{combined}"
+        );
+        assert!(
+            !combined.contains("NO N-QUADS AT ALL") && !combined.contains("is not a purrdf pack"),
+            "make {lane}: this stand-in DID produce the artifact the probe asked for; \
+             output:\n{combined}"
+        );
+        assert!(
+            !combined.contains("1/7 artifacts"),
+            "make {lane}: the arena knob is unusable, so the run must stop before step 1 — this \
+             test must never reach a download; output:\n{combined}"
+        );
+
+        std::fs::remove_dir_all(&arena).expect("cleanup arena");
     }
 
-    // Whatever happened downstream, the BINARY must not have been the complaint.
-    assert!(
-        !combined.contains("LUBM_BIN="),
-        "no knob diagnostic may be emitted for a real binary at a legal path; \
-         output:\n{combined}"
-    );
-    assert!(
-        !combined.contains("is not a working purrdf binary"),
-        "a real purrdf reached by symlink must be recognised as one; output:\n{combined}"
-    );
-
-    std::fs::remove_dir_all(&arena).expect("cleanup arena");
+    std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
 }
 
 #[test]
-fn a_lane_binary_knob_accepts_a_wrapper_that_answers_for_its_version() {
-    // The narrowest over-refusal counter-check, and it needs no artifacts at all: the validation
-    // added above must accept anything that behaves like the CLI, not just the one file this
-    // repository builds. A shell wrapper is the ordinary way an operator pins flags or a
-    // profiler around the binary under test, and refusing it would break that outright.
-    //
-    // Acceptance is observed as "the lane got PAST validation": every refusal above is emitted
-    // BEFORE step 1 by construction, so a run that reaches step 3 accepted the binary.
-    //
-    // The arena knob is then pointed at an UNCREATABLE directory so each lane stops at its
-    // `mkdir` — which both lanes reach before they unzip or extract anything. That keeps this
-    // test to a cache-hit artifact check instead of a gigabyte of bzip2 into the temp directory,
-    // and it doubles as the check that an unusable arena is itself a lane diagnostic naming its
-    // own knob rather than a bare `mkdir: cannot create directory ...`.
-    let dir = scratch("wrapper-accepted");
-    let wrapper = write_executable(
-        dir.join("purrdf wrapper"),
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'purrdf 9.9.9'; exit 0; fi\nexit 0\n",
-    );
+fn every_lane_names_its_arena_knob_when_the_arena_cannot_be_created() {
+    // The arena is a knob too, and a knob error is not worth a download: both lanes create it
+    // BEFORE step 1 now, for the same reason they validate the binary there. So this runs
+    // everywhere, with no network and no artifacts, and it doubles as the over-refusal check that
+    // a wrapper an operator writes around the CLI is accepted — the run must fail on the ARENA,
+    // never on the binary.
+    let dir = scratch("arena-unusable");
+    let wrapper = credible_stand_in(dir.join("purrdf wrapper"));
     let unusable = format!("/nonexistent-arena-{}/deeper/arena", unique_tag());
 
     for (lane, bin_knob, out_knob) in LANES {
@@ -458,19 +535,13 @@ fn a_lane_binary_knob_accepts_a_wrapper_that_answers_for_its_version() {
             &format!("{out_knob}={unusable}"),
         ]);
         let combined = format!("{stdout}\n{stderr}");
-        if combined.contains("artifact acquisition failed") {
-            eprintln!(
-                "NOT RUN past step 1 for {lane}: the pinned artifacts are neither cached nor \
-                 reachable. Validation itself was passed — no knob diagnostic was emitted."
-            );
-        }
 
         assert!(
             !combined.contains(&format!("{bin_knob}='")),
-            "make {lane}: a wrapper that answers --version is a legal binary and must pass \
-             validation — an operator wrapping the CLI in a profiler or a flag-pinning script is \
-             the ordinary case, and refusing it would be the mirror of accepting a directory; \
-             output:\n{combined}"
+            "make {lane}: a wrapper that answers --version and performs the conversion is a legal \
+             binary and must pass validation — an operator wrapping the CLI in a profiler or a \
+             flag-pinning script is the ordinary case, and refusing it would be the mirror of \
+             accepting a directory; output:\n{combined}"
         );
         assert!(
             !combined.contains("is not a working purrdf binary"),
@@ -491,6 +562,11 @@ fn a_lane_binary_knob_accepts_a_wrapper_that_answers_for_its_version() {
             "make {lane}: an uncreatable arena must be a LANE diagnostic naming {out_knob} and \
              quoting the bytes back, not a bare `mkdir: cannot create directory ...`; \
              output:\n{combined}"
+        );
+        assert!(
+            !combined.contains("1/7 artifacts"),
+            "make {lane}: an unusable arena must be refused BEFORE a byte is fetched, exactly as \
+             an unusable binary is; output:\n{combined}"
         );
     }
 

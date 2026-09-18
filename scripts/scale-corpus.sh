@@ -29,7 +29,7 @@
 #           count IS the concurrency here: choose it for the cores and the
 #           consumers actually available, not for a round number.
 #   pipe    the shards run in shard order and their bytes go to standard
-#           output, unmixed and unbuffered by this script. Those bytes ARE a
+#           output, unmixed and in order. Those bytes ARE a
 #           whole run: `SCALE_MODE=pipe ... | your-loader` loads the same
 #           corpus a single unsharded run would have produced. Ordered output
 #           cannot outrun its consumer, so this mode trades the concurrency for
@@ -60,6 +60,18 @@
 # mixes. A capture of this lane records the manifest beside the output digest;
 # neither half is evidence without the other.
 #
+# EVERY MODE ALSO COUNTS WHAT ACTUALLY LEFT THE LANE, and does so on the SAME
+# arithmetic: rows, bytes and whether the last byte was the newline that ends an
+# N-Quads row. The manifest is a CLAIM about a corpus; the counts are the
+# evidence, and the run fails unless they agree with it. That accounting is not
+# free in `pipe` and in `SCALE_SINK` mode — the payload is copied through a
+# counter on its way out, in 64 KiB chunks, which is one `memchr` and one `write`
+# per chunk on top of generating the row in the first place — and it is the price
+# of a manifest that means something. Without it, a binary emitting a valid
+# manifest and then zero corpus bytes exited 0 through the pipe, published
+# `"quads": 2000, "emitted_lines": 2000`, and delivered nothing at all; a
+# truncated final row exited 0 with 116 bytes of unterminated N-Quads.
+#
 # Any shard that fails fails the whole run, loudly. `bench-corpus` exits 2 on a
 # rejected specification and 1 on a write failure, and a driver that let either
 # pass would report a corpus that was never generated. Each shard body checks
@@ -68,6 +80,15 @@
 # runs them from — see the note above `stream_shard`.
 
 set -euo pipefail
+
+# The laws every lane in this repository shares — how it dies, how its scratch
+# directory is cleaned up, how the certificates it wrote are revoked when it
+# fails, and how the executable that certifies every number is validated — live
+# in ONE implementation that all three lanes source. See scripts/lane-common.sh.
+LANE="scale-corpus"
+LANE_BINARY="bench-corpus binary"
+# shellcheck source=scripts/lane-common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lane-common.sh"
 
 readonly PROFILE_ID="purrdf-scale-mixed-v1"
 
@@ -84,38 +105,6 @@ SINK="${SCALE_SINK:-}"
 MANIFEST_PATH="${SCALE_MANIFEST:-}"
 BIN="${SCALE_BIN:-}"
 
-# The whole-run manifest this run actually wrote to a FILE, if any. See
-# `cleanup` below: a manifest is a certificate, and a certificate must never
-# outlive the run it certifies.
-WROTE_MANIFEST=""
-
-die() {
-  echo "scale-corpus: $*" >&2
-  exit 1
-}
-
-# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP. Every redirection in
-# this lane goes through here, so an unopenable destination is a LANE failure
-# that names the knob and quotes the bytes back — never a bare
-# `scripts/scale-corpus.sh: line N: ...: Is a directory` with no hint which knob
-# supplied the path. `$1` is the destination, `$2` WHAT is being written, `$3` how
-# to name WHERE it was going (the caller spells this so the knob appears exactly
-# as an operator set it), `$4` the payload.
-#
-# The payload is an ARGUMENT rather than standard input on purpose: a pipeline
-# would put this function on the right-hand side, where `die`'s `exit` leaves a
-# subshell instead of the lane and the failure's propagation depends on
-# `pipefail` staying set. Called as a plain command, `die` means what it says.
-write_checked() {
-  local destination="$1" what="$2" where="$3" payload="$4" write_error
-  if ! write_error="$({ printf '%s\n' "${payload}" >"${destination}"; } 2>&1)"; then
-    die "cannot write ${what} to ${where}
-  ${write_error}
-  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Check that its parent directory exists and is writable."
-  fi
-}
-
 require_positive() {
   local name="$1" value="$2"
   [[ "${value}" =~ ^[0-9]+$ ]] ||
@@ -123,18 +112,105 @@ require_positive() {
   [[ "${value}" != "0" ]] || die "${name} must be positive"
 }
 
-# A RUN THAT PRODUCED NOTHING IS A FAILED RUN, and it must never be reported as
-# a fast one. The guard is at RUN level and deliberately not at shard level: with
+# WHAT THE MANIFEST CERTIFIES AND WHAT THE LANE PRODUCED ARE TWO DIFFERENT
+# NUMBERS, and only the second one is evidence. The manifest is produced by
+# asking the binary what it INTENDS to emit; this is the count of what actually
+# left the lane, and the run fails unless they are the same number.
+#
+# The guard is at RUN level and deliberately not at shard level: with
 # `--quads 1 --shards 8` the generator gives shard 7 the single row and shards
 # 0..6 an empty range, so an empty SHARD is a legitimate result and refusing it
 # would be over-refusal. An empty RUN never is: `SCALE_QUADS` is validated
-# positive above, so the whole run owes at least one row.
-require_nonempty_run() {
-  local produced="$1" unit="$2"
+# positive above, so the whole run owes exactly `SCALE_QUADS` rows.
+require_run_rows() {
+  local produced="$1" where="$2"
+  ((produced != QUADS)) || return 0
   ((produced > 0)) ||
-    die "the run produced 0 ${unit} for SCALE_QUADS=${QUADS} — nothing was generated.
+    die "the run produced 0 rows ${where} for SCALE_QUADS=${QUADS} — nothing was generated.
   A zero-row run is a FAILURE, not a fast one, and its digest is the SHA-256 of
-  the empty string rather than a corpus. Suspect the binary this lane ran."
+  the empty string rather than a corpus. No manifest is published for it.
+  Suspect the binary this lane ran."
+  die "the run produced ${produced} rows ${where}, but its manifest certifies
+  emitted_lines=${QUADS}. A manifest is this lane's CERTIFICATE of what the corpus
+  IS, so it is never published for a corpus that was only partly produced — a
+  truncated run loaded as if it were whole is the worst outcome this lane has.
+  Suspect the binary this lane ran."
+}
+
+# Copies standard input to standard output UNCHANGED and records what passed
+# through, as `rows bytes newline_terminated` in the file named by `$1`.
+#
+# This is how `pipe` and `SCALE_SINK` account for their output: those modes hand
+# the bytes to something outside this lane, so the only place the lane can count
+# them is on the way past. The chunk size is the size of a pipe buffer, so a
+# consumer sees the payload at the same granularity the kernel was going to hand
+# it over at anyway.
+#
+# `newline_terminated` is the third number because an N-Quads row ENDS with a
+# newline: a shard that stopped mid-row has produced bytes that are not a corpus,
+# and a row count alone cannot see it.
+count_through() {
+  python3 -c '
+import os
+import sys
+
+destination = sys.argv[1]
+out = sys.stdout.buffer
+read = sys.stdin.buffer.read
+rows = 0
+size = 0
+last = b""
+try:
+    while True:
+        chunk = read(1 << 16)
+        if not chunk:
+            break
+        out.write(chunk)
+        rows += chunk.count(b"\n")
+        size += len(chunk)
+        last = chunk[-1:]
+    out.flush()
+except BrokenPipeError:
+    # THE CONSUMER LEFT, and that is this lane failing rather than this counter
+    # failing. It is reported in the voice of the lane, with the shutdown flush of
+    # the interpreter redirected away so the diagnostic is not followed by a
+    # traceback about the same broken pipe.
+    os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    sys.stderr.write(
+        "scale-corpus: the consumer of this pipe closed it after %d rows (%d bytes);\n"
+        "  the run is INCOMPLETE and nothing about it is certified\n" % (rows, size)
+    )
+    raise SystemExit(1)
+with open(destination, "w", encoding="utf-8") as handle:
+    handle.write("%d %d %d\n" % (rows, size, 1 if last == b"\n" else 0))
+' "$1"
+}
+
+# Sums the per-shard counts this run wrote and applies the law to the total.
+# Every mode reaches here, by the same arithmetic, which is the point: a run
+# accounted for in one mode and unaccounted for in another is not accounted for.
+RUN_ROWS=0
+RUN_BYTES=0
+account_for_run() {
+  local where="$1"
+  local index rows=0 bytes=0 shard_rows shard_bytes terminated
+  for ((index = 0; index < SHARDS; index++)); do
+    [[ -f "${LANE_TMP}/${index}.count" ]] ||
+      die "shard ${index} of ${SHARDS} reported success but left no record of what it
+  produced, so this run cannot be accounted for and nothing is certified."
+    read -r shard_rows shard_bytes terminated <"${LANE_TMP}/${index}.count"
+    # An EMPTY shard is legitimate (see `require_run_rows`); a shard that emitted
+    # bytes and did not end on a row boundary is not.
+    ((shard_bytes == 0)) || ((terminated == 1)) ||
+      die "shard ${index} of ${SHARDS} emitted ${shard_bytes} bytes that do not end on a
+  row boundary — the last row is TRUNCATED. Those bytes are not N-Quads, so no
+  manifest is published for them."
+    rows=$((rows + shard_rows))
+    bytes=$((bytes + shard_bytes))
+  done
+  RUN_ROWS="${rows}"
+  RUN_BYTES="${bytes}"
+  require_run_rows "${rows}" "${where}"
 }
 
 require_positive SCALE_QUADS "${QUADS}"
@@ -206,32 +282,25 @@ fi
 # claims a profile and before a single shard runs, and every diagnostic quotes
 # the bytes the lane actually used — a typo that resolves to some OTHER
 # executable on the same path must be a lane failure, never a silently
-# substituted run.
-if [[ "${BIN_FROM_KNOB}" == "1" ]]; then
-  [[ -e "${BIN}" ]] ||
-    die "SCALE_BIN='${BIN}' does not exist
-  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Leave SCALE_BIN unset to have this lane build bench-corpus itself."
-  [[ -f "${BIN}" ]] ||
-    die "SCALE_BIN='${BIN}' is not a regular file"
-  [[ -x "${BIN}" ]] ||
-    die "SCALE_BIN='${BIN}' is not executable"
-else
-  [[ -n "${BIN}" && -x "${BIN}" ]] ||
-    die "the release build produced no executable bench-corpus binary (set SCALE_BIN to point at one)"
-fi
+# substituted run. The three tests, in this order and with this wording, are the
+# ones `lubm-lane.sh` and `watdiv-lane.sh` apply to their own binary knobs,
+# because they are one implementation shared by all three.
+lane_require_executable SCALE_BIN "${BIN_FROM_KNOB}" "${BIN}" bench-corpus
 
-# The built-in sink: consume a shard and retain only its summary. Rows are
-# counted as newlines, which is exact because the generator emits exactly one
-# line per row.
+# The built-in sink: consume a shard, retain only its summary, and record the
+# same three accounting numbers `count_through` does so that every mode is
+# accounted for by the same arithmetic. Rows are counted as newlines, which is
+# exact because the generator emits exactly one line per row.
 digest_sink() {
   python3 -c '
 import hashlib
 import sys
 
+destination = sys.argv[1]
 digest = hashlib.sha256()
 size = 0
 rows = 0
+last = b""
 while True:
     chunk = sys.stdin.buffer.read(1 << 20)
     if not chunk:
@@ -239,9 +308,12 @@ while True:
     digest.update(chunk)
     size += len(chunk)
     rows += chunk.count(b"\n")
+    last = chunk[-1:]
 density = (size / rows) if rows else 0.0
+with open(destination, "w", encoding="utf-8") as handle:
+    handle.write("%d %d %d\n" % (rows, size, 1 if last == b"\n" else 0))
 print(f"rows={rows} bytes={size} bytes_per_row={density:.1f} sha256={digest.hexdigest()}")
-'
+' "$1"
 }
 
 shard_args() {
@@ -261,30 +333,42 @@ shard_name() {
   printf '%s.shard-%0*d-of-%0*d.nq' "${PREFIX}" "${PAD}" "$1" "${PAD}" "${SHARDS}"
 }
 
-tmp="$(mktemp -d)"
-
-# A MANIFEST IS A CERTIFICATE, SO ONE MUST NEVER OUTLIVE THE RUN IT CERTIFIES.
+# A CERTIFICATE MUST NEVER OUTLIVE THE RUN IT CERTIFIES, and this lane writes two
+# kinds: the whole-run manifest and one manifest per shard file.
 #
-# `file_shard` already applies that law at SHARD level. It was not applied at RUN
-# level, and the whole-run manifest is written BEFORE the first shard starts (it
-# has to be — it is also the proof that the binary runs), so a run that lost a
-# shard left the arena holding three of four corpus files beside a manifest
-# reading `"quads": 2000, "emitted_lines": 2000` with no marker of failure at
-# all. Anything that later read that arena would certify a corpus that was never
-# produced.
+# The whole-run manifest is registered with `lane_certify` as soon as it is
+# written, and the shared EXIT trap revokes it when the run fails. The SHARD
+# manifests cannot be registered that way — `file_shard` runs in a backgrounded
+# subshell whose array writes this shell never sees — so they are swept here
+# instead, by the rule that defines them: a shard manifest beside no shard file
+# is a certificate for output that was not produced.
 #
-# The removal hangs off the EXIT trap rather than off `die` so it also covers an
-# `errexit` death that never reaches `die`.
-cleanup() {
-  local status=$?
-  rm -rf "${tmp}"
-  if ((status != 0)) && [[ -n "${WROTE_MANIFEST}" ]]; then
-    rm -f -- "${WROTE_MANIFEST}"
-    echo "scale-corpus: removed the whole-run manifest ${WROTE_MANIFEST} — this run \
-failed, and a manifest must never certify a corpus that was not produced" >&2
-  fi
+# `file_shard` removes the manifest of a shard whose corpus WRITE failed, which
+# is one route in. It is not the only one: a binary that exits 0 without creating
+# the file leaves a manifest beside nothing at all, a binary that creates an
+# EMPTY file leaves one beside a file that contradicts it, and a run that dies at
+# any later step leaves every shard manifest it had already written. Keying the
+# sweep on the shard file's absence would cover only the first of those, so the
+# rule is the plain one instead: A RUN THAT FAILED CERTIFIES NOTHING. Every shard
+# manifest belonging to this run's parameters goes, exactly as the whole-run
+# manifest above it does.
+#
+# In a REUSED arena that may take a certificate an earlier, successful run wrote.
+# That is correct and not collateral damage: this run has already overwritten the
+# corpus files those certificates described, so what they certify no longer
+# exists either.
+lane_revoke_derived_certificates() {
+  [[ "${MODE}" == "files" && -n "${OUT}" ]] || return 0
+  local index name manifest
+  for ((index = 0; index < SHARDS; index++)); do
+    name="$(shard_name "${index}")"
+    manifest="${OUT}/${name}.manifest.json"
+    [[ -f "${manifest}" ]] || continue
+    rm -f -- "${manifest}"
+    echo "scale-corpus: removed the shard manifest ${manifest} — this run failed, and \
+a certificate must never outlive the shard it certifies" >&2
+  done
 }
-trap cleanup EXIT
 
 # The whole-run manifest: shard 0 of 1, which is the specification every shard
 # is a slice of. It is produced ONCE, here, before any mode banner and before
@@ -294,28 +378,24 @@ trap cleanup EXIT
 # and died there as a bare non-zero exit with nothing on stderr but the banner.
 # A knob that names an executable has to fail in the lane's own voice, quoting
 # the bytes it used and whatever the binary itself said.
+#
+# This round trip is why the shared binary check takes the probe as a parameter
+# rather than fixing it at `--version`: proving a binary RUNS is running it, and
+# proving it is THIS lane's binary is checking what came back. `bench-corpus`
+# has no `--version`; its manifest is the stronger probe, because it also has to
+# name this profile and these parameters.
 if [[ "${BIN_FROM_KNOB}" == "1" ]]; then
   bin_provenance="SCALE_BIN='${BIN}'"
 else
   bin_provenance="the binary this lane built, '${BIN}'"
 fi
-manifest_status=0
-WHOLE_RUN_MANIFEST="$("${BIN}" --seed "${SEED}" --quads "${QUADS}" --iris "${IRIS}" \
-  --shard 0 --shards 1 --manifest 2>"${tmp}/manifest.err")" || manifest_status=$?
-if ((manifest_status != 0)); then
-  # Whatever the binary itself said is reported inside the lane's message, not
-  # leaked as a bare line above it — and a binary that said nothing (`/bin/false`
-  # says nothing) contributes no empty line either.
-  manifest_detail=""
-  if [[ -s "${tmp}/manifest.err" ]]; then
-    manifest_detail="$(sed 's/^/  /' "${tmp}/manifest.err")
-"
-  fi
-  die "${bin_provenance} failed to produce the whole-run manifest (exit ${manifest_status})
-${manifest_detail}  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Nothing downstream can be trusted when the specification itself cannot be
-  produced, so no shard was started."
-fi
+lane_run_probe "${bin_provenance}" "to print the whole-run manifest" \
+  "${BIN}" --seed "${SEED}" --quads "${QUADS}" --iris "${IRIS}" \
+  --shard 0 --shards 1 --manifest
+lane_require_probe_said_something "${bin_provenance}" "to print the whole-run manifest" \
+  "The manifest is this lane's CERTIFICATE of what the corpus is, so it is never
+  published for output that was not produced. No shard was started."
+WHOLE_RUN_MANIFEST="${LANE_PROBE_OUT}"
 
 # EXITING 0 IS NOT PRODUCING A MANIFEST, and the difference is the whole of the
 # empty-certificate bug. `SCALE_BIN=/bin/true` exits 0 and writes nothing: the
@@ -324,7 +404,8 @@ fi
 # that produced nothing, and printed
 # `sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` —
 # THE SHA-256 OF THE EMPTY STRING — as each shard's digest, then `total rows=0`,
-# then exited 0.
+# then exited 0. The silence itself is refused above; what remains here is the
+# stronger question of whether the output is a MANIFEST.
 #
 # So the manifest is checked for being a manifest, not merely for an exit status:
 # it must parse, it must name THIS profile, and its parameters must be the ones
@@ -335,10 +416,6 @@ import json
 import sys
 
 raw = sys.stdin.read()
-if not raw.strip():
-    print("it produced NO OUTPUT AT ALL (a binary that exits 0 and says nothing "
-          "is not a binary that generated a corpus)")
-    sys.exit(0)
 try:
     record = json.loads(raw)
 except json.JSONDecodeError as error:
@@ -427,15 +504,23 @@ stream_shard() {
   # anyway. Every command below that CAN fail is tested.
   mapfile -t args < <(shard_args "${index}")
   if [[ -n "${SINK}" ]]; then
+    # A SINK IS NOT AN EXEMPTION FROM ACCOUNTING. `SCALE_SINK` hands the bytes to
+    # something outside this lane, which is exactly why the lane has to count
+    # them on the way past: with a zero-row binary and `SCALE_SINK='cat
+    # >/dev/null'` this mode exited 0, published the manifest, and reported
+    # shards that had produced nothing at all.
+    #
     # Named in the failure because a sink that parses but cannot RUN (a missing
     # binary, a non-zero exit) otherwise surfaces only as a shard number.
-    if ! "${BIN}" "${args[@]}" | bash -c "${SINK}" >"${tmp}/${index}.report"; then
+    if ! "${BIN}" "${args[@]}" | count_through "${LANE_TMP}/${index}.count" |
+      bash -c "${SINK}" >"${LANE_TMP}/${index}.report"; then
       echo "scale-corpus: SCALE_SINK failed for shard ${index} (command: ${SINK})" >&2
       return 1
     fi
     return 0
   fi
-  if ! "${BIN}" "${args[@]}" | digest_sink >"${tmp}/${index}.report"; then
+  if ! "${BIN}" "${args[@]}" | digest_sink "${LANE_TMP}/${index}.count" \
+    >"${LANE_TMP}/${index}.report"; then
     echo "scale-corpus: shard ${index} of ${SHARDS} failed to generate" >&2
     return 1
   fi
@@ -456,6 +541,16 @@ file_shard() {
     # certifies. A reused arena can hold the manifest of an earlier, successful
     # run of this same shard, and leaving it in place beside a corpus file that
     # was not produced is exactly the certification this fix exists to stop.
+    rm -f "${OUT}/${name}.manifest.json"
+    return 1
+  fi
+  # EXITING 0 IS NOT WRITING THE FILE, and the manifest is written next — so a
+  # binary that exits 0 having created nothing would leave a certificate beside
+  # no shard at all. The existence test goes BEFORE the manifest write for that
+  # reason, and the manifest of an earlier, successful run of this same shard in
+  # a reused arena is removed with it.
+  if [[ ! -f "${OUT}/${name}" ]]; then
+    echo "scale-corpus: shard ${index} of ${SHARDS} exited 0 but wrote no file at ${OUT}/${name}" >&2
     rm -f "${OUT}/${name}.manifest.json"
     return 1
   fi
@@ -486,12 +581,13 @@ file_shard() {
 # branch below it had a bare `whole_run_manifest >"$1"`, so the identical fault —
 # an unwritable destination — produced a lane diagnostic naming the knob through
 # one branch and a bare `scripts/scale-corpus.sh: line N: ...: Is a directory`
-# through the other. One law, one implementation: `write_checked`.
+# through the other. One law, one implementation: `lane_write_checked`, which is
+# the same one `lubm-lane.sh` and `watdiv-lane.sh` write their files through.
 emit_manifest() {
   if [[ -n "${MANIFEST_PATH}" ]]; then
-    write_checked "${MANIFEST_PATH}" "the manifest" \
-      "SCALE_MANIFEST='${MANIFEST_PATH}'" "${WHOLE_RUN_MANIFEST}"
-    WROTE_MANIFEST="${MANIFEST_PATH}"
+    lane_write_checked "${MANIFEST_PATH}" "the manifest" \
+      "SCALE_MANIFEST='${MANIFEST_PATH}'" whole_run_manifest
+    lane_certify "${MANIFEST_PATH}" "the whole-run manifest"
     echo "scale-corpus: manifest written to ${MANIFEST_PATH}" >&2
     return
   fi
@@ -499,9 +595,9 @@ emit_manifest() {
     stdout) whole_run_manifest ;;
     stderr) whole_run_manifest >&2 ;;
     *)
-      write_checked "$1" "the whole-run manifest" \
-        "'$1', its default destination under SCALE_OUT='${OUT}'" "${WHOLE_RUN_MANIFEST}"
-      WROTE_MANIFEST="$1"
+      lane_write_checked "$1" "the whole-run manifest" \
+        "'$1', its default destination under SCALE_OUT='${OUT}'" whole_run_manifest
+      lane_certify "$1" "the whole-run manifest"
       echo "scale-corpus: manifest written to $1" >&2
       ;;
   esac
@@ -513,24 +609,22 @@ case "${MODE}" in
     emit_manifest stdout
     run_all_shards stream_shard || die "at least one shard failed"
     for ((index = 0; index < SHARDS; index++)); do
-      printf 'shard %d/%d %s\n' "${index}" "${SHARDS}" "$(cat "${tmp}/${index}.report")"
+      printf 'shard %d/%d %s\n' "${index}" "${SHARDS}" "$(cat "${LANE_TMP}/${index}.report")"
     done
+    # ACCOUNTED FOR IN BOTH HALVES OF THIS MODE. The totals line is only printed
+    # when this lane's own sink produced the per-shard reports; the ACCOUNTING
+    # happens either way, because `SCALE_SINK` changes who consumes the bytes and
+    # not whether they were produced.
+    account_for_run "across all ${SHARDS} shards"
     if [[ -z "${SINK}" ]]; then
-      total_line="$(cat "${tmp}"/*.report | python3 -c '
-import sys
-
-rows = 0
-size = 0
-for line in sys.stdin:
-    fields = dict(field.split("=", 1) for field in line.split() if "=" in field)
-    rows += int(fields["rows"])
-    size += int(fields["bytes"])
-density = (size / rows) if rows else 0.0
-print(f"total rows={rows} bytes={size} bytes_per_row={density:.1f}")
-')"
-      printf '%s\n' "${total_line}"
-      total_rows="${total_line#total rows=}"
-      require_nonempty_run "${total_rows%% *}" "rows"
+      density=0.0
+      if ((RUN_ROWS > 0)); then
+        density="$(python3 -c 'import sys; print(f"{int(sys.argv[1]) / int(sys.argv[2]):.1f}")' \
+          "${RUN_BYTES}" "${RUN_ROWS}")"
+      fi
+      printf 'total rows=%s bytes=%s bytes_per_row=%s\n' "${RUN_ROWS}" "${RUN_BYTES}" "${density}"
+    else
+      printf 'total rows=%s bytes=%s through SCALE_SINK\n' "${RUN_ROWS}" "${RUN_BYTES}"
     fi
     ;;
   pipe)
@@ -538,44 +632,63 @@ print(f"total rows={rows} bytes={size} bytes_per_row={density:.1f}")
     emit_manifest stderr
     for ((index = 0; index < SHARDS; index++)); do
       mapfile -t args < <(shard_args "${index}")
-      "${BIN}" "${args[@]}" ||
+      # Counted on the way out. stdout belongs to the consumer here, so the count
+      # is the only place this lane can see what it delivered — and the totals go
+      # to stderr, where they cannot corrupt the payload.
+      "${BIN}" "${args[@]}" | count_through "${LANE_TMP}/${index}.count" ||
         die "shard ${index} of ${SHARDS} failed with status $? — the stream is INCOMPLETE"
     done
+    account_for_run "onto standard output"
+    echo "scale-corpus: delivered ${RUN_ROWS} rows, ${RUN_BYTES} bytes on stdout" >&2
     ;;
   files)
     # `SCALE_OUT` gets the same treatment `SCALE_MANIFEST` already had: an
     # unusable directory is a LANE failure that quotes the bytes back, not a
     # bare `mkdir: cannot create directory ...` with no hint which knob supplied
     # it. The two messages are deliberately the same shape.
-    if ! mkdir_error="$(mkdir -p "${OUT}" 2>&1)"; then
-      die "cannot create the output directory SCALE_OUT='${OUT}'
-  ${mkdir_error}
-  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Check that its parent directory exists and is writable."
-    fi
+    lane_mkdir_checked "${OUT}" "SCALE_OUT='${OUT}'"
     echo "scale-corpus: profile=${PROFILE_ID} mode=files shards=${SHARDS} out=${OUT}" >&2
     emit_manifest "${OUT}/${PREFIX}.manifest.json"
     run_all_shards file_shard || die "at least one shard failed"
     # The guarantee on the last line is only worth printing if every shard file
-    # is actually there to be `cat`ed, so the sizes are read with their status
-    # checked. `wc -c < <a directory>` succeeds as a redirection and reports
-    # `bytes=0`, which is precisely how a missing shard used to be announced as
-    # an empty one.
-    run_bytes=0
+    # is actually there to be `cat`ed AND holds the rows the manifest certifies,
+    # so each one is measured with its status checked. `wc -c < <a directory>`
+    # succeeds as a redirection and reports `bytes=0`, which is precisely how a
+    # missing shard used to be announced as an empty one.
+    #
+    # `wc -lc` is ONE pass for both numbers, and `tail -c 1` is a seek: the cost
+    # of accounting for a materialized corpus is a single sequential read of what
+    # was just written, and it is what turns the manifest beside these files from
+    # a claim into a certificate.
     for ((index = 0; index < SHARDS; index++)); do
       name="$(shard_name "${index}")"
       [[ -f "${OUT}/${name}" ]] ||
         die "shard ${index} of ${SHARDS} reported success but ${OUT}/${name} is not a regular file"
-      if ! bytes="$(wc -c <"${OUT}/${name}")"; then
-        die "cannot size the shard file ${OUT}/${name}"
+      if ! measured="$(wc -lc <"${OUT}/${name}")"; then
+        die "cannot measure the shard file ${OUT}/${name}"
       fi
-      printf '%s bytes=%s\n' "${name}" "${bytes}"
-      run_bytes=$((run_bytes + bytes))
+      read -r rows bytes <<<"${measured}"
+      # NON-EMPTY IS NOT "IS N-QUADS", and this lane's output is N-Quads too. An
+      # EMPTY shard file is legitimate here (see `require_run_rows`), so only the
+      # shards that produced something are asked to have produced the right thing
+      # — by the same implementation `lubm-lane.sh` checks its dataset with.
+      if ((bytes > 0)); then
+        lane_require_nquads "${OUT}/${name}" "shard ${index} of ${SHARDS}"
+      fi
+      terminated=1
+      if ((bytes > 0)) && [[ "$(tail -c 1 -- "${OUT}/${name}")" != "" ]]; then
+        # `$(...)` strips trailing newlines, so a final newline reads back as the
+        # empty string and anything else reads back as itself.
+        terminated=0
+      fi
+      printf '%s rows=%s bytes=%s\n' "${name}" "${rows}" "${bytes}"
+      printf '%d %d %d\n' "${rows}" "${bytes}" "${terminated}" >"${LANE_TMP}/${index}.count"
     done
     # Materializing a corpus of zero bytes and then printing the byte-for-byte
-    # guarantee over it would certify emptiness. An individual shard file may
-    # legitimately be empty (see `require_nonempty_run`); the run may not.
-    require_nonempty_run "${run_bytes}" "bytes across all ${SHARDS} shard files"
+    # guarantee over it would certify emptiness; materializing HALF of one and
+    # printing it would be worse. An individual shard file may legitimately be
+    # empty (see `require_run_rows`); the run may not.
+    account_for_run "across all ${SHARDS} shard files"
     echo "scale-corpus: cat ${OUT}/${PREFIX}.shard-*.nq reproduces a whole run byte for byte" >&2
     ;;
 esac
