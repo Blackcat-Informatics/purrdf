@@ -157,16 +157,17 @@ pub enum PagedFreezeError {
     /// seal refuses rather than collapse the duplicate. Boxed to keep the enum (and
     /// therefore the seal `Result`) small.
     QuadOverlap(Box<PagedQuadOverlap>),
-    /// A page's freshly re-derived [`PageSummary`] disagrees with the one it was
+    /// A page's freshly re-derived `PageSummary` disagrees with the one it was
     /// sealed with — its materialized content has drifted since certification.
     ///
-    /// The pruning law ([`admission::admit_pattern`], [`GraphPageIndex`]) trusts the
-    /// sealed summary to authorize SKIPPING a page without materializing it. An
-    /// UNDER-reporting drift (the sealed summary claims fewer rows, in fewer places,
-    /// than the page actually holds) is exactly the direction no materialization-time
-    /// check can ever observe, because a page the pruning law skips is never
-    /// materialized in the first place — only [`PagedDataset::verify_parts`], which
-    /// materializes every page unconditionally, can reach it. Raised only there.
+    /// The pruning law (the `admit_pattern` law, over the dataset-level
+    /// graph-to-page index) trusts the sealed summary to authorize SKIPPING a page
+    /// without materializing it. An UNDER-reporting drift (the sealed summary claims
+    /// fewer rows, in fewer places, than the page actually holds) is exactly the
+    /// direction no materialization-time check can ever observe, because a page the
+    /// pruning law skips is never materialized in the first place — only
+    /// [`PagedDataset::verify_parts`], which materializes every page
+    /// unconditionally, can reach it. Raised only there.
     SummaryDrift {
         /// The page whose materialized content no longer matches its sealed summary.
         page: PageId,
@@ -802,20 +803,20 @@ impl PagedDataset {
         &self.graph_index
     }
 
-    /// The ascending [`PageId`]s the page-admission law
-    /// ([`admission::admit_pattern`]) admits for the global `(s, p, o, g)` pattern —
-    /// the pre-execution footprint of that pattern, computed entirely from sealed
-    /// [`PageSummary`](summary::PageSummary) metadata. Materializes NOTHING.
+    /// The ascending [`PageId`]s the `admit_pattern` page-admission law admits for
+    /// the global `(s, p, o, g)` pattern — the pre-execution footprint of that
+    /// pattern, computed entirely from sealed `PageSummary` metadata. Materializes
+    /// NOTHING.
     ///
     /// This is the prediction that pairs with [`PagedQueryEvidence::requested_pages`]:
     /// a query run over [`PagedQueryLimits::UNBOUNDED`] against the same pattern on
     /// the same snapshot requests exactly this page set (in this ascending order),
     /// because both this method and `quads_for_pattern`/`PagedQueryView::quads_for_pattern`
     /// apply the identical `admit_pattern` law to the identical candidate page set
-    /// before any materialization. The admission law is SOUND but not COMPLETE (see
-    /// the [`admission` module docs](admission)): an admitted page may still yield
-    /// zero matching rows once actually scanned, so this is an upper bound on rows
-    /// touched, not a promise every listed page contributes a row.
+    /// before any materialization. The admission law is SOUND but not COMPLETE: an
+    /// admitted page may still yield zero matching rows once actually scanned, so
+    /// this is an upper bound on rows touched, not a promise every listed page
+    /// contributes a row.
     #[must_use]
     pub fn pages_for_pattern(
         &self,
@@ -838,9 +839,9 @@ impl PagedDataset {
     }
 
     /// The ascending [`PageId`]s owning at least one base-quad row in named graph
-    /// `g`, computed from the dataset-level [`GraphPageIndex`] alone (itself derived
-    /// from sealed per-page [`PageSummary`](summary::PageSummary) metadata).
-    /// Materializes NOTHING. Equivalent to (and implemented via)
+    /// `g`, computed from the dataset-level graph-to-page index alone (itself
+    /// derived from sealed per-page `PageSummary` metadata). Materializes NOTHING.
+    /// Equivalent to (and implemented via)
     /// `pages_for_pattern(None, None, None, GraphMatch::Named(g))`.
     #[must_use]
     pub fn pages_for_graph(&self, g: GlobalTermId) -> Vec<PageId> {
@@ -932,7 +933,7 @@ impl PagedDataset {
     }
 
     /// Materialize EVERY page through the provider and certify each one's freshly
-    /// re-derived [`PageSummary`] against the summary it was sealed with — the
+    /// re-derived `PageSummary` against the summary it was sealed with — the
     /// explicitly-paid, cold certification pass.
     ///
     /// The pruning law never materializes a page it decides to skip, so an
