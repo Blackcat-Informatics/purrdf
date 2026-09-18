@@ -1897,7 +1897,7 @@ fn expand_to_dataset(
     context: &CompiledJsonLdContext,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let carrier = expand::expand_document(value, context)?;
-    expand::carrier_to_dataset(&carrier)
+    expand::carrier_to_dataset(carrier)
 }
 
 /// Validate `iri` as an absolute IRI and return the native term.
