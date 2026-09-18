@@ -26,6 +26,10 @@
 //! added, alongside the whole-dataset case above (whose default-graph query has no
 //! graph component to prune on).
 //!
+//! A fourth, `bench_graph_var_bgp`, wraps it in `GRAPH ?g { ... }` instead — the
+//! graph-MAJOR shape, evaluated once per named graph over a corpus dominated by named
+//! graphs that own no row at all.
+//!
 //! Report-only, `cargo bench -p purrdf-sparql-eval --bench paged_cross_page_bgp` (the
 //! `make bench` lane) — excluded from `make check`.
 
@@ -228,6 +232,61 @@ SELECT ?x ?n ?a WHERE {{
   }}
 }}"
     )
+}
+
+/// The `GRAPH ?g { ... }`-wrapped variant of [`QUERY`]: the graph-MAJOR shape, which
+/// evaluates its inner pattern once per named graph rather than once for one named
+/// graph.
+const GRAPH_VAR_QUERY: &str = "\
+PREFIX ex: <http://example.org/>
+SELECT ?g ?x ?n ?a WHERE {
+  GRAPH ?g {
+    ?p ex:knows ?x .
+    ?x ex:name ?n .
+    ?x ex:age ?a .
+    FILTER(?a > 30)
+  }
+}";
+
+/// Named graphs declared to exist while owning no quad, added to the graph-selective
+/// corpus for the `GRAPH ?g` bench below. `?g` ranges over these exactly as it ranges
+/// over the populated ones, so they are part of the loop's real per-graph cost — set
+/// several times [`GRAPH_COUNT`] so the "graphs that cannot answer" side of the loop
+/// dominates, which is the shape the graph-major path is about.
+const DECLARED_EMPTY_GRAPH_COUNT: usize = 24;
+
+/// Freeze one page that declares `graphs` as named graphs owning no quad at all.
+fn build_declared_empty_page(graphs: &[TermValue]) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    for graph in graphs {
+        let g = intern_value(&mut b, graph);
+        b.declare_named_graph(g);
+    }
+    b.freeze().expect("declared-empty page freeze")
+}
+
+/// Freeze ONE dataset holding every `(graph, triples)` pair's quads plus a list of named
+/// graphs declared with no quads — the whole-dataset counterpart of
+/// [`build_multi_graph_dataset`] plus [`build_declared_empty_page`].
+fn build_multi_graph_dataset_with_empties(
+    graphs: &[(TermValue, Vec<Triple>)],
+    declared_empty: &[TermValue],
+) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    for (graph, triples) in graphs {
+        let g = intern_value(&mut b, graph);
+        for (s, p, o) in triples {
+            let s = intern_value(&mut b, s);
+            let p = intern_value(&mut b, p);
+            let o = intern_value(&mut b, o);
+            b.push_quad(s, p, o, Some(g));
+        }
+    }
+    for graph in declared_empty {
+        let g = intern_value(&mut b, graph);
+        b.declare_named_graph(g);
+    }
+    b.freeze().expect("multi-graph dataset freeze")
 }
 
 fn bench_cross_page_bgp(c: &mut Criterion) {
@@ -440,10 +499,123 @@ fn bench_graph_selective_bgp(c: &mut Criterion) {
     group.finish();
 }
 
+/// Graph-MAJOR BGP evaluation latency: the same 3-pattern join + `FILTER`, this time
+/// wrapped in `GRAPH ?g { ... }` so the inner pattern is evaluated once per named graph,
+/// over a corpus deliberately dominated by named graphs that own nothing
+/// ([`DECLARED_EMPTY_GRAPH_COUNT`] declared-empty graphs against [`GRAPH_COUNT`]
+/// populated ones). Evaluated (a) over a single frozen `RdfDataset` holding every graph
+/// and (b) over a `PagedDataset` whose pages each hold exactly one named graph.
+///
+/// This is the shape whose cost is per-graph rather than per-query: each named graph's
+/// evaluation runs scoped to that graph, so a backend with a graph-to-page index reads
+/// only the pages owning it, and a graph that holds no row at all is passed over instead
+/// of being driven through the whole inner algebra. `?g` still ranges over every named
+/// graph in both cases — the declared-empty ones included — which is why they are in the
+/// corpus at all.
+///
+/// Report-only, same as every bench in this file: NO timing threshold, NO `assert!` on a
+/// duration, and no conclusion drawn from the two groups' relative numbers. The machine
+/// running `cargo bench` is not quiet. The falsifiable, deterministic claims — which
+/// graphs enumerate, which pages are materialized, how many inner evaluations run — are
+/// asserted in the test suite (`tests/graph_var_narrowing.rs`), not here.
+fn bench_graph_var_bgp(c: &mut Criterion) {
+    let per_graph_corpus: Vec<Vec<Triple>> = (0..GRAPH_COUNT)
+        .map(|i| graph_corpus(i, GRAPH_ENTITIES))
+        .collect();
+    let graphs: Vec<TermValue> = (0..GRAPH_COUNT)
+        .map(|i| iri(&format!("graph{i}")))
+        .collect();
+    let declared_empty: Vec<TermValue> = (0..DECLARED_EMPTY_GRAPH_COUNT)
+        .map(|i| iri(&format!("empty_graph{i}")))
+        .collect();
+
+    // (1) The whole-dataset baseline.
+    let multi: Vec<(TermValue, Vec<Triple>)> = graphs
+        .iter()
+        .cloned()
+        .zip(per_graph_corpus.iter().cloned())
+        .collect();
+    let single = build_multi_graph_dataset_with_empties(&multi, &declared_empty);
+
+    // (2) The paged view: one populated named graph per page, plus one page carrying
+    // nothing but the declared-empty graph names.
+    let mut pages: Vec<Arc<RdfDataset>> = graphs
+        .iter()
+        .zip(per_graph_corpus.iter())
+        .map(|(g, triples)| build_graph_page(triples, g))
+        .collect();
+    pages.push(build_declared_empty_page(&declared_empty));
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal graph pages");
+    assert_eq!(
+        paged.page_count(),
+        GRAPH_COUNT + 1,
+        "one page per populated named graph, plus the declared-empty page"
+    );
+    assert_eq!(
+        DatasetView::named_graphs(&paged).count(),
+        GRAPH_COUNT + DECLARED_EMPTY_GRAPH_COUNT,
+        "`?g` ranges over the declared-empty graphs too"
+    );
+
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(GRAPH_VAR_QUERY, None)
+        .expect("prepare");
+
+    // Sanity pass: both backends must do real per-graph work (a broken fixture would
+    // silently benchmark a no-op).
+    let single_rows = engine
+        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+        .expect("single graph-var query");
+    let paged_rows = engine
+        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .expect("paged graph-var query");
+    assert!(
+        row_count(&single_rows) > 0,
+        "single-dataset graph-var query must return rows"
+    );
+    assert_eq!(
+        row_count(&single_rows),
+        row_count(&paged_rows),
+        "single and paged backends must agree on row count"
+    );
+
+    let mut group = c.benchmark_group("graph_var_bgp");
+    group.bench_function("single", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared(
+                    criterion::black_box(&single),
+                    criterion::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("single graph-var query");
+            criterion::black_box(result);
+        });
+    });
+    group.bench_function("paged", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared_view(
+                    criterion::black_box(&paged),
+                    criterion::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("paged graph-var query");
+            criterion::black_box(result);
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_cross_page_bgp,
     bench_paged_full_scan,
-    bench_graph_selective_bgp
+    bench_graph_selective_bgp,
+    bench_graph_var_bgp
 );
 criterion_main!(benches);
