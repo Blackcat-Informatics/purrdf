@@ -1852,7 +1852,9 @@ pub(super) fn parse_jsonld_into_scope(
         CompiledJsonLdContext::compile(&to_json_object(BTreeMap::new()), scope_base(base))?;
     let value = context::parse_document(json_bytes)?;
     let in_force = expand::document_base(&value, &context)?;
-    let dataset = expand_to_dataset(&value, &context)?;
+    // `value` is MOVED here: the base question is already answered, so the parsed
+    // document need not outlive the expansion that consumes it.
+    let dataset = expand_to_dataset(value, &context)?;
     // Only a document that MOVED the base rewrites the scope. When the two agree, the
     // base in force is still the caller's and its `BaseOrigin::Caller` provenance is the
     // truthful one; overwriting it would claim the document said something it did not.
@@ -1885,7 +1887,7 @@ pub fn parse_jsonld_with_context(
     context: &CompiledJsonLdContext,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let value = context::parse_document(json_bytes)?;
-    expand_to_dataset(&value, context)
+    expand_to_dataset(value, context)
 }
 
 /// Expand a parsed JSON-LD value under `context` and lower it into the frozen IR.
@@ -1893,7 +1895,7 @@ pub fn parse_jsonld_with_context(
 /// The single expansion body both public parse entry points and the codec seam share, so
 /// the base-reporting path cannot expand a document differently from the base-less one.
 fn expand_to_dataset(
-    value: &Value,
+    value: Value,
     context: &CompiledJsonLdContext,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let carrier = expand::expand_document(value, context)?;
@@ -2215,7 +2217,7 @@ mod carrier_law_tests {
         let compacted = serialize_carrier_compacted(&expanded, &context).expect("compaction");
         let document = context::parse_document(compacted.as_bytes()).expect("strict JSON");
         let initial = CompiledJsonLdContext::compile(&json!({}), None).expect("empty context");
-        let reexpanded = expand::expand_document(&document, &initial).expect("re-expansion");
+        let reexpanded = expand::expand_document(document, &initial).expect("re-expansion");
         assert_eq!(expanded, reexpanded, "compacted document:\n{compacted}");
     }
 
