@@ -1394,6 +1394,10 @@ class _PreparedShapes:
 
     # Byte-deterministic: equal preparations produce identical bytes.
     def to_product(self) -> bytes: ...
+    # Where this preparation came from, as one deterministic token: `parsed`,
+    # `restored-admitted <identity_digest>` or `restored-rebuilt <identity_digest>`.
+    # Total — there is always an answer, and none of them means "unknown".
+    def provenance(self) -> str: ...
     def validate_nt(self, data_nt: str) -> _ValidationReport: ...
 
 class _ShapesProduct:

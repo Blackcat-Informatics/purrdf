@@ -1267,7 +1267,8 @@ impl<'a> ShapesProductView<'a> {
             ))
         })?;
 
-        CertifiedParts::from_rebuilt(shapes, host).map(CertifiedParts::into_prepared)
+        CertifiedParts::from_rebuilt(self.declared_identity(), shapes, host)
+            .map(CertifiedParts::into_prepared)
     }
 
     /// **The cold path.** Independently corroborate the shapes dataset's canonical

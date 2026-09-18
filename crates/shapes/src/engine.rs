@@ -16,6 +16,7 @@ use purrdf_sparql_eval::{GovernorEvidence, GovernorState, QueryGovernors, Trippe
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
 use crate::expression::{FnCall, NodeExpr, ShapeArg};
+use crate::provenance::ValidatorProvenance;
 use crate::report::ValidationReport;
 use crate::shapes::{Constraint, PropertyShape, Shape, Shapes, Target};
 use crate::term::{NamedNode, Term, canonical_cmp, term_id_to_native};
@@ -782,18 +783,64 @@ where
 /// exact dataset. No target set, validation answer or negative dependency proof
 /// is reused across bindings. Keep this value for a batch of related validations;
 /// its storage is bounded by the supplied shape tree and released with its owners.
+///
+/// Every one carries the [`ValidatorProvenance`] of the route that built it, so a
+/// report can be attributed to the artifact behind it rather than to whichever file
+/// the caller remembers opening — read it with [`Self::provenance`].
 #[derive(Debug, Clone)]
 pub struct PreparedShapes {
     shapes: Arc<Shapes>,
     classes: Arc<ClassCatalog>,
+    /// Where this preparation came from, recorded by the expression that built it.
+    ///
+    /// Shared rather than owned so that binding a preparation to a dataset — the
+    /// hot, repeated operation this whole type exists for — costs a reference-count
+    /// bump instead of deep-copying an [`Identity`](purrdf_core::artifact::Identity)
+    /// and every labelled component inside it, once per bind.
+    provenance: Arc<ValidatorProvenance>,
 }
 
 impl PreparedShapes {
     /// Analyze the complete parsed shape tree once, without inspecting any data.
+    ///
+    /// The resulting preparation reports [`ValidatorProvenance::Parsed`]: these
+    /// shapes were analyzed from a value this process holds, not restored from an
+    /// artifact. That is stated HERE, at the construction site, rather than left for
+    /// a caller to assert later — see [`ValidatorProvenance`] for why an accessor
+    /// with an "unknown" answer would be worse than none.
     #[must_use]
     pub fn new(shapes: Arc<Shapes>) -> Self {
+        Self::with_provenance(shapes, ValidatorProvenance::Parsed)
+    }
+
+    /// Analyze a shape tree and record a provenance other than a local parse.
+    ///
+    /// `pub(crate)` on purpose, and the reason is the one [`ParseProvenance`] gives:
+    /// a provenance a caller can assign is a CLAIM about a preparation rather than a
+    /// fact about it. The only expressions that may state "this came from product
+    /// X" are the codec's own admission seams, which have the product in hand and
+    /// have already checked what they are about to claim.
+    ///
+    /// [`ParseProvenance`]: crate::provenance::ParseProvenance
+    pub(crate) fn with_provenance(shapes: Arc<Shapes>, provenance: ValidatorProvenance) -> Self {
         let classes = Arc::new(ClassCatalog::for_shapes(shapes.node_shapes.iter()));
-        Self { shapes, classes }
+        Self {
+            shapes,
+            classes,
+            provenance: Arc::new(provenance),
+        }
+    }
+
+    /// Where this preparation came from: parsed in this process, or restored from a
+    /// named prepared product.
+    ///
+    /// TOTAL — every preparation has an answer, and none of them is "unknown". A
+    /// report is only attributable to the artifact that produced it if the
+    /// preparation can be asked, so this is the accessor a consumer pairs with a
+    /// verdict when the shapes arrived as bytes.
+    #[must_use]
+    pub fn provenance(&self) -> &ValidatorProvenance {
+        &self.provenance
     }
 
     /// The cycle-safe class analysis this preparation derived from its shape tree.
@@ -1000,6 +1047,10 @@ impl PreparedShapes {
 pub struct PreparedValidator {
     data: ShaclData,
     shapes: Arc<Shapes>,
+    /// The provenance of the [`PreparedShapes`] this binding came from, shared with
+    /// it and with every sibling binding — a bind copies a reference count, never an
+    /// identity.
+    provenance: Arc<ValidatorProvenance>,
     plan: ValidationPlan,
     targets: Vec<PreparedTargets>,
 }
@@ -1034,9 +1085,21 @@ impl PreparedValidator {
         Ok(Self {
             data,
             shapes,
+            provenance: Arc::clone(&prepared.provenance),
             plan,
             targets,
         })
+    }
+
+    /// Where the shapes this validator executes came from: parsed in this process,
+    /// or restored from a named prepared product.
+    ///
+    /// The same answer [`PreparedShapes::provenance`] gives — literally the same
+    /// shared value — so a caller holding only a binding can attribute its reports
+    /// without keeping the preparation beside it.
+    #[must_use]
+    pub fn provenance(&self) -> &ValidatorProvenance {
+        &self.provenance
     }
 
     /// Operational measurements for the retained Core and SPARQL carriers.

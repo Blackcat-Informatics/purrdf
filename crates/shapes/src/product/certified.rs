@@ -64,6 +64,7 @@ use purrdf_sparql_eval::user_fn::FnPopulation;
 use purrdf_sparql_eval::{UserFunctionRegistry, user_fn};
 
 use crate::engine::PreparedShapes;
+use crate::provenance::{ProductRestore, ValidatorProvenance};
 use crate::shapes::{Shapes, link};
 
 use super::error::{ProductDimension, ShapesProductError};
@@ -99,7 +100,13 @@ impl CertifiedParts {
         install(&mut shapes, host)?;
 
         let shapes = Arc::new(shapes);
-        let prepared = PreparedShapes::new(Arc::clone(&shapes));
+        let prepared = PreparedShapes::with_provenance(
+            Arc::clone(&shapes),
+            ValidatorProvenance::Restored {
+                identity: declared.clone(),
+                restore: ProductRestore::Admitted,
+            },
+        );
         let classes = prepared.class_catalog();
         identity::check_restored_identity(
             declared,
@@ -122,16 +129,30 @@ impl CertifiedParts {
     /// the shapes come from the dataset the envelope's per-section SHA-256 and
     /// whole-container digest already authenticate.
     ///
+    /// `declared` is RECORDED, not checked — it is the identity the product's own
+    /// authenticated identity region carries, and it is what lets a rebuilt
+    /// preparation still name the artifact it came from. The distinction between a
+    /// recorded identity and a verified one is carried in the type rather than left
+    /// to prose: this seam records [`ProductRestore::Rebuilt`], whose documentation
+    /// states exactly what has and has not been proven about the value beside it.
+    ///
     /// # Errors
     ///
     /// The installation refusals [`install`] reports.
     pub(super) fn from_rebuilt(
+        declared: &Identity,
         mut shapes: Shapes,
         host: &HostBindings<'_>,
     ) -> Result<Self, ShapesProductError> {
         install(&mut shapes, host)?;
         Ok(Self {
-            prepared: PreparedShapes::new(Arc::new(shapes)),
+            prepared: PreparedShapes::with_provenance(
+                Arc::new(shapes),
+                ValidatorProvenance::Restored {
+                    identity: declared.clone(),
+                    restore: ProductRestore::Rebuilt,
+                },
+            ),
         })
     }
 

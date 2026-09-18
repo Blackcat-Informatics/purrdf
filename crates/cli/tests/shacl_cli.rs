@@ -22,7 +22,10 @@
 //!   a CURRENT product too, and still honours `--expect-identity` rather than bypassing it;
 //! * `shacl pack --shapes-graph` records the same absolute IRI `validate --shapes
 //!   --shapes-graph` resolves, so a SHACL-SPARQL body reading `$shapesGraph` reaches the
-//!   byte-identical verdict through either lane.
+//!   byte-identical verdict through either lane;
+//! * every `validate` run prints `shacl shapes-provenance <token>`, and a restored product
+//!   names the ARTIFACT by the identity digest `shacl explain` publishes for that same file
+//!   — so a verdict in a log is attributable to the bytes that produced it.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -1253,10 +1256,37 @@ fn rebuild_on_a_current_product_matches_admit() {
         stdout(&rebuilt),
         "rebuilding a current product must not move a single byte of the report",
     );
-    assert_eq!(
+    // …nor a single byte of the verdict lines. The `shacl shapes-provenance` receipt is
+    // deliberately excluded and is the ONE line that legitimately differs: it names the
+    // seam the preparation came through, which is exactly what these two runs differ in,
+    // and flattening it would report "checked against this process" for a rebuild that was
+    // not. Everything that describes the ANSWER must still match byte for byte.
+    let verdict = |out: &Output| {
+        stderr(out)
+            .lines()
+            .filter(|line| !line.starts_with("shacl shapes-provenance "))
+            .fold(String::new(), |mut kept, line| {
+                kept.push_str(line);
+                kept.push('\n');
+                kept
+            })
+    };
+    assert_eq!(verdict(&admitted), verdict(&rebuilt));
+    assert!(
+        verdict(&admitted).contains("shacl conforms false\n"),
+        "the fixture must actually find its violation, or the comparison is vacuous: {}",
+        stderr(&admitted)
+    );
+
+    // The excluded line is excluded because it DIFFERS, not because it is absent — a
+    // filter that silently matched nothing would make the comparison above weaker than it
+    // looks.
+    assert!(
+        stderr(&admitted).contains("shacl shapes-provenance restored-admitted ")
+            && stderr(&rebuilt).contains("shacl shapes-provenance restored-rebuilt "),
+        "each run must name its own seam: {} / {}",
         stderr(&admitted),
-        stderr(&rebuilt),
-        "…nor a single byte of the verdict lines",
+        stderr(&rebuilt)
     );
 }
 
@@ -1362,4 +1392,94 @@ fn rebuild_is_refused_against_a_shapes_document() {
         "{}",
         stderr(&against_a_product)
     );
+}
+
+/// Every `validate` run says where its shapes came from, and a restored product names the
+/// ARTIFACT — with the identity digest `shacl explain` prints for that same file.
+///
+/// This is the half of the question admission does not answer. `--shapes-product` establishes
+/// that this build MAY execute a product; nothing in the verdict it prints says WHICH product
+/// produced it, so an operator reading `shacl conforms true` in a log has no way to attribute
+/// it to a file. The digest is read off `shacl explain` here rather than restated, because a
+/// second spelling of one artifact's name is a second thing to drift: the point of the
+/// receipt is that the value on it can be handed straight back to `--expect-identity`.
+#[test]
+fn a_validate_run_says_where_its_shapes_came_from() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes_path = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let data_path = write_file(dir.path(), "data.ttl", DATA);
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path").to_owned();
+
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes_path,
+        "--out",
+        &product_path,
+    ]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+
+    // The artifact's own name, read off the verb that publishes it.
+    let explained = run(&["shacl", "explain", &product_path]);
+    assert_eq!(code(&explained), 0, "{}", stderr(&explained));
+    let digest = stdout(&explained)
+        .lines()
+        .find_map(|line| line.strip_prefix("identity-digest ").map(ToOwned::to_owned))
+        .expect("`shacl explain` prints an identity digest");
+    assert_eq!(digest.len(), 64, "the digest is 64 hexadecimal digits");
+
+    let parsed = run(&["validate", "--shapes", &shapes_path, &data_path]);
+    assert_eq!(code(&parsed), 0, "{}", stderr(&parsed));
+    assert!(
+        stderr(&parsed).contains("shacl shapes-provenance parsed\n"),
+        "a document lane names no artifact, and must not invent one: {}",
+        stderr(&parsed)
+    );
+
+    let admitted = run(&["validate", "--shapes-product", &product_path, &data_path]);
+    assert_eq!(code(&admitted), 0, "{}", stderr(&admitted));
+    assert!(
+        stderr(&admitted).contains(&format!(
+            "shacl shapes-provenance restored-admitted {digest}\n"
+        )),
+        "the admitted lane must name the artifact by the digest `shacl explain` prints: {}",
+        stderr(&admitted)
+    );
+
+    let rebuilt = run(&[
+        "validate",
+        "--shapes-product",
+        &product_path,
+        "--rebuild",
+        &data_path,
+    ]);
+    assert_eq!(code(&rebuilt), 0, "{}", stderr(&rebuilt));
+    assert!(
+        stderr(&rebuilt).contains(&format!(
+            "shacl shapes-provenance restored-rebuilt {digest}\n"
+        )),
+        "the rebuild lane names the same artifact under its own token, because the digest it \
+         carries was recorded rather than checked: {}",
+        stderr(&rebuilt)
+    );
+
+    // The two restore tokens really are distinguishable — a rendering that flattened them
+    // would report the stronger claim (checked against this process) for both.
+    assert!(
+        !stderr(&rebuilt).contains("restored-admitted"),
+        "the rebuild lane must not claim the admitted token: {}",
+        stderr(&rebuilt)
+    );
+
+    // …and the receipt is a receipt, not a replacement for the verdict.
+    for out in [&parsed, &admitted, &rebuilt] {
+        assert!(
+            stderr(out).contains("shacl conforms false\n")
+                && stderr(out).contains("shacl results 1\n"),
+            "every lane still decides: {}",
+            stderr(out)
+        );
+    }
 }

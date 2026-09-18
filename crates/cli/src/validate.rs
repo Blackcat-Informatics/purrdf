@@ -148,6 +148,7 @@
 use std::sync::Arc;
 
 use purrdf::shapes::engine::{self, GovernedValidation};
+use purrdf::shapes::provenance::ValidatorProvenance;
 use purrdf::shapes::report::ValidationReport;
 use purrdf::shapes::shapes::Shapes;
 use purrdf_core::RdfDataset;
@@ -217,7 +218,7 @@ enum ShapesSource {
     /// A shapes document parsed on this run (`--shapes`).
     ///
     /// Boxed because a `Shapes` is two orders of magnitude larger than a
-    /// `PreparedShapes` (which is a pair of `Arc`s), and an enum sized to the larger
+    /// `PreparedShapes` (which is a handful of `Arc`s), and an enum sized to the larger
     /// arm would be moved around at that size on both routes.
     Parsed(Box<Shapes>),
     /// A preparation restored from a prepared product (`--shapes-product`). The
@@ -232,6 +233,29 @@ impl ShapesSource {
         match self {
             Self::Parsed(shapes) => shapes,
             Self::Restored(prepared) => prepared.shapes(),
+        }
+    }
+
+    /// Where these shapes came from, rendered as the receipt token an operator reads.
+    ///
+    /// Total across both arms, because "which shapes did this verdict come from?" has an
+    /// answer on every run and a receipt that only sometimes carried one would be a
+    /// receipt nobody could rely on scraping. The restored arm READS the answer off the
+    /// preparation the codec handed back — it does not restate what this function
+    /// believes was loaded, which would be a second, forgeable spelling of a fact the
+    /// preparation already holds. The parsed arm has no preparation to read (the parse
+    /// lane hands the engine a `&Shapes` directly), and there the arm IS the fact: this
+    /// run parsed a shapes document.
+    ///
+    /// One rendering for every host: [`ValidatorProvenance`]'s own `Display`, so the
+    /// digest printed here is the same 64 hexadecimal digits `purrdf shacl explain`
+    /// prints on its `identity-digest` line and `--expect-identity` accepts.
+    ///
+    /// [`ValidatorProvenance`]: purrdf_shapes::provenance::ValidatorProvenance
+    fn provenance(&self) -> String {
+        match self {
+            Self::Parsed(_) => ValidatorProvenance::Parsed.to_string(),
+            Self::Restored(prepared) => prepared.provenance().to_string(),
         }
     }
 }
@@ -265,6 +289,12 @@ pub(crate) fn run(
 
     let data = source::load_dataset(options.input, data_format, options.base)?;
     let source = plan.load(options)?;
+    // Before the verdict, because it describes the INPUT rather than the outcome and an
+    // operator reading a failed run needs to know which shapes produced it even when the
+    // validation below never gets to print anything. A restored product renders the
+    // artifact's own identity digest here, which is what makes a report attributable to
+    // the file it came from rather than to whichever path the shell happened to expand.
+    eprintln!("shacl shapes-provenance {}", source.provenance());
     let shapes = source.shapes();
 
     let Some(report) = validate(&data, shapes, options, plan.shapes_graph())? else {

@@ -147,3 +147,44 @@ def test_a_shapes_document_that_does_not_parse_names_no_dimension() -> None:
 
     # The neighbouring VALID case: a shapes document that DOES parse still packs.
     purrdf.shapes.pack_product(_SHAPES)
+
+
+# ── 5. A restored preparation names the artifact it came from ──────────────────
+
+
+def test_a_restored_preparation_names_the_product_it_came_from() -> None:
+    """``provenance()`` answers the half admission does not.
+
+    ``admit()`` establishes that this build MAY execute a product; nothing in the
+    report it produces says WHICH product produced it, so a caller looking at a
+    verdict afterwards cannot attribute it to an artifact. The digest asserted here
+    is read off ``identity_digest()`` rather than restated, because the value is
+    only useful if it is the one spelling ``admit_expecting()`` accepts back.
+    """
+    product = _pack()
+    view = purrdf.shapes.ShapesProduct.open(product)
+    digest = view.identity_digest()
+
+    admitted = purrdf.shapes.ShapesProduct.open(product).admit()
+    assert admitted.provenance() == f"restored-admitted {digest}"
+
+    rebuilt = purrdf.shapes.ShapesProduct.open(product).rebuild()
+    assert rebuilt.provenance() == f"restored-rebuilt {digest}"
+
+    # The two restore seams stay distinguishable: the digest means "checked against
+    # this process" on one and "recorded from the artifact, deliberately not
+    # checked" on the other, and one token for both would report the stronger claim.
+    assert admitted.provenance() != rebuilt.provenance()
+
+    # The digest is exactly the selector the bound restore takes, which is what
+    # makes reading it off a log worth anything.
+    purrdf.shapes.ShapesProduct.open(product).admit_expecting(
+        admitted.provenance().split(" ")[1]
+    )
+
+
+def test_a_parsed_preparation_names_no_artifact() -> None:
+    """The paired case, and the one that proves the accessor is TOTAL rather than
+    always-restored: a preparation built by parsing answers ``parsed``. It names no
+    artifact because there is none, and PurRDF invents no fact it was not given."""
+    assert purrdf.shapes.Shapes(_SHAPES).prepare().provenance() == "parsed"

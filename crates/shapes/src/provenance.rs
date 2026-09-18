@@ -2,7 +2,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! The parse identity of a shapes graph: the caller-supplied inputs that decided
-//! what the parsed [`Shapes`](crate::shapes::Shapes) actually mean.
+//! what the parsed [`Shapes`](crate::shapes::Shapes) actually mean, and the
+//! obtaining identity of a preparation: which route produced the
+//! [`PreparedShapes`](crate::engine::PreparedShapes) a report came out of.
+//!
+//! The two are deliberately separate facts recorded by separate producers.
+//! [`ParseProvenance`] answers *what did this shapes graph MEAN?* and travels
+//! inside a prepared product, because changing any of it changes the shapes.
+//! [`ValidatorProvenance`] answers *where did this preparation COME FROM?* and
+//! travels nowhere: it is a property of one restore in one process, not of the
+//! declarative model, so it is never encoded into a product (see
+//! [`ValidatorProvenance`] for why putting it there would be wrong as well as
+//! expensive).
 //!
 //! # Why the parse inputs are retained rather than re-supplied
 //!
@@ -48,6 +59,10 @@
 //!
 //! Nothing here touches the filesystem, a clock, a thread, or randomness; it holds
 //! caller-supplied strings and stays `wasm32-unknown-unknown` compatible.
+
+use std::fmt;
+
+use purrdf_core::artifact::Identity;
 
 use crate::model::BoxRoleVocab;
 
@@ -130,6 +145,147 @@ impl ParseProvenance {
     #[must_use]
     pub fn shapes_graph(&self) -> Option<&str> {
         self.shapes_graph.as_deref()
+    }
+}
+
+/// Where a [`PreparedShapes`](crate::engine::PreparedShapes) came from: parsed in
+/// this process, or restored from a named prepared product.
+///
+/// # Why an authenticated artifact needs this
+///
+/// A prepared product answers *may this process execute these bytes?* — its stage
+/// id, profile and input binding are checked before any of it reaches a validator.
+/// It does not answer the question a consumer has AFTERWARDS, looking at a report:
+/// *which artifact produced this?* A deployment that restores a product from a
+/// cache directory, a CI job that fetches one from a registry and a test that packs
+/// one inline all hand the engine the same `PreparedShapes` type, and the report
+/// they produce is identical prose either way. Without an accessor the only way to
+/// attribute a verdict to an artifact is for the caller to remember which file it
+/// opened — which is precisely the "an identity supplied alongside a value is a
+/// claim, not a fact" forgery [`ParseProvenance`] exists to prevent, arriving one
+/// layer up.
+///
+/// # Total by construction, not by convention
+///
+/// There is no `Unknown` arm and no `Option`. Every expression in this crate that
+/// builds a `PreparedShapes` states its provenance at the construction site:
+/// [`PreparedShapes::new`](crate::engine::PreparedShapes::new) — the only public
+/// constructor, and the one every parse-side entry point funnels through — records
+/// [`Parsed`](Self::Parsed), and the codec's two admission seams record
+/// [`Restored`](Self::Restored) with the identity the product declares. An
+/// "unknown" arm would mean "a construction path forgot", which is a defect to fix
+/// rather than a value to report, and offering somewhere to put it is how the
+/// forgetting becomes permanent.
+///
+/// # Not part of the product
+///
+/// A prepared product carries the declarative model and the inputs that decided
+/// what it means. It does NOT carry this, and must not: the route by which a
+/// preparation was obtained is a fact about one restore in one process, so encoding
+/// it would put a value in the artifact that is false for every reader except the
+/// one that wrote it. It would also change what the model census digests, moving the
+/// preparation stage id — a model-meaning digest — for a change that alters no
+/// model meaning at all, invalidating every product ever written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidatorProvenance {
+    /// The shape tree was analyzed directly, from a [`Shapes`](crate::shapes::Shapes)
+    /// this process holds.
+    ///
+    /// Carries nothing, deliberately. The facts about the parse behind those shapes
+    /// are already reachable — and reachable in exactly one spelling — through
+    /// [`PreparedShapes::shapes`](crate::engine::PreparedShapes::shapes) and
+    /// [`Shapes::provenance`](crate::shapes::Shapes::provenance). Copying them here
+    /// would create a second copy of one fact for the two to drift apart on, which
+    /// is the failure [`ParseProvenance`]'s module docs describe and not a
+    /// convenience worth paying for.
+    Parsed,
+    /// The preparation was restored from a prepared product.
+    Restored {
+        /// The input binding the product declares — the ordered, labelled
+        /// components and the SHA-256 digest over them. The digest is the value
+        /// that NAMES the artifact: it is what
+        /// `purrdf shacl explain` prints on its `identity-digest` line and what
+        /// the bound restores require, so an attributed report and the artifact it
+        /// came from are compared on one spelling rather than two.
+        identity: Identity,
+        /// Which of the codec's two restore seams produced it — see
+        /// [`ProductRestore`], because the identity above means something
+        /// materially different on each.
+        restore: ProductRestore,
+    },
+}
+
+impl ValidatorProvenance {
+    /// The product identity this preparation was restored from, or `None` when it
+    /// was parsed in this process.
+    ///
+    /// The `Option` is a statement about the WORLD, not about this crate's
+    /// bookkeeping: a preparation that was never restored from an artifact has no
+    /// artifact to name, and inventing an empty identity for it would be minting a
+    /// fact. That is the opposite of an "unknown" arm, which would mean a restore
+    /// happened and nothing recorded which one.
+    #[must_use]
+    pub fn product_identity(&self) -> Option<&Identity> {
+        match self {
+            Self::Parsed => None,
+            Self::Restored { identity, .. } => Some(identity),
+        }
+    }
+}
+
+/// Which of the prepared-product codec's two restore seams produced a preparation.
+///
+/// The distinction is not bookkeeping: it decides what the identity beside it has
+/// been PROVEN to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProductRestore {
+    /// The memo was admitted: the product's profile, preparation stage id and
+    /// complete input binding were checked against the executing environment
+    /// before the preparation existed. The identity beside this arm is therefore a
+    /// verified statement about this process as well as a name for the artifact.
+    Admitted,
+    /// The preparation was re-derived from the shapes dataset the product carries,
+    /// on the forward-compatibility path a reader takes when it meets a preparation
+    /// stage it does not know.
+    ///
+    /// The identity beside this arm still names the artifact — it is decoded from
+    /// the product's own identity region, which the envelope's digests
+    /// authenticate — but it was deliberately NOT checked against this environment,
+    /// because every component a rebuild could compare against is a claim made by a
+    /// build whose model is not this one's, and checking them would refuse exactly
+    /// the products the rebuild path exists to rescue. What binds a rebuilt
+    /// preparation is the derivation from that authenticated dataset.
+    Rebuilt,
+}
+
+impl fmt::Display for ValidatorProvenance {
+    /// The ONE rendering of a provenance, shared by every host that shows it.
+    ///
+    /// A single whitespace-separated token, or that token and the artifact's
+    /// identity digest as 64 lowercase hexadecimal digits — the same spelling
+    /// `purrdf shacl explain` prints on its `identity-digest` line and
+    /// `parse_identity_digest` reads back, so a value scraped off a validation
+    /// receipt can be handed straight to a bound restore without editing.
+    ///
+    /// `parsed`, `restored-admitted <digest>` or `restored-rebuilt <digest>`. The
+    /// two restore tokens are distinct rather than one `restored` because the
+    /// difference between "checked against this environment" and "re-derived
+    /// without that check" is the whole content of [`ProductRestore`], and a
+    /// rendering that flattened it would report the stronger claim for both.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parsed => f.write_str("parsed"),
+            Self::Restored { identity, restore } => {
+                f.write_str(match restore {
+                    ProductRestore::Admitted => "restored-admitted ",
+                    ProductRestore::Rebuilt => "restored-rebuilt ",
+                })?;
+                for byte in identity.digest() {
+                    write!(f, "{byte:02x}")?;
+                }
+                Ok(())
+            }
+        }
     }
 }
 

@@ -404,6 +404,25 @@ impl PyPreparedShapes {
         Ok(PyBytes::new(py, &bytes))
     }
 
+    /// Where this preparation came from, as one deterministic token — `parsed`,
+    /// `restored-admitted <identity_digest>` or `restored-rebuilt <identity_digest>`.
+    ///
+    /// TOTAL: every preparation has an answer and none of them means "we forgot to
+    /// record it". An authenticated artifact whose output cannot be attributed to it
+    /// answers only half the question — `admit()` establishes that this process MAY
+    /// execute a product, and this establishes WHICH product a report came out of,
+    /// which is the half a caller needs after the fact.
+    ///
+    /// The digest is the same 64 hexadecimal digits `identity_digest()` returns for
+    /// the product, so a value read off a validation log can be handed straight back
+    /// to `admit_expecting()` without editing. The two restore tokens are distinct
+    /// because the identity means different things on each: admitted means the
+    /// product's binding was checked against this process, rebuilt means it was
+    /// recorded from the artifact and deliberately not checked (see `rebuild()`).
+    fn provenance(&self) -> String {
+        self.inner.provenance().to_string()
+    }
+
     /// Validate an N-Triples data graph against this preparation.
     ///
     /// The same verdict `Shapes.validate_nt` reaches, through the same engine entry

@@ -184,6 +184,16 @@ time. What a product removes from the restore path is the parse, the model
 construction and the shape analysis — reusable preparation and per-dataset
 binding are different lines in the budget.
 
+**Nor is the provenance of a restore carried, for the same kind of reason.** A
+product records the inputs that decided what its shapes *mean*; how a particular
+preparation was *obtained* is a fact about one restore in one process, so a
+product that encoded it would carry a value that is false for every reader except
+the one that wrote it. It would also move the preparation stage id — a digest over
+the model's meaning — for a change that alters no meaning at all, invalidating
+every product ever written. The answer lives on the restored preparation instead,
+where it is true: see [Which shapes produced this
+verdict](#which-shapes-produced-this-verdict).
+
 RDF 1.2 term identity survives the round trip intact, including quoted triples,
 reifier bindings, statement annotations, and `rdf:dirLangString` literals whose
 base direction is part of their identity (`"x"@en--ltr` and `"x"@en--rtl` are
@@ -262,6 +272,49 @@ Everything describing the **data** graph stays live: `--from`, `--base`,
 `--format`, the governor flags (`--fuel`, `--deadline`,
 `--max-intermediate-cells`, `--max-scratch-bytes`, `--max-remote-requests`), and
 the positional `IN`/`OUT`.
+
+### Which shapes produced this verdict
+
+Every `validate` run writes one `shacl shapes-provenance` line to stderr, before
+the verdict, naming where its shapes came from:
+
+```console
+$ purrdf validate --shapes-product shapes.purrshp data.ttl
+shacl shapes-provenance restored-admitted 9f2c…64 lowercase hex…1b
+shacl conforms false
+shacl results 2
+```
+
+```console
+$ purrdf validate --shapes shapes.ttl data.ttl
+shacl shapes-provenance parsed
+shacl conforms false
+shacl results 2
+```
+
+The token is total — there is always one, and none of them means "unknown". A
+restored product renders the artifact's own **input binding**, the same 64
+hexadecimal digits `shacl explain` prints on its `identity-digest` line, so a
+report and the artifact behind it are compared on one spelling:
+
+```bash
+purrdf validate --shapes-product shapes.purrshp data.ttl 2> receipt
+awk '/^shacl shapes-provenance restored-/{print $3}' receipt   # the artifact
+```
+
+The three tokens are `parsed`, `restored-admitted <digest>` and
+`restored-rebuilt <digest>`. The two restore tokens stay distinct because the
+digest means something different on each: **admitted** says the product's binding
+was checked against this process before anything reached a validator, while
+**rebuilt** says it was read off the artifact and deliberately *not* checked —
+see [`rebuild`, the forward-compatibility
+path](#binding-a-restore-to-the-product-you-meant) for why checking it there
+would refuse exactly the products that path rescues.
+
+This answers the half of the question authentication does not. Admission asks
+*may this process execute these bytes?*; the provenance line answers *which
+artifact did this report come out of?*, which is the question a consumer has
+afterwards, looking at a verdict in a log.
 
 ### Binding a restore to the product you meant
 
@@ -605,8 +658,9 @@ is printed; in Python the exception's `.dimension` is `None`; in JavaScript
 `-` and is refused by name: there is only one standard input.
 
 `validate` additionally exits `3` when a governor budget trips, and always
-writes `shacl conforms true|false` and `shacl results <N>` to stderr — including
-when the shapes came from a product.
+writes `shacl shapes-provenance <token>` before the run and `shacl conforms
+true` or `shacl conforms false` plus `shacl results <N>` after it, all on
+stderr — including when the shapes came from a product.
 
 ## From Python
 
@@ -627,6 +681,10 @@ restored = view.admit() if view.stage_known() else view.rebuild()
 report = restored.validate_nt(data_nt)
 print(report.conforms)
 
+# Which artifact did that verdict come out of? Total — always an answer, never
+# "unknown": "parsed", "restored-admitted <digest>" or "restored-rebuilt <digest>".
+print(restored.provenance())             # restored-admitted 9f2c…1b
+
 # …or say which product you meant, and fail closed when it is not that one.
 restored = view.admit_expecting("9f2c…64 lowercase hex…1b")
 
@@ -634,6 +692,13 @@ restored = view.admit_expecting("9f2c…64 lowercase hex…1b")
 # ahead of the re-derivation, so choosing to rebuild never bypasses it.
 restored = view.rebuild_expecting("9f2c…64 lowercase hex…1b")
 ```
+
+`PreparedShapes.provenance()` is the Python spelling of the CLI's `shacl
+shapes-provenance` receipt, and renders the identical token — the digest in it is
+the value `identity_digest()` reports, so it can be handed straight back to
+`admit_expecting()`. A preparation built by `Shapes(...).prepare()` answers
+`parsed`, because it was never restored from an artifact and none may be invented
+for it.
 
 `ShapesProduct.certify()` is the cold path; call it from a build step or a test.
 Refusals raise `shacl.ShapesProductError`, whose `.dimension` carries the label
