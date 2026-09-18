@@ -715,7 +715,7 @@ Every knob is an overridable `make` variable, in the same style as `BENCH_ARGS`.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SCALE_QUADS` | `1000000` | Total rows across all shards. One slot emits exactly one line, so this is also the line count. |
-| `SCALE_IRIS` | `100000` | Distinct-IRI target: entity IRIs are minted from indexes `0..iris`, drawn with a `sqrt`-CDF skew. |
+| `SCALE_IRIS` | `100000` | The entity **index space**: entity IRIs are minted from indexes `0..iris`, drawn with a `sqrt`-CDF skew. A target, **not** an achieved distinct-entity count — see below. |
 | `SCALE_SEED` | `1592642302` | The `splitmix64` seed folded into every derivation (the generator's own default, in decimal). |
 | `SCALE_SHARDS` | `8` | How many independent shards the row sequence is cut into. |
 | `SCALE_MODE` | `stream` | `stream` (parallel shards, each piped to a sink, nothing retained), `pipe` (ordered whole run on stdout), `files` (opt-in materialization). |
@@ -727,14 +727,48 @@ Every knob is an overridable `make` variable, in the same style as `BENCH_ARGS`.
 
 A capture of this lane is **the manifest plus the digest of the output** —
 neither half is evidence on its own. The manifest (`bench-corpus --manifest`,
-emitted by every mode) carries the profile id, the seed, the quad and IRI
-counts, the shard's row range, and both mixes: `class_mix_per_mille` over the
-entity space (plain 400, numeric-long 200, chinese 200, irregular 150,
-very-long 50) and `row_mix_per_mille` over the emitted rows (entity-edge 500,
-plain-literal 150, zh-literal 100, typed-literal 100, long-text-literal 50,
-reified 60, blank-node 40). The digest says which bytes were actually consumed.
-A manifest without a digest describes a corpus nobody proved was produced; a
-digest without a manifest is a number with no parameters attached.
+emitted by every mode) **records**; it computes no digest of anything. It
+carries the profile id, the seed, the quad and IRI parameters, the shard's row
+range, the shard's exact `emitted_lines` count, and both mixes:
+
+* `entity_class_mix_per_mille` over the entity **index space** (plain 400,
+  numeric-long 200, chinese 200, irregular 150, very-long 50), and
+* `row_mix_per_mille` over the **emitted rows** (entity-edge 500,
+  plain-literal 150, zh-literal 100, typed-literal 100, long-text-literal 50,
+  reified 60, blank-node 40).
+
+Those are **different axes** and the key names say so. An entity's class is a
+function of its *index*, and slots draw indexes under the `sqrt`-CDF skew, so
+the class distribution measured over rows is not the pinned entity-space
+distribution. A capture that recorded an unqualified "class mix" as its corpus
+description would misreport what it measured.
+
+The digest says which bytes were actually consumed. A manifest without a digest
+describes a corpus nobody proved was produced; a digest without a manifest is a
+number with no parameters attached.
+
+### `--iris` is a target, not an achieved distinct count
+
+`SCALE_IRIS` (the generator's `--iris`) is the size of the index space entities
+are drawn from. It is **not** the number of distinct entities a run produced,
+and no artifact this lane emits reports that number.
+
+The achieved distinct-entity count is at most `min(iris, emitted_lines)` and in
+practice well below both, because the skew concentrates draws on the head of
+the space and because only some row kinds name two entities. Measured over the
+emitted bytes at `--quads 200000 --iris 100000` with the default seed: the
+corpus names **89,569** distinct entity IRIs against an index space of 100,000,
+and only **75,548** of those ever appear in row-subject position. Which of
+those two a "distinct entity count" means is itself a choice a claim has to
+state.
+
+Nothing here computes the achieved count on purpose: establishing it means
+enumerating the corpus, which is exactly what streaming at full scale exists to
+avoid — at 10^10 rows there is no pass over the output to spend. So a capacity
+claim made from this lane **must name which number it is about**: the entity
+index space that was configured (`iris`, recorded in the manifest), or a
+distinct-entity count (which a consumer that ingested the stream can report,
+and which is a different number).
 
 ### Density, and why full scale is streamed rather than stored
 

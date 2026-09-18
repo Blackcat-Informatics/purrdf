@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-bench"
-description = "Benchmark tooling: the deterministic, shardable scale-corpus generator whose mixed IRI classes keep a capacity claim honest, and the home of the comparison-workload drivers"
+description = "Benchmark tooling: the deterministic, shardable scale-corpus generator whose mixed IRI classes keep a capacity claim honest"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

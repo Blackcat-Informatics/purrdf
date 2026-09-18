@@ -251,13 +251,30 @@ fn manifest_reports_every_field_correctly() {
         "shard_rows must equal the library's shard_range() for this spec"
     );
 
+    // `iris` is the entity INDEX SPACE, a target — never an achieved distinct-entity count.
+    // Here 55 is the space and the shard emits 155 lines, so a reader who mistook the field for
+    // a distinct count would be reading a number that is neither the space nor the achievement.
+    // Nothing in the manifest claims the achieved count, by design: establishing it means
+    // enumerating the corpus, which is what streaming at full scale exists to avoid.
+    assert_eq!(
+        value["emitted_lines"],
+        serde_json::json!(end - start),
+        "emitted_lines must be exactly end - start from shard_range()"
+    );
+
     // The two mixes are INDEPENDENT AXES and the manifest must report both: the class mix is
-    // the shape of an entity IRI over the entity space, the row mix is the shape of a row over
-    // the emitted rows. A capture that recorded only the class mix would not name the row
-    // shapes its bytes actually contain.
-    let class_mix = value["class_mix_per_mille"]
+    // the shape of an entity IRI over the entity INDEX SPACE, the row mix is the shape of a row
+    // over the emitted rows. A capture that recorded only the class mix would not name the row
+    // shapes its bytes actually contain — and an unqualified `class_mix_per_mille` invited a
+    // capture to record the entity-space shares as though they were row-level ones, which under
+    // the skew they are not.
+    assert!(
+        value.get("class_mix_per_mille").is_none(),
+        "the unqualified class-mix key must not be emitted: its basis was ambiguous"
+    );
+    let class_mix = value["entity_class_mix_per_mille"]
         .as_object()
-        .expect("class_mix_per_mille must be a JSON object");
+        .expect("entity_class_mix_per_mille must be a JSON object");
     assert_eq!(
         class_mix.len(),
         CLASS_MIX_PER_MILLE.len(),
@@ -304,7 +321,8 @@ fn manifest_reports_every_field_correctly() {
     assert_eq!(
         top_level,
         vec![
-            "class_mix_per_mille",
+            "emitted_lines",
+            "entity_class_mix_per_mille",
             "iris",
             "profile",
             "quads",
@@ -316,6 +334,50 @@ fn manifest_reports_every_field_correctly() {
         ],
         "every manifest field must be covered by an assertion in this test"
     );
+}
+
+#[test]
+fn manifest_emitted_lines_equals_the_lines_the_same_invocation_produces() {
+    // `emitted_lines` is arithmetic on `shard_range()`, so it costs nothing at any scale — but
+    // an arithmetic claim about output is worth only as much as the one check that it matches
+    // the output. Drive the SAME arguments twice, once for the manifest and once for the rows.
+    for (shard, shards) in [(0u64, 1u64), (0, 7), (3, 7), (6, 7)] {
+        let common: Vec<String> = ["--quads", "5000", "--iris", "300", "--seed", "99"]
+            .iter()
+            .map(ToString::to_string)
+            .chain([
+                "--shard".to_string(),
+                shard.to_string(),
+                "--shards".to_string(),
+                shards.to_string(),
+            ])
+            .collect();
+        let mut manifest_args: Vec<&str> = common.iter().map(String::as_str).collect();
+        manifest_args.push("--manifest");
+        let (code, out, err) = run(&manifest_args);
+        assert_eq!(code, 0, "manifest run must succeed; stderr:\n{err}");
+        let value: serde_json::Value =
+            serde_json::from_slice(&out).expect("manifest must be valid JSON");
+        let claimed = value["emitted_lines"]
+            .as_u64()
+            .expect("emitted_lines must be an unsigned integer");
+
+        let row_args: Vec<&str> = common.iter().map(String::as_str).collect();
+        let (code, out, err) = run(&row_args);
+        assert_eq!(code, 0, "row run must succeed; stderr:\n{err}");
+        let produced = u64::try_from(
+            String::from_utf8(out)
+                .expect("utf-8 stdout")
+                .lines()
+                .count(),
+        )
+        .expect("line count fits u64");
+        assert_eq!(
+            claimed, produced,
+            "shard {shard} of {shards}: the manifest claimed {claimed} emitted lines but the \
+             same invocation produced {produced}"
+        );
+    }
 }
 
 #[test]

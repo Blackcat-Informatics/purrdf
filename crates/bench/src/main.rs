@@ -22,18 +22,28 @@ Streams a shard of the deterministic scale corpus as N-Quads.
 
   --seed S     splitmix64 seed (default 0x5EED_CAFE)
   --quads N    total quads across all shards (positive)
-  --iris N     distinct-IRI target (positive)
+  --iris N     entity index space, a TARGET, not an achieved count (positive)
   --shard K    this shard's zero-based index (default 0)
   --shards M   total shard count (default 1)
   --out PATH   write output to PATH instead of stdout
   --manifest   print the JSON manifest instead of rows
   --help, -h   print this usage text and exit
 
-`--manifest` prints the JSON manifest (profile id, parameters, shard row
-range, and BOTH mixes — the class mix over the entity space and the row mix
-over the emitted rows) instead of rows; a capture records the manifest beside
-the output digest. Output goes to stdout unless `--out` is given; `--manifest`
-honours `--out` too.
+`--manifest` prints the JSON manifest instead of rows: the profile id, the
+parameters, the shard row range, this shard's exact emitted line count, and
+BOTH mixes — `entity_class_mix_per_mille` over the entity index space and
+`row_mix_per_mille` over the emitted rows, which are different axes. The
+manifest RECORDS; it digests nothing. A capture is the manifest plus a digest
+of the bytes that were consumed, and neither half is evidence alone.
+
+`--iris` is the size of the index space entities are drawn from. The distinct
+entities a run actually names is at most min(--iris, emitted lines) and in
+practice far lower, and no artifact here reports it — establishing it means
+enumerating the corpus, which is what streaming at full scale avoids. A
+capacity claim must say which of the two numbers it is about.
+
+Output goes to stdout unless `--out` is given; `--manifest` honours `--out`
+too.
 
 Every flag may be given at most once.
 ";

@@ -694,6 +694,8 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |
 | [`purrdf-cli`](./crates/cli/) | The `purrdf` command-line tool: `convert`, `query`, `update`, `reason`, `entails`, `consistency`, `validate`, `shex`, `describe`, `project`, `lift`, `pack verify` (unpublished). `convert` takes any number of `--input` sources, merged by deterministic union under a separate blank-node scope per source, and `--transport auto\|none\|gzip\|zstd` detects a gzip or zstd wrapper by its magic bytes before consulting the suffix and decodes it all-or-nothing; a transport is never applied on output and is refused against a pack source. |
 | [`purrdf-sparql-conformance`](./crates/sparql-conformance/) | W3C SPARQL, entailment-regime, and OWL 2 conformance harnesses (unpublished). |
+| [`purrdf-envelope-probe`](./crates/envelope-probe/) | The micro-hardware envelope capture side (unpublished): a fixed, deterministic workload set run per named profile over the public APIs and the keystone fixture corpus, so a release can demonstrate that a constrained deployment class still fits its pinned ceilings. Pass criteria are completion and memory; wall time is recorded evidence, never a gate. |
+| [`purrdf-bench`](./crates/bench/) | Benchmark tooling (unpublished): `bench-corpus`, the deterministic, shardable scale-corpus generator (`purrdf-scale-mixed-v1`). Every IRI is minted purely from its index under a fixed seed across five deliberately adversarial classes, so no single dictionary trick can flatter a capacity claim, and concatenating every shard is byte-identical to one whole run. Driven by `make scale-corpus`. |
 
 ## Documentation
 

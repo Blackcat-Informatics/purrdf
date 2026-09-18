@@ -34,18 +34,38 @@
 //!
 //! [`ROW_MIX_PER_MILLE`] and [`CLASS_MIX_PER_MILLE`] are two **different axes**
 //! and are never mixed: the row mix partitions the emitted *rows* by shape,
-//! while the class mix partitions the *entity space* by IRI shape. A row of any
-//! kind may name an entity of any class.
+//! while the class mix partitions the *entity index space* by IRI shape. A row
+//! of any kind may name an entity of any class, and because slots draw entity
+//! indexes with a deliberate skew, the class shares measured over rows are not
+//! the class shares pinned over the entity space. [`manifest`] names the two
+//! keys accordingly (`entity_class_mix_per_mille`, `row_mix_per_mille`) so a
+//! capture cannot read one as the other.
 //!
 //! This is corpus *generation* only. Output digests, ingest timings, and
 //! capacity evidence are captured by the harnesses that consume it.
+//!
+//! ## The other deterministic generator
+//!
+//! PurRDF has two deterministic corpus generators and they own different
+//! regimes. The keystone fixture generator (`purrdf_rdf::gts_fixtures`, driven
+//! by `purrdf-envelope-probe`) is **small, fixed and statement-layer-focused**:
+//! a handful of hand-shaped row groups whose job is to make the micro-hardware
+//! envelope's ceilings meaningful on a constrained deployment. This profile is
+//! the opposite regime — **shardable, anti-compressible and parameterized for
+//! capacity at scale**, where the question is whether a dictionary trick could
+//! have flattered a number rather than whether a small box still fits. Neither
+//! substitutes for the other: a capacity claim measured over the keystone
+//! fixture would be measured over a corpus designed to be small, and an
+//! envelope measured over this profile would not be an envelope.
 
 use core::fmt::Write as _;
 
 /// A corpus specification: everything the output bytes depend on.
 ///
 /// Two specs that compare equal generate byte-identical corpora on every
-/// target; the manifest digests exactly these fields.
+/// target, and [`manifest`] **records** exactly these fields. It computes no
+/// digest of anything: digesting the emitted bytes is the capture's job, and a
+/// capture is the manifest *plus* that digest.
 ///
 /// The fields are private and only reachable through [`CorpusSpec::new`],
 /// which is the sole home of the spec's invariants: `quads`, `iris`, and
@@ -56,7 +76,8 @@ pub struct CorpusSpec {
     seed: u64,
     /// Total quads across all shards.
     quads: u64,
-    /// Distinct-IRI target: entity IRIs are minted from indexes `0..iris`.
+    /// Entity **index space**: entity IRIs are minted from indexes `0..iris`.
+    /// This is a target, never an achieved count — see [`CorpusSpec::iris`].
     iris: u64,
     /// This shard's zero-based index.
     shard: u64,
@@ -150,7 +171,18 @@ impl CorpusSpec {
         self.quads
     }
 
-    /// Distinct-IRI target: entity IRIs are minted from indexes `0..iris`.
+    /// The entity **index space**: entity IRIs are minted from indexes
+    /// `0..iris`.
+    ///
+    /// This is the size of the space rows draw from — a **target**, not an
+    /// achieved distinct-entity count. Slots draw entities with a deliberate
+    /// `sqrt`-CDF skew and a shard emits only `end - start` rows, so the
+    /// distinct entities a run actually names is at most
+    /// `min(iris, emitted rows)` and in practice well below both. A capacity
+    /// claim must say which of the two numbers it is about: this one (the
+    /// space that was available) or a distinct count (which only enumerating
+    /// the output can establish, and which this crate deliberately never
+    /// computes — enumerating a corpus defeats streaming it at full scale).
     #[must_use]
     pub const fn iris(&self) -> u64 {
         self.iris
@@ -209,6 +241,15 @@ pub const CORPUS_PROFILE_ID: &str = "purrdf-scale-mixed-v1";
 /// This is a different axis from [`ROW_MIX_PER_MILLE`]: this table decides
 /// what an entity IRI *looks like*, that one decides what a row *is*. A row of
 /// any kind may name an entity of any class.
+///
+/// **The shares are of the entity INDEX space, not of the emitted rows.**
+/// `class_of` is a function of the entity index alone, and slots draw entity
+/// indexes with a deliberate `sqrt`-CDF skew, so the class distribution
+/// *measured over rows* is a different number from the one pinned here. The
+/// manifest therefore reports this table under the key
+/// `entity_class_mix_per_mille`, so a capture that records it cannot be read
+/// as a row-level measurement; the row-level axis is
+/// [`ROW_MIX_PER_MILLE`] / `row_mix_per_mille`.
 pub const CLASS_MIX_PER_MILLE: [(&str, u16); 5] = [
     ("plain", 400),
     ("numeric-long", 200),
@@ -439,7 +480,34 @@ pub const RESERVED_OCTETS: [u8; 12] = *b"/?#[]@!$&+;=";
 /// the modulus can never drift from the table.
 fn reserved_octet(value: u64) -> u8 {
     let index = value % RESERVED_OCTETS.len() as u64;
-    RESERVED_OCTETS[usize::try_from(index).unwrap_or(0)]
+    RESERVED_OCTETS[usize::try_from(index).expect(
+        "index is a remainder modulo RESERVED_OCTETS.len() (12), so it is below 12 and fits \
+         usize on every supported target",
+    )]
+}
+
+/// The first code point of the CJK Unified Ideographs span the raw-Han shapes
+/// draw from.
+const HAN_BASE: u32 = 0x4E00;
+
+/// The width of that span: `0x4E00..=0x9FA4`. Every code point in it is a
+/// Unicode scalar value — the block ends far below the `0xD800..=0xDFFF`
+/// surrogate range — so no draw can land on a non-character.
+const HAN_SPAN: u64 = 0x51A5;
+
+/// Maps a draw onto one Han character from `0x4E00..=0x9FA4`.
+///
+/// Both narrowings below are infallible by construction, and they are spelled
+/// as `expect` rather than as a fallback on purpose: a fallback would answer a
+/// future derivation change by **emitting a different corpus byte**, in a
+/// generator whose entire value is that its bytes are pinned.
+fn han_char(value: u64) -> char {
+    let offset = u32::try_from(value % HAN_SPAN)
+        .expect("a remainder modulo HAN_SPAN (0x51A5) is below 0x51A5 and fits u32");
+    char::from_u32(HAN_BASE + offset).expect(
+        "HAN_BASE + offset lies in 0x4E00..=0x9FA4, every value of which is a Unicode scalar \
+         value (the span ends well below the 0xD800 surrogate range)",
+    )
 }
 
 /// Appends entity IRI `entity`'s text (without angle brackets) to `out`.
@@ -469,8 +537,7 @@ pub fn write_entity_iri(out: &mut String, seed: u64, entity: u64) {
             out.push_str("https://example.org/中文/");
             let mut v = h | 1;
             for _ in 0..4 {
-                let cp = 0x4E00 + u32::try_from(v % 0x51A5).unwrap_or(0);
-                out.push(char::from_u32(cp).unwrap_or('\u{4E00}'));
+                out.push(han_char(v));
                 v = splitmix64(v);
             }
             let _ = write!(out, "/{entity}");
@@ -553,7 +620,10 @@ const PREDICATES: [&str; 8] = [
 /// can never drift from the table.
 fn predicate_of(seed: u64, slot: u64) -> &'static str {
     let index = draw(seed, tags::PREDICATE, slot) % PREDICATES.len() as u64;
-    PREDICATES[usize::try_from(index).unwrap_or(0)]
+    PREDICATES[usize::try_from(index).expect(
+        "index is a remainder modulo PREDICATES.len() (8), so it is below 8 and fits usize on \
+         every supported target",
+    )]
 }
 
 /// The RDF 1.2 reification predicate. W3C standard vocabulary: using it is
@@ -578,7 +648,10 @@ const XSD_DATATYPES: [&str; 4] = ["integer", "decimal", "date", "boolean"];
 /// its month and no leap-year rule can ever apply; booleans are exactly `true`
 /// or `false`.
 fn write_typed_literal(out: &mut String, payload: u64) {
-    let index = usize::try_from(payload % XSD_DATATYPES.len() as u64).unwrap_or(0);
+    let index = usize::try_from(payload % XSD_DATATYPES.len() as u64).expect(
+        "index is a remainder modulo XSD_DATATYPES.len() (4), so it is below 4 and fits usize \
+         on every supported target",
+    );
     let value = payload >> 8;
     match index {
         // xsd:integer
@@ -634,8 +707,7 @@ fn write_zh_literal(out: &mut String, payload: u64) {
     out.push('"');
     let mut v = payload | 1;
     for _ in 0..3 {
-        let cp = 0x4E00 + u32::try_from(v % 0x51A5).unwrap_or(0);
-        out.push(char::from_u32(cp).unwrap_or('\u{4E00}'));
+        out.push(han_char(v));
         v = splitmix64(v);
     }
     out.push_str("\"@zh");
@@ -757,17 +829,45 @@ fn write_per_mille_object(out: &mut String, table: &[(&str, u16)]) {
 
 /// The manifest: everything a capture needs to name this corpus exactly.
 ///
+/// **It records; it does not digest.** No field here is a hash of anything,
+/// and nothing in this crate hashes the output: a capture is this manifest
+/// *plus* a digest of the bytes that were actually consumed, and neither half
+/// is evidence on its own.
+///
+/// Each key, and exactly what it is a statement about:
+///
+/// * `profile` — [`CORPUS_PROFILE_ID`], the identity of the derivation.
+/// * `seed`, `quads`, `shard`, `shards` — the spec's parameters, echoed.
+/// * `iris` — the entity **index space**, a TARGET (see [`CorpusSpec::iris`]).
+///   It is not an achieved distinct-entity count, and no field here is: the
+///   achieved count is at most `min(iris, emitted_lines)` and in practice far
+///   below it, and establishing it would mean enumerating the corpus, which is
+///   exactly what streaming at full scale exists to avoid. A capacity claim
+///   must name which of the two numbers it uses.
+/// * `shard_rows` — this shard's half-open slot range, `[start, end)`.
+/// * `emitted_lines` — `end - start`, the exact number of lines this shard
+///   emits (one slot emits exactly one line, for every row kind). Free and
+///   exact, because it is arithmetic on the range rather than a count of
+///   output.
+/// * `entity_class_mix_per_mille` — [`CLASS_MIX_PER_MILLE`], over the **entity
+///   index space**. The key is named for its basis on purpose: `class_of` is a
+///   function of the entity index, slots draw indexes under a skew, and so the
+///   class distribution over emitted ROWS is a different number.
+/// * `row_mix_per_mille` — [`ROW_MIX_PER_MILLE`], over the **emitted rows**.
+///
 /// Both mixes are reported, because they are independent axes: a capture that
 /// recorded only the class mix would not name the row shapes its bytes
 /// actually contain.
 #[must_use]
 pub fn manifest(spec: &CorpusSpec) -> String {
     let (start, end) = spec.shard_range();
+    let emitted_lines = end - start;
     let mut m = String::new();
     let _ = write!(
         m,
         "{{\"profile\": \"{CORPUS_PROFILE_ID}\", \"seed\": {}, \"quads\": {}, \"iris\": {}, \
-         \"shard\": {}, \"shards\": {}, \"shard_rows\": [{start}, {end}], \"class_mix_per_mille\": {{",
+         \"shard\": {}, \"shards\": {}, \"shard_rows\": [{start}, {end}], \
+         \"emitted_lines\": {emitted_lines}, \"entity_class_mix_per_mille\": {{",
         spec.seed, spec.quads, spec.iris, spec.shard, spec.shards
     );
     write_per_mille_object(&mut m, &CLASS_MIX_PER_MILLE);
@@ -1518,12 +1618,64 @@ mod tests {
     #[test]
     fn manifest_carries_both_mixes() {
         let text = super::manifest(&spec());
-        assert!(text.contains("\"class_mix_per_mille\""));
+        // The class-mix key names its BASIS: the shares are of the entity
+        // index space, not of the emitted rows, and an unqualified
+        // `class_mix_per_mille` invited a capture to record it as the latter.
+        assert!(
+            text.contains("\"entity_class_mix_per_mille\""),
+            "the class-mix key must name the entity space it partitions"
+        );
+        assert!(
+            !text.contains("\"class_mix_per_mille\""),
+            "the unqualified class-mix key must not be emitted: its basis was ambiguous"
+        );
         assert!(text.contains("\"row_mix_per_mille\""));
         for (name, share) in ROW_MIX_PER_MILLE {
             assert!(
                 text.contains(&format!("\"{name}\": {share}")),
                 "manifest must carry row kind {name}"
+            );
+        }
+        for (name, share) in CLASS_MIX_PER_MILLE {
+            assert!(
+                text.contains(&format!("\"{name}\": {share}")),
+                "manifest must carry entity class {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_reports_the_shard_line_count_exactly() {
+        // `emitted_lines` is `end - start` from `shard_range()` — free and
+        // exact, because one slot emits exactly one line for every row kind.
+        // Nothing else in the artifacts said how many lines a shard produced.
+        for (shard, shards) in [(0u64, 1u64), (0, 7), (3, 7), (6, 7)] {
+            let spec = CorpusSpec::new(SEED, 5_000, 1_000, shard, shards).expect("valid spec");
+            let (start, end) = spec.shard_range();
+            let text = super::manifest(&spec);
+            assert!(
+                text.contains(&format!("\"emitted_lines\": {}", end - start)),
+                "shard {shard} of {shards}: manifest must report end - start; got {text}"
+            );
+            assert_eq!(
+                u64::try_from(corpus(&spec).lines().count()).expect("fits u64"),
+                end - start,
+                "shard {shard} of {shards}: the reported line count must be the emitted one"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_computes_no_digest() {
+        // The doc comment used to claim "the manifest digests exactly these
+        // fields"; it computes no digest at all, and a capture's digest is of
+        // the OUTPUT BYTES, taken by whatever consumes them. This pins the
+        // corrected claim: no field here is a hash.
+        let text = super::manifest(&spec()).to_ascii_lowercase();
+        for absent in ["digest", "hash", "checksum", "sha256", "blake3", "fnv"] {
+            assert!(
+                !text.contains(&format!("\"{absent}")),
+                "the manifest must carry no {absent} field: it records, it does not digest"
             );
         }
     }
@@ -1552,7 +1704,7 @@ mod tests {
 
     #[test]
     fn subject_iri_byte_length_bands_match_measurement() {
-        // GAP M3: the doc comment on the very-long class claimed "~512 bytes"
+        // The doc comment on the very-long class once claimed "~512 bytes"
         // when the true figure is ~628 — a claim nothing here ever checked.
         // This is the test that would have caught it: every class's emitted
         // subject-IRI byte length is pinned to a band with headroom, and the

@@ -10,6 +10,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **bench:** A new unpublished tooling crate, `purrdf-bench`, and its
+  `bench-corpus` binary: the deterministic, shardable scale-corpus generator
+  behind the `purrdf-scale-mixed-v1` profile. Every IRI is minted purely from
+  its index under a fixed seed, across five deliberately adversarial classes
+  (front-codable plain, long zero-padded numerics beyond machine integer widths,
+  raw-Han Chinese, host-scattered irregular with reserved-octet escapes, and
+  very-long), so no single dictionary trick can flatter a capacity claim. The
+  row mix pins a share for every row kind and spans the RDF 1.2 term space the
+  profile targets — reifier rows binding triple terms, `xsd:`-typed literals
+  whose lexical forms are valid for their datatype, language-tagged literals,
+  and blank nodes in both subject and object position — so term-kind coverage is
+  a property of the profile rather than an accident of it. Index-pure minting
+  makes generation shardable with no coordination between shards: shard `k` of
+  `n` emits exactly its slice, and concatenating every shard is byte-identical
+  to one whole run, pinned by a golden digest. `make scale-corpus` is the lane
+  that drives it across shards, in streaming, piped, or opt-in file modes.
+- **envelope-probe:** A new unpublished tooling crate,
+  `purrdf-envelope-probe`: the capture side of the micro-hardware validation
+  envelope. A fixed, deterministic workload set runs per named profile over the
+  public APIs and the keystone fixture corpus, so a release can demonstrate that
+  a constrained deployment class still fits its pinned ceilings. Pass criteria
+  are completion and memory; wall time is recorded evidence, never a gate.
 - **hnsw:** A new publishable crate, `purrdf-hnsw`: a deterministic HNSW
   approximate nearest-neighbour index over a PURREMB embedding matrix, registered
   on the evaluator's property-function seam under a caller-supplied predicate IRI.
