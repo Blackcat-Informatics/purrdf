@@ -35,10 +35,9 @@
 //! expansion, node/property striping, base-IRI resolution, and `xmlns` prefix
 //! scoping.
 
-use purrdf_core::sink::TextSink;
+use purrdf_core::sink::{TextOut, TextSink};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use roxmltree::{Document, Node};
@@ -76,14 +75,12 @@ impl RdfCodec for RdfXmlCodec {
         graph: &SerGraph,
         out: &mut TextSink<'_>,
     ) -> Result<(), RdfDiagnostic> {
-        // Built whole, then appended. Unlike the four text formats, this one's document
-        // is assembled as a TREE — XML nesting, or a `serde_json` value — so its writer
-        // cannot emit a prefix before it knows what follows, and appending would mean
-        // rebuilding the construction itself rather than redirecting its output. The
-        // sink still earns its place here: the caller's buffer is the only one that
-        // outlives the call, and this is the seam a streaming writer replaces.
-        out.push_str(&serialize_ser_graph_to_rdfxml(graph)?);
-        Ok(())
+        // Emitted subject by subject after two pre-passes: a grouping index, and the
+        // namespace collection XML genuinely requires up front because every `xmlns:`
+        // declaration lands on the root element. Both hold IDENTIFIERS and prefixes,
+        // not document text, so neither is the output allocation — and removing the
+        // output allocation is independent of them.
+        write_rdfxml(graph, out)
     }
 }
 
@@ -1125,10 +1122,10 @@ enum XmlLiteralStep<'a, 'input> {
 /// Pre-order with an owed end tag reproduces the recursive walk's bytes exactly: children are
 /// pushed in reverse so they pop in document order, and the [`XmlLiteralStep::Close`] pushed
 /// before them pops after the whole subtree.
-fn serialize_xml_node(
+fn serialize_xml_node<W: TextOut + ?Sized>(
     node: Node<'_, '_>,
     apex_ns: Option<&[(String, String)]>,
-    out: &mut String,
+    out: &mut W,
 ) -> Result<(), RdfDiagnostic> {
     let mut stack = vec![XmlLiteralStep::Open(node, true)];
     while let Some(step) = stack.pop() {
@@ -1254,7 +1251,7 @@ enum PropertyItem {
 ///
 /// Subject GROUPING keys ([`subject_key`]) stay on the absolute IRI, so the emitted
 /// element order is the same whether or not a base is in force.
-pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+fn write_rdfxml<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<(), RdfDiagnostic> {
     let named = graph.quads.iter().any(|(_, _, _, g)| g.is_some())
         || graph.reifiers.iter().any(|(_, _, g)| g.is_some())
         || graph.annotations.iter().any(|(_, _, _, g)| g.is_some());
@@ -1309,7 +1306,7 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
     // the root just as much as a top-level one does.
     let reifier_index = graph.reifier_index();
     let namespaces = serializer_namespaces(graph, &subjects, &reifier_index)?;
-    let mut out = String::from(
+    out.push_str(
         "<?xml version=\"1.0\"?>\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema#\"",
     );
     for (namespace, prefix) in &namespaces {
@@ -1329,13 +1326,13 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
 
     for (subject, properties) in subjects.into_values() {
         out.push_str("  <rdf:Description");
-        write_node_attribute(&mut out, graph, subject)?;
+        write_node_attribute(out, graph, subject)?;
         out.push_str(">\n");
         for property in properties {
             match property {
                 PropertyItem::Pair(predicate, object) => {
                     write_property(
-                        &mut out,
+                        out,
                         "    ",
                         graph,
                         &reifier_index,
@@ -1346,7 +1343,7 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
                 }
                 PropertyItem::Reifies(s, p, o) => {
                     write_reifies(
-                        &mut out,
+                        out,
                         "    ",
                         graph,
                         &reifier_index,
@@ -1360,14 +1357,14 @@ pub(super) fn serialize_ser_graph_to_rdfxml(graph: &SerGraph) -> Result<String, 
     }
 
     out.push_str("</rdf:RDF>\n");
-    Ok(out)
+    Ok(())
 }
 
 /// Render an `rdf:reifies` binding to the quoted triple `(s, p, o)` as a
 /// `parseType="Triple"` property, matching the prior path's
 /// `<rid> rdf:reifies <<( s p o )>>` rendering.
-fn write_reifies(
-    out: &mut String,
+fn write_reifies<W: TextOut + ?Sized>(
+    out: &mut W,
     indent: &str,
     graph: &SerGraph,
     reifier_index: &ReifierIndex,
@@ -1404,8 +1401,8 @@ fn subject_key(graph: &SerGraph, tid: usize) -> Result<String, RdfDiagnostic> {
 ///
 /// `rdf:about` is an IRI REFERENCE, so it is spelled against the document base declared
 /// as `xml:base` on the root; `rdf:nodeID` is a blank-node label and is not.
-fn write_node_attribute(
-    out: &mut String,
+fn write_node_attribute<W: TextOut + ?Sized>(
+    out: &mut W,
     graph: &SerGraph,
     tid: usize,
 ) -> Result<(), RdfDiagnostic> {
@@ -1558,8 +1555,8 @@ fn enqueue_quoted_triple(
 /// [`SerGraph`] guarantees that, and the one that takes a caller-supplied graph
 /// (`crate::gts::gts_to_ser`) proves it, refusing a self-reaching table with
 /// `gts-self-reaching-term`. See `ser_model::write_term`.
-fn write_property(
-    out: &mut String,
+fn write_property<W: TextOut + ?Sized>(
+    out: &mut W,
     indent: &str,
     graph: &SerGraph,
     reifier_index: &ReifierIndex,
@@ -1623,8 +1620,8 @@ fn write_property(
     Ok(())
 }
 
-fn write_triple_node(
-    out: &mut String,
+fn write_triple_node<W: TextOut + ?Sized>(
+    out: &mut W,
     indent: &str,
     graph: &SerGraph,
     reifier_index: &ReifierIndex,
