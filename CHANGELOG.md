@@ -105,6 +105,48 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   plan reads is still ordered by score alone -- with nothing executed. Omitting
   both leaves the map empty rather than measuring against an invented law, and
   naming one without the other is a `ValueError`.
+- **bench:** A new unpublished tooling crate, `purrdf-bench`, and its
+  `bench-corpus` binary: the deterministic, shardable scale-corpus generator
+  behind the `purrdf-scale-mixed-v1` profile. Every IRI is minted purely from
+  its index under a fixed seed, across five deliberately adversarial classes
+  (front-codable plain, long zero-padded numerics beyond machine integer widths,
+  raw-Han Chinese, host-scattered irregular with reserved-octet escapes, and
+  very-long), so no single dictionary trick can flatter a capacity claim. The
+  row mix pins a share for every row kind and spans the RDF 1.2 term space the
+  profile targets — reifier rows binding triple terms, `xsd:`-typed literals
+  whose lexical forms are valid for their datatype, language-tagged literals,
+  and blank nodes in both subject and object position — so term-kind coverage is
+  a property of the profile rather than an accident of it. Index-pure minting
+  makes generation shardable with no coordination between shards: shard `k` of
+  `n` emits exactly its slice, and concatenating every shard is byte-identical
+  to one whole run, pinned by a golden digest. `make scale-corpus` is the lane
+  that drives it across shards, in streaming, piped, or opt-in file modes.
+- **bench:** Two comparison lanes against the workloads the RDF literature
+  publishes against, `make lubm` and `make watdiv`. Both are REPORT-ONLY, neither
+  is a gate, and neither vendors a byte: every artifact is fetched by digest into
+  an ignored cache under `target/` at the moment of use, because the LUBM
+  generator is GPL-2.0-or-later and WatDiv is citation-ware. `make lubm`
+  generates LUBM(N), converts it to N-Quads through the `purrdf` CLI itself and
+  answers the 14 published queries, printing the entailment regime and the
+  dataset rung every row was answered under — eleven of the fourteen have no
+  answers at all without inference, so a row without its regime is not
+  comparable with anything. `make watdiv` consumes upstream's digest-pinned
+  frozen 10M dataset (WatDiv's own generator is time-seeded and has no seed
+  flag, so a dataset is reproducible only as a frozen output) and instantiates
+  the 20 published templates deterministically from it, publishing a query-set
+  digest: the same dataset and the same seed reproduce the workload byte for
+  byte, and a different seed is a different workload rather than a re-run. All
+  three lanes share one implementation of the laws that make their numbers
+  evidence — `scripts/lane-common.sh` — including the rule that a certificate
+  (a manifest, a reuse stamp, a published digest) is never written for output
+  that was not produced and never outlives the run that wrote it.
+- **envelope-probe:** A new unpublished tooling crate,
+  `purrdf-envelope-probe`: the capture side of the micro-hardware validation
+  envelope. A fixed, deterministic workload set runs per named profile over the
+  public APIs and the keystone fixture corpus, so a release can demonstrate that
+  a constrained deployment class still fits its pinned ceilings. Pass criteria
+  are completion and memory; wall time is recorded evidence, never a gate.
+||||||| 45ad8bb7
 - **hnsw:** A new publishable crate, `purrdf-hnsw`: a deterministic HNSW
   approximate nearest-neighbour index over a PURREMB embedding matrix, registered
   on the evaluator's property-function seam under a caller-supplied predicate IRI.

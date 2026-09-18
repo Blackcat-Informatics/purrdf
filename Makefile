@@ -1,6 +1,42 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+# REPOSITORY-GLOBAL: no `make: Entering directory '...'` banners, from ANY
+# target — at any recursion depth ON GNU MAKE 4.4 OR NEWER.
+#
+# This is here because `make scale-corpus SCALE_MODE=pipe` puts a PAYLOAD on
+# make's standard output, and make's directory banner lands on the same stream
+# ahead of it as a corrupt first line a loader cannot parse. GNU make turns `-w`
+# on automatically whenever it detects a sub-make (a nonzero inherited
+# `MAKELEVEL`), so a wrapper that shells out to this lane inherits the
+# corruption without asking for it.
+#
+# WHAT THIS LINE DOES AND DOES NOT BUY, precisely, because the difference used
+# to be misstated here as immunity:
+#
+#   * GNU make >= 4.4: it cancels the automatic sub-make `-w`, so the bare
+#     `make scale-corpus SCALE_MODE=pipe` is byte-exact at any `MAKELEVEL`.
+#   * GNU make <= 4.3 (what ubuntu-24.04 runners ship): it does NOT. That make
+#     decides `-w` at STARTUP from the inherited `MAKELEVEL`, before a single
+#     line of makefile text is read, so this assignment arrives too late and the
+#     banner is printed anyway. There is no makefile-internal fix on 4.3. The
+#     target-specific form (`scale-corpus: MAKEFLAGS += ...`) is no better on
+#     any version: make emits the banner before target-specific variables apply.
+#
+# So this line is a convenience that is real from 4.4, not the lane's guarantee.
+# The guarantee lives in the idiom `docs/BENCHMARKS.md` documents for piping:
+# `SCALE_MODE=pipe bash scripts/scale-corpus.sh | your-loader`, which runs no
+# make at all and is therefore byte-exact on every version and at every
+# `MAKELEVEL`. An explicit `make --no-print-directory` on the command line also
+# works everywhere: the GNU make manual documents that option as cancelling the
+# `-w` make turns on by itself in a sub-make, and it is parsed at startup
+# alongside that `-w` rather than after it.
+#
+# The trade, stated plainly: every other target loses its directory banners too.
+# Nothing in this file parses them, and the recipes that change directory say so
+# themselves.
+MAKEFLAGS += --no-print-directory
+
 # Match Cargo's effective target directory, including `build.target-dir` from
 # host/workspace configuration. An explicit environment or command-line value
 # bypasses discovery.
@@ -12,8 +48,8 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -227,6 +263,65 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 bench: ## Run criterion benchmarks (report-only; never a gate).
 	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
 
+# HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
+#
+# A `make` recipe line is handed to `/bin/sh`, so a knob interpolated into one
+# gets a round of SHELL evaluation the operator never asked for. That is not
+# theoretical: `make scale-corpus 'SCALE_MANIFEST=/tmp/`touch /tmp/pwned`m.json'`
+# ran the backtick and then wrote the manifest to `/tmp/m.json` — a DIFFERENT
+# PATH than the one requested — and still exited 0. Quoting the interpolation
+# does not fix it: a double-quoted `sh` string still expands `` ` `` and `$`, and
+# a value containing a `"` becomes a raw `sh: unexpected EOF` instead of a lane
+# diagnostic. And `make` has a second expansion of its own — `$` in a
+# command-line variable value is `make`'s OWN variable syntax, so
+# `SCALE_MANIFEST=m$x.json` silently became `m.json`.
+#
+# `lane-env` closes both. `override X := $(value X)` freezes the bytes the
+# operator actually typed, before `make` expands anything in them; `export X`
+# hands exactly those bytes to the child's environment, where no shell parses
+# them. The lane scripts already read every one of these knobs from the
+# environment (`${SCALE_OUT:-}` and friends), so a path is now taken literally,
+# byte for byte, or the lane hard-fails saying which bytes it used.
+#
+# The one deliberate exception is `SCALE_SINK`, which is DOCUMENTED AS A COMMAND
+# and therefore must still reach a shell. It does so at exactly one place,
+# inside scripts/scale-corpus.sh, which syntax-checks it up front and fails with
+# a lane diagnostic if it cannot be run — never a bare `sh` error, never a
+# silent success.
+define lane-env
+override $(1) := $$(value $(1))
+export $(1)
+endef
+
+# The scale-corpus lane's knobs. Overridable exactly like BENCH_ARGS above:
+# `make scale-corpus SCALE_QUADS=10000000 SCALE_SHARDS=16`. The defaults are a
+# small streamed run because the profile's density rises with the entity index
+# space (~177 bytes per row at a 10^6-entity space, ~183 at 10^10) — a
+# 10^10-row run over a matching 10^10-entity space is ~1.83 TB, which is
+# streamed, not stored. SCALE_MODE=files is the only mode that writes
+# anything, and it refuses to run without SCALE_OUT.
+SCALE_QUADS ?= 1000000
+SCALE_IRIS ?= 100000
+SCALE_SEED ?= 1592642302
+SCALE_SHARDS ?= 8
+SCALE_MODE ?= stream
+SCALE_OUT ?=
+SCALE_SINK ?=
+SCALE_MANIFEST ?=
+# SCALE_BIN names the executable that certifies the bytes, exactly as LUBM_BIN
+# and WATDIV_BIN do for their lanes, so it belongs in `lane-env` more than any
+# other knob here. It was the one knob the script read that the `Makefile` never
+# listed, and the omission was the whole defect `lane-env` exists to stop:
+# `make scale-corpus 'SCALE_BIN=/tmp/bin/de$$xcoy'` had `$$x` expanded away by
+# `make` and the lane then EXECUTED `/tmp/bin/decoy` — a different binary than
+# the operator named, with exit 0.
+SCALE_BIN ?=
+
+$(foreach knob,SCALE_QUADS SCALE_IRIS SCALE_SEED SCALE_SHARDS SCALE_MODE SCALE_OUT SCALE_SINK SCALE_MANIFEST SCALE_BIN,$(eval $(call lane-env,$(knob))))
+
+scale-corpus: ## Generate the deterministic scale corpus across shards (streams and retains nothing by default; report-only, never a gate). See docs/BENCHMARKS.md.
+	@bash scripts/scale-corpus.sh
+
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
 
@@ -296,6 +391,72 @@ cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetche
 	python3 scripts/cnschema-probe.py --self-test
 	python3 scripts/cnschema-probe.py
 
+# The LUBM and WatDiv artifacts are NEVER vendored: the LUBM generator is
+# GPL-2.0-or-later, its ontology and query file publish no licence grant at all,
+# and WatDiv grants use-with-citation rather than redistribution. They are
+# fetched by digest into target/bench-artifacts/ at the moment of use. Run
+# `python3 scripts/benchmark-acquire.py --list` to read each artifact's terms.
+benchmark-acquire: ## Fetch the pinned LUBM and WatDiv comparison-workload artifacts by digest into target/ (network; nothing is vendored; not a CI gate).
+	python3 scripts/benchmark-acquire.py --self-test
+	python3 scripts/benchmark-acquire.py
+
+# The LUBM comparison lane's knobs. Overridable exactly like SCALE_* above:
+# `make lubm LUBM_UNIVERSITIES=5`. The default is ONE university (~103k triples),
+# which is small enough to run in seconds and is the size whose per-query answers
+# the LUBM literature publishes, so a first run can be checked against it.
+#
+# LUBM_DOC_BASE is the base each generated document's own two header triples
+# resolve against. It has a default because leaving it unset would silently embed
+# the scratch directory's `file://` path and destroy reproducibility; example.org
+# is RFC 2606's reserved documentation domain and this repository's fixture
+# convention, standing in for a publication IRI a local corpus does not have.
+LUBM_UNIVERSITIES ?= 1
+LUBM_SEED ?= 0
+LUBM_INDEX ?= 0
+LUBM_ONTO ?= http://swat.cse.lehigh.edu/onto/univ-bench.owl
+LUBM_DOC_BASE ?= http://example.org/lubm/
+LUBM_ENTAIL_SLICE ?= 3000
+LUBM_OUT ?= target/lubm
+LUBM_BIN ?=
+
+# Environment bytes, not a shell assignment prefix — see `lane-env` above. A
+# backtick in `LUBM_OUT` used to run and the lane then worked in a directory
+# nobody named. None of these knobs is a command, so none of them reaches a
+# shell at all.
+$(foreach knob,LUBM_UNIVERSITIES LUBM_SEED LUBM_INDEX LUBM_ONTO LUBM_DOC_BASE LUBM_ENTAIL_SLICE LUBM_OUT LUBM_BIN,$(eval $(call lane-env,$(knob))))
+
+lubm: ## Run the LUBM comparison workload end to end - acquire, generate, convert through the purrdf CLI, and run the 14 queries per entailment regime (report-only, never a gate). See docs/BENCHMARKS.md.
+	@bash scripts/lubm-lane.sh
+
+# The WatDiv comparison lane's knobs, in the same style as LUBM_* above:
+# `make watdiv WATDIV_SEED=7`. The default dataset is upstream's frozen 10M output
+# (~10.9M triples), which is the only scale pinned by digest: WatDiv's generator
+# seeds itself from the wall clock and has no seed flag, so a dataset is
+# reproducible only as a frozen OUTPUT, never as a generation run. The generator is
+# never built and never run here.
+#
+# WATDIV_SEED fixes the query set. The 20 published templates carry `%vN%`
+# placeholders that something must fill in, and upstream's own instantiator is
+# time-seeded and irreproducible; this lane chooses deterministically from the
+# frozen dataset instead. A DIFFERENT SEED IS A DIFFERENT WORKLOAD, so the seed is
+# reported next to every number it governs.
+WATDIV_SCALE ?= 10M
+WATDIV_SEED ?= 0
+WATDIV_OUT ?= target/watdiv
+WATDIV_BIN ?=
+
+# Environment bytes, not a shell assignment prefix — see `lane-env` above.
+$(foreach knob,WATDIV_SCALE WATDIV_SEED WATDIV_OUT WATDIV_BIN,$(eval $(call lane-env,$(knob))))
+
+watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen dataset, instantiate the 20 templates deterministically, load through the purrdf CLI, and run them (pure BGP, no entailment; report-only, never a gate). See docs/BENCHMARKS.md.
+	@bash scripts/watdiv-lane.sh
+
+# `purrdf-bench` is unpublished tooling rather than a release crate, and it is in
+# this list anyway: its library half documents itself as portable, and a
+# portability claim that no gate builds is carried by whoever last ran the build
+# by hand. Only the LIBRARY is built here (this recipe passes `--lib`); the
+# `bench-corpus` binary is std-only — files, process arguments, an exit code —
+# and stays deliberately out of the wasm surface.
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
@@ -304,7 +465,8 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
 			-p purrdf-geo -p purrdf-text -p purrdf-retrieval \
-			-p purrdf-validate -p purrdf -p purrdf-wasm; \
+			-p purrdf-validate -p purrdf -p purrdf-wasm \
+			-p purrdf-bench; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	elif ! command -v rustup >/dev/null 2>&1; then \
