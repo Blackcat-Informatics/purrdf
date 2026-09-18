@@ -8,6 +8,7 @@
 
 use crate::data_view::ShaclRead;
 
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use ::purrdf::{FastMap, FastSet, TermId, TermRef};
@@ -295,8 +296,15 @@ fn validate_shape_with_depth(
             None,
             ConstraintSource::from(shape),
         )?;
-        for r in &mut rs {
-            r.apply_box_roles(&shape.box_roles, &[]);
+        // A node-level result carries the shape's roles and no path roles. Every
+        // `eval_constraint` arm returns results with all three role vectors empty,
+        // so stamping a roleless shape onto them is the identity — and this loop
+        // also runs inside `conforms_with_depth`, which discards the whole vector.
+        // Skip it outright when there is nothing to stamp.
+        if !shape.box_roles.is_empty() {
+            for r in &mut rs {
+                r.apply_box_roles(&shape.box_roles, &[]);
+            }
         }
         results.extend(rs);
     }
@@ -506,12 +514,20 @@ fn eval_property_shape(
             .map(ValueNode::Foreign)
             .collect(),
     };
-    // Report-only path materialization is lazy: conforming focus nodes never
-    // allocate a native path term or clone a complex path structure.
+    // Report-only materialization is lazy: a conforming focus node never
+    // allocates a native path term, clones a complex path structure, merges the
+    // source graph-box roles, or scans the graph for the path's roles. All four
+    // exist only to be stamped onto a `ValidationResult`, and a conforming focus
+    // node produces none.
     let path_term = OnceLock::new();
     let path_structure = OnceLock::new();
-    let source_roles = merge_box_roles(parent_box_roles, &ps.box_roles);
-    let path_roles = path_box_roles(store, &ps.path, context.box_role_vocab);
+    let source_roles = OnceLock::new();
+    let path_roles = OnceLock::new();
+    // Both initializers capture only shared references, so they are `Copy` and can
+    // be handed to `get_or_init` at each of the sites that may be the first to
+    // need a role vector.
+    let init_source_roles = || merge_box_roles(parent_box_roles, &ps.box_roles);
+    let init_path_roles = || path_box_roles(store, &ps.path, context.box_role_vocab);
     let constraint_source = ConstraintSource {
         id: &ps.id,
         severity: &ps.severity,
@@ -548,7 +564,10 @@ fn eval_property_shape(
                 }));
             }
             r.focus_node = focus.clone();
-            r.apply_box_roles(&source_roles, &path_roles);
+            r.apply_box_roles(
+                source_roles.get_or_init(init_source_roles),
+                path_roles.get_or_init(init_path_roles),
+            );
         }
         results.extend(rs);
     }
@@ -569,7 +588,7 @@ fn eval_property_shape(
                 &value.to_term(store.core_view()),
                 value.as_id(store.core_view()),
                 nested,
-                &source_roles,
+                source_roles.get_or_init(init_source_roles),
             )?);
         }
     }
@@ -587,8 +606,8 @@ fn eval_property_shape(
             focus,
             value_nodes: &value_terms,
             ps,
-            source_roles: &source_roles,
-            path_roles: &path_roles,
+            source_roles: source_roles.get_or_init(init_source_roles),
+            path_roles: path_roles.get_or_init(init_path_roles),
             path_term: path_term.get_or_init(|| path::path_to_term(&ps.path)),
             box_role_vocab: context.box_role_vocab,
             plan: context.plan,
@@ -771,15 +790,21 @@ fn path_box_roles(
 }
 
 /// Merge the caller vocabulary's CBox role individual into `source_roles`.
-/// With no vocab configured this is the identity (no role is minted).
-fn with_cbox_role(
-    source_roles: &[NamedNode],
+///
+/// With no vocab configured the box-role feature is INACTIVE and this is the
+/// identity — no role is minted, and the borrowed input is handed straight back
+/// rather than copied, so the inactive case costs nothing at all.
+fn with_cbox_role<'roles>(
+    source_roles: &'roles [NamedNode],
     box_role_vocab: Option<&BoxRoleVocab>,
-) -> Vec<NamedNode> {
+) -> Cow<'roles, [NamedNode]> {
     let Some(vocab) = box_role_vocab else {
-        return source_roles.to_vec();
+        return Cow::Borrowed(source_roles);
     };
-    merge_box_roles(source_roles, &[NamedNode::from(vocab.box_cbox.as_str())])
+    Cow::Owned(merge_box_roles(
+        source_roles,
+        &[NamedNode::from(vocab.box_cbox.as_str())],
+    ))
 }
 
 fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {

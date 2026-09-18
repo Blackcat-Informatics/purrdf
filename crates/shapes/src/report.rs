@@ -134,16 +134,36 @@ impl ValidationResult {
     }
 
     /// Apply optional PurRDF graph-box role metadata to this result.
+    ///
+    /// The box-role feature is caller-configured and inactive when no vocabulary
+    /// supplies one, so the overwhelmingly common call has two empty inputs and
+    /// three empty outputs; that case clears in place and touches the allocator
+    /// not at all.
     pub fn apply_box_roles(&mut self, source_roles: &[NamedNode], path_roles: &[NamedNode]) {
+        if source_roles.is_empty() && path_roles.is_empty() {
+            self.source_box_roles.clear();
+            self.path_box_roles.clear();
+            self.result_box_roles.clear();
+            return;
+        }
         self.source_box_roles = dedup_roles(source_roles);
         self.path_box_roles = dedup_roles(path_roles);
-        let mut merged = self.source_box_roles.clone();
-        merged.extend(self.path_box_roles.iter().cloned());
-        self.result_box_roles = dedup_roles(&merged);
+        // The union is built straight from the two deduped halves — a separate
+        // `merged` copy would only be sorted and deduped again.
+        let mut result_roles =
+            Vec::with_capacity(self.source_box_roles.len() + self.path_box_roles.len());
+        result_roles.extend_from_slice(&self.source_box_roles);
+        result_roles.extend_from_slice(&self.path_box_roles);
+        result_roles.sort_unstable();
+        result_roles.dedup();
+        self.result_box_roles = result_roles;
     }
 }
 
 fn dedup_roles(roles: &[NamedNode]) -> Vec<NamedNode> {
+    if roles.is_empty() {
+        return Vec::new();
+    }
     let mut out = roles.to_vec();
     out.sort_unstable();
     out.dedup();
