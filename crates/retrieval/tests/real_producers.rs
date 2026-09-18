@@ -593,7 +593,16 @@ async fn manual_composition(
     profile: &FusionProfile,
 ) -> SearchResult {
     let planned = plan(&request(), registry, statistics).expect("the request plans");
-    let compiled = compile(&planned, env).expect("a fresh plan is admitted");
+    // The waist is re-formed around the law this composition will fuse under,
+    // exactly as `search` re-forms the environment it is handed: the planner
+    // still never sees a profile, and admission gains the one thing it can only
+    // know here — what each planned depth costs in rank resolution.
+    let env = AdmissionEnvironment {
+        registry: env.registry,
+        statistics: env.statistics,
+        fusion_profile: Some(profile),
+    };
+    let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
     let execution = execute(&compiled, registry, data)
         .await
         .expect("both real relations run");
@@ -619,6 +628,7 @@ async fn manual_composition(
         trailer: fused.trailer.completed_with(execution.statuses),
         unserved_terms: planned.unserved_evidence(),
         plan_id: planned.id(),
+        planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata,
     }

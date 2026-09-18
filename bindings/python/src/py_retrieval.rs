@@ -17,7 +17,10 @@
 //!   term that reached no producer at all. No weights: those are the fusion
 //!   law's, chosen at `search` time and deliberately not a planning input.
 //! * [`compile`] — semantic admission plus emission. Returns the per-stratum
-//!   SPARQL a host can read, run or log verbatim.
+//!   SPARQL a host can read, run or log verbatim, and — when the call names the
+//!   fusion law it means to fuse under — what the plan's depths will cost in
+//!   rank resolution, which is the question a host asks *before* paying to
+//!   execute anything.
 //! * [`search`] — `fuse ∘ execute ∘ compile ∘ plan`. Returns the fused ranking
 //!   with per-row, per-stratum provenance, every applicable producer's own
 //!   terminal status, the unserved-term evidence, and both identities that name
@@ -136,8 +139,8 @@ use pyo3::types::{PyDict, PyList};
 
 use crate::retrieval::{
     AdmissionEnvironment, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri, Metric, Plan,
-    ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, SearchResult,
-    Statistics, Term, TopK, UnservedReason,
+    PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason, RequestTerm,
+    RetrievalRequest, SearchResult, Statistics, Term, TopK, UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
@@ -366,12 +369,23 @@ fn run_plan(call: &Call) -> Result<(Arc<RdfDataset>, PropertyFunctionRegistry, P
 }
 
 /// Plan, then admit and emit the per-stratum SPARQL units.
-fn run_compile(call: &Call) -> Result<(Plan, CompiledRetrieval), String> {
+///
+/// `profile` is the fusion law the host means to fuse under, when it has named
+/// one. It is not a planning input and never becomes one — the plan is already
+/// built when it is read — but admission is the one stage that holds the plan
+/// and the law at the same time, so it is where each planned depth can be
+/// measured against the rank resolution that law delivers. A host that has not
+/// chosen a law passes `None` and is told nothing about resolution, rather than
+/// being handed evidence measured against a law it never named.
+fn run_compile(
+    call: &Call,
+    profile: Option<&FusionProfile>,
+) -> Result<(Plan, CompiledRetrieval), String> {
     let (_, registry, planned) = run_plan(call)?;
     let environment = AdmissionEnvironment {
         registry: &registry,
         statistics: &call.statistics,
-        fusion_profile: None,
+        fusion_profile: profile,
     };
     let compiled = crate::retrieval::compile(&planned, &environment).map_err(|e| e.to_string())?;
     Ok((planned, compiled))
@@ -887,6 +901,61 @@ fn unserved_list(
     Ok(out)
 }
 
+/// Render what a plan's recorded depths will cost in rank resolution, per
+/// stratum, as the admission waist measured it before anything ran.
+///
+/// Keyed by stratum IRI in ascending order, which is the order the engine's own
+/// map carries, so the dict a host reads is a pure function of the plan and the
+/// law. `separates_to` is `None` when the law never stops separating inside any
+/// depth a plan can express — a saturation, deliberately not a very large number
+/// a caller could mistake for a measurement — and `fully_separated` is the one
+/// bit that follows from comparing it with `requested_depth`, answered here so a
+/// host does not re-derive the comparison (and the saturating case) itself.
+fn planned_resolution_dict<'py>(
+    py: Python<'py>,
+    planned: &BTreeMap<Iri, PlannedResolution>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    for (stratum, entry) in planned {
+        let rendered = PyDict::new(py);
+        rendered.set_item("separates_to", entry.separation.rank())?;
+        rendered.set_item("requested_depth", entry.requested_depth)?;
+        rendered.set_item("fully_separated", entry.fully_separated())?;
+        out.set_item(stratum.as_str(), rendered)?;
+    }
+    Ok(out)
+}
+
+/// Render one compiled plan as a dict: the plan document, the per-stratum
+/// SPARQL, the two identities that pin the units, and what the plan's depths
+/// will cost in rank resolution under the law the caller named.
+fn compile_dict<'py>(
+    py: Python<'py>,
+    planned: &Plan,
+    compiled: &CompiledRetrieval,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("plan", plan_dict(py, planned)?)?;
+    let units = PyList::empty(py);
+    for unit in &compiled.units {
+        let entry = PyDict::new(py);
+        entry.set_item("stratum", unit.stratum.as_str())?;
+        entry.set_item("sparql", &unit.sparql)?;
+        units.append(entry)?;
+    }
+    out.set_item("units", units)?;
+    out.set_item("plan_id", compiled.plan_id.to_hex())?;
+    out.set_item("registry_fingerprint", &compiled.registry_fingerprint)?;
+    // The waist's whole point: the cost of the plan's depths, readable here,
+    // without executing a single unit. Empty when the call named no fusion law,
+    // because resolution is measured against one and this binding invents none.
+    out.set_item(
+        "planned_resolution",
+        planned_resolution_dict(py, &compiled.resolution)?,
+    )?;
+    Ok(out)
+}
+
 /// Render one fused answer as a dict.
 fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
@@ -937,19 +1006,29 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     }
     out.set_item("statuses", statuses)?;
 
-    // What the answer cost in rank resolution, per stratum it was actually read
-    // from. `separates_to` is `None` when the profile's contributions never
-    // collide inside any expressible depth — a saturation, deliberately not a
-    // very large number a caller could mistake for a measurement.
-    let resolution = PyDict::new(py);
+    // Rank resolution at two altitudes, kept apart by name because they answer
+    // two different questions. `planned_resolution` is what the admission waist
+    // said the plan's depths would cost, knowable before any row was read;
+    // `observed_resolution` is what the rows this run actually pulled did cost.
+    // They legitimately disagree — a top-k that certified early never reaches
+    // its planned depth — and neither corrects the other.
+    out.set_item(
+        "planned_resolution",
+        planned_resolution_dict(py, &result.planned_resolution)?,
+    )?;
+
+    // `separates_to` is `None` when the profile's contributions never collide
+    // inside any expressible depth — a saturation, deliberately not a very large
+    // number a caller could mistake for a measurement.
+    let observed = PyDict::new(py);
     for (stratum, measured) in &result.trailer.resolution {
         let entry = PyDict::new(py);
         entry.set_item("separates_to", measured.separation.rank())?;
         entry.set_item("ranks_pulled", measured.ranks_pulled)?;
         entry.set_item("collisions_observed", measured.collisions_observed)?;
-        resolution.set_item(stratum.as_str(), entry)?;
+        observed.set_item(stratum.as_str(), entry)?;
     }
-    out.set_item("resolution", resolution)?;
+    out.set_item("observed_resolution", observed)?;
     out.set_item("cut_on_a_tie", result.trailer.cut_on_a_tie)?;
 
     out.set_item(
@@ -1008,36 +1087,85 @@ fn plan<'py>(
 /// host that logs a unit can say exactly which plan and which registry it came
 /// from. A host can read, log or execute those units itself; [`search`] is what
 /// runs them and fuses their rows.
+///
+/// `"planned_resolution"` is what those depths will cost in rank resolution,
+/// per stratum, **before** anything is executed: each entry names the
+/// `"separates_to"` depth this law still tells adjacent ranks apart at (`None`
+/// when it never stops inside a depth a plan can express), the
+/// `"requested_depth"` the plan recorded, and `"fully_separated"` — whether
+/// every rank the plan reads is still ordered by score alone. A `False` there is
+/// not an error: past that depth the declared tie-break is total, so the answer
+/// stays correct and deterministic at a coarser resolution, and
+/// `retrieval.weight_for_depth` says what a finer one costs.
+///
+/// Resolution is measured against a fusion law, so it is reported only when the
+/// call names one: pass `weights` and `k` together, exactly as [`search`] takes
+/// them, and `"planned_resolution"` carries an entry per weighted stratum. Omit
+/// both and it is empty — this binding invents no law to measure against, and a
+/// resolution attributed to a law the host never chose would be evidence about
+/// nothing. Naming one without the other is a `ValueError`, because the two are
+/// one law between them.
 #[pyfunction]
-#[pyo3(signature = (data, request, *, text_producers, statistics, data_format="turtle", base=None))]
+#[pyo3(signature = (
+    data,
+    request,
+    *,
+    text_producers,
+    statistics,
+    weights=None,
+    k=None,
+    data_format="turtle",
+    base=None,
+))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the waist's inputs are named, not bundled"
+)]
 fn compile<'py>(
     py: Python<'py>,
     data: &str,
     request: &Bound<'py, PyAny>,
     text_producers: &Bound<'py, PyDict>,
     statistics: &Bound<'py, PyDict>,
+    weights: Option<&Bound<'py, PyDict>>,
+    k: Option<u32>,
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let call = collect_call(data, request, text_producers, statistics, data_format, base)?;
+    // A law is its weights *and* its smoothing constant; half of one names no
+    // law at all, and silently supplying the missing half would report a
+    // resolution measured against arithmetic the host never wrote.
+    let law = match (weights, k) {
+        (Some(weights), Some(k)) => Some((collect_weights(weights)?, k)),
+        (None, None) => None,
+        (Some(_), None) => {
+            return Err(PyValueError::new_err(
+                "`weights` names a fusion law and `k` is that law's smoothing constant; pass \
+                 both to learn what the planned depths cost in rank resolution, or neither to \
+                 compile without naming a law",
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(PyValueError::new_err(
+                "`k` is a fusion law's smoothing constant and `weights` is the rest of that law; \
+                 pass both to learn what the planned depths cost in rank resolution, or neither \
+                 to compile without naming a law",
+            ));
+        }
+    };
     // Parsing, index construction, planning and admission run detached.
     let (planned, compiled) = py
-        .detach(|| run_compile(&call))
+        .detach(|| {
+            let profile = law
+                .as_ref()
+                .map(|(declared, k)| build_profile(declared, *k))
+                .transpose()?;
+            run_compile(&call, profile.as_ref())
+        })
         .map_err(PyValueError::new_err)?;
 
-    let out = PyDict::new(py);
-    out.set_item("plan", plan_dict(py, &planned)?)?;
-    let units = PyList::empty(py);
-    for unit in &compiled.units {
-        let entry = PyDict::new(py);
-        entry.set_item("stratum", unit.stratum.as_str())?;
-        entry.set_item("sparql", &unit.sparql)?;
-        units.append(entry)?;
-    }
-    out.set_item("units", units)?;
-    out.set_item("plan_id", compiled.plan_id.to_hex())?;
-    out.set_item("registry_fingerprint", &compiled.registry_fingerprint)?;
-    Ok(out)
+    compile_dict(py, &planned, &compiled)
 }
 
 /// Run the whole retrieval ladder and return one fused answer.
@@ -1049,16 +1177,26 @@ fn compile<'py>(
 /// `"unweighted_strata"` the profile declined to score, and the `"plan_id"` /
 /// `"profile_id"` pair that names exactly which plan and which law produced it.
 ///
-/// It also carries what the answer cost in rank resolution. `"resolution"` maps
-/// each stratum actually read to its `"separates_to"` depth (`None` when this
-/// law never stops separating inside an expressible depth), the
-/// `"ranks_pulled"` this run reached, and the `"collisions_observed"` — adjacent
-/// ranks the fused score could not tell apart, counted by observation rather
-/// than inferred. `"cut_on_a_tie"` says whether the last row in the answer beat
-/// a rival it tied with exactly, so the final place was settled by the declared
-/// tie-break rather than by relevance. None of these is an error: past its
-/// separating depth a law still answers correctly and deterministically, only
-/// more coarsely. `retrieval.weight_for_depth` says what a finer answer costs.
+/// It also carries what rank resolution cost, at both altitudes and under two
+/// distinct keys. `"planned_resolution"` is the admission waist's own map —
+/// exactly what [`compile`] reports for the same request under the same law,
+/// carried onto the answer so the one call that plans and executes together is
+/// not the one call that cannot see it: per weighted stratum, the
+/// `"separates_to"` depth, the `"requested_depth"` the plan recorded, and
+/// `"fully_separated"`. `"observed_resolution"` is what the rows this run really
+/// pulled cost: per stratum actually read, the same `"separates_to"` depth
+/// (`None` when this law never stops separating inside an expressible depth),
+/// the `"ranks_pulled"` this run reached, and the `"collisions_observed"` —
+/// adjacent ranks the fused score could not tell apart, counted by observation
+/// rather than inferred. The two disagree whenever a top-k certified before
+/// reaching its planned depth, and that gap is the point: a depth a fusion never
+/// reached cost it nothing.
+///
+/// `"cut_on_a_tie"` says whether the last row in the answer beat a rival it tied
+/// with exactly, so the final place was settled by the declared tie-break rather
+/// than by relevance. None of these is an error: past its separating depth a law
+/// still answers correctly and deterministically, only more coarsely.
+/// `retrieval.weight_for_depth` says what a finer answer costs.
 ///
 /// `weights` maps a stratum IRI to its weight in raw fixed-point units, where
 /// `retrieval.SCALE` is one whole unit; see this module's own documentation for
@@ -1330,7 +1468,7 @@ mod tests {
             vec![lexical("quick fox", NOTE)],
             vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
         );
-        let (planned, compiled) = run_compile(&call).expect("a fresh plan is admitted");
+        let (planned, compiled) = run_compile(&call, None).expect("a fresh plan is admitted");
         assert_eq!(compiled.units.len(), 1);
         assert_eq!(compiled.units[0].stratum.as_str(), TEXT_STRATUM);
         assert!(
@@ -1344,6 +1482,40 @@ mod tests {
             compiled.units[0].sparql
         );
         assert_eq!(planned.statistics_snapshot.source, "host-statistics");
+        assert!(
+            compiled.resolution.is_empty(),
+            "a call that named no fusion law is told nothing about resolution, rather than being \
+             handed evidence measured against a law it never chose"
+        );
+    }
+
+    /// The waist answers what a plan will cost, without executing it: a call
+    /// that names the law it means to fuse under gets the resolution evidence
+    /// back from `compile`, not only from `search`.
+    #[test]
+    fn compile_reports_what_the_planned_depths_cost_under_a_named_law() {
+        let call = call(
+            vec![lexical("quick fox", NOTE)],
+            vec![producer(TEXT_PRODUCER, TEXT_STRATUM, NOTE)],
+        );
+        let profile = build_profile(&unit_weights(&[TEXT_STRATUM]), 60)
+            .expect("the fixture profile is valid");
+        let (planned, compiled) =
+            run_compile(&call, Some(&profile)).expect("a fresh plan is admitted under a law");
+        let stratum = Iri::parse(TEXT_STRATUM).expect("fixture stratum");
+        let recorded = compiled
+            .resolution
+            .get(&stratum)
+            .copied()
+            .expect("a weighted stratum's resolution is recorded at the waist");
+        assert!(
+            recorded.fully_separated(),
+            "a unit weight separates every rank this small plan reads"
+        );
+        assert_eq!(
+            recorded.requested_depth, planned.stratum_depths[&stratum],
+            "the evidence names the depth the plan recorded"
+        );
     }
 
     /// Statistics are the host's, recorded verbatim, and a measured cardinality

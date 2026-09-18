@@ -357,6 +357,14 @@ refusal retained is exact rather than conservative: asking for a depth no
 weight can reach under the truncated rule is refused, and the saturation
 rank is reported with it.
 
+The middle altitude is reported at every entry point, not only to a
+caller that stops at the waist to look. `compile` against an environment
+naming the law answers what a plan will cost with nothing executed, and
+the one-call composition carries that same map onto its answer beside the
+trailer's measured one — planned and observed kept apart by name, because
+a top-k that certifies early never reaches its planned depth and a depth
+nothing reached cost nothing.
+
 ## 6. Producer status survives fusion — the only place it can die
 
 Every producer's stream already names its own completeness: which

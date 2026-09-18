@@ -440,6 +440,28 @@ fn report(result: &SearchResult) {
         println!("  {}: {rendered}", short(stratum));
     }
 
+    // What the plan's depths were going to cost in rank resolution, as the
+    // admission waist measured them before a single row was read. A host that
+    // wants this and nothing else never has to run the search at all: `compile`
+    // against an environment naming the profile answers it on its own.
+    println!("\nplanned rank resolution (known before anything ran)");
+    for (stratum, planned) in &result.planned_resolution {
+        let separation = planned.separation.rank().map_or_else(
+            || "no depth a plan can express".to_owned(),
+            |rank| format!("rank {rank}"),
+        );
+        let verdict = if planned.fully_separated() {
+            "every planned rank is ordered by score alone"
+        } else {
+            "the deepest planned ranks fall to the declared tie-break"
+        };
+        println!(
+            "  {}: planned to read {} ranks; this law separates to {separation} — {verdict}",
+            short(stratum),
+            planned.requested_depth
+        );
+    }
+
     println!("\nrequest terms nothing served");
     if result.unserved_terms.is_empty() {
         println!("  (none)");

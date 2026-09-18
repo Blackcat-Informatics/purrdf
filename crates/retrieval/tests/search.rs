@@ -359,7 +359,17 @@ async fn manual_composition(
     top_k: TopK,
 ) -> SearchResult {
     let planned = plan(request, registry, stats).expect("the fixture request plans");
-    let compiled = compile(&planned, env).expect("a fresh plan is admitted");
+    // The waist is held to the law this composition is about to fuse under, which
+    // is exactly what `search` does with the environment it is handed: the plan is
+    // unchanged and the planner still never sees the profile, but admission can
+    // now say what each planned depth costs in rank resolution. A caller composing
+    // by hand re-forms the environment here for the same reason.
+    let env = AdmissionEnvironment {
+        registry: env.registry,
+        statistics: env.statistics,
+        fusion_profile: Some(profile),
+    };
+    let compiled = compile(&planned, &env).expect("a fresh plan is admitted");
     let execution = execute(&compiled, registry, dataset)
         .await
         .expect("the fixture registry executes");
@@ -384,6 +394,7 @@ async fn manual_composition(
         trailer: fused.trailer.completed_with(execution.statuses),
         unserved_terms: planned.unserved_evidence(),
         plan_id: planned.id(),
+        planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata,
     }
@@ -425,6 +436,16 @@ fn render(result: &SearchResult) -> String {
             out,
             "unserved term={} {:?}",
             unserved.request_term, unserved.reason
+        );
+    }
+    for (stratum, planned) in &result.planned_resolution {
+        let _ = writeln!(
+            out,
+            "planned-resolution {} separation={:?} depth={} separated={}",
+            stratum.as_str(),
+            planned.separation,
+            planned.requested_depth,
+            planned.fully_separated()
         );
     }
     let _ = writeln!(
@@ -638,6 +659,167 @@ fn search_answers_under_a_profile_that_cannot_separate_every_planned_rank() {
         ))
         .is_ok(),
         "a profile whose arithmetic covers every recorded depth still answers"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2a-bis. The waist's resolution evidence reaches the answer
+//
+// `search` is the only entry point that plans and executes in one call, so it is
+// the only one where a caller cannot stop at the compiled bundle to read what the
+// plan's depths were going to cost. The pair below holds it to carrying that
+// evidence forward: the criterion is a profile whose plan is NOT fully separated,
+// and the neighbour is one that is — which must report itself as separated rather
+// than as an absence.
+// ---------------------------------------------------------------------------
+
+/// The compiled bundle a `search` under `profile` would produce, for comparing
+/// the answer's planned resolution against the plan that produced it.
+///
+/// It re-forms the environment exactly as `search` does, because the resolution
+/// is a property of the plan *and* the law: an environment naming no profile has
+/// nothing to measure against and would report nothing at all.
+fn compiled_under(
+    registry: &PropertyFunctionRegistry,
+    stats: &MockStatistics,
+    profile: &FusionProfile,
+) -> purrdf_retrieval::CompiledRetrieval {
+    let planned = plan(&mixed_request(), registry, stats).expect("the fixture request plans");
+    let env = AdmissionEnvironment {
+        registry,
+        statistics: stats,
+        fusion_profile: Some(profile),
+    };
+    compile(&planned, &env).expect("a fresh plan is admitted")
+}
+
+#[test]
+fn search_reports_the_planned_resolution_the_compiled_plan_recorded() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    // The same sub-unit weight as the fixture above: `10^-9` cannot separate a
+    // hundred ranks under the truncated rule, so this plan is admitted and
+    // reported as coarse rather than refused.
+    let shallow = FusionProfile::with_decay(
+        BTreeMap::from([(iri(&ex("stratum/text")), Fixed::from_raw(1_000))]),
+        DecayRule::ReciprocalRank { k: 1 },
+    )
+    .expect("a strictly positive weight is a valid profile");
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &shallow,
+        TOP_K,
+    ))
+    .expect("a depth past the profile's separating range still answers");
+
+    // The criterion: what the answer reports is what the admission waist
+    // recorded, not a number `search` derived a second time.
+    let compiled = compiled_under(&registry, &stats, &shallow);
+    assert_eq!(
+        result.planned_resolution, compiled.resolution,
+        "the answer carries the compiled plan's own resolution map"
+    );
+    let planned = result
+        .planned_resolution
+        .get(&iri(&ex("stratum/text")))
+        .copied()
+        .expect("the weighted stratum's planned resolution is on the answer");
+    assert_eq!(
+        planned.requested_depth, 100,
+        "the depth reported is the one the PLAN recorded for the stratum"
+    );
+    assert!(
+        !planned.fully_separated(),
+        "a hundred ranks at a weight of 10^-9 is not fully separated"
+    );
+
+    // …and it is emphatically not the trailer's observed number wearing another
+    // name. The mock yields two rows, so fusion pulled two ranks and observed no
+    // collision at all: the plan's estimate and the run's outcome disagree here
+    // precisely because a depth nothing reached cost nothing.
+    let observed = result
+        .trailer
+        .resolution
+        .get(&iri(&ex("stratum/text")))
+        .copied()
+        .expect("the fused stratum's observed resolution is in the trailer");
+    assert_eq!(observed.ranks_pulled, 2, "the mock holds two rows");
+    assert_eq!(
+        observed.collisions_observed, 0,
+        "two ranks is far short of where this law stops separating"
+    );
+    assert_ne!(
+        u64::from(planned.requested_depth),
+        observed.ranks_pulled,
+        "the planned depth and the ranks actually pulled are two different facts"
+    );
+
+    // A stratum with no weight has no contribution and so no resolution; it is
+    // named as unweighted instead, never reported at a fabricated depth.
+    assert_eq!(
+        result.planned_resolution.keys().collect::<Vec<_>>(),
+        vec![&iri(&ex("stratum/text"))],
+        "only the weighted stratum has a resolution to report"
+    );
+    assert_eq!(
+        result.unweighted_strata,
+        vec![iri(&ex("stratum/graph")), iri(&ex("stratum/universal"))],
+        "the strata this profile does not weight are named, not silently resolved"
+    );
+}
+
+#[test]
+fn a_fully_separated_plan_reports_itself_as_separated_rather_than_as_an_absence() {
+    // The neighbouring valid case. The fixture profile's unit weights order far
+    // deeper than any depth this plan records, and the honest report for that is
+    // an entry saying so — not a missing entry, which is what a stratum with no
+    // weight looks like, and not a refusal.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let env = fixture_env(&registry, &stats);
+    let profile = fixture_profile();
+
+    let result = block_on(search(
+        &mixed_request(),
+        &registry,
+        &stats,
+        &*common::empty_dataset(),
+        &env,
+        &profile,
+        TOP_K,
+    ))
+    .expect("a profile whose arithmetic covers every recorded depth answers");
+
+    let compiled = compiled_under(&registry, &stats, &profile);
+    assert_eq!(result.planned_resolution, compiled.resolution);
+    assert_eq!(
+        result.planned_resolution.keys().collect::<Vec<_>>(),
+        vec![
+            &iri(&ex("stratum/graph")),
+            &iri(&ex("stratum/text")),
+            &iri(&ex("stratum/universal")),
+        ],
+        "every stratum the plan reached is weighted, so every one has an entry"
+    );
+    for (stratum, planned) in &result.planned_resolution {
+        assert!(
+            planned.fully_separated(),
+            "a unit weight separates every rank {stratum} plans to read ({planned:?})"
+        );
+        assert!(
+            planned.requested_depth > 0,
+            "the entry names the depth it separates, not merely that it does"
+        );
+    }
+    assert!(
+        result.unweighted_strata.is_empty(),
+        "nothing was set aside, so nothing is missing from the resolution map"
     );
 }
 

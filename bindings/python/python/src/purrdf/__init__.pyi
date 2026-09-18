@@ -1904,6 +1904,16 @@ class retrieval:
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Plan, admit, and emit the per-stratum SPARQL the request compiles to.
+    #
+    # `weights` and `k` are the fusion law the caller means to fuse under, and
+    # naming it is what makes `"planned_resolution"` answerable: per weighted
+    # stratum, the `"separates_to"` depth this law still tells adjacent ranks
+    # apart at (`None` when it never stops inside a depth a plan can express),
+    # the `"requested_depth"` the plan recorded, and `"fully_separated"`. That is
+    # what the plan will cost in rank resolution, known without executing a
+    # single unit. Omit both and the map is empty — no law is invented to measure
+    # against — and naming one without the other raises `ValueError`, because the
+    # two are one law between them.
     @staticmethod
     def compile(
         data: str,
@@ -1911,6 +1921,8 @@ class retrieval:
         *,
         text_producers: dict[str, tuple[str, str, str]],
         statistics: dict[str, builtins.object],
+        weights: dict[str, int] | None = None,
+        k: int | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -1927,6 +1939,16 @@ class retrieval:
     # enumeration is top-k by construction. How many contributions a candidate
     # may receive is not a parameter — it is the number of weighted strata,
     # because a candidate surfaces at most once in each.
+    #
+    # The answer reports rank resolution under two distinct keys.
+    # `"planned_resolution"` is the admission waist's map, identical to what
+    # `compile` reports for the same request under the same law: what the plan's
+    # depths were going to cost, knowable before any row was read.
+    # `"observed_resolution"` is what the rows this run actually pulled did cost:
+    # `"separates_to"`, the `"ranks_pulled"` reached, and the
+    # `"collisions_observed"`. The two legitimately disagree — a top-k that
+    # certified early never reaches its planned depth — and neither is a
+    # correction of the other.
     @staticmethod
     def search(
         data: str,

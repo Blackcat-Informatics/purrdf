@@ -284,6 +284,139 @@ def test_compile_emits_the_sparql_each_stratum_runs() -> None:
     assert '"quick fox"' in units[0]["sparql"], "the needle is a rendered constant"
     assert f"<{NOTE_PRODUCER}>" in units[0]["sparql"], "the unit calls the bound producer"
     assert compiled["plan_id"] == compiled["plan"]["plan_id"]
+    assert compiled["planned_resolution"] == {}, (
+        "resolution is measured against a fusion law, and this call named none"
+    )
+
+
+def test_compile_says_what_a_plan_costs_without_running_it() -> None:
+    """The waist's own question: what does this plan cost, before paying for it?
+
+    Naming the law the host means to fuse under is enough. Nothing is executed —
+    ``compile`` never touches the producers' rows — and the answer is already
+    there: how deep each stratum plans to read, how deep the law still tells
+    adjacent ranks apart, and the one bit that follows from comparing them.
+    """
+    compiled = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        k=60,
+    )
+    planned = compiled["planned_resolution"][NOTE_STRATUM]
+    assert planned["fully_separated"] is True, (
+        "a whole unit of weight separates every rank this plan reads"
+    )
+    assert planned["requested_depth"] >= 1
+    assert planned["separates_to"] is None or (
+        planned["separates_to"] >= planned["requested_depth"]
+    )
+    # The units are still the units: asking what the plan costs did not run it.
+    assert f"<{NOTE_PRODUCER}>" in compiled["units"][0]["sparql"]
+
+    # The neighbouring case that is NOT fully separated, derived rather than
+    # guessed: `weight_for_depth` reports the TRUE minimum weight that still
+    # separates every rank this plan reads, so one raw unit less cannot reach it.
+    depth = planned["requested_depth"]
+    assert depth >= 2, "a single rank has no adjacent pair to lose"
+    sufficient = retrieval.weight_for_depth(depth, 60)
+    coarse = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+        weights={NOTE_STRATUM: sufficient - 1},
+        k=60,
+    )
+    coarse_planned = coarse["planned_resolution"][NOTE_STRATUM]
+    assert coarse_planned["requested_depth"] == depth
+    assert coarse_planned["fully_separated"] is False, (
+        "a depth past where this law stops separating is reported, not refused"
+    )
+    assert coarse_planned["separates_to"] < depth
+    assert coarse["units"], "a coarse plan is still a compiled plan"
+
+    # …and the exact minimum, one unit up, separates it. The boundary is
+    # measured, not approximated, and neither side of it is a refusal.
+    exact = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+        weights={NOTE_STRATUM: sufficient},
+        k=60,
+    )
+    assert exact["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
+
+
+def test_compile_refuses_half_a_fusion_law_and_accepts_the_whole_one() -> None:
+    """Weights and the smoothing constant are one law between them."""
+    common: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "statistics": STATISTICS,
+    }
+    with pytest.raises(ValueError, match="smoothing constant"):
+        retrieval.compile(
+            DATA,
+            [_lexical("quick fox", NOTE)],
+            weights={NOTE_STRATUM: retrieval.SCALE},
+            **common,
+        )
+    with pytest.raises(ValueError, match="smoothing constant"):
+        retrieval.compile(DATA, [_lexical("quick fox", NOTE)], k=60, **common)
+
+    # Both halves together are a law, and the same call answers.
+    whole = retrieval.compile(
+        DATA,
+        [_lexical("quick fox", NOTE)],
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        k=60,
+        **common,
+    )
+    assert whole["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
+
+
+def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
+    """Both altitudes are on the answer, under names that cannot be confused.
+
+    ``planned_resolution`` is what the admission waist said the plan's depths
+    would cost; ``observed_resolution`` is what the rows this run really pulled
+    did cost. They disagree here exactly as they should: a three-document corpus
+    exhausts after a handful of ranks, while the plan reserved the depth the
+    producer declared it could fill, and a depth nothing reached cost nothing.
+    """
+    request = [_lexical("quick fox", NOTE)]
+    answer = retrieval.search(
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        statistics=STATISTICS,
+        k=60,
+        top_k=10,
+    )
+
+    planned = answer["planned_resolution"][NOTE_STRATUM]
+    observed = answer["observed_resolution"][NOTE_STRATUM]
+    assert planned["fully_separated"] is True
+    assert observed["collisions_observed"] == 0
+    assert observed["ranks_pulled"] <= planned["requested_depth"], (
+        "a run cannot pull deeper than the plan it descends from"
+    )
+
+    # And it is the WAIST's value, not a second derivation: compiling the same
+    # request under the same law, executing nothing, reports the same thing.
+    compiled = retrieval.compile(
+        DATA,
+        request,
+        text_producers=NOTE_ONLY,
+        statistics=STATISTICS,
+        weights={NOTE_STRATUM: retrieval.SCALE},
+        k=60,
+    )
+    assert compiled["planned_resolution"] == answer["planned_resolution"]
 
 
 def test_no_producer_is_refused_by_name() -> None:

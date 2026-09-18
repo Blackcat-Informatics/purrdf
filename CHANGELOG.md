@@ -53,6 +53,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   The trailer also reports whether the last row in a top-k beat a rival it tied
   with exactly, which is the case where the final place was settled by the
   declared tie-break rather than by relevance.
+
+  Both altitudes are readable from every entry point, and kept apart by name.
+  `SearchResult::planned_resolution` carries the compiled plan's own map onto the
+  fused answer, so the one call that plans and executes together is not the one
+  call that cannot see what it was about to pay; `FusionTrailer::resolution`
+  beside it is what the rows really cost. From Python the same pair is
+  `"planned_resolution"` and `"observed_resolution"` on the `search` answer, and
+  `retrieval.compile` now takes the `weights` and `k` that name a fusion law and
+  answers `"planned_resolution"` for it -- per weighted stratum, the depth the
+  law still separates, the depth the plan recorded, and whether every rank the
+  plan reads is still ordered by score alone -- with nothing executed. Omitting
+  both leaves the map empty rather than measuring against an invented law, and
+  naming one without the other is a `ValueError`.
 - **hnsw:** A new publishable crate, `purrdf-hnsw`: a deterministic HNSW
   approximate nearest-neighbour index over a PURREMB embedding matrix, registered
   on the evaluator's property-function seam under a caller-supplied predicate IRI.
@@ -110,6 +123,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **retrieval:** The Python `search` answer spells the trailer's measured rank
+  resolution `"observed_resolution"` rather than `"resolution"`. The answer now
+  reports two resolutions -- what the plan was going to cost and what the rows
+  actually cost -- and an unqualified name beside a qualified one reads as the
+  general case of it, which these are not: a top-k that certifies early never
+  reaches its planned depth, so the two differ by design. Confined to
+  `purrdf-retrieval` and its binding, which have not yet been published, so no
+  released API changes.
 - **retrieval:** `FusionProfile::class_width` and
   `FusionProfile::deepest_rank_within_width` answer with
   `Result<Option<u64>, FusionError>` rather than `Option<u64>`, so the two facts

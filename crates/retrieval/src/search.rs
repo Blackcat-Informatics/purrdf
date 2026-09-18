@@ -130,6 +130,15 @@
 //! planner still never sees a profile — the coupling is measured where it becomes
 //! knowable, not carried through a stage that must not know it.
 //!
+//! That measurement does not stop at the waist. `search` is the one entry point
+//! that plans and executes in a single call, so it is also the only one where a
+//! caller cannot stop between the two to read the compiled bundle: it carries
+//! the waist's own map forward as [`SearchResult::planned_resolution`],
+//! unchanged and unmerged. The answer therefore holds both altitudes at once —
+//! what the plan's depths were going to cost, and what the rows actually pulled
+//! cost ([`FusionTrailer::resolution`]) — and a caller comparing them is
+//! comparing the estimate with the outcome rather than reading one number twice.
+//!
 //! One case is still a refusal: when the profile weights *none* of the strata
 //! the plan reached, there is no answer to keep working. The plan and the
 //! profile are disjoint, every row that ran would be discarded, and an empty
@@ -143,12 +152,14 @@
 //! such assertion on the caller's behalf — it decides which streams to hand over
 //! and reports what it left out.
 
+use std::collections::BTreeMap;
+
 use purrdf_core::DatasetView;
 use purrdf_sparql_eval::PropertyFunctionRegistry;
 use purrdf_text::Fixed;
 
 use crate::admission::{AdmissionEnvironment, AdmissionError};
-use crate::compile::compile;
+use crate::compile::{PlannedResolution, compile};
 use crate::error::{FusionError, PlanError};
 use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute};
 use crate::fuse::{TopK, fuse};
@@ -215,6 +226,35 @@ pub struct SearchResult {
     /// ([`FusionError::PlanIdMismatch`]) rather than an answer filed under a
     /// plan that did not produce it.
     pub plan_id: PlanId,
+    /// What each stratum's **planned** depth was going to cost in rank
+    /// resolution under this profile, exactly as the admission waist recorded
+    /// it, keyed by stratum.
+    ///
+    /// This is the compiled plan's own map
+    /// ([`CompiledRetrieval::resolution`](crate::CompiledRetrieval)) carried
+    /// through unchanged, and it answers a different question from the one
+    /// [`FusionTrailer::resolution`] answers on [`Self::trailer`]:
+    ///
+    /// * here, *planned* — the depth the plan recorded for the stratum, against
+    ///   the depth this profile still separates. It is knowable before any row
+    ///   is read, so a caller that wants to decide whether a search is worth
+    ///   paying for reads this one, at the waist, through
+    ///   [`compile`](crate::compile). It is on the answer as well so that a
+    ///   caller which took the one-call entry point — the only path that plans
+    ///   and executes without stopping in between — is not the one caller that
+    ///   cannot see it;
+    /// * there, *observed* — how deep fusion really pulled and how many adjacent
+    ///   ranks it really could not tell apart, counted on the rows themselves.
+    ///
+    /// The two legitimately disagree: a top-k that certified early never reaches
+    /// its planned depth, and a bound a fusion never reached cost it nothing.
+    /// Neither number is a correction of the other.
+    ///
+    /// Keyed by the strata this profile weights **and** the plan gave a depth,
+    /// so it is empty for no other reason. A stratum with no weight makes no
+    /// contribution to fuse, so there is no resolution it could have; that
+    /// stratum is named in [`Self::unweighted_strata`] instead.
+    pub planned_resolution: BTreeMap<Iri, PlannedResolution>,
     /// The identity of the fusion profile the answer was fused under.
     pub profile_id: FusionProfileId,
     /// Every stratum that ran but that the profile declares no weight for, in
@@ -291,6 +331,14 @@ pub enum SearchError {
 /// weight still answer. See this module's header for why that is a report rather
 /// than a refusal. Its own execution status is still in the trailer, because it
 /// ran.
+///
+/// The answer reports rank resolution twice, and deliberately:
+/// [`SearchResult::planned_resolution`] is the admission waist's estimate of
+/// what the plan's depths would cost under `profile`, and
+/// [`FusionTrailer::resolution`] on [`SearchResult::trailer`] is what the rows
+/// this run actually pulled did cost. A caller that only wants the first does
+/// not have to run a search at all — [`compile`](crate::compile) against an
+/// environment naming `profile` answers it without executing anything.
 ///
 /// # Errors
 ///
@@ -430,6 +478,12 @@ where
         trailer,
         unserved_terms: plan.unserved_evidence(),
         plan_id,
+        // 7. Carry the waist's own resolution evidence onto the answer. It is
+        //    moved, not recomputed: recomputing it here from the profile and
+        //    the plan would be a second derivation of what the admission waist
+        //    already decided, and the value of the evidence is that it is the
+        //    one the compiled bundle actually holds.
+        planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata,
     })
