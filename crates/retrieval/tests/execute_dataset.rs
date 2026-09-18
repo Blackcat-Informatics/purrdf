@@ -22,7 +22,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CompiledRetrieval, Fixed, FusionProfile, Iri, ProducerStatus,
+    AdmissionEnvironment, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri, ProducerStatus,
     RankedStream, RankedStreamAdapter, RequestTerm, RetrievalRequest, Statistics, StreamContract,
     Term, TopK, compile, execute, plan, search,
 };
@@ -242,12 +242,12 @@ fn statistics() -> MockStatistics {
 }
 
 fn fixture_profile() -> FusionProfile {
-    FusionProfile::new(
+    FusionProfile::with_decay(
         STRATA
             .iter()
             .map(|stratum| (iri(&ex(stratum)), Fixed::ONE))
             .collect(),
-        K,
+        DecayRule::ReciprocalRank { k: K },
     )
     .expect("the fixture profile is valid")
 }

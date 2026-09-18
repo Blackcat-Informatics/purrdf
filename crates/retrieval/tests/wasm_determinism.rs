@@ -68,8 +68,8 @@ use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError,
-    RankedStream, StreamContract, Term, TopK, contribution, fuse,
+    DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus,
+    ProtocolError, RankedStream, StreamContract, Term, TopK, contribution, fuse,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -182,12 +182,12 @@ fn scripted(candidates: [&str; 3]) -> ScriptedStream {
 /// Both strata at unit weight and `K = 60`, which admits two contributions per
 /// candidate — one per stratum, derived from the two weights.
 fn profile() -> FusionProfile {
-    FusionProfile::new(
+    FusionProfile::with_decay(
         BTreeMap::from([
             (iri(STRATUM_ONE), Fixed::ONE),
             (iri(STRATUM_TWO), Fixed::ONE),
         ]),
-        K,
+        DecayRule::ReciprocalRank { k: K },
     )
     .expect("the fixture profile is valid")
 }

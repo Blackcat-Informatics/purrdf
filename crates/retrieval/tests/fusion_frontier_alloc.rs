@@ -52,8 +52,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError,
-    RankedStream, StreamContract, Term, TopK, contribution, fuse,
+    DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus,
+    ProtocolError, RankedStream, StreamContract, Term, TopK, contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -261,7 +261,8 @@ fn fixture(
         .iter()
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid");
     assert_eq!(
         profile.max_contributions(),
         u32::try_from(STRATA.len()).expect("three strata"),

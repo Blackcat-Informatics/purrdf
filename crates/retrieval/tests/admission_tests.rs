@@ -18,7 +18,7 @@ use pretty_assertions::assert_eq;
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, Fixed, FusionError,
-    FusionProfile, Iri, Metric, Plan, PlanOrigin, ProducerDecision, ProducerStatus,
+    FusionProfile, Iri, Metric, MonotoneDepth, Plan, PlanOrigin, ProducerDecision, ProducerStatus,
     RankedStreamImpl, RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term,
     UnservedReason, UnservedTerm, compile, contribution, execute,
 };
@@ -617,15 +617,21 @@ fn admission_rejects_depth_bound_violation() {
 }
 
 // ---------------------------------------------------------------------------
-// 4b. Depth against the fusion profile's own arithmetic
+// 4b. Depth against the fusion profile's own arithmetic — measured, not refused
 //
 // The registry's row bound answers "can this many rows be produced". It says
-// nothing about whether the profile can still tell them apart once they are, and
-// the failure to tell them apart is silent: no error, no nondeterminism, just
-// rows that stop being ordered by the ranks their producers assigned. The three
-// tests below pin the refusal, the exact bound it is drawn at, and — because a
-// bound off by one in the strict direction would refuse legitimate profiles —
-// that a depth sitting exactly on the bound is admitted and still orders.
+// nothing about whether the profile can still tell them apart once they are.
+// That second question is real, but its answer is not a defect: past the
+// separating depth the fused score stops parting adjacent ranks and the declared
+// tie-break — total — orders them by best stratum rank and then canonical term.
+// The answer is correct and deterministic at a coarser resolution.
+//
+// So admission reports it instead of refusing it. Refusing rejected plans that
+// order perfectly well for the caller's purpose, and it did so on a property of
+// the *consumer's* arithmetic that no producer supplied a term of. The three
+// tests below pin the measurement: a depth past the bound is admitted and
+// carries its resolution, a depth exactly on the bound is admitted and fully
+// separated, and a stratum the profile does not weight is reported on at all.
 // ---------------------------------------------------------------------------
 
 /// The smoothing constant the monotone-range fixtures use. One, so the bound is
@@ -637,31 +643,33 @@ const MONOTONE_K: u32 = 1;
 /// declared row bound of two hundred.
 ///
 /// A weight of `10^-9` puts the first colliding rank in the tens. That is a
-/// perfectly legitimate weight — `FusionProfile::new` asks only that a weight be
-/// strictly positive — which is exactly the point: nothing about the profile
-/// itself is malformed, and only the coupling with the depth is.
+/// perfectly legitimate weight — `FusionProfile::with_decay` asks only that a
+/// weight be strictly positive — which is exactly the point: nothing about the
+/// profile itself is malformed, and only the coupling with the depth is.
 ///
 /// `Fixed::from_raw(1_000)` is deliberate here and is *not* the constructor a
 /// whole-number weight wants: raw units are `10^-12` each, so this is `10^-9`,
 /// which is the sub-unit weight this fixture is about. A weight meaning the
 /// number one is `Fixed::ONE` or `Fixed::from_integer(1)`.
 fn shallow_profile() -> FusionProfile {
-    FusionProfile::new(
+    FusionProfile::with_decay(
         BTreeMap::from([(iri(&ex("stratum/universal")), Fixed::from_raw(1_000))]),
-        MONOTONE_K,
+        DecayRule::ReciprocalRank { k: MONOTONE_K },
     )
     .expect("a strictly positive weight is a valid profile")
 }
 
 #[test]
-fn admission_rejects_a_depth_beyond_the_profiles_monotone_range() {
+fn a_depth_beyond_the_profiles_monotone_range_is_admitted_and_records_its_resolution() {
     let registry = fixture_registry();
     let stats = statistics("r1");
     let profile = shallow_profile();
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this fixture collides inside the expressible range");
     assert!(
         monotone < 200,
         "the fixture must collide inside the registry's row bound, got {monotone}"
@@ -675,22 +683,28 @@ fn admission_rejects_a_depth_beyond_the_profiles_monotone_range() {
         statistics: &stats,
         fusion_profile: Some(&profile),
     };
-    let error = compile(&plan, &env).expect_err("a depth past the monotone range is refused");
-    match error {
-        AdmissionError::DepthBeyondMonotoneRange {
-            stratum: named,
-            monotone: reported,
-            requested: asked,
-        } => {
-            assert_eq!(*named, stratum, "the refusal names the stratum");
-            assert_eq!(reported, monotone, "and the bound it was drawn at");
-            assert_eq!(asked, requested);
-        }
-        other => panic!("expected DepthBeyondMonotoneRange, got {other:?}"),
-    }
+
+    // The criterion. This plan reads one rank past the depth its profile still
+    // separates, and that is not a defect to refuse: the answer is correct and
+    // deterministic there, merely coarser. It is admitted.
+    let compiled = compile(&plan, &env).expect("a depth past the monotone range is admitted");
+
+    // And it is not admitted silently. The caller learns, before executing
+    // anything, exactly what the depth costs in rank resolution.
+    let recorded = compiled
+        .resolution
+        .get(&stratum)
+        .copied()
+        .expect("a weighted stratum's resolution is recorded");
     assert_eq!(
-        compile(&plan, &env).expect_err("still refused").dimension(),
-        "depth_beyond_monotone_range"
+        recorded.separation,
+        MonotoneDepth::SeparatesTo(monotone),
+        "the evidence names the bound it was measured against"
+    );
+    assert_eq!(recorded.requested_depth, requested);
+    assert!(
+        !recorded.fully_separated(),
+        "reading past the bound is reported as not fully separated"
     );
 }
 
@@ -705,7 +719,9 @@ fn a_depth_exactly_at_the_monotone_bound_is_admitted_and_still_orders_by_rank() 
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this fixture collides inside the expressible range");
 
     let mut plan = fresh_plan(&registry, &stats);
     plan.stratum_depths.insert(
@@ -717,7 +733,15 @@ fn a_depth_exactly_at_the_monotone_bound_is_admitted_and_still_orders_by_rank() 
         statistics: &stats,
         fusion_profile: Some(&profile),
     };
-    compile(&plan, &env).expect("a depth exactly at the bound is admitted");
+    let compiled = compile(&plan, &env).expect("a depth exactly at the bound is admitted");
+    assert!(
+        compiled
+            .resolution
+            .get(&stratum)
+            .expect("a weighted stratum's resolution is recorded")
+            .fully_separated(),
+        "a depth exactly on the bound is reported as fully separated"
+    );
 
     // Admitted *and* ordered: every adjacent pair of ranks the admitted depth
     // covers produces a strictly smaller contribution than the one before it.
@@ -764,7 +788,9 @@ fn a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range() {
         u32::try_from(
             profile
                 .monotone_depth(&iri(&ex("stratum/universal")))
-                .expect("weighted"),
+                .expect("weighted")
+                .rank()
+                .expect("this fixture collides inside the expressible range"),
         )
         .expect("the fixture bound is small"),
     );
@@ -773,7 +799,13 @@ fn a_stratum_the_profile_does_not_weight_is_not_held_to_a_monotone_range() {
         statistics: &stats,
         fusion_profile: Some(&profile),
     };
-    compile(&admitted, &env).expect("an unweighted stratum's depth is not this profile's business");
+    let compiled = compile(&admitted, &env)
+        .expect("an unweighted stratum's depth is not this profile's business");
+    assert!(
+        !compiled.resolution.contains_key(&iri(&ex("stratum/text"))),
+        "a stratum the profile does not weight contributes nothing to this fusion, so there is \
+         nothing to report about how deep it was planned"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -835,7 +867,9 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this weight collides inside the expressible range");
     assert!(
         monotone >= u64::from(REQUIRED_DEPTH),
         "a weight of {DEEP_WEIGHT_UNITS} must order {REQUIRED_DEPTH} ranks, got {monotone}"
@@ -856,11 +890,13 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
         compiled.units[0].sparql
     );
 
-    // The same plan under the same weight on the *first* rule is refused, which
-    // is what makes the rule the load-bearing choice rather than the weight.
+    // The same plan under the same weight on the *first* rule answers at a much
+    // coarser resolution, which is what makes the rule the load-bearing choice
+    // rather than the weight. Both are admitted; only one of them still tells
+    // fourteen million ranks apart, and the evidence says which.
     let truncated = FusionProfile::with_decay(
         BTreeMap::from([(
-            stratum,
+            stratum.clone(),
             Fixed::from_integer(DEEP_WEIGHT_UNITS).expect("two hundred is representable"),
         )]),
         DecayRule::ReciprocalRank { k: 1 },
@@ -871,30 +907,48 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
         statistics: &stats,
         fusion_profile: Some(&truncated),
     };
-    assert_eq!(
-        compile(&plan, &shallow_env)
-            .expect_err("the truncated rule cannot order fourteen million ranks")
-            .dimension(),
-        "depth_beyond_monotone_range"
+    let coarse = compile(&plan, &shallow_env).expect("the truncated rule still answers");
+    let recorded = coarse
+        .resolution
+        .get(&stratum)
+        .copied()
+        .expect("a weighted stratum's resolution is recorded");
+    assert!(
+        !recorded.fully_separated(),
+        "the truncated rule cannot separate fourteen million ranks at any weight"
+    );
+    // And it stops near `sqrt(S) = 10^6` rather than anywhere the weight chose:
+    // the inner truncation is a ceiling two hundred times the weight cannot lift.
+    let bound = recorded
+        .separation
+        .rank()
+        .expect("the truncated rule always collides inside the expressible range");
+    assert!(
+        (1_000_000..1_100_000).contains(&bound),
+        "the truncated rule's bound is set by the scale, not by the weight, got {bound}"
     );
 }
 
 #[test]
-fn a_depth_past_the_weighted_profiles_own_range_is_still_refused() {
-    // The neighbouring refusal. Buying depth with weight must not become "any
-    // depth at all": one rank past this profile's exact range is refused, by
-    // name, reporting the stratum and the bound it was drawn at.
+fn a_depth_past_the_weighted_profiles_own_range_reports_a_coarser_resolution() {
+    // Buying depth with weight does not become "any depth at all" — it becomes a
+    // number the caller can read. One rank past this profile's exact range is
+    // admitted and reported as not fully separated; the rank exactly on it is
+    // admitted and reported as separated. The pair is the whole claim: the
+    // boundary is still measured exactly, it is simply no longer a refusal.
     let registry = deep_registry();
     let stats = statistics("r1");
     let profile = deep_profile();
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this weight collides inside the expressible range");
     let requested = u32::try_from(monotone + 1).expect("the bound is inside a u32");
     assert!(
         u64::from(requested) <= 20_000_000,
-        "the refusal must come from the profile, not from the registry's row bound"
+        "the measurement must come from the profile, not from the registry's row bound"
     );
 
     let mut plan = fresh_plan(&registry, &stats);
@@ -904,40 +958,51 @@ fn a_depth_past_the_weighted_profiles_own_range_is_still_refused() {
         statistics: &stats,
         fusion_profile: Some(&profile),
     };
-    match compile(&plan, &env).expect_err("a depth past the range is refused") {
-        AdmissionError::DepthBeyondMonotoneRange {
-            stratum: named,
-            monotone: reported,
-            requested: asked,
-        } => {
-            assert_eq!(*named, stratum, "the refusal names the stratum");
-            assert_eq!(reported, monotone, "and the bound it was drawn at");
-            assert_eq!(asked, requested);
-        }
-        other => panic!("expected DepthBeyondMonotoneRange, got {other:?}"),
-    }
+    let compiled = compile(&plan, &env).expect("a depth past the range is admitted");
+    let recorded = compiled
+        .resolution
+        .get(&stratum)
+        .copied()
+        .expect("a weighted stratum's resolution is recorded");
+    assert_eq!(recorded.separation, MonotoneDepth::SeparatesTo(monotone));
+    assert_eq!(recorded.requested_depth, requested);
+    assert!(
+        !recorded.fully_separated(),
+        "one rank past the range is reported as coarser"
+    );
 
-    // And the neighbour that must still pass: the depth exactly on the bound.
+    // The neighbour, one rank down, at the exact boundary.
     let mut admitted = plan;
     admitted.stratum_depths.insert(
-        stratum,
+        stratum.clone(),
         u32::try_from(monotone).expect("the bound is inside a u32"),
     );
-    compile(&admitted, &env).expect("a depth exactly at the bound is admitted");
+    let compiled = compile(&admitted, &env).expect("a depth exactly at the bound is admitted");
+    assert!(
+        compiled
+            .resolution
+            .get(&stratum)
+            .expect("recorded")
+            .fully_separated(),
+        "the bound is the last fully separated depth, not one short of it"
+    );
 }
 
 #[test]
-fn an_environment_that_names_no_profile_checks_no_monotone_range() {
-    // The dimension is checked against a law, and an environment that names no
-    // law has none to check against. A caller that plans and compiles before
-    // choosing how to fuse is not refused for not having chosen.
+fn an_environment_that_names_no_profile_reports_no_resolution() {
+    // Resolution is measured against a law, and an environment that names no law
+    // has none to measure against. A caller that plans and compiles before
+    // choosing how to fuse is not refused for not having chosen — and is handed
+    // no fabricated evidence either.
     let registry = fixture_registry();
     let stats = statistics("r1");
     let profile = shallow_profile();
     let stratum = iri(&ex("stratum/universal"));
     let monotone = profile
         .monotone_depth(&stratum)
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this fixture collides inside the expressible range");
     let mut plan = fresh_plan(&registry, &stats);
     plan.stratum_depths.insert(
         stratum,
@@ -948,7 +1013,11 @@ fn an_environment_that_names_no_profile_checks_no_monotone_range() {
         statistics: &stats,
         fusion_profile: None,
     };
-    compile(&plan, &env).expect("no profile named, so no profile arithmetic to violate");
+    let compiled = compile(&plan, &env).expect("no profile named, so nothing to measure against");
+    assert!(
+        compiled.resolution.is_empty(),
+        "an unnamed law reports nothing rather than a default"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -967,8 +1036,11 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
 
     // The criterion: a non-positive weight cannot participate in the §5 sum, so
     // no profile carrying one can be built. A plan therefore cannot present one.
-    let error = FusionProfile::new(BTreeMap::from([(stratum.clone(), Fixed::ZERO)]), 60)
-        .expect_err("a zero weight cannot fuse");
+    let error = FusionProfile::with_decay(
+        BTreeMap::from([(stratum.clone(), Fixed::ZERO)]),
+        DecayRule::ReciprocalRank { k: 60 },
+    )
+    .expect_err("a zero weight cannot fuse");
     match error {
         FusionError::NonPositiveWeight {
             stratum: named,
@@ -985,8 +1057,11 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
     // cannot contribute at all, never of a small one. (What such a weight cannot
     // do is order a deep stratum, and that is a different, separately named
     // dimension: see the monotone-depth tests above.)
-    let thin = FusionProfile::new(BTreeMap::from([(stratum.clone(), Fixed::from_raw(1))]), 60)
-        .expect("one raw unit is strictly positive");
+    let thin = FusionProfile::with_decay(
+        BTreeMap::from([(stratum.clone(), Fixed::from_raw(1))]),
+        DecayRule::ReciprocalRank { k: 60 },
+    )
+    .expect("one raw unit is strictly positive");
     assert_eq!(thin.weight(&stratum), Some(Fixed::from_raw(1)));
 
     // And a profile a plan can actually be fused under admits that plan, with no
@@ -1000,7 +1075,8 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
         .cloned()
         .map(|reached| (reached, Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(weights, 60).expect("unit weights are valid");
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: 60 })
+        .expect("unit weights are valid");
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
@@ -1026,7 +1102,8 @@ fn a_profile_weighting_a_stratum_no_producer_emits_under_is_admitted() {
         .chain(core::iter::once(ghost.clone()))
         .map(|stratum| (stratum, Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(weights, 60).expect("every weight is strictly positive");
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: 60 })
+        .expect("every weight is strictly positive");
     assert_eq!(
         profile.weight(&ghost),
         Some(Fixed::ONE),

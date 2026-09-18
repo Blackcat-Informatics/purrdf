@@ -135,7 +135,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::retrieval::{
-    AdmissionEnvironment, CompiledRetrieval, Fixed, FusionProfile, Iri, Metric, Plan,
+    AdmissionEnvironment, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri, Metric, Plan,
     ProducerDecision, ProducerStatus, RejectionReason, RequestTerm, RetrievalRequest, SearchResult,
     Statistics, Term, TopK, UnservedReason,
 };
@@ -353,7 +353,7 @@ fn build_profile(weights: &[(String, i128)], k: u32) -> Result<FusionProfile, St
             Fixed::from_raw(*raw),
         );
     }
-    FusionProfile::new(declared, k).map_err(|e| e.to_string())
+    FusionProfile::with_decay(declared, DecayRule::ReciprocalRank { k }).map_err(|e| e.to_string())
 }
 
 /// Plan the call's request against a registry built from its producers.

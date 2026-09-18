@@ -51,7 +51,8 @@ fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
         .iter()
         .map(|(name, weight)| (stratum(name), *weight))
         .collect();
-    FusionProfile::new(map, k).expect("fixture profile is valid")
+    FusionProfile::with_decay(map, DecayRule::ReciprocalRank { k })
+        .expect("fixture profile is valid")
 }
 
 /// A minimal single-threaded executor. The mock streams never actually pend, so
@@ -892,19 +893,22 @@ fn profile_construction_is_validated() {
     };
 
     assert!(matches!(
-        FusionProfile::new(weights(Fixed::ONE), 0),
+        FusionProfile::with_decay(weights(Fixed::ONE), DecayRule::ReciprocalRank { k: 0 }),
         Err(FusionError::InvalidK { k: 0 })
     ));
     assert!(matches!(
-        FusionProfile::new(BTreeMap::new(), K),
+        FusionProfile::with_decay(BTreeMap::new(), DecayRule::ReciprocalRank { k: K }),
         Err(FusionError::EmptyWeights)
     ));
     assert!(matches!(
-        FusionProfile::new(weights(Fixed::ZERO), K),
+        FusionProfile::with_decay(weights(Fixed::ZERO), DecayRule::ReciprocalRank { k: K }),
         Err(FusionError::NonPositiveWeight { .. })
     ));
     assert!(matches!(
-        FusionProfile::new(weights(Fixed::from_raw(-1)), K),
+        FusionProfile::with_decay(
+            weights(Fixed::from_raw(-1)),
+            DecayRule::ReciprocalRank { k: K }
+        ),
         Err(FusionError::NonPositiveWeight { .. })
     ));
     // The ceiling is `max_weight * strata`, so two strata at the top of the
@@ -912,17 +916,20 @@ fn profile_construction_is_validated() {
     // neighbour is directly below: one stratum at the same weight has a ceiling
     // of exactly `i128::MAX` and constructs.
     assert!(matches!(
-        FusionProfile::new(
+        FusionProfile::with_decay(
             BTreeMap::from([
                 (stratum("text"), Fixed::from_raw(i128::MAX)),
                 (stratum("vector"), Fixed::from_raw(i128::MAX)),
             ]),
-            K
+            DecayRule::ReciprocalRank { k: K }
         ),
         Err(FusionError::Overflow)
     ));
-    let at_the_top =
-        FusionProfile::new(weights(Fixed::from_raw(i128::MAX)), K).expect("one stratum still fits");
+    let at_the_top = FusionProfile::with_decay(
+        weights(Fixed::from_raw(i128::MAX)),
+        DecayRule::ReciprocalRank { k: K },
+    )
+    .expect("one stratum still fits");
     assert_eq!(at_the_top.ceiling(), Fixed::from_raw(i128::MAX));
 
     // The contribution maximum is the stratum count, not an argument, and the
@@ -2272,7 +2279,9 @@ fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
     .expect("a strictly positive weight is a valid profile");
     let bound = folded
         .monotone_depth(&stratum("text"))
-        .expect("the profile weights this stratum");
+        .expect("the profile weights this stratum")
+        .rank()
+        .expect("this weight reaches a real collision inside the expressible range");
     assert!(
         bound >= 14_000_000,
         "a weight of {DEEP_WEIGHT_UNITS} must order past fourteen million ranks, got {bound}"
@@ -2304,7 +2313,9 @@ fn the_weighted_rule_still_orders_at_fourteen_million_ranks() {
     .expect("valid");
     let shallow = truncated
         .monotone_depth(&stratum("text"))
-        .expect("weighted");
+        .expect("weighted")
+        .rank()
+        .expect("the truncated rule always collides inside the expressible range");
     assert!(
         shallow < 1_100_000,
         "the truncated rule's bound is set by sqrt(S), not by the weight, got {shallow}"

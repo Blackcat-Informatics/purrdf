@@ -251,6 +251,33 @@ pub enum FusionError {
         /// The profile's declared ceiling.
         ceiling: purrdf_text::Fixed,
     },
+
+    /// No weight at all reaches the requested depth under this decay rule.
+    ///
+    /// This is a property of the rule's arithmetic, not a budget or a policy,
+    /// and it is exact rather than conservative.
+    /// [`DecayRule::ReciprocalRank`](crate::DecayRule::ReciprocalRank) truncates
+    /// the reciprocal *before* applying the weight, so once `trunc(S / D)` and
+    /// `trunc(S / (D + 1))` are equal the two ranks have already merged at the
+    /// point the weight arrives and no weight can part them again. A caller that
+    /// needs depth past `saturates_at` names
+    /// [`DecayRule::WeightedReciprocalRank`](crate::DecayRule::WeightedReciprocalRank),
+    /// which folds the weight into the numerator and whose reachable depth does
+    /// grow with it.
+    ///
+    /// Reaching this is not an error in the answer: a profile read past its
+    /// separating range still produces a correct, deterministic result at a
+    /// coarser rank resolution. It is only a refusal to claim a depth the
+    /// arithmetic cannot deliver.
+    #[error(
+        "no weight separates ranks to depth {depth} under this decay rule; it stops separating at {saturates_at:?}"
+    )]
+    DepthUnreachable {
+        /// The depth that was asked for.
+        depth: u64,
+        /// Where this rule stops separating adjacent ranks, at any weight.
+        saturates_at: crate::reciprocal_rank::MonotoneDepth,
+    },
 }
 
 impl From<crate::ranked_stream::ProtocolError> for FusionError {

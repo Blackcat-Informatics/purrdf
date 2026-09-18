@@ -83,7 +83,7 @@
 //! surface at most once per stratum. Weights are read as ratios and never as
 //! absolute quantities, so a map built with two different [`Fixed`]
 //! constructors is a silent factor-of-`10^12` error that refuses nothing — see
-//! [`FusionProfile::new`] before writing one.
+//! [`FusionProfile::with_decay`] before writing one.
 //! It is content-addressed, so an answer names exactly which law produced it.
 //! Contributions are exact [`Fixed`] values computed with checked arithmetic;
 //! an intermediate that does not fit is a loud [`FusionError::Overflow`], never
@@ -241,7 +241,7 @@ mod search;
 mod statistics;
 
 pub use admission::{AdmissionEnvironment, AdmissionError};
-pub use compile::{CompiledRetrieval, StratumUnit, compile};
+pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, compile};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{FusionError, PlanError};
 pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, execute};
@@ -259,6 +259,7 @@ pub use plan::{
 };
 pub use planner::plan;
 pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
+pub use reciprocal_rank::MonotoneDepth;
 pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
 pub use request::{Metric, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};

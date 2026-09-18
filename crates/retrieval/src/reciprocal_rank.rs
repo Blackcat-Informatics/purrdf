@@ -154,6 +154,55 @@ pub fn contribution_under(
 /// is nothing further to compute. It is a saturation point, not a policy.
 const MAX_DEPTH: u64 = u32::MAX as u64;
 
+/// How deep a profile's contributions still tell adjacent ranks apart.
+///
+/// The bound is a saturating quantity, so it is spelled as one. A plan records a
+/// per-stratum depth as a `u32`; a profile whose contributions never collide
+/// inside that range has no bound to report, and handing back `u32::MAX` as
+/// though it were a measured depth invites a caller to log it, plot it, or
+/// divide by it. A saturation point is not a measurement, and this type is the
+/// difference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MonotoneDepth {
+    /// Every adjacent pair of ranks up to and including this 1-based depth
+    /// carries a distinct contribution, and the pair immediately after it does
+    /// not. Exact, not a conservative estimate.
+    SeparatesTo(u64),
+    /// No adjacent pair collides within any depth a plan is able to express.
+    /// There is no bound to report, not an enormous one.
+    SeparatesBeyondAnyPlan,
+}
+
+impl MonotoneDepth {
+    /// Read a raw first-collision rank as the saturating quantity it is.
+    #[must_use]
+    pub(crate) const fn from_rank(rank: u64) -> Self {
+        if rank >= MAX_DEPTH {
+            Self::SeparatesBeyondAnyPlan
+        } else {
+            Self::SeparatesTo(rank)
+        }
+    }
+
+    /// Whether reading to `depth` stays inside the range that still orders.
+    #[must_use]
+    pub const fn covers(self, depth: u64) -> bool {
+        match self {
+            Self::SeparatesBeyondAnyPlan => true,
+            Self::SeparatesTo(bound) => depth <= bound,
+        }
+    }
+
+    /// The bound as a number, when there is one to report.
+    #[must_use]
+    pub const fn rank(self) -> Option<u64> {
+        match self {
+            Self::SeparatesBeyondAnyPlan => None,
+            Self::SeparatesTo(bound) => Some(bound),
+        }
+    }
+}
+
 /// The largest 1-based depth at which `weight`'s contributions are still
 /// **strictly** decreasing with rank under `decay`.
 ///
@@ -245,6 +294,114 @@ fn first_collision(
         rank += 1;
     }
     MAX_DEPTH
+}
+
+/// The number of consecutive ranks around `rank` that carry one contribution.
+///
+/// This is the width of `rank`'s **indifference class**: the set of ranks whose
+/// contributions this profile cannot tell apart. One means the rank is still
+/// separated from both its neighbours; `w` means the fused score treats `w`
+/// consecutive ranks as equal and their relative order falls through to the
+/// declared tie-break's later keys.
+///
+/// [`monotone_depth`] is the single point where this first exceeds one. The
+/// width is the whole curve, and past the bound it grows: under the truncated
+/// rule it runs about `D²/S`, so it is roughly four ranks at two million, a
+/// hundred at ten million, and ten thousand at a hundred million. Reporting only
+/// whether the bound was crossed would flatten that into one bit.
+///
+/// Both ends are found with [`largest_rank_satisfying`] rather than by walking:
+/// contributions are non-increasing in the rank, so "is this rank's contribution
+/// at least `v`" and "is it strictly above `v`" are both non-increasing
+/// predicates, and their boundaries are the class's last and first rank.
+pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> u64 {
+    let Ok(value) = contribution_under(decay, weight, rank) else {
+        return 1;
+    };
+    let at = |probe: u64| contribution_under(decay, weight, probe).ok();
+    // Rank zero is not a rank; it anchors both searches so the predicate is
+    // non-increasing over the whole `0..=MAX_DEPTH` span the search covers.
+    let last = largest_rank_satisfying(|probe| {
+        probe == 0 || at(probe).is_some_and(|probed| probed >= value)
+    });
+    let before_first = largest_rank_satisfying(|probe| {
+        probe == 0 || at(probe).is_some_and(|probed| probed > value)
+    });
+    let first = before_first.saturating_add(1);
+    last.saturating_sub(first).saturating_add(1)
+}
+
+/// The deepest rank whose indifference class is still no wider than
+/// `max_width`.
+///
+/// The class width is non-decreasing in the rank under both rules, so the
+/// boundary is found exactly by the same non-increasing-predicate search every
+/// other bound in this module uses. A `max_width` below one is read as one: a
+/// class always contains its own rank.
+pub(crate) fn deepest_rank_within_width(decay: DecayRule, weight: Fixed, max_width: u64) -> u64 {
+    let ceiling = max_width.max(1);
+    largest_rank_satisfying(|rank| rank == 0 || class_width(decay, weight, rank) <= ceiling)
+}
+
+/// The smallest weight whose contributions still separate every adjacent pair
+/// of ranks up to `depth` under `decay`.
+///
+/// # Errors
+///
+/// [`FusionError::DepthUnreachable`] when **no** weight achieves `depth`, which
+/// under [`DecayRule::ReciprocalRank`] is a real condition rather than a
+/// conservative one. That rule truncates the reciprocal *before* applying the
+/// weight: once `trunc(S / D) == trunc(S / (D + 1))` the two ranks are equal at
+/// the point the weight is applied, so every weight maps them to one value and
+/// the depth is unreachable by construction. The saturation rank is therefore
+/// exact, and is reported.
+///
+/// The answer is the true minimum, found by bisecting on
+/// [`monotone_depth`] — which is itself exact — rather than by inverting a
+/// closed form. The closed-form guarantees are sufficient conditions, so
+/// inverting one would name a heavier weight than the profile actually needs
+/// and read as a requirement rather than the recommendation it was.
+pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<Fixed, FusionError> {
+    let reaches = |raw: i128| monotone_depth(decay, Fixed::from_raw(raw)) >= depth;
+
+    // A weight known to work, which is also the bisection's upper end. Under the
+    // weighted rule the guarantee `D · (D + 1) <= w_raw` inverts directly; under
+    // the truncated rule the inner truncation caps what any weight can buy, and
+    // a weight of exactly one already separates wherever the bare reciprocal
+    // does — so if one does not reach `depth`, nothing does.
+    let sufficient = match decay {
+        DecayRule::ReciprocalRank { .. } => SCALE_RAW,
+        DecayRule::WeightedReciprocalRank { k } => {
+            let denominator = u128::from(k)
+                .checked_add(u128::from(depth))
+                .ok_or(FusionError::Overflow)?;
+            let product = denominator
+                .checked_mul(denominator.checked_add(1).ok_or(FusionError::Overflow)?)
+                .ok_or(FusionError::Overflow)?;
+            i128::try_from(product).map_err(|_| FusionError::Overflow)?
+        }
+    };
+    if !reaches(sufficient) {
+        return Err(FusionError::DepthUnreachable {
+            depth,
+            saturates_at: MonotoneDepth::from_rank(monotone_depth(
+                decay,
+                Fixed::from_raw(sufficient),
+            )),
+        });
+    }
+
+    let mut low: i128 = 1;
+    let mut high = sufficient;
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if reaches(mid) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    Ok(Fixed::from_raw(low))
 }
 
 /// The largest rank in `0..=MAX_DEPTH` for which `guarantees` holds, or zero
@@ -614,8 +771,9 @@ mod tests {
     /// before anything is summed. At `w_raw = 1000` and `K = 60` the rank-1 value
     /// is `1000 / 61 = 16.39…` and both rules emit exactly 16 raw units. The same
     /// division at the whole-number weight `10^12` keeps eleven digits more,
-    /// which is the two anchors [`FusionProfile::new`](crate::FusionProfile::new)
-    /// quotes for the relation `(K + rank) / w_raw`.
+    /// which is the two anchors
+    /// [`FusionProfile::with_decay`](crate::FusionProfile::with_decay) quotes
+    /// for the relation `(K + rank) / w_raw`.
     #[test]
     fn a_weight_near_the_raw_unit_truncates_a_measurable_share_of_each_contribution() {
         let small = Fixed::from_raw(1_000);

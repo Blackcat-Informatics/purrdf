@@ -38,12 +38,12 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, CompiledRetrieval, ExecutionError, ExecutionResult,
-    Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanError, PlanId,
-    PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedStream,
-    RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest, SearchError,
-    SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK, UnservedReason,
-    UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, ExecutionError,
+    ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan,
+    PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError,
+    RankedStream, RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest,
+    SearchError, SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK,
+    UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -278,8 +278,11 @@ fn single_statistics(stratum_iri: &str, cardinality: u64) -> MockStatistics {
 
 /// A profile weighting exactly one stratum.
 fn single_profile(stratum_iri: &str) -> FusionProfile {
-    FusionProfile::new(BTreeMap::from([(iri(stratum_iri), Fixed::ONE)]), K)
-        .expect("the fixture profile is valid")
+    FusionProfile::with_decay(
+        BTreeMap::from([(iri(stratum_iri), Fixed::ONE)]),
+        DecayRule::ReciprocalRank { k: K },
+    )
+    .expect("the fixture profile is valid")
 }
 
 /// A profile weighting the named strata, which is also what leaves room for
@@ -290,7 +293,8 @@ fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
         .iter()
         .map(|(name, weight)| (stratum(name), *weight))
         .collect();
-    FusionProfile::new(map, k).expect("fixture profile is valid")
+    FusionProfile::with_decay(map, DecayRule::ReciprocalRank { k })
+        .expect("fixture profile is valid")
 }
 
 // ---------------------------------------------------------------------------
@@ -754,7 +758,8 @@ fn frontier_fixture(
         .iter()
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
-    let profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
+    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid");
     let streams = FRONTIER_STRATA
         .iter()
         .enumerate()
@@ -922,7 +927,8 @@ fn exactly_tied_candidates_are_ordered_rather_than_awaited() {
         .map(|name| (stratum(name), Fixed::ONE))
         .collect();
     // Two strata, so a candidate takes at most two contributions.
-    let tie_profile = FusionProfile::new(weights, K).expect("the fixture profile is valid");
+    let tie_profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid");
     let streams: Vec<(Iri, LazyStream)> = TIE_STRATA
         .iter()
         .enumerate()

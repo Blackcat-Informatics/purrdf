@@ -38,7 +38,7 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, Fixed, FusionProfile, Iri, RankedStreamAdapter, RequestTerm,
+    AdmissionEnvironment, DecayRule, Fixed, FusionProfile, Iri, RankedStreamAdapter, RequestTerm,
     RetrievalRequest, SearchResult, Statistics, Term, TopK, compile, contribution, execute, fuse,
     plan, search,
 };
@@ -335,7 +335,8 @@ fn profile() -> FusionProfile {
     let mut weights = BTreeMap::new();
     weights.insert(iri(TEXT_STRATUM), Fixed::ONE);
     weights.insert(iri(KNN_STRATUM), Fixed::ONE);
-    FusionProfile::new(weights, K).expect("the fixture profile is valid")
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+        .expect("the fixture profile is valid")
 }
 
 // ---------------------------------------------------------------------------
