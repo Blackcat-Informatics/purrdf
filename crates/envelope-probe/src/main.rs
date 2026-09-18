@@ -14,30 +14,10 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Instant;
 
+use purrdf_envelope_probe::alloc::{live_bytes, peak_bytes, record_allocation, record_deallocation, reset_peak};
 use purrdf_envelope_probe::{Metric, PROFILES, Profile, WORKLOADS, profile, run};
-
-static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
-static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
-
-fn record_allocation(size: usize) {
-    let size = i64::try_from(size).unwrap_or(i64::MAX);
-    let live = LIVE_BYTES.fetch_add(size, Ordering::Relaxed) + size;
-    let mut peak = PEAK_BYTES.load(Ordering::Relaxed);
-    while live > peak {
-        match PEAK_BYTES.compare_exchange_weak(peak, live, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(current) => peak = current,
-        }
-    }
-}
-
-fn record_deallocation(size: usize) {
-    let size = i64::try_from(size).unwrap_or(i64::MAX);
-    LIVE_BYTES.fetch_sub(size, Ordering::Relaxed);
-}
 
 struct CountingAllocator;
 
@@ -71,13 +51,6 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-/// Resets the peak to the current live figure and returns the live baseline.
-fn reset_peak() -> i64 {
-    let live = LIVE_BYTES.load(Ordering::Relaxed);
-    PEAK_BYTES.store(live, Ordering::Relaxed);
-    live
-}
 
 /// Resident-set high-water mark in KiB from the OS, `0` where unsupported.
 /// Cross-checks the allocator's view; the delta between the two is itself a
@@ -199,8 +172,8 @@ fn main() -> ExitCode {
         let started = Instant::now();
         let status = run(workload, &active);
         let duration_ms = started.elapsed().as_millis();
-        let peak_bytes = PEAK_BYTES.load(Ordering::Relaxed) - baseline;
-        let retained_delta_bytes = LIVE_BYTES.load(Ordering::Relaxed) - baseline;
+        let peak_bytes = peak_bytes() - baseline;
+        let retained_delta_bytes = live_bytes() - baseline;
         failed |= status.is_err();
         rows.push(WorkloadRow {
             name: workload,
