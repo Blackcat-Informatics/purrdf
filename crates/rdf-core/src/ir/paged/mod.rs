@@ -51,6 +51,7 @@
 
 pub mod provider;
 pub mod query;
+pub(crate) mod summary;
 pub mod translation;
 
 use std::collections::{BTreeSet, HashMap};

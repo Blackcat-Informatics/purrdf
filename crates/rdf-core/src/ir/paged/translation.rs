@@ -20,6 +20,7 @@
 //! automatically. It is NEVER a numeric offset remap — a page's local id space is
 //! meaningless outside that page (C0.8).
 
+use super::summary::PageSummary;
 use crate::ir::{GlobalDictionary, GlobalTermId, RdfDataset, TermId};
 
 /// The local↔global term-id map for a single page of a
@@ -41,6 +42,10 @@ pub struct PageTranslation {
     /// [`to_local`](Self::to_local). A `GlobalTermId` absent here does not occur on
     /// this page.
     global_to_local: Box<[(GlobalTermId, TermId)]>,
+    /// The page's exact per-term and per-graph row counts, in this page's own LOCAL
+    /// `TermId` space (never renumbered by [`remap`](Self::remap) — see there).
+    /// Built exactly once, by [`PageSummary::seal`], the sole producer.
+    summary: PageSummary,
 }
 
 impl PageTranslation {
@@ -78,9 +83,13 @@ impl PageTranslation {
         // Sort the reverse table by GlobalTermId for the binary search. A page's term
         // table has distinct terms, so the keys are unique.
         global_to_local.sort_unstable_by_key(|&(g, _)| g);
+        // The page's exact per-term/per-graph row counts, in LOCAL id space — built
+        // once here, the only call site of `PageSummary::seal`.
+        let summary = PageSummary::seal(page);
         Self {
             local_to_global: local_to_global.into_boxed_slice(),
             global_to_local: global_to_local.into_boxed_slice(),
+            summary,
         }
     }
 
@@ -145,6 +154,23 @@ impl PageTranslation {
         Self {
             local_to_global: local_to_global.into_boxed_slice(),
             global_to_local: global_to_local.into_boxed_slice(),
+            // The summary is keyed entirely in this page's LOCAL TermId space, which
+            // compaction never touches — only the global side is renumbered above — so
+            // it carries over verbatim rather than being resealed.
+            summary: self.summary.clone(),
         }
+    }
+
+    /// This page's exact per-term and per-graph row counts (LOCAL `TermId` space).
+    #[must_use]
+    #[inline]
+    #[allow(
+        dead_code,
+        reason = "read by the page-admission predicate and the cardinality estimate in \
+                  `mod.rs` and `query.rs`; this attribute is removed once those call \
+                  sites exist"
+    )]
+    pub(crate) fn summary(&self) -> &PageSummary {
+        &self.summary
     }
 }
