@@ -13,7 +13,7 @@ endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -317,6 +317,15 @@ rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-cor
 cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetches by digest; not a CI gate).
 	python3 scripts/cnschema-probe.py --self-test
 	python3 scripts/cnschema-probe.py
+
+# The LUBM and WatDiv artifacts are NEVER vendored: the LUBM generator is
+# GPL-2.0-or-later, its ontology and query file publish no licence grant at all,
+# and WatDiv grants use-with-citation rather than redistribution. They are
+# fetched by digest into target/bench-artifacts/ at the moment of use. Run
+# `python3 scripts/benchmark-acquire.py --list` to read each artifact's terms.
+benchmark-acquire: ## Fetch the pinned LUBM and WatDiv comparison-workload artifacts by digest into target/ (network; nothing is vendored; not a CI gate).
+	python3 scripts/benchmark-acquire.py --self-test
+	python3 scripts/benchmark-acquire.py
 
 # `purrdf-bench` is unpublished tooling rather than a release crate, and it is in
 # this list anyway: its library half documents itself as portable, and a

@@ -1,0 +1,714 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+"""Fetch the pinned comparison-workload artifacts by digest (`make benchmark-acquire`).
+
+PurRDF's own scale corpus is generated, not downloaded. Comparing PurRDF against
+other RDF stores needs the two workloads the literature actually uses — LUBM and
+WatDiv — and neither one may live in this repository. This script fetches five
+pinned artifacts into a cache under ``target/`` and verifies every byte against a
+digest recorded here. Nothing is vendored, nothing is redistributed, and no
+unverified byte is ever handed to a caller.
+
+LICENSING — the conclusions that force the fetch-by-digest design
+================================================================
+
+The design is not a matter of taste. A licensing review of each upstream
+artifact reached three binding conclusions, and the bytes bear all three out:
+
+* **The LUBM UBA data generator is GPL-2.0-or-later.** Every Java source file in
+  ``uba1.7.zip`` carries the GNU General Public License header, "either version
+  2 of the License, or (at your option) any later version", and
+  ``GeneratorLinuxFix.zip`` is a modified copy of that same source carrying the
+  same header. PurRDF is MIT OR Apache-2.0. The generator is therefore **RUN,
+  NEVER VENDORED**: copying it into this tree would place a copyleft work inside
+  a permissively licensed distribution. Running a GPL program to produce data is
+  not distribution of that program, and the data it emits is what the benchmark
+  consumes.
+
+* **``univ-bench.owl`` carries no license text at all.** The ontology file
+  contains no license, copyright, or rights statement of any kind, and the LUBM
+  project page publishes none either. Absent an explicit grant there is no
+  permission to redistribute, so the ontology is **NOT REDISTRIBUTED**: it is
+  fetched by digest at the moment of use and left in the cache. The same holds
+  for ``queries-sparql.txt``, which is published on the same page under the same
+  silence.
+
+* **WatDiv is citation-ware.** Its publisher's terms are, verbatim in substance,
+  that *provided you include a citation to the ISWC 2014 paper, you are free to
+  download and use the WatDiv Data and Query Generator*, supplied "as is" with
+  all use at your own risk. That is a use grant, not a redistribution grant, so
+  WatDiv is **NOT VENDORED** either — and the citation obligation is not
+  discharged by this file. Every published result derived from WatDiv must cite:
+
+      G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee. "Diversified Stress Testing
+      of RDF Data Management Systems." In Proc. The Semantic Web - ISWC 2014 -
+      13th International Semantic Web Conference, 2014, pages 197-212.
+
+  LUBM results should likewise cite Y. Guo, Z. Pan and J. Heflin, "LUBM: A
+  Benchmark for OWL Knowledge Base Systems", Journal of Web Semantics 3(2).
+
+So: **nothing is vendored; everything is fetched by digest at use time, into a
+cache under ``target/``, which is ignored.** ``--list`` prints the posture of
+each artifact so an operator can read the terms without reading this source.
+
+WATDIV GENERATION IS NOT REPRODUCIBLE — ONLY ITS OUTPUT CAN BE FROZEN
+=====================================================================
+
+Pinning the WatDiv *tarball* pins the generator's source, and that is all it
+pins. Stock WatDiv v0.6 seeds itself from the wall clock and from the operating
+system's entropy source, and exposes no seed flag:
+
+* ``src/model.cpp`` builds its Boost generator as
+  ``boost::mt19937(static_cast<unsigned>(time(0)))`` at static-initialization
+  time, and calls ``srand(time(NULL))`` again inside the generator;
+* ``src/statistics.cpp`` calls ``srand(time(NULL))``;
+* ``src/volatility_gen.cpp`` constructs ``mt19937`` from ``random_device``;
+* the tool's own usage banner offers ``-d``, ``-q`` and ``-s`` modes and no seed
+  option of any kind.
+
+Two runs of the same pinned binary over the same model file therefore produce
+different data. **The WatDiv GENERATION PROCESS cannot be pinned; only a frozen
+OUTPUT can be.** A WatDiv dataset used for a comparison must be generated once
+and then itself pinned by digest — treating a WatDiv run as reproducible because
+its source tarball is pinned is a false claim about the benchmark.
+
+LUBM is the opposite case and needs no such caveat: UBA accepts ``-index`` and
+``-seed``, and ``-index 0 -seed 0`` reproduces the datasets used in the LUBM
+papers. Its generation IS pinnable, given the generator it is run with.
+
+WHAT THIS SCRIPT GUARANTEES
+===========================
+
+* A digest mismatch is a HARD FAILURE. The offending bytes are moved aside to a
+  ``.rejected-<digest>`` file — never deleted silently, never overwritten by a
+  fresh download — and the run exits non-zero naming the expected and the actual
+  digest.
+* A cached file whose digest no longer matches is an ERROR, not a cache miss.
+  Nothing is re-fetched over it.
+* A re-run against a good cache performs no network access at all.
+* ``--self-test`` runs entirely offline and exercises the real verification,
+  quarantine, and cache-hit code paths against temporary fixtures.
+* Before and after fetching, the run proves the cache is invisible to version
+  control using the repository's OWN ignore rules, with the operator's personal
+  ignore file disabled — because a clone that lacks that personal file is the
+  case in which a multi-megabyte, non-redistributable artifact gets committed.
+"""
+
+import argparse
+import hashlib
+import os
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+from typing import Callable, NamedTuple
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The one place anything is written. Everything under ``target/`` is build
+# output; no artifact fetched here is ever written anywhere else in the tree.
+CACHE = REPO_ROOT / "target" / "bench-artifacts"
+
+
+class Artifact(NamedTuple):
+    """One pinned upstream file: where it comes from, and what it must hash to.
+
+    ``size`` is redundant against ``sha256`` for correctness and is checked
+    anyway, first: a truncated response or a captive-portal error page fails the
+    size check with a message that says "truncated", where the digest check alone
+    would only say "different".
+
+    ``md5`` is present only where upstream itself publishes one. It is an
+    independent statement by the publisher about the same bytes, so checking it
+    catches the case where a pin was copied from a file that had already drifted.
+    It is not a security property and is never the only check.
+    """
+
+    filename: str
+    url: str
+    sha256: str
+    size: int
+    md5: str | None
+    licence: str
+    posture: str
+
+
+_LUBM_GPL = (
+    "The UBA generator is RUN, NEVER VENDORED: copyleft cannot enter this "
+    "MIT OR Apache-2.0 tree. Running it to produce data is not distribution of "
+    "it. Cite Guo, Pan and Heflin, Journal of Web Semantics 3(2), in results."
+)
+
+_LUBM_UNLICENSED = (
+    "NO license, copyright, or rights statement accompanies this file upstream. "
+    "Absent an explicit grant there is no permission to redistribute it, so it "
+    "is fetched by digest at use time and never copied into this repository."
+)
+
+_WATDIV_POSTURE = (
+    "CITATION-WARE: free to download and use provided results cite Aluc, Hartig, "
+    "Ozsu and Daudjee, 'Diversified Stress Testing of RDF Data Management "
+    "Systems', ISWC 2014, pages 197-212. Supplied 'as is', all use at your own "
+    "risk. A use grant is not a redistribution grant, so it is not vendored. "
+    "DETERMINISM: stock v0.6 seeds from time(0) / srand(time(NULL)) / "
+    "random_device and has no seed flag, so the GENERATION PROCESS cannot be "
+    "pinned -- only a frozen OUTPUT dataset can be."
+)
+
+ARTIFACTS: tuple[Artifact, ...] = (
+    Artifact(
+        filename="uba1.7.zip",
+        url="https://swat.cse.lehigh.edu/projects/lubm/uba1.7.zip",
+        sha256="3d44f468e36b7f3cd532f0f5693a019d020877846397b1fa657367cbd53f380a",
+        size=35075,
+        md5=None,
+        licence="GPL-2.0-or-later",
+        posture=_LUBM_GPL,
+    ),
+    Artifact(
+        filename="GeneratorLinuxFix.zip",
+        url="https://swat.cse.lehigh.edu/projects/lubm/GeneratorLinuxFix.zip",
+        sha256="cc92e7a8373306086c593b519b15a5991f859d40e220e04cebb994d0cdc44be4",
+        size=9141,
+        md5=None,
+        licence="GPL-2.0-or-later",
+        posture=(
+            "A single modified Generator.java carrying the same GNU General "
+            "Public License header as the UBA sources it patches. " + _LUBM_GPL
+        ),
+    ),
+    Artifact(
+        filename="queries-sparql.txt",
+        url="https://swat.cse.lehigh.edu/projects/lubm/queries-sparql.txt",
+        sha256="c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104",
+        size=7195,
+        md5=None,
+        licence="unlicensed (no grant published)",
+        posture="The 14 LUBM test queries. " + _LUBM_UNLICENSED,
+    ),
+    Artifact(
+        filename="univ-bench.owl",
+        url="https://swat.cse.lehigh.edu/onto/univ-bench.owl",
+        sha256="e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a",
+        size=14433,
+        md5=None,
+        licence="unlicensed (no grant published)",
+        posture="The Univ-Bench domain ontology. " + _LUBM_UNLICENSED,
+    ),
+    Artifact(
+        filename="watdiv_v06.tar",
+        url="https://dsg.uwaterloo.ca/watdiv/watdiv_v06.tar",
+        sha256="fb8d930b74b3fbc8f948101bfaf658a90d2f74002f1fefda465c45ffd33a71d2",
+        size=307200,
+        # Published beside the download link on the WatDiv project page.
+        md5="9eac247dfdec044d7fa0141ea3ad361f",
+        licence="citation-ware",
+        posture=_WATDIV_POSTURE,
+    ),
+)
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def md5_of(path: Path) -> str:
+    """Compute MD5, to compare against a checksum the PUBLISHER published.
+
+    MD5 is not relied on for integrity here and never stands alone: every
+    artifact is also checked against a SHA-256 pin recorded in this file. This
+    function exists to compare our bytes against the publisher's own statement
+    about those bytes, which is the only form in which that statement exists.
+    """
+    digest = hashlib.md5(usedforsecurity=False)  # noqa: S324 - publisher-published checksum, not a security primitive
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_digest(path: Path, expected: str, label: str) -> None:
+    actual = sha256_of(path)
+    if actual != expected:
+        sys.exit(
+            f"FAIL: {label} digest mismatch\n  expected {expected}\n  actual   {actual}"
+        )
+    print(f"OK: {label} digest {expected}")
+
+
+def quarantine(path: Path, actual: str) -> Path:
+    """Move bytes that failed verification aside, preserving them as evidence.
+
+    A file that fails its pin is never deleted and never overwritten by a fresh
+    download. It is renamed to ``<name>.rejected-<digest prefix>`` so the next
+    run sees a cache miss rather than the same bad bytes, while the bad bytes
+    remain on disk for an operator to inspect. The digest is part of the name so
+    two different failures do not overwrite each other. A ``.part`` suffix is
+    dropped first, so a failed download is quarantined under the name it was
+    trying to become.
+    """
+    stem = path.name[: -len(".part")] if path.name.endswith(".part") else path.name
+    held = path.with_name(f"{stem}.rejected-{actual[:16]}")
+    os.replace(path, held)
+    return held
+
+
+def _install_verified_bytes(data: bytes, dest: Path, artifact: Artifact) -> None:
+    """Install *data* at *dest* only if every pinned identity matches.
+
+    The bytes are written to a sibling ``.part`` file and ``os.replace``d into
+    place — atomic within a filesystem — only after size, SHA-256, and (where
+    upstream publishes one) MD5 all agree with the pin. A truncated response, a
+    proxy error page, or an interrupted transfer therefore never appears at
+    *dest* under the artifact's real name; it is quarantined instead, and the
+    process exits non-zero.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    try:
+        tmp.write_bytes(data)
+
+        actual_size = tmp.stat().st_size
+        if actual_size != artifact.size:
+            held = quarantine(tmp, sha256_of(tmp))
+            sys.exit(
+                f"FAIL: {artifact.filename} is the wrong size (truncated or replaced upstream)\n"
+                f"  url      {artifact.url}\n"
+                f"  expected {artifact.size} bytes\n"
+                f"  actual   {actual_size} bytes\n"
+                f"  quarantined at {held}\n"
+                "  nothing was installed into the cache"
+            )
+
+        actual = sha256_of(tmp)
+        if actual != artifact.sha256:
+            held = quarantine(tmp, actual)
+            sys.exit(
+                f"FAIL: {artifact.filename} sha256 mismatch\n"
+                f"  url      {artifact.url}\n"
+                f"  expected {artifact.sha256}\n"
+                f"  actual   {actual}\n"
+                f"  quarantined at {held}\n"
+                "  nothing was installed into the cache; check the pin or the upstream file"
+            )
+
+        if artifact.md5 is not None:
+            actual_md5 = md5_of(tmp)
+            if actual_md5 != artifact.md5:
+                held = quarantine(tmp, actual)
+                sys.exit(
+                    f"FAIL: {artifact.filename} md5 disagrees with the publisher's own checksum\n"
+                    f"  url      {artifact.url}\n"
+                    f"  expected {artifact.md5}\n"
+                    f"  actual   {actual_md5}\n"
+                    f"  quarantined at {held}\n"
+                    "  the sha256 pin matched, so the PIN is what is wrong here, not the download"
+                )
+
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _download_verified(artifact: Artifact, dest: Path) -> None:
+    """Fetch *artifact* over the network and install it only if it verifies."""
+    print(f"  fetching {artifact.url}")
+    with urllib.request.urlopen(artifact.url) as response:  # noqa: S310 - pinned https URL
+        data = response.read()
+    _install_verified_bytes(data, dest, artifact)
+
+
+Fetcher = Callable[[Artifact, Path], None]
+
+
+def ensure_cached(
+    artifact: Artifact, cache_dir: Path, fetch: Fetcher = _download_verified
+) -> str:
+    """Return ``"cache-hit"`` or ``"downloaded"``, or exit non-zero.
+
+    A present cache entry is re-verified on every run, never trusted by
+    existence. If it no longer matches its pin that is an ERROR and not a cache
+    miss: the file is quarantined and the run stops. Re-downloading over a file
+    that failed verification would turn a detected corruption into a silent one,
+    and would mask a pin that is simply wrong.
+    """
+    dest = cache_dir / artifact.filename
+    if dest.exists():
+        actual = sha256_of(dest)
+        if actual != artifact.sha256:
+            held = quarantine(dest, actual)
+            sys.exit(
+                f"FAIL: cached {artifact.filename} no longer matches its pin\n"
+                f"  path     {dest}\n"
+                f"  expected {artifact.sha256}\n"
+                f"  actual   {actual}\n"
+                f"  quarantined at {held}\n"
+                "  a cached file that stops verifying is an error, not a cache miss: nothing was\n"
+                "  re-downloaded over it. Inspect the quarantined copy, then remove it to refetch."
+            )
+        return "cache-hit"
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    fetch(artifact, dest)
+    return "downloaded"
+
+
+def _offending_status_lines(status_text: str, top: str) -> list[str]:
+    """Return the ``git status --porcelain`` lines that expose *top* to a commit.
+
+    A porcelain line is ``XY <path>``; a rename carries ``old -> new``; a path
+    containing an unusual character is quoted. Both sides of a rename and the
+    unquoted form are tested, and a match is *top* itself or something beneath
+    it — so ``target``, ``target/`` and ``target/bench-artifacts/x`` all match
+    while ``targeted-notes.md`` does not. Prefix comparison without the
+    separator would flag that last one and turn this guard into noise.
+    """
+    hits: list[str] = []
+    for line in status_text.splitlines():
+        if len(line) < 4:
+            continue
+        for side in line[3:].split(" -> "):
+            candidate = side.strip().strip('"').rstrip("/")
+            if candidate == top or candidate.startswith(top + "/"):
+                hits.append(line)
+                break
+    return hits
+
+
+def assert_cache_invisible_to_git(cache_dir: Path) -> None:
+    """Prove the cache cannot be committed, using the REPOSITORY's own rules.
+
+    The operator's personal ignore file is disabled for this check on purpose.
+    An artifact that is only invisible because of a personal ``core.excludesFile``
+    is visible in every clone that lacks it, and these artifacts are exactly the
+    ones that must never be committed: one is GPL, two carry no licence grant at
+    all, and the fourth is redistributable only by its publisher. Only lines that
+    name the cache tree are inspected, so unrelated untracked files an operator
+    ignores personally do not make this fail.
+    """
+    top = cache_dir.relative_to(REPO_ROOT).parts[0]
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "-c",
+            f"core.excludesFile={os.devnull}",
+            "status",
+            "--porcelain",
+            "--untracked-files=normal",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.exit(
+            "FAIL: cannot prove the artifact cache is invisible to version control\n"
+            f"  git exited {result.returncode}: {result.stderr.strip()}\n"
+            "  refusing to download non-redistributable artifacts into a tree whose\n"
+            "  ignore state cannot be established"
+        )
+
+    offenders = _offending_status_lines(result.stdout, top)
+    if offenders:
+        listed = "\n".join(f"    {line}" for line in offenders)
+        sys.exit(
+            f"FAIL: '{top}/' IS VISIBLE TO GIT — THESE ARTIFACTS COULD BE COMMITTED\n"
+            f"{listed}\n"
+            f"  The repository's own .gitignore must cover '{top}'. It currently does not\n"
+            "  (a personal core.excludesFile does not count: a fresh clone has no such file).\n"
+            "  One of these artifacts is GPL-2.0-or-later and two carry no licence grant at\n"
+            "  all, so committing them is a licensing incident, not an untidy tree.\n"
+            "  Fix .gitignore before running this again. Nothing was fetched."
+        )
+    print(f"OK: '{top}/' is ignored by the repository's own rules; the cache cannot be committed")
+
+
+def list_artifacts() -> int:
+    """Print every pinned artifact with its licence posture and exit 0."""
+    print(f"cache: {CACHE}")
+    print(
+        "Nothing below is vendored. Every file is fetched by digest at use time.\n"
+        "The LUBM generator is GPL-2.0-or-later and is RUN, never copied into this tree.\n"
+        "Results derived from these workloads must carry the citations noted below."
+    )
+    for artifact in ARTIFACTS:
+        print()
+        print(f"{artifact.filename}")
+        print(f"  url      {artifact.url}")
+        print(f"  sha256   {artifact.sha256}")
+        if artifact.md5 is not None:
+            print(f"  md5      {artifact.md5}  (published by upstream)")
+        print(f"  size     {artifact.size} bytes")
+        print(f"  licence  {artifact.licence}")
+        for index, line in enumerate(_wrap(artifact.posture, 74)):
+            print(f"  posture  {line}" if index == 0 else f"           {line}")
+    return 0
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    """Wrap *text* to *width* columns on spaces, without importing textwrap."""
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        if current and len(current) + 1 + len(word) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = f"{current} {word}" if current else word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _expect_exit(thunk: Callable[[], object], label: str, must_contain: list[str]) -> bool:
+    """Assert *thunk* exits non-zero with a message carrying every *must_contain*."""
+    try:
+        thunk()
+    except SystemExit as exc:
+        message = str(exc.code)
+        if not exc.code or isinstance(exc.code, int) and exc.code == 0:
+            print(f"SELF-TEST FAIL: {label} exited zero")
+            return False
+        missing = [needle for needle in must_contain if needle not in message]
+        if missing:
+            print(f"SELF-TEST FAIL: {label} message omits {missing}\n  message: {message}")
+            return False
+        print(f"OK: self-test — {label}")
+        return True
+    print(f"SELF-TEST FAIL: {label} did not fail at all")
+    return False
+
+
+def self_test() -> int:
+    """Exercise the real verification, quarantine and cache logic. OFFLINE.
+
+    No case here touches the network and no case writes inside the repository:
+    every fixture lives in a temporary directory. A fetcher that raises on call
+    stands in for the network, so a cache-hit path that secretly re-downloaded
+    would fail here rather than merely being slow.
+    """
+    ok = True
+    good = b"pinned benchmark artifact bytes\n"
+    good_sha = hashlib.sha256(good).hexdigest()
+    good_md5 = hashlib.md5(good, usedforsecurity=False).hexdigest()  # noqa: S324 - fixture checksum
+    bad = b"corrupted\n"
+
+    fixture = Artifact(
+        filename="fixture.bin",
+        url="https://example.org/fixture.bin",
+        sha256=good_sha,
+        size=len(good),
+        md5=good_md5,
+        licence="test fixture",
+        posture="test fixture",
+    )
+
+    def explode(_artifact: Artifact, _dest: Path) -> None:
+        raise AssertionError("network fetch attempted on a path that must not fetch")
+
+    with tempfile.TemporaryDirectory(prefix="benchmark-acquire-selftest-") as raw:
+        tmp = Path(raw)
+
+        # 1. verify_digest accepts matching bytes (the neighbouring VALID case of
+        #    the failure below — a verifier that rejects everything also "passes"
+        #    a mismatch test).
+        sample = tmp / "sample.bin"
+        sample.write_bytes(good)
+        try:
+            verify_digest(sample, good_sha, "self-test sample")
+        except SystemExit:
+            print("SELF-TEST FAIL: verify_digest rejected bytes that match their digest")
+            ok = False
+        else:
+            print("OK: self-test — verify_digest accepts matching bytes")
+
+        # 2. verify_digest rejects wrong bytes and names both digests.
+        wrong = tmp / "wrong.bin"
+        wrong.write_bytes(bad)
+        ok &= _expect_exit(
+            lambda: verify_digest(wrong, good_sha, "self-test sample"),
+            "verify_digest rejects wrong bytes naming expected and actual",
+            ["FAIL:", good_sha, hashlib.sha256(bad).hexdigest()],
+        )
+
+        # 3. Cache hit: a correct cache entry is re-verified and NOT re-fetched.
+        hit_dir = tmp / "cache-hit"
+        hit_dir.mkdir()
+        (hit_dir / fixture.filename).write_bytes(good)
+        try:
+            status = ensure_cached(fixture, hit_dir, fetch=explode)
+        except AssertionError:
+            print("SELF-TEST FAIL: a good cache entry triggered a fetch")
+            ok = False
+        else:
+            if status != "cache-hit":
+                print(f"SELF-TEST FAIL: good cache entry reported {status!r}, expected 'cache-hit'")
+                ok = False
+            else:
+                print("OK: self-test — a verified cache entry is a cache hit with no fetch")
+
+        # 4. Cache miss: the fetcher runs and the installed bytes are exact.
+        miss_dir = tmp / "cache-miss"
+
+        def install_good(artifact: Artifact, dest: Path) -> None:
+            _install_verified_bytes(good, dest, artifact)
+
+        status = ensure_cached(fixture, miss_dir, fetch=install_good)
+        installed = miss_dir / fixture.filename
+        if status != "downloaded" or not installed.exists() or installed.read_bytes() != good:
+            print(f"SELF-TEST FAIL: cache miss did not install verified bytes (status {status!r})")
+            ok = False
+        else:
+            print("OK: self-test — a cache miss installs bytes that verify")
+
+        # 5. Corrupt cache entry: hard failure, quarantined, never re-fetched.
+        rot_dir = tmp / "cache-rot"
+        rot_dir.mkdir()
+        rotten = rot_dir / fixture.filename
+        rotten.write_bytes(bad)
+        ok &= _expect_exit(
+            lambda: ensure_cached(fixture, rot_dir, fetch=explode),
+            "a cached file that stops verifying is a hard failure, not a cache miss",
+            ["FAIL:", good_sha, hashlib.sha256(bad).hexdigest(), "quarantined at"],
+        )
+        if rotten.exists():
+            print("SELF-TEST FAIL: the corrupt cache entry was left in place under its real name")
+            ok = False
+        elif not list(rot_dir.glob(f"{fixture.filename}.rejected-*")):
+            print("SELF-TEST FAIL: the corrupt cache entry was not quarantined")
+            ok = False
+        else:
+            print("OK: self-test — corrupt cache bytes are quarantined, not deleted or overwritten")
+
+        # 6. A fetch that returns wrong bytes never lands at the real name.
+        fetch_dir = tmp / "bad-fetch"
+        fetch_dir.mkdir()
+        target = fetch_dir / fixture.filename
+        ok &= _expect_exit(
+            lambda: _install_verified_bytes(bad, target, fixture),
+            "wrong fetched bytes are rejected before installation",
+            ["FAIL:", "quarantined at"],
+        )
+        if target.exists():
+            print("SELF-TEST FAIL: unverified fetched bytes were installed at the real name")
+            ok = False
+        elif (fetch_dir / (fixture.filename + ".part")).exists():
+            print("SELF-TEST FAIL: a .part file was left behind after a rejected fetch")
+            ok = False
+        else:
+            print("OK: self-test — unverified fetched bytes never reach the cached name")
+
+        # 7. A right-sized file with the wrong content still fails on sha256,
+        #    so the cheap size check cannot stand in for the digest.
+        same_size = bytes(len(good))
+        ok &= _expect_exit(
+            lambda: _install_verified_bytes(same_size, fetch_dir / "sized.bin", fixture),
+            "right size with wrong content still fails the digest",
+            ["sha256 mismatch", good_sha],
+        )
+
+    # 8. The git-visibility matcher flags the cache tree and nothing adjacent.
+    flagged = _offending_status_lines(
+        "?? target\n"
+        "?? target/\n"
+        "?? target/bench-artifacts/uba1.7.zip\n"
+        "?? targeted-notes.md\n"
+        " M crates/bench/src/lib.rs\n"
+        'R  "old name" -> "target/bench-artifacts/x"\n',
+        "target",
+    )
+    if len(flagged) != 4:
+        print(f"SELF-TEST FAIL: git-visibility matcher flagged {len(flagged)} lines, expected 4")
+        print(f"  flagged: {flagged}")
+        ok = False
+    elif any("targeted-notes" in line or "crates/bench" in line for line in flagged):
+        print(f"SELF-TEST FAIL: git-visibility matcher flagged an unrelated path: {flagged}")
+        ok = False
+    else:
+        print("OK: self-test — the git-visibility matcher flags the cache tree and nothing else")
+
+    # 9. Every pin is well formed. A malformed pin can never match anything, so
+    #    it would turn this script into an unconditional refusal.
+    seen: set[str] = set()
+    for artifact in ARTIFACTS:
+        problems = []
+        if len(artifact.sha256) != 64 or not all(c in "0123456789abcdef" for c in artifact.sha256):
+            problems.append("sha256 is not 64 lowercase hex characters")
+        if artifact.md5 is not None and (
+            len(artifact.md5) != 32 or not all(c in "0123456789abcdef" for c in artifact.md5)
+        ):
+            problems.append("md5 is not 32 lowercase hex characters")
+        if artifact.size <= 0:
+            problems.append("size is not positive")
+        if not artifact.url.startswith("https://"):
+            problems.append("url is not https")
+        if "/" in artifact.filename or artifact.filename in seen:
+            problems.append("filename is not a unique bare name")
+        seen.add(artifact.filename)
+        if problems:
+            print(f"SELF-TEST FAIL: pin for {artifact.filename}: {'; '.join(problems)}")
+            ok = False
+    if len(seen) == len(ARTIFACTS):
+        print(f"OK: self-test — all {len(ARTIFACTS)} pins are well formed and uniquely named")
+
+    print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
+    return 0 if ok else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="print every pinned artifact, its URL, its digest and its licence posture",
+    )
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+
+    if args.self_test:
+        return self_test()
+    if args.list:
+        return list_artifacts()
+
+    assert_cache_invisible_to_git(CACHE)
+    print(f"cache: {CACHE}")
+
+    fetched = 0
+    for artifact in ARTIFACTS:
+        status = ensure_cached(artifact, CACHE)
+        if status == "downloaded":
+            fetched += 1
+        verify_digest(CACHE / artifact.filename, artifact.sha256, artifact.filename)
+        if artifact.md5 is not None:
+            actual_md5 = md5_of(CACHE / artifact.filename)
+            if actual_md5 != artifact.md5:
+                sys.exit(
+                    f"FAIL: {artifact.filename} md5 mismatch\n"
+                    f"  expected {artifact.md5}\n  actual   {actual_md5}"
+                )
+            print(f"OK: {artifact.filename} md5 {artifact.md5} (publisher-published)")
+        print(f"     {status}  {artifact.licence}")
+
+    assert_cache_invisible_to_git(CACHE)
+    print(
+        f"PASS: {len(ARTIFACTS)} artifacts verified ({fetched} fetched, "
+        f"{len(ARTIFACTS) - fetched} already cached) in {CACHE}\n"
+        "      None of them is vendored or redistributable from here. Results derived from\n"
+        "      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);\n"
+        "      the LUBM generator is GPL-2.0-or-later and is run, never copied into this tree.\n"
+        "      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
