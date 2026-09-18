@@ -26,3 +26,5 @@ path = "src/main.rs"
 # project's own strict N-Quads reader. The generator itself has zero
 # dependencies — pure arithmetic and formatting.
 purrdf-rdf = { workspace = true }
+# Test-only: parse the --manifest JSON contract in the CLI integration tests.
+serde_json = { workspace = true }
