@@ -42,7 +42,7 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use purrdf_retrieval::{
     DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, RankedStreamAdapter, RankedStreamImpl,
-    StreamContract, Term, TopK, fuse,
+    StreamContract, StreamEnding, Term, TopK, fuse,
 };
 
 /// A minimal executor. The adapter's rows are already materialized, so nothing
@@ -82,9 +82,13 @@ fn run(weight: Fixed, ranks: u64, top_k: usize) -> Result<usize, String> {
         .map(|rank| (rank, Term::new(format!("d{rank:07}"))))
         .collect();
     let contract = StreamContract::new(DuplicatePolicy::Unique);
-    let adapter =
-        RankedStreamAdapter::new(RankedStreamImpl::new(rows), contract, &profile, &stratum)
-            .expect("the profile weights this stratum");
+    let adapter = RankedStreamAdapter::new(
+        RankedStreamImpl::new(rows, StreamEnding::Exhausted),
+        contract,
+        &profile,
+        &stratum,
+    )
+    .expect("the profile weights this stratum");
     block_on(fuse(vec![(stratum, adapter)], &profile, TopK::new(top_k)))
         .map(|fused| fused.rows.len())
         .map_err(|error| format!("{error:?}"))

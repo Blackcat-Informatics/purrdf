@@ -883,10 +883,19 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     };
     let compiled = compile(&plan, &env).expect("a depth of fourteen million is admitted");
     assert_eq!(compiled.units.len(), 1, "one unit for the one deep stratum");
+    // The emitted bound is the depth plus the probe row, because this registry
+    // declares far more rows than the plan reads: the extra row is what lets the
+    // executor say `DepthReached` instead of claiming a fourteen-million-row
+    // stratum was exhausted. The depth the plan recorded is unchanged, and the
+    // assertion below says so.
     assert!(
-        compiled.units[0].sparql.contains("LIMIT 14000000"),
-        "the admitted depth reaches the emitted text: {}",
+        compiled.units[0].sparql.contains("LIMIT 14000001"),
+        "the admitted depth, plus its probe row, reaches the emitted text: {}",
         compiled.units[0].sparql
+    );
+    assert_eq!(
+        compiled.units[0].depth, REQUIRED_DEPTH,
+        "and the unit still records the depth the plan recorded, not the probe"
     );
 
     // The same plan under the same weight on the *first* rule answers at a much
@@ -1730,10 +1739,17 @@ fn a_recorded_depth_of_zero_is_refused_over_a_stratum_the_registry_ranks_under()
         .iter()
         .find(|unit| unit.stratum == iri(&ex("stratum/text")))
         .expect("the stratum emits a unit");
+    // One row read, plus the one probe row the registry's wider declared bound
+    // leaves room for: the read is one row deep, and the emitted bound is what
+    // lets the executor tell "there was only one" from "I stopped at one".
     assert!(
-        unit.sparql.ends_with("LIMIT 1"),
-        "the shallowest honest read is one row: {}",
+        unit.sparql.ends_with("LIMIT 2"),
+        "the shallowest honest read is one row, probed one deeper: {}",
         unit.sparql
+    );
+    assert_eq!(
+        unit.depth, 1,
+        "the depth is one; the probe row is a read and never a recorded value"
     );
 }
 

@@ -13,7 +13,7 @@
 //! ranking. Every refusal is paired with the neighbouring case that must still
 //! succeed. Fixtures are `example.org` throughout.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::sync::Arc;
@@ -22,9 +22,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri, ProducerStatus,
-    RankedStream, RankedStreamAdapter, RequestTerm, RetrievalRequest, Statistics, StreamContract,
-    Term, TopK, compile, execute, plan, search,
+    AdmissionEnvironment, CompiledRetrieval, DecayRule, Fixed, FusionProfile, IndexGeneration, Iri,
+    ProducerStatus, RankedStream, RankedStreamAdapter, RequestTerm, RetrievalRequest,
+    ScoreExactness, SearchResult, ServiceLevel, Statistics, StreamContract, Term, TopK, compile,
+    execute, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
@@ -75,12 +76,29 @@ fn dataset_of(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         .expect("the fixture dataset is structurally valid")
 }
 
+/// What a fixture producer's cursor attests about the index behind it.
+///
+/// The three cases are the three a host can actually be in: a relation written
+/// before the channel existed and overriding neither method, one that pins the
+/// generation it served from, and one that pins a generation **and** says that
+/// generation was not whole.
+#[derive(Clone, Copy)]
+enum Attests {
+    /// Overrides neither method; the trait defaults answer for it.
+    Nothing,
+    /// Pins the generation that answered, and declares nothing short.
+    Generation(&'static str),
+    /// Pins the generation, and declares it was not whole, in its own words.
+    Incomplete(&'static str, &'static str),
+}
+
 /// A ranked producer that emits `count` distinct `(entity, score)` rows.
 struct MockProducer {
     arity: PfArity,
     mode: BindingPattern,
     rows: u64,
     emitted: Vec<Vec<TermValue>>,
+    attests: Attests,
 }
 
 impl PropertyFunction for MockProducer {
@@ -124,21 +142,56 @@ impl PropertyFunction for MockProducer {
         }
         Ok(Box::new(RowCursor {
             rows: rows.into_iter(),
+            attests: self.attests,
         }))
     }
 }
 
 struct RowCursor {
     rows: std::vec::IntoIter<Vec<TermValue>>,
+    attests: Attests,
 }
 
 impl PfCursor for RowCursor {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         Ok(self.rows.next())
     }
+
+    fn generation(&self) -> IndexGeneration {
+        match self.attests {
+            Attests::Nothing => IndexGeneration::Undeclared,
+            Attests::Generation(value) | Attests::Incomplete(value, _) => {
+                IndexGeneration::Declared(value.to_owned())
+            }
+        }
+    }
+
+    fn service_level(&self) -> ServiceLevel {
+        match self.attests {
+            Attests::Nothing | Attests::Generation(_) => ServiceLevel::Undeclared,
+            Attests::Incomplete(_, reason) => ServiceLevel::Incomplete {
+                reason: reason.to_owned(),
+            },
+        }
+    }
 }
 
 fn producer(prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
+    producer_declaring(prefix, count, 100, Attests::Nothing)
+}
+
+/// A producer holding `count` rows, declaring `rows` per invocation, attesting
+/// `attests`.
+///
+/// `rows` is the registry's worst-case declaration and `count` is what the mock
+/// actually holds; they are separate parameters because the whole depth-probe
+/// question is what happens when the two disagree.
+fn producer_declaring(
+    prefix: &str,
+    count: usize,
+    rows: u64,
+    attests: Attests,
+) -> Arc<dyn PropertyFunction> {
     let arity = PfArity::new(1, 1);
     let emitted = (0..count)
         .map(|index| {
@@ -151,9 +204,42 @@ fn producer(prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
     Arc::new(MockProducer {
         arity,
         mode: arity.all_free_mode(),
-        rows: 100,
+        rows,
         emitted,
+        attests,
     })
+}
+
+/// One producer per stratum, each holding two rows and attesting what its entry
+/// of `attests` says.
+fn registry_attesting(attests: [Attests; 2]) -> PropertyFunctionRegistry {
+    registry_holding([(2, attests[0]), (2, attests[1])])
+}
+
+/// One producer per stratum, each holding the rows its entry names.
+fn registry_holding(specs: [(usize, Attests); 2]) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    for (index, (count, attests)) in specs.into_iter().enumerate() {
+        let name = ["alpha", "beta"][index];
+        registry.register_ranked(
+            ex(&format!("pf/{name}")),
+            producer_declaring(&format!("{name}/"), count, 100, attests),
+            ranked(&ex(STRATA[index])),
+        );
+    }
+    registry
+}
+
+/// A registry with ONE stratum, for the depth-probe arms: a producer holding
+/// `count` rows and declaring `rows` per invocation.
+fn one_stratum_registry(count: usize, rows: u64) -> PropertyFunctionRegistry {
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register_ranked(
+        ex("pf/alpha"),
+        producer_declaring("alpha/", count, rows, Attests::Nothing),
+        ranked(&ex(STRATA[0])),
+    );
+    registry
 }
 
 /// A ranked declaration for `stratum` that takes an IRI term and writes its
@@ -222,12 +308,21 @@ impl Statistics for MockStatistics {
 }
 
 fn statistics() -> MockStatistics {
+    statistics_bounding(10)
+}
+
+/// Statistics reporting `cardinality` for every fixture stratum.
+///
+/// The measured cardinality is what narrows a stratum's depth below the
+/// registry's declared row bound, which is how these tests choose a depth
+/// without ever editing a plan.
+fn statistics_bounding(cardinality: u64) -> MockStatistics {
     MockStatistics {
         source: "execute-dataset-statistics".to_owned(),
         revision: "r1".to_owned(),
         cardinalities: STRATA
             .iter()
-            .map(|stratum| (iri(&ex(stratum)), 10))
+            .map(|stratum| (iri(&ex(stratum)), cardinality))
             .collect(),
     }
 }
@@ -303,10 +398,28 @@ fn candidates(execution: &mut purrdf_retrieval::ExecutionResult, stratum: &Iri) 
 // 1. The dataset is load-bearing
 // ---------------------------------------------------------------------------
 
+/// A call on `producer`, projected under a name nothing else reads and bounded
+/// at one row.
+///
+/// Every hand-written unit below carries one of these. A compiled unit calls
+/// exactly one registered relation, and `execute` holds the run's relation
+/// witness to that — a unit that returned rows while attesting nothing did not
+/// run the text this layer emits, and reporting on it would be reporting about
+/// some other query. So a substituted unit keeps the one structural property of
+/// a real unit and varies only what this file is actually about: which graph the
+/// rest of the pattern reads.
+///
+/// It contributes exactly one row and binds no variable the unit projects, so it
+/// changes neither the candidates nor their order.
+fn calling(producer: &str) -> String {
+    format!("{{ SELECT (?r0 AS ?probe) WHERE {{ ( ?r0 ) <{producer}> ( ?r1 ) }} LIMIT 1 }}")
+}
+
 /// The unit that reads the graph: whatever `<mentions>` the fox, in IRI order.
 fn mentions_fox() -> String {
     format!(
-        "SELECT ?candidate WHERE {{ ?candidate <{}> <{}> }} ORDER BY ?candidate",
+        "SELECT ?candidate WHERE {{ {} ?candidate <{}> <{}> }} ORDER BY ?candidate",
+        calling(&ex("pf/alpha")),
         ex("mentions"),
         ex("topic/fox")
     )
@@ -464,9 +577,12 @@ fn a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request() {
 
 /// `OPTIONAL` over a triple the dataset does not hold: one solution, with the
 /// projected variable unbound.
-fn optional_mentions(topic: &str) -> String {
+///
+/// Carries `producer`'s call for the reason [`calling`] gives.
+fn optional_mentions(producer: &str, topic: &str) -> String {
     format!(
-        "SELECT ?candidate WHERE {{ OPTIONAL {{ ?candidate <{}> <{}> }} }}",
+        "SELECT ?candidate WHERE {{ {} OPTIONAL {{ ?candidate <{}> <{}> }} }}",
+        calling(producer),
         ex("mentions"),
         ex(topic)
     )
@@ -479,8 +595,8 @@ fn an_unbound_projection_fails_its_stratum_while_a_bound_one_streams() {
     let mut bundle = compiled(&registry, &stats);
     // Stratum alpha asks for a topic the dataset does not hold, so its single
     // solution leaves `?candidate` unbound. Stratum beta asks for one it does.
-    bundle.units[0].sparql = optional_mentions("topic/unicorn");
-    bundle.units[1].sparql = optional_mentions("topic/fox");
+    bundle.units[0].sparql = optional_mentions(&ex("pf/alpha"), "topic/unicorn");
+    bundle.units[1].sparql = optional_mentions(&ex("pf/beta"), "topic/fox");
 
     let dataset = dataset_of(&[(&ex("doc/alpha"), &ex("mentions"), &ex("topic/fox"))]);
     let mut execution = block_on(execute(&bundle, &registry, &*dataset)).expect("the units run");
@@ -621,4 +737,342 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 6. What the index attested travels with the rows
+// ---------------------------------------------------------------------------
+
+/// Plan, compile and execute `registry` against `stats` over an empty dataset.
+fn run(
+    registry: &PropertyFunctionRegistry,
+    stats: &MockStatistics,
+) -> purrdf_retrieval::ExecutionResult {
+    let planned = plan(&seed_request(), registry, stats).expect("the fixture request plans");
+    let env = AdmissionEnvironment {
+        registry,
+        statistics: stats,
+        fusion_profile: None,
+    };
+    let bundle = compile(&planned, &env).expect("the fresh plan is admitted");
+    block_on(execute(&bundle, registry, &*dataset_of(&[]))).expect("the units run")
+}
+
+/// The one-call path over `registry` and `stats`, under the fixture profile.
+fn searched(registry: &PropertyFunctionRegistry, stats: &MockStatistics) -> SearchResult {
+    let env = AdmissionEnvironment {
+        registry,
+        statistics: stats,
+        fusion_profile: None,
+    };
+    block_on(search(
+        &seed_request(),
+        registry,
+        stats,
+        &*dataset_of(&[]),
+        &env,
+        &fixture_profile(),
+        TOP_K,
+    ))
+    .expect("the fixture search answers")
+}
+
+/// What one stratum's executed stream attested.
+fn attested(
+    execution: &purrdf_retrieval::ExecutionResult,
+    stratum: &Iri,
+) -> purrdf_retrieval::PfAttestation {
+    execution
+        .streams
+        .iter()
+        .find(|stream| &stream.stratum == stratum)
+        .unwrap_or_else(|| panic!("stratum {stratum} streamed"))
+        .attestation
+        .clone()
+}
+
+/// **T4.1 — the generation a relation pinned reaches both paths.**
+///
+/// A generation is the one fact that can change a query's answer while every
+/// input this layer can see stays identical: the dataset snapshot, the query
+/// text and the registry fingerprint are all unchanged by an index rebuild. It
+/// is known only to the relation's cursor, so it has to travel — off the
+/// governed receipt of the run that produced the rows, onto the stream, through
+/// the bridge, into the trailer.
+#[test]
+fn a_pinned_generation_reaches_the_stream_and_the_fused_trailer() {
+    let registry = registry_attesting([Attests::Generation("gen-7"), Attests::Nothing]);
+    let stats = statistics();
+    let alpha = iri(&ex(STRATA[0]));
+    let beta = iri(&ex(STRATA[1]));
+
+    let execution = run(&registry, &stats);
+    assert_eq!(
+        attested(&execution, &alpha).generation,
+        IndexGeneration::Declared("gen-7".to_owned()),
+        "the executed stream carries the generation its own run attested"
+    );
+    assert_eq!(
+        attested(&execution, &beta).generation,
+        IndexGeneration::Undeclared,
+        "and the relation that declared nothing is recorded as having declared \
+         nothing, never as having certified its index"
+    );
+
+    let result = searched(&registry, &stats);
+    assert_eq!(
+        result.trailer.attestations[&alpha].generation,
+        IndexGeneration::Declared("gen-7".to_owned()),
+        "and the one-call path reports it under the stratum's own key"
+    );
+    assert_eq!(
+        result.trailer.attestations[&beta].generation,
+        IndexGeneration::Undeclared
+    );
+    assert_eq!(
+        result.evidence_id, result.trailer.evidence_id,
+        "the answer's evidence identity is the one its trailer carries, read \
+         back rather than recomputed beside it"
+    );
+    assert_eq!(
+        result.trailer.exactness,
+        ScoreExactness::Exact,
+        "nothing declared itself short, so the scores are exact — which is the \
+         narrower true claim, not a certificate that either index was whole"
+    );
+}
+
+/// **T4.2 — a short index is reported on a different axis from the read's end.**
+///
+/// "My index was missing a shard" and "my rows ran out" answer different
+/// questions, and this stratum says both at once: the read ended by exhaustion
+/// and the thing it exhausted was not whole. Collapsing them would lose whichever
+/// one the other overwrote.
+#[test]
+fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
+    let registry = registry_holding([
+        (1, Attests::Incomplete("gen-7", "rebuilding")),
+        (2, Attests::Nothing),
+    ]);
+    let stats = statistics();
+    let alpha = iri(&ex(STRATA[0]));
+    let beta = iri(&ex(STRATA[1]));
+
+    let execution = run(&registry, &stats);
+    assert_eq!(
+        attested(&execution, &alpha).service,
+        ServiceLevel::Incomplete {
+            reason: "rebuilding".to_owned(),
+        },
+        "the relation's own words, verbatim: that is what tells an operator \
+         which index to rebuild"
+    );
+    assert_eq!(
+        execution.statuses[&alpha],
+        ProducerStatus::Exhausted { rows_emitted: 1 },
+        "the index was short; the READ still ended by running out of rows, and \
+         the two facts are on different axes"
+    );
+
+    let result = searched(&registry, &stats);
+    assert_eq!(
+        result.rows.len(),
+        3,
+        "the rows the short index DID serve are fused beside the other \
+         stratum's, not discarded"
+    );
+    assert_eq!(
+        result.trailer.attestations[&alpha].service,
+        ServiceLevel::Incomplete {
+            reason: "rebuilding".to_owned(),
+        }
+    );
+    assert_eq!(
+        result.trailer.exactness,
+        ScoreExactness::LowerBounds {
+            strata: BTreeSet::from([alpha]),
+        },
+        "one stratum served from a short index, so every fused score is a lower \
+         bound — and the answer names exactly which stratum made it one"
+    );
+
+    // The neighbour that must still be reported plainly: a stratum that attested
+    // nothing is not swept into the shortfall its sibling declared.
+    assert_eq!(
+        result.trailer.attestations[&beta].service,
+        ServiceLevel::Undeclared
+    );
+    assert_eq!(
+        result.trailer.statuses[&beta],
+        ProducerStatus::Exhausted { rows_emitted: 2 },
+        "the silent stratum reports its own ordinary exhaustion"
+    );
+    let ScoreExactness::LowerBounds { ref strata } = result.trailer.exactness else {
+        panic!("asserted above");
+    };
+    assert!(
+        !strata.contains(&beta),
+        "and it is not named among the strata that made the scores a lower bound"
+    );
+}
+
+/// **T4.3 — a short index that served nothing is still a short index.**
+///
+/// Zero rows is the case where the incompleteness is easiest to lose and worst
+/// to lose: with nothing on the stream there is no row to hang the fact on, and
+/// a layer that reported the stratum as a plain failure would turn "I have a
+/// hole and it may be why you got nothing" into "I could not run".
+#[test]
+fn a_short_index_that_served_no_row_still_reports_its_shortfall() {
+    let registry = registry_holding([
+        (0, Attests::Incomplete("gen-7", "rebuilding")),
+        (2, Attests::Nothing),
+    ]);
+    let stats = statistics();
+    let alpha = iri(&ex(STRATA[0]));
+
+    let execution = run(&registry, &stats);
+    assert_eq!(
+        execution.statuses[&alpha],
+        ProducerStatus::Exhausted { rows_emitted: 0 },
+        "the producer was asked and had nothing, which is what exhausted means — \
+         never ExecutionFailed, which would claim it could not run at all"
+    );
+    let attestation = attested(&execution, &alpha);
+    assert_eq!(
+        attestation.service,
+        ServiceLevel::Incomplete {
+            reason: "rebuilding".to_owned(),
+        },
+        "and the hole beneath that emptiness survives having no row to ride on"
+    );
+    assert_eq!(
+        attestation.generation,
+        IndexGeneration::Declared("gen-7".to_owned()),
+        "including which generation of the index was the short one"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7. The depth probe: an exhausted stratum is one that really ran out
+// ---------------------------------------------------------------------------
+
+/// **T4.4 — the three arms of the probe.**
+///
+/// A stratum read at depth three over a producer holding ten rows is not
+/// exhausted, and before the probe there was no way for this layer to know that:
+/// ten rows cut to three and three rows that were all there ever was arrive
+/// identically. The emitted bound is therefore one row deeper wherever the
+/// registry left room, and the arrival of that row — and nothing else about it —
+/// decides the ending.
+///
+/// The third arm is the over-refusal guard. A producer that declared three rows
+/// per invocation has already promised there is no fourth, so at depth three
+/// there is nothing to probe for: the unit ends at exactly three and `Exhausted`
+/// is honest by contract. Probing anyway would push the emitted bound past a
+/// number admission itself enforces.
+#[test]
+fn the_probe_separates_a_cut_read_from_an_exhausted_one() {
+    let alpha = iri(&ex(STRATA[0]));
+
+    // (a) Ten rows held, one hundred declared, three planned: the fourth row
+    //     arrives, is dropped, and turns the ending into DepthReached.
+    let registry = one_stratum_registry(10, 100);
+    let stats = statistics_bounding(3);
+    let planned = plan(&seed_request(), &registry, &stats).expect("plans");
+    assert_eq!(planned.stratum_depths[&alpha], 3);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let bundle = compile(&planned, &env).expect("admits");
+    assert!(
+        bundle.units[0].sparql.ends_with("LIMIT 4"),
+        "the emitted bound is the depth plus one probe row: {}",
+        bundle.units[0].sparql
+    );
+    assert_eq!(
+        bundle.units[0].depth, 3,
+        "and the unit records the depth, not the bound it was emitted under"
+    );
+    let mut execution =
+        block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("the unit runs");
+    assert_eq!(
+        candidates(&mut execution, &alpha).len(),
+        3,
+        "exactly the depth reaches the stream; the probe row is a read, never a value"
+    );
+    assert_eq!(
+        execution.statuses[&alpha],
+        ProducerStatus::DepthReached { rank: 3 },
+        "the rows did not run out — the depth did"
+    );
+    let result = searched(&registry, &stats);
+    assert_eq!(
+        result.trailer.statuses[&alpha],
+        ProducerStatus::DepthReached { rank: 3 },
+        "and fusion, having checked the rank against the rows it pulled, says so too"
+    );
+    assert_eq!(
+        result.planned_resolution[&alpha].requested_depth, 3,
+        "the recorded depth is three; the probe row moves no plan field"
+    );
+
+    // (b) The same declaration and the same depth over a producer holding two
+    //     rows: the probe never arrives, so the stratum really is exhausted.
+    let registry = one_stratum_registry(2, 100);
+    let planned = plan(&seed_request(), &registry, &stats).expect("plans");
+    assert_eq!(planned.stratum_depths[&alpha], 3);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let bundle = compile(&planned, &env).expect("admits");
+    let execution =
+        block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&alpha],
+        ProducerStatus::Exhausted { rows_emitted: 2 },
+        "fewer rows than the depth is the one case where exhaustion was never in \
+         doubt, and it must keep saying so"
+    );
+    assert_eq!(
+        searched(&registry, &stats).planned_resolution[&alpha].requested_depth,
+        3
+    );
+
+    // (c) A producer declaring exactly three rows, planned at three: the depth
+    //     IS the declared bound, so there is no room and no question.
+    let registry = one_stratum_registry(3, 3);
+    let stats = statistics_bounding(10);
+    let planned = plan(&seed_request(), &registry, &stats).expect("plans");
+    assert_eq!(
+        planned.stratum_depths[&alpha], 3,
+        "the declared bound narrows the measured cardinality, not the other way round"
+    );
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    let bundle = compile(&planned, &env).expect("admits");
+    assert!(
+        bundle.units[0].sparql.ends_with("LIMIT 3"),
+        "a producer that promised no fourth row is not asked for one: {}",
+        bundle.units[0].sparql
+    );
+    assert_eq!(bundle.units[0].depth, 3);
+    let execution =
+        block_on(execute(&bundle, &registry, &*dataset_of(&[]))).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&alpha],
+        ProducerStatus::Exhausted { rows_emitted: 3 },
+        "and exhaustion at the declared bound is honest by contract, not a guess"
+    );
+    assert_eq!(
+        searched(&registry, &stats).planned_resolution[&alpha].requested_depth,
+        3
+    );
 }

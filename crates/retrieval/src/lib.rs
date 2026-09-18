@@ -68,6 +68,27 @@
 //! its consumer must do; one that declared [`DuplicatePolicy::Unique`] is
 //! believed and costs no per-stream identity set at all.
 //!
+//! The same route carries what the *index* behind those rows attested. A
+//! relation's cursor is the only party that knows which generation of its index
+//! answered and whether that generation was whole, and neither fact is visible
+//! in the dataset snapshot, the query text or the registry fingerprint — an
+//! index can rebuild with every one of those unchanged. So [`execute`] reads it
+//! off the governed receipt of the run that produced the rows, tags every
+//! [`StratumStream`] with it, and [`FusionStream`] reads it through
+//! [`RankedStream::attestation`] *before* pulling a row. It reaches the answer
+//! three ways: verbatim in [`FusionTrailer::attestations`], as
+//! [`FusionTrailer::exactness`] — which says whether a fused score may be read
+//! as a number or only as a lower bound — and digested into
+//! [`SearchResult::evidence_id`], so two answers assembled from differently-aged
+//! indexes are distinguishable even when every other identity matches.
+//!
+//! Neither is the depth a read was cut at. A unit is emitted one row deeper than
+//! its stratum reads wherever the registry left room, and that probe row is what
+//! separates [`ProducerStatus::DepthReached`] from
+//! [`ProducerStatus::Exhausted`] — the difference between "the plan stopped me"
+//! and "this is all there is". The probe is a read and never a value: no plan
+//! field, identity or resolution number moves by one because of it.
+//!
 //! Rank order is not carried there, because it is not a per-producer variable.
 //! Every ranked stream owes its consumer the same law — 1-based, contiguous,
 //! ascending ranks — and [`FusionStream`] enforces it row by row against the
@@ -282,7 +303,9 @@ pub use admission::{AdmissionEnvironment, AdmissionError};
 pub use compile::{CompiledRetrieval, PlannedResolution, StratumUnit, compile};
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{FusionError, PlanError};
-pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, execute};
+pub use execute::{
+    ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, StreamEnding, execute,
+};
 pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
 pub use fusion_stream::{

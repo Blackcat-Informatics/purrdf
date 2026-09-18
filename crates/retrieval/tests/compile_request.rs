@@ -577,14 +577,29 @@ fn depth_three_emits_limit_three_and_yields_three_rows() {
         fusion_profile: None,
     };
     let compiled = compile(&planned, &env).expect("admits");
+    // The stratum reads three rows; the emitted bound is four. The producer
+    // declares ten rows per invocation, so the fourth row is the probe that
+    // tells a read the depth cut from a read that ran out — and it is a read,
+    // never a value: the unit still records a depth of three and exactly three
+    // rows reach the stream.
     assert!(
-        compiled.units[0].sparql.contains("LIMIT 3"),
-        "the stratum's depth is the emitted bound: {}",
+        compiled.units[0].sparql.contains("LIMIT 4"),
+        "the stratum's depth plus its probe row is the emitted bound: {}",
         compiled.units[0].sparql
+    );
+    assert_eq!(
+        compiled.units[0].depth, 3,
+        "the recorded depth is the plan's, not the emitted bound"
     );
 
     let execution =
         block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
+    assert_eq!(
+        execution.statuses[&iri(&ex("stratum/text"))],
+        ProducerStatus::DepthReached { rank: 3 },
+        "the producer held ten rows and the plan read three of them, so the depth \
+         is what stopped the read"
+    );
     let rows = drain(
         execution
             .streams
@@ -638,10 +653,18 @@ fn a_zero_statistic_still_plans_one_row_and_the_producer_reports_the_emptiness()
             fusion_profile: None,
         };
         let compiled = compile(&planned, &env).expect("admits");
+        // One row read, plus the probe row the producer's ten-row declaration
+        // leaves room for. The floor is on the *depth*, which is what the unit
+        // records; the emitted bound is one deeper so the executor can tell an
+        // emptied stratum from one the floored depth cut.
         assert!(
-            compiled.units[0].sparql.ends_with("LIMIT 1"),
-            "the unit carries the floored depth: {}",
+            compiled.units[0].sparql.ends_with("LIMIT 2"),
+            "the unit carries the floored depth, probed one deeper: {}",
             compiled.units[0].sparql
+        );
+        assert_eq!(
+            compiled.units[0].depth, 1,
+            "the floored depth is one, and the probe row does not raise it"
         );
     }
 
@@ -732,16 +755,23 @@ fn a_zero_selectivity_narrows_to_one_row_and_the_relation_is_still_invoked() {
     };
     let compiled = compile(&planned, &env).expect("admits");
     assert!(
-        compiled.units[0].sparql.ends_with("LIMIT 1"),
-        "the floored depth is the emitted bound: {}",
+        compiled.units[0].sparql.ends_with("LIMIT 2"),
+        "the floored depth, plus its probe row, is the emitted bound: {}",
         compiled.units[0].sparql
     );
     let execution =
         block_on(execute(&compiled, &holding, &*common::empty_dataset())).expect("the unit runs");
+    // The read the provider would have eliminated returns a row — and says the
+    // right thing about it. This producer holds ten rows and the floored depth
+    // read one, so the stratum is emphatically NOT exhausted; reporting it that
+    // way would be the same fault the floor exists to prevent, one rung higher:
+    // an estimate that narrowed a read being published as a fact about the
+    // answer.
     assert_eq!(
         execution.statuses[&iri(&ex("stratum/text"))],
-        ProducerStatus::Exhausted { rows_emitted: 1 },
-        "the read the provider would have eliminated returns a row"
+        ProducerStatus::DepthReached { rank: 1 },
+        "the read the provider would have eliminated returns a row, and names \
+         the depth that stopped it"
     );
     assert_eq!(invocations(&holding_logs, "text"), 1);
     let rows = drain(
@@ -917,9 +947,12 @@ fn a_mandatory_producer_under_a_zero_selectivity_plans_admits_and_runs() {
     let compiled = compile(&planned, &env).expect("the mandatory producer is bound, so it admits");
     let execution =
         block_on(execute(&compiled, &registry, &*common::empty_dataset())).expect("the unit runs");
+    // Ten rows held, one row read: the mandatory producer answered, and the
+    // status names the floored depth as what stopped the read rather than
+    // claiming the stratum was exhausted at one row.
     assert_eq!(
         execution.statuses[&iri(&ex("stratum/text"))],
-        ProducerStatus::Exhausted { rows_emitted: 1 }
+        ProducerStatus::DepthReached { rank: 1 }
     );
     assert_eq!(invocations(&logs, "text"), 1);
 }
@@ -1137,16 +1170,22 @@ fn a_knn_producer_without_a_depth_placement_is_refused_and_with_one_is_admitted(
         })),
     )]);
     let sparql = compile_one(&admitting, &stats, terms);
+    // The argument carries the *emitted* bound — the depth of four plus the one
+    // probe row the producer's ten-row declaration leaves room for. For a
+    // producer that bounds itself from this argument there is no other bound in
+    // the text at all, so a probe it was never told about would not be a probe:
+    // the relation would stop at four and the executor could never distinguish
+    // a fifth row from none.
     assert!(
-        sparql.contains(&format!("\"4\"^^<{XSD_INTEGER}>")),
-        "the depth rides as an argument: {sparql}"
+        sparql.contains(&format!("\"5\"^^<{XSD_INTEGER}>")),
+        "the depth, probed one deeper, rides as an argument: {sparql}"
     );
     assert!(
-        !sparql.contains("}} LIMIT 4"),
+        !sparql.contains("}} LIMIT 5"),
         "a producer that took the depth as an argument gets no branch LIMIT: {sparql}"
     );
     assert!(
-        sparql.ends_with("LIMIT 4"),
+        sparql.ends_with("LIMIT 5"),
         "the unit still carries the stratum's contract with fusion: {sparql}"
     );
 }
@@ -1264,7 +1303,7 @@ fn an_untyped_embedding_is_refused_and_a_typed_one_carries_the_vector() {
         format!(
             "SELECT ?candidate WHERE {{\n  \
              {{ SELECT (?c0 AS ?candidate) WHERE {{ ( ?c0 ) <{}> ( {constant} ) }} \
-             LIMIT 5 }}\n}}\nLIMIT 5",
+             LIMIT 6 }}\n}}\nLIMIT 6",
             ex("pf/embedding")
         )
     );
@@ -1621,9 +1660,10 @@ fn producers_with_different_candidate_positions_read_back_under_one_name() {
             units[name]
         );
         assert_eq!(
-            units[name].matches("LIMIT 4").count(),
+            units[name].matches("LIMIT 5").count(),
             2,
-            "the branch bound plus the unit's own: {}",
+            "the branch bound plus the unit's own, each the depth of four probed \
+             one row deeper: {}",
             units[name]
         );
     }
@@ -1663,8 +1703,9 @@ fn the_branch_limit_reaches_the_relation_as_the_observed_ceiling() {
         .clone();
     assert_eq!(
         calls[0].ceiling,
-        Some(2),
-        "the branch LIMIT is observed to reach the relation as its row ceiling"
+        Some(3),
+        "the branch LIMIT — the depth of two, probed one row deeper — is observed \
+         to reach the relation as its row ceiling"
     );
 }
 

@@ -43,8 +43,8 @@ use purrdf_retrieval::{
     PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
     ProducerStatus, ProtocolError, RankedStream, RankedStreamAdapter, RankedStreamImpl,
     RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics,
-    StatisticsSnapshot, StreamContract, Term, TopK, UnservedReason, UnservedTerm, compile,
-    contribution, execute, fuse, plan, search,
+    StatisticsSnapshot, StreamContract, StreamEnding, Term, TopK, UnservedReason, UnservedTerm,
+    compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -1169,7 +1169,10 @@ fn prefix_reader_incomplete_evidence() {
     );
 
     // A partially-read stream refuses to describe its own completeness.
-    let mut partial = RankedStreamImpl::new(vec![(1, Term::new("a")), (2, Term::new("b"))]);
+    let mut partial = RankedStreamImpl::new(
+        vec![(1, Term::new("a")), (2, Term::new("b"))],
+        StreamEnding::Exhausted,
+    );
     assert!(block_on(partial.next()).expect("pulls").is_some());
     assert!(matches!(
         block_on(partial.receipt()),
@@ -1513,7 +1516,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     let elsewhere = crate::profile(&[("elsewhere", Fixed::ONE)], K);
     assert!(
         RankedStreamAdapter::new(
-            RankedStreamImpl::new(vec![(1, Term::new("a"))]),
+            RankedStreamImpl::new(vec![(1, Term::new("a"))], StreamEnding::Exhausted),
             unique_items(),
             &elsewhere,
             &stratum("resume"),
@@ -1635,7 +1638,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // come back as the protocol error fusion would raise for the same row.
     let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut adapter = RankedStreamAdapter::new(
-        RankedStreamImpl::new(vec![(0, Term::new("a"))]),
+        RankedStreamImpl::new(vec![(0, Term::new("a"))], StreamEnding::Exhausted),
         unique_items(),
         &profile,
         &stratum("resume"),
@@ -1655,7 +1658,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // The valid neighbour: a 1-based rank through the same adapter is an
     // ordinary row carrying the profile's own contribution.
     let mut adapter = RankedStreamAdapter::new(
-        RankedStreamImpl::new(vec![(1, Term::new("a"))]),
+        RankedStreamImpl::new(vec![(1, Term::new("a"))], StreamEnding::Exhausted),
         unique_items(),
         &profile,
         &stratum("resume"),

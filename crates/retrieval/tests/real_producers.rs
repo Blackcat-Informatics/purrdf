@@ -610,11 +610,20 @@ async fn manual_composition(
     let mut streams = Vec::new();
     let mut unweighted_strata = Vec::new();
     for stream in execution.streams {
+        let plan_id = stream.plan_id;
+        let attestation = stream.attestation.clone();
         match RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum) {
             // The plan the unit was compiled from travels on with the rows; the
             // trailer names it, and the answer's identity is read back from
-            // there rather than asked of the plan a second time.
-            Some(adapter) => streams.push((stream.stratum, adapter.with_plan_id(stream.plan_id))),
+            // there rather than asked of the plan a second time. What the index
+            // behind those rows attested rides the same way, and it is what the
+            // trailer's exactness and evidence identity are derived from — a
+            // composition that dropped it would publish a lower bound as an
+            // exact score.
+            Some(adapter) => streams.push((
+                stream.stratum,
+                adapter.with_plan_id(plan_id).with_attestation(attestation),
+            )),
             None => unweighted_strata.push(stream.stratum),
         }
     }
@@ -623,11 +632,14 @@ async fn manual_composition(
     let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, TOP_K)
         .await
         .expect("the surviving streams fuse");
+    let trailer = fused.trailer.completed_with(execution.statuses);
+    let evidence_id = trailer.evidence_id;
     SearchResult {
         rows: fused.rows,
-        trailer: fused.trailer.completed_with(execution.statuses),
+        trailer,
         unserved_terms: planned.unserved_evidence(),
         plan_id: planned.id(),
+        evidence_id,
         planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata,
@@ -663,6 +675,30 @@ fn search_equals_the_hand_composed_pipeline_over_the_real_producers() {
         &env,
         &profile,
     ));
+
+    // The evidence a caller acts on, named field by field before the whole-value
+    // comparison. `assert_eq!` on two `SearchResult`s already covers these, but
+    // a regression that dropped the attestation on one path would show up as an
+    // opaque struct diff; naming them says which claim broke — and these three
+    // are the ones that decide whether a score may be read as a number.
+    assert_eq!(
+        direct.trailer.attestations, manual.trailer.attestations,
+        "what each real index attested must reach both paths identically"
+    );
+    assert_eq!(
+        direct.trailer.exactness, manual.trailer.exactness,
+        "and therefore so must whether the fused scores are exact"
+    );
+    assert_eq!(
+        direct.evidence_id, manual.evidence_id,
+        "and the digest of that evidence, which is what makes two answers \
+         comparable at all"
+    );
+    assert_eq!(
+        direct.evidence_id, direct.trailer.evidence_id,
+        "the answer's evidence identity is the trailer's own, never a second \
+         derivation of it"
+    );
 
     assert_eq!(
         direct, manual,

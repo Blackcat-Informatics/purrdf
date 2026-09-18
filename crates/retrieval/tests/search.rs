@@ -376,10 +376,17 @@ async fn manual_composition(
     let mut streams = Vec::new();
     let mut unweighted_strata = Vec::new();
     for stream in execution.streams {
+        let plan_id = stream.plan_id;
+        let attestation = stream.attestation.clone();
         match RankedStreamAdapter::new(stream.stream, stream.contract, profile, &stream.stratum) {
             // The plan the unit was compiled from rides on with the rows, which
-            // is how the trailer comes to name it.
-            Some(adapter) => streams.push((stream.stratum, adapter.with_plan_id(stream.plan_id))),
+            // is how the trailer comes to name it — and so does what the index
+            // behind those rows attested, which is what the trailer's exactness
+            // and evidence identity are derived from.
+            Some(adapter) => streams.push((
+                stream.stratum,
+                adapter.with_plan_id(plan_id).with_attestation(attestation),
+            )),
             None => unweighted_strata.push(stream.stratum),
         }
     }
@@ -388,11 +395,14 @@ async fn manual_composition(
     let fused = fuse::<RankedStreamAdapter, Term>(streams, profile, top_k)
         .await
         .expect("the surviving streams fuse");
+    let trailer = fused.trailer.completed_with(execution.statuses);
+    let evidence_id = trailer.evidence_id;
     SearchResult {
         rows: fused.rows,
-        trailer: fused.trailer.completed_with(execution.statuses),
+        trailer,
         unserved_terms: planned.unserved_evidence(),
         plan_id: planned.id(),
+        evidence_id,
         planned_resolution: compiled.resolution,
         profile_id: profile.id(),
         unweighted_strata,
@@ -452,6 +462,21 @@ fn render(result: &SearchResult) -> String {
         "trailer-profile {}",
         result.trailer.profile_id.to_hex()
     );
+    // The evidence the answer carries about the indexes that served it. Rendered
+    // rather than only structurally compared, because this is the part of the
+    // answer that decides whether a score may be read as a number, and a path
+    // that silently lost it would otherwise differ only inside an opaque digest.
+    for (stratum, attestation) in &result.trailer.attestations {
+        let _ = writeln!(
+            out,
+            "attestation {} generation={:?} service={:?}",
+            stratum.as_str(),
+            attestation.generation,
+            attestation.service
+        );
+    }
+    let _ = writeln!(out, "exactness {:?}", result.trailer.exactness);
+    let _ = writeln!(out, "evidence {}", result.evidence_id.to_hex());
     out
 }
 
@@ -481,6 +506,29 @@ fn search_equals_manual_composition() {
         render(&manual).as_bytes(),
         "search must be byte-for-byte the manual composition"
     );
+
+    // The evidence about the indexes, named claim by claim. The rendering above
+    // already covers it, but a failure there reads as one long diff; these say
+    // which of the three facts moved — and all three are the difference between
+    // a score a caller may compare and one that is only a lower bound.
+    assert_eq!(
+        direct.trailer.attestations, manual.trailer.attestations,
+        "what each stratum's index attested must reach both paths identically"
+    );
+    assert_eq!(
+        direct.trailer.exactness, manual.trailer.exactness,
+        "and therefore so must whether the fused scores are exact"
+    );
+    assert_eq!(
+        direct.evidence_id, manual.evidence_id,
+        "and so must the digest of that evidence"
+    );
+    assert_eq!(
+        direct.evidence_id, direct.trailer.evidence_id,
+        "the answer's evidence identity is read off its own trailer, never \
+         recomputed beside it"
+    );
+
     assert_eq!(direct, manual, "and structurally the same answer");
 }
 

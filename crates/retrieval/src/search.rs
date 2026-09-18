@@ -72,6 +72,29 @@
 //! anywhere between the plan and the trailer and the search fails instead of
 //! filing its rows under a plan that did not produce them.
 //!
+//! # And so does what each index attested about itself
+//!
+//! The third thing that can only be known where the rows are is what the index
+//! behind them attested: which generation answered, and whether it admitted to
+//! being short. [`execute`] reads it off the governed receipt of the very run
+//! that produced the rows and tags the stream with it; the bridge below carries
+//! it into [`RankedStream::attestation`]; and
+//! [`FusionStream`](crate::FusionStream) reads it **before pulling a row** and
+//! derives the trailer's [`FusionTrailer::attestations`],
+//! [`FusionTrailer::exactness`] and [`FusionTrailer::evidence_id`] from it.
+//!
+//! Losing it on this path would not be a missing field, it would be a wrong
+//! claim: with no stratum attesting an incomplete index the trailer says every
+//! fused score is [`ScoreExactness::Exact`](crate::ScoreExactness), and a score
+//! that is really a lower bound would be published as the whole number. So
+//! `search` attaches it rather than letting the adapter's honest default stand
+//! in for a producer that did say something.
+//!
+//! [`SearchResult::evidence_id`] is read back off the trailer for the reason
+//! [`SearchResult::plan_id`] is: the value of the evidence is that it is the id
+//! the answer actually carries, and one recomputed here from the same
+//! attestations would be true of this function rather than of that answer.
+//!
 //! # So does each producer's declared stream contract
 //!
 //! The same route carries a second thing the fusion stage is the consumer of:
@@ -156,7 +179,7 @@
 use std::collections::BTreeMap;
 
 use purrdf_core::DatasetView;
-use purrdf_sparql_eval::PropertyFunctionRegistry;
+use purrdf_sparql_eval::{PfAttestation, PropertyFunctionRegistry};
 use purrdf_text::Fixed;
 
 use crate::admission::{AdmissionEnvironment, AdmissionError};
@@ -166,7 +189,7 @@ use crate::execute::{ExecutionError, ExecutionResult, RankedStreamImpl, execute}
 use crate::fuse::{TopK, fuse};
 use crate::fusion_profile::{DecayRule, FusionProfile};
 use crate::fusion_stream::{FusedRow, FusionTrailer};
-use crate::id::{FusionProfileId, PlanId};
+use crate::id::{EvidenceId, FusionProfileId, PlanId};
 use crate::iri::{Iri, Term};
 use crate::plan::UnservedTerm;
 use crate::planner::plan;
@@ -227,6 +250,19 @@ pub struct SearchResult {
     /// ([`FusionError::PlanIdMismatch`]) rather than an answer filed under a
     /// plan that did not produce it.
     pub plan_id: PlanId,
+    /// The identity of the evidence this answer carries: a digest of exactly
+    /// the per-stratum attestations in [`Self::trailer`].
+    ///
+    /// Read back off [`FusionTrailer::evidence_id`], never recomputed here.
+    /// Two answers that name the same plan, the same profile and the same
+    /// evidence id were assembled from the same indexes in the same state; two
+    /// that differ only here were not, and that difference is invisible in every
+    /// other field — the dataset snapshot, the query text and the registry
+    /// fingerprint are all unchanged by an index rebuild. Recomputing the digest
+    /// from the same attestations would produce the same bytes and prove
+    /// nothing, because it would be a fact about this function rather than about
+    /// the answer in the caller's hand.
+    pub evidence_id: EvidenceId,
     /// What each stratum's **planned** depth was going to cost in rank
     /// resolution under this profile, exactly as the admission waist recorded
     /// it, keyed by stratum.
@@ -405,6 +441,7 @@ where
     for stratum_stream in executed {
         let stratum = stratum_stream.stratum.clone();
         let plan_id = stratum_stream.plan_id;
+        let attestation = stratum_stream.attestation.clone();
         // The contract travels with the stream, exactly as the plan identity
         // does: it is the producer's own declaration, read at the admission
         // waist and carried, so the promise fusion holds this stream to is the
@@ -420,8 +457,14 @@ where
         };
         // The stream carries the plan it was compiled from into the fusion, so
         // the identity the answer reports is the one that travelled with the
-        // rows rather than one read back off the plan at the end.
-        streams.push((stratum, adapter.with_plan_id(plan_id)));
+        // rows rather than one read back off the plan at the end — and it
+        // carries what the index behind those rows attested for the same
+        // reason. Fusion reads the attestation before it pulls a row, which is
+        // why it is attached here rather than collected after.
+        streams.push((
+            stratum,
+            adapter.with_plan_id(plan_id).with_attestation(attestation),
+        ));
     }
     // `execute` yields its streams in the compiler's stratum order, but the
     // report is sorted rather than inherited: it is part of the answer, and an
@@ -473,12 +516,18 @@ where
     //    They are applicable producers that could not contribute, and §6 says
     //    the answer carries them beside the ones that did.
     let trailer = fused.trailer.completed_with(statuses);
+    // 6b. Read the evidence identity back off the answer, exactly as the plan
+    //     identity was read back off it above. Completing the report cannot move
+    //     it: a stratum that never became a stream opened no index, so it has no
+    //     attestation to digest and gets no entry.
+    let evidence_id = trailer.evidence_id;
 
     Ok(SearchResult {
         rows: fused.rows,
         trailer,
         unserved_terms: plan.unserved_evidence(),
         plan_id,
+        evidence_id,
         // 7. Carry the waist's own resolution evidence onto the answer. It is
         //    moved, not recomputed: recomputing it here from the profile and
         //    the plan would be a second derivation of what the admission waist
@@ -531,6 +580,8 @@ pub struct RankedStreamAdapter {
     decay: DecayRule,
     /// The pinned plan these rows descend from, when the caller named one.
     plan_id: Option<PlanId>,
+    /// What the index behind these rows attested, when the caller named it.
+    attestation: PfAttestation,
 }
 
 impl RankedStreamAdapter {
@@ -569,6 +620,7 @@ impl RankedStreamAdapter {
             weight: profile.weight(stratum)?,
             decay: profile.decay(),
             plan_id: None,
+            attestation: PfAttestation::UNDECLARED,
         })
     }
 
@@ -588,6 +640,30 @@ impl RankedStreamAdapter {
     #[must_use]
     pub const fn with_plan_id(mut self, plan_id: PlanId) -> Self {
         self.plan_id = Some(plan_id);
+        self
+    }
+
+    /// Name what the index behind these rows attested.
+    ///
+    /// [`execute`] reads this off the governed receipt of the run that produced
+    /// the rows and tags the stream with it
+    /// ([`StratumStream::attestation`](crate::StratumStream)); this is how that
+    /// tag continues into the fusion, which reads it through
+    /// [`RankedStream::attestation`] before pulling a row and derives the
+    /// trailer's attestation map, its
+    /// [`ScoreExactness`](crate::ScoreExactness) and its
+    /// [`EvidenceId`] from it.
+    ///
+    /// It is a builder step rather than a parameter of [`new`](Self::new) for
+    /// the reason [`with_plan_id`](Self::with_plan_id) is: the rows and their
+    /// provenance arrive as separate fields of one `StratumStream`, and a stream
+    /// that descends from no index at all attaches nothing and fuses anyway.
+    /// Attaching nothing is honest here in a way it never is for a contract —
+    /// see [`RankedStream::attestation`], which defaults for exactly that
+    /// reason.
+    #[must_use]
+    pub fn with_attestation(mut self, attestation: PfAttestation) -> Self {
+        self.attestation = attestation;
         self
     }
 }
@@ -638,5 +714,9 @@ impl RankedStream for RankedStreamAdapter {
 
     fn plan_id(&self) -> Option<PlanId> {
         self.plan_id
+    }
+
+    fn attestation(&self) -> PfAttestation {
+        self.attestation.clone()
     }
 }

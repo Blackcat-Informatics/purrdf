@@ -493,6 +493,18 @@ pub(crate) struct AdmittedRegistry<'a> {
     /// plan's binding list, for the reason `descriptors` is shared: two
     /// groupings of one list are two chances to disagree about it.
     pub(crate) stratum_bindings: BTreeMap<Iri, &'a ProducerBinding>,
+    /// What the registry declared about how many rows each ranked stratum can
+    /// yield, keyed by stratum — the same map the depth-bound check above was
+    /// decided against.
+    ///
+    /// Carried out of admission rather than re-derived at emission for the
+    /// reason `descriptors` is: emission needs this number to decide whether a
+    /// read can be probed one row past its planned depth, and a second
+    /// derivation of "what did this registry declare" is a second chance to
+    /// disagree with the one the depth was already admitted against. Every
+    /// ranked stratum the registry declares has an entry, including the strata
+    /// this plan records no depth for.
+    pub(crate) stratum_row_bounds: BTreeMap<Iri, RowBound>,
     /// The environment registry's declared content fingerprint.
     pub(crate) fingerprint: String,
     /// The environment registry's live instance identity.
@@ -527,7 +539,7 @@ fn ranked_stratum(descriptor: &PfDescriptor) -> Option<Iri> {
 /// merge that could only ever run against a registry the seam refuses to build
 /// would be unreachable code claiming a policy nothing enforces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RowBound {
+pub(crate) enum RowBound {
     /// The stratum's one producer declared a finite worst-case row count.
     Declared(u64),
     /// The stratum's one producer declared no worst-case row count at all, so
@@ -968,6 +980,7 @@ pub(crate) fn admit_plan<'a>(
     Ok(AdmittedRegistry {
         descriptors,
         stratum_bindings,
+        stratum_row_bounds: strata,
         fingerprint,
         instance_id,
     })

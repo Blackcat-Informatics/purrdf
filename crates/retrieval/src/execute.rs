@@ -55,6 +55,50 @@
 //! [`search`](crate::search) composes with. Stopping here and resuming later is
 //! one supported path, not a private one.
 //!
+//! # The witness rides the governed receipt, and one unit attests once
+//!
+//! A unit is run through the **governed** entry
+//! (`query_prepared_governed_view`) under
+//! [`QueryGovernors::UNBOUNDED`], not because anything here wants a ceiling but
+//! because that is the lane whose receipt carries a
+//! [`RelationWitness`](purrdf_sparql_eval::RelationWitness). A witness is
+//! evidence *about* an outcome rather than an outcome, and it already travels
+//! beside `GovernorEvidence` on that receipt, so asking for a second, witnessed
+//! entry point would be asking the evaluator to grow a second spelling of a
+//! channel it already has. `UNBOUNDED` is that engine's own documented way to
+//! decline every caller-settable ceiling, so nothing a unit could do before is
+//! bounded now; and the governors are built per call and dropped with it,
+//! because the entry point's own contract is that governors are per call and
+//! never per engine.
+//!
+//! What comes back is read under the **sole-witness rule**. A compiled unit
+//! binds exactly one producer — the registry refuses a second producer for a
+//! stratum and the admission waist re-checks it — and every argument the unit
+//! places is a constant, so a conforming run invokes exactly one relation,
+//! against one pinned index generation, with at most one thing to say about
+//! that index's wholeness. A witness that says otherwise did not observe a
+//! different stratum; it observed that the snapshot moved under the query or
+//! that the registry was not the one the unit was compiled against. That
+//! invalidates the **run**, so it is [`ExecutionError::InconsistentWitness`]
+//! and not a per-stratum status.
+//!
+//! It is deliberately not [`ProducerStatus::ExecutionFailed`]. That status
+//! means the producer could not run, it carries no rows, and the fusion stage
+//! refuses it outright once rows have been emitted
+//! ([`ProtocolError::ErrorAfterRows`]) — but the unit here *did* run and *did*
+//! return rows. Reporting it that way would either throw those rows away under
+//! a false label or hand fusion a receipt that contradicts what it just pulled.
+//!
+//! The rule is keyed on the declaration **sets** and the relation count, and
+//! deliberately **not** on the invocation count. How many times a relation
+//! enters host code is a property of the schedule: one evaluator lane forks a
+//! child per chunk of driving rows and a `FILTER EXISTS` re-enters pattern
+//! evaluation inside each, so the same query over the same data can count
+//! differently without anything having changed about the index. What was
+//! *declared* does not vary with the chunking, which is exactly why the witness
+//! unions the declarations and merely sums the counts. A rule that tightened to
+//! include the count would be a flake waiting for a bigger dataset.
+//!
 //! What *is* attached here is the producer's own ranked-stream contract —
 //! its rank ordering and its duplicate handling — carried through from the
 //! compiled unit into [`StratumStream::contract`]. That is not a fusion input
@@ -62,12 +106,28 @@
 //! the same one-stratum-one-producer rule the ranks rest on makes it
 //! unambiguous, so a stratum's contract is simply its producer's. It travels
 //! with the rows rather than being looked up again at the end, for the reason
-//! the plan identity does.
+//! the plan identity does. The attestation read off the witness travels the
+//! same way, in [`StratumStream::attestation`].
+//!
+//! # The unit is read one row deeper than the stratum is
+//!
+//! [`compile`](crate::compile) emits `LIMIT min(depth + 1, declared row bound)`,
+//! so a unit whose producer still had rows past the planned depth hands back one
+//! more row than the stratum may contribute. That row is a **probe**: it is
+//! never emitted onto the stream, never ranked, and never counted anywhere. All
+//! it does is decide the stream's ending — [`StreamEnding::DepthReached`] when
+//! it arrived, [`StreamEnding::Exhausted`] when it did not. Without it an
+//! executor could only ever say `Exhausted`, which is the strongest
+//! completeness claim this layer makes, uttered about a read the plan itself cut
+//! short.
 
 use std::collections::{HashMap, VecDeque};
 
-use purrdf_core::{DatasetView, SparqlRequest, SparqlResult, TermValue};
-use purrdf_sparql_eval::{NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions, RegistryId};
+use purrdf_core::{DatasetView, SparqlResult, TermValue};
+use purrdf_sparql_eval::{
+    GovernedOutcome, NativeSparqlEngine, PfAttestation, PropertyFunctionRegistry, QueryGovernors,
+    QueryOptions, RegistryId, RelationWitness, ServiceLevel,
+};
 
 use crate::compile::{CANDIDATE_NAME, CompiledRetrieval};
 use crate::fusion_stream::ProducerStatus;
@@ -95,6 +155,22 @@ pub struct StratumStream {
     /// [`RankedStreamAdapter::new`](crate::RankedStreamAdapter::new) alongside
     /// the stream, which is why it is a field of the same value.
     pub contract: StreamContract,
+    /// What the index behind these rows attested: which generation answered,
+    /// and whether that generation admitted to being short.
+    ///
+    /// Read off the governed receipt's relation witness for the run that
+    /// produced these very rows, and carried here for the reason
+    /// [`Self::contract`] and [`Self::plan_id`] are carried: the consumer is
+    /// three stages downstream, and a consumer that asked the index again at the
+    /// end would be told about the index *then* rather than about the one that
+    /// answered. A generation is pinned when an index opens, so the version that
+    /// served rank one is the version that served the last rank — which is only
+    /// a useful fact if it travels with the rows it is true of.
+    ///
+    /// [`PfAttestation::UNDECLARED`] is the honest answer for a unit whose
+    /// relation declared neither fact, and it stays an absence all the way out:
+    /// silence is never a certificate that the index was current or whole.
+    pub attestation: PfAttestation,
     /// The evaluator's rows, in rank order.
     pub stream: RankedStreamImpl,
 }
@@ -119,17 +195,26 @@ pub struct ExecutionResult {
 /// [`ExecutionResult::statuses`] — because the remaining strata must still run.
 /// Only a defect that invalidates the run itself is an error here.
 ///
-/// # Why there is exactly one variant
+/// # Why there are exactly two variants
 ///
 /// Every failure a *unit* can have is attributable to the stratum that unit was
 /// compiled for, and the registry identity is checked before any unit runs, so
 /// there is no window in which an evaluation failure exists without a stratum
-/// to hang it on. That leaves the registry mismatch as the only condition that
-/// invalidates the whole run, and it is the only variant here: a variant no
-/// path can construct is an error a caller writes a `match` arm for and never
-/// reaches, which is worse than no variant at all. The enum stays
-/// `#[non_exhaustive]` so a second whole-run condition can be added without a
-/// breaking change if one is ever found.
+/// to hang it on. That left the registry mismatch as the only condition known
+/// to invalidate the whole run — and the enum was left `#[non_exhaustive]`
+/// precisely so a second whole-run condition could be added without a breaking
+/// change if one were ever found. [`Self::InconsistentWitness`] is that second
+/// condition, and it is added on the terms that argument set rather than
+/// against them: a variant no path can construct is worse than no variant, and
+/// this one is reached by a real observation the executor now makes.
+///
+/// What makes it whole-run rather than per-stratum is *what it observes*. A
+/// witness that does not describe exactly one relation, one index generation
+/// and at most one incompleteness reason is not a report about one stratum's
+/// producer behaving badly; it is the evidence channel disagreeing with the
+/// admission waist about what was registered, or an index moving underneath the
+/// query. Neither fact is confined to the stratum that noticed it, and the
+/// remaining strata's answers rest on the same two assumptions.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ExecutionError {
@@ -140,6 +225,33 @@ pub enum ExecutionError {
         expected: RegistryId,
         /// The instance execution was handed.
         got: RegistryId,
+    },
+
+    /// The relation witness for one unit's run cannot be the witness of a
+    /// conforming compiled unit.
+    ///
+    /// A compiled unit binds one producer and passes it constants, so its run
+    /// invokes one relation over one pinned index generation with at most one
+    /// thing to say about that index's wholeness. More than one of any of those
+    /// — or none at all from a unit that returned rows — means the registry or
+    /// the snapshot was not what the unit was compiled against, which is a fact
+    /// about the run and not about the stratum that happened to expose it. It
+    /// is **not** [`ProducerStatus::ExecutionFailed`]: that status says the
+    /// producer could not run and carries no rows, and this unit ran and
+    /// returned rows.
+    ///
+    /// The invocation count is deliberately not part of the rule; see this
+    /// module's header for why tightening it to include the count would be a
+    /// flake rather than a check.
+    #[error("stratum {stratum}: the relation witness is not a compiled unit's: {reason}")]
+    InconsistentWitness {
+        /// The stratum whose unit produced the witness. Boxed because an
+        /// [`Iri`] is much wider than the other variant's two ids, and a large
+        /// `Err` is paid for on every call that returns `Ok`.
+        stratum: Box<Iri>,
+        /// What about the witness could not be a compiled unit's, naming the
+        /// count that was wrong.
+        reason: String,
     },
 }
 
@@ -159,16 +271,51 @@ pub struct RankedStreamImpl {
     rows: VecDeque<(u64, Term)>,
     pulled: u64,
     exhausted: bool,
+    ending: StreamEnding,
+}
+
+/// How a materialized stream ends, decided before the first row is pulled.
+///
+/// The two endings answer "what stopped this read", and only the producer's own
+/// side of the seam can tell them apart: an empty cursor looks identical whether
+/// the rows ran out or the bound did. [`execute`] can tell, because
+/// [`compile`](crate::compile) emits a bound one row deeper than the stratum
+/// reads, so the arrival of that extra row *is* the distinction — see this
+/// module's header.
+///
+/// It is fixed at construction rather than computed in
+/// [`RankedStreamImpl::receipt`] because the fact is about the evaluator's
+/// answer, not about how much of the stream a consumer chose to pull: a stream
+/// whose ending were derived at the end would say something different to a
+/// caller that stopped early, which is precisely the falsifiable status the
+/// ranked-stream protocol forbids.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamEnding {
+    /// Every row the unit could yield is on the stream.
+    Exhausted,
+    /// The planned depth stopped the read, and a further row existed.
+    DepthReached {
+        /// The last 1-based rank the stream carries, which is the planned depth
+        /// and also the number of rows the stream holds.
+        rank: u64,
+    },
 }
 
 impl RankedStreamImpl {
-    /// Build a stream over pre-ranked `(rank, candidate)` rows.
+    /// Build a stream over pre-ranked `(rank, candidate)` rows that ends the way
+    /// `ending` says.
+    ///
+    /// The ending is a parameter rather than something inferred from `rows`,
+    /// because it cannot be inferred from `rows`: the row count is the same
+    /// either way, and the whole point of the distinction is that only the
+    /// reader of the underlying answer knows which one happened.
     #[must_use]
-    pub fn new(rows: Vec<(u64, Term)>) -> Self {
+    pub fn new(rows: Vec<(u64, Term)>, ending: StreamEnding) -> Self {
         Self {
             rows: rows.into(),
             pulled: 0,
             exhausted: false,
+            ending,
         }
     }
 
@@ -197,6 +344,13 @@ impl RankedStreamImpl {
 
     /// How the stream ended. Call only after [`Self::next`] returned `None`.
     ///
+    /// A [`StreamEnding::Exhausted`] stream reports the rows it actually
+    /// emitted; a [`StreamEnding::DepthReached`] stream reports the rank the
+    /// depth stopped it at. Fusion measures either number against the rows it
+    /// pulled and refuses a disagreement
+    /// ([`ProtocolError::ForgedReceipt`]), which is why the rank is the depth
+    /// the rows were truncated to and not the number of rows the unit returned.
+    ///
     /// # Errors
     ///
     /// [`ProtocolError::NeverEndingSource`] when called before the stream was
@@ -207,8 +361,11 @@ impl RankedStreamImpl {
         if !self.exhausted {
             return Err(ProtocolError::NeverEndingSource);
         }
-        Ok(ProducerReceipt::Exhausted {
-            rows_emitted: self.pulled,
+        Ok(match self.ending {
+            StreamEnding::Exhausted => ProducerReceipt::Exhausted {
+                rows_emitted: self.pulled,
+            },
+            StreamEnding::DepthReached { rank } => ProducerReceipt::DepthReached { rank },
         })
     }
 }
@@ -224,8 +381,10 @@ impl RankedStreamImpl {
 /// # Errors
 ///
 /// [`ExecutionError::RegistryMismatch`] when `compiled` was built against a
-/// different live registry instance than `registry`. Per-stratum failures are not
-/// errors; they are reported in [`ExecutionResult::statuses`].
+/// different live registry instance than `registry`, and
+/// [`ExecutionError::InconsistentWitness`] when a unit's run attested something
+/// no compiled unit's run can attest. Per-stratum failures are not errors; they
+/// are reported in [`ExecutionResult::statuses`].
 // The executor drives a synchronous evaluator and returns materialized streams;
 // the `async` shape is its stage contract, not a pending future. A caller composes
 // it with the asynchronous fusion stage.
@@ -255,6 +414,15 @@ pub async fn execute<D: DatasetView + Sync>(
     let engine = NativeSparqlEngine::new();
     let mut streams = Vec::with_capacity(compiled.units.len());
     let mut statuses = HashMap::with_capacity(compiled.units.len());
+    // The registry is named identically at prepare and at evaluation: the
+    // evaluator refuses a plan prepared against a different registry than the
+    // one it is run under, because a plan prepared without one has already
+    // lowered every relation's predicate to an ordinary triple pattern. One
+    // spelling, called twice, so the two sites cannot drift apart.
+    let options = || QueryOptions {
+        property_functions: registry,
+        ..QueryOptions::EMPTY
+    };
 
     for unit in &compiled.units {
         if unit.sparql.trim().is_empty() {
@@ -266,51 +434,94 @@ pub async fn execute<D: DatasetView + Sync>(
             );
             continue;
         }
-        let outcome = engine.query_with_options_view(
+        let prepared = match engine.prepare_query_with_options(&unit.sparql, None, options()) {
+            Ok(prepared) => prepared,
+            Err(diagnostic) => {
+                statuses.insert(
+                    unit.stratum.clone(),
+                    ProducerStatus::ExecutionFailed {
+                        reason: diagnostic.to_string(),
+                    },
+                );
+                continue;
+            }
+        };
+        // Governors are per call, never per engine: the value is built here,
+        // used once, and dropped with the call. `UNBOUNDED` declines every
+        // caller-settable ceiling, so this is the governed lane for its receipt
+        // and for nothing else — see this module's header.
+        let outcome = engine.query_prepared_governed_view(
             dataset,
-            SparqlRequest {
-                query: &unit.sparql,
-                base_iri: None,
-                substitutions: &[],
-            },
-            QueryOptions {
-                property_functions: registry,
-                ..QueryOptions::EMPTY
-            },
+            &prepared,
+            &[],
+            options(),
+            &QueryGovernors::UNBOUNDED,
         );
         match outcome {
-            Ok(SparqlResult::Solutions {
-                variables, rows, ..
-            }) => match rank_candidates(&variables, &rows) {
-                Ok(ranked) => {
-                    let rows_emitted = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
-                    streams.push(StratumStream {
-                        stratum: unit.stratum.clone(),
-                        plan_id: compiled.plan_id,
-                        contract: unit.contract,
-                        stream: RankedStreamImpl::new(ranked),
-                    });
-                    statuses.insert(
-                        unit.stratum.clone(),
-                        ProducerStatus::Exhausted { rows_emitted },
-                    );
+            Ok(GovernedOutcome::Complete {
+                result:
+                    SparqlResult::Solutions {
+                        variables, rows, ..
+                    },
+                relations,
+                ..
+            }) => {
+                // Read before ranking. The witness describes the run that just
+                // happened, so an inconsistency in it invalidates that run
+                // whether or not this stratum's rows could also be ranked; the
+                // alternative would let a per-stratum ranking failure mask the
+                // whole-run condition that caused it.
+                let attestation =
+                    read_attestation(&relations.witness, rows.is_empty()).map_err(|reason| {
+                        ExecutionError::InconsistentWitness {
+                            stratum: Box::new(unit.stratum.clone()),
+                            reason,
+                        }
+                    })?;
+                match rank_candidates(&variables, &rows) {
+                    Ok(ranked) => {
+                        let (ranked, ending, status) = bound_to_depth(ranked, unit.depth);
+                        streams.push(StratumStream {
+                            stratum: unit.stratum.clone(),
+                            plan_id: compiled.plan_id,
+                            contract: unit.contract,
+                            attestation,
+                            stream: RankedStreamImpl::new(ranked, ending),
+                        });
+                        statuses.insert(unit.stratum.clone(), status);
+                    }
+                    Err(reason) => {
+                        statuses.insert(
+                            unit.stratum.clone(),
+                            ProducerStatus::ExecutionFailed {
+                                reason: format!("stratum {}: {reason}", unit.stratum),
+                            },
+                        );
+                    }
                 }
-                Err(reason) => {
-                    statuses.insert(
-                        unit.stratum.clone(),
-                        ProducerStatus::ExecutionFailed {
-                            reason: format!("stratum {}: {reason}", unit.stratum),
-                        },
-                    );
-                }
-            },
-            Ok(_) => {
+            }
+            Ok(GovernedOutcome::Complete { .. }) => {
                 statuses.insert(
                     unit.stratum.clone(),
                     ProducerStatus::ExecutionFailed {
                         reason: "compiled unit did not return solutions".to_owned(),
                     },
                 );
+            }
+            Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
+                // `UNBOUNDED` declines every caller-settable ceiling, so a trip
+                // is the same class of impossibility the witness rule catches:
+                // something other than this call's governors stopped the run,
+                // and whatever rows it reached are a partial answer nothing here
+                // asked for. It is reported as the whole-run refusal it is,
+                // naming the governor, rather than as a stratum that answered.
+                return Err(ExecutionError::InconsistentWitness {
+                    stratum: Box::new(unit.stratum.clone()),
+                    reason: format!(
+                        "the run declined every ceiling, yet {} stopped it",
+                        exhausted.tripped
+                    ),
+                });
             }
             Err(diagnostic) => {
                 statuses.insert(
@@ -324,6 +535,125 @@ pub async fn execute<D: DatasetView + Sync>(
     }
 
     Ok(ExecutionResult { streams, statuses })
+}
+
+/// Cut `ranked` down to the stratum's `depth`, and say which ending that was.
+///
+/// The unit was emitted one row deeper than `depth` wherever the registry left
+/// room, so a `depth + 1`-th row here means the producer still had rows when the
+/// plan's bound ran out. That row is dropped — it is a probe and never a value —
+/// and its only effect is the ending. Every other row keeps the rank
+/// [`rank_candidates`] gave it, so nothing is renumbered.
+///
+/// The status returned is the mirror of the ending, so the terminal report and
+/// the stream's own receipt cannot say different things about the same read.
+fn bound_to_depth(
+    mut ranked: Vec<(u64, Term)>,
+    depth: u32,
+) -> (Vec<(u64, Term)>, StreamEnding, ProducerStatus) {
+    let ceiling = usize::try_from(depth).unwrap_or(usize::MAX);
+    if ranked.len() > ceiling {
+        ranked.truncate(ceiling);
+        let rank = u64::from(depth);
+        return (
+            ranked,
+            StreamEnding::DepthReached { rank },
+            ProducerStatus::DepthReached { rank },
+        );
+    }
+    let rows_emitted = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
+    (
+        ranked,
+        StreamEnding::Exhausted,
+        ProducerStatus::Exhausted { rows_emitted },
+    )
+}
+
+/// The attestation a compiled unit's run left on the governed receipt.
+///
+/// `empty_answer` is whether the unit returned no solution row at all, and it
+/// decides exactly one thing: whether an empty witness is a refusal. A unit that
+/// returned rows must have reached its relation to obtain them, so a witness
+/// naming nothing contradicts the rows in hand. A unit that returned nothing has
+/// nothing for an attestation to be *about*, and refusing it would fail the whole
+/// run over a stratum that legitimately answered with nothing — the over-refusal
+/// mirror of the silent drop. [`PfAttestation::UNDECLARED`] is the true report
+/// there: nobody said anything.
+///
+/// Everything else is [`sole_attestation`]'s rule, unchanged.
+fn read_attestation(
+    witness: &RelationWitness,
+    empty_answer: bool,
+) -> Result<PfAttestation, String> {
+    if empty_answer && witness.is_empty() {
+        return Ok(PfAttestation::UNDECLARED);
+    }
+    sole_attestation(witness)
+}
+
+/// The one attestation a conforming compiled unit's witness holds, or why it
+/// cannot be one.
+///
+/// The rule, and the reason it is the rule, is in this module's header. In
+/// short: one unit, one producer, constant arguments — therefore one relation,
+/// one pinned generation, at most one incompleteness reason. Each refusal names
+/// the count that was wrong, because the count is what a caller needs in order
+/// to tell "the registry grew a second producer for this stratum" from "the
+/// index rebuilt under the query".
+///
+/// The invocation **count** is read and deliberately ignored. It is a function
+/// of how the evaluator chunked its driving rows, not of what was attested, and
+/// a rule keyed on it would fail on an input size rather than on a defect.
+fn sole_attestation(witness: &RelationWitness) -> Result<PfAttestation, String> {
+    let mut entries = witness.iter();
+    let (relation, attested) = match (entries.next(), entries.next()) {
+        (None, _) => {
+            return Err(
+                "0 relations attested, but a compiled unit calls exactly one registered \
+                 relation, so its run must attest exactly 1"
+                    .to_owned(),
+            );
+        }
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "{} relations attested, but a compiled unit binds exactly 1 producer",
+                witness.len()
+            ));
+        }
+        (Some(sole), None) => sole,
+    };
+    if attested.generations.len() > 1 {
+        return Err(format!(
+            "relation {relation} attested {} distinct index generations, but one invocation \
+             pins exactly 1: the index moved under the query",
+            attested.generations.len()
+        ));
+    }
+    let Some(generation) = attested.generations.first() else {
+        return Err(format!(
+            "relation {relation} attested 0 index generations, but every recorded invocation \
+             contributes exactly 1, even when it declares nothing"
+        ));
+    };
+    if attested.incompleteness.len() > 1 {
+        return Err(format!(
+            "relation {relation} attested {} distinct incompleteness reasons, but one \
+             invocation can give at most 1",
+            attested.incompleteness.len()
+        ));
+    }
+    let service = attested
+        .incompleteness
+        .first()
+        .map_or(ServiceLevel::Undeclared, |reason| {
+            ServiceLevel::Incomplete {
+                reason: reason.clone(),
+            }
+        });
+    Ok(PfAttestation {
+        generation: generation.clone(),
+        service,
+    })
 }
 
 /// Read a unit's projected candidate column into ranked `(rank, candidate)` rows.
@@ -385,9 +715,14 @@ fn term_candidate(value: &TermValue) -> Term {
 #[cfg(test)]
 mod tests {
     use purrdf_core::TermValue;
+    use purrdf_sparql_eval::{IndexGeneration, PfAttestation, RelationWitness, ServiceLevel};
 
-    use super::{rank_candidates, term_candidate};
+    use super::{
+        ProducerStatus, StreamEnding, bound_to_depth, rank_candidates, read_attestation,
+        sole_attestation, term_candidate,
+    };
     use crate::compile::CANDIDATE_NAME;
+    use crate::iri::Term;
     use crate::render::decode_term;
 
     fn variables() -> Vec<String> {
@@ -479,10 +814,7 @@ mod tests {
         ]];
         assert_eq!(
             rank_candidates(&variables, &rows).expect("the candidate column ranks"),
-            vec![(
-                1,
-                crate::iri::Term::new("<http://example.org/doc>".to_owned())
-            )]
+            vec![(1, Term::new("<http://example.org/doc>".to_owned()))]
         );
     }
 
@@ -491,5 +823,215 @@ mod tests {
         let reason = rank_candidates(&["other".to_owned()], &[vec![None]])
             .expect_err("a unit with no candidate column cannot be ranked");
         assert!(reason.contains(CANDIDATE_NAME), "{reason}");
+    }
+
+    // -----------------------------------------------------------------------
+    // The sole-witness rule, over hand-built witnesses
+    // -----------------------------------------------------------------------
+
+    /// The relation a conforming unit calls. Two spellings, because the rule
+    /// counts relations and a test that used one name twice would be counting
+    /// nothing.
+    const ONE_RELATION: &str = "http://example.org/pf/alpha";
+    const ANOTHER_RELATION: &str = "http://example.org/pf/beta";
+
+    fn declared(generation: &str) -> IndexGeneration {
+        IndexGeneration::Declared(generation.to_owned())
+    }
+
+    fn incomplete(reason: &str) -> ServiceLevel {
+        ServiceLevel::Incomplete {
+            reason: reason.to_owned(),
+        }
+    }
+
+    /// A witness built the way the evaluator builds one: by recording
+    /// invocations. Nothing here reaches inside the type, so a rule that only
+    /// held for a hand-assembled map would not pass.
+    fn witness_of(invocations: &[(&str, IndexGeneration, ServiceLevel)]) -> RelationWitness {
+        let mut witness = RelationWitness::default();
+        for (relation, generation, service) in invocations {
+            witness.record(relation, generation.clone(), service.clone());
+        }
+        witness
+    }
+
+    #[test]
+    fn a_witness_with_one_relation_and_one_generation_is_that_units_attestation() {
+        let witness = witness_of(&[(ONE_RELATION, declared("gen-7"), ServiceLevel::Undeclared)]);
+        assert_eq!(
+            sole_attestation(&witness),
+            Ok(PfAttestation {
+                generation: declared("gen-7"),
+                service: ServiceLevel::Undeclared,
+            }),
+            "one relation, one generation, nothing short: the conforming case"
+        );
+
+        // And the incompleteness comes through verbatim, because the reason is
+        // what tells an operator which index to rebuild.
+        let witness = witness_of(&[(ONE_RELATION, declared("gen-7"), incomplete("rebuilding"))]);
+        assert_eq!(
+            sole_attestation(&witness),
+            Ok(PfAttestation {
+                generation: declared("gen-7"),
+                service: incomplete("rebuilding"),
+            })
+        );
+    }
+
+    /// **The count is not part of the rule.** How many times a relation enters
+    /// host code is a function of how the evaluator chunked its driving rows —
+    /// a forked `FILTER EXISTS` re-evaluates per chunk — so a rule that read it
+    /// would fail on an input size rather than on a defect. Seven invocations
+    /// of one index are still one index.
+    #[test]
+    fn seven_invocations_of_one_relation_are_accepted() {
+        let mut witness = RelationWitness::default();
+        for _ in 0..7 {
+            witness.record(ONE_RELATION, declared("gen-7"), ServiceLevel::Undeclared);
+        }
+        assert_eq!(
+            witness
+                .get(ONE_RELATION)
+                .expect("the relation attested")
+                .invocations,
+            7,
+            "the fixture really does count seven, or the claim below is vacuous"
+        );
+        assert_eq!(
+            sole_attestation(&witness),
+            Ok(PfAttestation {
+                generation: declared("gen-7"),
+                service: ServiceLevel::Undeclared,
+            }),
+            "the count is read and deliberately ignored"
+        );
+    }
+
+    #[test]
+    fn a_witness_naming_no_relation_is_refused_and_names_the_count() {
+        let reason = sole_attestation(&RelationWitness::default())
+            .expect_err("a unit that returned rows reached its relation to obtain them");
+        assert!(
+            reason.contains('0'),
+            "the refusal names the count: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_witness_naming_two_relations_is_refused_and_names_the_count() {
+        let witness = witness_of(&[
+            (ONE_RELATION, declared("gen-7"), ServiceLevel::Undeclared),
+            (
+                ANOTHER_RELATION,
+                declared("gen-7"),
+                ServiceLevel::Undeclared,
+            ),
+        ]);
+        let reason = sole_attestation(&witness)
+            .expect_err("a compiled unit binds exactly one producer, so its run calls one");
+        assert!(
+            reason.contains('2'),
+            "the refusal names the count: {reason}"
+        );
+    }
+
+    #[test]
+    fn one_relation_attesting_two_generations_is_refused_and_names_the_count() {
+        let witness = witness_of(&[
+            (ONE_RELATION, declared("gen-7"), ServiceLevel::Undeclared),
+            (ONE_RELATION, declared("gen-8"), ServiceLevel::Undeclared),
+        ]);
+        let reason = sole_attestation(&witness)
+            .expect_err("a query that straddled a rebuild did not read one index");
+        assert!(
+            reason.contains('2'),
+            "the refusal names the count: {reason}"
+        );
+        assert!(
+            reason.contains(ONE_RELATION),
+            "and the relation whose index moved: {reason}"
+        );
+    }
+
+    #[test]
+    fn one_relation_attesting_two_incompleteness_reasons_is_refused_and_names_the_count() {
+        let witness = witness_of(&[
+            (ONE_RELATION, declared("gen-7"), incomplete("shard 1")),
+            (ONE_RELATION, declared("gen-7"), incomplete("shard 2")),
+        ]);
+        let reason =
+            sole_attestation(&witness).expect_err("one invocation can give at most one reason");
+        assert!(
+            reason.contains('2'),
+            "the refusal names the count: {reason}"
+        );
+    }
+
+    /// The over-refusal guard on the one condition that is not absolute. A unit
+    /// that returned no row has nothing for an attestation to be *about*, so an
+    /// empty witness there is silence rather than a contradiction — and the
+    /// neighbouring case, the same empty witness after rows were returned, is
+    /// still refused.
+    #[test]
+    fn an_empty_witness_refuses_only_when_the_unit_returned_rows() {
+        assert_eq!(
+            read_attestation(&RelationWitness::default(), true),
+            Ok(PfAttestation::UNDECLARED),
+            "a unit that answered with nothing attested nothing, which is not a defect"
+        );
+        assert!(
+            read_attestation(&RelationWitness::default(), false).is_err(),
+            "but rows with no relation behind them did not come from this unit's text"
+        );
+        // And a unit that returned no rows while its relation DID attest is read
+        // exactly as any other: the incompleteness is not lost with the rows.
+        assert_eq!(
+            read_attestation(
+                &witness_of(&[(ONE_RELATION, declared("gen-7"), incomplete("rebuilding"))]),
+                true,
+            ),
+            Ok(PfAttestation {
+                generation: declared("gen-7"),
+                service: incomplete("rebuilding"),
+            })
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The probe row is a read, never a value
+    // -----------------------------------------------------------------------
+
+    /// The `depth + 1`-th row decides the ending and is then dropped; every row
+    /// that stays keeps the rank it was given, so nothing is renumbered.
+    #[test]
+    fn the_probe_row_changes_the_ending_and_nothing_else() {
+        let rows = |count: u64| {
+            (1..=count)
+                .map(|rank| (rank, Term::new(format!("<http://example.org/doc{rank}>"))))
+                .collect::<Vec<_>>()
+        };
+
+        let (kept, ending, status) = bound_to_depth(rows(4), 3);
+        assert_eq!(
+            kept.iter().map(|(rank, _)| *rank).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "the probe row is dropped and its neighbours keep their ranks"
+        );
+        assert_eq!(ending, StreamEnding::DepthReached { rank: 3 });
+        assert_eq!(status, ProducerStatus::DepthReached { rank: 3 });
+
+        // Exactly at the depth: the probe never arrived, so the read ran out.
+        let (kept, ending, status) = bound_to_depth(rows(3), 3);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(ending, StreamEnding::Exhausted);
+        assert_eq!(status, ProducerStatus::Exhausted { rows_emitted: 3 });
+
+        // And below it, where the depth was never the binding constraint.
+        let (kept, ending, status) = bound_to_depth(rows(1), 3);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(ending, StreamEnding::Exhausted);
+        assert_eq!(status, ProducerStatus::Exhausted { rows_emitted: 1 });
     }
 }

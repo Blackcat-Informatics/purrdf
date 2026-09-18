@@ -18,8 +18,8 @@ use purrdf_retrieval::{
     ClassWidth, DecayRule, DuplicatePolicy, EvidenceId, Fixed, FusionError, FusionProfile,
     FusionProfileId, FusionResult, FusionStream, IndexGeneration, Iri, MonotoneDepth,
     PfAttestation, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankedStream,
-    RankedStreamImpl, ScoreExactness, ServiceLevel, StreamContract, Term, ToleratedDepth, TopK,
-    contribution, contribution_under,
+    RankedStreamImpl, ScoreExactness, ServiceLevel, StreamContract, StreamEnding, Term,
+    ToleratedDepth, TopK, contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -4558,7 +4558,10 @@ fn a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end
     // And the same pair on the in-crate producer that actually mints the
     // refusal. Asked too early it refuses; asked after its rows ran out — one
     // more pull, nothing else changed — it answers with the count it emitted.
-    let mut stream = RankedStreamImpl::new(vec![(1, Term::new("a")), (2, Term::new("b"))]);
+    let mut stream = RankedStreamImpl::new(
+        vec![(1, Term::new("a")), (2, Term::new("b"))],
+        StreamEnding::Exhausted,
+    );
     assert!(
         block_on(stream.next())
             .expect("the first row pulls")

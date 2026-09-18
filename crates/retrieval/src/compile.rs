@@ -101,12 +101,45 @@
 //! which is also how the planner expresses it, since it records a depth only for
 //! a stratum a surviving producer ranks under. Absence emits no unit and claims
 //! nothing; a zero would have claimed everything.
+//!
+//! # The emitted bound is one row deeper than the depth, and that row is a probe
+//!
+//! A unit bounded at exactly its depth cannot tell the two endings apart that
+//! its consumer most needs to distinguish. A producer holding nine rows read at
+//! depth three and a producer holding exactly three rows read at depth three
+//! both hand back three rows and an empty cursor, so an executor that only ever
+//! saw `depth` rows had to guess — and the guess it used to make was
+//! [`ProducerStatus::Exhausted`](crate::ProducerStatus), which is the strongest
+//! completeness claim this layer can utter, minted for a read the plan itself
+//! cut short. That is the zero-depth fault one size larger: a bound on the read
+//! silently becoming a statement about the answer.
+//!
+//! So the emitted bound is `min(depth + 1, declared row bound)`, on the branch,
+//! on the unit, and in the depth argument of a producer that takes the depth
+//! itself — because for such a producer the argument *is* the only bound there
+//! is, and a probe the producer never hears about is not a probe. The extra row
+//! is a **read, never a value**: [`execute`](crate::execute) emits at most
+//! `depth` rows onto the stream and uses the arrival of the `depth + 1`-th only
+//! to end the stream [`DepthReached`](crate::ProducerReceipt::DepthReached)
+//! instead of `Exhausted`. No plan field, no identity and no recorded
+//! resolution moves by one: [`PlannedResolution::requested_depth`] is the
+//! depth, and so is [`StratumUnit::depth`].
+//!
+//! The `min` is what keeps the probe from becoming an over-refusal of its own.
+//! A producer that declared it can yield `n` rows per invocation has already
+//! promised there is no `n + 1`-th, so asking for one is asking a question
+//! whose answer the registry already gave — and at `depth == n` the probe would
+//! push the emitted bound past a bound admission itself enforces
+//! ([`AdmissionError::DepthBoundViolation`]). At that depth exactly `depth` is
+//! emitted and `Exhausted` is honest by contract. A registry that declared no
+//! row count at all promised nothing, so there is nothing to read the answer
+//! off and the probe is the only way to learn it.
 
 use std::collections::BTreeMap;
 
 use purrdf_sparql_eval::{PfDescriptor, RankedDeclaration, RegistryId};
 
-use crate::admission::{AdmissionEnvironment, AdmissionError, admit_plan};
+use crate::admission::{AdmissionEnvironment, AdmissionError, RowBound, admit_plan};
 use crate::id::PlanId;
 use crate::iri::Iri;
 use crate::matching::{PlacementError, place, render_slots};
@@ -135,6 +168,22 @@ pub struct StratumUnit {
     /// was *compiled against* stated — an identity `execute` re-checks before it
     /// runs anything.
     pub contract: StreamContract,
+    /// The stratum's planned depth: the most rows this unit may contribute to
+    /// the answer, exactly as [`Plan::stratum_depths`] records it.
+    ///
+    /// This is **not** the `LIMIT` in [`Self::sparql`]. The emitted bound is one
+    /// row deeper wherever the registry left room for it, so that the executor
+    /// can tell a read the depth cut from a read that ran out; see this module's
+    /// header. The probe row is a read and never a value, so the number a
+    /// consumer reasons about — and the number every other field of this bundle
+    /// is keyed to — is this one.
+    ///
+    /// It travels on the unit rather than being looked up again from the plan
+    /// for the reason [`Self::contract`] does: [`execute`](crate::execute) is
+    /// handed the compiled bundle and nothing else, and a depth re-read from a
+    /// plan at execution time would be a fact about that plan rather than about
+    /// the text that is actually being run.
+    pub depth: u32,
 }
 
 /// The admitted, compiled plan: the query units plus the identities that pin them.
@@ -233,11 +282,29 @@ pub fn compile(
             continue;
         };
         let declaration = ranked_declaration(binding, &admitted.descriptors)?;
-        let sparql = emit_unit(plan, binding, declaration, &admitted.descriptors, *depth)?;
+        // The bound the registry declared for this stratum, taken from the map
+        // admission already decided the depth against. A stratum the registry
+        // declares nothing about cannot appear here — admission refuses a
+        // binding whose stratum no ranked producer emits under — but the lookup
+        // is still total, and the total answer is the one that enforces nothing:
+        // `Undeclared` is silence, and silence bounds no read.
+        let bound = admitted
+            .stratum_row_bounds
+            .get(stratum)
+            .copied()
+            .unwrap_or(RowBound::Undeclared);
+        let sparql = emit_unit(
+            plan,
+            binding,
+            declaration,
+            &admitted.descriptors,
+            emitted_limit(*depth, bound),
+        )?;
         units.push(StratumUnit {
             stratum: stratum.clone(),
             sparql,
             contract: StreamContract::declared(declaration),
+            depth: *depth,
         });
     }
     units.sort_by(|left, right| left.stratum.cmp(&right.stratum));
@@ -290,27 +357,57 @@ fn ranked_declaration<'a>(
         .ok_or_else(|| malformed(binding, "declares no ranked capability to compile against"))
 }
 
-/// Render one stratum's `SELECT` over its one `binding` at `depth`.
+/// The row bound the emitted text actually carries for a stratum planned at
+/// `depth` over a producer whose registry declared `bound`.
+///
+/// `min(depth + 1, declared)`, and the whole argument for both halves is in this
+/// module's header. The addition saturates because it is arithmetic on untrusted
+/// input, and the saturation is not a silent narrowing: at `u32::MAX` the extra
+/// row is not expressible in a `LIMIT` this emitter can write, so the read ends
+/// exactly where it would have ended anyway and is reported as what it is.
+///
+/// A declared bound wider than a `u32` is clamped before the `min`, which cannot
+/// change the answer: `depth + 1` is a `u32`, so a wider bound can never be the
+/// smaller of the two.
+fn emitted_limit(depth: u32, bound: RowBound) -> u32 {
+    let probe = depth.saturating_add(1);
+    match bound {
+        // The producer already promised there is no row past `declared`, so a
+        // probe for one asks a question the registry answered at registration —
+        // and at `depth == declared` it would also push the emitted bound past
+        // the very number admission holds the depth to.
+        RowBound::Declared(declared) => u32::try_from(declared).unwrap_or(u32::MAX).min(probe),
+        // Nothing was declared, so there is no promise to read the answer off
+        // and the probe is the only way to learn whether the depth cut the read.
+        RowBound::Undeclared => probe,
+    }
+}
+
+/// Render one stratum's `SELECT` over its one `binding`, bounded at `limit`.
+///
+/// `limit` is the emitted bound from [`emitted_limit`], not the stratum's depth:
+/// the unit is written one row deeper than the plan reads wherever the registry
+/// left room, so the executor can tell a cut read from an exhausted one.
 fn emit_unit(
     plan: &Plan,
     binding: &ProducerBinding,
     declaration: &RankedDeclaration,
     descriptors: &BTreeMap<String, PfDescriptor>,
-    depth: u32,
+    limit: u32,
 ) -> Result<String, AdmissionError> {
-    let branch = emit_branch(plan, binding, declaration, descriptors, depth)?;
+    let branch = emit_branch(plan, binding, declaration, descriptors, limit)?;
     Ok(format!(
-        "SELECT ?{CANDIDATE_NAME} WHERE {{\n  {branch}\n}}\nLIMIT {depth}"
+        "SELECT ?{CANDIDATE_NAME} WHERE {{\n  {branch}\n}}\nLIMIT {limit}"
     ))
 }
 
-/// Render the stratum's producer as the unit's one branch.
+/// Render the stratum's producer as the unit's one branch, bounded at `limit`.
 fn emit_branch(
     plan: &Plan,
     binding: &ProducerBinding,
     declaration: &RankedDeclaration,
     descriptors: &BTreeMap<String, PfDescriptor>,
-    depth: u32,
+    limit: u32,
 ) -> Result<String, AdmissionError> {
     let descriptor = descriptors
         .get(&binding.producer)
@@ -344,7 +441,7 @@ fn emit_branch(
         declaration,
         &plan.request_terms,
         &binding.request_terms,
-        depth,
+        limit,
     )
     .map_err(|error| unsatisfiable(binding, &error))?;
     let candidate = declaration.candidate_position;
@@ -360,10 +457,12 @@ fn emit_branch(
     let args = render_slots(&invocation).map_err(|error| unrenderable(binding, &error))?;
     let subject_text = args[..subject].join(" ");
     let object_text = args[subject..].join(" ");
-    // A producer that took the depth as an argument bounds itself; one that did
-    // not is bounded here, per this module's header.
+    // A producer that took the depth as an argument bounds itself — with the
+    // number `place` just rendered into that argument, which is the emitted
+    // bound and therefore carries the probe row too; one that did not is bounded
+    // here, per this module's header.
     let limit = if declaration.depth_placement.is_none() {
-        format!(" LIMIT {depth}")
+        format!(" LIMIT {limit}")
     } else {
         String::new()
     };
