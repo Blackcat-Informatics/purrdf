@@ -744,12 +744,12 @@ stderr — including when the shapes came from a product.
 ## From Python
 
 ```python
-from purrdf import shacl
+from purrdf import shapes
 
-prepared = shacl.Shapes(shapes_ttl, base="https://example.org/shapes").prepare()
-product = prepared.to_product()          # bytes, byte-deterministic
+prepared = shapes.Shapes(shapes_ttl, base="https://example.org/shapes").prepare()
+product = prepared.to_product()           # bytes, byte-deterministic
 
-view = shacl.ShapesProduct.open(product) # framing and integrity only
+view = shapes.ShapesProduct.open(product) # framing and integrity only
 print(view.format_version())             # 1
 print(view.stage_known())                # True
 print(view.identity_digest())            # 64 lowercase hex characters
@@ -780,8 +780,13 @@ the value `identity_digest()` reports, so it can be handed straight back to
 for it.
 
 `ShapesProduct.certify()` is the cold path; call it from a build step or a test.
-Refusals raise `shacl.ShapesProductError`, whose `.dimension` carries the label
+Refusals raise `shapes.ShapesProductError`, whose `.dimension` carries the label
 string (or `None` when no product was ever inspected).
+
+The submodule is `purrdf.shapes`. `purrdf.shacl` is a back-compatible alias for
+the same object and keeps working, but new code should spell the canonical name:
+the alias predates the surface this page describes, and the two names resolving to
+one module is the kind of thing that reads as two APIs to someone learning it.
 
 `admit_expecting(expected_identity)` is `admit()` bound to the product you meant:
 it takes the 64 hexadecimal digits `identity_digest()` reports, and raises

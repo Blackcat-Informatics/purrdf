@@ -76,6 +76,26 @@
  * for all four; splitting them would break the same consumer four times for one
  * reason. A FIFTH incompatible change made after `0.7.0` ships must bump again — the
  * ledger here is what makes that judgement possible.
+ *
+ * # Additive changes that rode `0.7.0` without moving it
+ *
+ * The prepared-shapes-product surface added eight exported symbols —
+ * `purrdf_shapes_product_encode`, `_open`, `_admit`, `_admit_expecting`, `_rebuild`,
+ * `_rebuild_expecting`, `_certify` and `_error_dimension` — and APPENDED
+ * `PurrdfStatus::ShapesProductError = 11`. None of them is in the incompatible set
+ * enumerated on [`PURRDF_ABI_MAJOR`]: no existing prototype was retyped, reordered,
+ * removed, or given a parameter, and no discriminant was renumbered. A host compiled
+ * against the previous header calls every function it called before, with the same
+ * arguments, and receives the same values — it simply cannot see the new ones, which
+ * is what "additive" means and why the version does not move for it.
+ *
+ * They are recorded here anyway, because this ledger is the only place the fifth-change
+ * judgement above can be made from, and a reader counting incompatible changes needs to
+ * see what was considered and excluded rather than inferring it from silence. The
+ * appended status is the one worth a second look: appending is sound, but RENUMBERING
+ * a status is invisible to `tests/abi_signatures.rs` — that snapshot compares
+ * prototypes and never sees an enumerator's value move — so the discriminants are
+ * pinned separately by `the_status_enum_is_append_only` in `tests/abi.rs`.
  */
 #define PURRDF_ABI_MINOR 7
 
