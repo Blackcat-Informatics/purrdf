@@ -43,14 +43,14 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, btree_map};
 
-use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering};
+use purrdf_sparql_eval::DuplicatePolicy;
 use purrdf_text::Fixed;
 
 use crate::error::FusionError;
 use crate::fusion_profile::FusionProfile;
 use crate::id::PlanId;
 use crate::iri::{Iri, Term};
-use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
+use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
 
 /// A candidate's identity in the frontier: its canonical term.
 pub type CandidateId = Term;
@@ -279,8 +279,13 @@ pub struct FusionStream<S: RankedStream> {
     next_ranks: Vec<u64>,
     rows_pulled: Vec<u64>,
     last_contribution: Vec<Option<Fixed>>,
-    /// Each stream's declared contract, read once at construction.
-    contracts: Vec<StreamContract>,
+    /// Per-stream count of adjacent ranks whose contributions were equal.
+    ///
+    /// Counted on the comparison [`Self::check_ordering`] already performs, so
+    /// it costs one increment on a compare that happens either way. It is the
+    /// exact number of ranks this run could not separate — an observation, not
+    /// the profile's a-priori bound.
+    collisions_observed: Vec<u64>,
     /// The identity set of every stream that declared
     /// [`DuplicatePolicy::Allowed`], and `None` for every stream that declared
     /// [`DuplicatePolicy::Unique`].
@@ -312,11 +317,13 @@ impl<S: RankedStream> FusionStream<S> {
     /// Build a fusion engine over `streams` under `profile`.
     ///
     /// Every stream's declared contract is read here, before any row is pulled,
-    /// through [`RankedStream::contract`] — so what the engine holds and what it
-    /// refuses is decided by the producers' own declarations rather than by one
-    /// law applied to all of them. A stream declaring
-    /// [`DuplicatePolicy::Allowed`] gets an identity set to de-duplicate
-    /// against; one declaring [`DuplicatePolicy::Unique`] gets none.
+    /// through [`RankedStream::contract`] — so what the engine holds is decided
+    /// by the producers' own declarations rather than by one law applied to all
+    /// of them. A stream declaring [`DuplicatePolicy::Allowed`] gets an identity
+    /// set to de-duplicate against; one declaring [`DuplicatePolicy::Unique`]
+    /// gets none. The contract is consumed here rather than retained: its one
+    /// remaining term is already structural in `seen_items`, and nothing later
+    /// in the engine asks a stream what it declared.
     ///
     /// No plan identity is attached; use [`with_plan_id`](Self::with_plan_id) to
     /// name the pinned plan the streams came from. [`fuse`](crate::fuse) does
@@ -326,13 +333,9 @@ impl<S: RankedStream> FusionStream<S> {
     #[must_use]
     pub fn new(streams: Vec<(Iri, S)>, profile: FusionProfile) -> Self {
         let count = streams.len();
-        let contracts: Vec<StreamContract> = streams
+        let seen_items = streams
             .iter()
-            .map(|(_, stream)| stream.contract())
-            .collect();
-        let seen_items = contracts
-            .iter()
-            .map(|contract| match contract.duplicates {
+            .map(|(_, stream)| match stream.contract().duplicates {
                 DuplicatePolicy::Unique => None,
                 DuplicatePolicy::Allowed => Some(BTreeSet::new()),
             })
@@ -347,7 +350,7 @@ impl<S: RankedStream> FusionStream<S> {
             next_ranks: vec![1; count],
             rows_pulled: vec![0; count],
             last_contribution: vec![None; count],
-            contracts,
+            collisions_observed: vec![0; count],
             seen_items,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
@@ -538,8 +541,6 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 .into());
             }
-            self.check_ordering(index, rank, producer_contribution)?;
-
             // The stratum is read by reference, not cloned: an `Iri` owns its
             // text, so cloning one here would be a heap allocation on every row
             // every stream emits, to serve a lookup that only borrows and an
@@ -561,6 +562,13 @@ impl<S: RankedStream> FusionStream<S> {
                 }
                 .into());
             }
+
+            // Ordered after the re-derivation on purpose: the monotone check and
+            // the collision count are claims about the *profile's* value at this
+            // rank, so they must run on a value already proven to be that one. A
+            // forged contribution is rejected above as the mismatch it is,
+            // rather than reported as a shape of the decay curve.
+            self.check_ordering(index, producer_contribution)?;
 
             self.last_contribution[index] = Some(producer_contribution);
             self.next_ranks[index] = rank + 1;
@@ -599,22 +607,25 @@ impl<S: RankedStream> FusionStream<S> {
         }
     }
 
-    /// Hold stream `index`'s contribution sequence to the ordering it declared.
+    /// Hold stream `index`'s contribution sequence to non-increase, and count
+    /// the adjacent ranks the profile's arithmetic can no longer separate.
     ///
-    /// Both declarations forbid a contribution that *rises* with rank, because
-    /// the threshold over the stream heads would otherwise not be an upper bound
-    /// and the whole certification argument would fail. They differ on equality:
-    /// a [`RankOrdering::NonIncreasing`] producer said equal scores may appear in
-    /// any order, so two adjacent ranks carrying one contribution is exactly
-    /// what it declared; a [`RankOrdering::StrictlyDescending`] producer said
-    /// every row has an unambiguous rank, and a repeated contribution is the
-    /// condition under which the fused sum can no longer tell those ranks apart.
-    fn check_ordering(
-        &self,
-        index: usize,
-        rank: u64,
-        contribution: Fixed,
-    ) -> Result<(), ProtocolError> {
+    /// A contribution that *rises* with rank is refused for every stream,
+    /// whatever ordering its producer declared, because the threshold over the
+    /// stream heads would otherwise not be an upper bound and the whole
+    /// certification argument would fail.
+    ///
+    /// Equality is **measured, not refused**. By the time a value reaches here it
+    /// has been proven equal to `contribution_under(decay, weight, rank)`, and
+    /// the ranks that produced it are already contiguous and ascending — so an
+    /// equal adjacent pair carries no information about the producer at all. It
+    /// says the profile's fixed-point decay stopped separating those two ranks at
+    /// this depth, which is a property of `(decay rule, K, weight, depth)`.
+    /// Refusing it rejected conforming streams for the consumer's own
+    /// quantization. The count is reported per stratum in the fused trailer,
+    /// where it is an exact observation rather than a bound inferred from the
+    /// profile.
+    fn check_ordering(&mut self, index: usize, contribution: Fixed) -> Result<(), ProtocolError> {
         let Some(previous) = self.last_contribution[index] else {
             return Ok(());
         };
@@ -624,13 +635,8 @@ impl<S: RankedStream> FusionStream<S> {
                 got: contribution,
             });
         }
-        if contribution == previous
-            && self.contracts[index].ordering == RankOrdering::StrictlyDescending
-        {
-            return Err(ProtocolError::RepeatedContribution {
-                rank,
-                value: contribution,
-            });
+        if contribution == previous {
+            self.collisions_observed[index] += 1;
         }
         Ok(())
     }

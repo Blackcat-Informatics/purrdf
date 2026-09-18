@@ -53,7 +53,7 @@ use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
     DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError,
-    RankOrdering, RankedStream, StreamContract, Term, TopK, contribution, fuse,
+    RankedStream, StreamContract, Term, TopK, contribution, fuse,
 };
 
 // ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ impl RankedStream for LazyStream {
     }
 
     fn contract(&self) -> StreamContract {
-        StreamContract::new(RankOrdering::StrictlyDescending, self.duplicates)
+        StreamContract::new(self.duplicates)
     }
 }
 

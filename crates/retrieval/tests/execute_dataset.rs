@@ -597,8 +597,8 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
 
         let stats = statistics();
         let bundle = compiled(&registry, &stats);
-        let expected = StreamContract::new(ordering, duplicates);
-        let beta = StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique);
+        let expected = StreamContract::new(duplicates);
+        let beta = StreamContract::new(DuplicatePolicy::Unique);
 
         let unit = bundle
             .units

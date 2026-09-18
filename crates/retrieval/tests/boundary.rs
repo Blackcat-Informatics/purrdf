@@ -132,7 +132,7 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
 /// spelled once so the registered declaration above and the streams below cannot
 /// drift into describing two different promises.
 fn strict_unique() -> StreamContract {
-    StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique)
+    StreamContract::new(DuplicatePolicy::Unique)
 }
 
 fn lexical_term() -> RequestTerm {

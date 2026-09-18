@@ -22,20 +22,34 @@
 //! [`RankedStream::contract`], and every refusal below that names an ordering or
 //! a repeat says which declaration it was measured against.
 
-use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering, RankedDeclaration};
+use purrdf_sparql_eval::{DuplicatePolicy, RankedDeclaration};
 use purrdf_text::Fixed;
 
 use crate::iri::Term;
 
-/// The two promises a ranked producer makes about one invocation's rows: how
-/// they are ordered, and whether an item may repeat.
+/// The promise a ranked producer makes about one invocation's rows: whether an
+/// item may repeat.
 ///
-/// Both halves are the producer's own — [`RankedDeclaration::ordering`] and
-/// [`RankedDeclaration::duplicates`], supplied by the host where the producer is
-/// registered. Neither is inferred and neither has a default: a stream either
-/// repeats items or it does not, and the consumer's behaviour differs, so there
-/// is no honest "unstated" answer the way there is for a stream that descends
-/// from no plan ([`RankedStream::plan_id`]).
+/// It is the producer's own — [`RankedDeclaration::duplicates`], supplied by the
+/// host where the producer is registered. It is not inferred and has no default:
+/// a stream either repeats items or it does not, and the consumer's behaviour
+/// differs, so there is no honest "unstated" answer the way there is for a
+/// stream that descends from no plan ([`RankedStream::plan_id`]).
+///
+/// # Why the ordering declaration is not carried here
+///
+/// A producer also declares a [`RankOrdering`](purrdf_sparql_eval::RankOrdering),
+/// and fusion does not read it.
+/// That is not an oversight. The only quantity fusion can observe is the
+/// *contribution*, which it computes itself from `(decay rule, K, weight, rank)`
+/// and then refuses if the producer's copy disagrees
+/// ([`ProtocolError::ContributionMismatch`]); the producer supplies no term of
+/// it. Ranks are separately held contiguous and ascending for every stream, so
+/// the ordering claim is already enforced on the quantity it is actually about.
+/// Reading the declaration in contribution space instead refused conforming
+/// producers whenever fixed-point decay quantized two adjacent ranks to one
+/// value — a property of the profile's arithmetic and of the depth read, never
+/// of the stream.
 ///
 /// # Why the contract travels with the stream
 ///
@@ -53,10 +67,6 @@ use crate::iri::Term;
 /// stream that is actually being read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StreamContract {
-    /// The ordering guarantee the producer declared. Fusion holds a
-    /// [`RankOrdering::StrictlyDescending`] stream to strict descent and a
-    /// [`RankOrdering::NonIncreasing`] one to non-increasing.
-    pub ordering: RankOrdering,
     /// The duplicate handling the producer declared. A
     /// [`DuplicatePolicy::Unique`] stream is believed and a repeat is a protocol
     /// violation; a [`DuplicatePolicy::Allowed`] stream is de-duplicated by the
@@ -69,18 +79,14 @@ impl StreamContract {
     #[must_use]
     pub const fn declared(declaration: &RankedDeclaration) -> Self {
         Self {
-            ordering: declaration.ordering,
             duplicates: declaration.duplicates,
         }
     }
 
     /// A contract stated directly, for a stream a caller built itself.
     #[must_use]
-    pub const fn new(ordering: RankOrdering, duplicates: DuplicatePolicy) -> Self {
-        Self {
-            ordering,
-            duplicates,
-        }
+    pub const fn new(duplicates: DuplicatePolicy) -> Self {
+        Self { duplicates }
     }
 }
 
@@ -157,41 +163,38 @@ pub enum ProtocolError {
     /// must be monotonically non-increasing with rank, or the threshold that
     /// bounds fusion would not be an upper bound.
     ///
-    /// Raised under either [`RankOrdering`], because neither admits a
-    /// contribution that rises.
+    /// Raised for every stream, whatever ordering its producer declared: no
+    /// declaration admits a contribution that rises.
+    ///
+    /// # This is an invariant guard, not a producer diagnostic
+    ///
+    /// A conforming stream cannot reach it, and neither can a hostile one. The
+    /// checked value has already been proven equal to the profile's own
+    /// `contribution_under(decay, weight, rank)`, over ranks already held
+    /// contiguous and ascending, and that function is non-increasing in the rank
+    /// for every rule and weight. A producer that supplies a rising value is
+    /// therefore supplying one the profile did not compute, and is refused as
+    /// the [`Self::ContributionMismatch`] that is — naming it an ordering fault
+    /// would blame the stream's shape for a wrong number.
+    ///
+    /// It is kept because the certification argument depends on non-increase:
+    /// the threshold over the stream heads is an upper bound only while it
+    /// holds. A dependency that load-bearing gets a named error at the point it
+    /// is relied on rather than an unstated assumption.
+    ///
+    /// Equality between adjacent ranks is **not** raised here and is not an
+    /// error. The contribution is the consumer's own function of the rank, so
+    /// two adjacent ranks carry one value exactly when the profile's fixed-point
+    /// decay has stopped separating them at that depth. The answer stays correct
+    /// and deterministic there — the declared tie-break is total — at a lower
+    /// rank resolution, which the fused trailer reports per stratum rather than
+    /// refusing.
     #[error("stream contribution rose from {previous:?} to {got:?} with rank")]
     NonMonotoneContribution {
         /// The previous rank's contribution.
         previous: Fixed,
         /// The contribution that rose above it.
         got: Fixed,
-    },
-
-    /// A producer that declared [`RankOrdering::StrictlyDescending`] emitted the
-    /// same contribution at two adjacent ranks.
-    ///
-    /// The declaration says every row has an unambiguous rank; two adjacent
-    /// ranks carrying one contribution is exactly the condition under which the
-    /// fused sum stops separating them, so the stream is no longer strictly
-    /// descending in the only quantity fusion sums. A producer whose ranks may
-    /// legitimately tie declares [`RankOrdering::NonIncreasing`] and is admitted
-    /// here, which is the difference between the two spellings.
-    ///
-    /// A plan admitted through [`compile`](crate::compile) cannot reach this: a
-    /// contribution is the profile's own function of the rank, and
-    /// [`AdmissionError::DepthBeyondMonotoneRange`](crate::AdmissionError::DepthBeyondMonotoneRange)
-    /// already refuses a per-stratum depth past the rank at which that function
-    /// stops separating adjacent ranks. This is the same claim held against a
-    /// stream that reached fusion without passing the waist — a hand-built one,
-    /// or one read deeper than its weight can order.
-    #[error(
-        "stream declared strictly descending contributions but repeated {value:?} at rank {rank}"
-    )]
-    RepeatedContribution {
-        /// The 1-based rank that repeated its predecessor's contribution.
-        rank: u64,
-        /// The contribution both ranks carried.
-        value: Fixed,
     },
 
     /// A producer's contribution does not equal the profile's declared

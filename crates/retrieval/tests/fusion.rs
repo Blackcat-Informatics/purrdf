@@ -17,7 +17,7 @@ use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult,
     FusionStream, Iri, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K,
-    RankOrdering, RankedStream, StreamContract, Term, TopK, contribution, contribution_under,
+    RankedStream, StreamContract, Term, TopK, contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -86,14 +86,7 @@ enum Step {
 /// distinct items at contiguous ranks, and it is what `register_ranked`'s own
 /// fixtures elsewhere in the crate state.
 fn strict_unique() -> StreamContract {
-    StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Unique)
-}
-
-/// The honest declaration for a producer whose adjacent ranks can carry one
-/// contribution — a stratum weighted so lightly that the truncation collides.
-/// Its rows still never rise; they are simply allowed to tie.
-fn non_increasing_unique() -> StreamContract {
-    StreamContract::new(RankOrdering::NonIncreasing, DuplicatePolicy::Unique)
+    StreamContract::new(DuplicatePolicy::Unique)
 }
 
 /// A producer whose rows and failures are pre-scripted.
@@ -1711,12 +1704,11 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
         ),
         (
             stratum("sparse"),
-            // `NonIncreasing`, because under this weight that is what its rows
-            // honestly are: every contribution truncates to zero, so no two
-            // adjacent ranks differ. A producer declaring strict descent here
-            // would be declaring something this profile's arithmetic cannot
-            // deliver, and is refused for exactly that — see
-            // `the_declared_ordering_decides_whether_a_repeated_contribution_is_refused`.
+            // Under this weight every contribution truncates to zero, so no two
+            // adjacent ranks differ. That is a property of the profile's
+            // arithmetic at this weight, not a claim the producer made or could
+            // have made — see
+            // `the_contribution_law_no_longer_depends_on_a_declared_ordering`.
             MockStream::new(
                 vec![
                     row(1, ZERO_CONTRIBUTING_WEIGHT, K, "z"),
@@ -1724,7 +1716,7 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
                 ],
                 exhausted(2),
             )
-            .declaring(non_increasing_unique()),
+            .declaring(strict_unique()),
         ),
     ];
     let result = block_on(run_fuse(streams, &profile));
@@ -1828,7 +1820,7 @@ fn an_exhausted_zero_contribution_stream_delays_no_certification() {
 
 /// `DuplicatePolicy::Allowed`, with the strict ordering the fixtures' rows keep.
 fn allowed_duplicates() -> StreamContract {
-    StreamContract::new(RankOrdering::StrictlyDescending, DuplicatePolicy::Allowed)
+    StreamContract::new(DuplicatePolicy::Allowed)
 }
 
 /// Two streams: `dense` as scripted, and a one-row `sparse` stream that stays
@@ -2040,7 +2032,7 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
 }
 
 #[test]
-fn the_declared_ordering_decides_whether_a_repeated_contribution_is_refused() {
+fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
     // A contribution is the profile's own function of the rank, so a weight
     // small enough that the truncation collides makes two adjacent ranks carry
     // one value. `monotone_depth` is the exact rank at which that first happens,
@@ -2054,8 +2046,13 @@ fn the_declared_ordering_decides_whether_a_repeated_contribution_is_refused() {
         "this fixture needs a profile whose adjacent ranks collide, or it tests nothing"
     );
 
-    // The criterion: a producer that declared every rank unambiguous, refused
-    // for a rank the fused sum can no longer separate from its predecessor.
+    // The criterion, inverted from what this test used to assert. The stream is
+    // well formed in every respect a producer controls: ranks 1 and 2, ascending,
+    // contiguous, unique items, and each contribution exactly the one the profile
+    // computes. The equality between them is the consumer's own truncation, so it
+    // is not a protocol violation and is no longer refused. The rows fuse, and
+    // the tie falls through to the declared tie-break, whose next key is best
+    // stratum rank ascending — which returns them in the producer's own order.
     let streams = vec![(
         stratum("thin"),
         MockStream::new(
@@ -2065,31 +2062,6 @@ fn the_declared_ordering_decides_whether_a_repeated_contribution_is_refused() {
             ],
             exhausted(2),
         ),
-    )];
-    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
-        streams, &profile, TOP_K,
-    ));
-    assert!(
-        matches!(
-            &result,
-            Err(FusionError::Protocol(error))
-                if matches!(**error, ProtocolError::RepeatedContribution { rank: 2, value } if value == second)
-        ),
-        "expected RepeatedContribution at rank 2, got {result:?}"
-    );
-
-    // THE NEIGHBOURING CASE, and the whole reason the two spellings exist: the
-    // same stream, declaring that its equal scores are interchangeable, fuses.
-    let streams = vec![(
-        stratum("thin"),
-        MockStream::new(
-            vec![
-                Step::Row(1, first, Term::new("a")),
-                Step::Row(2, second, Term::new("b")),
-            ],
-            exhausted(2),
-        )
-        .declaring(non_increasing_unique()),
     )];
     let fused = block_on(run_fuse(streams, &profile));
     assert_eq!(
@@ -2099,14 +2071,31 @@ fn the_declared_ordering_decides_whether_a_repeated_contribution_is_refused() {
             .map(|fused_row| fused_row.entity.clone())
             .collect::<Vec<_>>(),
         vec![Term::new("a"), Term::new("b")],
-        "a non-increasing producer's tied ranks are admitted, in rank order"
+        "a collided adjacent pair fuses, in rank order"
+    );
+    // The producer is still held to the rows it claimed, so this is not a case
+    // of fusion having stopped checking the stream.
+    assert_eq!(
+        fused.trailer.statuses[&stratum("thin")],
+        ProducerStatus::Exhausted { rows_emitted: 2 },
+        "both rows were pulled and the receipt is measured against them"
     );
 
-    // And a contribution that *rises* is refused under either declaration,
-    // because the threshold over the heads would stop being an upper bound.
+    // And a contribution that *rises* never enters fusion, because the threshold
+    // over the heads would stop being an upper bound. The ordering declaration is
+    // gone, so the axis that remains is the duplicate policy: the refusal holds
+    // for every stream, not for a subset that declared something.
+    //
+    // It is refused as the `ContributionMismatch` it is. The only way to present
+    // a rising value is to supply one the profile did not compute, and naming
+    // that "your contribution rose with rank" would blame the stream's shape for
+    // a wrong number — the same conflation this test's subject was. Non-increase
+    // of the profile's own curve is proven where it is true, as a property of
+    // `DecayRule` (`reciprocal_rank::tests::every_decay_rule_is_non_increasing_in_the_rank`);
+    // `NonMonotoneContribution` remains as the typed guard on that invariant.
     let first_rank = contribution(Fixed::ONE, 1, K).expect("fits");
     let risen = Fixed::from_raw(first_rank.into_raw() + 1);
-    for contract in [strict_unique(), non_increasing_unique()] {
+    for contract in [strict_unique(), allowed_duplicates()] {
         let heavy = crate::profile(&[("thin", Fixed::ONE)], K);
         let streams = vec![(
             stratum("thin"),
@@ -2126,9 +2115,9 @@ fn the_declared_ordering_decides_whether_a_repeated_contribution_is_refused() {
             matches!(
                 &result,
                 Err(FusionError::Protocol(error))
-                    if matches!(**error, ProtocolError::NonMonotoneContribution { .. })
+                    if matches!(**error, ProtocolError::ContributionMismatch { .. })
             ),
-            "a rising contribution is refused under {contract:?}, got {result:?}"
+            "a rising contribution never enters fusion under {contract:?}, got {result:?}"
         );
     }
 }

@@ -655,4 +655,44 @@ mod tests {
         assert_eq!(weighted(negative, 1, 1).into_raw(), -3);
         assert_eq!(weighted(Fixed::from_raw(7), 1, 1).into_raw(), 3);
     }
+
+    /// Non-increase is a property of the decay rule, not a per-row observation.
+    ///
+    /// The fusion engine refuses a contribution that rises with rank, because
+    /// the threshold over the stream heads would otherwise not be an upper bound
+    /// and certification would be unsound. That refusal is only ever reachable
+    /// by a producer supplying a value the profile did not compute — which is
+    /// rejected as the mismatch it is — so the invariant it relies on has to be
+    /// proven here, at its source, rather than sampled one adjacent pair at a
+    /// time by whatever streams happen to be fused.
+    ///
+    /// Both rules, across the full span where the arithmetic changes character:
+    /// below the collision bound, across it, and far past it where every pair is
+    /// a plateau.
+    #[test]
+    fn every_decay_rule_is_non_increasing_in_the_rank() {
+        let weights = [
+            Fixed::from_raw(1),
+            Fixed::from_raw(1_000),
+            Fixed::from_raw(1_000_000),
+            Fixed::from_raw(SCALE),
+        ];
+        for decay in [truncated(60), folded(60), truncated(1), folded(1)] {
+            for weight in weights {
+                let mut previous = contribution_under(decay, weight, 1)
+                    .expect("a positive weight at rank one does not overflow");
+                for rank in 2..4_000 {
+                    let current = contribution_under(decay, weight, rank)
+                        .expect("a positive weight at a 1-based rank does not overflow");
+                    assert!(
+                        current <= previous,
+                        "{decay:?} at weight {weight:?} rose from {previous:?} to {current:?} \
+                         between ranks {} and {rank}",
+                        rank - 1
+                    );
+                    previous = current;
+                }
+            }
+        }
+    }
 }

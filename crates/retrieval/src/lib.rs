@@ -59,16 +59,21 @@
 //! contribution bound the fused top-k stopped reading it at.
 //!
 //! That includes what each producer declared about its *own* rows. A ranked
-//! producer states its rank ordering and its duplicate handling where it is
-//! registered, and fusion is the consumer both declarations were written for, so
-//! they are carried from the registry to that consumer as a [`StreamContract`] —
-//! read at the admission waist into [`StratumUnit`], tagged onto every
-//! [`StratumStream`], reported through [`RankedStream::contract`]. A producer
-//! that declared [`DuplicatePolicy::Allowed`] is de-duplicated, which is what
-//! that policy says its consumer must do; one that declared
-//! [`DuplicatePolicy::Unique`] is believed and costs no per-stream identity set
-//! at all. A [`RankOrdering::StrictlyDescending`] stream is held to strict
-//! descent and a [`RankOrdering::NonIncreasing`] one is not.
+//! producer states its duplicate handling where it is registered, and fusion is
+//! the consumer that declaration was written for, so it is carried from the
+//! registry to that consumer as a [`StreamContract`] — read at the admission
+//! waist into [`StratumUnit`], tagged onto every [`StratumStream`], reported
+//! through [`RankedStream::contract`]. A producer that declared
+//! [`DuplicatePolicy::Allowed`] is de-duplicated, which is what that policy says
+//! its consumer must do; one that declared [`DuplicatePolicy::Unique`] is
+//! believed and costs no per-stream identity set at all.
+//!
+//! A producer's [`RankOrdering`] is deliberately *not* carried here. Its claim
+//! is about ranks, and ranks are held contiguous and ascending for every stream
+//! regardless of what was declared. The only quantity fusion can observe is the
+//! contribution, which it computes itself and refuses on mismatch, so the
+//! producer supplies no term of it; a declaration read in contribution space
+//! would refuse conforming streams for the consumer's own quantization.
 //!
 //! # Fusion is a law, not a knob
 //!
@@ -88,11 +93,12 @@
 //! depth are one coupled quantity: past a depth those first three decide,
 //! adjacent ranks stop producing distinct contributions and the fused score
 //! stops separating them. Nothing errors there and nothing becomes
-//! nondeterministic — it simply stops being rank-ordered, which is exactly the
-//! kind of quiet degradation this crate refuses to leave unsaid.
-//! [`FusionProfile::monotone_depth`] reports the exact bound, and admission
-//! refuses a depth beyond it whenever the environment names the profile the
-//! answer will be fused under.
+//! nondeterministic — the declared tie-break is total, so the order simply falls
+//! through to its later keys — which is exactly the kind of quiet degradation
+//! this crate refuses to leave unsaid. It is said rather than refused:
+//! [`FusionProfile::monotone_depth`] reports the exact bound before a plan runs,
+//! and the fused trailer reports, per stratum, how deep the answer in hand was
+//! actually read against it.
 //!
 //! Which rule a profile names decides how much depth a weight can buy.
 //! [`DecayRule::ReciprocalRank`] truncates the reciprocal before applying the
@@ -101,9 +107,9 @@
 //! the same quantity, one exactly-rounded division instead of two truncations —
 //! and its bound runs to roughly `10^6 · sqrt(w)`, so a stratum that must be
 //! read fourteen million ranks deep is admissible at a weight of two hundred.
-//! Read in reverse, that relation is a requirement: under the weighted rule a
-//! deep stratum *needs* a heavy enough weight, and a profile that underweights
-//! one has its plans refused rather than silently unordered. See
+//! Read in reverse, that relation is a design calculus: under the weighted rule
+//! a deep stratum *needs* a heavy enough weight, and a profile that underweights
+//! one answers at a coarser rank resolution, which it reports. See
 //! [`FusionProfile`] for the derivation in both directions.
 //!
 //! # A composition outside the kernel
