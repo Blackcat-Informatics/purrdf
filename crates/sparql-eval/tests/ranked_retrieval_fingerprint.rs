@@ -163,17 +163,22 @@ fn declaration_types_contain_no_function_pointers() {
     );
 }
 
-/// The fingerprint the fixture registry spells, byte for byte.
+/// The digest the fixture registry's declarations fold into, hex digit for hex
+/// digit.
 ///
 /// A plan carries the fingerprint of the registry it was admitted against and a
-/// host compares it against a live one, so the bytes are a compatibility
+/// host compares it against a live one, so this digest is a compatibility
 /// boundary: two runs of the same build, and two builds of the same source, must
 /// produce this exact string or plans stop matching registries that did not
 /// change. Pinning it is what makes a drift visible as a failure here rather
 /// than as a mismatch in a caller's plan cache.
-const FIXTURE_FINGERPRINT: &str = "http://example.org/ns#ranked\u{2}1,1\u{2}stable\u{3}ff:0\u{5}\
-     r28:http://example.org/stratum/a6:unique1:01;0;1:\u{1}7:literal0;12:en;0;1:\u{6}5:value1:10;\
-     \u{4}";
+///
+/// It is a MEASUREMENT: it covers the framed declaration bytes under their
+/// domain separator, so it moves whenever either the declared fields or the
+/// framing change. Never edit it to match a run — re-run this test and record
+/// what it reports.
+const FIXTURE_FINGERPRINT: &str =
+    "1e7e04a44497fe601c9b0924e0008927ae7fbee52b491ee0785451d7a76aee0d";
 
 #[test]
 fn the_fingerprint_is_the_same_string_every_time_the_registry_is_rebuilt() {
