@@ -649,12 +649,12 @@ impl BaseScope {
     /// Accepts exactly what `resolve` accepts and fails with exactly the error
     /// `resolve` fails with — an **absolute** reference simply skips building the
     /// owned `Iri` that `resolve` hands back and this caller would drop unread. That
-    /// is sound because `resolve` carries an absolute reference lexical-verbatim
-    /// (see [`Reference::Absolute`]'s doc comment): the value it returns is `reference`
-    /// itself, so a caller that does not want the value needs nothing beyond the
-    /// grammar check [`classify`] already performed. Every other shape — the empty
-    /// same-document reference, and a relative reference with or without a base —
-    /// falls through to `resolve` itself rather than to a second transcription of it.
+    /// is sound because `resolve` carries an absolute reference lexical-verbatim: the
+    /// value it returns is the `reference` string itself, unchanged, so a caller that
+    /// does not want the value needs nothing beyond the grammar check that classifying
+    /// the reference already performed. Every other shape — the empty same-document
+    /// reference, and a relative reference with or without a base — falls through to
+    /// `resolve` itself rather than to a second transcription of it.
     ///
     /// The store-once term tables of an RDF dataset are the motivating caller: they
     /// validate each DISTINCT IRI exactly once and keep the string in their own
