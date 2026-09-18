@@ -772,31 +772,47 @@ and which is a different number).
 
 ### Density, and why full scale is streamed rather than stored
 
-Measured, not estimated: at `--quads 2000000 --iris 1000000 --seed 31337` the
-corpus is 354,824,007 bytes over 2,000,000 rows — **177.4 bytes per row**. That
-figure is a property of the profile and its parameters rather than of the host —
-the same specification produces the same bytes on every target — and it moves by
-a byte or two with `SCALE_IRIS`, because a smaller entity space means shorter
-indexes inside the IRIs (the default 10^5-IRI lane reports 175.2). The lane
-prints the density it actually observed on every run, so a change to the mixes
-shows up in the report instead of silently invalidating this paragraph.
+Measured, not estimated, at `--quads 2000000 --seed 31337` across a run of
+`SCALE_IRIS` values: density is a **function of the index space**, not a
+single number, because a larger entity space means longer indexes inside the
+minted IRIs (the zero-padded numeric-long class and the host-scattered
+irregular class both carry the index itself). That figure is a property of the
+profile and its parameters rather than of the host — the same specification
+produces the same bytes on every target.
 
-The arithmetic that follows is the whole design constraint:
+| `SCALE_IRIS` | Bytes | Bytes per row |
+| ---: | ---: | ---: |
+| 10^5 | 351,119,043 | 175.560 |
+| 10^6 | 354,824,007 | 177.412 |
+| 10^7 | 357,694,926 | 178.847 |
+| 10^8 | 360,269,245 | 180.135 |
+| 10^9 | 362,774,790 | 181.387 |
+| 10^10 | 365,534,901 | 182.767 |
 
-| Rows | Approximate N-Quads bytes |
-| ---: | ---: |
-| 10^6 | 177 MB |
-| 10^9 | 177 GB |
-| 10^10 | **1.77 TB** |
+The spread across those six decades of index space is **7.2 bytes per row**,
+not "a byte or two" — roughly 1.4 bytes per row per decade of `SCALE_IRIS`.
+The lane prints the density it actually observed on every run, so a change to
+the mixes shows up in the report instead of silently invalidating this table.
 
-So a run at 10^10 rows is a **1.77 TB** corpus. That is an operator-driven,
-off-CI activity, and it should be **streamed into whatever consumes it rather
-than stored**: `SCALE_MODE=pipe` hands a loader the same bytes an unsharded run
-would have produced, and the default `stream` mode hands each shard to a sink
-and keeps nothing at all. `SCALE_MODE=files` exists for the operator who has a
-filesystem that can hold the run and a reason to keep it; it is opt-in, it
-demands an explicit `SCALE_OUT`, and no continuous-integration runner has the
-disk for it.
+The arithmetic that follows pairs each row count with an index space of the
+same order of magnitude — the pairing a run sized to keep a meaningful,
+non-repeating entity space would use — and applies that row's OWN measured
+density rather than one flat number carried up from a smaller scale:
+
+| Rows | `SCALE_IRIS` | Density (B/row) | Approximate N-Quads bytes |
+| ---: | ---: | ---: | ---: |
+| 10^6 | 10^6 | 177.412 | 177 MB |
+| 10^9 | 10^9 | 181.387 | 181 GB |
+| 10^10 | 10^10 | 182.767 | **1.83 TB** |
+
+So a run at 10^10 rows over a 10^10-entity index space is a **1.83 TB**
+corpus. That is an operator-driven, off-CI activity, and it should be
+**streamed into whatever consumes it rather than stored**: `SCALE_MODE=pipe`
+hands a loader the same bytes an unsharded run would have produced, and the
+default `stream` mode hands each shard to a sink and keeps nothing at all.
+`SCALE_MODE=files` exists for the operator who has a filesystem that can hold
+the run and a reason to keep it; it is opt-in, it demands an explicit
+`SCALE_OUT`, and no continuous-integration runner has the disk for it.
 
 ### Sharding: what is a property of the algorithm, and what is not
 
@@ -813,9 +829,9 @@ should not be confused. The driver runs shards concurrently, and byte-exact
 stitching is verified at sizes a disk can hold: a whole unsharded run and a
 sharded run of the same specification produce identical bytes, both through
 `SCALE_MODE=pipe` and through `cat` of the `SCALE_MODE=files` output. A
-10^10-row run has a 1.77 TB storage requirement and is nobody's smoke test; the
-table above is the honest reason it is described as arithmetic rather than
-reported as a demonstration.
+10^10-row run over a 10^10-entity index space has a 1.83 TB storage
+requirement and is nobody's smoke test; the table above is the honest reason
+it is described as arithmetic rather than reported as a demonstration.
 
 In `files` mode each shard is written as:
 

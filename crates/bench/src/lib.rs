@@ -702,7 +702,7 @@ fn write_subject_predicate(out: &mut String, seed: u64, subject: u64, predicate:
     out.push_str("> ");
 }
 
-/// Appends a `@zh` language-tagged literal of four Han characters.
+/// Appends a `@zh` language-tagged literal of three Han characters.
 fn write_zh_literal(out: &mut String, payload: u64) {
     out.push('"');
     let mut v = payload | 1;
@@ -828,6 +828,30 @@ fn write_per_mille_object(out: &mut String, table: &[(&str, u16)]) {
     }
 }
 
+/// Appends [`ROW_MIX_PER_MILLE`] as a per-mille JSON object body (no
+/// surrounding braces), sourced through [`RowKind::name`] and
+/// [`RowKind::share_per_mille`] rather than reading the table directly, so
+/// the manifest and the enum share one path and cannot drift apart. The
+/// values written are identical to [`write_per_mille_object`] over
+/// [`ROW_MIX_PER_MILLE`] — [`RowKind::from_position`] and the accessors are
+/// all plain reads of that same table.
+fn write_row_mix_object(out: &mut String) {
+    for position in 0..ROW_MIX_PER_MILLE.len() {
+        let kind = RowKind::from_position(position);
+        let comma = if position + 1 == ROW_MIX_PER_MILLE.len() {
+            ""
+        } else {
+            ", "
+        };
+        let _ = write!(
+            out,
+            "\"{}\": {}{comma}",
+            kind.name(),
+            kind.share_per_mille()
+        );
+    }
+}
+
 /// The manifest: everything a capture needs to name this corpus exactly.
 ///
 /// **It records; it does not digest.** No field here is a hash of anything,
@@ -873,7 +897,7 @@ pub fn manifest(spec: &CorpusSpec) -> String {
     );
     write_per_mille_object(&mut m, &CLASS_MIX_PER_MILLE);
     m.push_str("}, \"row_mix_per_mille\": {");
-    write_per_mille_object(&mut m, &ROW_MIX_PER_MILLE);
+    write_row_mix_object(&mut m);
     m.push_str("}}\n");
     m
 }
@@ -1707,12 +1731,15 @@ mod tests {
     fn subject_iri_byte_length_bands_match_measurement() {
         // The doc comment on the very-long class once claimed "~512 bytes"
         // when the true figure is ~628 — a claim nothing here ever checked.
-        // This is the test that would have caught it: every class's emitted
-        // subject-IRI byte length is pinned to a band with headroom, and the
-        // bands below come from an ACTUAL measurement over SHARE_SAMPLE rows
-        // at this module's SEED (plain 23-27, numeric-long exactly 58,
+        // This test pins SUBJECT-IRI byte lengths only, and every class's
+        // emitted subject-IRI byte length is pinned to a band with headroom;
+        // the bands below come from an ACTUAL measurement over SHARE_SAMPLE
+        // rows at this module's SEED (plain 23-27, numeric-long exactly 58,
         // chinese 41-45, irregular 54-58, very-long 627-630, reifier 38-42),
-        // never from the prose.
+        // never from the prose. It does NOT cover literal payloads — an
+        // identical doc-vs-code drift in a `@zh` literal's Han character
+        // count survived here undetected; see
+        // `literal_payload_shapes_match_measurement` below for that axis.
         let text = share_corpus();
         let mut bands: std::collections::BTreeMap<&'static str, (usize, usize)> =
             std::collections::BTreeMap::new();
@@ -1760,6 +1787,180 @@ mod tests {
             bands.len(),
             expected.len(),
             "every class band must be observed exactly once; observed {bands:?}"
+        );
+    }
+
+    /// Splits a typed-literal OBJECT into its XSD local name and lexical
+    /// form, e.g. `"212"^^<http://www.w3.org/2001/XMLSchema#integer>` ->
+    /// (`"integer"`, `"212"`). A text-shape read only, exactly like
+    /// [`kind_of_row_text`] above — never a re-derivation of
+    /// [`write_typed_literal`].
+    fn typed_literal_parts(object: &str) -> (&str, &str) {
+        let lexical = object
+            .strip_prefix('"')
+            .and_then(|rest| rest.split('"').next())
+            .expect("typed literal must open with a quoted lexical form");
+        let namespace_at = object
+            .rfind(XSD_NAMESPACE)
+            .expect("typed literal must carry an XSD datatype IRI");
+        let local = object[namespace_at + XSD_NAMESPACE.len()..].trim_end_matches('>');
+        (local, lexical)
+    }
+
+    /// Widens `band` (an inclusive `[lo, hi]`, or unset) to also cover
+    /// `value`.
+    fn widen_band(band: &mut Option<(usize, usize)>, value: usize) {
+        *band = Some(match *band {
+            Some((lo, hi)) => (lo.min(value), hi.max(value)),
+            None => (value, value),
+        });
+    }
+
+    #[test]
+    fn literal_payload_shapes_match_measurement() {
+        // The `@zh`-literal doc once claimed "four" Han characters when the
+        // loop only ever emits three — a claim [`subject_iri_byte_length_bands_match_measurement`]
+        // above never checked, because it pins subject IRIs only. This test
+        // measures every literal-bearing row kind's PAYLOAD instead: the
+        // `@zh` literal's Han character count, the plain-literal digit
+        // shape, the long-text literal's fixed byte length, and each typed
+        // literal's lexical form — all from an ACTUAL measurement over
+        // SHARE_SAMPLE rows at this module's SEED, never from the prose.
+        let text = share_corpus();
+
+        let mut zh_chars: Option<(usize, usize)> = None;
+        let mut plain_digits: Option<(usize, usize)> = None;
+        let mut long_text_len: Option<usize> = None;
+        let mut integer_digits: Option<(usize, usize)> = None;
+        let mut decimal_int_digits: Option<(usize, usize)> = None;
+        let mut date_rows = 0u64;
+        let mut boolean_seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        let (mut zh_rows, mut plain_rows, mut long_rows, mut typed_rows) = (0u64, 0u64, 0u64, 0u64);
+
+        for row in text.lines() {
+            let (object, _) = split_row(row);
+            match kind_of_row_text(row) {
+                RowKind::ZhLiteral => {
+                    zh_rows += 1;
+                    let lexical = object
+                        .strip_prefix('"')
+                        .and_then(|rest| rest.strip_suffix("\"@zh"))
+                        .expect("zh-literal object must be a quoted @zh literal");
+                    widen_band(&mut zh_chars, lexical.chars().count());
+                }
+                RowKind::PlainLiteral => {
+                    plain_rows += 1;
+                    let digits = object
+                        .strip_prefix("\"value ")
+                        .and_then(|rest| rest.strip_suffix('"'))
+                        .expect("plain-literal object must be `\"value N\"`");
+                    assert!(
+                        digits.bytes().all(|b| b.is_ascii_digit()),
+                        "plain-literal payload must be bare digits: {digits:?}"
+                    );
+                    widen_band(&mut plain_digits, digits.len());
+                }
+                RowKind::LongTextLiteral => {
+                    long_rows += 1;
+                    match long_text_len {
+                        Some(len) => assert_eq!(
+                            len,
+                            object.len(),
+                            "every long-text literal must share one fixed length"
+                        ),
+                        None => long_text_len = Some(object.len()),
+                    }
+                }
+                RowKind::TypedLiteral => {
+                    typed_rows += 1;
+                    let (local, lexical) = typed_literal_parts(object);
+                    match local {
+                        "integer" => {
+                            let digits = lexical.trim_start_matches('-');
+                            assert!(
+                                digits.bytes().all(|b| b.is_ascii_digit()),
+                                "xsd:integer lexical form must be signed digits: {lexical:?}"
+                            );
+                            widen_band(&mut integer_digits, digits.len());
+                        }
+                        "decimal" => {
+                            let (int_part, frac) = lexical
+                                .split_once('.')
+                                .expect("xsd:decimal lexical form must carry exactly one '.'");
+                            assert_eq!(
+                                frac.len(),
+                                6,
+                                "xsd:decimal fractional part must be zero-padded to 6 digits: \
+                                 {lexical:?}"
+                            );
+                            widen_band(&mut decimal_int_digits, int_part.len());
+                        }
+                        "date" => {
+                            assert_eq!(
+                                lexical.len(),
+                                10,
+                                "xsd:date lexical form must be YYYY-MM-DD: {lexical:?}"
+                            );
+                            date_rows += 1;
+                        }
+                        "boolean" => {
+                            assert!(
+                                lexical == "true" || lexical == "false",
+                                "xsd:boolean lexical form must be true or false: {lexical:?}"
+                            );
+                            boolean_seen.insert(lexical);
+                        }
+                        other => panic!("unknown XSD datatype local name: {other}"),
+                    }
+                }
+                RowKind::EntityEdge | RowKind::Reified | RowKind::BlankNode => {}
+            }
+        }
+
+        let (zh_lo, zh_hi) = zh_chars.expect("zh-literal rows must be exercised");
+        assert_eq!(
+            (zh_lo, zh_hi),
+            (3, 3),
+            "a @zh literal must carry exactly three Han characters"
+        );
+
+        let (plain_lo, plain_hi) = plain_digits.expect("plain-literal rows must be exercised");
+        assert!(
+            plain_lo >= 10 && plain_hi <= 17,
+            "plain-literal digit-length band [{plain_lo}, {plain_hi}] must fall inside [10, 17]"
+        );
+
+        assert_eq!(
+            long_text_len,
+            Some(136),
+            "a long-text literal object must be exactly 136 bytes (2 quotes + \"text \" + two \
+             zero-padded 64-hex-digit words + 1 separating space)"
+        );
+
+        let (int_lo, int_hi) = integer_digits.expect("xsd:integer rows must be exercised");
+        assert!(
+            int_lo >= 6 && int_hi <= 12,
+            "xsd:integer digit-length band [{int_lo}, {int_hi}] must fall inside [6, 12]"
+        );
+
+        let (dec_lo, dec_hi) = decimal_int_digits.expect("xsd:decimal rows must be exercised");
+        assert!(
+            dec_lo >= 1 && dec_hi <= 6,
+            "xsd:decimal integer-part digit-length band [{dec_lo}, {dec_hi}] must fall inside \
+             [1, 6]"
+        );
+
+        assert!(date_rows > 0, "xsd:date rows must be exercised");
+        assert_eq!(
+            boolean_seen,
+            ["false", "true"].into_iter().collect(),
+            "xsd:boolean must be observed emitting both true and false"
+        );
+
+        assert!(
+            zh_rows > 0 && plain_rows > 0 && long_rows > 0 && typed_rows > 0,
+            "every literal-bearing row kind must be exercised: zh={zh_rows} plain={plain_rows} \
+             long={long_rows} typed={typed_rows}"
         );
     }
 

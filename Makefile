@@ -229,9 +229,11 @@ bench: ## Run criterion benchmarks (report-only; never a gate).
 
 # The scale-corpus lane's knobs. Overridable exactly like BENCH_ARGS above:
 # `make scale-corpus SCALE_QUADS=10000000 SCALE_SHARDS=16`. The defaults are a
-# small streamed run because the profile emits ~177 bytes per row — a 10^10-row
-# run is ~1.77 TB, which is streamed, not stored. SCALE_MODE=files is the only
-# mode that writes anything, and it refuses to run without SCALE_OUT.
+# small streamed run because the profile's density rises with the entity index
+# space (~177 bytes per row at a 10^6-entity space, ~183 at 10^10) — a
+# 10^10-row run over a matching 10^10-entity space is ~1.83 TB, which is
+# streamed, not stored. SCALE_MODE=files is the only mode that writes
+# anything, and it refuses to run without SCALE_OUT.
 SCALE_QUADS ?= 1000000
 SCALE_IRIS ?= 100000
 SCALE_SEED ?= 1592642302

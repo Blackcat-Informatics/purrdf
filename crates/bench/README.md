@@ -56,10 +56,14 @@ parameters, the manifest-plus-digest capture rule and the storage arithmetic.
 Index-pure minting means shard `k` needs no coordination with shard `j` — no
 shared dictionary, no ordering barrier, no merge — so shards are independent
 processes at any scale. That is a property of the algorithm, and it is not the
-same as a claim that any particular run has been performed: the corpus is
-**177.4 bytes per row** measured, so 10^10 rows is ~1.77 TB. A run that size is
-streamed into whatever consumes it, not stored, which is why the lane's default
-mode keeps nothing and writing shard files is opt-in.
+same as a claim that any particular run has been performed: density is a
+function of the entity index space (measured **177.4 bytes per row** at a
+10^6-entity space, rising to **182.8 bytes per row** at a 10^10-entity space),
+so 10^10 rows over a 10^10-entity index space is ~1.83 TB, not the flat 1.77 TB
+a smaller-scale density would suggest — see the density table in
+`docs/BENCHMARKS.md` for the full measurement. A run that size is streamed
+into whatever consumes it, not stored, which is why the lane's default mode
+keeps nothing and writing shard files is opt-in.
 
 ## The other deterministic generator
 

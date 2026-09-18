@@ -11,11 +11,14 @@
 # and this driver is what turns it into a lane an operator can actually run.
 #
 # STREAMING IS THE DEFAULT, and the default is not a preference — it is the
-# storage arithmetic. The profile emits ~177 bytes per row, so 10^10 rows is
-# ~1.77 TB of N-Quads. A run of that size has to be consumed as it is produced;
-# writing it down is an operator decision about a filesystem that can hold it,
-# never something a lane does implicitly. `SCALE_MODE=files` is therefore
-# opt-in, and no continuous-integration runner should ever select it.
+# storage arithmetic. Density rises with the entity index space (~177 bytes
+# per row at a 10^6-entity space, ~183 at 10^10), so 10^10 rows over a
+# matching 10^10-entity space is ~1.83 TB of N-Quads, not the flat 1.77 TB a
+# smaller-scale density would suggest. A run of that size has to be consumed
+# as it is produced; writing it down is an operator decision about a
+# filesystem that can hold it, never something a lane does implicitly.
+# `SCALE_MODE=files` is therefore opt-in, and no continuous-integration
+# runner should ever select it.
 #
 # Modes (`SCALE_MODE`):
 #
