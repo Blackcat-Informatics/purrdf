@@ -142,10 +142,14 @@ neither the conformance corpora nor other engines could follow it.
 Every boundary between stages is a supported place to stop. A caller who
 wants only the plan calls `plan` and stops. A caller who wants the query
 text calls through `compile` and stops. A caller who wants per-producer
-ranked streams — because it intends to enumerate a million rows, or to
-apply its own combination — calls through `execute` and stops. None of
-these is a degraded use of the surface, and none is requested by passing
-an option that asks the full pipeline for less.
+ranked streams — because it wants each stratum's ranked list on its own
+terms, with its own receipt and no cross-stratum accounting applied, or
+because it intends to combine them by a law of its own — calls through
+`execute` and stops. That rung is not a cursor and stopping there buys no
+laziness: each stratum's result is fully materialized before its first
+row is readable (§7). None of these is a degraded use of the surface, and
+none is requested by passing an option that asks the full pipeline for
+less.
 
 Every boundary is equally a place to **start**. A caller who has already
 done its own planning — one that knows exactly which producer terms it

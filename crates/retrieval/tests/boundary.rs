@@ -42,8 +42,8 @@ use purrdf_retrieval::{
     Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan, PlanError, PlanId,
     PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError, RankedStream,
     RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest, SearchError,
-    SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK, compile,
-    contribution, execute, fuse, plan, search,
+    SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK, UnservedReason,
+    UnservedTerm, compile, contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -538,11 +538,21 @@ fn start_at_compile_hand_built_plan() {
         producer_bindings: vec![ProducerBinding {
             producer: ex("pf/hand"),
             stratum,
-            request_terms: vec![0],
+            // Bound to no term, and that is what this fixture declares: its one
+            // accepted pattern is the unconstrained `Any`, which places nothing,
+            // so the producer is matched by the request and receives none of it.
+            // Naming term 0 here would be the claim that the emitted call
+            // carries the needle, and the call this plan compiles to leaves both
+            // arguments free.
+            request_terms: Vec::new(),
         }],
         producer_decisions: Vec::new(),
-        // The one request term is bound below, so nothing went unserved.
-        unserved_terms: Vec::new(),
+        // So the one request term reached a producer that declared nowhere to
+        // put it, which is per-term evidence rather than an empty list.
+        unserved_terms: vec![UnservedTerm {
+            request_term: 0,
+            reason: UnservedReason::AcceptedWithoutPlacement,
+        }],
         stratum_depths,
         statistics_snapshot: StatisticsSnapshot {
             source: stats.source().to_owned(),
@@ -570,6 +580,11 @@ fn start_at_compile_hand_built_plan() {
     let planned = plan(&request, &registry, &stats).expect("planner origin");
     let planned_compiled = compile(&planned, &env).expect("planner origin admits");
     assert_eq!(planned_compiled.units, compiled.units);
+    // Same units is the weaker half. The plans agree about what was *served*
+    // too, which is the half a caller reads back: binding the term by hand would
+    // have compiled to this same text while reporting the needle answered.
+    assert_eq!(planned.producer_bindings, hand_built.producer_bindings);
+    assert_eq!(planned.unserved_evidence(), hand_built.unserved_evidence());
 }
 
 // ---------------------------------------------------------------------------

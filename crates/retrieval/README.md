@@ -68,7 +68,11 @@ The stages:
   `search` always names the profile it is about to fuse under.
 * `execute(units, registry, dataset)` — one run per stratum through
   `purrdf-sparql-eval` against the caller's own dataset. A stratum that cannot
-  run becomes its own `ProducerStatus` while every other stratum streams on.
+  run becomes its own `ProducerStatus` while every other stratum streams on. A
+  `RankedStream` is a reading order, **not** a cursor: the evaluator materializes
+  a stratum's whole result before its first row is readable, so stopping here
+  buys independent per-stratum receipts and no cross-stratum accounting — never
+  a cheaper enumeration than reading the stratum costs.
 * `fuse(streams, profile, k)` / `search(…, k)` — the exact fixed-point
   reciprocal-rank fusion, bounded by the caller's `TopK` because fused
   enumeration is top-k by construction. The bound stops the reading as well as

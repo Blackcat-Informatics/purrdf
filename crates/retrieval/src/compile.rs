@@ -251,8 +251,20 @@ fn emit_branch(
         ));
     }
 
-    // The plan is untrusted input, so the placement the planner proved is proved
-    // again here — by the same function, never by a second approximation.
+    // The plan is untrusted input, so what `place` decided when the planner
+    // called it is decided again here, by that same function and never by a
+    // second approximation: every facet the declaration places renders into a
+    // SPARQL constant, no two placements contend for one argument position, and
+    // some declared access pattern serves the resulting invocation.
+    //
+    // What `place` does NOT re-derive is that the bound terms are carried at
+    // all. It iterates the matching alternative's placements, so an alternative
+    // declaring none gives it nothing to do and it returns success on a binding
+    // that transports nothing. That property is a different rule —
+    // `matching::carries_content`, which the planner applies when it chooses
+    // what to bind — and admission re-derives it before emission is reached
+    // (`AdmissionError::HollowBinding`).
+
     let invocation = place(
         &binding.producer,
         descriptor,

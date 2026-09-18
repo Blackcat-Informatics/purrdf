@@ -30,6 +30,10 @@
 //! * every producer the plan binds is bound to a stratum the plan records a
 //!   depth for, so a compiler that emits one unit per depth entry cannot skip a
 //!   bound producer;
+//! * every request term a binding names is one that producer's own declaration
+//!   can **receive** — accepted, and placed somewhere by the alternative that
+//!   accepted it — because a binding is the claim that the producer got the term
+//!   ([`AdmissionError::HollowBinding`]);
 //! * every request term the plan records as unserved addresses the plan's own
 //!   request, is recorded once, and is not also bound to a producer — a plan
 //!   that both serves a term and reports it unanswered contradicts itself;
@@ -108,6 +112,20 @@
 //! claim for a term whose content reaches no argument position. Presence still
 //! quantifies over the accepted set: a mandatory producer that accepts something
 //! of the request must be in the plan, even if what it accepts it does not read.
+//!
+//! The received set bounds bindings in the other direction too, and there the
+//! rule is not about `mandatory` at all. *No* binding, on any producer, may name
+//! a term its declaration cannot receive: the emitted call would carry no trace
+//! of that term while
+//! [`Plan::unserved_evidence`](crate::Plan::unserved_evidence) — which reads
+//! "served" off binding membership — reported it answered. That is a plan
+//! claiming a service its own query text does not perform, and it is
+//! [`HollowBinding`](AdmissionError::HollowBinding). Emission cannot catch it:
+//! an accepted alternative with no placements gives `place` nothing to do, so
+//! `place` succeeds. The planner applies exactly this rule when it binds — it
+//! binds the carried set and nothing wider — and the waist re-derives it by
+//! calling the very same matching function, because the plan between them is a
+//! value a caller can edit.
 //!
 //! Declaring a producer mandatory is therefore a claim with teeth, and it bites
 //! in two distinguishable ways:
@@ -262,6 +280,43 @@ pub enum AdmissionError {
         provided: usize,
     },
 
+    /// A binding names a request term the producer's declaration cannot
+    /// **receive**, so the call it compiles to would carry no trace of that term
+    /// while the plan reads back as having served it.
+    ///
+    /// A producer receives a term when its first matching accepted alternative
+    /// declares at least one placement for it. A term it accepts and places
+    /// nowhere, and a term it does not accept at all, are both unreceivable: in
+    /// either case the emitted text mentions nothing of the term, yet
+    /// [`Plan::unserved_evidence`](crate::Plan::unserved_evidence) derives
+    /// "served" from binding membership and would report it answered. The
+    /// planner never writes such an index — it binds the received set — so a
+    /// plan carrying one was hand-edited or deserialized from one that was.
+    ///
+    /// This is distinct from [`Self::UnsatisfiablePlacement`], which is about a
+    /// placement the producer *does* declare and cannot perform. This one is
+    /// about the absence of a placement, which placement itself cannot see: an
+    /// alternative with an empty placement list gives the renderer nothing to do
+    /// and therefore succeeds.
+    ///
+    /// It is also distinct from [`Self::InsufficientBindings`], and in the
+    /// opposite direction: that one refuses a binding set too *narrow* for what
+    /// the registry declared mandatory, this one refuses a binding set too
+    /// *wide* for what the producer can take, on every producer, mandatory or
+    /// not.
+    #[error(
+        "producer {producer} is bound to request term {request_term}, which its declaration \
+         cannot receive: nothing of that term is placed into an argument, so the call would \
+         carry none of it"
+    )]
+    HollowBinding {
+        /// The producer whose binding names a term it cannot receive.
+        producer: Box<Iri>,
+        /// The index, into the plan's own request terms, of the term it cannot
+        /// receive.
+        request_term: u32,
+    },
+
     /// A stratum's recorded depth exceeds the registry's declared row bound.
     #[error(
         "stratum {stratum} declares depth {requested}, but the registry bounds it at {declared}"
@@ -402,6 +457,7 @@ impl AdmissionError {
         match self {
             Self::MissingMandatoryProducer { .. } => "missing_mandatory_producer",
             Self::InsufficientBindings { .. } => "insufficient_bindings",
+            Self::HollowBinding { .. } => "hollow_binding",
             Self::DepthBoundViolation { .. } => "depth_bound_violation",
             Self::DepthBeyondMonotoneRange { .. } => "depth_beyond_monotone_range",
             Self::StaleStatistics { .. } => "stale_statistics",
@@ -735,14 +791,23 @@ pub(crate) fn admit_plan<'a>(
                 ),
             });
         };
-        if ranked_stratum(descriptor).as_ref() != Some(&binding.stratum) {
+        // Read once, and it answers both of the next two questions: which
+        // stratum the registry ranks this producer under, and which of the
+        // plan's request terms its placements can actually receive. A relation
+        // with no ranked declaration emits under no stratum, so it can match no
+        // stratum a plan names and falls into the same refusal.
+        let Some(declaration) = descriptor
+            .ranked
+            .as_ref()
+            .filter(|ranked| ranked.stratum.as_str() == binding.stratum.as_str())
+        else {
             return Err(AdmissionError::MalformedPlan {
                 reason: format!(
                     "producer {} is bound to stratum {}, which the registry does not declare for it",
                     binding.producer, binding.stratum
                 ),
             });
-        }
+        };
         if !plan.stratum_depths.contains_key(&binding.stratum) {
             return Err(AdmissionError::MalformedPlan {
                 reason: format!(
@@ -752,13 +817,35 @@ pub(crate) fn admit_plan<'a>(
             });
         }
         for index in &binding.request_terms {
-            if *index as usize >= plan.request_terms.len() {
+            let Some(term) = plan.request_terms.get(*index as usize) else {
                 return Err(AdmissionError::MalformedPlan {
                     reason: format!(
                         "producer {} references request term {index}, but the plan carries {} term(s)",
                         binding.producer,
                         plan.request_terms.len()
                     ),
+                });
+            };
+            // A binding is the claim that the producer received the term, so the
+            // index must name a term the declaration can receive. The planner
+            // binds exactly the received set and the waist asks the same
+            // question of the same function, because the plan between them is
+            // editable: an index the planner would never have written compiles
+            // to a call that mentions nothing of the term, while
+            // `Plan::unserved_evidence` reads the binding back as having served
+            // it — the term is reported answered by query text that never names
+            // it. Emission cannot catch this. `place` iterates the alternative's
+            // placements, so an alternative with none gives it nothing to do and
+            // it succeeds; the missing placement is visible only to the rule
+            // that asks about placements directly.
+            //
+            // `carries_content` asked per index is membership in
+            // `carried_request_terms`, without materializing the set on the
+            // admitting path.
+            if !carries_content(declaration, term) {
+                return Err(AdmissionError::HollowBinding {
+                    producer: registry_iri(&binding.producer)?,
+                    request_term: *index,
                 });
             }
         }

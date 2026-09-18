@@ -2493,3 +2493,206 @@ fn narrowing_a_producer_leaves_the_plan_admissible_and_the_term_reported() {
         "and the term the edit stranded is reported from the bindings in hand"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A binding that names a term the producer cannot receive
+//
+// Every edit above removes something. These three add: an index PUSHED onto a
+// binding is the one shape of tampering that makes a plan claim *more* than the
+// planner did, and it is invisible downstream — `place` iterates an
+// alternative's placements, so an alternative that declares none gives it
+// nothing to do and it succeeds. The plan then compiles to well-formed query
+// text carrying no trace of the term while `unserved_evidence`, which reads
+// "served" off binding membership, reports the term answered. The waist applies
+// the planner's own rule so the two cannot part company over an editable value.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_binding_pushed_onto_a_term_the_producer_places_nowhere_is_refused() {
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&registry, &stats);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    // The neighbouring valid case first, and it is the plan as planned: the
+    // mandatory producer accepts every shape, places none, and is bound to
+    // nothing, which is admitted exactly as it stands.
+    let mandatory_binding = plan
+        .producer_bindings
+        .iter()
+        .find(|binding| binding.producer == mandatory())
+        .expect("the mandatory producer is selected");
+    assert_eq!(
+        mandatory_binding.request_terms,
+        Vec::<u32>::new(),
+        "it declares nowhere to put any of them, so it receives none of them"
+    );
+    compile(&plan, &env).expect("the plan as planned is admitted");
+    assert_eq!(
+        plan.unserved_evidence(),
+        vec![UnservedTerm {
+            request_term: 1,
+            reason: UnservedReason::AcceptedWithoutPlacement,
+        }],
+        "and the vector term is reported as reaching nowhere to be put"
+    );
+
+    // The upward edit: the vector term IS matched by the producer's `Any`
+    // pattern, so nothing downstream objects — the alternative places nothing,
+    // `place` has nothing to render, and the emitted text is byte-identical to
+    // the admitted plan's. Only the plan's own claim changed.
+    let mut hollow = plan.clone();
+    hollow
+        .producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == mandatory())
+        .expect("the mandatory producer is selected")
+        .request_terms
+        .push(1);
+    assert!(
+        hollow.unserved_evidence().is_empty(),
+        "which is the whole danger: the edited plan now reports every term served"
+    );
+
+    let error = compile(&hollow, &env).expect_err("a binding that transports nothing is refused");
+    assert_eq!(error.dimension(), "hollow_binding");
+    match error {
+        AdmissionError::HollowBinding {
+            producer,
+            request_term,
+        } => {
+            assert_eq!(producer.as_str(), mandatory());
+            assert_eq!(request_term, 1);
+        }
+        other => panic!("expected HollowBinding, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_binding_pushed_onto_a_term_the_producer_does_receive_is_admitted() {
+    // The over-refusal mirror. Pushing an index is not itself the defect: a
+    // plan narrowed by hand and then widened back to what the producer can
+    // receive is a legitimate value, and it must still admit. What is refused is
+    // an index past the received set, not an index that was added.
+    let registry = catch_all_registry(false);
+    let stats = statistics("r1");
+    let request = literal_seed_and_triple_request();
+    let plan = purrdf_retrieval::plan(&request, &registry, &stats).expect("the request plans");
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+    assert_eq!(
+        catch_all_binding(&plan)
+            .expect("the catch-all is bound")
+            .request_terms,
+        vec![0, 1],
+        "it places the literal and the IRI seed, and accepts the quoted triple not at all"
+    );
+    let admitted = compile(&plan, &env).expect("the plan as planned is admitted");
+
+    // Narrowed, then widened back to the received set: admitted, and emitting
+    // the same text as the plan it was derived from.
+    let mut widened = plan.clone();
+    let binding = widened
+        .producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == ex("pf/catch-all"))
+        .expect("the catch-all is bound");
+    binding.request_terms.truncate(1);
+    binding.request_terms.push(1);
+    let rewidened = compile(&widened, &env).expect("an index the producer receives is admitted");
+    assert_eq!(rewidened.units, admitted.units);
+
+    // One index further, onto the quoted triple, and the producer's declaration
+    // names no alternative that takes it at all — so nothing of it is placed
+    // either, and it is refused on the same dimension.
+    let mut overreaching = plan;
+    overreaching
+        .producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == ex("pf/catch-all"))
+        .expect("the catch-all is bound")
+        .request_terms
+        .push(2);
+    let error =
+        compile(&overreaching, &env).expect_err("a term no alternative accepts is not received");
+    assert_eq!(error.dimension(), "hollow_binding");
+    match error {
+        AdmissionError::HollowBinding {
+            producer,
+            request_term,
+        } => {
+            assert_eq!(producer.as_str(), ex("pf/catch-all"));
+            assert_eq!(request_term, 2);
+        }
+        other => panic!("expected HollowBinding, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_hollow_binding_is_refused_on_every_decode_path() {
+    // The waist exists for plans that arrived from outside this process, so the
+    // rule has to hold on the paths such a plan actually takes — not only on a
+    // value edited in place.
+    let registry = fixture_registry();
+    let stats = statistics("r1");
+    let plan = fresh_plan(&registry, &stats);
+    let env = AdmissionEnvironment {
+        registry: &registry,
+        statistics: &stats,
+        fusion_profile: None,
+    };
+
+    let mut hollow = plan.clone();
+    hollow
+        .producer_bindings
+        .iter_mut()
+        .find(|binding| binding.producer == mandatory())
+        .expect("the mandatory producer is selected")
+        .request_terms
+        .push(1);
+
+    // serde, which is how a plan crosses a service boundary.
+    let json = serde_json::to_string(&hollow).expect("a plan serializes");
+    let decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    match compile(&decoded, &env).expect_err("a deserialized hollow binding is refused") {
+        AdmissionError::HollowBinding {
+            producer,
+            request_term,
+        } => {
+            assert_eq!(producer.as_str(), mandatory());
+            assert_eq!(request_term, 1);
+        }
+        other => panic!("expected HollowBinding from serde, got {other:?}"),
+    }
+
+    // And the canonical bytes, which is how it is cached and replayed.
+    let bytes = hollow.canonical_bytes();
+    let decoded = Plan::from_canonical_bytes(&bytes).expect("canonical bytes decode");
+    match compile(&decoded, &env).expect_err("a decoded hollow binding is refused") {
+        AdmissionError::HollowBinding {
+            producer,
+            request_term,
+        } => {
+            assert_eq!(producer.as_str(), mandatory());
+            assert_eq!(request_term, 1);
+        }
+        other => panic!("expected HollowBinding from canonical bytes, got {other:?}"),
+    }
+
+    // The neighbouring valid case on both paths: the untampered plan survives
+    // the round trip and admits, so the refusal is the edit's and not the
+    // decoder's.
+    let json = serde_json::to_string(&plan).expect("a plan serializes");
+    let decoded: Plan = serde_json::from_str(&json).expect("a plan deserializes");
+    compile(&decoded, &env).expect("an untampered deserialized plan is admitted");
+    let decoded =
+        Plan::from_canonical_bytes(&plan.canonical_bytes()).expect("canonical bytes decode");
+    compile(&decoded, &env).expect("an untampered decoded plan is admitted");
+}

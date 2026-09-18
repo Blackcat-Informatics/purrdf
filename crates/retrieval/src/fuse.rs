@@ -27,8 +27,10 @@
 //! retention is linear wherever it is put — and this surface does not offer it
 //! as though it were free. So `k` is
 //! a required argument rather than a default: a caller states how many rows it
-//! wants, and a caller that wants to walk everything wants the unfused rung,
-//! which is built for exactly that.
+//! wants, and a caller that wants every row of a stratum wants the unfused
+//! rung — not because walking there is free, but because that stratum's whole
+//! result is materialized either way, so the walk adds nothing to what
+//! producing it already cost.
 //!
 //! Nothing about the returned rows is a completeness claim — reaching `k` and
 //! exhausting the frontier are the same return value — and nothing needs to be.
