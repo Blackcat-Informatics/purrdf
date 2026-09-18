@@ -31,8 +31,8 @@ use std::sync::Arc;
 
 use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider, PagedDataset,
-    PagedQueryLimits, RdfDataset, RdfLookaside, ResourceDimension, SparqlRequest, TermValue,
-    ViewOperationStatus,
+    PagedQueryLimits, RdfDataset, RdfLookaside, ResourceDimension, SparqlRequest, SparqlResult,
+    TermValue, ViewOperationStatus,
 };
 use purrdf_rdf::gts_fixtures::{keystone_base, keystone_contribution};
 use purrdf_rdf::{
@@ -120,20 +120,145 @@ pub fn profile(name: &str) -> Option<&'static Profile> {
 /// The workload names, in run order.
 pub const WORKLOADS: &[&str] = &["roundtrip", "governed_query", "shacl", "gts", "pack_paged"];
 
+/// Exactly which metrics each workload owes, by name.
+///
+/// A measurement that is emitted only when some condition holds stops being
+/// measured the moment that condition stops holding — and the conditions worth
+/// guarding on are usually the ones the system falsifies by working. The absence
+/// that results is invisible: a reader sees a report with one fewer entry and no
+/// statement that anything was skipped. The roster turns that absence into a
+/// refusal, so a metric can only leave this crate by being deleted from here too,
+/// deliberately and in the diff.
+const EXPECTED_METRICS: &[(&str, &[&str])] = &[
+    (
+        "roundtrip",
+        &[
+            "term_count",
+            "rdf_rows",
+            "payload_bytes",
+            "nquads_bytes",
+            "trig_bytes",
+            "jsonld_bytes",
+        ],
+    ),
+    (
+        "governed_query",
+        &[
+            "join_fuel",
+            "join_intermediate_cells",
+            "join_answer_rows",
+            "join_scratch_bytes",
+            "truncation_tripped",
+            "neighbor_answer_rows",
+        ],
+    ),
+    (
+        "shacl",
+        &["conforms", "results", "fuel", "intermediate_cells"],
+    ),
+    ("gts", &["gts_bytes", "rdf_rows"]),
+    (
+        "pack_paged",
+        &[
+            "pack_bytes",
+            "pack_join_fuel",
+            "paged_pages",
+            "paged_page_bytes",
+            "paged_consumed_pages",
+            "paged_consumed_bytes",
+            "single_graph_pages_predicted",
+            "single_graph_pages_touched",
+            "single_graph_rows",
+            "paged_budget_tripped",
+            "paged_neighbor_ok",
+        ],
+    ),
+];
+
+/// The metric names a workload owes, or `None` when it has no roster.
+fn expected_metrics(workload: &str) -> Option<&'static [&'static str]> {
+    EXPECTED_METRICS
+        .iter()
+        .find(|(name, _)| *name == workload)
+        .map(|(_, metrics)| *metrics)
+}
+
+/// Checks an emitted metric list against the workload's roster, in both
+/// directions: a missing metric is a measurement that quietly stopped happening,
+/// an unlisted one is a roster that quietly stopped describing the workload.
+fn check_metric_roster(workload: &str, metrics: &[Metric]) -> Result<(), String> {
+    let expected = expected_metrics(workload)
+        .ok_or_else(|| format!("workload {workload:?} declares no expected metrics"))?;
+    for name in expected {
+        if !metrics.iter().any(|(emitted, _)| emitted == name) {
+            return Err(format!(
+                "workload {workload} did not emit {name}: a measurement that stops being taken \
+                 deletes the evidence it exists to produce"
+            ));
+        }
+    }
+    for (emitted, _) in metrics {
+        if !expected.contains(emitted) {
+            return Err(format!(
+                "workload {workload} emitted {emitted}, which it does not declare"
+            ));
+        }
+    }
+    if metrics.len() != expected.len() {
+        return Err(format!(
+            "workload {workload} emitted {} metrics against {} declared: a name is repeated",
+            metrics.len(),
+            expected.len()
+        ));
+    }
+    Ok(())
+}
+
 /// Runs one named workload at a profile's scale.
 ///
 /// # Errors
 ///
 /// A string naming the first failure; the probe is evidence tooling, and any
-/// failure is a finding to report verbatim, never to degrade around.
+/// failure is a finding to report verbatim, never to degrade around. Emitting
+/// fewer (or other) metrics than the workload declares is itself such a failure.
 pub fn run(workload: &str, profile: &Profile) -> Result<Vec<Metric>, String> {
-    match workload {
+    let metrics = match workload {
         "roundtrip" => roundtrip(profile),
         "governed_query" => governed_query(profile),
         "shacl" => shacl(profile),
         "gts" => gts(profile),
         "pack_paged" => pack_paged(profile),
-        other => Err(format!("unknown workload {other:?}")),
+        other => return Err(format!("unknown workload {other:?}")),
+    }?;
+    check_metric_roster(workload, &metrics)?;
+    Ok(metrics)
+}
+
+/// A SELECT answer normalized for comparison: the projection, plus the rows in a
+/// canonical order, so two executions are compared as answer *sets* rather than
+/// as whatever order each happened to produce.
+#[derive(PartialEq, Eq)]
+struct SolutionSet {
+    /// The projected variable names, in projection order.
+    variables: Vec<String>,
+    /// The solution rows, sorted.
+    rows: Vec<Vec<Option<TermValue>>>,
+}
+
+/// Normalizes a SELECT result, refusing anything that is not a solution sequence.
+fn solution_set(result: SparqlResult, label: &str) -> Result<SolutionSet, String> {
+    match result {
+        SparqlResult::Solutions {
+            variables,
+            mut rows,
+            ..
+        } => {
+            rows.sort_unstable();
+            Ok(SolutionSet { variables, rows })
+        }
+        SparqlResult::Graph(_) | SparqlResult::Boolean(_) => {
+            Err(format!("{label} produced no solution sequence to count"))
+        }
     }
 }
 
@@ -271,12 +396,16 @@ fn governed_query(profile: &Profile) -> Result<Vec<Metric>, String> {
             "the selective neighbor was refused under the {TRUNCATION_CELLS}-cell budget: over-refusal"
         ));
     }
-    metrics.push((
-        "neighbor_answer_rows",
-        neighbor
-            .evidence()
-            .consumed_in(ResourceDimension::AnswerRows),
-    ));
+    let neighbor_rows = neighbor
+        .evidence()
+        .consumed_in(ResourceDimension::AnswerRows);
+    if neighbor_rows == 0 {
+        return Err(format!(
+            "the selective neighbor completed under the {TRUNCATION_CELLS}-cell budget with no \
+             rows: a query that answers nothing evidences no admission"
+        ));
+    }
+    metrics.push(("neighbor_answer_rows", neighbor_rows));
     Ok(metrics)
 }
 
@@ -440,42 +569,9 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         .len() as u64;
     metrics.push(("single_graph_pages_predicted", predicted));
     let measured = paged.query_view(PagedQueryLimits::UNBOUNDED);
-    let first = engine.query_governed_fallible_view(
-        &measured,
-        SparqlRequest {
-            query: single_graph_query,
-            base_iri: None,
-            substitutions: &[],
-        },
-        QueryOptions::EMPTY,
-        &QueryGovernors::METERED,
-    );
-    if let Err(diagnostic) = first {
-        return Err(format!(
-            "the single-graph query failed unbounded: {diagnostic}"
-        ));
-    }
-    let ViewOperationStatus::Ready { evidence } = measured.operation_status() else {
-        return Err("unbounded single-graph query left the view failed".to_owned());
-    };
-    let touched = evidence.consumed_pages;
-    metrics.push(("single_graph_pages_touched", touched));
-    if predicted != touched {
-        return Err(format!(
-            "the sealed metadata predicted {predicted} pages for the single-graph query              but it consumed {touched}"
-        ));
-    }
-
-    // Refusal pair at the measured boundary: one page fewer refuses, the exact
-    // consumption completes. Both sides are executed, so a tightened budget cannot
-    // silently over-refuse. The guard admits a one-page footprint, where the starved
-    // side is a zero-page budget — a valid hard limit, not a degenerate one — because
-    // a boundary that stops being exercised exactly when the narrowing starts working
-    // would delete the evidence it exists to produce.
-    if touched >= 1 {
-        let starved = paged.query_view(PagedQueryLimits::new(touched - 1, profile.paged_max_bytes));
-        let refused = engine.query_governed_fallible_view(
-            &starved,
+    let first = engine
+        .query_governed_fallible_view(
+            &measured,
             SparqlRequest {
                 query: single_graph_query,
                 base_iri: None,
@@ -483,18 +579,57 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
             },
             QueryOptions::EMPTY,
             &QueryGovernors::METERED,
-        );
-        if refused.is_ok() {
-            return Err(format!(
-                "the single-graph query completed under a {}-page budget after consuming {touched}",
-                touched - 1
-            ));
-        }
-        metrics.push(("paged_budget_tripped", 1));
+        )
+        .map_err(|diagnostic| format!("the single-graph query failed unbounded: {diagnostic}"))?;
+    let (answer, _) = first.into_parts();
+    let answers = solution_set(answer, "the unbounded single-graph query")?;
+    let ViewOperationStatus::Ready { evidence } = measured.operation_status() else {
+        return Err("unbounded single-graph query left the view failed".to_owned());
+    };
+    let touched = evidence.consumed_pages;
+    metrics.push(("single_graph_pages_touched", touched));
+    if predicted != touched {
+        return Err(format!(
+            "the sealed metadata predicted {predicted} pages for the single-graph query but it \
+             consumed {touched}"
+        ));
     }
-    let exact = paged.query_view(PagedQueryLimits::new(touched, profile.paged_max_bytes));
-    let neighbor = engine.query_governed_fallible_view(
-        &exact,
+
+    // The row axis of the same guarantee. A page count alone reads identically whether
+    // narrowing kept the owning page's answers or pruned them to nothing, so the count is
+    // asserted against the shape of the fixture that produced the page: each contribution
+    // emits exactly one `ex:p` row per contribution row, wholly inside its own graph, and
+    // the query binds exactly that pattern in exactly that graph.
+    let expected_rows = profile.paged_rows_per_page as u64;
+    let rows = answers.rows.len() as u64;
+    if rows == 0 {
+        return Err(format!(
+            "the single-graph query returned no rows while touching {touched} page(s): a page \
+             count cannot tell narrowing apart from a query that found nothing"
+        ));
+    }
+    if rows != expected_rows {
+        return Err(format!(
+            "the single-graph query returned {rows} rows where its one page holds \
+             {expected_rows} matching rows"
+        ));
+    }
+    metrics.push(("single_graph_rows", rows));
+
+    // Refusal pair at the measured boundary: one page fewer refuses, the exact
+    // consumption completes. Both sides are executed, so a tightened budget cannot
+    // silently over-refuse. A zero-page footprint would leave nothing to starve, and it
+    // is refused rather than skipped: the pair going quiet exactly when the narrowing
+    // starts working would delete the evidence it exists to produce.
+    if touched == 0 {
+        return Err(format!(
+            "the single-graph query returned {rows} rows while consuming no pages, so the \
+             page-budget boundary has nothing to exercise"
+        ));
+    }
+    let starved = paged.query_view(PagedQueryLimits::new(touched - 1, profile.paged_max_bytes));
+    let refused = engine.query_governed_fallible_view(
+        &starved,
         SparqlRequest {
             query: single_graph_query,
             base_iri: None,
@@ -503,10 +638,43 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
-    if let Err(diagnostic) = neighbor {
+    if refused.is_ok() {
         return Err(format!(
-            "the single-graph query was refused at its own measured {touched}-page budget: \
-             over-refusal ({diagnostic})"
+            "the single-graph query completed under a {}-page budget after consuming {touched}",
+            touched - 1
+        ));
+    }
+    metrics.push(("paged_budget_tripped", 1));
+
+    let exact = paged.query_view(PagedQueryLimits::new(touched, profile.paged_max_bytes));
+    let neighbor = engine
+        .query_governed_fallible_view(
+            &exact,
+            SparqlRequest {
+                query: single_graph_query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
+        .map_err(|diagnostic| {
+            format!(
+                "the single-graph query was refused at its own measured {touched}-page budget: \
+                 over-refusal ({diagnostic})"
+            )
+        })?;
+    // Narrowing is allowed to change how many pages a query touches. It is not allowed to
+    // change the answer, so the exact-budget re-run is compared row for row against the
+    // unbounded one rather than merely counted.
+    let (narrowed_answer, _) = neighbor.into_parts();
+    let narrowed = solution_set(narrowed_answer, "the exact-budget single-graph query")?;
+    if narrowed != answers {
+        return Err(format!(
+            "the exact {touched}-page budget changed the single-graph answer: {} rows unbounded \
+             against {} narrowed, and the two answer sets are not identical",
+            answers.rows.len(),
+            narrowed.rows.len()
         ));
     }
     metrics.push(("paged_neighbor_ok", 1));
@@ -515,7 +683,60 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROFILES, WORKLOADS, profile, run};
+    use super::{
+        EXPECTED_METRICS, Metric, PROFILES, WORKLOADS, check_metric_roster, expected_metrics,
+        profile, run,
+    };
+
+    #[test]
+    fn every_workload_declares_a_distinct_metric_roster() {
+        for workload in WORKLOADS {
+            let declared = expected_metrics(workload)
+                .unwrap_or_else(|| panic!("workload {workload} declares no metrics"));
+            assert!(!declared.is_empty(), "{workload} declares an empty roster");
+            let mut names = declared.to_vec();
+            names.sort_unstable();
+            names.dedup();
+            assert_eq!(
+                names.len(),
+                declared.len(),
+                "{workload} declares a name twice"
+            );
+        }
+        for (workload, _) in EXPECTED_METRICS {
+            assert!(
+                WORKLOADS.contains(workload),
+                "{workload} is declared but never run"
+            );
+        }
+    }
+
+    #[test]
+    fn the_roster_refuses_a_dropped_or_stray_metric() {
+        let declared = expected_metrics("pack_paged").expect("pack_paged declares metrics");
+        let full: Vec<Metric> = declared.iter().map(|name| (*name, 0)).collect();
+        check_metric_roster("pack_paged", &full).expect("the full roster passes");
+
+        let dropped = &full[..full.len() - 1];
+        assert!(
+            check_metric_roster("pack_paged", dropped).is_err(),
+            "a metric that stopped being emitted passed unnoticed"
+        );
+
+        let mut stray = full.clone();
+        stray.push(("undeclared_metric", 0));
+        assert!(
+            check_metric_roster("pack_paged", &stray).is_err(),
+            "an undeclared metric passed unnoticed"
+        );
+
+        let mut repeated = full.clone();
+        repeated.push(full[0]);
+        assert!(
+            check_metric_roster("pack_paged", &repeated).is_err(),
+            "a repeated metric name passed unnoticed"
+        );
+    }
 
     #[test]
     fn smoke_profile_runs_every_workload() {
