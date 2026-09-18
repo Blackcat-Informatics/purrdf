@@ -3292,6 +3292,114 @@ fn an_operand_the_decay_rule_refuses_is_propagated_rather_than_measured_as_a_cla
 }
 
 #[test]
+fn the_decay_rule_reports_a_class_width_with_no_stratum_in_the_question() {
+    // A width is a property of four numbers — the rule, its smoothing constant,
+    // the weight and the rank — so asking for one must not require a stratum,
+    // a weight map or a profile. A caller with only arithmetic in hand (a
+    // language binding, a profile author sizing a weight) would otherwise have
+    // to invent an IRI to ask through, and an invented IRI is a minted one.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+
+    assert_eq!(
+        decay
+            .class_width(weight, 1)
+            .expect("rank one is a rank and evaluates"),
+        1,
+        "rank one is inside the separating range, so it stands alone"
+    );
+
+    // And it is the SAME arithmetic the profile-level entry point reaches, not
+    // a second derivation that could drift from it: for the stratum a profile
+    // does weight, the two agree at every rank probed, on both sides of the
+    // point where the classes start to widen.
+    let profile = deep_profile(decay, weight);
+    let stratum = stratum("deep");
+    let bound = profile
+        .monotone_depth(&stratum)
+        .expect("weighted")
+        .rank()
+        .expect("saturates");
+    for rank in [1_u64, 2, bound - 1, bound, bound + 1, bound * 4] {
+        assert_eq!(
+            profile
+                .class_width(&stratum, rank)
+                .expect("the arithmetic evaluates"),
+            Some(
+                decay
+                    .class_width(weight, rank)
+                    .expect("the arithmetic evaluates")
+            ),
+            "the stratum-free entry point answers exactly what the profile does at rank {rank}"
+        );
+    }
+
+    // The rule is part of the question, not a fixed backdrop. At a weight heavy
+    // enough for the fold to buy depth, the two rules answer differently at the
+    // same rank: the truncated rule has already lost resolution there and the
+    // folded one still has it.
+    let folded = DecayRule::WeightedReciprocalRank { k: K };
+    let heavy = Fixed::from_integer(1000).expect("a thousand is representable");
+    let deep = deep_profile(decay, heavy)
+        .monotone_depth(&stratum)
+        .expect("weighted")
+        .rank()
+        .expect("the truncated rule saturates at every weight")
+        * 4;
+    assert!(
+        folded
+            .class_width(heavy, deep)
+            .expect("the arithmetic evaluates")
+            < decay
+                .class_width(heavy, deep)
+                .expect("the arithmetic evaluates"),
+        "the folded rule keeps resolution the truncated rule has already lost at rank {deep}"
+    );
+}
+
+#[test]
+fn the_decay_rules_stratum_free_class_width_refuses_the_operands_it_cannot_evaluate() {
+    // The refusal travels with the arithmetic rather than with the profile, so
+    // dropping the stratum must not drop the refusal. A width of one is the
+    // most favourable thing this algebra can say, and returning it where
+    // nothing was computed would be a false claim about an answer's quality.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+
+    assert!(
+        matches!(
+            decay.class_width(weight, 0),
+            Err(FusionError::InvalidRank { rank: 0 })
+        ),
+        "rank zero is not a rank, so there is no class around it to measure"
+    );
+    assert!(
+        matches!(
+            DecayRule::ReciprocalRank { k: 0 }.class_width(weight, 4),
+            Err(FusionError::InvalidK { k: 0 })
+        ),
+        "a smoothing constant of zero is not a constant this rule can evaluate under"
+    );
+
+    // The neighbouring valid cases, one operand away from each refusal above:
+    // the same weight at rank one, and the same rank under K of one.
+    assert_eq!(
+        decay
+            .class_width(weight, 1)
+            .expect("rank one is a rank and evaluates"),
+        1
+    );
+    assert_eq!(
+        DecayRule::ReciprocalRank { k: 1 }
+            .class_width(weight, 4)
+            .expect("a smoothing constant of one is usable"),
+        1,
+        "rank four is inside the separating range at this weight, and the refusal above was \
+         about the constant being zero and nothing else"
+    );
+}
+
+#[test]
 fn a_stratum_this_profile_does_not_weight_is_an_absence_and_never_a_refusal() {
     // The other half of the same signature. `Ok(None)` and `Err(..)` are two
     // different facts — "this profile says nothing about that stratum" and

@@ -31,6 +31,7 @@ host that writes Python:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -57,6 +58,12 @@ DATA = f"""
 
 STATISTICS: dict[str, Any] = {"source": "host-statistics", "revision": "r1"}
 
+# The two decay rules, by the spelling the binding reads them under. Neither is
+# a default: they compute different contributions from the same weights and
+# reach different depths, so every call that names a fusion law names one.
+TRUNCATED = "reciprocal_rank"
+FOLDED = "weighted_reciprocal_rank"
+
 
 def _producers(*pairs: tuple[str, str, str]) -> dict[str, tuple[str, str, str]]:
     """``(producer, stratum, predicate)`` triples as the engine's declaration map."""
@@ -68,6 +75,27 @@ def _producers(*pairs: tuple[str, str, str]) -> dict[str, tuple[str, str, str]]:
 def _lexical(text: str, predicate: str) -> tuple[Any, ...]:
     """One lexical request term over an indexed predicate."""
     return ("lexical", text, None, predicate)
+
+
+# The deepest depth anything downstream can name: a plan carries a per-stratum
+# depth as a 32-bit rank.
+PLAN_DEPTH_LIMIT = 2**32 - 1
+
+
+def _truncated_saturation(k: int) -> int:
+    """The exact depth ``"reciprocal_rank"`` separates to, read out of its refusal.
+
+    Derived rather than written down. The truncated rule's wall is a property of
+    the layer's declared fixed-point scale and of ``k``, and the refusal names
+    the depth the rule does reach, so every boundary these tests probe comes
+    from the surface under test rather than from a literal that could quietly
+    drift away from it.
+    """
+    with pytest.raises(ValueError, match="no weight separates ranks to depth") as refused:
+        retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, k, decay=TRUNCATED)
+    found = re.search(r"separates to depth (\d+)", str(refused.value))
+    assert found is not None, str(refused.value)
+    return int(found.group(1))
 
 
 NOTE_ONLY = _producers((NOTE_PRODUCER, NOTE_STRATUM, NOTE))
@@ -86,6 +114,7 @@ def test_one_request_fuses_two_producers_into_one_ranking() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
+        decay=TRUNCATED,
         top_k=10,
     )
 
@@ -114,6 +143,7 @@ def test_every_producer_reports_its_own_terminal_status() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
+        decay=TRUNCATED,
         top_k=10,
     )
     statuses = answer["statuses"]
@@ -132,6 +162,7 @@ def test_a_term_no_producer_accepts_is_named_not_dropped() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
+        decay=TRUNCATED,
         top_k=10,
     )
     assert answer["unserved_terms"] == [
@@ -149,6 +180,7 @@ def test_scores_are_exact_decimals_that_sum_to_their_provenance() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE, TITLE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
+        decay=TRUNCATED,
         top_k=10,
     )
     from decimal import Decimal
@@ -178,6 +210,7 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
         [_lexical("quick fox", NOTE)],
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
+        decay=TRUNCATED,
         top_k=10,
         **kwargs,
     )
@@ -190,6 +223,7 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
         [_lexical("quick fox", NOTE)],
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=10,
+        decay=TRUNCATED,
         top_k=10,
         **kwargs,
     )
@@ -201,6 +235,7 @@ def test_both_identities_name_the_plan_and_the_law() -> None:
         [_lexical("quick fox", NOTE)],
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
+        decay=TRUNCATED,
         top_k=10,
         **kwargs,
     )
@@ -304,6 +339,7 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         statistics=STATISTICS,
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
+        decay=TRUNCATED,
     )
     planned = compiled["planned_resolution"][NOTE_STRATUM]
     assert planned["fully_separated"] is True, (
@@ -321,7 +357,7 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
     # separates every rank this plan reads, so one raw unit less cannot reach it.
     depth = planned["requested_depth"]
     assert depth >= 2, "a single rank has no adjacent pair to lose"
-    sufficient = retrieval.weight_for_depth(depth, 60)
+    sufficient = retrieval.weight_for_depth(depth, 60, decay=TRUNCATED)
     coarse = retrieval.compile(
         DATA,
         [_lexical("quick fox", NOTE)],
@@ -329,6 +365,7 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         statistics=STATISTICS,
         weights={NOTE_STRATUM: sufficient - 1},
         k=60,
+        decay=TRUNCATED,
     )
     coarse_planned = coarse["planned_resolution"][NOTE_STRATUM]
     assert coarse_planned["requested_depth"] == depth
@@ -347,12 +384,20 @@ def test_compile_says_what_a_plan_costs_without_running_it() -> None:
         statistics=STATISTICS,
         weights={NOTE_STRATUM: sufficient},
         k=60,
+        decay=TRUNCATED,
     )
     assert exact["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
 
 
-def test_compile_refuses_half_a_fusion_law_and_accepts_the_whole_one() -> None:
-    """Weights and the smoothing constant are one law between them."""
+def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> None:
+    """Weights, the smoothing constant and the decay rule are ONE law together.
+
+    Any subset of the three names no law at all, and the refusal says which part
+    arrived and which did not. Filling the absent part in would report a
+    resolution measured against arithmetic the caller never wrote — and the
+    decay rule is the part that most changes the measurement, so it is the part
+    least defensible to guess.
+    """
     common: dict[str, Any] = {
         "text_producers": NOTE_ONLY,
         "statistics": STATISTICS,
@@ -365,17 +410,36 @@ def test_compile_refuses_half_a_fusion_law_and_accepts_the_whole_one() -> None:
             **common,
         )
     with pytest.raises(ValueError, match="smoothing constant"):
-        retrieval.compile(DATA, [_lexical("quick fox", NOTE)], k=60, **common)
+        retrieval.compile(
+            DATA, [_lexical("quick fox", NOTE)], k=60, decay=TRUNCATED, **common
+        )
+    # Two thirds of a law is still not a law, and the message names the third
+    # that is missing rather than choosing one.
+    with pytest.raises(ValueError, match=r"left the `decay` rule unnamed"):
+        retrieval.compile(
+            DATA,
+            [_lexical("quick fox", NOTE)],
+            weights={NOTE_STRATUM: retrieval.SCALE},
+            k=60,
+            **common,
+        )
 
-    # Both halves together are a law, and the same call answers.
+    # All three together are a law, and the same call answers.
     whole = retrieval.compile(
         DATA,
         [_lexical("quick fox", NOTE)],
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
+        decay=TRUNCATED,
         **common,
     )
     assert whole["planned_resolution"][NOTE_STRATUM]["fully_separated"] is True
+
+    # Naming NONE of the three is not a refusal: it compiles without a law and
+    # is simply told nothing about resolution.
+    lawless = retrieval.compile(DATA, [_lexical("quick fox", NOTE)], **common)
+    assert lawless["planned_resolution"] == {}
+    assert lawless["units"], "a call that names no law is still a compiled plan"
 
 
 def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
@@ -395,6 +459,7 @@ def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
         weights={NOTE_STRATUM: retrieval.SCALE},
         statistics=STATISTICS,
         k=60,
+        decay=TRUNCATED,
         top_k=10,
     )
 
@@ -415,6 +480,7 @@ def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
         statistics=STATISTICS,
         weights={NOTE_STRATUM: retrieval.SCALE},
         k=60,
+        decay=TRUNCATED,
     )
     assert compiled["planned_resolution"] == answer["planned_resolution"]
 
@@ -444,6 +510,7 @@ def test_a_float_weight_is_refused_and_an_exact_one_is_not() -> None:
         "text_producers": NOTE_ONLY,
         "statistics": STATISTICS,
         "k": 60,
+        "decay": TRUNCATED,
         "top_k": 10,
     }
     with pytest.raises(TypeError, match="raw fixed-point units"):
@@ -502,3 +569,173 @@ def test_an_unknown_graph_selector_names_what_is_accepted() -> None:
             text_producers={NOTE_PRODUCER: (NOTE_STRATUM, NOTE, "every")},
             statistics=STATISTICS,
         )
+
+
+def test_the_folded_rule_reaches_every_number_in_the_answer() -> None:
+    """Naming the folded rule changes the arithmetic, not just the constructor.
+
+    A rule that only reached the profile's constructor would still produce
+    truncated-rule contributions, and the difference is invisible unless it is
+    computed independently. So the expected raw contribution is derived here
+    from the rule's own definition rather than pinned to a literal: the
+    truncated rule is ``trunc(w * trunc(S / D) / S)`` and the folded rule is
+    ``trunc(w / D)``, with ``D = k + rank``, and at this weight they differ by
+    exactly one raw unit at rank one.
+    """
+    from decimal import Decimal
+
+    scale = retrieval.SCALE
+    # A weight of one and a half units: the folded rule's single division keeps
+    # a raw unit the truncated rule's inner rounding throws away.
+    weight = scale + scale // 2
+    denominator = 60 + 1
+    expected_truncated = weight * (scale // denominator) // scale
+    expected_folded = weight // denominator
+    assert expected_folded == expected_truncated + 1, (
+        "this fixture is only a witness while the two rules disagree here"
+    )
+
+    def _top_row(decay: str) -> dict[str, Any]:
+        answer = retrieval.search(
+            DATA,
+            [_lexical("quick fox", NOTE)],
+            text_producers=NOTE_ONLY,
+            weights={NOTE_STRATUM: weight},
+            statistics=STATISTICS,
+            k=60,
+            decay=decay,
+            top_k=10,
+        )
+        return answer
+
+    truncated = _top_row(TRUNCATED)
+    folded = _top_row(FOLDED)
+
+    # One stratum, so the fused score IS the rank-one contribution.
+    assert Decimal(truncated["rows"][0]["score"]) * scale == expected_truncated
+    assert Decimal(folded["rows"][0]["score"]) * scale == expected_folded
+    assert (
+        Decimal(folded["rows"][0]["contributions"][0]["contribution"]) * scale
+        == expected_folded
+    ), "the per-stratum provenance is computed under the named rule too"
+
+    # …and the law that produced it names itself differently, because the rule
+    # is part of what the profile's content identity fixes.
+    assert folded["profile_id"] != truncated["profile_id"]
+    assert len(folded["profile_id"]) == 64
+
+
+def test_a_depth_the_truncated_rule_refuses_is_answered_by_the_folded_one() -> None:
+    """The remedy the refusal recommends is reachable from Python.
+
+    ``weight_for_depth`` under ``"reciprocal_rank"`` refuses a deep enough
+    request because that rule rounds the reciprocal BEFORE the weight lands, so
+    past a point no weight parts two adjacent ranks. The error says so and names
+    the depth it does reach. That is a diagnosis, and the cure is to fuse under
+    ``"weighted_reciprocal_rank"`` instead — so the SAME depth must answer
+    there. The boundary is read out of the refusal rather than hardcoded.
+    """
+    saturates_at = _truncated_saturation(60)
+    assert 0 < saturates_at < PLAN_DEPTH_LIMIT
+
+    # The neighbouring VALID case, one rank shallower than the wall: the same
+    # rule answers, so the refusal is about the depth and nothing else.
+    reachable = retrieval.weight_for_depth(saturates_at, 60, decay=TRUNCATED)
+    assert reachable > 0
+
+    # One rank deeper is the wall, and no weight lifts it.
+    with pytest.raises(ValueError, match="no weight separates ranks to depth"):
+        retrieval.weight_for_depth(saturates_at + 1, 60, decay=TRUNCATED)
+
+    # THE CURE, reachable from the same surface that delivered the diagnosis:
+    # the folded rule answers at exactly the depth the truncated one refused.
+    cured = retrieval.weight_for_depth(saturates_at + 1, 60, decay=FOLDED)
+    assert cured > 0
+
+    # And it keeps answering well past the wall, because its reachable depth
+    # grows with the weight rather than being capped by the inner rounding.
+    assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED) > cured
+
+    # The same split shows in the resolution curve, read at the very weight the
+    # folded rule quoted. At the truncated rule's own last separating rank that
+    # rule has ALREADY put two ranks into one class, while the folded rule still
+    # holds them apart — which is the whole difference the cure buys, measured
+    # rather than asserted from the refusal alone.
+    assert retrieval.class_width(cured, 60, saturates_at, decay=TRUNCATED) == 2
+    assert retrieval.class_width(cured, 60, saturates_at, decay=FOLDED) == 1
+
+
+def test_the_decay_rule_must_be_named_and_is_named_by_its_own_spelling() -> None:
+    """No hidden default, and an unknown spelling names the accepted ones."""
+    common: dict[str, Any] = {
+        "text_producers": NOTE_ONLY,
+        "weights": {NOTE_STRATUM: retrieval.SCALE},
+        "statistics": STATISTICS,
+        "k": 60,
+        "top_k": 10,
+    }
+
+    # Omitted: refused, naming the argument that is missing.
+    with pytest.raises(TypeError, match="decay"):
+        retrieval.search(DATA, [_lexical("quick fox", NOTE)], **common)
+    with pytest.raises(TypeError, match="decay"):
+        retrieval.weight_for_depth(16, 60)
+    with pytest.raises(TypeError, match="decay"):
+        retrieval.class_width(retrieval.SCALE, 60, 4)
+
+    # Unknown: refused, naming both accepted spellings.
+    for unknown in ("rrf", "", "ReciprocalRank"):
+        with pytest.raises(ValueError, match="unknown decay rule") as refused:
+            retrieval.search(
+                DATA, [_lexical("quick fox", NOTE)], decay=unknown, **common
+            )
+        assert "reciprocal_rank" in str(refused.value)
+        assert "weighted_reciprocal_rank" in str(refused.value)
+    with pytest.raises(ValueError, match="unknown decay rule"):
+        retrieval.weight_for_depth(16, 60, decay="rrf")
+    with pytest.raises(ValueError, match="unknown decay rule"):
+        retrieval.class_width(retrieval.SCALE, 60, 4, decay="rrf")
+
+    # The neighbouring VALID calls: every one of the three answers under either
+    # accepted spelling, so the refusals above are about the value and nothing
+    # else.
+    for named in (TRUNCATED, FOLDED):
+        assert retrieval.search(
+            DATA, [_lexical("quick fox", NOTE)], decay=named, **common
+        )["rows"]
+        assert retrieval.weight_for_depth(16, 60, decay=named) > 0
+        assert retrieval.class_width(retrieval.SCALE, 60, 4, decay=named) == 1
+
+
+def test_class_width_asks_about_arithmetic_and_needs_no_stratum() -> None:
+    """A width is the rule, the constant, the weight and the rank — nothing else.
+
+    No stratum is supplied and none is invented: PurRDF mints no IRIs, and a
+    probe IRI conjured to ask a question about arithmetic would be a minted one.
+    """
+    # Inside the separating range every rank stands alone.
+    assert retrieval.class_width(retrieval.SCALE, 60, 1, decay=TRUNCATED) == 1
+
+    # Past it the classes widen, and the curve belongs to the RULE: a weight
+    # heavy enough for the fold to buy depth is coarse under the truncated rule
+    # and still exact under the folded one at the same rank.
+    heavy = 1000 * retrieval.SCALE
+    deep = 16 * _truncated_saturation(60)
+    coarse = retrieval.class_width(heavy, 60, deep, decay=TRUNCATED)
+    fine = retrieval.class_width(heavy, 60, deep, decay=FOLDED)
+    assert coarse > 1, "the truncated rule has lost resolution by this depth"
+    assert fine < coarse, "and the folded rule has not"
+
+    # The operands it cannot evaluate are refused rather than answered with the
+    # most favourable width there is, each beside the neighbour that works.
+    with pytest.raises(ValueError, match="rank must be at least 1"):
+        retrieval.class_width(retrieval.SCALE, 60, 0, decay=TRUNCATED)
+    assert retrieval.class_width(retrieval.SCALE, 60, 1, decay=TRUNCATED) == 1
+
+    with pytest.raises(ValueError, match="K must be at least 1"):
+        retrieval.class_width(retrieval.SCALE, 0, 4, decay=TRUNCATED)
+    assert retrieval.class_width(retrieval.SCALE, 1, 4, decay=TRUNCATED) == 1
+
+    with pytest.raises(ValueError, match="strictly positive"):
+        retrieval.class_width(0, 60, 4, decay=TRUNCATED)
+    assert retrieval.class_width(1, 60, 4, decay=TRUNCATED) >= 1

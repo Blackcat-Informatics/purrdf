@@ -1876,6 +1876,22 @@ class retrieval:
     # One whole fixed-point unit, in raw units: the weight `Fixed::ONE`.
     SCALE: int
 
+    # Every entry point that takes a smoothing constant `k` also takes the
+    # `decay` rule it belongs to, as one of two spellings, with no default:
+    #
+    # * "reciprocal_rank" truncates the reciprocal to the declared scale BEFORE
+    #   the weight is applied. The inner truncation is a ceiling no weight can
+    #   lift, so this rule stops separating adjacent ranks at the same depth —
+    #   just past a million — for every weight at or above one.
+    # * "weighted_reciprocal_rank" folds the weight into the numerator as one
+    #   exactly-rounded division. Its value is never below the other's, and its
+    #   reachable depth grows with the weight, so a heavier stratum is readable
+    #   deeper.
+    #
+    # The two compute different contributions from the same weights and name
+    # different content-addressed laws, so neither is a default and an omitted
+    # rule is refused. An unknown spelling raises `ValueError` naming both.
+
     # Plan one request against the declared ranked producers, executing nothing.
     #
     # Each `request` entry is a tuple whose first element names its kind:
@@ -1905,15 +1921,18 @@ class retrieval:
     ) -> dict[str, builtins.object]: ...
     # Plan, admit, and emit the per-stratum SPARQL the request compiles to.
     #
-    # `weights` and `k` are the fusion law the caller means to fuse under, and
-    # naming it is what makes `"planned_resolution"` answerable: per weighted
-    # stratum, the `"separates_to"` depth this law still tells adjacent ranks
-    # apart at (`None` when it never stops inside a depth a plan can express),
-    # the `"requested_depth"` the plan recorded, and `"fully_separated"`. That is
-    # what the plan will cost in rank resolution, known without executing a
-    # single unit. Omit both and the map is empty — no law is invented to measure
-    # against — and naming one without the other raises `ValueError`, because the
-    # two are one law between them.
+    # `weights`, `k` and `decay` are the fusion law the caller means to fuse
+    # under, and naming it is what makes `"planned_resolution"` answerable: per
+    # weighted stratum, the `"separates_to"` depth this law still tells adjacent
+    # ranks apart at (`None` when it never stops inside a depth a plan can
+    # express), the `"requested_depth"` the plan recorded, and
+    # `"fully_separated"`. That is what the plan will cost in rank resolution,
+    # known without executing a single unit. Omit all three and the map is empty
+    # — no law is invented to measure against — and naming some of them and not
+    # the rest raises `ValueError` saying which part is missing, because the
+    # three are one law between them. The rule matters most here: a stratum the
+    # truncated rule reports as coarse may be fully separated under the folded
+    # one at the same weight.
     @staticmethod
     def compile(
         data: str,
@@ -1923,6 +1942,7 @@ class retrieval:
         statistics: dict[str, builtins.object],
         weights: dict[str, int] | None = None,
         k: int | None = None,
+        decay: str | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -1935,10 +1955,13 @@ class retrieval:
     # factor-of-`SCALE` error: it runs, refuses nothing, and ranks as though the
     # smaller stratum were absent. Write every weight the same way.
     #
-    # `k` and `top_k` are required: the fusion law is the caller's and fused
-    # enumeration is top-k by construction. How many contributions a candidate
-    # may receive is not a parameter — it is the number of weighted strata,
-    # because a candidate surfaces at most once in each.
+    # `k`, `decay` and `top_k` are required: the fusion law is the caller's and
+    # fused enumeration is top-k by construction. How many contributions a
+    # candidate may receive is not a parameter — it is the number of weighted
+    # strata, because a candidate surfaces at most once in each. `decay` reaches
+    # every number in the answer, not only the law's identity: the two rules
+    # produce different contributions, different resolution maps and different
+    # `"profile_id"` values from the same weights.
     #
     # The answer reports rank resolution under two distinct keys.
     # `"planned_resolution"` is the admission waist's map, identical to what
@@ -1958,7 +1981,45 @@ class retrieval:
         weights: dict[str, int],
         statistics: dict[str, builtins.object],
         k: int,
+        decay: str,
         top_k: int,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
+    # The smallest stratum weight, in raw fixed-point units, that still separates
+    # every adjacent pair of ranks up to `depth` under the rule `decay` names.
+    #
+    # The profile-design calculus read in the direction an author needs: name the
+    # depth you must read to, get the weight that buys it. The answer is the true
+    # minimum rather than a safe over-estimate, because weights are read as
+    # ratios and an over-estimate would silently re-scale that stratum's share of
+    # every fused score.
+    #
+    # Raises `ValueError` for four distinct reasons and the message says which:
+    # an unknown `decay` spelling; a `depth` of zero, which names no rank to
+    # separate; a `depth` past `2 ** 32 - 1`, which is deeper than a plan can
+    # record and is the only refusal "weighted_reciprocal_rank" makes; and a
+    # depth no weight reaches, which only "reciprocal_rank" raises because it
+    # rounds the reciprocal before the weight lands. That last message names the
+    # exact depth it does reach, and its remedy is reachable from this same
+    # call: ask again under "weighted_reciprocal_rank".
+    @staticmethod
+    def weight_for_depth(depth: int, k: int, *, decay: str) -> int: ...
+    # How many consecutive ranks around `rank` a weight of `weight_raw` cannot
+    # tell apart under the rule `decay` names.
+    #
+    # One means the rank is still separated from both neighbours by score alone;
+    # `w` means `w` consecutive ranks share a contribution and their order falls
+    # through to the declared tie-break. This is the resolution curve, of which
+    # `weight_for_depth` prices a single point, and the curve belongs to the
+    # rule — the two answer differently at the same weight and rank.
+    #
+    # No stratum is taken, because a width is a property of the rule, its
+    # smoothing constant, the weight and the rank and of nothing else.
+    # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
+    #
+    # An operand the law cannot evaluate raises `ValueError` rather than
+    # returning a width: a rank of zero, a smoothing constant of zero, an unknown
+    # `decay` spelling, or a weight that is not strictly positive.
+    @staticmethod
+    def class_width(weight_raw: int, k: int, rank: int, *, decay: str) -> int: ...

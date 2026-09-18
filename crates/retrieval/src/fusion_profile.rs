@@ -127,6 +127,39 @@ impl DecayRule {
         minimum_weight_for_depth(self, depth)
     }
 
+    /// How many consecutive ranks around `rank` a stratum weighted `weight`
+    /// cannot be told apart at under this rule.
+    ///
+    /// The resolution algebra with no stratum in it. A width is a property of
+    /// four numbers — the rule, its smoothing constant, the weight and the rank
+    /// — and of nothing else, so a caller asking about *arithmetic* rather than
+    /// about a configured stratum asks here, exactly as it asks
+    /// [`Self::weight_for_depth`] here. [`FusionProfile::class_width`] is the
+    /// same answer looked up by stratum, for a caller that already holds a law
+    /// and means one of the strata that law weights.
+    ///
+    /// One means `rank` is still separated from both its neighbours by score
+    /// alone. A width of `w` means `w` consecutive ranks share a contribution,
+    /// so their relative order in a fused answer falls through to the declared
+    /// tie-break's later keys rather than being decided by relevance. This is
+    /// the resolution curve, of which [`Self::weight_for_depth`] prices a single
+    /// point.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::InvalidRank`] when `rank` is zero. Ranks are 1-based, so
+    /// there is no rank zero for a class to form around.
+    ///
+    /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero,
+    /// and [`FusionError::Overflow`] when a contribution leaves the fixed-point
+    /// range. A refusal is reported and never rendered as a width: a width of
+    /// one is the most favourable claim this algebra can make about a
+    /// resolution, and making it where the arithmetic produced nothing would be
+    /// a false claim at exactly the point no answer exists.
+    pub fn class_width(self, weight: Fixed, rank: u64) -> Result<u64, FusionError> {
+        class_width(self, weight, rank)
+    }
+
     /// The canonical discriminator byte for this rule.
     const fn tag(self) -> u8 {
         match self {
@@ -557,6 +590,12 @@ impl FusionProfile {
     /// nonsense, and knowing it is four ranks rather than ten thousand is the
     /// difference between an answer a caller can use and one it cannot.
     ///
+    /// The width itself is [`DecayRule::class_width`], which takes a weight
+    /// rather than a stratum. This is the same arithmetic reached by the name a
+    /// law gave the weight, so a caller holding a profile need not restate a
+    /// weight the profile already carries; a caller with no stratum in hand asks
+    /// the rule directly instead of inventing one to ask through.
+    ///
     /// `Ok(None)` is a stratum this profile declares no weight for. That is an
     /// absence and not a failure — a profile silent about a stratum has said
     /// nothing about its resolution either, and that stratum contributes
@@ -580,7 +619,7 @@ impl FusionProfile {
         let Some(weight) = self.weights.get(stratum) else {
             return Ok(None);
         };
-        class_width(self.decay, *weight, rank).map(Some)
+        self.decay.class_width(*weight, rank).map(Some)
     }
 
     /// The deepest rank in `stratum` whose indifference class is still no wider

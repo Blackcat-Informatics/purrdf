@@ -44,6 +44,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   answers at the deepest depth a plan can hold. A depth of zero names no rank
   and is refused as `FusionError::InvalidRank` rather than answered with the
   lightest weight there is.
+- **retrieval:** `DecayRule::class_width`, the same resolution curve
+  `FusionProfile::class_width` reports but asked of a weight rather than of a
+  stratum. A width is a property of the rule, its smoothing constant, the weight
+  and the rank and of nothing else, so a caller holding only arithmetic -- a
+  language binding, or a profile author sizing a weight before any stratum
+  exists -- asks the rule directly instead of building a throwaway one-stratum
+  profile to ask through. `DecayRule::weight_for_depth` already sat at that
+  altitude; the width now sits beside it. The profile-level call remains, is
+  unchanged for callers with a real stratum in hand, and now reaches the same
+  arithmetic through it rather than through a second path that could drift.
 - **retrieval:** Rank-resolution evidence on the answer. `CompiledRetrieval`
   carries a `PlannedResolution` per weighted stratum, so the cost of a planned
   depth is knowable before executing anything, and `FusionTrailer` carries a
@@ -123,6 +133,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **retrieval:** Every Python entry point that takes a smoothing constant now
+  takes the decay rule that constant belongs to, and none of them defaults it.
+  `retrieval.search`, `retrieval.weight_for_depth` and `retrieval.class_width`
+  take a required `decay` keyword, and `retrieval.compile` takes it as the third
+  part of the fusion law beside `weights` and `k`. It is spelled the way every
+  other closed set on that surface is -- `"reciprocal_rank"` or
+  `"weighted_reciprocal_rank"`, alongside a request term's `metric` and a
+  producer's `graph` -- and an unknown spelling raises `ValueError` naming both.
+
+  Before this, the Python surface hardwired the truncated rule everywhere it
+  named one, so a Python caller could not build, search under, or ask any
+  question about a folded-rule law. That mattered most where
+  `weight_for_depth` refused: its message says the remedy for a depth past the
+  truncated rule's wall is to name the folded rule, and Python had no way to
+  name it, so the surface handed out a diagnosis with no cure. The folded rule
+  now reaches every number in an answer -- contributions, both resolution maps
+  and the `"profile_id"` the law names itself by -- rather than only the
+  profile's constructor.
+
+  A `compile` call naming some of `weights`, `k` and `decay` but not the rest is
+  a `ValueError` that says which part arrived and which did not; naming none of
+  them still compiles without a law and reports no resolution. Confined to
+  `purrdf-retrieval` and its binding, which have not yet been published, so no
+  released API changes.
 - **retrieval:** The Python `search` answer spells the trailer's measured rank
   resolution `"observed_resolution"` rather than `"resolution"`. The answer now
   reports two resolutions -- what the plan was going to cost and what the rows
