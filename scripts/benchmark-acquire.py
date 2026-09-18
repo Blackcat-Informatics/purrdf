@@ -6,7 +6,7 @@
 
 PurRDF's own scale corpus is generated, not downloaded. Comparing PurRDF against
 other RDF stores needs the two workloads the literature actually uses — LUBM and
-WatDiv — and neither one may live in this repository. This script fetches five
+WatDiv — and neither one may live in this repository. This script fetches six
 pinned artifacts into a cache under ``target/`` and verifies every byte against a
 digest recorded here. Nothing is vendored, nothing is redistributed, and no
 unverified byte is ever handed to a caller.
@@ -73,6 +73,18 @@ different data. **The WatDiv GENERATION PROCESS cannot be pinned; only a frozen
 OUTPUT can be.** A WatDiv dataset used for a comparison must be generated once
 and then itself pinned by digest — treating a WatDiv run as reproducible because
 its source tarball is pinned is a false claim about the benchmark.
+
+That is why ``watdiv.10M.tar.bz2`` is pinned here as a first-class artifact
+alongside the toolkit, and why **the WatDiv generator is never built and never
+run by this repository at all**. It could not be built even if that were wanted:
+v0.6 calls ``std::random_shuffle``, which C++17 removed. The dataset the lane
+consumes is upstream's own frozen output, verified byte for byte.
+
+Freezing the dataset has a consequence the query side depends on: once the bytes
+are pinned, **the candidate set behind every query template's ``#mapping`` is
+fixed too**, so query instantiation can be made a pure function of the dataset
+and a seed. ``scripts/watdiv-queries.py`` makes it one, which upstream's
+equally time-seeded query instantiator cannot.
 
 LUBM is the opposite case and needs no such caveat: UBA accepts ``-index`` and
 ``-seed``, and ``-index 0 -seed 0`` reproduces the datasets used in the LUBM
@@ -158,6 +170,19 @@ _WATDIV_POSTURE = (
     "pinned -- only a frozen OUTPUT dataset can be."
 )
 
+_WATDIV_FROZEN_OUTPUT = (
+    "A FROZEN OUTPUT, not a generation run. Because stock v0.6 has no seed flag "
+    "(see the posture above), the only reproducible WatDiv dataset is one that "
+    "was generated once and then pinned by digest -- which is exactly what "
+    "upstream publishes and what this pin covers. The bytes behind this URL are "
+    "therefore the dataset itself, and no generator is built or run to obtain "
+    "it. UPSTREAM PUBLISHES NO CHECKSUM FOR IT: the size and sha256 below are "
+    "OUR OWN, taken from the bytes served on 2026-09-18, exactly as the LUBM "
+    "pins above are ours. There is no publisher checksum to cross-check them "
+    "against, so `md5` is None rather than invented. "
+    + _WATDIV_POSTURE.split(" DETERMINISM:")[0]
+)
+
 ARTIFACTS: tuple[Artifact, ...] = (
     Artifact(
         filename="uba1.7.zip",
@@ -208,7 +233,28 @@ ARTIFACTS: tuple[Artifact, ...] = (
         licence="citation-ware",
         posture=_WATDIV_POSTURE,
     ),
+    Artifact(
+        filename="watdiv.10M.tar.bz2",
+        url="https://dsg.uwaterloo.ca/watdiv/watdiv.10M.tar.bz2",
+        sha256="1d0a8a4725c98974eb7347ce3e6d9cab44f9f40389589809674254151b745af6",
+        size=58558746,
+        # Upstream publishes an md5 beside the v0.6 toolkit download but none
+        # beside the frozen datasets. Inventing one would be a fabricated
+        # publisher statement, so there is none here.
+        md5=None,
+        licence="citation-ware",
+        posture=_WATDIV_FROZEN_OUTPUT,
+    ),
 )
+
+# The frozen datasets upstream publishes, by scale. Only the 10M one is PINNED
+# above, and that is the whole point of listing the others by name: a larger
+# scale is a one-line addition to ARTIFACTS, but only after whoever wants it has
+# FETCHED AND HASHED IT THEMSELVES. A digest that nobody verified is worse than
+# no digest at all -- it turns a download into an unchecked download that prints
+# "OK". `scripts/watdiv-lane.sh` refuses an unpinned scale by name and points
+# here rather than quietly falling back to 10M.
+WATDIV_SCALES: tuple[str, ...] = ("10M", "100M", "1000M")
 
 
 def sha256_of(path: Path) -> str:
@@ -430,6 +476,32 @@ def assert_cache_invisible_to_git(cache_dir: Path) -> None:
             "  Fix .gitignore before running this again. Nothing was fetched."
         )
     print(f"OK: '{top}/' is ignored by the repository's own rules; the cache cannot be committed")
+
+
+def select_artifacts(names: list[str] | None) -> tuple[Artifact, ...]:
+    """Return the pinned artifacts named by *names*, or all of them if *names* is None.
+
+    An unknown name is a HARD FAILURE that names the bad value and lists every valid
+    one — never a silent no-op (fetch nothing) and never a silent fallback (fetch
+    everything). This is what lets `scripts/lubm-lane.sh` ask for only its four
+    artifacts and `scripts/watdiv-lane.sh` ask for only its two, instead of every
+    lane paying for every pinned artifact regardless of which one it uses.
+
+    Order follows ``ARTIFACTS``, not *names*, and a name repeated in *names* is
+    fetched once: this selects a subset, it does not resequence or multiply it.
+    """
+    if names is None:
+        return ARTIFACTS
+    by_filename = {artifact.filename: artifact for artifact in ARTIFACTS}
+    unknown = sorted({name for name in names if name not in by_filename})
+    if unknown:
+        sys.exit(
+            f"FAIL: --only names unknown artifact(s): {', '.join(unknown)}\n"
+            f"  valid names: {', '.join(sorted(by_filename))}\n"
+            "  refusing to fetch nothing and refusing to fetch everything instead"
+        )
+    wanted = set(names)
+    return tuple(artifact for artifact in ARTIFACTS if artifact.filename in wanted)
 
 
 def list_artifacts() -> int:
@@ -660,30 +732,75 @@ def self_test() -> int:
     if len(seen) == len(ARTIFACTS):
         print(f"OK: self-test — all {len(ARTIFACTS)} pins are well formed and uniquely named")
 
+    # 10. --only selection: no argument fetches everything (unchanged behaviour);
+    #     a real name selects exactly that subset (the neighbouring VALID case);
+    #     an unknown name is a hard failure naming itself and listing every valid
+    #     name (never a silent fetch-nothing, never a silent fetch-everything); a
+    #     name repeated does not duplicate the artifact; and a request naming both
+    #     a known and an unknown artifact still refuses, rather than fetching the
+    #     known one and dropping the rest quietly.
+    if select_artifacts(None) != ARTIFACTS:
+        print("SELF-TEST FAIL: select_artifacts(None) did not return every pinned artifact")
+        ok = False
+    else:
+        print("OK: self-test — select_artifacts(None) selects every pinned artifact")
+
+    one_name = ARTIFACTS[0].filename
+    other_name = ARTIFACTS[1].filename
+    selected = select_artifacts([one_name])
+    if selected != (ARTIFACTS[0],):
+        print(f"SELF-TEST FAIL: select_artifacts([{one_name!r}]) returned {selected!r}")
+        ok = False
+    else:
+        print(f"OK: self-test — select_artifacts selects a single named artifact ({one_name})")
+
+    selected = select_artifacts([other_name, one_name, one_name])
+    if selected != (ARTIFACTS[0], ARTIFACTS[1]):
+        print(
+            "SELF-TEST FAIL: select_artifacts with a repeated name and reversed order "
+            f"returned {selected!r}, expected ARTIFACTS order with no duplicate"
+        )
+        ok = False
+    else:
+        print(
+            "OK: self-test — select_artifacts follows ARTIFACTS order and de-duplicates "
+            "a repeated name"
+        )
+
+    ok &= _expect_exit(
+        lambda: select_artifacts(["not-a-real-artifact.zip"]),
+        "select_artifacts refuses an unknown name, naming it and listing valid names",
+        ["FAIL:", "not-a-real-artifact.zip", one_name, other_name],
+    )
+
+    # The neighbouring valid case, run immediately after the refusal above: proof
+    # the refusal is not sticky and a real name still works right after a bad one.
+    if select_artifacts([one_name]) != (ARTIFACTS[0],):
+        print(
+            "SELF-TEST FAIL: a valid name failed right after an unknown-name refusal "
+            "-- the refusal must not be sticky"
+        )
+        ok = False
+    else:
+        print("OK: self-test — a valid --only name still works immediately after a refusal")
+
+    ok &= _expect_exit(
+        lambda: select_artifacts([one_name, "not-a-real-artifact.zip"]),
+        "select_artifacts refuses a mix of one known and one unknown name",
+        ["FAIL:", "not-a-real-artifact.zip"],
+    )
+
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--list",
-        action="store_true",
-        help="print every pinned artifact, its URL, its digest and its licence posture",
-    )
-    parser.add_argument("--self-test", action="store_true")
-    args = parser.parse_args()
-
-    if args.self_test:
-        return self_test()
-    if args.list:
-        return list_artifacts()
-
+def acquire(artifacts: tuple[Artifact, ...]) -> int:
+    """Fetch-and-verify *artifacts* into the cache, printing a PASS summary. Exits non-zero on failure."""
     assert_cache_invisible_to_git(CACHE)
     print(f"cache: {CACHE}")
 
     fetched = 0
-    for artifact in ARTIFACTS:
+    for artifact in artifacts:
         status = ensure_cached(artifact, CACHE)
         if status == "downloaded":
             fetched += 1
@@ -700,14 +817,43 @@ def main() -> int:
 
     assert_cache_invisible_to_git(CACHE)
     print(
-        f"PASS: {len(ARTIFACTS)} artifacts verified ({fetched} fetched, "
-        f"{len(ARTIFACTS) - fetched} already cached) in {CACHE}\n"
+        f"PASS: {len(artifacts)} artifacts verified ({fetched} fetched, "
+        f"{len(artifacts) - fetched} already cached) in {CACHE}\n"
         "      None of them is vendored or redistributable from here. Results derived from\n"
         "      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);\n"
         "      the LUBM generator is GPL-2.0-or-later and is run, never copied into this tree.\n"
         "      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run."
     )
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="print every pinned artifact, its URL, its digest and its licence posture",
+    )
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        metavar="NAME",
+        default=None,
+        help=(
+            "fetch only the named artifact(s) (bare filenames, e.g. uba1.7.zip) instead of "
+            "every pinned artifact. An unknown name is a hard failure that lists the valid "
+            "ones. Omit --only to fetch everything, unchanged from before this flag existed."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.self_test:
+        return self_test()
+    if args.list:
+        return list_artifacts()
+
+    return acquire(select_artifacts(args.only))
 
 
 if __name__ == "__main__":

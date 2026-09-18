@@ -131,7 +131,8 @@ now_ms() {
 # ── 1. Artifacts ────────────────────────────────────────────────────────────────
 
 step "1/7 artifacts (pinned, fetched by digest, never vendored)"
-python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" ||
+python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" \
+  --only uba1.7.zip GeneratorLinuxFix.zip queries-sparql.txt univ-bench.owl ||
   die "artifact acquisition failed -- nothing downstream can be trusted, stopping"
 
 for required in uba1.7.zip univ-bench.owl queries-sparql.txt; do

@@ -13,7 +13,7 @@ endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
 .PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -351,6 +351,28 @@ lubm: ## Run the LUBM comparison workload end to end - acquire, generate, conver
 	LUBM_ONTO=$(LUBM_ONTO) LUBM_DOC_BASE=$(LUBM_DOC_BASE) \
 	LUBM_ENTAIL_SLICE=$(LUBM_ENTAIL_SLICE) LUBM_OUT=$(LUBM_OUT) LUBM_BIN=$(LUBM_BIN) \
 	bash scripts/lubm-lane.sh
+
+# The WatDiv comparison lane's knobs, in the same style as LUBM_* above:
+# `make watdiv WATDIV_SEED=7`. The default dataset is upstream's frozen 10M output
+# (~10.9M triples), which is the only scale pinned by digest: WatDiv's generator
+# seeds itself from the wall clock and has no seed flag, so a dataset is
+# reproducible only as a frozen OUTPUT, never as a generation run. The generator is
+# never built and never run here.
+#
+# WATDIV_SEED fixes the query set. The 20 published templates carry `%vN%`
+# placeholders that something must fill in, and upstream's own instantiator is
+# time-seeded and irreproducible; this lane chooses deterministically from the
+# frozen dataset instead. A DIFFERENT SEED IS A DIFFERENT WORKLOAD, so the seed is
+# reported next to every number it governs.
+WATDIV_SCALE ?= 10M
+WATDIV_SEED ?= 0
+WATDIV_OUT ?= target/watdiv
+WATDIV_BIN ?=
+
+watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen dataset, instantiate the 20 templates deterministically, load through the purrdf CLI, and run them (pure BGP, no entailment; report-only, never a gate). See docs/BENCHMARKS.md.
+	WATDIV_SCALE=$(WATDIV_SCALE) WATDIV_SEED=$(WATDIV_SEED) \
+	WATDIV_OUT=$(WATDIV_OUT) WATDIV_BIN=$(WATDIV_BIN) \
+	bash scripts/watdiv-lane.sh
 
 # `purrdf-bench` is unpublished tooling rather than a release crate, and it is in
 # this list anyway: its library half documents itself as portable, and a

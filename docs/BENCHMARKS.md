@@ -20,12 +20,20 @@ unoptimized default it used to. It is still not a bench: `make bench` runs under
 `bench`/`release`, which additionally carries fat LTO and `codegen-units = 1`.
 Quote a criterion number, not a test's wall clock.
 
-There are four benchmark layers. The third is not a timing layer at all: it
+There are five benchmark layers. The third is not a timing layer at all: it
 produces the *input* the other measurements are taken over, and it is here
 because a capacity number whose corpus nobody can regenerate is a number nobody
-can check. The fourth is the only one that measures PurRDF against *the outside
-world*: the first three compare PurRDF to itself, and a workload the literature
-already publishes numbers for is the one thing that cannot be tuned to flatter.
+can check. The last two are the only ones that measure PurRDF against *the
+outside world*: the first three compare PurRDF to itself, and a workload the
+literature already publishes numbers for is the one thing that cannot be tuned
+to flatter.
+
+Those two are not interchangeable, and they are not comparable with each other.
+LUBM asks what an engine can **derive** — eleven of its fourteen queries have no
+answers at all without an entailment regime. WatDiv asks how a planner copes
+with query **shape and selectivity** over a deliberately skewed dataset, and
+needs no inference whatsoever. A row from one lane set beside a row from the
+other compares two different questions.
 
 | Layer | What it measures | How to run |
 | --- | --- | --- |
@@ -33,6 +41,7 @@ already publishes numbers for is the one thing that cannot be tuned to flatter.
 | **Python compat harness** | `purrdf.compat.rdflib` (the native-backed drop-in) vs. the real `rdflib` 7.x, on the operations a drop-in user actually calls. | `make bench-python` |
 | **Scale corpus** | Nothing, by itself. It *generates* the deterministic mixed corpus (`purrdf-scale-mixed-v1`) that a capacity capture is measured against, and reports what it produced. | `make scale-corpus` |
 | **LUBM comparison workload** | The published LUBM generator, its 14 published queries, and the entailment regime each one needs — the workload the OWL knowledge-base literature compares engines on. | `make lubm` |
+| **WatDiv comparison workload** | A digest-pinned frozen WatDiv dataset and the 20 published query templates, instantiated deterministically — the workload the RDF-store literature compares planners on. Pure BGP, no entailment. | `make watdiv` |
 
 ## Native-layer benchmarks (criterion)
 
@@ -1050,3 +1059,266 @@ operator's job, and the regime rule above is the thing that makes such a
 comparison honest rather than flattering. It is also not a conformance check:
 that a query returned *n* rows under `owl-rl` is a measurement, not a claim that
 the answer is complete under that regime.
+
+## WatDiv comparison workload
+
+The **Waterloo SPARQL Diversity Test Suite** is the other workload the RDF-store
+literature publishes numbers for, and it asks a different question from LUBM.
+LUBM asks what an engine can *derive*. WatDiv asks how a planner copes with
+query **shape and selectivity**: its 20 basic query templates are deliberately
+spread across four structural families — three complex (`C`), five snowflake
+(`F`), five linear (`L`) and seven star (`S`) — over a dataset whose predicate
+and object distributions are deliberately skewed, so a planner that only handles
+uniform data has nowhere to hide.
+
+Run it with `make watdiv`. It is **report-only** — like every other layer here
+it gates nothing, asserts nothing, and prints what it measured on the host it
+ran on.
+
+```sh
+make watdiv                      # the frozen 10M dataset, seed 0
+make watdiv WATDIV_SEED=7        # a DIFFERENT WORKLOAD, not a re-run
+```
+
+Cite, in anything derived from it — this one is not optional, see below:
+
+> G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee. "Diversified Stress Testing of
+> RDF Data Management Systems." In *Proc. The Semantic Web - ISWC 2014 - 13th
+> International Semantic Web Conference*, 2014, pages 197–212.
+
+### Licence posture: citation-ware, so the citation is a condition of use
+
+WatDiv's published terms are, in substance, that *provided you include a
+citation to the ISWC 2014 paper, you are free to download and use the WatDiv
+Data and Query Generator*, supplied "as is" with all use at your own risk.
+
+That has two consequences and this repository observes both.
+
+* The grant is a **use** grant, not a **redistribution** grant. So no WatDiv
+  byte lives in this tree — not the toolkit, not the dataset, not the query
+  templates — and neither do the queries the lane derives from those templates,
+  because a query mechanically derived from a template is still derived from it.
+  Everything is fetched by digest into `target/bench-artifacts/` and every file
+  the lane writes is build output.
+* **The citation is a condition, not a courtesy.** Publishing a number derived
+  from this lane without that citation is using WatDiv outside the terms it was
+  offered under. The lane prints the citation at the end of every run, and
+  `provenance.txt` carries it too, so it travels with the numbers rather than
+  living only here.
+
+### The generator cannot be pinned, so a frozen output is pinned instead
+
+This is the load-bearing difference from the LUBM lane, which *runs* its
+generator.
+
+Stock WatDiv v0.6 seeds itself from the wall clock and the operating system's
+entropy source and exposes **no seed flag of any kind**: `src/model.cpp` builds
+its Boost generator as `boost::mt19937(static_cast<unsigned>(time(0)))` and
+calls `srand(time(NULL))` again inside the generator, `src/statistics.cpp` calls
+`srand(time(NULL))`, and `src/volatility_gen.cpp` constructs an `mt19937` from
+`random_device`. Two runs of the same binary over the same model file therefore
+produce different data. (It would not build unmodified today in any case — it
+calls `std::random_shuffle`, which C++17 removed.)
+
+So **pinning the WatDiv tarball pins the generator's source and nothing else**.
+Treating a WatDiv run as reproducible because its source tarball is pinned is a
+false claim about the benchmark. The only reproducible WatDiv dataset is one
+that was generated **once** and then itself pinned by digest — a frozen
+*output*. Upstream publishes exactly those, and
+`scripts/benchmark-acquire.py` pins one:
+
+| | |
+| --- | --- |
+| Artifact | `watdiv.10M.tar.bz2` (contains `watdiv.10M.nt` and `saved.txt`) |
+| Size | 58 558 746 bytes |
+| SHA-256 | `1d0a8a4725c98974eb7347ce3e6d9cab44f9f40389589809674254151b745af6` |
+| Triples | 10 916 457 |
+
+**The generator is never built and never run here.** Upstream publishes no
+checksum beside its frozen datasets, so that size and digest are *ours*, taken
+from the bytes served on 2026-09-18 — exactly as the LUBM pins are ours. There
+is no publisher checksum to cross-check them against, so the artifact's `md5`
+field is `None` rather than invented.
+
+Upstream also publishes `watdiv.100M.tar.bz2` and `watdiv.1000M.tar.bz2`. They
+are **not** pinned. `WATDIV_SCALE` refuses them by name and says why: using one
+means fetching and hashing it yourself and adding it to the artifact table. A
+lane that quietly fell back to 10M would report a number for the wrong corpus
+under the right name.
+
+### Instantiation is deterministic here, which upstream's cannot be
+
+A WatDiv template is not a query. Each carries `#mapping` directives and `%vN%`
+placeholders that something must fill in:
+
+```text
+#mapping v1 wsdbm:Website uniform
+SELECT ?v0 ?v2 ?v3 WHERE {
+    ?v0  wsdbm:subscribes  %v1% .
+    ?v2  sorg:caption      ?v3 .
+    ?v0  wsdbm:likes       ?v2 .
+}
+```
+
+Upstream's own instantiator draws from the same time-seeded generators, so its
+query sets cannot be regenerated either — a published WatDiv number whose
+queries came out of it is not reproducible by the person reading it.
+
+Freezing the dataset fixes that, because it fixes the **candidate set** behind
+every mapping: the candidates are a property of those exact bytes.
+`scripts/watdiv-queries.py` therefore instantiates the placeholders itself, as a
+pure function of the dataset and a seed:
+
+1. Collect the candidates for each mapped type in **one pass** over the frozen
+   dataset. WatDiv names its entities `<namespace><Type><decimal>`, so a
+   candidate is a term in subject or object position whose IRI has exactly that
+   shape. Nothing is inferred from `rdf:type`: WatDiv asserts a type triple for
+   products and users but not for websites, topics or cities, so a type-triple
+   rule would find candidates for some mappings and none for others.
+2. Sort each set into a canonical order, by UTF-8 bytes, so the choice never
+   depends on the order the file happened to mention a term in.
+3. Select with **`splitmix64`** over `WATDIV_SEED` and a pinned per-mapping
+   stream — the same arithmetic-only idiom `crates/bench/src/lib.rs` uses, with
+   no RNG syscalls and no platform floats. Each mapping draws from its own
+   stream, so no two are correlated and adding a template cannot shift another
+   template's choice.
+4. Record every choice — which template, which mapping, which candidate, and
+   **out of how many** — in `provenance.txt`, together with the seed and the
+   dataset digest.
+
+The result is that **the same frozen dataset and the same seed reproduce the
+queries byte for byte**, and the lane prints a digest over the emitted query set
+so that is checkable rather than merely claimed. This is a deliberate
+improvement on upstream's time-seeded instantiation, not a reimplementation of
+it.
+
+> **A query set from a different seed is a DIFFERENT WORKLOAD.** Two numbers
+> taken under two seeds compare two workloads, not two engines. The seed is
+> printed in the lane's summary next to the numbers it governs, for the same
+> reason the LUBM lane prints each row's entailment regime.
+
+`uniform` is implemented as *actually* uniform — the draw is rejected and
+retaken when it lands in the short tail plain modulo would fold unevenly. At
+these candidate counts the bias would have been below one part in 2⁴⁴ and
+unobservable, but `uniform` is a claim the mappings make. **A distribution the
+instantiator does not implement is a hard failure naming it**, never a silent
+fallback to `uniform`: a fallback would emit a query set that looks fine, runs
+fine, and is not the workload the template asked for.
+
+### The candidate scrape is checked against the generator's own census
+
+The frozen tarball ships `saved.txt` — the generator's own record of how many
+entities of each type it emitted. Every scraped candidate set is cross-checked
+against it, and a disagreement stops the run naming the type, the scraped count
+and the declared count.
+
+This matters more than it looks. An incomplete candidate set does not make
+instantiation *fail*; it makes it quietly **biased**, and every query built from
+it would be subtly the wrong query while every step still printed `OK`. All 17
+declared types agree exactly on the pinned 10M dataset. A mapping naming a type
+the census does not declare is likewise refused: its candidates could still be
+scraped, but with nothing to check the scrape against the set would be
+unverified rather than merely unusual.
+
+### Pure BGP — no entailment, and that is not an omission
+
+Every one of the 20 templates is a basic graph pattern: triple patterns and
+nothing else. No `OPTIONAL`, no `UNION`, no `FILTER`, no `MINUS`, no `GRAPH`, no
+subquery. WatDiv stresses structure and selectivity and needs no inference at
+all, so **no entailment regime is chosen and none is used**.
+
+The instantiator's `--self-test` *asserts* that emptiness rather than trusting
+this paragraph, so a future template that smuggled in a `FILTER` would fail the
+self-test instead of quietly changing what the lane measures. The lane's
+`queries.tsv` carries a `regime` column that is always `-`, so the contrast is
+visible in the data and not only in prose.
+
+This is the exact opposite of the LUBM regime table above, and the two must not
+be read across:
+
+| | LUBM | WatDiv |
+| --- | --- | --- |
+| What it asks | What can be **derived** | How a planner handles **shape and selectivity** |
+| Entailment | 11 of 14 queries have *no* answers without it | None, anywhere |
+| Data | Generated per run from a pinned generator + seed | A digest-pinned **frozen output**; no generator is run |
+| Queries | 14 published queries, mechanically normalised | 20 published templates, deterministically instantiated |
+| Comparable with the other lane? | **No** | **No** |
+
+### What the reported timings include
+
+Each query is one process invocation, so its wall time includes opening the data
+source — which at this scale dominates. Reporting that as query cost would be a
+misleading number, so the lane **measures the open cost once** with a trivial
+one-row probe and reports it, then prints both `TOTAL_MS` (process wall time,
+open cost included) and `EVAL_MS` (the subtraction).
+
+`EVAL_MS` is an *estimate*, and at this scale it is a small difference between
+two large numbers on a host that is not quiet. Read it as an indication of where
+the work is, not as a measurement of evaluation cost.
+
+The dataset is loaded **through the CLI under test** into a native pack once per
+run, and the 20 queries are answered against that pack. This is not an
+optimization dodge: it is what a store does, and handing 20 queries the raw
+N-Triples file would re-parse well over a gigabyte twenty times and measure the
+parser rather than the planner.
+
+### A vacuous run is a failure, not a fast one
+
+Twenty basic graph patterns over ten million triples cannot all legitimately
+match nothing. So the lane **hard-fails** if no query executed, and hard-fails
+again if every query that executed returned zero rows — the shape a broken
+prefix table, a failed load, or a broken instantiation takes, and the shape that
+otherwise looks exactly like a very fast engine.
+
+An *individual* zero is a real answer and is reported as one — and it is the
+skew WatDiv exists to exercise, showing up. A property is concentrated on some
+entities and absent from others, so a star pattern demanding several at once can
+legitimately match nothing: on the pinned dataset, for instance, all 1 673
+products typed `wsdbm:ProductCategory10` carry `wsdbm:hasGenre`, 1 016 carry
+`sorg:description` and *none at all* carry `sorg:publisher`.
+
+Those queries are listed by name under their own heading, and the report
+distinguishes the two ways a zero arises. Where the query has a mapping, the
+uniform draw landed on a candidate the rest of the pattern does not join with,
+and `provenance.txt` says which candidate and out of how many. Where the query
+has **no** mapping — the `MAPPINGS` column reads `0` — nothing was chosen at
+all, and the zero is a fact about the published template over this corpus rather
+than about anything this lane did.
+
+### Parameters
+
+Every knob is an overridable `make` variable, in the same style as `LUBM_*`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `WATDIV_SCALE` | `10M` | Which pinned frozen dataset to use. Only `10M` is pinned; any other value is refused by name. |
+| `WATDIV_SEED` | `0` | The instantiation seed. **Changing it changes the workload**, not just the run. |
+| `WATDIV_OUT` | `target/watdiv` | Where the lane works. Everything it writes is build output. |
+| `WATDIV_BIN` | *(unset)* | A prebuilt `purrdf` to use instead of building one. |
+
+The extraction and the pack are each stamped with the digest they were built
+from — the dataset tarball's digest, and for the pack that plus the binary's own
+version — so a re-run reuses them only when they provably came from the same
+bytes, and a stale artifact is a cache miss rather than a silent stale hit.
+
+**Give concurrent runs separate arenas.** Instantiation begins by deleting
+`$WATDIV_OUT/queries`, so a second run starting while a first is partway through
+its twenty queries rewrites the query set underneath it — and the first run's
+printed rows would then belong to two different workloads. That is the most
+expensive kind of wrong number, because nothing about it looks wrong. The lane
+therefore re-digests the query set before the first query and again after the
+last, and **hard-fails naming the collision** if it changed. Two runs at once
+want two arenas: `make watdiv WATDIV_OUT=target/watdiv-$$`.
+
+### What it covers, and what it does not
+
+It covers a real, published, externally defined workload end to end: a frozen
+dataset verified by digest, deterministic query instantiation with a full
+provenance record, loading **through PurRDF's own CLI**, and evaluation of all
+20 queries with per-query row counts and timings.
+
+It does **not** cover: any other engine, WatDiv's `linear_incremental` and
+`linear_mixed` studies (separate suites, deliberately excluded from the twenty),
+or scales beyond the one pinned dataset. It is not a conformance check either —
+that a query returned *n* rows is a measurement, not a claim that *n* is the
+answer any other implementation would produce.
