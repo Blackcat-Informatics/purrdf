@@ -93,6 +93,22 @@ BIN="${LUBM_BIN:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="${REPO_ROOT}/target/bench-artifacts"
 
+# `LUBM_OUT` IS HONOURED AS WRITTEN. An absolute path is the arena, verbatim; a
+# relative one is resolved against the repository root, which is what the
+# `target/lubm` default has always meant and what keeps the lane independent of
+# the caller's working directory.
+#
+# Prefixing `REPO_ROOT` unconditionally — which is what this did — quietly turned
+# `LUBM_OUT=/mnt/big/arena` into `<repo>/mnt/big/arena`: nothing appeared where
+# the operator asked, the arena landed INSIDE the working tree and outside
+# `target/`, and the lane reported success. `docs/BENCHMARKS.md` documents an
+# absolute `SCALE_OUT` and `SCALE_OUT` already behaves this way, so the trap was
+# one the documentation trained an operator straight into.
+case "${OUT}" in
+  /*) ARENA_ROOT="${OUT}" ;;
+  *) ARENA_ROOT="${REPO_ROOT}/${OUT}" ;;
+esac
+
 die() {
   echo "lubm-lane: $*" >&2
   exit 1
@@ -159,7 +175,7 @@ command -v java >/dev/null 2>&1 ||
   die "java is not on PATH; UBA ships prebuilt classes, so a JRE is enough"
 command -v unzip >/dev/null 2>&1 || die "unzip is not on PATH"
 
-UBA="${REPO_ROOT}/${OUT}/uba"
+UBA="${ARENA_ROOT}/uba"
 rm -rf "${UBA}"
 mkdir -p "${UBA}"
 unzip -q -o "${CACHE}/uba1.7.zip" -d "${UBA}" || die "could not unpack uba1.7.zip"
@@ -171,7 +187,7 @@ echo "generator classes: ${UBA}/classes"
 # ── 4. Generate ─────────────────────────────────────────────────────────────────
 
 step "4/7 generate LUBM(${UNIVERSITIES}, ${INDEX}) seed=${SEED}"
-ARENA="${REPO_ROOT}/${OUT}/gen"
+ARENA="${ARENA_ROOT}/gen"
 rm -rf "${ARENA}"
 WORK="${ARENA}/work"
 mkdir -p "${WORK}"
@@ -210,7 +226,7 @@ echo "renamed ${renamed} backslash-named file(s) out of the parent directory"
 # ── 5. Convert RDF/XML -> N-Quads through purrdf itself ─────────────────────────
 
 step "5/7 convert RDF/XML -> N-Quads through the purrdf CLI"
-NQ="${REPO_ROOT}/${OUT}/nq"
+NQ="${ARENA_ROOT}/nq"
 rm -rf "${NQ}"
 mkdir -p "${NQ}"
 
@@ -228,7 +244,7 @@ conv_ms=$(($(now_ms) - conv_start))
 ((converted == owl_count)) ||
   die "converted ${converted} of ${owl_count} files; refusing to report a partial dataset"
 
-DATA="${REPO_ROOT}/${OUT}/lubm-data.nq"
+DATA="${ARENA_ROOT}/lubm-data.nq"
 # `sort` fixes the concatenation order so the dataset is byte-reproducible. LUBM's
 # instance data contains no blank nodes, so concatenating separately converted
 # files cannot collide labels -- a property this lane checks below rather than
@@ -239,7 +255,7 @@ if grep -q '^_:' "${DATA}"; then
   die "the generated data contains blank nodes; per-file conversion may have collided labels"
 fi
 
-ONTO_NQ="${REPO_ROOT}/${OUT}/lubm-onto.nq"
+ONTO_NQ="${ARENA_ROOT}/lubm-onto.nq"
 "${BIN}" convert --from rdfxml --to nquads --base "${ONTO}" \
   "${CACHE}/univ-bench.owl" "${ONTO_NQ}" ||
   die "purrdf convert failed on the univ-bench ontology"
@@ -261,7 +277,7 @@ echo "    and the same LUBM_DOC_BASE must reproduce it byte for byte."
 # ── 6. Normalise the queries ────────────────────────────────────────────────────
 
 step "6/7 normalise the 14 published queries (mechanical rules, recorded)"
-QUERIES="${REPO_ROOT}/${OUT}/queries"
+QUERIES="${ARENA_ROOT}/queries"
 rm -rf "${QUERIES}"
 NAMESPACE="${ONTO}#"
 python3 "${REPO_ROOT}/scripts/lubm-queries.py" --self-test ||
@@ -279,9 +295,9 @@ step "7/7 run the queries, per regime"
 # progressively smaller rungs rather than being reported as unsupported. Each rung
 # is a real dataset and every reported row count names the rung it came from, so a
 # smaller rung never silently masquerades as a full-scale answer.
-ENTAIL_FULL="${REPO_ROOT}/${OUT}/entail-full.nq"
-ENTAIL_FILE="${REPO_ROOT}/${OUT}/entail-file.nq"
-ENTAIL_SLICE_NQ="${REPO_ROOT}/${OUT}/entail-slice.nq"
+ENTAIL_FULL="${ARENA_ROOT}/entail-full.nq"
+ENTAIL_FILE="${ARENA_ROOT}/entail-file.nq"
+ENTAIL_SLICE_NQ="${ARENA_ROOT}/entail-slice.nq"
 FIRST_NQ="$(find "${NQ}" -maxdepth 1 -name '*.nq' | sort | head -1)"
 
 cat "${DATA}" "${ONTO_NQ}" >"${ENTAIL_FULL}"

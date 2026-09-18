@@ -755,9 +755,10 @@ Every knob is an overridable `make` variable, in the same style as `BENCH_ARGS`.
 | `SCALE_SEED` | `1592642302` | The `splitmix64` seed folded into every derivation (the generator's own default, in decimal). |
 | `SCALE_SHARDS` | `8` | How many independent shards the row sequence is cut into. |
 | `SCALE_MODE` | `stream` | `stream` (parallel shards, each piped to a sink, nothing retained), `pipe` (ordered whole run on stdout), `files` (opt-in materialization). |
-| `SCALE_OUT` | *(unset)* | Output directory; **required** by `SCALE_MODE=files`, which refuses to run without it. |
+| `SCALE_OUT` | *(unset)* | Output directory; **required** by `SCALE_MODE=files`, which refuses to run without it. Absolute or relative; a relative path is relative to where the lane runs. |
 | `SCALE_SINK` | *(unset)* | Replaces the built-in digest sink in `stream` mode with any command that reads standard input. |
 | `SCALE_MANIFEST` | *(unset)* | Writes the manifest to this path instead of the mode's default destination. |
+| `SCALE_BIN` | *(unset)* | A prebuilt `bench-corpus` to use instead of building one. Checked up front — a path that does not exist, is not a regular file, is not executable, or cannot produce the whole-run manifest fails the lane by name before any shard starts. |
 
 Every knob above except `SCALE_SINK` is **passed through literally**. `make`
 hands each one to the lane script as environment bytes rather than
@@ -895,6 +896,15 @@ counts widen the field), so the files sort lexicographically into shard order
 and `cat <prefix>.shard-*.nq` reproduces a whole run byte for byte. The
 whole-run manifest is written beside them as `<prefix>.manifest.json`, and each
 shard gets its own `<shard>.manifest.json` recording that shard's row range.
+
+That guarantee is only worth anything if a run that did not produce every shard
+cannot claim it, so **any shard that fails fails the whole run**, in every mode.
+The lane names the failing shards (`FAILED shards: 1`), exits non-zero, prints
+no shard sizes and no byte-for-byte guarantee, and leaves no
+`<shard>.manifest.json` certifying a shard whose corpus file was not written —
+including one left behind by an earlier, successful run into the same
+directory. A shard manifest is a certificate; it never outlives the shard it
+certifies.
 
 ### What the corpus covers, and what it does not
 
@@ -1082,7 +1092,7 @@ Every knob is an overridable `make` variable, in the same style as `SCALE_*`.
 | `LUBM_ONTO` | Lehigh's ontology IRI | The `-onto` IRI stamped into the data, and the namespace `ub:` is rebound to. |
 | `LUBM_DOC_BASE` | `http://example.org/lubm/` | Base for each document's own two header triples. |
 | `LUBM_ENTAIL_SLICE` | `3000` | Triples in the smallest rung of the entailment ladder. |
-| `LUBM_OUT` | `target/lubm` | Where the lane works. Everything it writes is build output. |
+| `LUBM_OUT` | `target/lubm` | Where the lane works. An absolute path is used verbatim; a relative one resolves against the repository root, so the default keeps everything the lane writes inside `target/` as build output. |
 | `LUBM_BIN` | *(unset)* | A prebuilt `purrdf` to use instead of building one. |
 
 ### What it covers, and what it does not
@@ -1332,7 +1342,7 @@ Every knob is an overridable `make` variable, in the same style as `LUBM_*`.
 | --- | --- | --- |
 | `WATDIV_SCALE` | `10M` | Which pinned frozen dataset to use. Only `10M` is pinned; any other value is refused by name. |
 | `WATDIV_SEED` | `0` | The instantiation seed. **Changing it changes the workload**, not just the run. |
-| `WATDIV_OUT` | `target/watdiv` | Where the lane works. Everything it writes is build output. |
+| `WATDIV_OUT` | `target/watdiv` | Where the lane works. An absolute path is used verbatim; a relative one resolves against the repository root, so the default keeps everything the lane writes inside `target/` as build output. |
 | `WATDIV_BIN` | *(unset)* | A prebuilt `purrdf` to use instead of building one. |
 
 The extraction and the pack are each stamped with the digest they were built

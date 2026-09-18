@@ -291,8 +291,16 @@ SCALE_MODE ?= stream
 SCALE_OUT ?=
 SCALE_SINK ?=
 SCALE_MANIFEST ?=
+# SCALE_BIN names the executable that certifies the bytes, exactly as LUBM_BIN
+# and WATDIV_BIN do for their lanes, so it belongs in `lane-env` more than any
+# other knob here. It was the one knob the script read that the `Makefile` never
+# listed, and the omission was the whole defect `lane-env` exists to stop:
+# `make scale-corpus 'SCALE_BIN=/tmp/bin/de$$xcoy'` had `$$x` expanded away by
+# `make` and the lane then EXECUTED `/tmp/bin/decoy` — a different binary than
+# the operator named, with exit 0.
+SCALE_BIN ?=
 
-$(foreach knob,SCALE_QUADS SCALE_IRIS SCALE_SEED SCALE_SHARDS SCALE_MODE SCALE_OUT SCALE_SINK SCALE_MANIFEST,$(eval $(call lane-env,$(knob))))
+$(foreach knob,SCALE_QUADS SCALE_IRIS SCALE_SEED SCALE_SHARDS SCALE_MODE SCALE_OUT SCALE_SINK SCALE_MANIFEST SCALE_BIN,$(eval $(call lane-env,$(knob))))
 
 scale-corpus: ## Generate the deterministic scale corpus across shards (streams and retains nothing by default; report-only, never a gate). See docs/BENCHMARKS.md.
 	@bash scripts/scale-corpus.sh

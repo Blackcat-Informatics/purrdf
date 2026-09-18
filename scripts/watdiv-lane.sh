@@ -126,7 +126,21 @@ now_ms() {
   echo $(($(date +%s%N) / 1000000))
 }
 
-ARENA="${REPO_ROOT}/${OUT}"
+# `WATDIV_OUT` IS HONOURED AS WRITTEN. An absolute path is the arena, verbatim; a
+# relative one is resolved against the repository root, which is what the
+# `target/watdiv` default has always meant and what keeps the lane independent of
+# the caller's working directory.
+#
+# Prefixing `REPO_ROOT` unconditionally — which is what this did — quietly turned
+# `WATDIV_OUT=/mnt/big/arena` into `<repo>/mnt/big/arena`: nothing appeared where
+# the operator asked, the arena landed INSIDE the working tree and outside
+# `target/`, and the lane reported success. `docs/BENCHMARKS.md` documents an
+# absolute `SCALE_OUT` and `SCALE_OUT` already behaves this way, so the trap was
+# one the documentation trained an operator straight into.
+case "${OUT}" in
+  /*) ARENA="${OUT}" ;;
+  *) ARENA="${REPO_ROOT}/${OUT}" ;;
+esac
 DATASET="${ARENA}/${DATASET_NAME}"
 CENSUS="${ARENA}/saved.txt"
 TESTSUITE="${ARENA}/testsuite"

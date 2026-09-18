@@ -62,7 +62,10 @@
 #
 # Any shard that fails fails the whole run, loudly. `bench-corpus` exits 2 on a
 # rejected specification and 1 on a write failure, and a driver that let either
-# pass would report a corpus that was never generated.
+# pass would report a corpus that was never generated. Each shard body checks
+# every command's status ITSELF instead of trusting `errexit`, which a
+# backgrounded subshell does not honour inside the `|| die` context this driver
+# runs them from — see the note above `stream_shard`.
 
 set -euo pipefail
 
@@ -131,7 +134,9 @@ fi
 # guessed path: `build.target-dir` may point anywhere, and a stale binary from
 # a previous checkout would certify the wrong bytes. `SCALE_BIN` skips the
 # build for a caller that already has one (the shards are then pure execs).
+BIN_FROM_KNOB=1
 if [[ -z "${BIN}" ]]; then
+  BIN_FROM_KNOB=0
   echo "scale-corpus: building bench-corpus (release)..." >&2
   BIN="$(cargo build --locked --release -p purrdf-bench --bin bench-corpus \
     --message-format=json-render-diagnostics |
@@ -154,8 +159,26 @@ for line in sys.stdin:
 print(executable)
 ')"
 fi
-[[ -n "${BIN}" && -x "${BIN}" ]] ||
-  die "no executable bench-corpus binary (set SCALE_BIN to point at one)"
+
+# `SCALE_BIN` NAMES THE EXECUTABLE THAT CERTIFIES THE BYTES, so it is the last
+# knob that may fail obscurely. It is validated here, up front, before a banner
+# claims a profile and before a single shard runs, and every diagnostic quotes
+# the bytes the lane actually used — a typo that resolves to some OTHER
+# executable on the same path must be a lane failure, never a silently
+# substituted run.
+if [[ "${BIN_FROM_KNOB}" == "1" ]]; then
+  [[ -e "${BIN}" ]] ||
+    die "SCALE_BIN='${BIN}' does not exist
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Leave SCALE_BIN unset to have this lane build bench-corpus itself."
+  [[ -f "${BIN}" ]] ||
+    die "SCALE_BIN='${BIN}' is not a regular file"
+  [[ -x "${BIN}" ]] ||
+    die "SCALE_BIN='${BIN}' is not executable"
+else
+  [[ -n "${BIN}" && -x "${BIN}" ]] ||
+    die "the release build produced no executable bench-corpus binary (set SCALE_BIN to point at one)"
+fi
 
 # The built-in sink: consume a shard and retain only its summary. Rows are
 # counted as newlines, which is exact because the generator emits exactly one
@@ -197,15 +220,45 @@ shard_name() {
   printf '%s.shard-%0*d-of-%0*d.nq' "${PREFIX}" "${PAD}" "$1" "${PAD}" "${SHARDS}"
 }
 
-# The whole-run manifest: shard 0 of 1, which is the specification every shard
-# is a slice of.
-whole_run_manifest() {
-  "${BIN}" --seed "${SEED}" --quads "${QUADS}" --iris "${IRIS}" \
-    --shard 0 --shards 1 --manifest
-}
-
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
+
+# The whole-run manifest: shard 0 of 1, which is the specification every shard
+# is a slice of. It is produced ONCE, here, before any mode banner and before
+# any shard runs — which also makes it the lane's proof that the binary chosen
+# above actually RUNS. The execute bit is not that proof: `/bin/false` carries
+# it, and before this check `SCALE_BIN=/bin/false` reached the first real use
+# and died there as a bare non-zero exit with nothing on stderr but the banner.
+# A knob that names an executable has to fail in the lane's own voice, quoting
+# the bytes it used and whatever the binary itself said.
+if [[ "${BIN_FROM_KNOB}" == "1" ]]; then
+  bin_provenance="SCALE_BIN='${BIN}'"
+else
+  bin_provenance="the binary this lane built, '${BIN}'"
+fi
+manifest_status=0
+WHOLE_RUN_MANIFEST="$("${BIN}" --seed "${SEED}" --quads "${QUADS}" --iris "${IRIS}" \
+  --shard 0 --shards 1 --manifest 2>"${tmp}/manifest.err")" || manifest_status=$?
+if ((manifest_status != 0)); then
+  # Whatever the binary itself said is reported inside the lane's message, not
+  # leaked as a bare line above it — and a binary that said nothing (`/bin/false`
+  # says nothing) contributes no empty line either.
+  manifest_detail=""
+  if [[ -s "${tmp}/manifest.err" ]]; then
+    manifest_detail="$(sed 's/^/  /' "${tmp}/manifest.err")
+"
+  fi
+  die "${bin_provenance} failed to produce the whole-run manifest (exit ${manifest_status})
+${manifest_detail}  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Nothing downstream can be trusted when the specification itself cannot be
+  produced, so no shard was started."
+fi
+
+# Replays the manifest captured above. The binary is not re-run: every mode
+# reports the SAME specification bytes the shards were checked against.
+whole_run_manifest() {
+  printf '%s\n' "${WHOLE_RUN_MANIFEST}"
+}
 
 # Runs every shard concurrently and waits for all of them, collecting the
 # failures instead of stopping at the first: a half-reported run hides which
@@ -231,30 +284,72 @@ run_all_shards() {
   return "${status}"
 }
 
+# A SHARD BODY MAY NEVER RELY ON `errexit`, AND NEITHER OF THESE DOES.
+#
+# These run as backgrounded subshells, and `run_all_shards <body> || die` puts
+# the call that starts them on the LEFT of `||`. That suppresses `errexit` for
+# the whole dynamic extent of the call — the backgrounded subshells included —
+# so a body whose FAILING command is not its last one exited 0 and `wait` saw
+# success. (A plain background subshell does honour `errexit`; the `||` context
+# is what defeats it. Reproduced on the production surface: a leftover directory
+# where shard 1 of 4's file belongs made the corpus write fail, the manifest
+# write after it succeed, and `make scale-corpus SCALE_MODE=files` exit 0 —
+# printing `bytes=0` for that shard and then its byte-for-byte guarantee, which
+# the sorted `cat` disproved. `stream_shard` was correct only by accident,
+# because its failing command happened to be last.)
+#
+# So every command that can fail has its status tested explicitly, and the first
+# failure returns non-zero at once — which is what `wait` observes, regardless
+# of command order and regardless of the caller's `||` context.
+
 stream_shard() {
   local index="$1"
   local -a args
+  # Stated rather than inherited. This body always runs in a subshell, so the
+  # setting is local to it, and a generator that dies mid-shard must fail the
+  # shard even though the sink downstream of it exits 0 on a short read.
+  set -o pipefail
+  # `shard_args` is a `printf` over already-validated values; it has no failure
+  # mode, and `mapfile`'s status would not report the substituted process's
+  # anyway. Every command below that CAN fail is tested.
   mapfile -t args < <(shard_args "${index}")
   if [[ -n "${SINK}" ]]; then
     # Named in the failure because a sink that parses but cannot RUN (a missing
     # binary, a non-zero exit) otherwise surfaces only as a shard number.
-    "${BIN}" "${args[@]}" | bash -c "${SINK}" >"${tmp}/${index}.report" || {
+    if ! "${BIN}" "${args[@]}" | bash -c "${SINK}" >"${tmp}/${index}.report"; then
       echo "scale-corpus: SCALE_SINK failed for shard ${index} (command: ${SINK})" >&2
       return 1
-    }
-  else
-    "${BIN}" "${args[@]}" | digest_sink >"${tmp}/${index}.report"
+    fi
+    return 0
+  fi
+  if ! "${BIN}" "${args[@]}" | digest_sink >"${tmp}/${index}.report"; then
+    echo "scale-corpus: shard ${index} of ${SHARDS} failed to generate" >&2
+    return 1
   fi
 }
 
 file_shard() {
   local index="$1"
   local -a args
+  # `shard_args` is a `printf` over already-validated values; it has no failure
+  # mode, and `mapfile`'s status would not report the substituted process's
+  # anyway. Every command below that CAN fail is tested.
   mapfile -t args < <(shard_args "${index}")
   local name
   name="$(shard_name "${index}")"
-  "${BIN}" "${args[@]}" --out "${OUT}/${name}"
-  "${BIN}" "${args[@]}" --manifest --out "${OUT}/${name}.manifest.json"
+  if ! "${BIN}" "${args[@]}" --out "${OUT}/${name}"; then
+    echo "scale-corpus: shard ${index} of ${SHARDS} could not be written to ${OUT}/${name}" >&2
+    # A SHARD MANIFEST IS A CERTIFICATE, so one must never outlive the shard it
+    # certifies. A reused arena can hold the manifest of an earlier, successful
+    # run of this same shard, and leaving it in place beside a corpus file that
+    # was not produced is exactly the certification this fix exists to stop.
+    rm -f "${OUT}/${name}.manifest.json"
+    return 1
+  fi
+  if ! "${BIN}" "${args[@]}" --manifest --out "${OUT}/${name}.manifest.json"; then
+    echo "scale-corpus: shard ${index} of ${SHARDS} could not write its manifest to ${OUT}/${name}.manifest.json" >&2
+    return 1
+  fi
 }
 
 # Emits the whole-run manifest to `SCALE_MANIFEST` if the caller named a file,
@@ -331,13 +426,32 @@ print(f"total rows={rows} bytes={size} bytes_per_row={density:.1f}")
     done
     ;;
   files)
-    mkdir -p "${OUT}"
+    # `SCALE_OUT` gets the same treatment `SCALE_MANIFEST` already had: an
+    # unusable directory is a LANE failure that quotes the bytes back, not a
+    # bare `mkdir: cannot create directory ...` with no hint which knob supplied
+    # it. The two messages are deliberately the same shape.
+    if ! mkdir_error="$(mkdir -p "${OUT}" 2>&1)"; then
+      die "cannot create the output directory SCALE_OUT='${OUT}'
+  ${mkdir_error}
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Check that its parent directory exists and is writable."
+    fi
     echo "scale-corpus: profile=${PROFILE_ID} mode=files shards=${SHARDS} out=${OUT}" >&2
     emit_manifest "${OUT}/${PREFIX}.manifest.json"
     run_all_shards file_shard || die "at least one shard failed"
+    # The guarantee on the last line is only worth printing if every shard file
+    # is actually there to be `cat`ed, so the sizes are read with their status
+    # checked. `wc -c < <a directory>` succeeds as a redirection and reports
+    # `bytes=0`, which is precisely how a missing shard used to be announced as
+    # an empty one.
     for ((index = 0; index < SHARDS; index++)); do
       name="$(shard_name "${index}")"
-      printf '%s bytes=%s\n' "${name}" "$(wc -c <"${OUT}/${name}")"
+      [[ -f "${OUT}/${name}" ]] ||
+        die "shard ${index} of ${SHARDS} reported success but ${OUT}/${name} is not a regular file"
+      if ! bytes="$(wc -c <"${OUT}/${name}")"; then
+        die "cannot size the shard file ${OUT}/${name}"
+      fi
+      printf '%s bytes=%s\n' "${name}" "${bytes}"
     done
     echo "scale-corpus: cat ${OUT}/${PREFIX}.shard-*.nq reproduces a whole run byte for byte" >&2
     ;;

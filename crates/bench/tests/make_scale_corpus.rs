@@ -24,6 +24,7 @@
 //! its own `cargo build --release` — the shards become pure execs of a binary this crate's own
 //! test harness already built, keeping this file fast.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -128,6 +129,59 @@ fn whole(quads: u64, iris: u64, seed: u64) -> Vec<u8> {
         String::from_utf8_lossy(&output.stderr)
     );
     output.stdout
+}
+
+/// Writes `contents` to `path` and makes it executable, returning `path`.
+fn write_executable(path: PathBuf, contents: &str) -> PathBuf {
+    std::fs::write(&path, contents).expect("write the executable script");
+    let mut permissions = std::fs::metadata(&path)
+        .expect("stat the freshly written script")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).expect("make the script executable");
+    path
+}
+
+/// Builds a stand-in for `bench-corpus` that delegates every invocation to the real binary
+/// EXCEPT a single shard of a sharded run, which it refuses.
+///
+/// A sharded lane has no other way to break exactly one shard in `stream` and `pipe` mode: those
+/// modes write nothing, so there is no filesystem obstacle to place in one shard's way (the
+/// `files`-mode test does exactly that instead, because there the ORDER of the failing command
+/// inside the shard body is the whole defect).
+///
+/// The whole-run manifest is `--shard 0 --shards 1`, so `shards != 1` keeps this wrapper from
+/// refusing the manifest and turning the test into an up-front-validation test instead.
+fn failing_shard_binary(dir: &Path, refuse_shard: u64) -> PathBuf {
+    write_executable(
+        dir.join("bench-corpus-failing-shard"),
+        &format!(
+            r#"#!/bin/sh
+shard=""
+shards=""
+prev=""
+for arg in "$@"; do
+  case "${{prev}}" in
+    --shard) shard="${{arg}}" ;;
+    --shards) shards="${{arg}}" ;;
+  esac
+  prev="${{arg}}"
+done
+if [ "${{shards}}" != "1" ] && [ "${{shard}}" = "{refuse_shard}" ]; then
+  echo "failing-shard stand-in: refusing shard ${{shard}}" >&2
+  exit 1
+fi
+exec "{BENCH}" "$@"
+"#
+        ),
+    )
+}
+
+/// A scratch directory unique to this process, created and returned.
+fn scratch(label: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("purrdf-bench-scale-{label}-{}", unique_tag()));
+    std::fs::create_dir_all(&dir).expect("create the scratch directory");
+    dir
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -456,4 +510,310 @@ fn make_scale_corpus_pipe_mode_is_clean_even_when_the_child_thinks_it_is_a_sub_m
          must STILL be byte-identical to a whole run, without the caller passing \
          `--no-print-directory`"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// F5 — A SHARD THAT FAILS MUST FAIL THE RUN, IN EVERY MODE.
+//
+// The script's own header promises it ("Any shard that fails fails the whole run, loudly ... a
+// driver that let either pass would report a corpus that was never generated") and
+// `docs/BENCHMARKS.md` repeats it. Nothing tested it, and in `files` mode it was FALSE.
+//
+// The mechanism: shard bodies are backgrounded subshells started from
+// `run_all_shards <body> || die`, and putting that call on the LEFT of `||` suppresses `errexit`
+// for its entire dynamic extent — the subshells included. `file_shard` ran the corpus write
+// FIRST and the manifest write LAST, so a failing corpus write left a succeeding last command,
+// the subshell exited 0, `wait` saw success, and `make scale-corpus SCALE_MODE=files` exited 0
+// after printing `bytes=0` for the missing shard, writing a manifest CERTIFYING it, and then
+// printing its byte-for-byte guarantee — which the sorted `cat` disproved. `stream_shard` was
+// correct only by accident, its failing command happening to be last.
+//
+// So these tests break a shard in each mode, and the `files` one breaks it in the ORDER that
+// defeated `errexit`. The byte-identity test is the other half: the old files-mode test asserted
+// only that the output directory was non-empty, which is exactly why it passed on the bug.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn make_scale_corpus_files_mode_fails_loudly_when_a_shard_cannot_be_written() {
+    let out_dir = scratch("failshard-files");
+    let (quads, iris, seed, shards) = (400u64, 40u64, 1_592_642_302u64, 4u64);
+    let prefix = format!("purrdf-scale-mixed-v1.seed{seed}.quads{quads}.iris{iris}");
+    let shard_one = format!("{prefix}.shard-00001-of-00004.nq");
+
+    // A leftover DIRECTORY where shard 1's file belongs. This makes the corpus write — the FIRST
+    // of the shard body's two commands — fail while the `--manifest` write after it succeeds,
+    // which is precisely the ordering that used to be swallowed.
+    std::fs::create_dir(out_dir.join(&shard_one)).expect("occupy the shard file's path");
+
+    // A manifest left by an earlier, successful run of this same shard. A manifest is a
+    // CERTIFICATE, so it must not survive a shard that did not produce its corpus file.
+    let stale_manifest = out_dir.join(format!("{shard_one}.manifest.json"));
+    std::fs::write(&stale_manifest, b"{\"stale\": true}\n").expect("seed a stale shard manifest");
+
+    let (code, stdout, stderr) = run_make(&[
+        "scale-corpus",
+        &format!("SCALE_QUADS={quads}"),
+        &format!("SCALE_IRIS={iris}"),
+        &format!("SCALE_SEED={seed}"),
+        &format!("SCALE_SHARDS={shards}"),
+        "SCALE_MODE=files",
+        &format!("SCALE_OUT={}", out_dir.display()),
+    ]);
+    let stdout = String::from_utf8_lossy(&stdout).into_owned();
+
+    assert_ne!(
+        code, 0,
+        "a shard that could not be written must fail the whole run; stdout:\n{stdout}\n\
+         stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("scale-corpus: FAILED shards: 1"),
+        "the run must name the shard that failed in its own diagnostic; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("reproduces a whole run byte for byte"),
+        "the byte-for-byte guarantee must NOT be printed for a run whose shards are incomplete; \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("bytes="),
+        "a failed run must not report shard sizes at all — `bytes=0` for a shard that was never \
+         written is the corpus-certification bug itself; stdout:\n{stdout}"
+    );
+    assert!(
+        !stale_manifest.exists(),
+        "no manifest may be left certifying shard 1, whose corpus file does not exist; {} is \
+         still present",
+        stale_manifest.display()
+    );
+
+    std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
+}
+
+#[test]
+fn make_scale_corpus_stream_mode_fails_when_a_shard_fails() {
+    let dir = scratch("failshard-stream");
+    let stand_in = failing_shard_binary(&dir, 1);
+
+    let (code, stdout, stderr) = run_make(&[
+        "scale-corpus",
+        "SCALE_QUADS=400",
+        "SCALE_IRIS=40",
+        "SCALE_SHARDS=4",
+        "SCALE_MODE=stream",
+        &format!("SCALE_BIN={}", stand_in.display()),
+    ]);
+    assert_ne!(
+        code,
+        0,
+        "a failing shard must fail a stream run; stdout:\n{}\nstderr:\n{stderr}",
+        String::from_utf8_lossy(&stdout)
+    );
+    assert!(
+        stderr.contains("scale-corpus: FAILED shards: 1"),
+        "the stream run must name the shard that failed; stderr:\n{stderr}"
+    );
+
+    // The over-refusal counter-check: the same lane, same shard count, with a stand-in that
+    // refuses NOTHING must still succeed. A run that fails whatever it is given proves nothing.
+    let healthy = failing_shard_binary(&dir, u64::MAX);
+    let (code, _stdout, stderr) = run_make(&[
+        "scale-corpus",
+        "SCALE_QUADS=400",
+        "SCALE_IRIS=40",
+        "SCALE_SHARDS=4",
+        "SCALE_MODE=stream",
+        &format!("SCALE_BIN={}", healthy.display()),
+    ]);
+    assert_eq!(
+        code, 0,
+        "a stream run whose shards all succeed must still exit 0; stderr:\n{stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
+}
+
+#[test]
+fn make_scale_corpus_pipe_mode_fails_when_a_shard_fails() {
+    let dir = scratch("failshard-pipe");
+    let stand_in = failing_shard_binary(&dir, 1);
+
+    let (code, _stdout, stderr) = run_make(&[
+        "scale-corpus",
+        "SCALE_QUADS=400",
+        "SCALE_IRIS=40",
+        "SCALE_SHARDS=4",
+        "SCALE_MODE=pipe",
+        &format!("SCALE_BIN={}", stand_in.display()),
+    ]);
+    assert_ne!(
+        code, 0,
+        "a failing shard must fail a pipe run — a truncated stream silently loaded is the worst \
+         outcome this lane has; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("the stream is INCOMPLETE"),
+        "the pipe run must say the stream is incomplete; stderr:\n{stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
+}
+
+#[test]
+fn make_scale_corpus_files_mode_sorted_cat_matches_a_direct_whole_run_byte_for_byte() {
+    // The guarantee `SCALE_MODE=files` prints on its last line, asserted in BYTES. The
+    // pre-existing files-mode test asserted only that the output directory was non-empty, so it
+    // passed on a run with an entirely missing shard.
+    let (quads, iris, seed, shards) = (600u64, 70u64, 42u64, 3u64);
+    let expected = whole(quads, iris, seed);
+    let out_dir = scratch("files-identity");
+
+    let (code, _stdout, stderr) = run_make(&[
+        "scale-corpus",
+        &format!("SCALE_QUADS={quads}"),
+        &format!("SCALE_IRIS={iris}"),
+        &format!("SCALE_SEED={seed}"),
+        &format!("SCALE_SHARDS={shards}"),
+        "SCALE_MODE=files",
+        &format!("SCALE_OUT={}", out_dir.display()),
+    ]);
+    assert_eq!(
+        code, 0,
+        "the files-mode run must succeed; stderr:\n{stderr}"
+    );
+
+    // Lexicographic order over the zero-padded names IS shard order; that is what the zero
+    // padding is for, and what `cat <out>/<prefix>.shard-*.nq` relies on.
+    let mut shard_files: Vec<PathBuf> = std::fs::read_dir(&out_dir)
+        .expect("read the out directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        // Exactly what `cat <out>/<prefix>.shard-*.nq` selects: the corpus files and not the
+        // `.nq.manifest.json` certificates beside them, whose extension is `json`.
+        .filter(|path| path.extension().is_some_and(|extension| extension == "nq"))
+        .collect();
+    shard_files.sort();
+    assert_eq!(
+        shard_files.len() as u64,
+        shards,
+        "every shard must have produced a file; found {shard_files:?}"
+    );
+
+    let mut concatenated = Vec::new();
+    for path in &shard_files {
+        concatenated.extend_from_slice(&std::fs::read(path).expect("read a shard file"));
+    }
+    // Reported as a length plus the first differing offset rather than as two byte vectors: a
+    // failing `assert_eq!` over ~90 kB of N-Quads prints both sides in full and buries the one
+    // fact that matters.
+    let divergence = concatenated
+        .iter()
+        .zip(expected.iter())
+        .position(|(left, right)| left != right);
+    assert!(
+        concatenated == expected,
+        "the sorted `cat` of the shard files must be byte-identical to a direct whole run — the \
+         exact guarantee the lane prints on its last line. Concatenation is {} bytes, the whole \
+         run is {} bytes, first differing offset: {divergence:?}",
+        concatenated.len(),
+        expected.len()
+    );
+
+    std::fs::remove_dir_all(&out_dir).expect("cleanup out directory");
+}
+
+// ---------------------------------------------------------------------------------------------
+// F6 — `SCALE_BIN` is a path knob like every other, and it names the executable that CERTIFIES
+// THE BYTES.
+//
+// It was the one knob the script read that the `Makefile` never passed through `lane-env`, so it
+// still went through `make`'s own expansion: `make scale-corpus 'SCALE_BIN=/tmp/bin/de$xcoy'`
+// had `$x` expanded away and the lane EXECUTED `/tmp/bin/decoy` — a different binary than the
+// operator named — and exited 0.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn make_scale_corpus_scale_bin_is_taken_literally_and_never_resolves_to_another_binary() {
+    let dir = scratch("bin-literal");
+    let sentinel = dir.join("DECOY_RAN");
+
+    // The binary `make`'s expansion used to arrive at. It is a real, executable file, so a lane
+    // that lost the `$x` runs it happily.
+    write_executable(
+        dir.join("decoy"),
+        &format!("#!/bin/sh\n: >\"{}\"\nexit 0\n", sentinel.display()),
+    );
+
+    let requested = dir.join("de$xcoy");
+    assert!(
+        !requested.exists(),
+        "the requested path must NOT exist — that is the whole point of the test"
+    );
+
+    let (code, _stdout, stderr) = run_make(&[
+        "scale-corpus",
+        "SCALE_QUADS=100",
+        "SCALE_IRIS=10",
+        "SCALE_SHARDS=2",
+        "SCALE_MODE=stream",
+        &format!("SCALE_BIN={}", requested.display()),
+    ]);
+    assert!(
+        !sentinel.exists(),
+        "`make` must not expand `$x` away and run a DIFFERENT executable; the decoy at {} ran",
+        dir.join("decoy").display()
+    );
+    assert_ne!(
+        code, 0,
+        "a SCALE_BIN that does not exist must hard-fail; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("scale-corpus: SCALE_BIN="),
+        "the failure must be a LANE diagnostic naming the knob, not a bare shell or `make` \
+         error; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("de$xcoy"),
+        "the diagnostic must quote back the bytes the lane actually used; stderr:\n{stderr}"
+    );
+
+    std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
+}
+
+#[test]
+fn make_scale_corpus_accepts_a_scale_bin_whose_path_is_unusual_but_real() {
+    // The over-refusal counter-check to the test above. `$` and a space are legal in a filename,
+    // and a real binary at such a path must RUN — refusing it would be the mirror of executing
+    // the wrong one. This also pins that a command-line `SCALE_BIN` beats the environment's,
+    // since `run_make` always puts the plain binary in the child's environment.
+    let dir = scratch("bin literal ok");
+    for name in ["be$nch-corpus", "bench corpus", "bench-corpus"] {
+        let copy = dir.join(name);
+        std::fs::copy(BENCH, &copy).expect("copy the real binary to an unusual path");
+        let mut permissions = std::fs::metadata(&copy)
+            .expect("stat the copied binary")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&copy, permissions).expect("keep the copy executable");
+
+        let (code, stdout, stderr) = run_make(&[
+            "scale-corpus",
+            "SCALE_QUADS=100",
+            "SCALE_IRIS=10",
+            "SCALE_SHARDS=2",
+            "SCALE_MODE=stream",
+            &format!("SCALE_BIN={}", copy.display()),
+        ]);
+        assert_eq!(
+            code, 0,
+            "SCALE_BIN={name:?} names a real executable and must run; stderr:\n{stderr}"
+        );
+        assert!(
+            String::from_utf8_lossy(&stdout).contains("total rows=100"),
+            "the run must actually have produced the corpus; stdout:\n{}",
+            String::from_utf8_lossy(&stdout)
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).expect("cleanup scratch directory");
 }
