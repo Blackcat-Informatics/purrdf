@@ -608,14 +608,24 @@ case "${MODE}" in
     echo "scale-corpus: profile=${PROFILE_ID} mode=stream shards=${SHARDS} (retaining nothing)" >&2
     emit_manifest stdout
     run_all_shards stream_shard || die "at least one shard failed"
+    # ACCOUNTED FOR IN BOTH HALVES OF THIS MODE, AND BEFORE A WORD IS REPORTED.
+    # The totals line is only printed when this lane's own sink produced the
+    # per-shard reports; the ACCOUNTING happens either way, because `SCALE_SINK`
+    # changes who consumes the bytes and not whether they were produced.
+    #
+    # The ORDER is the point. A per-shard report carries that shard's digest, and
+    # a zero-row shard's digest is
+    # `sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+    # — the SHA-256 of the empty string, which `lane_require_nonempty_file` says
+    # is DESCRIBED and never EMITTED. Reporting first and accounting second put
+    # that digest on stdout for a run the next line was about to refuse: the exit
+    # status was 1 and nothing was certified, but the lane had still published the
+    # empty certificate it exists to withhold. Nothing is reported for a run that
+    # is about to fail.
+    account_for_run "across all ${SHARDS} shards"
     for ((index = 0; index < SHARDS; index++)); do
       printf 'shard %d/%d %s\n' "${index}" "${SHARDS}" "$(cat "${LANE_TMP}/${index}.report")"
     done
-    # ACCOUNTED FOR IN BOTH HALVES OF THIS MODE. The totals line is only printed
-    # when this lane's own sink produced the per-shard reports; the ACCOUNTING
-    # happens either way, because `SCALE_SINK` changes who consumes the bytes and
-    # not whether they were produced.
-    account_for_run "across all ${SHARDS} shards"
     if [[ -z "${SINK}" ]]; then
       density=0.0
       if ((RUN_ROWS > 0)); then
@@ -660,6 +670,13 @@ case "${MODE}" in
     # of accounting for a materialized corpus is a single sequential read of what
     # was just written, and it is what turns the manifest beside these files from
     # a claim into a certificate.
+    #
+    # MEASURING IS NOT REPORTING, and this mode has to do the first to be able to
+    # do the second — the per-shard counts below are what `account_for_run` adds
+    # up. So the lines are held rather than printed, and printed only once the
+    # run as a whole has been accounted for, by the same law `stream` follows: a
+    # run that is about to be refused reports nothing.
+    shard_reports=()
     for ((index = 0; index < SHARDS; index++)); do
       name="$(shard_name "${index}")"
       [[ -f "${OUT}/${name}" ]] ||
@@ -681,7 +698,7 @@ case "${MODE}" in
         # empty string and anything else reads back as itself.
         terminated=0
       fi
-      printf '%s rows=%s bytes=%s\n' "${name}" "${rows}" "${bytes}"
+      shard_reports+=("$(printf '%s rows=%s bytes=%s' "${name}" "${rows}" "${bytes}")")
       printf '%d %d %d\n' "${rows}" "${bytes}" "${terminated}" >"${LANE_TMP}/${index}.count"
     done
     # Materializing a corpus of zero bytes and then printing the byte-for-byte
@@ -689,6 +706,9 @@ case "${MODE}" in
     # printing it would be worse. An individual shard file may legitimately be
     # empty (see `require_run_rows`); the run may not.
     account_for_run "across all ${SHARDS} shard files"
+    for ((index = 0; index < SHARDS; index++)); do
+      printf '%s\n' "${shard_reports[index]}"
+    done
     echo "scale-corpus: cat ${OUT}/${PREFIX}.shard-*.nq reproduces a whole run byte for byte" >&2
     ;;
 esac

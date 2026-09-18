@@ -1109,6 +1109,29 @@ fn make_scale_corpus_refuses_a_run_that_produced_less_than_its_manifest_certifie
                 "{label} in {mode} mode must not print the byte-for-byte guarantee over a corpus \
                  that was not produced; output:\n{combined}"
             );
+            // NOTHING IS REPORTED FOR A RUN THAT IS ABOUT TO BE REFUSED, and the order of two
+            // lines is the whole of it. `stream` printed its per-shard reports BEFORE the
+            // accounting decided the run had failed, so a zero-row shard's digest — the SHA-256
+            // of the empty string, which `lane_require_nonempty_file` says is DESCRIBED and never
+            // EMITTED — reached stdout on the way to exiting 1. The exit status was right and
+            // nothing was certified, and the lane had still published the one digest it exists to
+            // withhold. The accounting runs first in every mode now.
+            assert!(
+                !combined.contains(EMPTY_STRING_SHA256),
+                "{label} in {mode} mode: the SHA-256 of the EMPTY STRING must never be published \
+                 as a digest, not even on the way to exiting non-zero; output:\n{combined}"
+            );
+            assert!(
+                !stdout.contains("sha256="),
+                "{label} in {mode} mode: a refused run reports no per-shard digest at all — \
+                 reporting first and accounting second publishes the certificate the next line is \
+                 about to refuse; stdout:\n{stdout}"
+            );
+            assert!(
+                !stdout.contains("rows="),
+                "{label} in {mode} mode: a refused run reports no per-shard counts at all; \
+                 stdout:\n{stdout}"
+            );
             // The certificate must not survive, by any of these routes.
             if mode == "files" {
                 let leftovers: Vec<_> = std::fs::read_dir(&out_dir)
