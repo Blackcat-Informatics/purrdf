@@ -21,7 +21,8 @@ use crate::error::FusionError;
 use crate::id::{FUSION_PROFILE_VERSION, FusionProfileId};
 use crate::iri::Iri;
 use crate::reciprocal_rank::{
-    MonotoneDepth, class_width, deepest_rank_within_width, minimum_weight_for_depth, monotone_depth,
+    MonotoneDepth, ToleratedDepth, class_width, deepest_rank_within_width,
+    minimum_weight_for_depth, monotone_depth,
 };
 
 // Canonical discriminators. One tag space per enum, never reused.
@@ -187,12 +188,21 @@ impl DecayRule {
     /// is the same answer looked up by stratum, for a caller that already
     /// holds a law and means one of the strata that law weights.
     ///
-    /// `max_width` of one agrees exactly with the depth
-    /// [`Self::weight_for_depth`]'s inverse would report: the deepest rank
-    /// still separated from both its neighbours. Larger values answer the
-    /// question a caller reading deeply actually has — not "where does this
-    /// stop being exact" but "how far can I read and still have ranks ordered
-    /// to within the resolution I can live with".
+    /// `max_width` of one is the separating depth itself — the deepest depth a
+    /// read can stop at with every rank it **actually read** separated from
+    /// both of its neighbours *within that read*. It is a depth, not a rank
+    /// property, and the difference is visible one call away:
+    /// [`Self::class_width`] at that rank reports at least `max_width + 1` —
+    /// two at a tolerance of one, never the one a "still separated from both
+    /// neighbours" reading would predict — because the unbounded curve it walks
+    /// also looks at the one rank the bounded read never reaches. It is exactly
+    /// `max_width + 1` where the run that ends the walk is one rank longer than
+    /// the tolerance, and wider where that run is longer still. The two agree
+    /// in every such case; they are answering a depth question and a rank
+    /// question. Larger tolerances answer the question a caller reading deeply
+    /// actually has — not "where does this stop being exact" but "how far can I
+    /// read and still have ranks ordered to within the resolution I can live
+    /// with".
     ///
     /// # What it costs to ask
     ///
@@ -214,25 +224,31 @@ impl DecayRule {
     /// tolerance at a heavy weight under the folded rule — where the separating
     /// depth itself grows as `sqrt(w)` — walks very far.
     ///
-    /// The walk stops at the deepest depth a plan can record, saturating there
-    /// and returning it, so it is bounded by fewer than `2^32` steps however it
-    /// is asked and cannot fail to terminate. It is a design-time question all
-    /// the same — price a depth budget once while choosing weights — and not
-    /// something to put in a hot loop.
+    /// The walk stops at the deepest depth a plan can record, so it is bounded
+    /// by fewer than `2^32` steps however it is asked and cannot fail to
+    /// terminate. A walk that gets there has found no bound inside the range a
+    /// plan can express, and says so as
+    /// [`ToleratedDepth::ReadsBeyondAnyPlan`] rather than quoting the ceiling
+    /// as a reading. It is a design-time question all the same — price a depth
+    /// budget once while choosing weights — and not something to put in a hot
+    /// loop.
     ///
     /// # Errors
     ///
-    /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero,
-    /// and [`FusionError::Overflow`] when a contribution leaves the
-    /// fixed-point range. A refusal is reported and never rendered as a
-    /// depth: the rank the walk stopped at is where the arithmetic gave out,
-    /// not a depth this rule was measured to deliver, and returning it as one
-    /// would quote a resolution nothing established.
+    /// [`FusionError::InvalidK`] when this rule's smoothing constant is zero
+    /// and [`FusionError::InvalidWidth`] when `max_width` is zero — a class
+    /// always contains its own rank, so a tolerance of zero is not a tolerance
+    /// — both refused before anything is measured, and
+    /// [`FusionError::Overflow`] when a contribution leaves the fixed-point
+    /// range. A refusal is reported and never rendered as a depth: the rank the
+    /// walk stopped at is where the arithmetic gave out, not a depth this rule
+    /// was measured to deliver, and returning it as one would quote a
+    /// resolution nothing established.
     pub fn deepest_rank_within_width(
         self,
         weight: Fixed,
         max_width: u64,
-    ) -> Result<u64, FusionError> {
+    ) -> Result<ToleratedDepth, FusionError> {
         deepest_rank_within_width(self, weight, max_width)
     }
 
@@ -712,10 +728,18 @@ impl FusionProfile {
     /// The deepest rank in `stratum` whose indifference class is still no wider
     /// than `max_width`.
     ///
-    /// `max_width` of one is [`Self::monotone_depth`]. Larger values answer the
-    /// question a caller reading deeply actually has: not "where does this stop
-    /// being exact" but "how far can I read and still have ranks ordered to
-    /// within the resolution I can live with".
+    /// `max_width` of one is [`Self::monotone_depth`]: the separating depth
+    /// itself, the deepest depth a read can stop at with every rank it
+    /// **actually read** separated from both of its neighbours within that
+    /// read. [`Self::class_width`] at that rank reports at least `max_width + 1`
+    /// rather than one — two at a tolerance of one, and wider than
+    /// `max_width + 1` where the run that ends the walk is longer than the
+    /// tolerance by more than a rank — because the unbounded curve it walks
+    /// also looks at the one rank the bounded read never reaches; the two are
+    /// answering a depth question and a rank question, and they agree. Larger tolerances answer
+    /// the question a caller reading deeply actually has: not "where does this
+    /// stop being exact" but "how far can I read and still have ranks ordered
+    /// to within the resolution I can live with".
     ///
     /// `Ok(None)` is a stratum this profile declares no weight for, exactly as
     /// in [`Self::class_width`], and it is an absence rather than a failure.
@@ -734,14 +758,27 @@ impl FusionProfile {
     /// [`DecayRule::WeightedReciprocalRank`] — the case whose separating depth
     /// itself grows with the weight — walks very far.
     ///
-    /// The walk saturates at the deepest depth a plan can record and returns
-    /// it, which bounds it at fewer than `2^32` steps however it is asked; it
-    /// cannot fail to terminate. It is a design-time question all the same —
-    /// price a depth budget once while choosing weights — and not something to
-    /// put in a hot loop. See [`DecayRule::deepest_rank_within_width`] for the
-    /// arithmetic behind the estimate.
+    /// The walk stops at the deepest depth a plan can record, which bounds it
+    /// at fewer than `2^32` steps however it is asked; it cannot fail to
+    /// terminate. Getting there means no depth a plan can express ever exceeds
+    /// the tolerance, which is reported as
+    /// [`ToleratedDepth::ReadsBeyondAnyPlan`] and not as the ceiling wearing a
+    /// measurement's shape — two weights fifty times apart both arrive there,
+    /// and a bare number would say they reach the same depth. It is a
+    /// design-time question all the same — price a depth budget once while
+    /// choosing weights — and not something to put in a hot loop. See
+    /// [`DecayRule::deepest_rank_within_width`] for the arithmetic behind the
+    /// estimate.
     ///
     /// # Errors
+    ///
+    /// [`FusionError::InvalidWidth`] when `max_width` is zero: a class always
+    /// contains its own rank, so a tolerance of zero is not a tolerance and no
+    /// depth is walked for one. A stratum this profile does not weight is still
+    /// `Ok(None)` whatever the tolerance, exactly as in [`Self::class_width`] —
+    /// "this profile says nothing about that stratum" is true before the
+    /// tolerance is read, and turning an absence into a refusal would answer a
+    /// question about arithmetic that was never reached.
     ///
     /// [`FusionError::InvalidK`] when the profile's smoothing constant is zero,
     /// and [`FusionError::Overflow`] when a contribution leaves the fixed-point
@@ -753,7 +790,7 @@ impl FusionProfile {
         &self,
         stratum: &Iri,
         max_width: u64,
-    ) -> Result<Option<u64>, FusionError> {
+    ) -> Result<Option<ToleratedDepth>, FusionError> {
         let Some(weight) = self.weights.get(stratum) else {
             return Ok(None);
         };

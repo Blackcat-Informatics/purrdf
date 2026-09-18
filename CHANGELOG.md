@@ -29,12 +29,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   next weight that could satisfy it, and the search walks those candidates
   without ever skipping one, so the weight it returns is the true minimum rather
   than whichever side of an oscillation a probe happened to land on.
-  `MonotoneDepth` spells the saturation point as a
-  distinct case so it cannot be mistaken for a measured depth. The same surface
-  is exposed to Python as `retrieval.weight_for_depth`,
+  `MonotoneDepth` spells the separating depth's saturation point as a
+  distinct case so it cannot be mistaken for a measured depth, and
+  `ToleratedDepth` does the same for the depth a tolerance buys. The same
+  surface is exposed to Python as `retrieval.weight_for_depth`,
   `retrieval.class_width` and `retrieval.deepest_rank_within_width`.
 
-  Its four refusals are four separate facts and carry four separate variants.
+  Its five refusals are five separate facts and carry five separate variants.
+  `FusionError::InvalidWidth` means the tolerance was zero, which describes no
+  class at all because a class always contains its own rank.
   `FusionError::DepthUnreachable` means the decay rule itself stopped separating
   adjacent ranks at any weight, and it reports the exact depth it does reach --
   the deepest any weight reaches, not the depth of one particular weight, and
@@ -203,6 +206,58 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **retrieval:** `DecayRule::deepest_rank_within_width` and
+  `FusionProfile::deepest_rank_within_width` answer with the new
+  `ToleratedDepth` rather than a bare `u64`, and the Python
+  `retrieval.deepest_rank_within_width` answers `int | None` rather than `int`.
+  A plan records a per-stratum depth as a 32-bit rank, so a walk that runs to
+  that ceiling has found no bound inside any plan's reach -- and it now says
+  that, as `ToleratedDepth::ReadsBeyondAnyPlan` and as `None`, rather than
+  handing back `2**32 - 1` as though it were a depth somebody measured. Two
+  weights fifty times apart both reach the ceiling, and the bare number said
+  they read to the same depth: a number a caller can log, plot or divide by,
+  quoted precisely where no bound exists. `MonotoneDepth` had already drawn that
+  line for the separating depth; the tolerated depth is a separate type because
+  its cases claim something different -- above a tolerance of one the ranks it
+  reports do share contributions, just never more than the tolerance of them
+  within the read, so carrying it in `MonotoneDepth::SeparatesTo` would attach a
+  separation claim to a depth measured under no such claim. The Python rendering
+  matches what a `search` answer already does with `"separates_to"`, which is
+  `None` for the same wall. Confined to `purrdf-retrieval` and its binding,
+  which have not yet been published, so no released API changes.
+- **retrieval:** A `max_width` of zero is refused as the new
+  `FusionError::InvalidWidth` -- "a tolerance of zero is not a tolerance,
+  because a class always contains its own rank" -- from `DecayRule`,
+  `FusionProfile` and `retrieval.deepest_rank_within_width` alike, instead of
+  being silently read as one. It is the only zero operand on this surface that
+  did not refuse: a rank of zero and a smoothing constant of zero already did,
+  and a tolerance of zero is the same shape as a constant of zero, a question
+  with no evaluable content. Reading it as one answered the narrowest real
+  tolerance in its place, which is the deepest fully-separated depth this
+  algebra can report -- the most favourable answer there is, returned precisely
+  where nothing was asked. It is a separate variant from
+  `FusionError::InvalidRank` because a tolerance is a count of ranks measured
+  across the 1-based axis rather than a position on it, and "rank must be at
+  least 1" would send a caller to inspect an argument that was never at fault.
+  The normalisation had also been documented only on the private implementation:
+  neither public entry point's `# Errors` section, nor the `.pyi` stub,
+  mentioned it. Confined to `purrdf-retrieval` and its binding, which have not
+  yet been published, so no released API changes.
+- **retrieval:** The documented meaning of a `max_width` of one now says what
+  the code does. It had claimed to report "the deepest rank still separated from
+  both its neighbours", and the branch's own tests assert the opposite: the
+  answer is the deepest depth a *read* can stop at with every rank it actually
+  read separated, and `class_width` at that rank is never one. `class_width`
+  measures the unbounded curve, which also looks at the one rank the bounded
+  read never reaches, so it reports at least `max_width + 1` there -- exactly
+  `max_width + 1` where the run that ends the walk is one rank longer than the
+  tolerance, and wider where that run is longer still, which is measured under
+  the truncated rule at a raw weight of `10^6` with a tolerance of fifty. The
+  two functions agree in all of those cases; they are answering a depth question
+  and a rank question. The corrected relationship is carried into
+  `DecayRule::deepest_rank_within_width`,
+  `FusionProfile::deepest_rank_within_width`, the Python docstring and
+  `__init__.pyi`, and is asserted rather than described.
 - **retrieval:** Every Python entry point that takes a smoothing constant now
   takes the decay rule that constant belongs to, and none of them defaults it.
   `retrieval.search`, `retrieval.weight_for_depth` and `retrieval.class_width`

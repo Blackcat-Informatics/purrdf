@@ -100,6 +100,28 @@ fn usable_k(decay: DecayRule) -> Result<u32, FusionError> {
     Ok(k)
 }
 
+/// A class-width tolerance, or the refusal that says it describes no class.
+///
+/// An indifference class always contains its own rank, so the narrowest class
+/// that exists is one rank wide and a tolerance of zero admits none. This is
+/// [`usable_k`]'s shape exactly — an operand with no evaluable content, read
+/// before the question it qualifies — and it is refused rather than clamped for
+/// the same reason. Clamping it to one answers the narrowest *real* tolerance
+/// in its place, which is the deepest fully-separated depth this algebra can
+/// report: the most favourable answer available, returned precisely where
+/// nothing was asked.
+///
+/// It is not [`FusionError::InvalidRank`]. A rank of zero is a position that
+/// does not exist on a 1-based axis; a tolerance of zero is a *count of ranks*
+/// measured across that axis, and telling a caller that "rank must be at least
+/// 1" points at an argument that was never at fault.
+fn usable_width(max_width: u64) -> Result<u64, FusionError> {
+    if max_width == 0 {
+        return Err(FusionError::InvalidWidth { max_width });
+    }
+    Ok(max_width)
+}
+
 /// The contribution of a stratum weight at a 1-based rank under smoothing `K`,
 /// under [`DecayRule::ReciprocalRank`].
 ///
@@ -246,6 +268,69 @@ impl MonotoneDepth {
         match self {
             Self::SeparatesBeyondAnyPlan => None,
             Self::SeparatesTo(bound) => Some(bound),
+        }
+    }
+}
+
+/// How deep a profile can be read with every rank the read reaches sitting in
+/// an indifference class no wider than a stated tolerance.
+///
+/// This is [`MonotoneDepth`]'s sibling, not a second spelling of it, and the
+/// two are kept apart because their reported cases claim different things.
+/// [`MonotoneDepth::SeparatesTo`] asserts that *every adjacent pair* up to the
+/// bound carries a distinct contribution — the most favourable claim this
+/// algebra makes. A tolerance above one buys depth by giving exactly that up:
+/// at the depth reported here ranks do share contributions, just never more
+/// than the tolerance of them within the read. Reusing the separating type to
+/// carry a tolerated depth would attach a separation claim to a depth measured
+/// under no such claim, which is the defect this whole algebra is written to
+/// avoid.
+///
+/// The saturating case is spelled for the same reason it is on
+/// [`MonotoneDepth`]: a plan records a per-stratum depth as a `u32`, so a
+/// tolerance no depth in that range ever exceeds has no bound to report, and
+/// handing back `u32::MAX` as though it were a measured depth invites a caller
+/// to log it, plot it, or divide by it. Two weights fifty times apart both
+/// saturate, and a bare number says they are the same depth; the saturating
+/// case says only what is true, which is that neither has a bound inside any
+/// plan's reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToleratedDepth {
+    /// A read truncated at this 1-based depth puts every rank it reads in a
+    /// class no wider than the tolerance, and a read one rank deeper does not.
+    /// Exact, not a conservative estimate.
+    ReadsTo(u64),
+    /// No depth a plan is able to express exceeds the tolerance. There is no
+    /// bound to report, not an enormous one.
+    ReadsBeyondAnyPlan,
+}
+
+impl ToleratedDepth {
+    /// Read a raw walked depth as the saturating quantity it is.
+    #[must_use]
+    pub(crate) const fn from_rank(rank: u64) -> Self {
+        if rank >= MAX_DEPTH {
+            Self::ReadsBeyondAnyPlan
+        } else {
+            Self::ReadsTo(rank)
+        }
+    }
+
+    /// Whether reading to `depth` stays inside the tolerated range.
+    #[must_use]
+    pub const fn covers(self, depth: u64) -> bool {
+        match self {
+            Self::ReadsBeyondAnyPlan => true,
+            Self::ReadsTo(bound) => depth <= bound,
+        }
+    }
+
+    /// The depth as a number, when there is one to report.
+    #[must_use]
+    pub const fn rank(self) -> Option<u64> {
+        match self {
+            Self::ReadsBeyondAnyPlan => None,
+            Self::ReadsTo(bound) => Some(bound),
         }
     }
 }
@@ -450,7 +535,25 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<
 /// depth that orders perfectly, which is the same defect as refusing it.
 ///
 /// With `max_width` of one this therefore agrees exactly with
-/// [`monotone_depth`].
+/// [`monotone_depth`] — and [`class_width`] at the returned depth reports at
+/// least two, never one, for exactly that reason: the class the *unbounded*
+/// curve puts that rank in also looks at rank `r + 1`, the one rank the bounded
+/// read never reaches.
+///
+/// That offset is a law at every tolerance. The walk returns `D` only once
+/// `run_start..=D + 1` — `max_width + 1` consecutive ranks, `D` among them —
+/// have been observed to share one contribution, and `class_width(D)` measures
+/// the whole maximal run containing `D`. So `class_width` at this function's
+/// answer is **never** `max_width` and never one; it is at least
+/// `max_width + 1`. It is exactly `max_width + 1` when the run that ended the
+/// walk is exactly one rank longer than the tolerance, which is the ordinary
+/// case wherever the curve is smooth at that depth, and it is wider where the
+/// run is longer still: under the truncated rule at a raw weight of `10^3` a
+/// tolerance of two lands on a depth whose full class is four, and a tolerance
+/// of 4096 lands on a depth whose class runs to the end of the expressible
+/// range, because there every deeper contribution has truncated to the same
+/// value. The two functions are agreeing in all of those cases, not
+/// disagreeing; they are answering a depth question and a rank question.
 ///
 /// The same truncation argument generalizes to any `max_width`. Suppose a run
 /// of mutually colliding ranks begins at `run_start`, and the first depth at
@@ -482,8 +585,10 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<
 /// So the run lengths are counted exactly. The walk starts at
 /// [`monotone_depth`] rather than at rank one, because every class below that
 /// point has width one by its definition and cannot be what exceeds
-/// `max_width`. A `max_width` below one is read as one: a class always contains
-/// its own rank.
+/// `max_width`. A `max_width` of zero is refused rather than read as one: a
+/// class always contains its own rank, so a tolerance of zero describes no
+/// class at all, and reading it as the narrowest real tolerance would answer a
+/// question nobody asked with the most favourable depth that question has.
 ///
 /// # How long the walk is
 ///
@@ -507,12 +612,13 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<
 /// folded one — so a large tolerance at a heavy folded weight is where this
 /// walks farthest.
 ///
-/// It never walks past [`MAX_DEPTH`]: above that the answer saturates and is
-/// returned as `MAX_DEPTH`, which bounds the whole walk at fewer than `2^32`
-/// steps no matter what it is asked. A saturating call is the slowest one
-/// there is and it terminates; none of this is a hazard to be guarded against,
-/// but it is a cost worth knowing before putting the call somewhere it runs
-/// more than once.
+/// It never walks past [`MAX_DEPTH`]: above that there is no bound inside the
+/// expressible range to report, and the answer is
+/// [`ToleratedDepth::ReadsBeyondAnyPlan`] rather than the ceiling dressed as a
+/// reading. That bounds the whole walk at fewer than `2^32` steps no matter
+/// what it is asked. A saturating call is the slowest one there is and it
+/// terminates; none of this is a hazard to be guarded against, but it is a cost
+/// worth knowing before putting the call somewhere it runs more than once.
 ///
 /// # Errors
 ///
@@ -520,6 +626,12 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<
 /// refused before anything is measured or walked. A tolerance of one does no
 /// walking at all, so leaving this to the walk would let the widest tolerance
 /// refuse and the narrowest one answer under the very same unusable rule.
+///
+/// [`FusionError::InvalidWidth`] when `max_width` is zero, refused on the same
+/// terms and for the same reason: a class always contains its own rank, so a
+/// tolerance of zero is not a tolerance. It is checked beside the constant
+/// rather than at the walk, because the tolerance decides how far the walk
+/// runs and a malformed one has no walk to refuse it.
 ///
 /// Then whatever [`contribution_under`] refuses at any rank the walk reads:
 /// [`FusionError::Overflow`] for a product that leaves the fixed-point range.
@@ -534,17 +646,21 @@ pub(crate) fn deepest_rank_within_width(
     decay: DecayRule,
     weight: Fixed,
     max_width: u64,
-) -> Result<u64, FusionError> {
+) -> Result<ToleratedDepth, FusionError> {
     // The law before the question. [`monotone_depth`] below refuses an unusable
     // constant too, so this is not what makes the refusal reachable; it is what
     // keeps it reachable if a short-circuit is ever hoisted above the
     // measurement, which is exactly how a tolerance of one came to answer for a
     // rule that could not be evaluated.
     usable_k(decay)?;
-    let ceiling = max_width.max(1);
+    // And the question before the measurement. A class always contains its own
+    // rank, so zero describes no class; normalising it up to one answered the
+    // narrowest real tolerance in its place, which is the most favourable thing
+    // this function can say, said where nothing was asked.
+    let ceiling = usable_width(max_width)?;
     let start = monotone_depth(decay, weight)?;
     if ceiling == 1 || start >= MAX_DEPTH {
-        return Ok(start);
+        return Ok(ToleratedDepth::from_rank(start));
     }
 
     // Walk forward, counting consecutive ranks that carry one contribution. The
@@ -557,7 +673,7 @@ pub(crate) fn deepest_rank_within_width(
         let next = contribution_under(decay, weight, rank + 1)?;
         if next == current {
             if rank + 1 - run_start + 1 > ceiling {
-                return Ok(rank);
+                return Ok(ToleratedDepth::ReadsTo(rank));
             }
         } else {
             current = next;
@@ -565,7 +681,7 @@ pub(crate) fn deepest_rank_within_width(
         }
         rank += 1;
     }
-    Ok(MAX_DEPTH)
+    Ok(ToleratedDepth::ReadsBeyondAnyPlan)
 }
 
 /// What one adjacent-rank constraint says about one candidate weight.
@@ -1173,9 +1289,9 @@ fn weighted_guarantee(weight_raw: u128, k: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_DEPTH, class_width, contribution, contribution_under, deepest_rank_within_width,
-        first_collision, minimum_weight_for_depth, monotone_depth, shortfall_at,
-        weighted_contribution, weighted_guarantee,
+        MAX_DEPTH, MonotoneDepth, ToleratedDepth, class_width, contribution, contribution_under,
+        deepest_rank_within_width, first_collision, minimum_weight_for_depth, monotone_depth,
+        shortfall_at, weighted_contribution, weighted_guarantee,
     };
     use crate::error::FusionError;
     use crate::fusion_profile::DecayRule;
@@ -1765,7 +1881,7 @@ mod tests {
                 assert!(
                     deepest_rank_within_width(rule(1), weight, tolerance)
                         .expect("the smallest usable constant measures a depth")
-                        > 1,
+                        .covers(2),
                     "{:?} tolerance {tolerance}: the smallest usable constant reads past \
                      a single rank",
                     rule(1)
@@ -1811,7 +1927,7 @@ mod tests {
         assert!(
             deepest_rank_within_width(truncated(1), weight, 4)
                 .expect("a constant of one is usable")
-                > 1,
+                .covers(2),
             "and tolerating a class of four reads deeper than a single rank"
         );
     }
@@ -1834,12 +1950,14 @@ mod tests {
             let separating = measured_bound(decay, weight);
             assert_eq!(
                 deepest_rank_within_width(decay, weight, 1).expect("a unit weight measures"),
-                separating,
+                ToleratedDepth::ReadsTo(separating),
                 "{decay:?}: a tolerance of one is the separating depth and walks not at all"
             );
             for (tolerance, root) in [(4_u64, 2_u64), (16, 4), (64, 8)] {
                 let depth = deepest_rank_within_width(decay, weight, tolerance)
-                    .expect("a unit weight measures");
+                    .expect("a unit weight measures")
+                    .rank()
+                    .expect("a unit weight's tolerated depth is inside a plan's range");
                 let expected = separating * root;
                 let slack = expected / 1_000;
                 assert!(
@@ -1848,6 +1966,130 @@ mod tests {
                      {root} times the separating depth {separating}, and landed at {depth}"
                 );
             }
+        }
+    }
+
+    /// The ceiling a plan's depth encoding sets is a wall, and the tolerance
+    /// walk reports it as one rather than as a depth it measured.
+    ///
+    /// Two weights fifty times apart both run to that ceiling. A bare
+    /// `u32::MAX` from each says they reach the same depth — a number a caller
+    /// can log, plot or divide by — where the only true statement is that
+    /// neither has a bound inside any plan's reach. The neighbouring weight
+    /// just below the wall is asserted in the same test, because a saturating
+    /// case is only honest if its neighbour still reports a real depth.
+    ///
+    /// The other two entry points over this file are asserted here too, at the
+    /// identical boundary. They agree by law rather than by which one was
+    /// called: a *measured* range that reaches the ceiling is the saturating
+    /// case of a typed quantity, and a *requested* depth past it is refused as
+    /// a limit of the plan's depth encoding.
+    #[test]
+    fn a_tolerated_depth_that_saturates_is_reported_as_saturation_and_not_as_a_number() {
+        let decay = folded(60);
+
+        for weight in [
+            Fixed::from_raw(20_000_000 * SCALE),
+            Fixed::from_raw(1_000_000_000 * SCALE),
+        ] {
+            assert_eq!(
+                deepest_rank_within_width(decay, weight, 1).expect("the arithmetic evaluates"),
+                ToleratedDepth::ReadsBeyondAnyPlan,
+                "{decay:?}: a weight that outruns every expressible depth has no bound to \
+                 report, not an enormous one"
+            );
+            assert_eq!(
+                MonotoneDepth::from_rank(
+                    monotone_depth(decay, weight).expect("the arithmetic evaluates")
+                ),
+                MonotoneDepth::SeparatesBeyondAnyPlan,
+                "{decay:?}: and the separation question hits the same wall and spells it the \
+                 same way"
+            );
+        }
+
+        // The neighbouring weight, below the wall: a measured depth, reported
+        // as one. Two million raw units lighter than the first saturating
+        // weight above, and the answer changes shape rather than degree.
+        let below = Fixed::from_raw(18_000_000 * SCALE);
+        let bound = monotone_depth(decay, below).expect("the arithmetic evaluates");
+        assert!(
+            bound < MAX_DEPTH,
+            "the neighbouring case must be inside the expressible range, or it proves nothing"
+        );
+        assert_eq!(
+            deepest_rank_within_width(decay, below, 1).expect("the arithmetic evaluates"),
+            ToleratedDepth::ReadsTo(bound),
+            "{decay:?}: a bound inside a plan's range is a measurement and is reported as one"
+        );
+
+        // The walk's own saturating exit, not only the short-circuit above: the
+        // smallest weight that separates to one rank short of the ceiling,
+        // walked at a tolerance of two, steps off the end of the expressible
+        // range instead of stopping inside it.
+        let at_the_edge = minimum_weight_for_depth(decay, MAX_DEPTH - 1)
+            .expect("the folded rule prices the deepest expressible depths");
+        assert_eq!(
+            monotone_depth(decay, at_the_edge).expect("the arithmetic evaluates"),
+            MAX_DEPTH - 1,
+            "the minimum weight for a depth separates to exactly that depth"
+        );
+        assert_eq!(
+            deepest_rank_within_width(decay, at_the_edge, 2).expect("the arithmetic evaluates"),
+            ToleratedDepth::ReadsBeyondAnyPlan,
+            "a walk that runs to the ceiling found no bound a plan could carry"
+        );
+
+        // And the entry point that is handed a *requested* depth rather than
+        // measuring one refuses at the same boundary, as a limit of the plan's
+        // depth encoding — with the neighbouring in-range depth still priced,
+        // so the refusal is about the depth and nothing else.
+        assert!(
+            matches!(
+                minimum_weight_for_depth(decay, MAX_DEPTH + 1),
+                Err(FusionError::DepthBeyondPlanRange {
+                    limit: MAX_DEPTH,
+                    ..
+                })
+            ),
+            "a requested depth past the wall is a range refusal, never a saturated measurement"
+        );
+        assert!(
+            minimum_weight_for_depth(decay, MAX_DEPTH).is_ok(),
+            "and the deepest expressible depth is still priced"
+        );
+    }
+
+    /// A tolerance of zero is refused rather than read as the narrowest real
+    /// one, and the neighbouring tolerance of one still answers.
+    ///
+    /// A class always contains its own rank, so a tolerance of zero describes
+    /// no class at all — the same shape as a smoothing constant of zero
+    /// describing no law. Normalising it up to one answered the narrowest real
+    /// tolerance in its place, which is the deepest fully-separated depth this
+    /// algebra reports: the most favourable answer available, returned
+    /// precisely where nothing was asked.
+    #[test]
+    fn a_tolerance_of_zero_is_refused_rather_than_read_as_the_narrowest_real_one() {
+        let weight = Fixed::from_raw(1_000);
+        for decay in [truncated(60), folded(60)] {
+            assert!(
+                matches!(
+                    deepest_rank_within_width(decay, weight, 0),
+                    Err(FusionError::InvalidWidth { max_width: 0 })
+                ),
+                "{decay:?}: a tolerance of zero is not a tolerance, and it is refused as one \
+                 rather than as a rank"
+            );
+
+            // The neighbouring valid case: the narrowest tolerance that does
+            // describe a class, at the same weight under the same rule.
+            let bound = monotone_depth(decay, weight).expect("the arithmetic evaluates");
+            assert_eq!(
+                deepest_rank_within_width(decay, weight, 1).expect("the arithmetic evaluates"),
+                ToleratedDepth::ReadsTo(bound),
+                "{decay:?}: a tolerance of one is a tolerance and reads to the separating depth"
+            );
         }
     }
 

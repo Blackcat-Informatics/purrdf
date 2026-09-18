@@ -265,7 +265,7 @@ pub use plan::{
 };
 pub use planner::plan;
 pub use ranked_stream::{ProducerReceipt, ProtocolError, RankedStream, StreamContract};
-pub use reciprocal_rank::MonotoneDepth;
+pub use reciprocal_rank::{MonotoneDepth, ToleratedDepth};
 pub use reciprocal_rank::{contribution, contribution_under, weighted_contribution};
 pub use request::{Metric, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};

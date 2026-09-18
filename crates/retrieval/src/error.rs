@@ -160,6 +160,29 @@ pub enum FusionError {
         rank: u64,
     },
 
+    /// A class-width tolerance of zero was offered as a tolerance.
+    ///
+    /// An indifference class always contains its own rank, so the narrowest
+    /// class that exists is one rank wide and a tolerance of zero admits no
+    /// class at all. It is the same shape as a smoothing constant of zero —
+    /// a question with no evaluable content — and it is refused for the same
+    /// reason rather than quietly read as one, which would answer the most
+    /// favourable question available instead of the one that was asked.
+    ///
+    /// It does **not** share [`InvalidRank`](Self::InvalidRank), even though
+    /// both are "this count may not be zero". That variant is about the 1-based
+    /// rank axis, and its message says `rank must be at least 1`; a tolerance
+    /// is a width measured *across* that axis rather than a position on it, and
+    /// reporting a rejected tolerance as a rejected rank would send a caller to
+    /// inspect an argument that was never at fault.
+    #[error(
+        "class-width tolerance must be at least 1, got {max_width}; a tolerance of zero is not a tolerance, because a class always contains its own rank"
+    )]
+    InvalidWidth {
+        /// The rejected tolerance.
+        max_width: u64,
+    },
+
     /// A fusion profile carried no stratum weights.
     #[error("fusion profile must declare at least one stratum weight")]
     EmptyWeights,

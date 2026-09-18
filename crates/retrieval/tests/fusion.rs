@@ -17,8 +17,8 @@ use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId, FusionResult,
     FusionStream, Iri, MonotoneDepth, PlanId, ProducerReceipt, ProducerStatus, ProtocolError,
-    RECIP_K, RankedStream, RankedStreamImpl, StreamContract, Term, TopK, contribution,
-    contribution_under,
+    RECIP_K, RankedStream, RankedStreamImpl, StreamContract, Term, ToleratedDepth, TopK,
+    contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -3471,14 +3471,16 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
         .expect("weighted");
     let expected_deepest = deepest_rank_within_width_by_walking(decay, weight, near, 10_000);
     assert_eq!(
-        deepest, expected_deepest,
-        "tolerating a class of {near} must equal the independently walked depth"
+        deepest,
+        ToleratedDepth::ReadsTo(expected_deepest),
+        "tolerating a class of {near} must equal the independently walked depth, and report it \
+         as a measured depth rather than as a saturation point"
     );
     assert_eq!(
         profile
             .deepest_rank_within_width(&stratum, 1)
             .expect("the arithmetic evaluates"),
-        Some(bound),
+        Some(ToleratedDepth::ReadsTo(bound)),
         "a tolerance of one is the separating bound itself"
     );
 }
@@ -3506,7 +3508,8 @@ fn deepest_rank_within_width_matches_an_independently_walked_truth_at_several_to
             .expect("the arithmetic evaluates")
             .expect("weighted");
         assert_eq!(
-            got, truth,
+            got,
+            ToleratedDepth::ReadsTo(truth),
             "deepest_rank_within_width must equal the independently walked depth at max_width {max_width}, not understate it"
         );
     }
@@ -3523,7 +3526,7 @@ fn deepest_rank_within_width_matches_an_independently_walked_truth_at_several_to
         profile
             .deepest_rank_within_width(&stratum, 1)
             .expect("the arithmetic evaluates"),
-        Some(bound),
+        Some(ToleratedDepth::ReadsTo(bound)),
         "max_width one must still agree exactly with monotone_depth"
     );
 }
@@ -3544,7 +3547,9 @@ fn deepest_rank_within_width_is_the_last_depth_the_offending_run_still_fits_in()
         let depth = profile
             .deepest_rank_within_width(&stratum, max_width)
             .expect("the arithmetic evaluates")
-            .expect("weighted");
+            .expect("weighted")
+            .rank()
+            .expect("this fixture's tolerated depth is inside a plan's range");
 
         for rank in 1..=depth {
             let width = truncated_class_width(decay, weight, depth, rank);
@@ -3564,6 +3569,171 @@ fn deepest_rank_within_width_is_the_last_depth_the_offending_run_still_fits_in()
              class past {max_width}, or {depth} was not actually the deepest admissible depth"
         );
     }
+}
+
+#[test]
+fn the_class_at_the_reported_depth_is_the_run_the_bounded_read_never_finishes() {
+    // What the reported depth means, asserted rather than described. It is the
+    // deepest depth a READ can stop at with every rank it actually read sitting
+    // in a class no wider than the tolerance -- NOT the deepest rank whose own
+    // class on the unbounded curve is that narrow. The two differ by exactly
+    // the rank the bounded read never reaches, so `class_width` at the reported
+    // depth is never the tolerance and never one: it is at least the tolerance
+    // plus one, being the whole run whose (max_width + 1)-th member ended the
+    // walk.
+    //
+    // The magnitudes are measured against this fixture and pinned beside the
+    // inequality, not in place of it. They also show why the relation is an
+    // inequality: at a tolerance of fifty the run that ends the walk is two
+    // ranks longer than the tolerance rather than one, so equality would be a
+    // claim this arithmetic does not make.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+    let profile = deep_profile(decay, weight);
+    let stratum = stratum("deep");
+
+    for (max_width, measured_depth, measured_width) in [
+        (1_u64, 972_u64, 2_u64),
+        (2, 1382, 3),
+        (3, 1712, 4),
+        (5, 2222, 6),
+        (10, 3144, 11),
+        (50, 7132, 52),
+    ] {
+        let depth = profile
+            .deepest_rank_within_width(&stratum, max_width)
+            .expect("the arithmetic evaluates")
+            .expect("weighted")
+            .rank()
+            .expect("this fixture's tolerated depth is inside a plan's range");
+        assert_eq!(
+            depth, measured_depth,
+            "max_width {max_width}: the depth this fixture reports"
+        );
+
+        let width = profile
+            .class_width(&stratum, depth)
+            .expect("the arithmetic evaluates")
+            .expect("weighted");
+        assert!(
+            width > max_width,
+            "max_width {max_width}: the unbounded class at the reported depth {depth} must be \
+             at least {} ranks wide -- it contains the run whose last member is the rank the \
+             bounded read never reaches -- and was {width}",
+            max_width + 1
+        );
+        assert_eq!(
+            width, measured_width,
+            "max_width {max_width}: the width this fixture measures at depth {depth}"
+        );
+    }
+}
+
+#[test]
+fn a_tolerance_of_zero_is_refused_at_both_altitudes_and_a_tolerance_of_one_answers() {
+    // A class always contains its own rank, so a tolerance of zero describes no
+    // class at all -- the same shape as the smoothing constant of zero that
+    // describes no law, and refused on the same terms rather than quietly read
+    // as one. Reading it as one answered the narrowest REAL tolerance in its
+    // place, which is the deepest fully-separated depth this algebra reports:
+    // the most favourable answer there is, returned where nothing was asked.
+    //
+    // Both altitudes are asserted, each beside its neighbouring valid case, per
+    // the repository's rule that a refusal is proved from both sides.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+    let profile = deep_profile(decay, weight);
+    let unweighted = stratum("never/declared");
+    let stratum = stratum("deep");
+
+    assert!(
+        matches!(
+            decay.deepest_rank_within_width(weight, 0),
+            Err(FusionError::InvalidWidth { max_width: 0 })
+        ),
+        "the arithmetic-only altitude refuses a tolerance of zero as a tolerance"
+    );
+    assert!(
+        matches!(
+            profile.deepest_rank_within_width(&stratum, 0),
+            Err(FusionError::InvalidWidth { max_width: 0 })
+        ),
+        "and so does the altitude that looks the weight up by stratum"
+    );
+
+    let bound = profile
+        .monotone_depth(&stratum)
+        .expect("weighted")
+        .rank()
+        .expect("this fixture separates inside a plan's range");
+    assert_eq!(
+        decay
+            .deepest_rank_within_width(weight, 1)
+            .expect("a tolerance of one is a tolerance"),
+        ToleratedDepth::ReadsTo(bound),
+        "the neighbouring valid tolerance still reads to the separating depth"
+    );
+    assert_eq!(
+        profile
+            .deepest_rank_within_width(&stratum, 1)
+            .expect("a tolerance of one is a tolerance"),
+        Some(ToleratedDepth::ReadsTo(bound)),
+        "at both altitudes, so the refusal above is about the tolerance and nothing else"
+    );
+
+    // A stratum this profile does not weight stays an absence at either
+    // tolerance, exactly as it does for `class_width`: "this profile says
+    // nothing about that stratum" is true before the tolerance is read.
+    assert!(
+        matches!(profile.deepest_rank_within_width(&unweighted, 0), Ok(None)),
+        "an unweighted stratum is an absence, not a refusal, whatever the tolerance"
+    );
+    assert!(
+        matches!(profile.class_width(&unweighted, 0), Ok(None)),
+        "and its sibling answers the same way at the operand it refuses for a weighted stratum"
+    );
+}
+
+#[test]
+fn a_depth_that_outruns_every_plan_is_saturation_and_not_the_ceiling_as_a_number() {
+    // Two weights fifty times apart, one tolerance, one answer each. Handing
+    // back `u32::MAX` from both says they reach the same depth -- a number a
+    // caller can log, plot or divide by -- when the only true statement is that
+    // neither has a bound inside any plan's reach. A plan records a per-stratum
+    // depth as a 32-bit rank, so there is nothing in that range left to report.
+    let decay = DecayRule::WeightedReciprocalRank { k: K };
+    let scale = Fixed::ONE.into_raw();
+    for weight in [
+        Fixed::from_raw(20_000_000 * scale),
+        Fixed::from_raw(1_000_000_000 * scale),
+    ] {
+        assert_eq!(
+            decay
+                .deepest_rank_within_width(weight, 1)
+                .expect("the arithmetic evaluates"),
+            ToleratedDepth::ReadsBeyondAnyPlan,
+            "a weight that outruns every expressible depth has no bound to report"
+        );
+        assert_eq!(
+            decay
+                .deepest_rank_within_width(weight, 1)
+                .expect("the arithmetic evaluates")
+                .rank(),
+            None,
+            "and reading it as a number is declined rather than answered with the ceiling"
+        );
+    }
+
+    // The neighbouring weight below the wall answers with a real depth, so the
+    // saturating pair above is about the wall and not about the question.
+    let below = Fixed::from_raw(18_000_000 * scale);
+    let measured = decay
+        .deepest_rank_within_width(below, 1)
+        .expect("the arithmetic evaluates");
+    assert!(
+        matches!(measured, ToleratedDepth::ReadsTo(depth) if depth < u64::from(u32::MAX)),
+        "a bound inside a plan's range is a measurement and is reported as one, got {measured:?}"
+    );
 }
 
 #[test]

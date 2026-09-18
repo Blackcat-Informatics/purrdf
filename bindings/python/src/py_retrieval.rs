@@ -160,7 +160,7 @@ use pyo3::types::{PyDict, PyList};
 use crate::retrieval::{
     AdmissionEnvironment, CompiledRetrieval, DecayRule, Fixed, FusionProfile, Iri, Metric, Plan,
     PlannedResolution, ProducerDecision, ProducerStatus, RejectionReason, RequestTerm,
-    RetrievalRequest, SearchResult, Statistics, Term, TopK, UnservedReason,
+    RetrievalRequest, SearchResult, Statistics, Term, ToleratedDepth, TopK, UnservedReason,
 };
 use crate::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use crate::{NativeRdfFormat, RdfDataset, TermValue, parse_dataset};
@@ -1465,12 +1465,28 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64
 /// rule `decay` names**.
 ///
 /// This inverts [`class_width`]: name the tolerance you can live with, get the
-/// depth it buys. `max_width` of one agrees exactly with the depth
-/// `retrieval.weight_for_depth` prices — the deepest rank still separated from
-/// both its neighbours. Larger values answer the question a caller reading
-/// deeply actually has: not "where does this stop being exact" but "how far
-/// can I read and still have ranks ordered to within the resolution I can
-/// live with".
+/// depth it buys. `max_width` of one is the separating depth itself — the
+/// deepest depth a read can stop at with every rank it *actually read*
+/// separated from both of its neighbours within that read. It is a depth, not a
+/// rank property, and the difference is one call away: `retrieval.class_width`
+/// at that rank reports at least `max_width + 1` — two at a tolerance of one,
+/// never the one a "still separated from both neighbours" reading would predict
+/// — because the unbounded curve it walks also looks at the one rank the
+/// bounded read never reaches. It is exactly `max_width + 1` where the run that
+/// ends the walk is one rank longer than the tolerance, and wider where that
+/// run is longer still. The two agree; they are answering a depth question and
+/// a rank question. Larger tolerances
+/// answer the question a caller reading deeply actually has: not "where does
+/// this stop being exact" but "how far can I read and still have ranks ordered
+/// to within the resolution I can live with".
+///
+/// The answer is `None` when no depth a plan can express ever exceeds the
+/// tolerance, exactly as `"separates_to"` is `None` on a `retrieval.search`
+/// answer for a law that never stops separating. A plan records a per-stratum
+/// depth as a 32-bit rank, so there is no bound inside its reach to report, and
+/// `2**32 - 1` is a saturation point rather than a reading: two weights fifty
+/// times apart both land on it, and an `int` there would say they reach the
+/// same depth and invite a caller to log it, plot it, or divide by it.
 ///
 /// This asks a question about arithmetic and takes no stratum, exactly as
 /// [`class_width`] does: the answer is a property of the rule, its smoothing
@@ -1483,13 +1499,15 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64
 /// read.
 ///
 /// An operand the law cannot evaluate raises `ValueError` rather than
-/// returning a depth: a smoothing constant of zero; an unknown `decay`
-/// spelling; and a weight that is not strictly positive, which a fusion law
-/// refuses where it is declared and which therefore has no resolution to
-/// report here either. The constant is checked before anything is measured, so
-/// the refusal does not depend on `max_width` — a tolerance of one does no
-/// walking, and letting it answer where a larger tolerance refuses would make
-/// the same unusable rule usable or not according to a question asked of it.
+/// returning a depth: a smoothing constant of zero; a `max_width` of zero,
+/// because a class always contains its own rank and so a tolerance of zero is
+/// not a tolerance; an unknown `decay` spelling; and a weight that is not
+/// strictly positive, which a fusion law refuses where it is declared and which
+/// therefore has no resolution to report here either. The constant and the
+/// tolerance are both checked before anything is measured, so neither refusal
+/// depends on the other argument — a tolerance of one does no walking, and
+/// letting it answer where a larger tolerance refuses would make the same
+/// unusable rule usable or not according to a question asked of it.
 ///
 /// # What it costs to ask
 ///
@@ -1505,11 +1523,12 @@ fn class_width(weight_raw: i128, k: u32, rank: u64, decay: &str) -> PyResult<u64
 /// `"weighted_reciprocal_rank"`, where the separating depth itself grows with
 /// the weight, walks very far.
 ///
-/// The walk saturates at the deepest depth a plan can record and returns it,
-/// which bounds it at fewer than `2^32` steps however it is asked; it cannot
-/// fail to terminate, and the GIL is not released while it runs. It is a
-/// design-time question all the same — price a depth budget once while
-/// choosing weights — and not something to put in a hot loop.
+/// The walk stops at the deepest depth a plan can record — reporting `None`
+/// there rather than that ceiling — which bounds it at fewer than `2^32` steps
+/// however it is asked; it cannot fail to terminate, and the GIL is not
+/// released while it runs. It is a design-time question all the same — price a
+/// depth budget once while choosing weights — and not something to put in a hot
+/// loop.
 #[pyfunction]
 #[pyo3(signature = (weight_raw, k, max_width, *, decay))]
 fn deepest_rank_within_width(
@@ -1517,7 +1536,7 @@ fn deepest_rank_within_width(
     k: u32,
     max_width: u64,
     decay: &str,
-) -> PyResult<u64> {
+) -> PyResult<Option<u64>> {
     if weight_raw <= 0 {
         return Err(PyValueError::new_err(format!(
             "a stratum weight is strictly positive, and {weight_raw} raw fixed-point units is \
@@ -1528,6 +1547,10 @@ fn deepest_rank_within_width(
     decay_rule(decay, k)
         .map_err(PyValueError::new_err)?
         .deepest_rank_within_width(Fixed::from_raw(weight_raw), max_width)
+        // The saturating case is rendered the way `"separates_to"` renders it
+        // on a `search` answer: `None`, because there is no bound inside any
+        // plan's reach to report, not an enormous one.
+        .map(ToleratedDepth::rank)
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 

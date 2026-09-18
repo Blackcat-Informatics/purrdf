@@ -2034,22 +2034,39 @@ class retrieval:
     # rule `decay` names.
     #
     # This inverts `class_width`: name the tolerance you can live with, get the
-    # depth it buys. `max_width` of one agrees exactly with the depth
-    # `weight_for_depth` prices — the deepest rank still separated from both its
-    # neighbours. The curve belongs to the rule — the two answer differently at
-    # the same weight and tolerance.
+    # depth it buys. `max_width` of one is the separating depth itself — the
+    # deepest depth a read can stop at with every rank it *actually read*
+    # separated from both of its neighbours within that read. It is a depth, not
+    # a rank property: `class_width` at that rank reports at least
+    # `max_width + 1` — two at a tolerance of one, never the one a "still
+    # separated from both neighbours" reading would predict — because the
+    # unbounded curve it walks also looks at the one rank the bounded read never
+    # reaches. It is exactly `max_width + 1` where the run that ends the walk is
+    # one rank longer than the tolerance, and wider where that run is longer
+    # still. The two agree by answering a depth question and a rank question.
+    # The curve belongs to the rule — the two answer differently at the same
+    # weight and tolerance.
+    #
+    # `None` means no depth a plan can express ever exceeds the tolerance,
+    # exactly as `"separates_to"` is `None` on a `search` answer for a law that
+    # never stops separating. A plan records a per-stratum depth as a 32-bit
+    # rank, so there is no bound inside its reach to report, and `2 ** 32 - 1`
+    # would be a saturation point wearing a measurement's shape: two weights
+    # fifty times apart both land there.
     #
     # No stratum is taken, because the answer is a property of the rule, its
     # smoothing constant, the weight and the tolerance and of nothing else.
     # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
     #
     # An operand the law cannot evaluate raises `ValueError` rather than
-    # returning a depth: a smoothing constant of zero, an unknown `decay`
-    # spelling, or a weight that is not strictly positive. The constant is
-    # checked before anything is measured, so the refusal does not depend on
-    # `max_width`; a tolerance of one does no walking, and letting it answer
-    # where a larger tolerance refuses would make one unusable rule usable or
-    # not according to the question asked of it.
+    # returning a depth: a smoothing constant of zero, a `max_width` of zero —
+    # a class always contains its own rank, so a tolerance of zero is not a
+    # tolerance — an unknown `decay` spelling, or a weight that is not strictly
+    # positive. The constant and the tolerance are both checked before anything
+    # is measured, so neither refusal depends on the other argument; a tolerance
+    # of one does no walking, and letting it answer where a larger tolerance
+    # refuses would make one unusable rule usable or not according to the
+    # question asked of it.
     #
     # The answer is walked rank by rank — the class width is not monotone in the
     # rank, so bisecting it would silently over-report — from the separating
@@ -2057,11 +2074,12 @@ class retrieval:
     # `sqrt(max_width)` times that depth, so the walk is about
     # `sqrt(max_width) - 1` times it: a `max_width` of one does not walk at all
     # and a small tolerance is cheap, while a large tolerance at a heavy weight
-    # under `"weighted_reciprocal_rank"` walks very far. The walk saturates at
-    # the deepest depth a plan can record rather than running on, so it is
-    # bounded at fewer than `2**32` steps and always terminates, and the GIL is
-    # held throughout. It is a design-time query, not a hot-loop one.
+    # under `"weighted_reciprocal_rank"` walks very far. The walk stops at the
+    # deepest depth a plan can record rather than running on — reporting `None`
+    # there — so it is bounded at fewer than `2**32` steps and always
+    # terminates, and the GIL is held throughout. It is a design-time query, not
+    # a hot-loop one.
     @staticmethod
     def deepest_rank_within_width(
         weight_raw: int, k: int, max_width: int, *, decay: str
-    ) -> int: ...
+    ) -> int | None: ...

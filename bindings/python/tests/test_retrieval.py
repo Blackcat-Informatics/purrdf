@@ -98,6 +98,22 @@ def _truncated_saturation(k: int) -> int:
     return int(found.group(1))
 
 
+def _measured_depth(depth: int | None) -> int:
+    """A tolerated depth that is a measurement rather than a saturation point.
+
+    ``retrieval.deepest_rank_within_width`` answers ``None`` when no depth a
+    plan can express ever exceeds the tolerance, exactly as ``"separates_to"``
+    does on a ``search`` answer. Every call below that is meant to land inside a
+    plan's range says so through here, so a case that silently starts saturating
+    fails where it is asked rather than being compared as a number.
+    """
+    assert depth is not None, (
+        "this call was expected to measure a depth inside a plan's range, and "
+        "reported that it has no bound there at all"
+    )
+    return depth
+
+
 NOTE_ONLY = _producers((NOTE_PRODUCER, NOTE_STRATUM, NOTE))
 BOTH = _producers(
     (NOTE_PRODUCER, NOTE_STRATUM, NOTE),
@@ -717,7 +733,11 @@ def test_a_zero_smoothing_constant_is_one_refusal_across_all_three_functions() -
                 "saturated rule"
             )
             assert (
-                retrieval.deepest_rank_within_width(weight, 1, max_width, decay=decay)
+                _measured_depth(
+                    retrieval.deepest_rank_within_width(
+                        weight, 1, max_width, decay=decay
+                    )
+                )
                 > 1
             ), (
                 f"{decay}, max_width {max_width}: the smallest usable constant "
@@ -769,9 +789,12 @@ def test_the_decay_rule_must_be_named_and_is_named_by_its_own_spelling() -> None
         )["rows"]
         assert retrieval.weight_for_depth(16, 60, decay=named) > 0
         assert retrieval.class_width(retrieval.SCALE, 60, 4, decay=named) == 1
-        assert retrieval.deepest_rank_within_width(
-            retrieval.SCALE, 60, 4, decay=named
-        ) >= 1
+        assert (
+            _measured_depth(
+                retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 4, decay=named)
+            )
+            >= 1
+        )
 
 
 def test_class_width_asks_about_arithmetic_and_needs_no_stratum() -> None:
@@ -815,24 +838,110 @@ def test_deepest_rank_within_width_asks_about_arithmetic_and_needs_no_stratum() 
     ``class_width`` takes none: PurRDF mints no IRIs, and a probe IRI conjured
     to ask a question about arithmetic would be a minted one.
     """
-    # A tolerance of one is the deepest fully-separated depth there is, and it
-    # only grows as the tolerance is relaxed.
-    narrow = retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 1, decay=TRUNCATED)
-    wide = retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 50, decay=TRUNCATED)
+    # A tolerance of one is the deepest depth a read can stop at with every rank
+    # it actually read separated, and it only grows as the tolerance is relaxed.
+    narrow = _measured_depth(
+        retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 1, decay=TRUNCATED)
+    )
+    wide = _measured_depth(
+        retrieval.deepest_rank_within_width(retrieval.SCALE, 60, 50, decay=TRUNCATED)
+    )
     assert wide > narrow, "a larger tolerance reads deeper, never shallower"
 
     # The operands it cannot evaluate are refused rather than answered with the
     # most favourable depth there is, each beside the neighbour that works.
     with pytest.raises(ValueError, match="K must be at least 1"):
         retrieval.deepest_rank_within_width(retrieval.SCALE, 0, 4, decay=TRUNCATED)
-    assert retrieval.deepest_rank_within_width(retrieval.SCALE, 1, 4, decay=TRUNCATED) >= 1
+    assert (
+        _measured_depth(
+            retrieval.deepest_rank_within_width(retrieval.SCALE, 1, 4, decay=TRUNCATED)
+        )
+        >= 1
+    )
 
     with pytest.raises(ValueError, match="strictly positive"):
         retrieval.deepest_rank_within_width(0, 60, 4, decay=TRUNCATED)
-    assert retrieval.deepest_rank_within_width(1, 60, 4, decay=TRUNCATED) >= 1
+    assert (
+        _measured_depth(
+            retrieval.deepest_rank_within_width(1, 60, 4, decay=TRUNCATED)
+        )
+        >= 1
+    )
 
     with pytest.raises(ValueError, match="strictly positive"):
         retrieval.deepest_rank_within_width(-1, 60, 4, decay=TRUNCATED)
+
+
+def test_a_tolerance_of_zero_is_refused_and_a_tolerance_of_one_answers() -> None:
+    """A class always contains its own rank, so zero describes no class at all.
+
+    That is the same shape as the smoothing constant of zero that describes no
+    law, and it is refused on the same terms rather than quietly normalised up
+    to one. Reading it as one answered the narrowest REAL tolerance in its
+    place, which is the deepest fully-separated depth this algebra reports: the
+    most favourable answer there is, returned precisely where nothing was asked.
+
+    The neighbouring valid tolerance is executed in this same test, per the
+    repository's rule that a refusal is proved from both sides.
+    """
+    for decay in (TRUNCATED, FOLDED):
+        with pytest.raises(ValueError, match="tolerance must be at least 1") as refused:
+            retrieval.deepest_rank_within_width(1000, 60, 0, decay=decay)
+        assert "a tolerance of zero is not a tolerance" in str(refused.value), (
+            f"{decay}: the refusal must say what is wrong with the operand, not "
+            "point at a rank that was never at fault"
+        )
+        assert "rank must be at least 1" not in str(refused.value), (
+            f"{decay}: a tolerance is not a position on the 1-based rank axis"
+        )
+
+        # The neighbouring valid case: the narrowest tolerance that does
+        # describe a class, at the same weight under the same rule.
+        assert (
+            _measured_depth(
+                retrieval.deepest_rank_within_width(1000, 60, 1, decay=decay)
+            )
+            >= 1
+        ), f"{decay}: a tolerance of one is a tolerance and still answers"
+
+
+def test_a_depth_that_outruns_every_plan_is_reported_as_saturation() -> None:
+    """``None`` is the wall; a number would be the wall wearing a measurement.
+
+    A plan records a per-stratum depth as a 32-bit rank. Two weights fifty times
+    apart both read past every depth in that range, and handing back
+    ``2**32 - 1`` from each says they reach the SAME depth -- a number a caller
+    can log, plot or divide by -- when the only true statement is that neither
+    has a bound inside any plan's reach. ``search`` already renders that fact as
+    ``"separates_to": None``; this is the same fact from the arithmetic-only
+    entry point, and it is rendered the same way.
+    """
+    fifty_times_apart = (20_000_000 * retrieval.SCALE, 1_000_000_000 * retrieval.SCALE)
+    for weight in fifty_times_apart:
+        assert (
+            retrieval.deepest_rank_within_width(weight, 60, 1, decay=FOLDED) is None
+        ), (
+            f"weight {weight}: a law with no bound inside any plan's range has "
+            "no depth to report, not an enormous one"
+        )
+
+    # The neighbouring weight below the wall reports a real depth, so the pair
+    # above is about the wall and not about the question being unanswerable.
+    below = _measured_depth(
+        retrieval.deepest_rank_within_width(
+            18_000_000 * retrieval.SCALE, 60, 1, decay=FOLDED
+        )
+    )
+    assert 0 < below < PLAN_DEPTH_LIMIT, (
+        "a bound inside a plan's range is a measurement and is reported as one"
+    )
+
+    # And the third entry point, handed a REQUESTED depth rather than measuring
+    # one, refuses at the identical boundary as a limit of the plan's depth
+    # encoding -- with the neighbouring in-range depth still priced.
+    with pytest.raises(ValueError, match="deeper than a plan can record"):
+        retrieval.weight_for_depth(PLAN_DEPTH_LIMIT + 1, 60, decay=FOLDED)
+    assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED) > 0
 
 
 def test_deepest_rank_within_width_answers_under_both_rules_and_the_rules_differ() -> None:
@@ -844,11 +953,11 @@ def test_deepest_rank_within_width_answers_under_both_rules_and_the_rules_differ
     """
     heavy = 1000 * retrieval.SCALE
     for max_width in (1, 5, 50):
-        truncated_depth = retrieval.deepest_rank_within_width(
-            heavy, 60, max_width, decay=TRUNCATED
+        truncated_depth = _measured_depth(
+            retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=TRUNCATED)
         )
-        folded_depth = retrieval.deepest_rank_within_width(
-            heavy, 60, max_width, decay=FOLDED
+        folded_depth = _measured_depth(
+            retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=FOLDED)
         )
         assert folded_depth > truncated_depth, (
             f"max_width {max_width}: the folded rule must read deeper than the "
@@ -865,11 +974,19 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
     RANK question over the unbounded curve, which also looks at the one rank a
     truncated read never reaches — so at the reported depth ``D``,
     ``class_width`` finds ``D`` sharing a contribution with ``D + 1`` and
-    reports a class of exactly ``max_width + 1``, one wider than the bounded
-    read that stopped at ``D`` ever observes. That is the same "depth, not a
-    rank property" distinction this function's own documentation draws, and it
-    means the class at ``D`` and at ``D + 1`` both already exceed the
-    tolerance the bounded read stayed inside of.
+    reports a class of at least ``max_width + 1``, wider than the bounded read
+    that stopped at ``D`` ever observes. It is NEVER one — which is what the
+    claim "the deepest rank still separated from both its neighbours" would
+    predict at a tolerance of one, and that claim was wrong in exactly this way.
+    The relation is an inequality and not an equality because the run that ends
+    the walk can be longer than the tolerance by more than a rank: it is exactly
+    ``max_width + 1`` at every case executed here, and two wider than the
+    tolerance under the truncated rule at a raw weight of ``10 ** 6`` with a
+    tolerance of fifty.
+
+    That is the same "depth, not a rank property" distinction this function's
+    own documentation draws, and it means the class at ``D`` and at ``D + 1``
+    both already exceed the tolerance the bounded read stayed inside of.
 
     For a tolerance of one this also ties in ``weight_for_depth``, by its own
     exact inverse round trip: ``weight_for_depth`` names the smallest weight
@@ -885,14 +1002,19 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
     heavy = 1000 * retrieval.SCALE
     for decay in (TRUNCATED, FOLDED):
         for max_width in (1, 5, 50):
-            depth = retrieval.deepest_rank_within_width(
-                heavy, 60, max_width, decay=decay
+            depth = _measured_depth(
+                retrieval.deepest_rank_within_width(heavy, 60, max_width, decay=decay)
             )
             at_depth = retrieval.class_width(heavy, 60, depth, decay=decay)
             one_deeper = retrieval.class_width(heavy, 60, depth + 1, decay=decay)
-            assert at_depth > max_width, (
+            assert at_depth >= max_width + 1, (
                 f"{decay}, max_width {max_width}: the reported depth already sits "
-                "in an over-tolerance class on the unbounded curve"
+                "in an over-tolerance class on the unbounded curve, which also "
+                "looks at the one rank the bounded read never reaches"
+            )
+            assert at_depth == max_width + 1, (
+                f"{decay}, max_width {max_width}: and at this weight the run that "
+                "ended the walk is exactly one rank longer than the tolerance"
             )
             assert one_deeper > max_width, (
                 f"{decay}, max_width {max_width}: one rank deeper must exceed the "
@@ -903,8 +1025,8 @@ def test_deepest_rank_within_width_agrees_with_class_width_and_weight_for_depth(
         # function agrees exactly with the separating bound.
         for named_depth in (16, 100, 972):
             minimum_weight = retrieval.weight_for_depth(named_depth, 60, decay=decay)
-            round_tripped = retrieval.deepest_rank_within_width(
-                minimum_weight, 60, 1, decay=decay
+            round_tripped = _measured_depth(
+                retrieval.deepest_rank_within_width(minimum_weight, 60, 1, decay=decay)
             )
             assert round_tripped == named_depth, (
                 f"{decay}: the minimum weight that separates to depth "
