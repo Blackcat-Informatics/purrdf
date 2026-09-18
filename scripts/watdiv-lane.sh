@@ -94,6 +94,52 @@ die() {
   exit 1
 }
 
+TMP="$(mktemp -d)"
+trap 'rm -rf "${TMP}"' EXIT
+
+# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP. `$1` is the destination,
+# `$2` the role, and the rest is the command whose stdout becomes the file, so an
+# unopenable destination is a LANE failure naming the file — never a bare
+# `scripts/watdiv-lane.sh: line N: ...: Is a directory`.
+write_checked() {
+  local destination="$1" role="$2"
+  shift 2
+  local write_error
+  if ! write_error="$({ "$@" >"${destination}"; } 2>&1)"; then
+    die "cannot write ${role} to '${destination}'
+  ${write_error}
+  Check that WATDIV_OUT names a directory that exists and is writable."
+  fi
+}
+
+# `WATDIV_OUT` is a knob, so an arena that cannot be created is a LANE failure
+# quoting the bytes back, not a bare `mkdir: cannot create directory ...`.
+mkdir_checked() {
+  local directory="$1" mkdir_error
+  if ! mkdir_error="$(mkdir -p "${directory}" 2>&1)"; then
+    die "cannot create '${directory}' under WATDIV_OUT='${OUT}'
+  ${mkdir_error}
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Check that its parent directory exists and is writable."
+  fi
+}
+
+# EXISTING IS NOT BEING PRODUCED. An artifact this lane goes on to digest, load,
+# query or report a size for must be a regular, non-empty file; a zero-byte one
+# reports as a very fast engine and digests to the SHA-256 of the empty string.
+require_nonempty_file() {
+  local path="$1" role="$2"
+  [[ -f "${path}" ]] ||
+    die "${role} was not produced at '${path}' even though the step before it reported success"
+  # The SHA-256 of the empty string is deliberately NOT quoted here: it is the
+  # digest this lane must never publish, so it is described and never emitted.
+  [[ -s "${path}" ]] ||
+    die "${role} at '${path}' is EMPTY.
+  An empty artifact is a failure wearing a success's clothes: it loads cleanly,
+  answers every query 0, and digests to the SHA-256 of the empty string. No digest
+  and no size is published for it."
+}
+
 step() {
   echo ""
   echo "=== $* ==="
@@ -119,6 +165,65 @@ require_uint WATDIV_SEED "${SEED}"
 
 TARBALL="watdiv.${SCALE}.tar.bz2"
 DATASET_NAME="watdiv.${SCALE}.nt"
+
+# `WATDIV_BIN` NAMES THE EXECUTABLE EVERY NUMBER IN THIS REPORT IS ABOUT, and it
+# is validated the way `SCALE_BIN` and `LUBM_BIN` are — the same three tests, in
+# the same order, for the same reason, and then made to prove it RUNS.
+#
+# `[[ -x ]]` ALONE IS NOT A CHECK FOR AN EXECUTABLE: a DIRECTORY carries the
+# execute bit, so `WATDIV_BIN=/tmp` reached the version probe and was refused
+# there with "is not a working purrdf binary" — true, but silent about WHY. The
+# tests below name the fault.
+#
+# `$1` is how to name the binary in a diagnostic; `$2` is the knob to point at,
+# empty when this lane built the binary itself. Sets `PURRDF_VERSION`.
+validate_purrdf_bin() {
+  local provenance="$1" knob="$2"
+  if [[ -n "${knob}" ]]; then
+    [[ -e "${BIN}" ]] ||
+      die "${knob}='${BIN}' does not exist
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Leave ${knob} unset to have this lane build the purrdf CLI itself."
+    [[ -f "${BIN}" ]] ||
+      die "${knob}='${BIN}' is not a regular file (a directory carries the execute
+  bit too, so an executability test alone would have accepted it)"
+    [[ -x "${BIN}" ]] || die "${knob}='${BIN}' is not executable"
+  else
+    [[ -x "${BIN}" ]] ||
+      die "the release build produced no executable purrdf binary at '${BIN}' (set WATDIV_BIN to point at one)"
+  fi
+
+  local status=0
+  PURRDF_VERSION="$("${BIN}" --version 2>"${TMP}/version.err")" || status=$?
+  if ((status != 0)); then
+    local detail=""
+    if [[ -s "${TMP}/version.err" ]]; then
+      detail="$(sed 's/^/  /' "${TMP}/version.err")
+"
+    fi
+    die "${provenance} is not a working purrdf binary: it exited ${status} when asked for its version
+${detail}  Nothing was fetched, extracted, loaded or queried."
+  fi
+  # `PURRDF_VERSION` is half of `PACK_KEY`, the stamp that decides whether a
+  # LATER run may reuse this run's pack. An empty version (`/bin/true` exits 0
+  # and prints nothing) would make that stamp certify a pack built by an unknown
+  # binary.
+  [[ -n "${PURRDF_VERSION}" ]] ||
+    die "${provenance} exited 0 when asked for its version but printed NOTHING.
+  That string is half of this lane's pack stamp, so accepting it would let a
+  later run reuse a pack with no record of what built it."
+}
+
+# VALIDATED HERE, BEFORE STEP 1. A knob error is not worth a 58 MB download and a
+# gigabyte of bzip2 extraction before it is noticed, and every one of those is a
+# chance for the real fault to be mistaken for a problem with the corpus. An
+# unset `WATDIV_BIN` is validated at step 2 instead, once the build that produces
+# the binary has run.
+BIN_FROM_KNOB=0
+if [[ -n "${BIN}" ]]; then
+  BIN_FROM_KNOB=1
+  validate_purrdf_bin "WATDIV_BIN='${BIN}'" WATDIV_BIN
+fi
 
 # Milliseconds since the epoch. `bc` is not assumed present, so every duration is
 # integer arithmetic over nanoseconds.
@@ -157,8 +262,8 @@ python3 "${REPO_ROOT}/scripts/benchmark-acquire.py" --only watdiv_v06.tar "${TAR
   die "artifact acquisition failed -- nothing downstream can be trusted, stopping"
 
 for required in "${TARBALL}" watdiv_v06.tar; do
-  [[ -f "${CACHE}/${required}" ]] ||
-    die "${required} is missing from ${CACHE} after acquisition reported success"
+  require_nonempty_file "${CACHE}/${required}" \
+    "${required}, which acquisition reported it had cached,"
 done
 
 TARBALL_SHA="$(python3 -c '
@@ -174,15 +279,13 @@ echo "frozen dataset tarball: ${TARBALL}  sha256 ${TARBALL_SHA}"
 # ── 2. The purrdf binary ────────────────────────────────────────────────────────
 
 step "2/7 purrdf CLI"
-if [[ -z "${BIN}" ]]; then
+if ((BIN_FROM_KNOB == 0)); then
   echo "building purrdf (release)..." >&2
   cargo build --locked --release -p purrdf-cli >&2 ||
     die "cargo build -p purrdf-cli failed"
   BIN="${REPO_ROOT}/target/release/purrdf"
+  validate_purrdf_bin "the binary this lane built, '${BIN}'" ""
 fi
-[[ -x "${BIN}" ]] || die "no executable purrdf binary at '${BIN}' (set WATDIV_BIN)"
-PURRDF_VERSION="$("${BIN}" --version 2>/dev/null)" ||
-  die "'${BIN}' is not a working purrdf binary"
 echo "purrdf: ${BIN}  (${PURRDF_VERSION})"
 
 # ── 3. Extract the frozen dataset and the 20 templates ──────────────────────────
@@ -191,12 +294,17 @@ step "3/7 extract the frozen dataset and the 20 published templates into target/
 command -v tar >/dev/null 2>&1 || die "tar is not on PATH"
 command -v bzip2 >/dev/null 2>&1 || die "bzip2 is not on PATH; the dataset is bzip2-compressed"
 
-mkdir -p "${ARENA}"
+mkdir_checked "${ARENA}"
 
 # Extraction is keyed by the tarball's DIGEST, not by the presence of a file or by
 # its mtime, so a stale extraction from other bytes is a miss and never a hit.
+#
+# A STAMP IS A CERTIFICATE: it is what a LATER run consults to skip this work
+# entirely. So it is written only after the artifacts it certifies have been
+# checked for being artifacts, and the reuse test demands a NON-EMPTY dataset —
+# `-f` alone would have made a zero-byte `watdiv.10M.nt` reusable forever.
 extract_start="$(now_ms)"
-if [[ -f "${DATA_STAMP}" && "$(cat "${DATA_STAMP}")" == "${TARBALL_SHA}" && -f "${DATASET}" ]]; then
+if [[ -f "${DATA_STAMP}" && "$(cat "${DATA_STAMP}")" == "${TARBALL_SHA}" && -s "${DATASET}" && -s "${CENSUS}" ]]; then
   echo "dataset: reusing the extraction already stamped with this tarball's digest"
   extracted="reused"
 else
@@ -204,14 +312,16 @@ else
   echo "extracting ${TARBALL} (this takes a minute; it expands to well over a gigabyte)..."
   tar xjf "${CACHE}/${TARBALL}" -C "${ARENA}" ||
     die "could not extract ${TARBALL}"
-  printf '%s\n' "${TARBALL_SHA}" >"${DATA_STAMP}"
+  require_nonempty_file "${DATASET}" "${DATASET_NAME}, which ${TARBALL} must contain,"
+  require_nonempty_file "${CENSUS}" \
+    "saved.txt (the entity census the candidate scrape is checked against), which ${TARBALL} must contain,"
+  write_checked "${DATA_STAMP}" "the dataset stamp" printf '%s\n' "${TARBALL_SHA}"
   extracted="extracted"
 fi
 extract_ms=$(($(now_ms) - extract_start))
 
-[[ -f "${DATASET}" ]] || die "${TARBALL} did not contain ${DATASET_NAME}"
-[[ -f "${CENSUS}" ]] ||
-  die "${TARBALL} did not contain saved.txt -- the entity census the candidate scrape is checked against"
+require_nonempty_file "${DATASET}" "the WatDiv dataset"
+require_nonempty_file "${CENSUS}" "the WatDiv entity census (saved.txt)"
 
 # The toolkit tar is small; re-extracting it every run costs nothing and removes a
 # whole class of stale-state question.
@@ -232,6 +342,9 @@ template_count=$(find "${TESTSUITE}" -maxdepth 1 -name '*.txt' | wc -l)
 
 data_rows=$(wc -l <"${DATASET}")
 data_bytes=$(wc -c <"${DATASET}")
+((data_rows > 0)) ||
+  die "the extracted dataset at ${DATASET} has ${data_bytes} bytes but not one triple;
+  every row this lane prints would be a zero over an empty corpus"
 echo "dataset:   ${data_rows} triples, ${data_bytes} bytes (${extracted} in ${extract_ms} ms)"
 echo "templates: ${template_count} basic templates, prefix table from $(basename "${MODEL}")"
 
@@ -268,6 +381,17 @@ print(digest.hexdigest())
 ' "${QUERIES}"
 }
 
+# A DIGEST IS A CERTIFICATE, so it is never published for output that was not
+# produced. `queries_digest` over an EMPTY directory is
+# e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -- the SHA-256
+# of the empty string -- and printing that under "the reproducibility check"
+# would certify a workload of no queries.
+rq_count=$(find "${QUERIES}" -maxdepth 1 -name '*.rq' | wc -l)
+((rq_count == 20)) ||
+  die "the instantiator reported success but wrote ${rq_count} .rq file(s) to ${QUERIES}, not 20.
+  No query-set digest is published for a set that is not the 20 published templates."
+require_nonempty_file "${QUERIES}/queries.tsv" "the instantiated query index"
+
 queries_sha="$(queries_digest)"
 
 echo "instantiated in ${inst_ms} ms"
@@ -286,18 +410,33 @@ step "5/7 load the dataset through the purrdf CLI into a native pack"
 # written by the same CLI under test, so nothing external is doing the loading.
 PACK_KEY="${TARBALL_SHA} ${PURRDF_VERSION}"
 load_start="$(now_ms)"
-if [[ -f "${PACK_STAMP}" && "$(cat "${PACK_STAMP}")" == "${PACK_KEY}" && -f "${PACK}" ]]; then
+# `-s` rather than `-f`: a zero-byte pack beside a matching stamp would be reused
+# by every subsequent run, and the stamp is written below only after the pack has
+# been checked for being one. Same law as the dataset stamp above.
+if [[ -f "${PACK_STAMP}" && "$(cat "${PACK_STAMP}")" == "${PACK_KEY}" && -s "${PACK}" ]]; then
   echo "pack: reusing the one already stamped with this dataset digest and this binary"
   loaded="reused"
 else
   rm -f "${PACK}" "${PACK_STAMP}"
-  "${BIN}" convert --from ntriples --to pack "${DATASET}" "${PACK}" ||
-    die "purrdf convert failed on ${DATASET} -- the CLI could not load the WatDiv dataset"
-  printf '%s\n' "${PACK_KEY}" >"${PACK_STAMP}"
+  convert_status=0
+  "${BIN}" convert --from ntriples --to pack "${DATASET}" "${PACK}" || convert_status=$?
+  # What is known here is the exit status. The binary was proved to run at step 2
+  # and the dataset was proved non-empty at step 3, so a failure is about this
+  # invocation; the message names it rather than asserting a cause.
+  ((convert_status == 0)) ||
+    die "the purrdf CLI exited ${convert_status} loading the WatDiv dataset into a pack.
+  binary   ${BIN}
+  input    ${DATASET}
+  output   ${PACK}
+  Whatever the CLI printed is above this line."
+  # EXITING 0 IS NOT LOADING. The stamp is written only once the pack exists and
+  # is non-empty, so a stamp never certifies a pack that was not produced.
+  require_nonempty_file "${PACK}" "the pack the CLI reported it had written"
+  write_checked "${PACK_STAMP}" "the pack stamp" printf '%s\n' "${PACK_KEY}"
   loaded="loaded"
 fi
 load_ms=$(($(now_ms) - load_start))
-[[ -f "${PACK}" ]] || die "no pack at ${PACK} after loading reported success"
+require_nonempty_file "${PACK}" "the pack, after loading reported success,"
 pack_bytes=$(wc -c <"${PACK}")
 echo "pack: ${pack_bytes} bytes (${loaded} in ${load_ms} ms)"
 

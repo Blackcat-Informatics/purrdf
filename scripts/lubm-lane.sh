@@ -114,6 +114,57 @@ die() {
   exit 1
 }
 
+TMP="$(mktemp -d)"
+trap 'rm -rf "${TMP}"' EXIT
+
+# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP. Every redirection in this
+# lane that builds a dataset goes through here, so an unopenable destination is a
+# LANE failure naming the file and the role — never a bare
+# `scripts/lubm-lane.sh: line N: ...: No such file or directory` that names
+# neither the lane, the knob, nor purrdf. `$1` is the destination, `$2` the role,
+# and the rest is the command whose stdout becomes the file.
+write_checked() {
+  local destination="$1" role="$2"
+  shift 2
+  local write_error
+  if ! write_error="$({ "$@" >"${destination}"; } 2>&1)"; then
+    die "cannot write ${role} to '${destination}'
+  ${write_error}
+  Check that LUBM_OUT names a directory that exists and is writable."
+  fi
+}
+
+# `LUBM_OUT` is a knob, so an arena that cannot be created is a LANE failure that
+# quotes the bytes back — not a bare `mkdir: cannot create directory ...` with no
+# hint which knob supplied the path.
+mkdir_checked() {
+  local directory="$1" mkdir_error
+  if ! mkdir_error="$(mkdir -p "${directory}" 2>&1)"; then
+    die "cannot create '${directory}' under LUBM_OUT='${OUT}'
+  ${mkdir_error}
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Check that its parent directory exists and is writable."
+  fi
+}
+
+# A DATASET IS THE THING EVERY NUMBER BELOW IS ABOUT, so an empty one is a hard
+# failure and never a row in the report. See the digest law at step 5.
+require_nonempty_file() {
+  local path="$1" role="$2"
+  [[ -f "${path}" ]] ||
+    die "${role} was not produced at '${path}' even though the step before it reported success"
+  # The SHA-256 of the empty string is deliberately NOT quoted here. It is the
+  # digest this lane must never publish, and printing it inside the diagnostic
+  # would put it in the lane's output anyway -- so an operator grepping a log for
+  # it would hit the very message saying it was refused. Described, never emitted.
+  [[ -s "${path}" ]] ||
+    die "${role} at '${path}' is EMPTY.
+  An empty dataset converts cleanly, answers every one of the 14 queries 0, and
+  digests to the SHA-256 of the empty string. That is a failure wearing a
+  success's clothes, so this lane stops here rather than publishing a certificate
+  for a corpus that does not exist."
+}
+
 step() {
   echo ""
   echo "=== $* ==="
@@ -138,6 +189,65 @@ require_uint LUBM_INDEX "${INDEX}"
   die "LUBM_DOC_BASE must be an absolute IRI (got '${DOC_BASE}')"
 [[ "${ONTO}" == *://* ]] || die "LUBM_ONTO must be an absolute IRI (got '${ONTO}')"
 
+# `LUBM_BIN` NAMES THE EXECUTABLE EVERY NUMBER IN THIS REPORT IS ABOUT, so it is
+# validated the way `SCALE_BIN` already was, with the same three tests in the
+# same order, and then made to prove it RUNS.
+#
+# `[[ -x ]]` ALONE IS NOT A CHECK FOR AN EXECUTABLE: a DIRECTORY carries the
+# execute bit, so `LUBM_BIN=/tmp` passed it. And the execute bit is not proof the
+# binary runs: `/bin/false` carries it too, reached step 5, and made the lane die
+# with `purrdf convert failed on ... -- the CLI could not parse LUBM's RDF/XML`.
+# That diagnostic was FALSE in every particular — the CLI never ran, the RDF/XML
+# parses, and the fault was in the knob — and an operator following it would go
+# hunting a parser bug that does not exist.
+#
+# `$1` is how to name the binary in a diagnostic; `$2` is the knob to point at,
+# empty when this lane built the binary itself. Sets `PURRDF_VERSION`.
+validate_purrdf_bin() {
+  local provenance="$1" knob="$2"
+  if [[ -n "${knob}" ]]; then
+    [[ -e "${BIN}" ]] ||
+      die "${knob}='${BIN}' does not exist
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Leave ${knob} unset to have this lane build the purrdf CLI itself."
+    [[ -f "${BIN}" ]] ||
+      die "${knob}='${BIN}' is not a regular file (a directory carries the execute
+  bit too, so an executability test alone would have accepted it)"
+    [[ -x "${BIN}" ]] || die "${knob}='${BIN}' is not executable"
+  else
+    [[ -x "${BIN}" ]] ||
+      die "the release build produced no executable purrdf binary at '${BIN}' (set LUBM_BIN to point at one)"
+  fi
+
+  local status=0
+  PURRDF_VERSION="$("${BIN}" --version 2>"${TMP}/version.err")" || status=$?
+  if ((status != 0)); then
+    local detail=""
+    if [[ -s "${TMP}/version.err" ]]; then
+      detail="$(sed 's/^/  /' "${TMP}/version.err")
+"
+    fi
+    die "${provenance} is not a working purrdf binary: it exited ${status} when asked for its version
+${detail}  Nothing was fetched, generated or converted, so no failure downstream can be
+  mistaken for a problem with LUBM's data."
+  fi
+  [[ -n "${PURRDF_VERSION}" ]] ||
+    die "${provenance} exited 0 when asked for its version but printed NOTHING.
+  A binary that says nothing is not the purrdf CLI, and a lane that accepted it
+  would go on to report a corpus it never converted."
+}
+
+# VALIDATED HERE, BEFORE STEP 1. A knob error is not worth a download, a JRE, a
+# Java generator run and eight megabytes of RDF/XML before it is noticed, and
+# every one of those is a chance for the real fault to be mistaken for a problem
+# with the corpus. An unset `LUBM_BIN` is validated at step 2 instead, once the
+# build that produces the binary has run.
+BIN_FROM_KNOB=0
+if [[ -n "${BIN}" ]]; then
+  BIN_FROM_KNOB=1
+  validate_purrdf_bin "LUBM_BIN='${BIN}'" LUBM_BIN
+fi
+
 # Milliseconds since the epoch. `bc` is not assumed present, so every duration is
 # integer arithmetic over nanoseconds.
 now_ms() {
@@ -159,14 +269,14 @@ done
 # ── 2. The purrdf binary ────────────────────────────────────────────────────────
 
 step "2/7 purrdf CLI"
-if [[ -z "${BIN}" ]]; then
+if ((BIN_FROM_KNOB == 0)); then
   echo "building purrdf (release)..." >&2
   cargo build --locked --release -p purrdf-cli >&2 ||
     die "cargo build -p purrdf-cli failed"
   BIN="${REPO_ROOT}/target/release/purrdf"
+  validate_purrdf_bin "the binary this lane built, '${BIN}'" ""
 fi
-[[ -x "${BIN}" ]] || die "no executable purrdf binary at '${BIN}' (set LUBM_BIN)"
-echo "purrdf: ${BIN}"
+echo "purrdf: ${BIN}  (${PURRDF_VERSION})"
 
 # ── 3. Unpack the generator (RUN, never vendored) ───────────────────────────────
 
@@ -177,7 +287,7 @@ command -v unzip >/dev/null 2>&1 || die "unzip is not on PATH"
 
 UBA="${ARENA_ROOT}/uba"
 rm -rf "${UBA}"
-mkdir -p "${UBA}"
+mkdir_checked "${UBA}"
 unzip -q -o "${CACHE}/uba1.7.zip" -d "${UBA}" || die "could not unpack uba1.7.zip"
 GENERATOR_CLASS="${UBA}/classes/edu/lehigh/swat/bench/uba/Generator.class"
 [[ -f "${GENERATOR_CLASS}" ]] ||
@@ -190,7 +300,7 @@ step "4/7 generate LUBM(${UNIVERSITIES}, ${INDEX}) seed=${SEED}"
 ARENA="${ARENA_ROOT}/gen"
 rm -rf "${ARENA}"
 WORK="${ARENA}/work"
-mkdir -p "${WORK}"
+mkdir_checked "${WORK}"
 
 gen_start="$(now_ms)"
 (
@@ -220,6 +330,9 @@ shopt -u nullglob
 owl_count=$(find "${WORK}" -maxdepth 1 -name '*.owl' | wc -l)
 ((owl_count > 0)) || die "no .owl files after renaming ${renamed} stray file(s)"
 owl_bytes=$(find "${WORK}" -maxdepth 1 -name '*.owl' -printf '%s\n' | awk '{t+=$1} END {print t+0}')
+((owl_bytes > 0)) ||
+  die "the generator wrote ${owl_count} .owl file(s) totalling zero bytes; there is
+  no corpus to convert and nothing downstream would be measuring LUBM"
 echo "generated ${owl_count} RDF/XML file(s), ${owl_bytes} bytes, in ${gen_ms} ms"
 echo "renamed ${renamed} backslash-named file(s) out of the parent directory"
 
@@ -228,15 +341,35 @@ echo "renamed ${renamed} backslash-named file(s) out of the parent directory"
 step "5/7 convert RDF/XML -> N-Quads through the purrdf CLI"
 NQ="${ARENA_ROOT}/nq"
 rm -rf "${NQ}"
-mkdir -p "${NQ}"
+mkdir_checked "${NQ}"
 
 conv_start="$(now_ms)"
 converted=0
 while IFS= read -r owl; do
   name="$(basename "${owl}")"
+  convert_status=0
   "${BIN}" convert --from rdfxml --to nquads --base "${DOC_BASE}${name}" \
-    "${owl}" "${NQ}/${name}.nq" ||
-    die "purrdf convert failed on ${owl} -- the CLI could not parse LUBM's RDF/XML"
+    "${owl}" "${NQ}/${name}.nq" || convert_status=$?
+  # WHAT IS KNOWN HERE IS THE EXIT STATUS, AND NOTHING ELSE. The previous
+  # wording asserted a cause it had not established -- "the CLI could not parse
+  # LUBM's RDF/XML" -- and with LUBM_BIN=/bin/false it was false three times
+  # over: the CLI never ran, the RDF/XML parses, and the fault was in the knob.
+  # The binary is proved to run at step 2 now, so a failure here is genuinely
+  # about this invocation; the message says which one and what it said.
+  ((convert_status == 0)) ||
+    die "the purrdf CLI exited ${convert_status} converting RDF/XML -> N-Quads.
+  binary   ${BIN}
+  input    ${owl}
+  output   ${NQ}/${name}.nq
+  base     ${DOC_BASE}${name}
+  Whatever the CLI printed is above this line. The generated RDF/XML is not
+  assumed to be at fault: it was produced by the pinned UBA generator and nothing
+  here has established a cause."
+  # EXITING 0 IS NOT CONVERTING. A CLI that exits 0 and writes nothing (or an
+  # empty file) used to reach the report as `data: 0 rows, 0 bytes` on a SUCCESS
+  # line -- the exact shape this guard exists to stop, one file at a time so the
+  # failure names the file rather than the whole dataset.
+  require_nonempty_file "${NQ}/${name}.nq" "the N-Quads conversion of ${name}"
   converted=$((converted + 1))
 done < <(find "${WORK}" -maxdepth 1 -name '*.owl' | sort)
 conv_ms=$(($(now_ms) - conv_start))
@@ -249,20 +382,44 @@ DATA="${ARENA_ROOT}/lubm-data.nq"
 # instance data contains no blank nodes, so concatenating separately converted
 # files cannot collide labels -- a property this lane checks below rather than
 # assumes.
-find "${NQ}" -maxdepth 1 -name '*.nq' | sort | xargs cat >"${DATA}"
+mapfile -t nq_files < <(find "${NQ}" -maxdepth 1 -name '*.nq' | sort)
+((${#nq_files[@]} > 0)) ||
+  die "no .nq files under ${NQ} after ${converted} conversion(s) reported success"
+write_checked "${DATA}" "the concatenated LUBM dataset" cat "${nq_files[@]}"
+require_nonempty_file "${DATA}" "the LUBM dataset"
 
 if grep -q '^_:' "${DATA}"; then
   die "the generated data contains blank nodes; per-file conversion may have collided labels"
 fi
 
 ONTO_NQ="${ARENA_ROOT}/lubm-onto.nq"
+onto_status=0
 "${BIN}" convert --from rdfxml --to nquads --base "${ONTO}" \
-  "${CACHE}/univ-bench.owl" "${ONTO_NQ}" ||
-  die "purrdf convert failed on the univ-bench ontology"
+  "${CACHE}/univ-bench.owl" "${ONTO_NQ}" || onto_status=$?
+((onto_status == 0)) ||
+  die "the purrdf CLI exited ${onto_status} converting the univ-bench ontology.
+  binary   ${BIN}
+  input    ${CACHE}/univ-bench.owl
+  output   ${ONTO_NQ}"
+require_nonempty_file "${ONTO_NQ}" "the converted univ-bench ontology"
 
 data_rows=$(wc -l <"${DATA}")
 data_bytes=$(wc -c <"${DATA}")
 onto_rows=$(wc -l <"${ONTO_NQ}")
+
+# A DIGEST IS A CERTIFICATE. It is emitted below as "the determinism check", and
+# a capture of this lane records it as the dataset's provenance -- so it must
+# never be emitted for output that is empty or that failed to be produced. The
+# guards above make that structurally true; these two make it true of the numbers
+# printed beside it, which are the other half of the same certificate.
+((data_rows > 0)) ||
+  die "the LUBM dataset at ${DATA} has ${data_bytes} bytes but not one N-Quads row.
+  No digest is published for it: a zero-row dataset answers every one of the 14
+  queries 0, instantly, and would report as a very fast engine."
+((onto_rows > 0)) ||
+  die "the converted univ-bench ontology at ${ONTO_NQ} has no rows; eleven of the
+  14 queries have answers only under a regime that needs it."
+
 data_sha=$(python3 -c '
 import hashlib, sys
 print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
@@ -298,11 +455,27 @@ step "7/7 run the queries, per regime"
 ENTAIL_FULL="${ARENA_ROOT}/entail-full.nq"
 ENTAIL_FILE="${ARENA_ROOT}/entail-file.nq"
 ENTAIL_SLICE_NQ="${ARENA_ROOT}/entail-slice.nq"
-FIRST_NQ="$(find "${NQ}" -maxdepth 1 -name '*.nq' | sort | head -1)"
+FIRST_NQ="${nq_files[0]}"
+# `${nq_files}` is non-empty by the guard at step 5, but the rungs are DATASETS
+# that queries are answered over and reported against, so each one is checked
+# for being one. The unchecked `cat "${FIRST_NQ}" ...` here is where the
+# empty-corpus run finally died, at 7/7, on a bare `cat: '': No such file or
+# directory` that named neither the lane, the knob, nor purrdf -- six steps and
+# one published digest after the dataset was already known to be empty.
+require_nonempty_file "${FIRST_NQ}" "the first converted LUBM file"
 
-cat "${DATA}" "${ONTO_NQ}" >"${ENTAIL_FULL}"
-cat "${FIRST_NQ}" "${ONTO_NQ}" >"${ENTAIL_FILE}"
-{ head -n "${ENTAIL_SLICE}" "${FIRST_NQ}"; cat "${ONTO_NQ}"; } >"${ENTAIL_SLICE_NQ}"
+write_checked "${ENTAIL_FULL}" "the 'full' rung of the entailment ladder" \
+  cat "${DATA}" "${ONTO_NQ}"
+write_checked "${ENTAIL_FILE}" "the 'one-file' rung of the entailment ladder" \
+  cat "${FIRST_NQ}" "${ONTO_NQ}"
+slice_rung() {
+  head -n "${ENTAIL_SLICE}" "${FIRST_NQ}"
+  cat "${ONTO_NQ}"
+}
+write_checked "${ENTAIL_SLICE_NQ}" "the 'slice' rung of the entailment ladder" slice_rung
+for rung_file in "${ENTAIL_FULL}" "${ENTAIL_FILE}" "${ENTAIL_SLICE_NQ}"; do
+  require_nonempty_file "${rung_file}" "a rung of the entailment ladder"
+done
 
 rows_of() { wc -l <"$1"; }
 
@@ -355,9 +528,9 @@ else:
 # regime, not of the query, so probing per query would repeat an identical failure
 # fourteen times and multiply the run time by the number of queries that share a
 # regime.
-probe_query="$(mktemp)"
-trap 'rm -f "${probe_query}"' EXIT
-printf 'SELECT ?s WHERE { ?s ?p ?o } LIMIT 1\n' >"${probe_query}"
+probe_query="${TMP}/probe.rq"
+write_checked "${probe_query}" "the regime probe query" \
+  printf 'SELECT ?s WHERE { ?s ?p ?o } LIMIT 1\n'
 
 declare -A REGIME_DATASET REGIME_RUNG REGIME_NOTE
 

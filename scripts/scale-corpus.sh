@@ -84,9 +84,36 @@ SINK="${SCALE_SINK:-}"
 MANIFEST_PATH="${SCALE_MANIFEST:-}"
 BIN="${SCALE_BIN:-}"
 
+# The whole-run manifest this run actually wrote to a FILE, if any. See
+# `cleanup` below: a manifest is a certificate, and a certificate must never
+# outlive the run it certifies.
+WROTE_MANIFEST=""
+
 die() {
   echo "scale-corpus: $*" >&2
   exit 1
+}
+
+# A WRITE WHOSE STATUS IS NOT CHECKED IS A SILENT DROP. Every redirection in
+# this lane goes through here, so an unopenable destination is a LANE failure
+# that names the knob and quotes the bytes back — never a bare
+# `scripts/scale-corpus.sh: line N: ...: Is a directory` with no hint which knob
+# supplied the path. `$1` is the destination, `$2` WHAT is being written, `$3` how
+# to name WHERE it was going (the caller spells this so the knob appears exactly
+# as an operator set it), `$4` the payload.
+#
+# The payload is an ARGUMENT rather than standard input on purpose: a pipeline
+# would put this function on the right-hand side, where `die`'s `exit` leaves a
+# subshell instead of the lane and the failure's propagation depends on
+# `pipefail` staying set. Called as a plain command, `die` means what it says.
+write_checked() {
+  local destination="$1" what="$2" where="$3" payload="$4" write_error
+  if ! write_error="$({ printf '%s\n' "${payload}" >"${destination}"; } 2>&1)"; then
+    die "cannot write ${what} to ${where}
+  ${write_error}
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Check that its parent directory exists and is writable."
+  fi
 }
 
 require_positive() {
@@ -94,6 +121,20 @@ require_positive() {
   [[ "${value}" =~ ^[0-9]+$ ]] ||
     die "${name} must be a decimal unsigned integer (got '${value}')"
   [[ "${value}" != "0" ]] || die "${name} must be positive"
+}
+
+# A RUN THAT PRODUCED NOTHING IS A FAILED RUN, and it must never be reported as
+# a fast one. The guard is at RUN level and deliberately not at shard level: with
+# `--quads 1 --shards 8` the generator gives shard 7 the single row and shards
+# 0..6 an empty range, so an empty SHARD is a legitimate result and refusing it
+# would be over-refusal. An empty RUN never is: `SCALE_QUADS` is validated
+# positive above, so the whole run owes at least one row.
+require_nonempty_run() {
+  local produced="$1" unit="$2"
+  ((produced > 0)) ||
+    die "the run produced 0 ${unit} for SCALE_QUADS=${QUADS} — nothing was generated.
+  A zero-row run is a FAILURE, not a fast one, and its digest is the SHA-256 of
+  the empty string rather than a corpus. Suspect the binary this lane ran."
 }
 
 require_positive SCALE_QUADS "${QUADS}"
@@ -221,7 +262,29 @@ shard_name() {
 }
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "${tmp}"' EXIT
+
+# A MANIFEST IS A CERTIFICATE, SO ONE MUST NEVER OUTLIVE THE RUN IT CERTIFIES.
+#
+# `file_shard` already applies that law at SHARD level. It was not applied at RUN
+# level, and the whole-run manifest is written BEFORE the first shard starts (it
+# has to be — it is also the proof that the binary runs), so a run that lost a
+# shard left the arena holding three of four corpus files beside a manifest
+# reading `"quads": 2000, "emitted_lines": 2000` with no marker of failure at
+# all. Anything that later read that arena would certify a corpus that was never
+# produced.
+#
+# The removal hangs off the EXIT trap rather than off `die` so it also covers an
+# `errexit` death that never reaches `die`.
+cleanup() {
+  local status=$?
+  rm -rf "${tmp}"
+  if ((status != 0)) && [[ -n "${WROTE_MANIFEST}" ]]; then
+    rm -f -- "${WROTE_MANIFEST}"
+    echo "scale-corpus: removed the whole-run manifest ${WROTE_MANIFEST} — this run \
+failed, and a manifest must never certify a corpus that was not produced" >&2
+  fi
+}
+trap cleanup EXIT
 
 # The whole-run manifest: shard 0 of 1, which is the specification every shard
 # is a slice of. It is produced ONCE, here, before any mode banner and before
@@ -252,6 +315,56 @@ if ((manifest_status != 0)); then
 ${manifest_detail}  The path is used exactly as given, byte for byte; nothing in it is expanded.
   Nothing downstream can be trusted when the specification itself cannot be
   produced, so no shard was started."
+fi
+
+# EXITING 0 IS NOT PRODUCING A MANIFEST, and the difference is the whole of the
+# empty-certificate bug. `SCALE_BIN=/bin/true` exits 0 and writes nothing: the
+# status check above passed, `WHOLE_RUN_MANIFEST` was the EMPTY STRING, the lane
+# emitted it as a blank line where the specification belongs, ran four shards
+# that produced nothing, and printed
+# `sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` —
+# THE SHA-256 OF THE EMPTY STRING — as each shard's digest, then `total rows=0`,
+# then exited 0.
+#
+# So the manifest is checked for being a manifest, not merely for an exit status:
+# it must parse, it must name THIS profile, and its parameters must be the ones
+# the lane asked for. That is also what proves the binary is a `bench-corpus` and
+# not some other executable that happens to print JSON.
+manifest_error="$(printf '%s' "${WHOLE_RUN_MANIFEST}" | python3 -c '
+import json
+import sys
+
+raw = sys.stdin.read()
+if not raw.strip():
+    print("it produced NO OUTPUT AT ALL (a binary that exits 0 and says nothing "
+          "is not a binary that generated a corpus)")
+    sys.exit(0)
+try:
+    record = json.loads(raw)
+except json.JSONDecodeError as error:
+    print(f"its output is not JSON ({error}); first 200 bytes: {raw[:200]!r}")
+    sys.exit(0)
+expected = {
+    "profile": sys.argv[1],
+    "seed": int(sys.argv[2]),
+    "quads": int(sys.argv[3]),
+    "iris": int(sys.argv[4]),
+    "emitted_lines": int(sys.argv[3]),
+}
+for key, want in expected.items():
+    if key not in record:
+        print(f"its manifest has no {key!r} field")
+        sys.exit(0)
+    if record[key] != want:
+        print(f"its manifest reports {key}={record[key]!r}, not the {want!r} this run asked for")
+        sys.exit(0)
+' "${PROFILE_ID}" "${SEED}" "${QUADS}" "${IRIS}")" ||
+  die "could not inspect the whole-run manifest produced by ${bin_provenance}"
+if [[ -n "${manifest_error}" ]]; then
+  die "${bin_provenance} exited 0 but did not produce a usable whole-run manifest:
+  ${manifest_error}
+  The manifest is this lane's CERTIFICATE of what the corpus is, so it is never
+  published for output that was not produced. No shard was started."
 fi
 
 # Replays the manifest captured above. The binary is not re-run: every mode
@@ -367,19 +480,18 @@ file_shard() {
 # failure with the path quoted back verbatim, so an operator can see exactly
 # which bytes were used; the one thing this must never do is write somewhere
 # else and report success.
+#
+# EVERY manifest write here is status-checked, and by the SAME code. The
+# `SCALE_MANIFEST` branch had the three-line diagnostic and the default-path
+# branch below it had a bare `whole_run_manifest >"$1"`, so the identical fault —
+# an unwritable destination — produced a lane diagnostic naming the knob through
+# one branch and a bare `scripts/scale-corpus.sh: line N: ...: Is a directory`
+# through the other. One law, one implementation: `write_checked`.
 emit_manifest() {
   if [[ -n "${MANIFEST_PATH}" ]]; then
-    # The write happens exactly once; its diagnostics are CAPTURED rather than
-    # discarded, so the redirection error (and anything the generator said) is
-    # reported inside the lane's own message instead of leaking as a bare shell
-    # line or, worse, being swallowed.
-    local write_error
-    if ! write_error="$({ whole_run_manifest >"${MANIFEST_PATH}"; } 2>&1)"; then
-      die "cannot write the manifest to SCALE_MANIFEST='${MANIFEST_PATH}'
-  ${write_error}
-  The path is used exactly as given, byte for byte; nothing in it is expanded.
-  Check that its parent directory exists and is writable."
-    fi
+    write_checked "${MANIFEST_PATH}" "the manifest" \
+      "SCALE_MANIFEST='${MANIFEST_PATH}'" "${WHOLE_RUN_MANIFEST}"
+    WROTE_MANIFEST="${MANIFEST_PATH}"
     echo "scale-corpus: manifest written to ${MANIFEST_PATH}" >&2
     return
   fi
@@ -387,7 +499,9 @@ emit_manifest() {
     stdout) whole_run_manifest ;;
     stderr) whole_run_manifest >&2 ;;
     *)
-      whole_run_manifest >"$1"
+      write_checked "$1" "the whole-run manifest" \
+        "'$1', its default destination under SCALE_OUT='${OUT}'" "${WHOLE_RUN_MANIFEST}"
+      WROTE_MANIFEST="$1"
       echo "scale-corpus: manifest written to $1" >&2
       ;;
   esac
@@ -402,7 +516,7 @@ case "${MODE}" in
       printf 'shard %d/%d %s\n' "${index}" "${SHARDS}" "$(cat "${tmp}/${index}.report")"
     done
     if [[ -z "${SINK}" ]]; then
-      cat "${tmp}"/*.report | python3 -c '
+      total_line="$(cat "${tmp}"/*.report | python3 -c '
 import sys
 
 rows = 0
@@ -413,7 +527,10 @@ for line in sys.stdin:
     size += int(fields["bytes"])
 density = (size / rows) if rows else 0.0
 print(f"total rows={rows} bytes={size} bytes_per_row={density:.1f}")
-'
+')"
+      printf '%s\n' "${total_line}"
+      total_rows="${total_line#total rows=}"
+      require_nonempty_run "${total_rows%% *}" "rows"
     fi
     ;;
   pipe)
@@ -444,6 +561,7 @@ print(f"total rows={rows} bytes={size} bytes_per_row={density:.1f}")
     # checked. `wc -c < <a directory>` succeeds as a redirection and reports
     # `bytes=0`, which is precisely how a missing shard used to be announced as
     # an empty one.
+    run_bytes=0
     for ((index = 0; index < SHARDS; index++)); do
       name="$(shard_name "${index}")"
       [[ -f "${OUT}/${name}" ]] ||
@@ -452,7 +570,12 @@ print(f"total rows={rows} bytes={size} bytes_per_row={density:.1f}")
         die "cannot size the shard file ${OUT}/${name}"
       fi
       printf '%s bytes=%s\n' "${name}" "${bytes}"
+      run_bytes=$((run_bytes + bytes))
     done
+    # Materializing a corpus of zero bytes and then printing the byte-for-byte
+    # guarantee over it would certify emptiness. An individual shard file may
+    # legitimately be empty (see `require_nonempty_run`); the run may not.
+    require_nonempty_run "${run_bytes}" "bytes across all ${SHARDS} shard files"
     echo "scale-corpus: cat ${OUT}/${PREFIX}.shard-*.nq reproduces a whole run byte for byte" >&2
     ;;
 esac
