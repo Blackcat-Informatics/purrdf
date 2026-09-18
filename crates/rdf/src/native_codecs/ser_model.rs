@@ -606,7 +606,6 @@ fn write_term_in(
 /// second time. Peak was therefore about twice the output on top of one live `String`
 /// per quad; Turtle paid a third copy by wrapping this function's result.
 pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
-    let mut any = false;
     // One reifier index per document: every quoted-triple term below resolves through
     // it in O(1) instead of scanning the reifier table.
     let ix = g.reifier_index();
@@ -618,7 +617,6 @@ pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
         out.push(' ');
         write_term(g, &ix, o, out);
         write_graph_terminator(g, &ix, gname, out);
-        any = true;
     }
 
     for &(rid, (s, p, o), gname) in &g.reifiers {
@@ -641,7 +639,6 @@ pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
         write_term(g, &ix, o, out);
         out.push_str(" )>>");
         write_graph_terminator(g, &ix, gname, out);
-        any = true;
     }
 
     for &(r, p, v, gname) in &g.annotations {
@@ -651,10 +648,7 @@ pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
         out.push(' ');
         write_term(g, &ix, v, out);
         write_graph_terminator(g, &ix, gname, out);
-        any = true;
     }
-
-    let _ = any;
 }
 
 /// Close one N-Quads statement: the optional graph name, the `.`, and the line break.
@@ -717,29 +711,44 @@ pub(crate) fn write_ntriples(g: &SerGraph, out: &mut String) -> Result<(), RdfDi
 pub(crate) fn write_turtle(g: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
     ensure_default_graph_projection(g, "Turtle")?;
 
-    // The header is written first and RETRACTED if the body turns out to be empty,
-    // rather than the body being built into its own `String` so its emptiness can be
-    // tested before deciding. Building it separately meant the whole document was
-    // copied a second time to place it after the header — on top of the two copies
-    // `to_nquads` itself was making — so a Turtle export peaked at roughly three times
-    // its own output.
-    let start = out.len();
+    // Decided BEFORE the header is written, not after. The previous shape emitted the
+    // header, emitted the body, and retracted the header with `truncate` when the body
+    // turned out empty — a rewind an incremental sink cannot perform once bytes have
+    // gone downstream. The predicate is the one `write_nquads` already computed and
+    // threw away, so an empty graph still emits nothing at all, header included.
+    if !emits_any_statement(g) {
+        return Ok(());
+    }
+
     write_base_directive(g, out);
     out.push_str("@prefix rdf: <");
     out.push_str(RDF_NS);
     out.push_str("> .\n@prefix xsd: <");
     out.push_str(XSD_NS);
     out.push_str("> .\n\n");
-    let header = out.len();
 
     write_nquads(g, out);
-    if out.len() == header {
-        // An empty graph emits nothing at all, header included — unchanged behaviour.
-        // Truncating to where this call began (not `clear`) is what lets a caller write
-        // more than one document into one buffer.
-        out.truncate(start);
-    }
     Ok(())
+}
+
+/// Whether this graph emits at least one statement.
+///
+/// Hoisted out of [`write_nquads`], which computed exactly this and discarded it. It
+/// is what lets a header-bearing syntax decide before emitting rather than emitting
+/// and retracting.
+///
+/// A self-reifier sentinel does NOT count. Such a row is an inline quoted-triple term
+/// already carried by its parent row, not a statement of its own, which is why
+/// [`write_nquads`] skips it — so a graph holding nothing else emits nothing, and
+/// Turtle and TriG agree on that.
+pub(crate) fn emits_any_statement(g: &SerGraph) -> bool {
+    !g.quads.is_empty()
+        || !g.annotations.is_empty()
+        || g.reifiers.iter().any(|&(rid, _, _)| {
+            !g.terms
+                .get(rid)
+                .is_some_and(|term| term.kind == SerTermKind::Triple && term.reifier == Some(rid))
+        })
 }
 
 // ── TriG ──────────────────────────────────────────────────────────────────────────
@@ -854,7 +863,13 @@ fn begin_statement(
 /// its own newline produces exactly those bytes: a join with `"\n"` plus one trailing
 /// `"\n"` is the same sequence as one `"\n"` after each line.
 pub(crate) fn write_trig(g: &SerGraph, out: &mut String) {
-    if g.quads.is_empty() && g.reifiers.is_empty() && g.annotations.is_empty() {
+    // The same predicate Turtle uses. The previous guard tested `reifiers.is_empty()`,
+    // which counts self-reifier sentinel rows that this writer then skips — so a graph
+    // holding only sentinels emitted a bare `@base`/`@prefix` header here while Turtle
+    // emitted nothing. Sharing the predicate makes the two agree, in the direction of
+    // emitting nothing: a document with no statements has no reason to declare
+    // prefixes.
+    if !emits_any_statement(g) {
         return;
     }
 
@@ -1023,6 +1038,89 @@ mod tests {
         }
         g.quads = rows.iter().map(|&(s, p, o)| (s, p, o, None)).collect();
         g
+    }
+
+    /// A graph carrying ONLY self-reifier sentinel rows — an inline quoted-triple term
+    /// that is its own reifier, with no statement of its own.
+    ///
+    /// Built DIRECTLY rather than through `build_ser_graph`, deliberately. `SerGraph`
+    /// has four producers in this crate, so "the builder cannot construct this" is not
+    /// a proof that no writer ever sees it; constructing it here is.
+    fn self_reifier_sentinel_only_graph() -> SerGraph {
+        let mut g = graph_of(&["https://example.org/s", "https://example.org/p"], &[]);
+        // A `Triple` term whose reifier is itself: the sentinel shape both writers skip.
+        let rid = g.terms.len();
+        g.terms.push(SerTerm {
+            kind: SerTermKind::Triple,
+            value: None,
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: Some(rid),
+        });
+        g.reifiers.push((rid, (0, 1, 0), None));
+        g
+    }
+
+    /// Turtle and TriG agree that a graph with no statements emits NOTHING.
+    ///
+    /// Turtle used to write its header and retract it with `truncate`; TriG guarded on
+    /// `reifiers.is_empty()`, which counts sentinel rows it then skips — so this input
+    /// made TriG emit a bare header while Turtle emitted nothing. Both now consult one
+    /// predicate, and this is the executable proof of it rather than an argument about
+    /// which inputs are reachable.
+    #[test]
+    fn a_graph_with_no_statements_emits_nothing_in_turtle_and_trig() {
+        for mut g in [
+            SerGraph::default(),
+            self_reifier_sentinel_only_graph(),
+            graph_of(&["https://example.org/s"], &[]),
+        ] {
+            g.sort_canonical();
+            assert!(
+                !emits_any_statement(&g),
+                "fixture should carry no emittable statement"
+            );
+
+            let mut turtle = String::new();
+            write_turtle(&g, &mut turtle).expect("default-graph projection");
+            assert_eq!(turtle, "", "Turtle emitted a header for an empty document");
+
+            let mut trig = String::new();
+            write_trig(&g, &mut trig);
+            assert_eq!(trig, "", "TriG emitted a header for an empty document");
+
+            let mut nquads = String::new();
+            write_nquads(&g, &mut nquads);
+            assert_eq!(nquads, "", "N-Quads emitted a statement for an empty document");
+        }
+    }
+
+    /// The hoisted predicate agrees with what the writers actually emit, for graphs that
+    /// DO carry statements — the valid neighbour of the refusal above, so "emits
+    /// nothing" cannot be satisfied by emitting nothing for everything.
+    #[test]
+    fn a_graph_with_statements_still_emits_a_header_and_a_body() {
+        let mut g = graph_of(
+            &[
+                "https://example.org/s",
+                "https://example.org/p",
+                "https://example.org/o",
+            ],
+            &[(0, 1, 2)],
+        );
+        g.sort_canonical();
+        assert!(emits_any_statement(&g));
+
+        let mut turtle = String::new();
+        write_turtle(&g, &mut turtle).expect("default-graph projection");
+        assert!(turtle.contains("@prefix rdf:"), "header is still emitted");
+        assert!(turtle.contains("https://example.org/s"), "body is emitted");
+
+        let mut trig = String::new();
+        write_trig(&g, &mut trig);
+        assert!(trig.contains("@prefix rdf:"));
+        assert!(trig.contains("https://example.org/s"));
     }
 
     /// THE EMITTED ROW ORDER DOES NOT MOVE WITH THE BASE.
