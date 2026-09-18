@@ -43,12 +43,13 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet, btree_map};
 
-use purrdf_sparql_eval::DuplicatePolicy;
+use purrdf_sparql_eval::{DuplicatePolicy, IndexGeneration, PfAttestation, ServiceLevel};
 use purrdf_text::Fixed;
 
+use crate::canonical::Writer;
 use crate::error::FusionError;
 use crate::fusion_profile::FusionProfile;
-use crate::id::PlanId;
+use crate::id::{EVIDENCE_VERSION, EvidenceId, PlanId};
 use crate::iri::{Iri, Term};
 use crate::ranked_stream::{ProducerReceipt, ProtocolError, RankedStream};
 use crate::reciprocal_rank::MonotoneDepth;
@@ -62,9 +63,43 @@ pub type CandidateId = Term;
 /// that contributed — and every applicable one that could not — keeps its own
 /// status, so "all producers answered" and "one could not" stay distinguishable.
 ///
+/// # `Exhausted` is the only completeness claim in the vocabulary
+///
+/// There are five variants and exactly one of them says a stratum's rows ran
+/// out. Every other one names *who stopped the read*, and they are four
+/// different parties stopping it at four different places:
+///
+/// * [`Self::DepthReached`] — the **plan's depth** stopped the producer, at a
+///   rank. The rows below it exist and were not looked at.
+/// * [`Self::CeilingReached`] — a **contribution bound** stopped the read, at a
+///   value in the profile's fixed-point space. Either the producer's own
+///   declared bound or, far more often, the one a bounded fusion wrote down
+///   when the caller's [`TopK`](crate::TopK) was satisfied.
+/// * [`Self::TermsRejected`] — the **producer** stopped it before it began, by
+///   declining the request terms it was handed.
+/// * [`Self::ExecutionFailed`] — the **run** stopped it: the unit could not
+///   execute at all.
+///
+/// A consumer therefore reads completeness by looking for one variant rather
+/// than by eliminating the others, which is the property that makes this
+/// vocabulary safe to extend: a read ending added later is incomplete by
+/// construction instead of complete by omission.
+///
+/// The first two are the pair most easily confused, and collapsing them would
+/// lose the fact a consumer acts on. Both say "this stratum is not complete",
+/// but they differ in who stopped the read and in what space the stopping point
+/// is expressed — a rank the producer was handed as its depth, versus a
+/// contribution the producer never saw. The remedy differs with them:
+/// [`Self::DepthReached`] is answered by re-planning deeper, and
+/// [`Self::CeilingReached`] by certifying further rows from the same streams.
+/// Neither number converts into the other — a rank becomes a contribution only
+/// under a profile, and a contribution does not become a rank again once
+/// fixed-point decay has quantized two adjacent ranks to one value — so a
+/// consumer handed the merged fact could only guess which knob to turn.
+///
 /// # Where each variant comes from
 ///
-/// Three of the four are the producer's own declaration, converted from the
+/// Four of the five are the producer's own declaration, converted from the
 /// receipt it returned through [`RankedStream::receipt`] — plus, for the strata
 /// that never became a stream, the executor's report carried in by
 /// [`FusionTrailer::completed_with`].
@@ -95,15 +130,59 @@ pub type CandidateId = Term;
 /// can say either. The fusion engine validates the claim against the rows the
 /// stream actually emitted, so it cannot be used to hide them.
 ///
+/// [`Self::DepthReached`] has exactly one author too, the producer, and it is
+/// the only ending in this enum that fusion has no way of observing for itself:
+/// a stream that stops at its depth and a stream that stops because it ran out
+/// look identical from here — both simply stop yielding rows. So it is believed
+/// where it is stated and checked where it is checkable: fusion verifies the
+/// rank against the rows it actually pulled
+/// ([`ProtocolError::ForgedReceipt`]) and takes the producer's word for the
+/// rows it says it did not look at, which is the only party that knows.
+///
 /// [`RankedStreamImpl`](crate::RankedStreamImpl), this crate's own executor
 /// stream, materializes its rows and declares [`Self::Exhausted`]; a unit that
 /// cannot run at all becomes [`Self::ExecutionFailed`].
+///
+/// # What is deliberately not in this enum: an incomplete index
+///
+/// A producer whose index was short — a shard that failed to load, a segment
+/// mid-rebuild, a replica that has not caught up — has *not* described a read
+/// ending, and it gets no variant here. That fact is true of the invocation
+/// from the instant it opened and stays true however the read then ends, so it
+/// travels as an attestation instead
+/// ([`RankedStream::attestation`], reported in
+/// [`FusionTrailer::attestations`]), pinned at `open` before a row is pulled.
+///
+/// The reason is not taxonomy, it is survival. Terminal statuses are
+/// overwritten by a bounded stop: a fusion that satisfies its
+/// [`TopK`](crate::TopK) writes [`Self::CeilingReached`] over every stream it
+/// stopped, and a stream it stopped never returns a receipt at all. An
+/// incompleteness held as a terminal status would therefore be destroyed
+/// exactly in the runs where it mattered most — the bounded ones — and the
+/// answer would name the bound while silently losing the hole beneath it.
+/// Pinned at open, both facts reach the trailer together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProducerStatus {
     /// The producer emitted every row it had.
     Exhausted {
         /// How many rows it emitted.
         rows_emitted: u64,
+    },
+    /// The producer stopped at the depth it was given, and more rows existed.
+    ///
+    /// The mirror of [`ProducerReceipt::DepthReached`], verified: `rank` is the
+    /// last rank the producer emitted, and fusion has checked it against the
+    /// rows it actually pulled. Ranks one through `rank` were read; nothing
+    /// below `rank` was looked at.
+    ///
+    /// Authored by the producer, in **rank** space — which is what separates it
+    /// from [`Self::CeilingReached`], authored (usually) by fusion in
+    /// contribution space. See this type's header for why the two are not one
+    /// variant.
+    DepthReached {
+        /// The last 1-based rank the producer emitted, equal to the number of
+        /// rows fusion pulled from it.
+        rank: u64,
     },
     /// Reading stopped at a contribution bound rather than at the end of the
     /// rows. Declared by the producer, or written down by a fusion the caller's
@@ -127,7 +206,7 @@ impl From<ProducerReceipt> for ProducerStatus {
     /// Carry a producer's own terminal declaration into the fused trailer,
     /// variant for variant.
     ///
-    /// The two enums are deliberately separate types for the same four facts:
+    /// The two enums are deliberately separate types for the same five facts:
     /// a [`ProducerReceipt`] is what a producer *claims* on the input protocol,
     /// and a [`ProducerStatus`] is what the trailer *reports* after fusion has
     /// checked that claim against the rows it actually pulled. Keeping them
@@ -143,6 +222,7 @@ impl From<ProducerReceipt> for ProducerStatus {
     fn from(receipt: ProducerReceipt) -> Self {
         match receipt {
             ProducerReceipt::Exhausted { rows_emitted } => Self::Exhausted { rows_emitted },
+            ProducerReceipt::DepthReached { rank } => Self::DepthReached { rank },
             ProducerReceipt::CeilingReached { bound } => Self::CeilingReached { bound },
             ProducerReceipt::ExecutionFailed { reason } => Self::ExecutionFailed { reason },
             ProducerReceipt::TermsRejected => Self::TermsRejected,
@@ -150,12 +230,15 @@ impl From<ProducerReceipt> for ProducerStatus {
     }
 }
 
-/// One fused row: a candidate with its exact score and its provenance.
+/// One fused row: a candidate with its fused score and its provenance.
 ///
 /// `contributions` names, for every stratum the candidate surfaced in, the
 /// 1-based rank and the contribution that stratum made. Their checked sum is
-/// `score`. `threshold_witness` is the global threshold in force when the row
-/// was certified, so a reader can replay the certification.
+/// `score` — exact over the strata that answered, and a lower bound where one
+/// of them served from an index it attested was not whole (see
+/// [`FusionTrailer::exactness`]). `threshold_witness` is the global threshold
+/// in force when the row was certified, so a reader can replay the
+/// certification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FusedRow {
     /// The candidate, in its canonical term lexical — `<http://example.org/doc>`,
@@ -165,7 +248,34 @@ pub struct FusedRow {
     /// [`RequestTerm::EntitySeed`](crate::RequestTerm::EntitySeed) takes, so a
     /// fused row can be handed straight back as the seed of a follow-up request.
     pub entity: Term,
-    /// The exact fused score.
+    /// The fused score: the checked sum of the contributions in
+    /// [`Self::contributions`], exact over the strata that answered.
+    ///
+    /// The arithmetic is exact and always was — every summand is a checked
+    /// fixed-point value the engine re-derived itself — but arithmetic is not
+    /// the whole of the claim. Whether this number is the candidate's *whole*
+    /// score depends on whether every stratum that could have contributed to it
+    /// had a whole index to contribute from, and that is a fact about the
+    /// producers, not about the sum. A stratum serving from a short index omits
+    /// the rows its missing shard held, so a candidate that shard would have
+    /// named is summed without that contribution and scores lower than it
+    /// should.
+    ///
+    /// So this field is not an unconditional exactness claim, and reading it as
+    /// one is the very fault this protocol exists to prevent — a bound on the
+    /// read silently becoming a value. The trailer says which reading applies:
+    /// [`FusionTrailer::exactness`] is [`ScoreExactness::Exact`] when no handed
+    /// stream attested an incomplete index, and
+    /// [`ScoreExactness::LowerBounds`] naming the short strata otherwise, in
+    /// which case every score here is a **lower bound** on the true one. This
+    /// is the same refusal to overstate that the row list itself already makes:
+    /// a returned row is never a completeness claim, and the trailer is where
+    /// completeness is asserted.
+    ///
+    /// [`Self::threshold_witness`] certifies the *order* under the scores that
+    /// were summed, and it stays replayable either way — it is a fact about
+    /// this fusion's own arithmetic. It does not, and cannot, certify that the
+    /// summands were all the summands there were.
     pub score: Fixed,
     /// Per-stratum provenance: `(stratum, rank, contribution)`.
     pub contributions: Vec<(Iri, u64, Fixed)>,
@@ -223,7 +333,66 @@ pub struct StratumResolution {
     pub collisions_observed: u64,
 }
 
-/// The terminal report of a fusion: every producer's status and both identities.
+/// Whether the fused scores in an answer are the scores, or floors under them.
+///
+/// A fused score is the checked sum of a candidate's contributions across
+/// strata. The arithmetic is exact in every case; what varies is whether all
+/// the summands were there to be summed. A stratum serving from an index it
+/// attests was **not whole** ([`ServiceLevel::Incomplete`]) omits whatever its
+/// missing shard held, so any candidate that shard would have named is summed
+/// short — a real score, one contribution light.
+///
+/// Labelling such a score "exact" would be the fault this whole protocol
+/// exists to remove: a bound on the read presented as a value. So the trailer
+/// states which of the two readings applies, once, for the whole answer, and
+/// the rows are still returned either way. Refusing to answer at all would be
+/// the mirror error — a short index still produced real rows in a real order,
+/// and a caller that knows the scores are floors can use them.
+///
+/// # Why the answer is per fusion rather than per row
+///
+/// The honest per-row answer is not computable. Knowing which *particular*
+/// candidates lost a contribution would mean knowing what the missing shard
+/// held, which is precisely what nobody has — the producer least of all, since
+/// a shard that failed to load cannot be consulted about its contents. What is
+/// knowable is the set of strata that could have contributed and could not
+/// fully, and that is what [`Self::LowerBounds`] names. A per-row flag would
+/// have to be either fabricated or set on every row, and the second is this
+/// value spelled once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScoreExactness {
+    /// Every handed stream served from an index it did not attest was short, so
+    /// each score is the exact sum of every contribution that was due.
+    ///
+    /// Not a certificate that every index was whole. Most producers attest
+    /// nothing at all ([`ServiceLevel::Undeclared`] is silence, and there is no
+    /// `Whole` variant to attest), so this says the narrower true thing: no
+    /// stratum in this fusion declared itself short. It is the strongest claim
+    /// the seam can carry, and reading it as more would put words in the mouth
+    /// of every producer that stayed silent.
+    Exact,
+    /// At least one handed stream attested an incomplete index, so every score
+    /// in this answer is a lower bound on the score the whole index would have
+    /// produced.
+    ///
+    /// The order is still this fusion's own certified order over the
+    /// contributions it did receive, and the rows are real rows. What cannot be
+    /// concluded is that a row absent from the answer would have stayed absent,
+    /// or that the emitted order would have survived the missing contributions.
+    LowerBounds {
+        /// Exactly the strata that attested [`ServiceLevel::Incomplete`], in
+        /// canonical stratum order.
+        ///
+        /// Naming them rather than raising a flag is what makes the fact
+        /// actionable: these are the indexes to rebuild, and a caller can read
+        /// each one's verbatim reason out of
+        /// [`FusionTrailer::attestations`] under the same key.
+        strata: BTreeSet<Iri>,
+    },
+}
+
+/// The terminal report of a fusion: every producer's status, what their indexes
+/// attested, and all three identities.
 ///
 /// The trailer is the only place completeness may be asserted. A consumer that
 /// read a prefix and stopped holds evidence the answer is incomplete; nothing
@@ -232,10 +401,74 @@ pub struct StratumResolution {
 pub struct FusionTrailer {
     /// Every producer's own status, keyed by its stratum.
     pub statuses: BTreeMap<Iri, ProducerStatus>,
+    /// What each handed stream's index attested, keyed by its stratum: which
+    /// generation answered, and whether that generation was whole.
+    ///
+    /// Read from [`RankedStream::attestation`] in
+    /// [`FusionStream::new`](FusionStream::new), **before any row is pulled**.
+    /// A generation is pinned when an index is opened, so the value read there
+    /// is the truth for the whole read — asking at the end would ask a stream
+    /// that a bounded fusion may have stopped, and the answer would depend on
+    /// how deep the caller happened to read.
+    ///
+    /// # Both facts survive a bounded stop
+    ///
+    /// This is the load-bearing consequence of reading at construction. A
+    /// stratum that attests [`ServiceLevel::Incomplete`] and is then stopped by
+    /// the caller's [`TopK`](crate::TopK) appears **twice** in this trailer: as
+    /// [`ProducerStatus::CeilingReached`] in [`Self::statuses`], and as
+    /// `Incomplete` here. Had incompleteness been a terminal receipt instead,
+    /// the bounded stop would have overwritten it — a stopped stream never
+    /// returns a receipt at all — and the answer would have lost the hole in
+    /// the index exactly in the runs where the bound made it matter.
+    ///
+    /// # The key set is a subset of [`Self::statuses`]'
+    ///
+    /// Only the streams this fusion was handed are keyed. A stratum that never
+    /// became a stream — one whose unit failed to run, added afterwards through
+    /// [`FusionTrailer::completed_with`] — has no attestation to name, because
+    /// no index of its was ever opened. Its absence from this map is the honest
+    /// answer, and it is deliberately not filled with
+    /// [`PfAttestation::UNDECLARED`]: `Undeclared` means a producer was asked
+    /// and said nothing, and fabricating it here would report a producer that
+    /// was never asked as one that declined to answer.
+    pub attestations: BTreeMap<Iri, PfAttestation>,
+    /// Whether the fused scores are exact, or floors under the scores a whole
+    /// index would have produced.
+    ///
+    /// [`ScoreExactness::Exact`] when no handed stream attested an incomplete
+    /// index, and [`ScoreExactness::LowerBounds`] naming exactly the strata
+    /// that did.
+    ///
+    /// # As of when
+    ///
+    /// Like every other field here it is as of the moment
+    /// [`FusionStream::trailer`] was called, but unlike [`Self::statuses`] and
+    /// [`Self::resolution`] it does not move between calls, and that difference
+    /// is the point. Its inputs are [`Self::attestations`], pinned before the
+    /// first row was pulled; how deep a caller then read changes which streams
+    /// are still open, never whether an index was whole. A caller that reads a
+    /// trailer, certifies more rows and reads another gets a different set of
+    /// statuses and the same exactness — which is exactly the invariance a read
+    /// bound must not be able to destroy.
+    pub exactness: ScoreExactness,
     /// The pinned plan the fused rows came from, when one is attached.
     pub plan_id: Option<PlanId>,
     /// The fusion profile in force.
     pub profile_id: crate::id::FusionProfileId,
+    /// The evidence these rows were produced against: the content identity of
+    /// [`Self::attestations`].
+    ///
+    /// The third of the three identities an answer carries.
+    /// [`Self::plan_id`] pins the question, [`Self::profile_id`] pins the law,
+    /// and this pins the index generations that answered — so one equality
+    /// comparison over the triple decides whether two answers are comparable at
+    /// all. See [`EvidenceId`] for why the plan and the law are not enough on
+    /// their own.
+    ///
+    /// Derived from the attestation map alone, so it is as immovable across
+    /// repeated [`FusionStream::trailer`] calls as that map is.
+    pub evidence_id: EvidenceId,
     /// What each stream's rank resolution cost this fusion, keyed by stratum.
     ///
     /// Keyed by every stream this fusion was handed whose stratum the profile
@@ -298,7 +531,72 @@ pub struct FusionTrailer {
     pub cut_on_a_tie: bool,
 }
 
+// Canonical discriminators for the evidence encoding. One tag space per enum,
+// never reused, so a variant added to either enum takes the next free tag and
+// leaves every identity already issued exactly where it was.
+const GENERATION_UNDECLARED: u8 = 0;
+const GENERATION_DECLARED: u8 = 1;
+const SERVICE_UNDECLARED: u8 = 0;
+const SERVICE_INCOMPLETE: u8 = 1;
+
+/// Write `attestations` as the canonical bytes an [`EvidenceId`] digests.
+///
+/// One encoder, reached both by [`FusionTrailer::evidence_canonical_bytes`] and
+/// by the fusion that mints the identity, so the bytes an answer's id was taken
+/// over are the same bytes a holder of that answer can re-derive. Two encoders
+/// agreeing today is a property that decays; one encoder is a property that
+/// holds.
+fn evidence_canonical_bytes(attestations: &BTreeMap<Iri, PfAttestation>) -> Vec<u8> {
+    let mut writer = Writer::new();
+    writer.u16(EVIDENCE_VERSION);
+    writer.u64(attestations.len() as u64);
+    for (stratum, attestation) in attestations {
+        writer.string(stratum.as_str());
+        match &attestation.generation {
+            IndexGeneration::Undeclared => writer.u8(GENERATION_UNDECLARED),
+            IndexGeneration::Declared(generation) => {
+                writer.u8(GENERATION_DECLARED);
+                writer.string(generation);
+            }
+        }
+        match &attestation.service {
+            ServiceLevel::Undeclared => writer.u8(SERVICE_UNDECLARED),
+            ServiceLevel::Incomplete { reason } => {
+                writer.u8(SERVICE_INCOMPLETE);
+                // The host's verbatim reason is part of the identity rather
+                // than decoration beside it: one generation read twice, once
+                // missing a shard and once behind a lagging replica, is
+                // different evidence and must not digest alike.
+                writer.string(reason);
+            }
+        }
+    }
+    writer.into_bytes()
+}
+
 impl FusionTrailer {
+    /// The canonical bytes [`Self::evidence_id`] is the digest of.
+    ///
+    /// A pure function of [`Self::attestations`]: the layout version, the entry
+    /// count, then every `(stratum, generation, service level)` in canonical
+    /// stratum order, each variable-length part framed by its own length and
+    /// every integer little-endian. Sorting comes free from the `BTreeMap` and
+    /// is relied on, so no iteration order can reach the digest; the framing is
+    /// what makes the encoding injective, so no two different maps can share
+    /// bytes by running their fields together; the little-endian integers are
+    /// what make it identical on every target, wasm32 included.
+    ///
+    /// Public because an identity nobody can re-derive is an identity nobody
+    /// can audit. A caller holding a trailer can recompute
+    /// [`EvidenceId::from_canonical`] over these bytes and confirm the id it
+    /// was handed, or archive the bytes beside an answer so a later run can be
+    /// compared against the evidence this one actually had — the same reason
+    /// [`Plan::canonical_bytes`](crate::Plan::canonical_bytes) is public.
+    #[must_use]
+    pub fn evidence_canonical_bytes(&self) -> Vec<u8> {
+        evidence_canonical_bytes(&self.attestations)
+    }
+
     /// Add the status of every producer that never became a stream, and return
     /// the completed trailer.
     ///
@@ -315,6 +613,13 @@ impl FusionTrailer {
     /// against the rows actually pulled ([`ProtocolError::ForgedReceipt`]), and
     /// an unverified report of the same stratum cannot be allowed to overwrite
     /// one that was; `statuses` fills only the strata the fusion never saw.
+    ///
+    /// Only [`Self::statuses`] grows. A producer that never became a stream
+    /// gets no [`Self::attestations`] entry and does not change
+    /// [`Self::evidence_id`], because no index of its was opened and there is
+    /// nothing it attested — naming it `Undeclared` would report a producer
+    /// that was never asked as one that answered with silence, and would make
+    /// the evidence identity depend on a stratum that contributed no evidence.
     ///
     /// The result does not depend on `statuses`' iteration order: its keys are
     /// distinct and each is inserted only where nothing stands.
@@ -407,6 +712,14 @@ pub struct FusionStream<S: RankedStream> {
     /// the promise structural — there is no set for a later edit to start
     /// filling on a stream that declined to pay for one.
     seen_items: Vec<Option<BTreeSet<Term>>>,
+    /// What every handed stream attested about the index behind it, read in
+    /// [`Self::new`] before a single row was pulled and never read again.
+    ///
+    /// Held rather than re-asked for the same reason it is read early: a
+    /// generation is pinned when the index opens, so one read is the truth for
+    /// the whole fusion, and a second read at the end would be a read of
+    /// whatever state a bounded stop left the stream in.
+    attestations: BTreeMap<Iri, PfAttestation>,
     statuses: BTreeMap<Iri, ProducerStatus>,
     frontier: BTreeMap<CandidateId, CandidateState>,
     threshold: Fixed,
@@ -443,6 +756,19 @@ impl<S: RankedStream> FusionStream<S> {
     /// remaining term is already structural in `seen_items`, and nothing later
     /// in the engine asks a stream what it declared.
     ///
+    /// Every stream's attestation is read here too, and it is read *here*
+    /// rather than at the end for a reason the contract does not share: an
+    /// index generation is pinned when the index is opened, so the version that
+    /// answers the first row is the version that answers the last, and reading
+    /// it before the first pull is reading the truth for the whole fusion at
+    /// the one instant every stream is guaranteed to be in. Reading it at the
+    /// end would instead ask each stream in whatever state this fusion happened
+    /// to leave it — and for a stream a bounded top-k stopped, that is a state
+    /// with no terminal report at all, so an attested incompleteness would be
+    /// lost precisely when the bound made it matter. Unlike the contract, it is
+    /// retained: the trailer reports it verbatim and derives both
+    /// [`FusionTrailer::exactness`] and [`FusionTrailer::evidence_id`] from it.
+    ///
     /// No plan identity is attached; use [`with_plan_id`](Self::with_plan_id) to
     /// name the pinned plan the streams came from. [`fuse`](crate::fuse) does
     /// that for its caller, reading the identity off the streams themselves
@@ -458,6 +784,15 @@ impl<S: RankedStream> FusionStream<S> {
                 DuplicatePolicy::Allowed => Some(BTreeSet::new()),
             })
             .collect();
+        // Keyed by stratum, exactly as `statuses` is, so the two maps are read
+        // under one key. A caller driving this type directly may hand it two
+        // streams tagged with one stratum — `fuse` refuses that before pulling
+        // — and both maps collapse such a pair the same way rather than
+        // disagreeing about how many producers there were.
+        let attestations = streams
+            .iter()
+            .map(|(stratum, stream)| (stratum.clone(), stream.attestation()))
+            .collect();
         Self {
             streams,
             profile,
@@ -470,6 +805,7 @@ impl<S: RankedStream> FusionStream<S> {
             last_contribution: vec![None; count],
             collisions_observed: vec![0; count],
             seen_items,
+            attestations,
             statuses: BTreeMap::new(),
             frontier: BTreeMap::new(),
             threshold: Fixed::ZERO,
@@ -619,8 +955,36 @@ impl<S: RankedStream> FusionStream<S> {
             })
             .collect();
 
+        // Derived from the attestations pinned at construction, never from the
+        // statuses just written. A stream stopped at a bound has a bounded
+        // status and may still have served from a short index; those are two
+        // facts and this is the second one, so nothing about how deep this
+        // fusion read may reach this derivation.
+        let short_strata: BTreeSet<Iri> = self
+            .attestations
+            .iter()
+            .filter(|(_, attestation)| {
+                matches!(attestation.service, ServiceLevel::Incomplete { .. })
+            })
+            .map(|(stratum, _)| stratum.clone())
+            .collect();
+        let exactness = if short_strata.is_empty() {
+            ScoreExactness::Exact
+        } else {
+            ScoreExactness::LowerBounds {
+                strata: short_strata,
+            }
+        };
+
         Ok(FusionTrailer {
             statuses: self.statuses.clone(),
+            // Digested through the one encoder the trailer's own
+            // `evidence_canonical_bytes` calls, so the identity in an answer
+            // and the identity a holder of that answer re-derives cannot come
+            // from two encodings that drifted apart.
+            evidence_id: EvidenceId::from_canonical(&evidence_canonical_bytes(&self.attestations)),
+            attestations: self.attestations.clone(),
+            exactness,
             plan_id: self.plan_id,
             profile_id: self.profile.id(),
             resolution,
@@ -786,12 +1150,32 @@ impl<S: RankedStream> FusionStream<S> {
     }
 
     /// Record a terminal receipt, refusing one the rows contradict.
+    ///
+    /// Every receipt that states a count is measured against the rows this
+    /// fusion actually pulled, and the two counting receipts are measured
+    /// identically. [`ProducerReceipt::Exhausted`] states how many rows it
+    /// emitted; [`ProducerReceipt::DepthReached`] states the last rank it
+    /// emitted, which is the same number because ranks are contiguous from one
+    /// — a law already enforced row by row in [`Self::fetch`]. A producer may
+    /// stop at the depth it was given; it may not miscount what it emitted, and
+    /// the licence to stop reading is deliberately not also a licence to
+    /// misreport. What fusion cannot check either way is the claim about rows
+    /// nobody pulled: that a depth-stopped stream still held rows below its
+    /// last rank is the producer's word, and the producer is the only party who
+    /// can know it.
     fn finish(&mut self, index: usize, receipt: ProducerReceipt) -> Result<(), FusionError> {
         let actual = self.rows_pulled[index];
         match &receipt {
             ProducerReceipt::Exhausted { rows_emitted } if *rows_emitted != actual => {
                 return Err(ProtocolError::ForgedReceipt {
                     declared: *rows_emitted,
+                    actual,
+                }
+                .into());
+            }
+            ProducerReceipt::DepthReached { rank } if *rank != actual => {
+                return Err(ProtocolError::ForgedReceipt {
+                    declared: *rank,
                     actual,
                 }
                 .into());

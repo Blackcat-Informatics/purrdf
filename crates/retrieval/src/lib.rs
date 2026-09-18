@@ -192,6 +192,40 @@
 //! serde document or a `Hash`. The encoding sorts map entries, so it is a pure
 //! function of the plan's fields and is byte-identical on every target.
 //!
+//! A fused answer carries **three** such identities, and they answer three
+//! different questions about it. [`PlanId`] names the question that was asked;
+//! [`FusionProfileId`] names the law the rows were fused under; and
+//! [`EvidenceId`] names the index generations that answered, digested over the
+//! per-stratum attestation map in [`FusionTrailer::attestations`]. The third
+//! exists because the first two are derived from configuration, and
+//! configuration is exactly what does not change when an index is rebuilt
+//! underneath a running system: the same plan under the same law over a rebuilt
+//! index returns different rows while both other identities stay byte-identical.
+//! Two answers are comparable iff all three agree — one equality comparison over
+//! a triple, rather than a map diff each caller would write differently.
+//!
+//! What an index attested is a different kind of fact from how a read ended, and
+//! it is kept apart from one deliberately. A producer's terminal
+//! [`ProducerStatus`] says who stopped the read — the plan's depth, fusion's
+//! contribution bound, the producer's refusal of the terms, or a failed run —
+//! and only [`ProducerStatus::Exhausted`] claims a stratum's rows ran out. An
+//! incomplete *index* is none of those: it is true from the instant the stream
+//! opened and stays true however the read ends, so it is read from
+//! [`RankedStream::attestation`] before the first row is pulled. Held as a
+//! terminal status it would be overwritten by a bounded stop — a stream a top-k
+//! stopped never returns a receipt — and would vanish exactly in the runs where
+//! the bound mattered. Held as an attestation, a stratum that was both stopped
+//! and short reports both facts.
+//!
+//! That is also what keeps a fused score honest. A stratum serving from a short
+//! index omits whatever its missing shard held, so a candidate that shard would
+//! have named is summed one contribution light; labelling that "exact" would be
+//! a bound on the read becoming a value, which is the one failure this layer
+//! exists to prevent. [`FusionTrailer::exactness`] says which reading applies —
+//! [`ScoreExactness::Exact`], or [`ScoreExactness::LowerBounds`] naming exactly
+//! the strata that declared themselves short — and the rows are returned either
+//! way, because a short index still produced real rows in a real order.
+//!
 //! # No float is ever computed with
 //!
 //! Every number this layer derives — a stratum weight, a reciprocal-rank
@@ -252,11 +286,13 @@ pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStre
 pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
 pub use fusion_stream::{
-    CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus, StratumResolution,
+    CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus, ScoreExactness,
+    StratumResolution,
 };
 pub use id::{
-    FUSION_PROFILE_ID_BYTES, FUSION_PROFILE_ID_DOMAIN, FUSION_PROFILE_VERSION, FusionProfileId,
-    PLAN_ID_BYTES, PLAN_ID_DOMAIN, PLAN_VERSION, PlanId,
+    EVIDENCE_ID_BYTES, EVIDENCE_ID_DOMAIN, EVIDENCE_VERSION, EvidenceId, FUSION_PROFILE_ID_BYTES,
+    FUSION_PROFILE_ID_DOMAIN, FUSION_PROFILE_VERSION, FusionProfileId, PLAN_ID_BYTES,
+    PLAN_ID_DOMAIN, PLAN_VERSION, PlanId,
 };
 pub use iri::{Iri, Term};
 pub use plan::{
@@ -285,3 +321,9 @@ pub use purrdf_sparql_eval::RegistryId;
 // is built from it and a caller assembling a stream of its own must be able to
 // name it without depending on the evaluator crate.
 pub use purrdf_sparql_eval::DuplicatePolicy;
+// What a producer attests about the index behind its rows. Re-exported for the
+// same reason: `RankedStream::attestation` returns one and `FusionTrailer`
+// reports a map of them, so a caller implementing a stream or reading a trailer
+// must be able to name these types — and match on `ServiceLevel::Incomplete` —
+// without taking a dependency on the evaluator crate itself.
+pub use purrdf_sparql_eval::{IndexGeneration, PfAttestation, ServiceLevel};

@@ -7,7 +7,7 @@
 //! so a protocol violation can be produced deliberately; the oracle recomputes
 //! the fused order from first principles and must agree with the engine.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,10 +15,11 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
-    ClassWidth, DecayRule, DuplicatePolicy, Fixed, FusionError, FusionProfile, FusionProfileId,
-    FusionResult, FusionStream, Iri, MonotoneDepth, PlanId, ProducerReceipt, ProducerStatus,
-    ProtocolError, RECIP_K, RankedStream, RankedStreamImpl, StreamContract, Term, ToleratedDepth,
-    TopK, contribution, contribution_under,
+    ClassWidth, DecayRule, DuplicatePolicy, EvidenceId, Fixed, FusionError, FusionProfile,
+    FusionProfileId, FusionResult, FusionStream, IndexGeneration, Iri, MonotoneDepth,
+    PfAttestation, PlanId, ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankedStream,
+    RankedStreamImpl, ScoreExactness, ServiceLevel, StreamContract, Term, ToleratedDepth, TopK,
+    contribution, contribution_under,
 };
 
 const K: u32 = 60;
@@ -106,6 +107,10 @@ struct MockStream {
     /// the declaration states its own; everything else declares the strict,
     /// unique contract its scripted rows actually satisfy.
     contract: StreamContract,
+    /// What this stream attests about the index behind its rows. A scripted
+    /// stream descends from no index at all, so the honest default is the
+    /// undeclared attestation; the evidence fixtures state their own.
+    attestation: PfAttestation,
 }
 
 impl Drop for MockStream {
@@ -124,6 +129,7 @@ impl MockStream {
             pull_counter: Arc::new(AtomicUsize::new(0)),
             plan_id: None,
             contract: unique_items(),
+            attestation: PfAttestation::UNDECLARED,
         }
     }
 
@@ -149,6 +155,14 @@ impl MockStream {
     /// The same producer, declaring `contract` about its rows.
     fn declaring(mut self, contract: StreamContract) -> Self {
         self.contract = contract;
+        self
+    }
+
+    /// The same producer, attesting `attestation` about the index behind its
+    /// rows. A fixture that says nothing keeps the default every stream that
+    /// descends from no index honestly reports.
+    fn attesting(mut self, attestation: PfAttestation) -> Self {
+        self.attestation = attestation;
         self
     }
 }
@@ -182,6 +196,10 @@ impl RankedStream for MockStream {
 
     fn plan_id(&self) -> Option<PlanId> {
         self.plan_id
+    }
+
+    fn attestation(&self) -> PfAttestation {
+        self.attestation.clone()
     }
 }
 
@@ -4642,5 +4660,458 @@ fn the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused()
     assert_eq!(
         fused.rows[0].score,
         contribution(Fixed::ONE, 1, K).expect("fits")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A read ending the producer authored, and the evidence it answered from
+//
+// Two different kinds of fact meet in the trailer here, and every test below
+// exists to keep them apart. `ProducerStatus` says who stopped the read; an
+// attestation says what the index behind the rows was. The first is written
+// when a stream ends and can be written *over* by a bounded stop; the second is
+// pinned before the first row is pulled and nothing a caller does can move it.
+// ---------------------------------------------------------------------------
+
+/// A producer that names a generation and declares nothing about wholeness.
+fn attests(generation: &str) -> PfAttestation {
+    PfAttestation {
+        generation: IndexGeneration::Declared(generation.to_owned()),
+        service: ServiceLevel::Undeclared,
+    }
+}
+
+/// A producer that names a generation and declares that index was **not** whole.
+fn attests_short(generation: &str, reason: &str) -> PfAttestation {
+    PfAttestation {
+        generation: IndexGeneration::Declared(generation.to_owned()),
+        service: ServiceLevel::Incomplete {
+            reason: reason.to_owned(),
+        },
+    }
+}
+
+// T3.1. A producer-authored ending for a read the plan's depth stopped.
+//
+// The rows are returned and the ending is carried verbatim: fusion has no way
+// of telling a stream that stopped at its depth from one that ran out — both
+// simply stop yielding — so the producer is the only party that can say which
+// happened, and this is the channel it says it on.
+#[test]
+fn a_depth_ending_is_carried_and_its_rank_is_still_measured_against_the_rows() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let scripted = || vec![row(1, Fixed::ONE, K, "a"), row(2, Fixed::ONE, K, "b")];
+
+    let stopped = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(scripted(), ProducerReceipt::DepthReached { rank: 2 }),
+        )],
+        &profile,
+    ));
+    assert_eq!(
+        stopped.rows.len(),
+        2,
+        "a depth-stopped stream still contributed every row it emitted"
+    );
+    assert_eq!(
+        stopped.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::DepthReached { rank: 2 }),
+        "the producer's own ending reaches the trailer in rank space, unreworded"
+    );
+    assert_ne!(
+        stopped.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 2 }),
+        "and it is emphatically not a completeness claim: rows existed below rank 2"
+    );
+
+    // The refusal: a depth ending may stop the read, it may not miscount it.
+    // Two rows were pulled and the receipt names rank one, so the producer is
+    // claiming it never emitted the row fusion already holds.
+    let forged = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        vec![(
+            stratum("text"),
+            MockStream::new(scripted(), ProducerReceipt::DepthReached { rank: 1 }),
+        )],
+        &profile,
+        TOP_K,
+    ));
+    assert!(
+        matches!(
+            &forged,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ForgedReceipt { declared: 1, actual: 2 })
+        ),
+        "expected ForgedReceipt {{ declared: 1, actual: 2 }}, got {forged:?}"
+    );
+
+    // THE NEIGHBOURING CASE that must still succeed, because the refusal above
+    // is about the count and not about stopping: the same two rows with the
+    // honest rank fuse, and so does a one-row stream that stopped at rank one.
+    let honest = block_on(run_fuse(
+        vec![(
+            stratum("text"),
+            MockStream::new(
+                vec![row(1, Fixed::ONE, K, "a")],
+                ProducerReceipt::DepthReached { rank: 1 },
+            ),
+        )],
+        &profile,
+    ));
+    assert_eq!(honest.rows.len(), 1);
+    assert_eq!(
+        honest.trailer.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::DepthReached { rank: 1 }),
+        "a depth of one is a legitimate depth, not a forgery"
+    );
+}
+
+// T3.2. The trailer names exactly what the handed streams attested.
+#[test]
+fn the_trailer_carries_every_handed_streams_attestation_and_invents_none() {
+    let profile = profile(
+        &[
+            ("text", Fixed::ONE),
+            ("vector", Fixed::ONE),
+            ("geo", Fixed::ONE),
+        ],
+        K,
+    );
+    let streams = vec![
+        (
+            stratum("text"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(attests("a")),
+        ),
+        (
+            stratum("vector"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1))
+                .attesting(attests_short("b", "shard 3 of 4 failed to load")),
+        ),
+        // The third says nothing at all, which is what a stream that descends
+        // from no index honestly reports.
+        (
+            stratum("geo"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "c")], exhausted(1)),
+        ),
+    ];
+
+    let result = block_on(run_fuse(streams, &profile));
+    assert_eq!(
+        result.trailer.attestations,
+        BTreeMap::from([
+            (stratum("text"), attests("a")),
+            (
+                stratum("vector"),
+                attests_short("b", "shard 3 of 4 failed to load")
+            ),
+            (stratum("geo"), PfAttestation::UNDECLARED),
+        ]),
+        "every handed stream is named, with its own attestation and nobody else's"
+    );
+
+    // A producer that never became a stream gets a status and no attestation.
+    // Its absence is the honest answer: no index of its was ever opened, so
+    // there is nothing it attested — and `Undeclared` would be the wrong
+    // answer, because that means a producer was asked and stayed silent.
+    let completed = result
+        .trailer
+        .completed_with([(stratum("absent"), ProducerStatus::TermsRejected)]);
+    assert!(
+        completed.statuses.contains_key(&stratum("absent")),
+        "a producer that never became a stream still gets a status"
+    );
+    assert!(
+        !completed.attestations.contains_key(&stratum("absent")),
+        "but no attestation, fabricated or otherwise"
+    );
+    assert_eq!(
+        completed.attestations.len(),
+        3,
+        "so the attestation keys stay a subset of the statuses'"
+    );
+}
+
+// T3.3. The load-bearing consequence of reading the attestation at `open`.
+#[test]
+fn a_bounded_stop_and_an_incomplete_index_both_survive_in_one_trailer() {
+    // One stratum, three rows, and a bound that stops the read at the first.
+    // The stream is therefore closed by fusion rather than by its own receipt —
+    // which is exactly the path that would have destroyed an incompleteness
+    // held as a terminal fact, because a stopped stream never returns a receipt
+    // at all.
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let streams = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "b"),
+                row(3, Fixed::ONE, K, "c"),
+            ],
+            exhausted(3),
+        )
+        .attesting(attests_short(
+            "2026-09-18T00:00:00Z",
+            "replica is 2 segments behind",
+        )),
+    )];
+
+    let bounded = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        streams,
+        &profile,
+        TopK::new(1),
+    ))
+    .expect("a bounded fusion succeeds");
+
+    assert_eq!(bounded.rows.len(), 1, "the bound is the bound");
+    assert!(
+        matches!(
+            bounded.trailer.statuses.get(&stratum("text")),
+            Some(&ProducerStatus::CeilingReached { .. })
+        ),
+        "the bound stopped this stream, so its status is fusion's own bounded stop, \
+         got {:?}",
+        bounded.trailer.statuses.get(&stratum("text"))
+    );
+    assert_eq!(
+        bounded
+            .trailer
+            .attestations
+            .get(&stratum("text"))
+            .map(|attestation| &attestation.service),
+        Some(&ServiceLevel::Incomplete {
+            reason: "replica is 2 segments behind".to_owned()
+        }),
+        "and the short index it served from survives the stop that overwrote nothing \
+         else about it"
+    );
+}
+
+// T3.4. An incomplete stratum makes every score a lower bound — and the rows
+// are still returned, because a short index produced real rows in a real order.
+#[test]
+fn an_incomplete_stratum_makes_the_scores_lower_bounds_without_refusing_the_rows() {
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let streams = |vector: PfAttestation| {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1)).attesting(vector),
+            ),
+        ]
+    };
+
+    // Nothing declared short: the sums are exact over every contribution that
+    // was due. Note what this does *not* say — most producers attest nothing,
+    // and `Exact` is the narrow true claim that none of them declared itself
+    // short, never a certificate that the indexes were whole.
+    let exact = block_on(run_fuse(streams(PfAttestation::UNDECLARED), &profile));
+    assert_eq!(
+        exact.trailer.exactness,
+        ScoreExactness::Exact,
+        "no stratum declared itself short, so nothing makes these scores floors"
+    );
+
+    // One stratum short: every score in the answer is a floor, and the trailer
+    // names the stratum to rebuild rather than raising an anonymous flag.
+    let bounded = block_on(run_fuse(
+        streams(attests_short("b", "segment rebuilding")),
+        &profile,
+    ));
+    assert_eq!(
+        bounded.trailer.exactness,
+        ScoreExactness::LowerBounds {
+            strata: BTreeSet::from([stratum("vector")])
+        },
+        "exactly the stratum that declared itself short, and no other"
+    );
+    assert_eq!(
+        bounded.rows.len(),
+        2,
+        "and the rows are returned, not refused: a short index still produced \
+         real rows in a real order"
+    );
+    assert_eq!(
+        bounded
+            .rows
+            .iter()
+            .map(|fused| fused.score)
+            .collect::<Vec<_>>(),
+        exact
+            .rows
+            .iter()
+            .map(|fused| fused.score)
+            .collect::<Vec<_>>(),
+        "the arithmetic did not change; what changed is what may be concluded from it"
+    );
+
+    // The reason a caller can act on it: the verbatim reason is readable under
+    // the same key the exactness named.
+    assert_eq!(
+        bounded
+            .trailer
+            .attestations
+            .get(&stratum("vector"))
+            .map(|attestation| &attestation.service),
+        Some(&ServiceLevel::Incomplete {
+            reason: "segment rebuilding".to_owned()
+        })
+    );
+}
+
+// T3.5. The third identity: equal evidence digests equally, and a rebuilt index
+// does not.
+#[test]
+fn the_evidence_identity_moves_exactly_when_the_evidence_does() {
+    // The injectivity fixtures at the foot of this test need profiles of their
+    // own, and they are built here, before the binding below shadows the
+    // helper that builds them.
+    let split_profile = profile(&[("ab", Fixed::ONE)], K);
+    let joined_profile = profile(&[("a", Fixed::ONE)], K);
+    let profile = profile(&[("text", Fixed::ONE), ("vector", Fixed::ONE)], K);
+    let streams = |text: PfAttestation| {
+        vec![
+            (
+                stratum("text"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(text),
+            ),
+            (
+                stratum("vector"),
+                MockStream::new(vec![row(1, Fixed::ONE, K, "b")], exhausted(1))
+                    .attesting(attests_short("v-1", "one shard offline")),
+            ),
+        ]
+    };
+
+    let first = block_on(run_fuse(streams(attests("t-1")), &profile));
+    let repeat = block_on(run_fuse(streams(attests("t-1")), &profile));
+    let rebuilt = block_on(run_fuse(streams(attests("t-2")), &profile));
+
+    assert_eq!(
+        first.trailer.evidence_id, repeat.trailer.evidence_id,
+        "identically-attesting streams are identical evidence"
+    );
+    assert_ne!(
+        first.trailer.evidence_id, rebuilt.trailer.evidence_id,
+        "one rebuilt generation is different evidence, and nothing else in the \
+         answer would have said so"
+    );
+    // The gap the third identity closes, stated as the assertion it is: the
+    // plan and the law are byte-identical across a rebuild.
+    assert_eq!(first.trailer.plan_id, rebuilt.trailer.plan_id);
+    assert_eq!(first.trailer.profile_id, rebuilt.trailer.profile_id);
+
+    // The identity is re-derivable from bytes a holder of the answer has, which
+    // is what makes it auditable rather than merely present.
+    assert_eq!(
+        EvidenceId::from_canonical(&first.trailer.evidence_canonical_bytes()),
+        first.trailer.evidence_id,
+        "the id in the trailer is the digest of the trailer's own canonical bytes"
+    );
+    assert_ne!(
+        first.trailer.evidence_canonical_bytes(),
+        rebuilt.trailer.evidence_canonical_bytes(),
+        "and the bytes themselves differ, so the difference is not a digest artefact"
+    );
+
+    // Injectivity, which is what the length framing buys: a stratum suffix and
+    // a generation that run together the same way must not encode alike.
+    let split = block_on(run_fuse(
+        vec![(
+            stratum("ab"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1)).attesting(attests("c")),
+        )],
+        &split_profile,
+    ));
+    let joined = block_on(run_fuse(
+        vec![(
+            stratum("a"),
+            MockStream::new(vec![row(1, Fixed::ONE, K, "a")], exhausted(1))
+                .attesting(attests("bc")),
+        )],
+        &joined_profile,
+    ));
+    assert_ne!(
+        split.trailer.evidence_canonical_bytes(),
+        joined.trailer.evidence_canonical_bytes(),
+        "framed fields cannot run together into one another's bytes"
+    );
+    assert_ne!(split.trailer.evidence_id, joined.trailer.evidence_id);
+}
+
+// T3.6. A trailer is non-consuming and re-callable, and the two kinds of fact
+// behave differently across two reads — which is the whole point of pinning one
+// of them at `open`.
+#[test]
+fn a_re_read_trailer_moves_the_read_and_never_the_evidence() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let streams = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, Fixed::ONE, K, "a"),
+                row(2, Fixed::ONE, K, "b"),
+                row(3, Fixed::ONE, K, "c"),
+            ],
+            exhausted(3),
+        )
+        .attesting(attests_short("g-7", "shard 1 offline")),
+    )];
+    let mut fusion = FusionStream::new(streams, profile);
+
+    block_on(fusion.next())
+        .expect("the first row certifies")
+        .expect("a row");
+    let early = block_on(fusion.trailer()).expect("a trailer mid-stream");
+    assert!(
+        matches!(
+            early.statuses.get(&stratum("text")),
+            Some(&ProducerStatus::CeilingReached { .. })
+        ),
+        "mid-stream the producer has not ended, so it is reported at the bound \
+         reading had reached, got {:?}",
+        early.statuses.get(&stratum("text"))
+    );
+
+    block_on(fusion.next()).expect("the second row certifies");
+    block_on(fusion.next()).expect("the third row certifies");
+    let late = block_on(fusion.trailer()).expect("a trailer after the stream ended");
+
+    // What moved: how the read ended, because the read moved.
+    assert_eq!(
+        late.statuses.get(&stratum("text")),
+        Some(&ProducerStatus::Exhausted { rows_emitted: 3 }),
+        "the stream reached its own receipt between the two reads"
+    );
+    assert_ne!(
+        early.statuses, late.statuses,
+        "so the statuses are as of each read, exactly as the resolution counters are"
+    );
+
+    // What did not move, and must not: an index generation is pinned when the
+    // index is opened, so how deep a caller chose to read cannot change what
+    // answered, whether it was whole, or the identity built from those two.
+    assert_eq!(
+        early.attestations, late.attestations,
+        "the attestations were read before the first row and never re-asked"
+    );
+    assert_eq!(
+        early.evidence_id, late.evidence_id,
+        "so the evidence identity is the same identity at any read depth"
+    );
+    assert_eq!(
+        early.exactness, late.exactness,
+        "and so is the exactness derived from it"
+    );
+    assert_eq!(
+        late.exactness,
+        ScoreExactness::LowerBounds {
+            strata: BTreeSet::from([stratum("text")])
+        },
+        "which is `LowerBounds` throughout, because the index was short throughout"
     );
 }

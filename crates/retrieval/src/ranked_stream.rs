@@ -28,7 +28,7 @@
 //! the stream through [`RankedStream::contract`], and the refusal below that
 //! names a repeat says which declaration it was measured against.
 
-use purrdf_sparql_eval::{DuplicatePolicy, RankedDeclaration};
+use purrdf_sparql_eval::{DuplicatePolicy, PfAttestation, RankedDeclaration};
 use purrdf_text::Fixed;
 
 use crate::iri::Term;
@@ -116,6 +116,53 @@ pub enum ProducerReceipt {
     Exhausted {
         /// How many rows it emitted. Must equal the number fusion pulled.
         rows_emitted: u64,
+    },
+    /// The producer stopped at the depth it was given, and more rows existed.
+    ///
+    /// A read ending authored by the producer, stated in **rank** space: ranks
+    /// one through `rank` were read and emitted, and the producer looked at
+    /// nothing below `rank`. The rows did not run out — the depth did. A
+    /// producer handed a depth of fifty that still had a fifty-first row says
+    /// this; a producer handed a depth of fifty whose index held forty rows says
+    /// [`Self::Exhausted`], because the depth is not what stopped it and its
+    /// stratum *is* complete.
+    ///
+    /// # Why this is not [`Self::CeilingReached`]
+    ///
+    /// Both say "this stratum is not complete", and that is the whole of what
+    /// they share. They differ in who stopped the read and in what space the
+    /// stopping point is written:
+    ///
+    /// * this one is the **producer's** ending, and its stopping point is a
+    ///   rank — a number the producer was handed as its depth and can act on
+    ///   directly;
+    /// * [`Self::CeilingReached`] as fusion writes it
+    ///   ([`FusionStream::trailer`](crate::FusionStream::trailer)) is
+    ///   **fusion's** ending, and its stopping point is a contribution — a
+    ///   value in the profile's fixed-point space that the producer was never
+    ///   given and that names no depth the producer understands.
+    ///
+    /// Collapsing them into one "stopped early" would destroy exactly the
+    /// distinction a consumer acts on. A consumer that wants more rows must
+    /// decide which knob to turn, and the two variants name different knobs:
+    /// this one is answered by re-planning at a greater depth, the other by
+    /// certifying further rows against the same streams. Neither number
+    /// converts into the other, either — a rank becomes a contribution only
+    /// under a profile the producer never saw, and a contribution does not
+    /// convert back into a rank at all once fixed-point decay has quantized two
+    /// adjacent ranks to one value. A consumer handed the merged fact would
+    /// have to guess, and half its guesses would be wrong.
+    ///
+    /// A producer may stop at its depth; it may not miscount what it emitted.
+    /// Fusion checks `rank` against the rows it actually pulled and refuses a
+    /// disagreement as [`ProtocolError::ForgedReceipt`], exactly as it checks
+    /// [`Self::Exhausted`]'s count — the depth is a licence to stop reading,
+    /// never a licence to misreport.
+    DepthReached {
+        /// The last 1-based rank the producer emitted. Because ranks are
+        /// contiguous from one, this is also the number of rows it emitted,
+        /// which is what fusion measures it against.
+        rank: u64,
     },
     /// The producer stopped at a declared score bound rather than at
     /// exhaustion.
@@ -342,5 +389,54 @@ pub trait RankedStream {
     /// [`execute`]: crate::execute
     fn plan_id(&self) -> Option<crate::id::PlanId> {
         None
+    }
+
+    /// What the index behind these rows attests: which generation answered, and
+    /// whether that generation was whole.
+    ///
+    /// Read once by [`FusionStream::new`](crate::FusionStream::new), **before
+    /// any row is pulled**, and carried into the fused trailer
+    /// ([`FusionTrailer::attestations`](crate::FusionTrailer::attestations)).
+    /// Reading it first is reading the truth for the whole read rather than a
+    /// convenience: a generation is pinned when the index is opened, so the
+    /// version that answers row one is the version that answers row `n`, and
+    /// asking at the end would ask a stream that a bounded fusion may have
+    /// stopped mid-read — or, worse, would let a top-k stop *overwrite* the
+    /// answer. That is the same failure the two identities above already avoid
+    /// by travelling with the stream instead of being re-fetched from the
+    /// registry at the end.
+    ///
+    /// # Why this is not a [`ProducerReceipt`] variant
+    ///
+    /// An incomplete index is not a read ending. Every [`ProducerReceipt`]
+    /// variant answers "what stopped this read", and "a shard of my index
+    /// failed to load" answers a different question: it is true of the whole
+    /// invocation from the instant it opened, and it stays true whichever way
+    /// the read then ends. Made terminal it would be *destroyed* by a top-k
+    /// stop, because a bounded fusion never collects a receipt from a stream it
+    /// stopped — the incompleteness would vanish exactly in the runs where the
+    /// bound mattered. Held as an attestation, both facts survive: the stratum
+    /// reports the bounded stop it got and the short index it had.
+    ///
+    /// # Why this has a default and [`contract`](Self::contract) does not
+    ///
+    /// The default is [`PfAttestation::UNDECLARED`], for precisely the reason
+    /// [`plan_id`](Self::plan_id) defaults to `None`: a stream may honestly
+    /// descend from no index at all — a hand-built stream, a computation over
+    /// its arguments, a walk of the dataset already being queried — and
+    /// "nothing to name" is that stream's true answer rather than a gap in it.
+    /// The absence stays an absence all the way out, too: `Undeclared` is
+    /// silence, never a certificate that the index was current or whole (see
+    /// [`ServiceLevel`](purrdf_sparql_eval::ServiceLevel), which has no
+    /// `Whole` variant on purpose).
+    ///
+    /// [`contract`](Self::contract) is the opposite case and is defaulted
+    /// nowhere. A stream either repeats items or it does not; there is no third
+    /// state to be honestly silent about, and the consumer holds different
+    /// state for each answer, so a default there would be this layer inventing
+    /// a declaration and then enforcing it. A default here invents nothing — it
+    /// says the producer said nothing, which is what happened.
+    fn attestation(&self) -> PfAttestation {
+        PfAttestation::UNDECLARED
     }
 }

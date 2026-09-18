@@ -428,6 +428,9 @@ fn report(result: &SearchResult) {
             ProducerStatus::Exhausted { rows_emitted } => {
                 format!("exhausted after {rows_emitted} rows")
             }
+            ProducerStatus::DepthReached { rank } => {
+                format!("stopped at the depth it was given, after rank {rank}")
+            }
             ProducerStatus::CeilingReached { bound } => {
                 format!(
                     "still held rows; read down to {} and stopped",

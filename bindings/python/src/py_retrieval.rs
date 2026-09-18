@@ -1078,6 +1078,10 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
                 entry.set_item("status", "exhausted")?;
                 entry.set_item("rows_emitted", rows_emitted)?;
             }
+            ProducerStatus::DepthReached { rank } => {
+                entry.set_item("status", "depth_reached")?;
+                entry.set_item("rank", rank)?;
+            }
             ProducerStatus::CeilingReached { bound } => {
                 entry.set_item("status", "ceiling_reached")?;
                 entry.set_item("bound", bound.to_decimal_lexical())?;

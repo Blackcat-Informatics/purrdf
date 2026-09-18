@@ -39,11 +39,12 @@ use pretty_assertions::assert_eq;
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CompiledRetrieval, DecayRule, ExecutionError,
-    ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri, Plan,
-    PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt, ProducerStatus, ProtocolError,
-    RankedStream, RankedStreamAdapter, RankedStreamImpl, RequestTerm, RetrievalRequest,
-    SearchError, SearchResult, Statistics, StatisticsSnapshot, StreamContract, Term, TopK,
-    UnservedReason, UnservedTerm, compile, contribution, execute, fuse, plan, search,
+    ExecutionResult, Fixed, FusionError, FusionProfile, FusionResult, FusionStream, Iri,
+    PfAttestation, Plan, PlanError, PlanId, PlanOrigin, ProducerBinding, ProducerReceipt,
+    ProducerStatus, ProtocolError, RankedStream, RankedStreamAdapter, RankedStreamImpl,
+    RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics,
+    StatisticsSnapshot, StreamContract, Term, TopK, UnservedReason, UnservedTerm, compile,
+    contribution, execute, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
@@ -651,6 +652,83 @@ fn start_at_fuse_hand_built_streams() {
     assert_eq!(result.rows.len(), 2);
     assert_eq!(result.trailer.statuses.len(), 2);
     assert_eq!(result.trailer.profile_id, profile.id());
+
+    // These streams descend from no index, so they attest nothing — and the
+    // seam records that as the absence it is rather than inventing evidence
+    // for a caller that assembled its rows by hand. `Exact` here is the narrow
+    // claim it always is: no stratum declared itself short.
+    assert_eq!(
+        result.trailer.attestations,
+        BTreeMap::from([
+            (stratum("s1"), PfAttestation::UNDECLARED),
+            (stratum("s2"), PfAttestation::UNDECLARED),
+        ]),
+        "a hand-built stream is asked and honestly says nothing"
+    );
+    assert_eq!(result.trailer.exactness, ScoreExactness::Exact);
+}
+
+// ---------------------------------------------------------------------------
+// 6b. Start at fuse: a hand-built stream may author the ending its own depth
+//     gave it
+//
+// The seam is a place to start, and a caller starting here is the party that
+// read its own index to some depth and stopped. Fusion cannot tell that apart
+// from a stream that ran out — both simply stop yielding rows — so the ending
+// has to be declarable at the seam, in the rank space the caller actually
+// stopped in. What the seam *can* check, it does: the rank against the rows it
+// pulled.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_hand_built_stream_can_declare_the_depth_that_stopped_it() {
+    let profile = profile(&[("s1", Fixed::ONE)], K);
+    let scripted = || {
+        vec![
+            row(1, Fixed::ONE, K, "alpha"),
+            row(2, Fixed::ONE, K, "beta"),
+        ]
+    };
+
+    let stopped = block_on(fuse::<ScriptedStream, Term>(
+        vec![(
+            stratum("s1"),
+            ScriptedStream::new(scripted(), ProducerReceipt::DepthReached { rank: 2 }),
+        )],
+        &profile,
+        TOP_K,
+    ))
+    .expect("a depth-stopped stream fuses");
+
+    assert_eq!(
+        stopped.rows.len(),
+        2,
+        "every row the caller did read is in the answer"
+    );
+    assert_eq!(
+        stopped.trailer.statuses.get(&stratum("s1")),
+        Some(&ProducerStatus::DepthReached { rank: 2 }),
+        "and the trailer says the depth stopped the read, which no other party could say"
+    );
+
+    // The count is still measured, because a licence to stop reading is not a
+    // licence to misreport what was read.
+    let forged = block_on(fuse::<ScriptedStream, Term>(
+        vec![(
+            stratum("s1"),
+            ScriptedStream::new(scripted(), ProducerReceipt::DepthReached { rank: 1 }),
+        )],
+        &profile,
+        TOP_K,
+    ));
+    assert!(
+        matches!(
+            &forged,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::ForgedReceipt { declared: 1, actual: 2 })
+        ),
+        "expected ForgedReceipt {{ declared: 1, actual: 2 }}, got {forged:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
