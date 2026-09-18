@@ -110,6 +110,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **retrieval:** `FusionProfile::class_width` and
+  `FusionProfile::deepest_rank_within_width` answer with
+  `Result<Option<u64>, FusionError>` rather than `Option<u64>`, so the two facts
+  they carry stay two facts. `Ok(None)` is a stratum the profile declares no
+  weight for -- an absence, not a failure -- while an operand the decay rule
+  cannot evaluate is now the refusal it is. A rank of zero is the reachable one:
+  ranks are 1-based, so there is no rank zero for a class to form around, and
+  such a call previously came back as a width of **one** -- the claim that the
+  rank is perfectly separated from both its neighbours, which is the most
+  favourable thing the resolution algebra can say, returned precisely where it
+  had measured nothing. The same call from Python, `retrieval.class_width`,
+  raises `ValueError` there instead of returning a number. Confined to
+  `purrdf-retrieval`, which has not yet been published, so no released API
+  changes.
 - **sparql-eval:** `knn::Kernel::distance` and `knn::norm` are generic over
   `knn::Scalar`. This is **source-breaking for inference-dependent callers**: an
   expression whose operand type the compiler previously inferred may now need an

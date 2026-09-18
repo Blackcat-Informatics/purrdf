@@ -1152,6 +1152,13 @@ fn weight_for_depth(depth: u64, k: u32) -> PyResult<i128> {
 /// This is the resolution curve, not the single point where it first exceeds
 /// one: knowing a depth is coarse by four ranks rather than ten thousand is the
 /// difference between an answer that is usable and one that is not.
+///
+/// An operand the decay rule cannot evaluate — a rank of zero, which is not a
+/// rank, or a smoothing constant of zero — raises `ValueError` rather than
+/// returning a width. A width of one is the claim that a rank is perfectly
+/// separated from its neighbours, and returning it where nothing was measured
+/// would report the most favourable resolution there is at exactly the point no
+/// resolution was computed.
 #[pyfunction]
 fn class_width(weight_raw: i128, k: u32, rank: u64) -> PyResult<u64> {
     let stratum = Iri::parse("https://example.org/stratum/probe")
@@ -1163,6 +1170,7 @@ fn class_width(weight_raw: i128, k: u32, rank: u64) -> PyResult<u64> {
     .map_err(|error| PyValueError::new_err(error.to_string()))?;
     profile
         .class_width(&stratum, rank)
+        .map_err(|error| PyValueError::new_err(error.to_string()))?
         .ok_or_else(|| PyValueError::new_err("the probe stratum is weighted"))
 }
 

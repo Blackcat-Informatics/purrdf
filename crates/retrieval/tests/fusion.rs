@@ -2731,6 +2731,7 @@ fn fusion_past_the_collision_is_deterministic() {
     assert!(
         profile
             .class_width(&stratum("deep"), 200)
+            .expect("the arithmetic evaluates")
             .expect("weighted")
             > 1,
         "this fixture must sit on a plateau, or it proves nothing about ties"
@@ -3063,7 +3064,9 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
     // Strictly inside the bound every rank is its own class.
     for rank in [1_u64, 2, bound / 2, bound - 1] {
         assert_eq!(
-            profile.class_width(&stratum, rank),
+            profile
+                .class_width(&stratum, rank)
+                .expect("the arithmetic evaluates"),
             Some(1),
             "rank {rank} is inside the separating range, so it stands alone"
         );
@@ -3072,14 +3075,22 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
     // successor, which a read to this depth never reaches. That is why the
     // separating *depth* is this rank and not the one before it.
     assert_eq!(
-        profile.class_width(&stratum, bound),
+        profile
+            .class_width(&stratum, bound)
+            .expect("the arithmetic evaluates"),
         Some(2),
         "the bound is where the first collision begins"
     );
 
     // Past it the classes are wider, and they keep widening.
-    let near = profile.class_width(&stratum, bound + 1).expect("weighted");
-    let far = profile.class_width(&stratum, bound * 4).expect("weighted");
+    let near = profile
+        .class_width(&stratum, bound + 1)
+        .expect("the arithmetic evaluates")
+        .expect("weighted");
+    let far = profile
+        .class_width(&stratum, bound * 4)
+        .expect("the arithmetic evaluates")
+        .expect("weighted");
     assert!(near > 1, "past the bound ranks share a contribution");
     assert!(
         far > near,
@@ -3091,6 +3102,7 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
     // which is exactly how this shipped. Pin it to the exact truth instead.
     let deepest = profile
         .deepest_rank_within_width(&stratum, near)
+        .expect("the arithmetic evaluates")
         .expect("weighted");
     let expected_deepest = deepest_rank_within_width_by_walking(decay, weight, near, 10_000);
     assert_eq!(
@@ -3098,7 +3110,9 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
         "tolerating a class of {near} must equal the independently walked depth"
     );
     assert_eq!(
-        profile.deepest_rank_within_width(&stratum, 1),
+        profile
+            .deepest_rank_within_width(&stratum, 1)
+            .expect("the arithmetic evaluates"),
         Some(bound),
         "a tolerance of one is the separating bound itself"
     );
@@ -3124,6 +3138,7 @@ fn deepest_rank_within_width_matches_an_independently_walked_truth_at_several_to
         );
         let got = profile
             .deepest_rank_within_width(&stratum, max_width)
+            .expect("the arithmetic evaluates")
             .expect("weighted");
         assert_eq!(
             got, truth,
@@ -3140,7 +3155,9 @@ fn deepest_rank_within_width_matches_an_independently_walked_truth_at_several_to
         .rank()
         .expect("saturates");
     assert_eq!(
-        profile.deepest_rank_within_width(&stratum, 1),
+        profile
+            .deepest_rank_within_width(&stratum, 1)
+            .expect("the arithmetic evaluates"),
         Some(bound),
         "max_width one must still agree exactly with monotone_depth"
     );
@@ -3161,6 +3178,7 @@ fn deepest_rank_within_width_is_the_last_depth_the_offending_run_still_fits_in()
     for max_width in [2_u64, 3, 5, 10] {
         let depth = profile
             .deepest_rank_within_width(&stratum, max_width)
+            .expect("the arithmetic evaluates")
             .expect("weighted");
 
         for rank in 1..=depth {
@@ -3181,6 +3199,76 @@ fn deepest_rank_within_width_is_the_last_depth_the_offending_run_still_fits_in()
              class past {max_width}, or {depth} was not actually the deepest admissible depth"
         );
     }
+}
+
+#[test]
+fn an_operand_the_decay_rule_refuses_is_propagated_rather_than_measured_as_a_class_of_one() {
+    // A width of one is the most favourable thing the resolution algebra can
+    // say: this rank is separated from both its neighbours by score alone.
+    // Saying it because the arithmetic refused the operand would be a false
+    // claim about the quality of an answer, made exactly where no answer was
+    // computed. Rank numbering is 1-based, so rank zero is that operand and it
+    // is reachable from the public surface with nothing else out of the
+    // ordinary.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+    let profile = deep_profile(decay, weight);
+    let stratum = stratum("deep");
+
+    assert!(
+        matches!(
+            profile.class_width(&stratum, 0),
+            Err(FusionError::InvalidRank { rank: 0 })
+        ),
+        "rank zero is not a rank, so there is no class around it to measure"
+    );
+
+    // The neighbouring valid case: one rank further along, the same profile and
+    // the same stratum answer normally. The refusal above is about the operand
+    // and nothing else.
+    assert_eq!(
+        profile
+            .class_width(&stratum, 1)
+            .expect("rank one is a rank and evaluates"),
+        Some(1),
+        "rank one is inside the separating range, so it stands alone"
+    );
+}
+
+#[test]
+fn a_stratum_this_profile_does_not_weight_is_an_absence_and_never_a_refusal() {
+    // The other half of the same signature. `Ok(None)` and `Err(..)` are two
+    // different facts — "this profile says nothing about that stratum" and
+    // "the arithmetic could not be evaluated" — and collapsing either into the
+    // other loses the one a caller needs to act on.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let profile = deep_profile(decay, Fixed::from_raw(1_000_000));
+    let unweighted = stratum("never/declared");
+
+    assert!(
+        matches!(profile.class_width(&unweighted, 7), Ok(None)),
+        "an unweighted stratum has no width to report, which is not a failure"
+    );
+    assert!(
+        matches!(profile.deepest_rank_within_width(&unweighted, 4), Ok(None)),
+        "and no depth to report either, on the same terms"
+    );
+    // And the weighted stratum of the same profile still answers, so the
+    // absence above is about the stratum rather than about the profile.
+    assert!(
+        profile
+            .class_width(&stratum("deep"), 7)
+            .expect("the arithmetic evaluates")
+            .is_some(),
+        "the stratum this profile does weight still reports a width"
+    );
+    assert!(
+        profile
+            .deepest_rank_within_width(&stratum("deep"), 4)
+            .expect("the arithmetic evaluates")
+            .is_some(),
+        "and a depth"
+    );
 }
 
 // ---------------------------------------------------------------------------

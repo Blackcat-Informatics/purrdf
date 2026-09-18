@@ -549,11 +549,31 @@ impl FusionProfile {
     /// point of. Past that point the width grows rather than jumping to
     /// nonsense, and knowing it is four ranks rather than ten thousand is the
     /// difference between an answer a caller can use and one it cannot.
-    #[must_use]
-    pub fn class_width(&self, stratum: &Iri, rank: u64) -> Option<u64> {
-        self.weights
-            .get(stratum)
-            .map(|weight| class_width(self.decay, *weight, rank))
+    ///
+    /// `Ok(None)` is a stratum this profile declares no weight for. That is an
+    /// absence and not a failure — a profile silent about a stratum has said
+    /// nothing about its resolution either, and that stratum contributes
+    /// nothing to a fusion under this profile — so it is kept distinct from the
+    /// refusal below rather than folded into it.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::InvalidRank`] when `rank` is zero. Ranks are 1-based, so
+    /// there is no rank zero for a class to form around.
+    ///
+    /// [`FusionError::InvalidK`] when the profile's smoothing constant is zero,
+    /// and [`FusionError::Overflow`] when a contribution leaves the fixed-point
+    /// range. Neither is reachable through a profile this type built —
+    /// [`Self::with_decay`] refuses a zero constant, and no contribution
+    /// exceeds its own weight in magnitude — and both are carried rather than
+    /// assumed away, because the alternative is to report the most favourable
+    /// width there is at exactly the point the arithmetic produced no width at
+    /// all.
+    pub fn class_width(&self, stratum: &Iri, rank: u64) -> Result<Option<u64>, FusionError> {
+        let Some(weight) = self.weights.get(stratum) else {
+            return Ok(None);
+        };
+        class_width(self.decay, *weight, rank).map(Some)
     }
 
     /// The deepest rank in `stratum` whose indifference class is still no wider
@@ -563,10 +583,27 @@ impl FusionProfile {
     /// question a caller reading deeply actually has: not "where does this stop
     /// being exact" but "how far can I read and still have ranks ordered to
     /// within the resolution I can live with".
-    #[must_use]
-    pub fn deepest_rank_within_width(&self, stratum: &Iri, max_width: u64) -> Option<u64> {
-        let weight = *self.weights.get(stratum)?;
-        Some(deepest_rank_within_width(self.decay, weight, max_width))
+    ///
+    /// `Ok(None)` is a stratum this profile declares no weight for, exactly as
+    /// in [`Self::class_width`], and it is an absence rather than a failure.
+    ///
+    /// # Errors
+    ///
+    /// [`FusionError::InvalidK`] when the profile's smoothing constant is zero,
+    /// and [`FusionError::Overflow`] when a contribution leaves the fixed-point
+    /// range. Neither is reachable through a profile this type built, and both
+    /// are carried rather than assumed away: the rank the walk stopped at is
+    /// where the arithmetic gave out, not a depth this profile was measured to
+    /// deliver.
+    pub fn deepest_rank_within_width(
+        &self,
+        stratum: &Iri,
+        max_width: u64,
+    ) -> Result<Option<u64>, FusionError> {
+        let Some(weight) = self.weights.get(stratum) else {
+            return Ok(None);
+        };
+        deepest_rank_within_width(self.decay, *weight, max_width).map(Some)
     }
 
     /// The profile's canonical, length-framed bytes.

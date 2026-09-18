@@ -37,6 +37,8 @@
 //! Neither rule is a default and neither replaces the other: a profile names the
 //! one it runs under and carries that choice in its identity.
 
+use core::convert::Infallible;
+
 use purrdf_text::{Fixed, SCALE_DIGITS};
 
 use crate::error::FusionError;
@@ -324,25 +326,42 @@ fn first_collision(
 /// hundred at ten million, and ten thousand at a hundred million. Reporting only
 /// whether the bound was crossed would flatten that into one bit.
 ///
-/// Both ends are found with [`largest_rank_satisfying`] rather than by walking:
-/// contributions are non-increasing in the rank, so "is this rank's contribution
-/// at least `v`" and "is it strictly above `v`" are both non-increasing
-/// predicates, and their boundaries are the class's last and first rank.
-pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> u64 {
-    let Ok(value) = contribution_under(decay, weight, rank) else {
-        return 1;
-    };
-    let at = |probe: u64| contribution_under(decay, weight, probe).ok();
+/// Both ends are found with [`largest_rank_satisfying_checked`] rather than by
+/// walking: contributions are non-increasing in the rank, so "is this rank's
+/// contribution at least `v`" and "is it strictly above `v`" are both
+/// non-increasing predicates, and their boundaries are the class's last and
+/// first rank.
+///
+/// # Errors
+///
+/// Whatever [`contribution_under`] refuses, at the anchor rank or at any rank
+/// the two searches probe: [`FusionError::InvalidK`] for a zero smoothing
+/// constant, [`FusionError::InvalidRank`] for a rank of zero, and
+/// [`FusionError::Overflow`] for a product that leaves the fixed-point range.
+///
+/// A refusal is reported and never rendered as a width. A width of one is the
+/// claim "this rank is separated from both its neighbours", which is the most
+/// favourable thing this function can say about a profile's resolution; saying
+/// it because the arithmetic failed would be a false claim about the quality of
+/// an answer, made exactly where no answer was computed at all.
+pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> Result<u64, FusionError> {
+    let value = contribution_under(decay, weight, rank)?;
     // Rank zero is not a rank; it anchors both searches so the predicate is
     // non-increasing over the whole `0..=MAX_DEPTH` span the search covers.
-    let last = largest_rank_satisfying(|probe| {
-        probe == 0 || at(probe).is_some_and(|probed| probed >= value)
-    });
-    let before_first = largest_rank_satisfying(|probe| {
-        probe == 0 || at(probe).is_some_and(|probed| probed > value)
-    });
+    let last = largest_rank_satisfying_checked(|probe| -> Result<bool, FusionError> {
+        if probe == 0 {
+            return Ok(true);
+        }
+        Ok(contribution_under(decay, weight, probe)? >= value)
+    })?;
+    let before_first = largest_rank_satisfying_checked(|probe| -> Result<bool, FusionError> {
+        if probe == 0 {
+            return Ok(true);
+        }
+        Ok(contribution_under(decay, weight, probe)? > value)
+    })?;
     let first = before_first.saturating_add(1);
-    last.saturating_sub(first).saturating_add(1)
+    Ok(last.saturating_sub(first).saturating_add(1))
 }
 
 /// The deepest **depth** that can be read with every rank in it sitting in a
@@ -392,28 +411,41 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> u64 {
 /// point has width one by its definition and cannot be what exceeds
 /// `max_width`. A `max_width` below one is read as one: a class always contains
 /// its own rank.
-pub(crate) fn deepest_rank_within_width(decay: DecayRule, weight: Fixed, max_width: u64) -> u64 {
+///
+/// # Errors
+///
+/// Whatever [`contribution_under`] refuses at any rank the walk reads:
+/// [`FusionError::InvalidK`] for a zero smoothing constant and
+/// [`FusionError::Overflow`] for a product that leaves the fixed-point range.
+/// The walk starts at rank one or deeper, so it never forms the zero rank
+/// [`FusionError::InvalidRank`] names.
+///
+/// A refusal is reported and never rendered as a depth. The rank the walk
+/// stopped at is where the arithmetic gave out, not a depth this profile was
+/// measured to deliver, and returning it as one would quote a resolution
+/// nothing established.
+pub(crate) fn deepest_rank_within_width(
+    decay: DecayRule,
+    weight: Fixed,
+    max_width: u64,
+) -> Result<u64, FusionError> {
     let ceiling = max_width.max(1);
     let start = monotone_depth(decay, weight);
     if ceiling == 1 || start >= MAX_DEPTH {
-        return start;
+        return Ok(start);
     }
 
     // Walk forward, counting consecutive ranks that carry one contribution. The
     // first run longer than `ceiling` ends the range at the rank that run began,
     // because reading that far would put `ceiling + 1` ranks in one class.
-    let Ok(mut current) = contribution_under(decay, weight, start) else {
-        return start;
-    };
+    let mut current = contribution_under(decay, weight, start)?;
     let mut run_start = start;
     let mut rank = start;
     while rank < MAX_DEPTH {
-        let Ok(next) = contribution_under(decay, weight, rank + 1) else {
-            return rank;
-        };
+        let next = contribution_under(decay, weight, rank + 1)?;
         if next == current {
             if rank + 1 - run_start + 1 > ceiling {
-                return rank;
+                return Ok(rank);
             }
         } else {
             current = next;
@@ -421,7 +453,7 @@ pub(crate) fn deepest_rank_within_width(decay: DecayRule, weight: Fixed, max_wid
         }
         rank += 1;
     }
-    MAX_DEPTH
+    Ok(MAX_DEPTH)
 }
 
 /// What one adjacent-rank constraint says about one candidate weight.
@@ -906,18 +938,45 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
 ///
 /// Every predicate handed here is non-increasing in the rank, so the search is
 /// exact rather than a heuristic jump.
+///
+/// This is the infallible spelling, for a predicate that is pure integer
+/// algebra and has no operand it can refuse. A predicate that probes the decay
+/// rule's own arithmetic uses [`largest_rank_satisfying_checked`] instead, so
+/// that a refusal travels rather than being read as a rank that failed the
+/// test.
 fn largest_rank_satisfying(guarantees: impl Fn(u64) -> bool) -> u64 {
+    match largest_rank_satisfying_checked(|rank| Ok::<bool, Infallible>(guarantees(rank))) {
+        Ok(rank) => rank,
+        // [`Infallible`] has no values, so this arm is a proof rather than a
+        // branch: the predicate above cannot refuse, and the compiler checks it.
+        Err(never) => match never {},
+    }
+}
+
+/// The same bisection over a predicate that may refuse a probe.
+///
+/// A refusal is **not** the same fact as "this rank does not satisfy the
+/// predicate". Reading it as one would move the boundary — downwards for the
+/// class's last rank, upwards for its first — and hand back a width that was
+/// never measured. So the first refusal ends the search and is returned.
+///
+/// # Errors
+///
+/// Whatever `guarantees` refuses, at the first probe that refuses it.
+fn largest_rank_satisfying_checked<E>(
+    guarantees: impl Fn(u64) -> Result<bool, E>,
+) -> Result<u64, E> {
     let mut low = 0_u64;
     let mut high = MAX_DEPTH;
     while low < high {
         let mid = low + (high - low).div_ceil(2);
-        if guarantees(mid) {
+        if guarantees(mid)? {
             low = mid;
         } else {
             high = mid - 1;
         }
     }
-    low
+    Ok(low)
 }
 
 /// The largest rank up to which [`contribution`]'s distinctness is guaranteed in
@@ -974,8 +1033,9 @@ fn weighted_guarantee(weight_raw: u128, k: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_DEPTH, contribution, contribution_under, minimum_weight_for_depth, monotone_depth,
-        shortfall_at, weighted_contribution, weighted_guarantee,
+        MAX_DEPTH, class_width, contribution, contribution_under, deepest_rank_within_width,
+        minimum_weight_for_depth, monotone_depth, shortfall_at, weighted_contribution,
+        weighted_guarantee,
     };
     use crate::error::FusionError;
     use crate::fusion_profile::DecayRule;
@@ -1462,6 +1522,73 @@ mod tests {
                     Err(FusionError::InvalidRank { rank: 0 })
                 ),
                 "{decay:?}: a depth of zero names no rank and must be refused"
+            );
+        }
+    }
+
+    /// Both resolution measurements hand back the decay rule's own refusal
+    /// rather than a number, and the numbers they would otherwise have handed
+    /// back are the two most flattering ones there are: a width of one is
+    /// "perfectly separated from both neighbours", and a depth is a resolution
+    /// the profile was measured to deliver.
+    ///
+    /// A smoothing constant of zero is the operand that reaches both walks.
+    /// `FusionProfile::with_decay` refuses one, so this is the lowest level a
+    /// caller can still present it at; the neighbouring constant of one is
+    /// asserted in the same test, because a refusal is only honest if its
+    /// neighbour still answers.
+    #[test]
+    fn an_unusable_smoothing_constant_is_propagated_rather_than_rendered_as_a_measurement() {
+        let weight = Fixed::from_raw(1_000_000);
+        assert!(
+            matches!(
+                class_width(truncated(0), weight, 4),
+                Err(FusionError::InvalidK { k: 0 })
+            ),
+            "a width measured from an unusable constant is no width at all"
+        );
+        assert!(
+            matches!(
+                deepest_rank_within_width(truncated(0), weight, 4),
+                Err(FusionError::InvalidK { k: 0 })
+            ),
+            "and the rank the walk stopped at is not a depth it measured"
+        );
+
+        assert_eq!(
+            class_width(truncated(1), weight, 4).expect("a constant of one is usable"),
+            1,
+            "rank four is inside the separating range at this weight"
+        );
+        assert!(
+            deepest_rank_within_width(truncated(1), weight, 4)
+                .expect("a constant of one is usable")
+                > 1,
+            "and tolerating a class of four reads deeper than a single rank"
+        );
+    }
+
+    /// The other operand either walk can be handed: a rank of zero, which is
+    /// not a rank at all under 1-based numbering. It is refused where the class
+    /// is anchored, and rank one — the neighbouring valid case — still
+    /// measures.
+    ///
+    /// The depth walk never forms it: it starts at the monotone bound, which is
+    /// at least one.
+    #[test]
+    fn a_rank_of_zero_is_refused_rather_than_anchoring_a_class_of_one() {
+        for decay in [truncated(60), folded(60)] {
+            assert!(
+                matches!(
+                    class_width(decay, Fixed::ONE, 0),
+                    Err(FusionError::InvalidRank { rank: 0 })
+                ),
+                "{decay:?}: rank zero names no rank for a class to form around"
+            );
+            assert_eq!(
+                class_width(decay, Fixed::ONE, 1).expect("rank one is a rank"),
+                1,
+                "{decay:?}: rank one is separated from its neighbour at a unit weight"
             );
         }
     }
