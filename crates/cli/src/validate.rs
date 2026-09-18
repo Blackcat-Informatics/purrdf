@@ -82,10 +82,10 @@
 //! it, naming the wrong product on the command line produces a decided, well-formed
 //! report about a shapes graph nobody asked about, with a `0` exit status.
 //!
-//! `--shapes-from`, `--shapes-graph` and `--import` all configure a PARSE, and this route
-//! performs none: the product carries its own base, prefix map and `sh:shapesGraph` IRI,
-//! bound by its identity. They are refused by name rather than accepted and ignored — see
-//! [`refuse_parse_flags_against_a_product`].
+//! `--shapes-from`, `--shapes-graph`, `--import` and `--box-role-vocab` all configure a
+//! PARSE, and this route performs none: the product carries its own base, prefix map,
+//! `sh:shapesGraph` IRI and box-role vocabulary, bound by its identity. They are refused by
+//! name rather than accepted and ignored — see [`refuse_parse_flags_against_a_product`].
 //!
 //! # Reading the two graphs
 //!
@@ -195,6 +195,11 @@ pub(crate) struct ValidateOptions<'a> {
     /// `owl:imports`. Empty means the operator named none, which is the pre-flag behaviour
     /// plus a diagnostic — see [`crate::shapes_source::fold_shapes_imports`].
     pub(crate) imports: &'a [String],
+    /// `--box-role-vocab`: the caller-supplied graph-box role vocabulary NAMESPACE, or
+    /// `None` to leave the box-role annotation feature inactive. Threaded to
+    /// [`purrdf_shapes::shapes::from_dataset_with_config`] through
+    /// [`purrdf_shapes::model::BoxRoleVocab::for_namespace`] — see [`load_shapes`].
+    pub(crate) box_role_vocab: Option<&'a str>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base IRI relative IRIs in the DATA graph resolve against.
@@ -419,8 +424,15 @@ fn load_shapes(
 ) -> Result<Shapes, CliError> {
     let root = crate::shapes_source::read_shapes_document(path, format, base, "--shapes")?;
     let folded = crate::shapes_source::fold_shapes_imports(root, options.imports)?;
-    purrdf::shapes::shapes::from_dataset_with_prefixes(&folded.dataset, &folded.prefixes)
-        .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))
+    let box_role_vocab = options
+        .box_role_vocab
+        .map(purrdf::shapes::model::BoxRoleVocab::for_namespace);
+    purrdf::shapes::shapes::from_dataset_with_config(
+        &folded.dataset,
+        &folded.prefixes,
+        box_role_vocab,
+    )
+    .map_err(|error| CliError::Runtime(format!("--shapes {path}: {error}")))
 }
 
 /// Everything DECIDED about the shapes side of this run, before either document is read.
@@ -679,13 +691,14 @@ fn refuse_a_rebuild_with_no_product(options: &ValidateOptions<'_>) -> Result<(),
 
 /// Refuse the shapes-PARSE flags against `--shapes-product`.
 ///
-/// `--shapes-from`, `--shapes-graph` and `--import` all configure a parse of a shapes
-/// DOCUMENT, and `--shapes-product` performs none: the product carries the compiled model
-/// and, in its own authenticated parse provenance, the base, the prefix map and the
-/// `sh:shapesGraph` IRI it was prepared under. Accepting any of the three and quietly
-/// ignoring it is the silent no-op this pipeline refuses everywhere else, and here it would
-/// be worse than usual — an operator who passed `--shapes-graph` and got a validation back
-/// would reasonably believe the shapes graph was exposed under the IRI they named.
+/// `--shapes-from`, `--shapes-graph`, `--import` and `--box-role-vocab` all configure a
+/// parse of a shapes DOCUMENT, and `--shapes-product` performs none: the product carries
+/// the compiled model and, in its own authenticated parse provenance and identity, the
+/// base, the prefix map, the `sh:shapesGraph` IRI and the box-role vocabulary it was
+/// prepared under. Accepting any of the four and quietly ignoring it is the silent no-op
+/// this pipeline refuses everywhere else, and here it would be worse than usual — an
+/// operator who passed `--shapes-graph` and got a validation back would reasonably believe
+/// the shapes graph was exposed under the IRI they named.
 ///
 /// `--import` is refused for the additional reason that folding an import closure changes
 /// WHICH shapes graph is validated against. The product's identity binds the graph it was
@@ -715,6 +728,15 @@ fn refuse_parse_flags_against_a_product(options: &ValidateOptions<'_>) -> Result
             "folds an `owl:imports` closure into a shapes DOCUMENT before it is parsed, and \
              this product's identity binds the shapes graph it was actually compiled from. \
              Fold the closure with `purrdf shacl pack`'s own `--import IRI=FILE`",
+        ))
+    } else if options.box_role_vocab.is_some() {
+        Some((
+            "--box-role-vocab",
+            "names the graph-box role vocabulary a shapes DOCUMENT parses under, and this \
+             product already recorded the vocabulary (or its deliberate absence) it was \
+             prepared under — which its identity binds, so it cannot be changed without \
+             re-preparing. Pass `--box-role-vocab` to `purrdf shacl pack` instead, and \
+             re-pack",
         ))
     } else {
         None

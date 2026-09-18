@@ -808,9 +808,9 @@ pub(crate) enum Command {
         shapes: Option<String>,
         /// A PREPARED SHACL product `FILE` written by `purrdf shacl pack`, restored instead of
         /// parsing a shapes document. The product carries its own shapes graph, the base it was
-        /// parsed under, its prefix map and its `sh:shapesGraph` IRI, so `--shapes-from`,
-        /// `--shapes-graph` and `--import` name a parse that does not happen here and are
-        /// refused by name rather than accepted and ignored.
+        /// parsed under, its prefix map, its `sh:shapesGraph` IRI and its box-role vocabulary, so
+        /// `--shapes-from`, `--shapes-graph`, `--import` and `--box-role-vocab` name a parse
+        /// that does not happen here and are refused by name rather than accepted and ignored.
         ///
         /// The bytes are UNTRUSTED: the product's stage id, profile and full input binding are
         /// checked before any of it reaches the validator, and a mismatch is refused on a named
@@ -892,6 +892,20 @@ pub(crate) enum Command {
         /// and the shapes graph validates alone, exactly as it did before this flag existed.
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
+        /// The caller-supplied graph-box role vocabulary NAMESPACE — the SAME namespace
+        /// `purrdf shacl pack --box-role-vocab` records, deriving the six term IRIs
+        /// `purrdf_shapes::model::BoxRoleVocab::for_namespace` mints by concatenation
+        /// (`graphBoxRole`, `boxABox`, `boxTBox`, `boxRBox`, `boxCBox`, `boxConfigBox`).
+        /// PurRDF mints no vocabulary IRIs, so there is no default: without this flag
+        /// the box-role annotation feature is simply INACTIVE — shapes parse fine, and
+        /// no role annotation is collected or stamped on a validation result.
+        ///
+        /// Refused against `--shapes-product`: a product already recorded the
+        /// vocabulary (or its deliberate absence) it was packed under, which its
+        /// identity binds, so it cannot be changed without re-preparing. Pass
+        /// `--box-role-vocab` to `purrdf shacl pack` instead, and re-pack.
+        #[arg(long = "box-role-vocab", value_name = "NS")]
+        box_role_vocab: Option<String>,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -1246,6 +1260,23 @@ pub(crate) enum ShaclCommand {
         /// it has no `--shapes-graph` of its own to disagree with it.
         #[arg(long = "shapes-graph", value_name = "IRI")]
         shapes_graph: Option<String>,
+        /// RECORD the caller-supplied graph-box role vocabulary NAMESPACE, deriving the
+        /// six term IRIs `purrdf_shapes::model::BoxRoleVocab::for_namespace` mints by
+        /// concatenation (`graphBoxRole`, `boxABox`, `boxTBox`, `boxRBox`, `boxCBox`,
+        /// `boxConfigBox`). PurRDF mints no vocabulary IRIs of its own, so there is no
+        /// default: without this flag the box-role annotation feature is simply
+        /// INACTIVE — the shapes graph packs fine, and the product's `box-role-vocab`
+        /// identity component records ABSENT, exactly as it always has.
+        ///
+        /// RECORDED into the product's identity, the same way `--shapes-graph` and
+        /// `--base` are: a restore under a DIFFERENT namespace, or under none, is
+        /// refused rather than silently validated with a different role feature than
+        /// the one this product was packed under. This is the ONE way to make a packed
+        /// product and `validate --shapes --box-role-vocab NS` reach the identical
+        /// verdict over a shapes graph whose validation results the vocabulary
+        /// annotates.
+        #[arg(long = "box-role-vocab", value_name = "NS")]
+        box_role_vocab: Option<String>,
         /// Product path `OUT`, or `-` for stdout.
         #[arg(long, value_name = "OUT", required = true)]
         out: String,
@@ -1272,6 +1303,35 @@ pub(crate) enum ShaclCommand {
         /// Product path `IN`, or `-` for stdin.
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
+    },
+    /// Compare two prepared products' declared identities, WITHOUT admitting either.
+    ///
+    /// `explain` answers "what does THIS product say it was compiled from"; `diff` is
+    /// the same question over TWO products, answered once instead of by running
+    /// `explain` twice and comparing the rendering by eye. This is what makes a
+    /// restore refused on a named dimension actionable when the operator's next
+    /// question is "which of these two products actually carries the input that
+    /// changed" — printed as deterministic `key value` lines (`diff-count N`, then
+    /// `diff <label> <value-in-a> <value-in-b>` for each differing component, in `A`'s
+    /// own component order).
+    ///
+    /// Like `explain`, this never admits either product: it decodes each one's
+    /// self-described identity and compares the two, so it works even when `A`, `B`,
+    /// or both carry a preparation stage id this build does not recognize — the
+    /// exact situation an operator reaches for a diff to make sense of.
+    ///
+    /// Exit codes: **0** when the two identities are identical (a decided, useful
+    /// answer, the same way `verify` exits 0 when a product certifies). **1** when
+    /// they differ — mirroring `verify`'s 0/success vs. 1/refused split, so a script
+    /// can branch on `purrdf shacl diff A B` without parsing stdout, and a genuine
+    /// non-difference stays the only exit that is silent. **2** for a usage error.
+    Diff {
+        /// The first product `A`.
+        #[arg(value_name = "A")]
+        a: String,
+        /// The second product `B`.
+        #[arg(value_name = "B")]
+        b: String,
     },
 }
 

@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 use purrdf_core::RdfDataset;
 use purrdf_shapes::engine::{self, PreparedShapes};
+use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{
     AggregateRegistry, HostBindings, ProductDimension, PropertyFunctionRegistry, STAGE_ID,
     ShapesProduct, ShapesProductError, ShapesProfile, UserFunctionRegistry,
@@ -187,7 +188,7 @@ pub fn pack_shapes_product(
         )));
     }
     let prefixes = purrdf_shapes::text_ingest::extract_prefixes(shapes_ttl);
-    pack_shapes_product_from_dataset(&dataset, &prefixes, shapes_base, None)
+    pack_shapes_product_from_dataset(&dataset, &prefixes, shapes_base, None, None)
 }
 
 /// Write an already-READ shapes dataset out as a prepared product under
@@ -212,6 +213,14 @@ pub fn pack_shapes_product(
 /// so a restore resolves relative references and exposes `sh:shapesGraph`
 /// identically to the document(s) the dataset was read from.
 ///
+/// `box_role_vocab` is the caller-supplied [`BoxRoleVocab`], recorded into the
+/// product's identity (the `box-role-vocab` component) exactly as
+/// [`purrdf_shapes::shapes::from_dataset_with_base`] records it into a parsed
+/// [`Shapes`](purrdf_shapes::shapes::Shapes)'s own provenance. PurRDF mints no
+/// vocabulary IRIs, so `None` is a real, first-class answer — the box-role
+/// feature stays inactive and the component records ABSENT — rather than a
+/// fabricated default standing in for it.
+///
 /// # Errors
 ///
 /// [`ShapesProductRefusal::Shapes`] when the dataset does not parse as a shapes
@@ -222,12 +231,13 @@ pub fn pack_shapes_product_from_dataset(
     doc_prefixes: &[(String, String)],
     base: Option<&str>,
     shapes_graph: Option<String>,
+    box_role_vocab: Option<BoxRoleVocab>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
     let shapes = purrdf_shapes::shapes::from_dataset_with_base(
         dataset,
         base,
         doc_prefixes,
-        None,
+        box_role_vocab,
         shapes_graph,
     )
     .map_err(ShapesProductRefusal::Shapes)?;
@@ -566,6 +576,139 @@ pub fn explain_shapes_product(product: &[u8]) -> Result<String, ShapesProductErr
     Ok(out)
 }
 
+/// One identity component on which two diffed products disagreed — see
+/// [`ShapesProductDiff`].
+///
+/// `None` on either side means that side carries no component under this
+/// label at all: a different SET of tracked components is as real a
+/// difference as two products disagreeing about a shared one, and this is
+/// how that case stays distinguishable from "both sides carry it, and the
+/// bytes differ".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityComponentDiff {
+    /// The component's stable label (e.g. `box-role-vocab`).
+    pub label: String,
+    /// The value the LEFT product (`a`) declared under this label, if any.
+    pub a: Option<Vec<u8>>,
+    /// The value the RIGHT product (`b`) declared under this label, if any.
+    pub b: Option<Vec<u8>>,
+}
+
+/// The result of comparing two prepared products' declared identities WITHOUT
+/// admitting either — see [`diff_shapes_products`].
+///
+/// Every component this repository's own writer produces is a fingerprint (a
+/// digest, or a small fixed-shape encoding), so [`Self::differences`] is what a
+/// caller actually wants: not "these differ" but "on which of the eleven
+/// tracked inputs, and what did each side declare".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShapesProductDiff {
+    differences: Vec<IdentityComponentDiff>,
+}
+
+impl ShapesProductDiff {
+    /// Whether the two products declared identical identities.
+    #[must_use]
+    pub fn identical(&self) -> bool {
+        self.differences.is_empty()
+    }
+
+    /// The differing components, by label, in the order compared: the LEFT
+    /// product's own component order, then any label only the RIGHT product
+    /// carries.
+    #[must_use]
+    pub fn differences(&self) -> &[IdentityComponentDiff] {
+        &self.differences
+    }
+}
+
+impl std::fmt::Display for ShapesProductDiff {
+    /// Deterministic `key value` lines, the same rendering rule
+    /// [`explain_shapes_product`] uses for a single component's value —
+    /// quoted text when the value is printable UTF-8, lowercase hex
+    /// otherwise, and `missing` when a side carries no component under this
+    /// label:
+    ///
+    /// ```text
+    /// diff-count <N>
+    /// diff <label> <value-in-a> <value-in-b>   (one per differing component)
+    /// ```
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "diff-count {}", self.differences.len())?;
+        for component in &self.differences {
+            writeln!(
+                f,
+                "diff {} {} {}",
+                component.label,
+                render_optional_component(component.a.as_deref()),
+                render_optional_component(component.b.as_deref())
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Open two prepared products WITHOUT admitting either, and compare their
+/// declared identities component by component.
+///
+/// This is what makes a refusal on a NAMED dimension actionable between two
+/// artifacts rather than just one: `explain` answers "what does THIS product
+/// say it was compiled from", and an operator whose restore was refused on
+/// `prefixes` still has to run it twice and compare the rendering by eye to
+/// find which declaration moved. `diff_shapes_products` is that comparison,
+/// done once, over the SAME decoded components `explain_shapes_product`
+/// renders — so the two can never disagree about what a component's value is.
+///
+/// # This never admits, so an unrecognized stage id is not a reason to refuse
+///
+/// [`ShapesProduct::open`] verifies the envelope and decodes the identity as a
+/// self-describing labelled byte sequence; it does not consult this build's
+/// own [`STAGE_ID`] or model at all (that only happens inside `admit`/
+/// `rebuild`). So two products can be diffed even when one, or both, carry a
+/// preparation stage id this build does not recognize — which is exactly the
+/// situation an operator reaches for a diff to make sense of: "these two
+/// don't even admit here; what, concretely, is different about them?"
+///
+/// # Errors
+///
+/// Any structural [`ProductDimension`]: each side must be a well-formed
+/// product of this format before there is anything to compare.
+pub fn diff_shapes_products(a: &[u8], b: &[u8]) -> Result<ShapesProductDiff, ShapesProductError> {
+    let view_a = ShapesProduct::open(a)?;
+    let view_b = ShapesProduct::open(b)?;
+    let identity_a = view_a.declared_identity();
+    let identity_b = view_b.declared_identity();
+
+    // The LEFT product's own order, then any RIGHT-only labels appended in the
+    // right product's order — deterministic and total over the union of the
+    // two label sets, with no dependency on either side's component COUNT.
+    let mut labels: Vec<&str> = Vec::new();
+    for component in identity_a.components() {
+        if !labels.contains(&component.label()) {
+            labels.push(component.label());
+        }
+    }
+    for component in identity_b.components() {
+        if !labels.contains(&component.label()) {
+            labels.push(component.label());
+        }
+    }
+
+    let mut differences = Vec::new();
+    for label in labels {
+        let value_a = identity_a.component(label);
+        let value_b = identity_b.component(label);
+        if value_a != value_b {
+            differences.push(IdentityComponentDiff {
+                label: label.to_owned(),
+                a: value_a.map(<[u8]>::to_vec),
+                b: value_b.map(<[u8]>::to_vec),
+            });
+        }
+    }
+    Ok(ShapesProductDiff { differences })
+}
+
 /// Admit `product` and validate `data_nt` (N-Triples) with it, rendering the SHACL
 /// report to a SARIF 2.1.0 JSON string.
 ///
@@ -762,6 +905,14 @@ fn render_component(value: &[u8]) -> String {
     }
 }
 
+/// [`render_component`] over a component that may not exist on one side of a
+/// [`ShapesProductDiff`] at all — rendered as the bare word `missing`, which is
+/// not a value [`render_component`] can ever itself produce (every byte
+/// string it renders is either quoted text or an `0x`-prefixed hex run).
+fn render_optional_component(value: Option<&[u8]>) -> String {
+    value.map_or_else(|| "missing".to_owned(), render_component)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -876,7 +1027,7 @@ mod tests {
 
         let dataset = parse_turtle_to_dataset(SHAPES, None).expect("dataset parse");
         let prefixes = extract_prefixes(SHAPES);
-        let via_dataset = pack_shapes_product_from_dataset(&dataset, &prefixes, None, None)
+        let via_dataset = pack_shapes_product_from_dataset(&dataset, &prefixes, None, None, None)
             .expect("dataset entry point");
 
         assert_eq!(
@@ -895,7 +1046,7 @@ mod tests {
 
         let dataset = parse_turtle_to_dataset(SHAPES, base).expect("dataset parse");
         let prefixes = extract_prefixes(SHAPES);
-        let via_dataset = pack_shapes_product_from_dataset(&dataset, &prefixes, base, None)
+        let via_dataset = pack_shapes_product_from_dataset(&dataset, &prefixes, base, None, None)
             .expect("dataset entry point");
 
         assert_eq!(via_text, via_dataset);

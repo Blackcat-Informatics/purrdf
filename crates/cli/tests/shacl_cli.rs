@@ -631,6 +631,7 @@ fn the_shapes_parse_flags_are_refused_against_a_product() {
         ("--shapes-from", "turtle"),
         ("--shapes-graph", "http://example.org/sg"),
         ("--import", "http://example.org/o=x.ttl"),
+        ("--box-role-vocab", "https://example.org/meta/"),
     ] {
         let out = run(&[
             "validate",
@@ -1102,6 +1103,241 @@ fn accepts_pack_without_shapes_graph_neighbour() {
     );
 }
 
+// ── `shacl pack --box-role-vocab` / `validate --box-role-vocab` ────────────────────
+//
+// `purrdf_shapes::model::BoxRoleVocab` is a PUBLIC, production entry point
+// (`parse_shapes_with_config`/`from_dataset_with_base`) that no shipped command line
+// could ever reach: `shacl explain` printed `identity box-role-vocab 0x00` on every
+// CLI-produced product, forever, and the `vocabulary` refusal dimension was
+// unprovokable from any command. These tests pin the two lanes `--box-role-vocab`
+// now reaches through to the same identity and the same restored behaviour.
+
+/// A shapes graph carrying `meta:graphBoxRole` annotations on two shapes — the
+/// vocabulary this fixture's role predicate resolves under is `BOX_ROLE_NS`, the
+/// same one the first-party corpus's reifier-shape cases use. An `sh:reifierShape`
+/// constraint fires when a claim is not attributed a `source`, which gives this
+/// fixture a real, non-vacuous violation to find independent of the vocabulary.
+const BOX_ROLE_NS: &str = "https://example.org/meta/";
+
+const BOX_ROLE_SHAPES: &str = concat!(
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
+    "@prefix ex: <http://example.org/ns#> .\n",
+    "@prefix meta: <https://example.org/meta/> .\n",
+    "ex:PersonShape a sh:NodeShape ;\n",
+    "  sh:targetNode ex:alice ;\n",
+    "  sh:property ex:KnowsShape .\n",
+    "ex:KnowsShape a sh:PropertyShape ;\n",
+    "  meta:graphBoxRole meta:boxCBox ;\n",
+    "  sh:path ex:knows ;\n",
+    "  sh:message \"knowledge claims need statement context\" ;\n",
+    "  sh:reificationRequired true ;\n",
+    "  sh:reifierShape ex:ProvenanceShape .\n",
+    "ex:ProvenanceShape a sh:NodeShape ;\n",
+    "  meta:graphBoxRole meta:boxCBox ;\n",
+    "  sh:property ex:SourceShape .\n",
+    "ex:SourceShape a sh:PropertyShape ;\n",
+    "  sh:path ex:source ;\n",
+    "  sh:minCount 1 ;\n",
+    "  sh:message \"source required\" .\n",
+);
+
+/// `ex:alice ex:knows ex:bob`, reified but with no `ex:source` — one
+/// `ReifierShapeConstraintComponent` violation, regardless of the vocabulary.
+const BOX_ROLE_DATA: &str = concat!(
+    "<http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> .\n",
+    "<http://example.org/ns#claim1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+     <<( <http://example.org/ns#alice> <http://example.org/ns#knows> <http://example.org/ns#bob> )>> .\n",
+);
+
+/// THE FALSIFIABLE CORE: `shacl pack --box-role-vocab` records a PRESENT
+/// `box-role-vocab` identity component — the row `shacl explain` could never print
+/// as anything but `0x00` from any shipped command line before this flag existed.
+#[test]
+fn explain_reports_the_box_role_vocab_pack_recorded() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+
+    assert_eq!(
+        code(&run(&[
+            "shacl",
+            "pack",
+            "--shapes",
+            &shapes,
+            "--box-role-vocab",
+            BOX_ROLE_NS,
+            "--out",
+            product_path,
+        ])),
+        0
+    );
+
+    let explained = run(&["shacl", "explain", product_path]);
+    assert_eq!(code(&explained), 0, "{}", stderr(&explained));
+    let text = stdout(&explained);
+    let row = text
+        .lines()
+        .find(|line| line.starts_with("identity box-role-vocab "))
+        .unwrap_or_else(|| panic!("explain must print a box-role-vocab identity row: {text:?}"));
+    assert_ne!(
+        row, "identity box-role-vocab 0x00",
+        "packed WITH --box-role-vocab, the row must no longer be the absent encoding: {text:?}"
+    );
+}
+
+/// THE NEIGHBOURING VALID CASE: a shapes graph packed with NO `--box-role-vocab` at
+/// all packs exactly as it always did — the flag existing must not change the
+/// no-flag path, and `explain` still reports the row absent (`0x00`, exactly as it
+/// has been on every CLI-produced product until now).
+#[test]
+fn accepts_pack_without_box_role_vocab_neighbour() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+
+    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+
+    let explained = run(&["shacl", "explain", product_path]);
+    assert_eq!(code(&explained), 0, "{}", stderr(&explained));
+    assert!(
+        stdout(&explained).contains("\nidentity box-role-vocab 0x00\n"),
+        "with no --box-role-vocab flag, the identity row stays the absent encoding: {}",
+        stdout(&explained)
+    );
+}
+
+/// `shacl pack --box-role-vocab` genuinely THREADS the namespace value into the
+/// product's identity, rather than merely flipping a present/absent bit: packing
+/// the SAME shapes graph under two DIFFERENT namespaces must produce two DIFFERENT
+/// identities, or a caller who typed the wrong namespace would restore a product
+/// that silently claims to be the right one.
+#[test]
+fn different_box_role_vocab_namespaces_pack_to_different_identities() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
+    let a = dir.path().join("a.purrshp");
+    let a_path = a.to_str().expect("utf8 path");
+    let b = dir.path().join("b.purrshp");
+    let b_path = b.to_str().expect("utf8 path");
+
+    for (out, ns) in [
+        (a_path, BOX_ROLE_NS),
+        (b_path, "https://example.org/other-meta/"),
+    ] {
+        assert_eq!(
+            code(&run(&[
+                "shacl",
+                "pack",
+                "--shapes",
+                &shapes,
+                "--box-role-vocab",
+                ns,
+                "--out",
+                out,
+            ])),
+            0
+        );
+    }
+
+    assert_ne!(
+        explained_identity(a_path),
+        explained_identity(b_path),
+        "two different namespaces must not restore as the same input binding"
+    );
+}
+
+/// THE "two lanes agree" pin `--shapes-graph` already has, applied to
+/// `--box-role-vocab`: a product packed WITH the vocabulary, restored and
+/// validated, must reach the byte-identical report `validate --shapes
+/// --box-role-vocab` reaches parsing the same document directly — the same
+/// property that makes a prepared product safe to cache at all.
+///
+/// # This does NOT (yet) pin a verdict that differs from the no-vocab run
+///
+/// Unlike `--shapes-graph` (whose SPARQL `$shapesGraph` binding a `sh:sparql`
+/// constraint can `FILTER bound(...)` on), the box-role annotations
+/// [`purrdf_shapes::shapes::Shapes::box_roles`]/[`ValidationResult::result_box_roles`]
+/// collects are not yet projected into the SHACL results graph
+/// (`ValidationReport::to_dataset`) or into the SARIF writer — both render a
+/// result's focus node, path, value, severity, source shape/component and message,
+/// and nothing else. So, verified by running this exact fixture with and without
+/// `--box-role-vocab` through the built binary: the validation report is
+/// BYTE-IDENTICAL either way. That is a real, pre-existing property of the
+/// box-role feature (collected, not yet rendered) rather than a gap in this
+/// wiring, and asserting a report difference here would be asserting something
+/// false. What this test pins instead — the property this flag's plumbing is
+/// actually responsible for — is that the vocabulary reaches an IDENTICAL parsed
+/// `Shapes` whether it arrives via `shacl pack` and a restore or via `validate
+/// --shapes` directly, which is exactly what makes the two lanes agree at all.
+#[test]
+fn packing_with_box_role_vocab_agrees_with_validating_the_document_with_box_role_vocab() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", BOX_ROLE_SHAPES);
+    let data = write_file(dir.path(), "data.nt", BOX_ROLE_DATA);
+    let product = dir.path().join("shapes.purrshp");
+    let product_path = product.to_str().expect("utf8 path");
+
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--box-role-vocab",
+        BOX_ROLE_NS,
+        "--out",
+        product_path,
+    ]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+
+    let via_product = run(&["validate", "--shapes-product", product_path, &data]);
+    let via_document = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--box-role-vocab",
+        BOX_ROLE_NS,
+        &data,
+    ]);
+    assert_eq!(code(&via_product), 0, "{}", stderr(&via_product));
+    assert_eq!(code(&via_document), 0, "{}", stderr(&via_document));
+    assert_eq!(
+        stdout(&via_product),
+        stdout(&via_document),
+        "a product packed with --box-role-vocab and a document validated with the same \
+         --box-role-vocab must reach the byte-identical report"
+    );
+    for out in [&via_product, &via_document] {
+        assert!(
+            stderr(out).contains("shacl conforms false\n")
+                && stderr(out).contains("shacl results 1\n"),
+            "the reifier-shape constraint must actually find its violation, or the \
+             comparison is vacuous: {}",
+            stderr(out)
+        );
+    }
+
+    // The documented finding above, pinned as a passing assertion rather than left
+    // as prose: today, the SAME document validated with NO --box-role-vocab at all
+    // reaches the byte-identical report too. If a future change starts projecting
+    // box roles into the results graph, this assertion — not the one above — is the
+    // one that should start failing, and the doc comment should be revisited.
+    let via_document_no_vocab = run(&["validate", "--shapes", &shapes, &data]);
+    assert_eq!(
+        code(&via_document_no_vocab),
+        0,
+        "{}",
+        stderr(&via_document_no_vocab)
+    );
+    assert_eq!(
+        stdout(&via_document),
+        stdout(&via_document_no_vocab),
+        "the box-role feature does not currently change the rendered validation report"
+    );
+}
+
 // ── `validate --shapes-product --rebuild` ──────────────────────────────────────────
 //
 // `rebuild` is the prepared-product design's entire forward-compatibility answer: a
@@ -1128,6 +1364,17 @@ const SECTION_IDENTITY: u32 = 0;
 const SECTION_DATASET: u32 = 1;
 const SECTION_AST: u32 = 2;
 
+/// Parse `shapes_ttl` under `base = None` and pack it exactly as `shacl pack` would
+/// pack a document with no derivable base — the GENUINE product
+/// [`foreign_stage_product`] tampers with, and the fixture the `shacl diff` tests
+/// compare a foreign stage id against, base for base.
+fn foreign_stage_product_source(shapes_ttl: &str) -> Vec<u8> {
+    let shapes = parse_shapes(shapes_ttl, None).expect("the fixture shapes parse");
+    PreparedShapes::new(Arc::new(shapes))
+        .to_product(&ShapesProfile::CORE)
+        .expect("the fixture packs under this build")
+}
+
 /// Parse `shapes_ttl`, prepare and pack it exactly as `shacl pack` does, then splice
 /// a stage id NO build ever wrote into its identity section and reframe the
 /// container so every digest still checks out.
@@ -1137,11 +1384,7 @@ const SECTION_AST: u32 = 2;
 /// dataset section is untouched, so the shapes graph it carries is still exactly the
 /// one `shapes_ttl` describes — only the memo's stage id is foreign.
 fn foreign_stage_product(shapes_ttl: &str) -> Vec<u8> {
-    let shapes = parse_shapes(shapes_ttl, None).expect("the fixture shapes parse");
-    let genuine = PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
-        .expect("the fixture packs under this build");
-
+    let genuine = foreign_stage_product_source(shapes_ttl);
     let view = ArtifactView::from_bytes(PRODUCT_SPEC, &genuine).expect("the genuine product opens");
     let mut identity_section = view
         .section(SECTION_IDENTITY)
@@ -1482,4 +1725,156 @@ fn a_validate_run_says_where_its_shapes_came_from() {
             stderr(out)
         );
     }
+}
+
+// ── `shacl diff` ─────────────────────────────────────────────────────────────────
+//
+// `explain` answers "what does THIS product say it was compiled from"; `diff` was
+// specified and never built, so an operator whose restore was refused on a named
+// dimension had to run `explain` twice on the two candidate products and compare the
+// rendering by eye. These tests pin `diff` to: naming EXACTLY the component(s) that
+// differ and no others, reporting `diff-count 0` and exiting 0 for two identical
+// products, and — because it never admits either side — working on a product whose
+// preparation stage id this build does not recognize, which is exactly the product a
+// caller reaches for a diff to make sense of.
+
+/// Pack `shapes_ttl` (read from the SAME source path both times, so the derived base
+/// never differs) to two products, returning both paths.
+fn pack_twice(
+    dir: &Path,
+    shapes_ttl: &str,
+    extra_a: &[&str],
+    extra_b: &[&str],
+) -> (String, String) {
+    let shapes = write_file(dir, "shapes.ttl", shapes_ttl);
+    let a = dir.join("a.purrshp");
+    let a_path = a.to_str().expect("utf8 path").to_owned();
+    let b = dir.join("b.purrshp");
+    let b_path = b.to_str().expect("utf8 path").to_owned();
+
+    let mut args_a = vec!["shacl", "pack", "--shapes", shapes.as_str()];
+    args_a.extend_from_slice(extra_a);
+    args_a.extend_from_slice(&["--out", &a_path]);
+    assert_eq!(code(&run(&args_a)), 0, "pack a failed");
+
+    let mut args_b = vec!["shacl", "pack", "--shapes", shapes.as_str()];
+    args_b.extend_from_slice(extra_b);
+    args_b.extend_from_slice(&["--out", &b_path]);
+    assert_eq!(code(&run(&args_b)), 0, "pack b failed");
+
+    (a_path, b_path)
+}
+
+/// THE FALSIFIABLE CORE: two products differing in EXACTLY one identity component —
+/// here, `box-role-vocab` — are diffed to name that component and NO other. A diff
+/// that reported the whole identity, or a diff that missed the one row that moved,
+/// would be exactly as useless as running `explain` twice and comparing by eye.
+#[test]
+fn diff_names_exactly_the_one_component_that_differs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (plain, with_vocab) =
+        pack_twice(dir.path(), SHAPES, &[], &["--box-role-vocab", BOX_ROLE_NS]);
+
+    let diff = run(&["shacl", "diff", &plain, &with_vocab]);
+    assert_eq!(
+        code(&diff),
+        1,
+        "two products that differ must exit non-zero: {}",
+        stderr(&diff)
+    );
+    let text = stdout(&diff);
+    assert!(
+        text.starts_with("diff-count 1\n"),
+        "exactly one component must be reported as differing: {text:?}"
+    );
+    let diff_lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("diff "))
+        .collect();
+    assert_eq!(
+        diff_lines.len(),
+        1,
+        "no OTHER component may be reported as differing: {text:?}"
+    );
+    assert!(
+        diff_lines[0].starts_with("diff box-role-vocab "),
+        "the ONE differing component must be named: {text:?}"
+    );
+}
+
+/// THE PAIRED NEIGHBOUR: two products packed from the same document, base and
+/// configuration are byte-deterministic, so their identities are identical — `diff`
+/// must report NOTHING and exit 0, the same way `verify` exits 0 for a product that
+/// certifies.
+#[test]
+fn diff_of_identical_products_reports_nothing_and_exits_zero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (a, b) = pack_twice(dir.path(), SHAPES, &[], &[]);
+
+    let diff = run(&["shacl", "diff", &a, &b]);
+    assert_eq!(code(&diff), 0, "{}", stderr(&diff));
+    assert_eq!(stdout(&diff), "diff-count 0\n");
+    assert!(
+        stderr(&diff).is_empty(),
+        "a clean diff prints no refusal: {}",
+        stderr(&diff)
+    );
+}
+
+/// THE FORWARD-COMPATIBILITY CASE: `diff` must work on a product whose preparation
+/// stage id this build does not recognize — the exact product `validate
+/// --shapes-product` (without `--rebuild`) refuses outright. `diff` never admits
+/// either side, so a foreign stage id is not in its way at all: it is decoded and
+/// compared like any other product, and here it is compared against a product built
+/// from the SAME shapes graph, so the two identities (which do not carry the stage id
+/// at all — that lives in the product's separate preparation memo) are identical.
+#[test]
+fn diff_works_on_a_product_with_an_unrecognized_stage_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data_path = write_file(dir.path(), "data.ttl", DATA);
+    // The GENUINE twin of `foreign_stage_product(SHAPES)`, parsed under the identical
+    // `base = None` — not `pack(dir.path(), …, SHAPES)`, which would derive its base
+    // from ITS OWN source file's `file://` retrieval IRI and differ on that
+    // component alone, which is a different claim than the one this test makes.
+    let normal_path = dir.path().join("normal.purrshp");
+    std::fs::write(&normal_path, foreign_stage_product_source(SHAPES)).expect("write product");
+    let normal_path = normal_path.to_str().expect("utf8 path").to_owned();
+    let foreign_path = dir.path().join("foreign.purrshp");
+    std::fs::write(&foreign_path, foreign_stage_product(SHAPES)).expect("write foreign product");
+    let foreign = foreign_path.to_str().expect("utf8 path").to_owned();
+
+    // The neighbouring evidence that this file really IS the one `validate` refuses:
+    // without this, `diff` succeeding would prove nothing about the forward-compat
+    // claim above.
+    let refused = run(&["validate", "--shapes-product", &foreign, &data_path]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("shacl dimension stage-id\n"),
+        "the fixture must really carry a stage id this build refuses to admit: {}",
+        stderr(&refused)
+    );
+
+    let diff = run(&["shacl", "diff", &normal_path, &foreign]);
+    assert_eq!(
+        code(&diff),
+        0,
+        "diff must not refuse on the stage id it never inspects: {}",
+        stderr(&diff)
+    );
+    assert_eq!(
+        stdout(&diff),
+        "diff-count 0\n",
+        "the foreign product's DATASET and identity are untouched — only its memo's \
+         stage id is foreign, so the two identities must compare equal"
+    );
+}
+
+/// `shacl diff` reads standard input at most once, the same posture `validate`
+/// takes on `IN`/`--shapes`: naming it for BOTH products would give each product
+/// part of one byte stream.
+#[test]
+fn diff_refuses_two_stdins() {
+    let out = run(&["shacl", "diff", "-", "-"]);
+    assert_eq!(code(&out), 2);
+    assert!(stderr(&out).contains("standard input"), "{}", stderr(&out));
 }

@@ -124,6 +124,30 @@ the command line able to close the gap.
 Omitting `--shapes-graph` packs exactly as it always has: the product records
 whatever `sh:shapesGraph` the shapes graph itself declares, or none at all.
 
+### `--box-role-vocab` is resolved and recorded at pack time, the same way `validate --shapes` resolves it
+
+The graph-box role annotation feature takes a caller-supplied vocabulary — six
+term IRIs derived by concatenation from one namespace — and PurRDF mints no
+vocabulary IRIs of its own, so there is no default: without `--box-role-vocab`
+the feature is simply **inactive**, exactly as it always has been.
+
+```bash
+purrdf shacl pack \
+  --shapes shapes.ttl \
+  --box-role-vocab https://example.org/meta/ \
+  --out shapes.purrshp
+```
+
+`--box-role-vocab NS` derives `NSgraphBoxRole`, `NSboxABox`, `NSboxTBox`,
+`NSboxRBox`, `NSboxCBox` and `NSboxConfigBox`, records the namespace into the
+product's identity (the `box-role-vocab` component — see
+[The refusal dimensions](#the-refusal-dimensions)), and is the identical
+derivation `validate --shapes --box-role-vocab NS` spends the flag on: a
+product packed with the flag and a document validated with the same flag parse
+to the same `box_role_vocab` and therefore restore or run under the identical
+`vocabulary` component. Omitting the flag packs exactly as it always has: the
+component records **absent**, and no role annotation is collected or stamped.
+
 The writer is **byte-deterministic**. No wall clock, no randomness and no
 hash-iteration order reach it, so two runs over the same document, base and
 import table produce identical bytes and a content-addressed cache key over a
@@ -258,7 +282,7 @@ purrdf validate --shapes-product shapes.purrshp --format sarif data.ttl
 required. The verdict is the identical one `--shapes shapes.ttl` reaches: the
 same engine entry point runs, over the same restored shapes.
 
-Three flags that describe a shapes **parse** are refused by name against a
+Four flags that describe a shapes **parse** are refused by name against a
 product rather than accepted and ignored, because that parse does not happen
 here:
 
@@ -267,6 +291,7 @@ here:
 | `--shapes-from` | names the syntax a shapes document is read as, and a product is not a document | not applicable |
 | `--shapes-graph` | the product records its own `sh:shapesGraph` IRI | pass `--shapes-graph IRI` to `purrdf shacl pack` and re-pack |
 | `--import` | the `owl:imports` closure is folded at pack time | pass `--import IRI=FILE` to `purrdf shacl pack` |
+| `--box-role-vocab` | the product records its own box-role vocabulary (or its deliberate absence) | pass `--box-role-vocab NS` to `purrdf shacl pack` and re-pack |
 
 Everything describing the **data** graph stays live: `--from`, `--base`,
 `--format`, the governor flags (`--fuel`, `--deadline`,
@@ -563,10 +588,56 @@ otherwise.
 `stage-known` is the fact to act on: `false` says this build's `admit` will
 refuse these bytes and `rebuild` is the path that still restores them.
 
+`identity box-role-vocab 0x00` above is the encoding of **absent** — the
+product this example packed with no `--box-role-vocab`. A product packed with
+the flag renders a longer `0x…` run instead (the six derived term IRIs,
+length-prefixed and key-sorted), never `0x00`; the two are deliberately
+distinguishable so a restore can never confuse "the feature is inactive" with
+"the feature is active over a vocabulary of empty IRIs".
+
 This is what makes a named refusal actionable rather than a log line. A restore
 refused on `prefixes` is answered by reading which prefix map the product
 actually carries and fixing the configuration — not by guessing, and not by
-re-packing blindly.
+re-packing blindly. Comparing that answer across **two** products — the one you
+have and the one you meant — is [`shacl diff`](#comparing-two-products), rather
+than running `explain` twice and comparing the rendering by eye.
+
+## Comparing two products
+
+```console
+$ purrdf shacl diff a.purrshp b.purrshp
+diff-count 1
+diff box-role-vocab 0x00 0x0108626f78…
+```
+
+`shacl diff` opens **both** products WITHOUT admitting either — the same
+framing-and-integrity-only tier `shacl explain` reads through — and prints
+every identity component whose value differs, one `diff <label> <value-in-a>
+<value-in-b>` line per component, in `A`'s own component order. `diff-count 0`
+and no `diff` lines means the two products declared identical identities.
+
+This is what makes a NAMED refusal actionable between two artifacts rather than
+just one. `shacl explain` answers "what does THIS product say it was compiled
+from"; before `diff` existed, an operator whose restore was refused on a named
+dimension had to run `explain` twice — on the product in hand and on the one
+they meant to restore — and compare the rendering by eye to find which
+declaration moved. `diff` is that comparison, done once, over the identical
+decoded components `explain` renders, so the two can never disagree about what
+a component's value is.
+
+Exit codes mirror `shacl verify`'s certified/refused split rather than
+`validate`'s conforms/non-conforms one, because a `diff` that finds a
+difference is a **decided answer about two artifacts**, not a validation
+verdict about data: exit `0` when the two identities are identical, exit `1`
+when they differ (the difference is printed on stdout either way), and exit `2`
+for a usage error.
+
+`diff` never admits either side, so it works on a product whose preparation
+stage id this build does not recognize — the stage id lives in the product's
+separate preparation memo, not in the identity `diff` compares, and is exactly
+the situation an operator reaches for a diff to make sense of: "`validate
+--shapes-product` refuses this file outright; what, concretely, would change if
+I re-packed it?"
 
 ## The refusal dimensions
 
@@ -604,7 +675,7 @@ which opens the product before it certifies anything.
 | `shapes-graph` | prepared under a different `sh:shapesGraph` IRI — or, under [`--expect-identity`](#binding-a-restore-to-the-product-you-meant), carrying an input binding that is not the one you required | expose the shapes under the same named graph and re-pack with that IRI, or point the expectation at the product you meant |
 | `prefixes` | prepared against a different prefix map | pack and execute under the same prefixes — the map decides which IRI a prefixed name denotes |
 | `base` | prepared against a different base IRI | pack and execute under the same base — relative references resolve against it |
-| `vocabulary` | prepared under a different box-role vocabulary | supply the same vocabulary; PurRDF mints no vocabulary IRIs and there is no default to fall back on |
+| `vocabulary` | prepared under a different box-role vocabulary | pass the SAME `--box-role-vocab NS` (or none) to both `purrdf shacl pack` and the executing side; PurRDF mints no vocabulary IRIs and there is no default to fall back on |
 | `function-registry` | prepared against a different SPARQL function registry, or against a different build of the host implementations behind it | wire the same functions into the executing host, under the same implementation identity |
 | `aggregate-registry` | prepared against a different custom-aggregate registry, or against a different build of the host implementations behind it | wire the same aggregates into the executing host, under the same implementation identity |
 | `property-function-registry` | prepared against a different property-function registry, or against a different build of the host implementations behind it | wire the same relations into the executing host, under the same implementation identity |
@@ -648,14 +719,22 @@ is printed; in Python the exception's `.dimension` is `None`; in JavaScript
 
 | Command | Does | Exit `0` | Exit `1` | Exit `2` |
 | --- | --- | --- | --- | --- |
-| `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE]` | parse, prepare, write the product | product written | the shapes did not parse, or the graph declares something a product cannot carry | bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
+| `purrdf shacl pack --shapes FILE --out OUT [--base IRI] [--shapes-graph IRI] [--import IRI=FILE] [--box-role-vocab NS]` | parse, prepare, write the product | product written | the shapes did not parse, or the graph declares something a product cannot carry | bad flags, `--shapes -`, or a `--shapes-graph`/`--import` the shapes graph cannot resolve |
 | `purrdf shacl verify [IN]` | corroborate the carried dataset against the claimed identity | prints the identity digest | refused, with `shacl dimension <label>` on stderr | bad flags |
 | `purrdf shacl explain [IN]` | print what the product says it was compiled from | prints the `key value` rendering | the bytes are not a well-formed product | bad flags |
+| `purrdf shacl diff A B` | compare two products' declared identities, without admitting either | the two identities are identical | the two identities differ (the `diff` lines are still printed, on stdout) | bad flags, or both `A` and `B` naming standard input |
 | `purrdf validate --shapes-product FILE [--rebuild] [--expect-identity HEX] [IN]` | restore and validate — `--rebuild` re-derives from the carried dataset instead of admitting the memo | validation ran | product refused | bad flags, a parse flag passed against a product, `--rebuild` or `--expect-identity` without a product, or an `--expect-identity` that is not 64 hexadecimal digits |
 
 `IN` defaults to `-` (standard input) for `verify` and `explain`. For
 `validate`, `--shapes-product -` collides with the data graph's own default of
-`-` and is refused by name: there is only one standard input.
+`-` and is refused by name: there is only one standard input. `diff`'s two
+products, `A` and `B`, are both required positional paths with no default, for
+the identical reason: naming standard input for both would give each product
+part of one byte stream.
+
+`validate --shapes FILE [--box-role-vocab NS]` accepts the identical flag on
+the parse lane — see [Producing a product](#producing-a-product) above — and
+refuses it by name against `--shapes-product`, in the four-flag table above.
 
 `validate` additionally exits `3` when a governor budget trips, and always
 writes `shacl shapes-provenance <token>` before the run and `shacl conforms

@@ -29,21 +29,29 @@
 //!   admitting any of it. This is what makes a named refusal actionable: a restore
 //!   refused on `prefixes` is answered by reading which prefix map the product
 //!   actually carries, not by guessing.
+//! * `diff` is `explain` for TWO products at once: it decodes both without
+//!   admitting either, and prints only the identity components that DIFFER. A
+//!   caller whose restore was refused on a named dimension can otherwise only
+//!   answer "what changed" by running `explain` twice and comparing the rendering
+//!   by eye; `diff` is that comparison, done once.
 //!
-//! Both print a refusal's DIMENSION, because the dimension is the stable thing a
-//! caller branches on: `stage-id` means re-pack, or restore with `validate
-//! --shapes-product --rebuild`; `container-digest` means the file is corrupt in
-//! place; `function-registry` means the caller's own configuration is wrong and
-//! re-packing will not help. Collapsing those to one exit code and one prose
-//! string is exactly what the typed boundary exists to prevent, so the label is
-//! written to stderr as a `key value` line alongside the message.
+//! `explain` and `diff` print a refusal's DIMENSION, because the dimension is the
+//! stable thing a caller branches on: `stage-id` means re-pack, or restore with
+//! `validate --shapes-product --rebuild`; `container-digest` means the file is
+//! corrupt in place; `function-registry` means the caller's own configuration is
+//! wrong and re-packing will not help. Collapsing those to one exit code and one
+//! prose string is exactly what the typed boundary exists to prevent, so the
+//! label is written to stderr as a `key value` line alongside the message.
 //!
 //! # Exit codes
 //!
-//! **0** when the product is written, certified, or explained. **1** when it is
+//! **0** when the product is written, certified, or explained, or when a `diff`
+//! finds the two products' identities identical. **1** when a product is
 //! refused — a refusal is a decided verdict about an ARTIFACT, not about data, so
-//! unlike a non-conforming validation it really is a failure of the thing asked for.
-//! **2** for a usage error.
+//! unlike a non-conforming validation it really is a failure of the thing asked
+//! for — and also when a `diff` finds the two identities DIFFER: not a crash, but
+//! a decided answer worth a non-zero code, the same way `verify` distinguishes
+//! "certified" from "refused" with its own 0/1 split. **2** for a usage error.
 //!
 //! # Where the bytes come from
 //!
@@ -83,6 +91,16 @@ use crate::{sink, source};
 /// different one through a restored product, with no flag on `shacl pack` able to close the
 /// gap.
 ///
+/// `box_role_vocab` is `--box-role-vocab NS`, turned into a
+/// [`purrdf_shapes::model::BoxRoleVocab`] by
+/// [`BoxRoleVocab::for_namespace`](purrdf_shapes::model::BoxRoleVocab::for_namespace) and
+/// recorded into the product's identity by
+/// [`purrdf_validate::pack_shapes_product_from_dataset`] — the identical function
+/// `validate --shapes --box-role-vocab NS` spends the parsed value on. PurRDF mints no
+/// vocabulary IRIs, so `None` is not a fallback default standing in for a real one: the
+/// box-role annotation feature is simply INACTIVE, and the product's `box-role-vocab`
+/// identity component records that fact rather than omitting it.
+///
 /// The document is Turtle. That is not a restriction this lane invents for its own
 /// convenience — it is the one syntax that carries a `@prefix`/`PREFIX` map recoverable
 /// from source text, which is the fallback prefix environment every SHACL-AF
@@ -121,6 +139,7 @@ pub(crate) fn pack(
     base: Option<&str>,
     imports: &[String],
     shapes_graph: Option<&str>,
+    box_role_vocab: Option<&str>,
     out: &str,
 ) -> Result<(), CliError> {
     let effective_base = source::effective_base(shapes, NativeRdfFormat::Turtle, base)?;
@@ -138,6 +157,10 @@ pub(crate) fn pack(
     // the ordering `validate --shapes` decides in.
     let shapes_graph =
         crate::shapes_source::resolve_shapes_graph(shapes_graph, effective_base.as_deref())?;
+    // PurRDF mints no vocabulary IRIs, so `None` (no `--box-role-vocab`) is a real answer
+    // rather than a default: the box-role feature stays inactive, exactly as it would
+    // parsing the same document through `validate --shapes` with no `--box-role-vocab`.
+    let box_role_vocab = box_role_vocab.map(purrdf::shapes::model::BoxRoleVocab::for_namespace);
 
     let root = crate::shapes_source::read_shapes_document(
         shapes,
@@ -152,6 +175,7 @@ pub(crate) fn pack(
         &folded.prefixes,
         effective_base.as_deref(),
         shapes_graph,
+        box_role_vocab,
     )
     .map_err(|refusal| refusal_error(&format!("--shapes {shapes}"), &refusal))?;
 
@@ -217,6 +241,52 @@ pub(crate) fn explain(product: &str) -> Result<(), CliError> {
     let explained = purrdf_validate::explain_shapes_product(owner.as_bytes())
         .map_err(|error| admission_error(product, &error))?;
     sink::write_out("-", explained.as_bytes())
+}
+
+/// Run `shacl diff`: open the products at `a` and `b` and print every identity component
+/// that DIFFERS between them, WITHOUT admitting either.
+///
+/// The comparison is [`purrdf_validate::diff_shapes_products`]'s, over the same decoded
+/// identity components [`explain`] renders for one product — deterministic `key value`
+/// lines, written verbatim to stdout, terminated even when there is nothing to report
+/// (`diff-count 0` alone).
+///
+/// # Exit code doubles as the verdict
+///
+/// Returning `Ok(())` when the two identities are identical and an [`CliError::Runtime`]
+/// naming the difference count when they are not is the same split [`verify`] makes
+/// between a product that certifies and one that is refused: a `diff` that finds a
+/// difference is a meaningful, decided answer rather than a malfunction, but it is a
+/// DIFFERENT answer than "these match", and a caller scripting around this command should
+/// not have to parse stdout to tell the two apart.
+///
+/// # Errors
+///
+/// [`CliError::Runtime`] naming the refused dimension when either side is not a
+/// well-formed product of this format, or — when both open cleanly — naming how many
+/// identity components differ.
+pub(crate) fn diff(a: &str, b: &str) -> Result<(), CliError> {
+    if a == "-" && b == "-" {
+        return Err(CliError::Usage(
+            "A and B both read standard input, and there is only one: a process has a single \
+             stdin stream, so the two products would each get part of one byte stream. Give \
+             one of them a path"
+                .to_owned(),
+        ));
+    }
+    let owner_a = source::acquire_product_input(a)?;
+    let owner_b = source::acquire_product_input(b)?;
+    let diff = purrdf_validate::diff_shapes_products(owner_a.as_bytes(), owner_b.as_bytes())
+        .map_err(|error| admission_error(&format!("{a} {b}"), &error))?;
+    sink::write_out("-", diff.to_string().as_bytes())?;
+    if diff.identical() {
+        return Ok(());
+    }
+    Err(CliError::Runtime(format!(
+        "{a} {b}: the two products' identities differ on {} component(s) — see the `diff` \
+         lines above",
+        diff.differences().len()
+    )))
 }
 
 /// Turn an admission refusal into a [`CliError`], writing the DIMENSION to stderr as its
