@@ -30,8 +30,9 @@ Streams a shard of the deterministic scale corpus as N-Quads.
   --help, -h   print this usage text and exit
 
 `--manifest` prints the JSON manifest (profile id, parameters, shard row
-range, class mix) instead of rows; a capture records the manifest beside the
-output digest. Output goes to stdout unless `--out` is given; `--manifest`
+range, and BOTH mixes — the class mix over the entity space and the row mix
+over the emitted rows) instead of rows; a capture records the manifest beside
+the output digest. Output goes to stdout unless `--out` is given; `--manifest`
 honours `--out` too.
 
 Every flag may be given at most once.
