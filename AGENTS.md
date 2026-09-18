@@ -51,6 +51,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-entail` (`crates/entail`) | Entailment regimes: RDF/RDFS/OWL 2 RL/D materialization, OWL-Direct, RIF |
 | `purrdf-geo` (`crates/geo`) | GeoSPARQL 1.1: exact float-free WKT/GeoJSON geometry and the `geof:` family over both extension seams |
 | `purrdf-text` (`crates/text`) | Deterministic full-text search over literals: exact fixed-point BM25, ranked rows through the property-function seam |
+| `purrdf-retrieval` (`crates/retrieval`) | Composition layer over the ranked producers: plan → compile → execute → fuse, with a canonical BLAKE3 plan identity and an exact, content-addressed fusion law; producers, strata and weights are caller-supplied |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-json` (`crates/json`) | Ordered JSON byte-cover codec with queryable occurrences, strict reconstruction and caller-selected profile; sole runtime dependency is `purrdf-core` |
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
@@ -91,7 +92,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 23 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 24 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -230,7 +231,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (23 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (24 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Five members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,

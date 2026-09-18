@@ -46,7 +46,7 @@ use crate::convert::literal_to_value;
 use crate::error::EvalError;
 use crate::expr::xsd_of;
 use crate::modifier::is_numeric_xsd;
-use crate::property_fn::{PfArity, PropertyFunctionRegistry};
+use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
 
 /// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
 ///
@@ -1138,11 +1138,41 @@ pub(crate) fn registry_fingerprint(
     if relations.is_empty() {
         return Ok(String::new());
     }
-    let registry = relations;
     let mut out = String::new();
-    out.push_str(&registry.instance_id().stable_encoding().to_string());
+    out.push_str(&relations.instance_id().stable_encoding().to_string());
     out.push('\u{5}');
-    for descriptor in registry.describe()? {
+    out.push_str(&content_fingerprint(relations)?);
+    Ok(out)
+}
+
+/// The content half of [`registry_fingerprint`]: every registered IRI's arity,
+/// declared volatility, and declared modes with their row bounds, IRI-sorted —
+/// and nothing else.
+///
+/// This is the durable, instance-independent half. It deliberately omits the
+/// [`RegistryId`](crate::registry_id::RegistryId) that [`registry_fingerprint`]
+/// prepends, so two independently constructed registries that declare the same
+/// relations produce the identical digest across processes and instances. It is
+/// exposed to hosts through [`PropertyFunctionRegistry::content_fingerprint`],
+/// which is exactly the "do these declare the same shape?" question; the plan
+/// cache and governed receipts must keep using the instance-bearing
+/// [`registry_fingerprint`], because a plan admitted under one registry must never
+/// run under a different one that merely describes itself identically.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] if a registered relation's declaration methods panic —
+/// [`PropertyFunctionRegistry::describe`]'s own failure, propagated unchanged.
+/// Never raised when `relations` is empty: that case returns before any
+/// relation's declaration is read at all.
+pub(crate) fn content_fingerprint(
+    relations: &PropertyFunctionRegistry,
+) -> Result<String, EvalError> {
+    if relations.is_empty() {
+        return Ok(String::new());
+    }
+    let mut out = String::new();
+    for descriptor in relations.describe()? {
         out.push_str(&descriptor.iri);
         out.push('\u{2}');
         out.push_str(&descriptor.subject_arity.to_string());
@@ -1155,6 +1185,17 @@ pub(crate) fn registry_fingerprint(
             out.push_str(&mode.code);
             out.push(':');
             out.push_str(&mode.rows_per_invocation.to_string());
+        }
+        // The ranked-retrieval declaration the host supplied at registration: a
+        // producer's participation in fusion is a declaration a prepared plan's
+        // identity must cover, exactly as arity, volatility and modes are. A
+        // relation registered without one contributes the fixed one-byte
+        // `NOT_RANKED_CANONICAL` description, so a producer that does not fuse
+        // cannot perturb the digest of one that does.
+        out.push('\u{5}');
+        match descriptor.ranked.as_ref() {
+            None => out.push_str(NOT_RANKED_CANONICAL),
+            Some(declaration) => out.push_str(&declaration.canonical_description()),
         }
         out.push('\u{4}');
     }

@@ -57,6 +57,13 @@ purrdf-geo = { workspace = true }
 # evaluator's property-function seam, and must be able to name `TextIndex`,
 # `TextIndexConfig` and `Scored` while depending on `purrdf` alone.
 purrdf-text = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: the umbrella
+# already hands out the ranked-retrieval CAPABILITY type a producer declares
+# with (`sparql::RetrievalTermPattern`), so the layer that CONSUMES those
+# declarations has to be reachable from here too — a consumer that can name what
+# a producer accepts but not `RetrievalRequest`, `Plan` or `search` has been
+# handed half a seam.
+purrdf-retrieval = { workspace = true }
 purrdf-validate = { workspace = true }
 # Part of the published surface, so the umbrella re-exports it: a consumer who
 # slices a Markdown document must be able to name `Profile`, `Vocabulary`,

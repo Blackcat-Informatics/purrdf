@@ -2247,6 +2247,20 @@ fn eval_evaluated_inner<D: DatasetView + Sync>(
 /// it can plan at that node when evaluation reaches it. This is both cheaper for the
 /// overwhelmingly common LIMIT-free query (zero discovery walk) and more local: a slice
 /// inside a subquery receives its own plan without making unrelated siblings carry it.
+///
+/// # Why this survives the planner's own slice re-seed
+///
+/// [`crate::governor::soundness::plan_cap_pushdown`] re-seeds at every restricting `Slice`
+/// it descends past with no ceiling, which makes this function's arithmetic a special case
+/// of that one — but not this function redundant. The planner runs only when something
+/// hands it a root ceiling, and the ONLY root ceiling is the caller's answer cap: a query
+/// carrying a bare `LIMIT` and no engaged `AnswerRows` governor never calls it at all.
+/// This is what installs a pushdown for that query, and deleting it in favour of the
+/// re-seed would mean walking every plan in the workspace — the whole cost the lazy
+/// install exists to avoid — to serve the cap-free case.
+///
+/// Once a pushdown IS installed, the early return below leaves the planner's own re-seed
+/// to handle every slice further down, which is why the two never disagree about a node.
 fn install_local_slice_pushdown<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
