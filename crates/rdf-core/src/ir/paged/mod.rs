@@ -49,6 +49,7 @@
 //! records first page requests in evaluation order and charges each admitted page
 //! exactly once.
 
+pub(crate) mod graph_index;
 pub mod provider;
 pub mod query;
 pub(crate) mod summary;
@@ -61,6 +62,7 @@ use std::sync::{Arc, OnceLock};
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
+use graph_index::GraphPageIndex;
 
 pub use provider::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
@@ -73,7 +75,7 @@ pub use translation::PageTranslation;
 /// [`PageTranslation`] built at seal time, and a lazily-cached resident
 /// [`RdfDataset`] (empty after the seal pass; filled on first query-time access).
 #[derive(Debug)]
-struct PageSlot {
+pub(crate) struct PageSlot {
     /// The page's dense ordinal (equals its index in `PagedDataset::pages`).
     id: PageId,
     /// The seal-time local↔global term-id map for this page.
@@ -272,6 +274,16 @@ pub struct PagedDataset {
     /// The total quad count, summed at seal time so [`len_hint`](DatasetView::len_hint)
     /// never materializes a page.
     total_quads: usize,
+    /// The dataset-level "which pages carry graph G" index, DERIVED (never
+    /// persisted) from the completed `pages` in every constructor — see
+    /// [`GraphPageIndex::derive`].
+    #[allow(
+        dead_code,
+        reason = "read only via `graph_index()`, whose own production callers are the \
+                  page-admission predicate and the composed `named_graphs()` surface in \
+                  `mod.rs` and `query.rs`; this attribute is removed once those call sites exist"
+    )]
+    graph_index: GraphPageIndex,
 }
 
 impl std::fmt::Debug for PagedDataset {
@@ -427,13 +439,19 @@ impl PagedDataset {
                 provider: current_page_count,
             });
         }
+        let pages = pages.into_boxed_slice();
+        // Derived from the FINAL, densely-numbered `pages` slice, after every page id
+        // is assigned — the sole producer, per page-set, of the dataset-level graph
+        // index.
+        let graph_index = GraphPageIndex::derive(&pages);
         Ok(Self {
             dictionary,
-            pages: pages.into_boxed_slice(),
+            pages,
             provider,
             generation,
             caps,
             total_quads,
+            graph_index,
         })
     }
 
@@ -503,13 +521,19 @@ impl PagedDataset {
                 byte_len: part.byte_len,
             });
         }
+        let pages = pages.into_boxed_slice();
+        // Derived from `slot.translation.summary()` alone (already carried by each
+        // `PagePart`), so this reads no page — the warm-restart cost stays
+        // O(page count), never O(page count × page size).
+        let graph_index = GraphPageIndex::derive(&pages);
         Ok(Self {
             dictionary,
-            pages: pages.into_boxed_slice(),
+            pages,
             provider,
             generation,
             caps,
             total_quads,
+            graph_index,
         })
     }
 
@@ -573,13 +597,21 @@ impl PagedDataset {
             });
         }
         let indices: Vec<PageId> = keep.to_vec();
+        let pages = pages.into_boxed_slice();
+        // Each retained page's PageSummary is keyed in that page's own LOCAL TermId
+        // space, which subsetting never touches, so it carries over unchanged inside
+        // `slot.translation` above. The graph INDEX, however, is keyed by GLOBAL id
+        // and by PageId — and page ids are renumbered densely here — so it must be
+        // rebuilt from the final `pages` slice rather than carried over.
+        let graph_index = GraphPageIndex::derive(&pages);
         Self {
             dictionary,
-            pages: pages.into_boxed_slice(),
+            pages,
             provider: Arc::new(SubsetPageProvider::new(self.provider.clone(), indices)),
             generation: self.generation,
             caps,
             total_quads,
+            graph_index,
         }
     }
 
@@ -669,13 +701,21 @@ impl PagedDataset {
                 byte_len: slot.byte_len,
             })
             .collect();
+        let pages = pages.into_boxed_slice();
+        // Each page's PageSummary is keyed in that page's own LOCAL TermId space,
+        // which compaction never touches (only the global side moves — see
+        // `PageTranslation::remap`), so it carries over unchanged. The graph INDEX is
+        // keyed by GLOBAL id, which compaction DOES renumber, so it must be rebuilt
+        // from the completed `pages` slice rather than remapped in place.
+        let graph_index = GraphPageIndex::derive(&pages);
         Self {
             dictionary,
-            pages: pages.into_boxed_slice(),
+            pages,
             provider: self.provider.clone(),
             generation: self.generation,
             caps: self.caps,
             total_quads: self.total_quads,
+            graph_index,
         }
     }
 
@@ -704,6 +744,19 @@ impl PagedDataset {
     pub fn translation(&self, id: PageId) -> Option<&PageTranslation> {
         let index = usize::try_from(id.0).ok()?;
         self.pages.get(index).map(|slot| &slot.translation)
+    }
+
+    /// The dataset-level "which pages carry graph G" index (read-only). See
+    /// [`GraphPageIndex`] — derived at every constructor, never persisted.
+    #[must_use]
+    #[allow(
+        dead_code,
+        reason = "its production callers are the page-admission predicate and the composed \
+                  `named_graphs()` surface in `mod.rs` and `query.rs`; this attribute is \
+                  removed once those call sites exist"
+    )]
+    pub(crate) fn graph_index(&self) -> &GraphPageIndex {
+        &self.graph_index
     }
 
     /// The cached, fallible per-page getter: fast-path the resident [`OnceLock`],
