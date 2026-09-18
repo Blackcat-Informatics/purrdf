@@ -169,6 +169,7 @@ const EXPECTED_METRICS: &[(&str, &[&str])] = &[
             "single_graph_pages_predicted",
             "single_graph_pages_touched",
             "single_graph_rows",
+            "single_graph_retained_pages",
             "paged_budget_tripped",
             "paged_neighbor_ok",
         ],
@@ -409,19 +410,37 @@ fn governed_query(profile: &Profile) -> Result<Vec<Metric>, String> {
     Ok(metrics)
 }
 
-/// Shapes for the keystone corpus: every subject of `ex:p` must carry at
-/// least one `ex:q`. The generator's per-group `shared` blank node is a
-/// subject of `ex:p` only, so the corpus yields exactly one violation per
-/// group — the workload therefore exercises the violation-report path, and
-/// `results` scales with the profile.
-const SHAPES_TTL: &str = r"
+/// Shapes for the keystone corpus, deliberately covering BOTH validation paths.
+///
+/// `ex:ProbeShape` is the core-constraint path: every subject of `ex:p` must
+/// carry at least one `ex:q`. The generator's per-group `shared` blank node is a
+/// subject of `ex:p` only, so the corpus yields exactly one violation per group.
+///
+/// `ex:ProbeSparqlShape` states the same rule as a SHACL-SPARQL constraint. It
+/// exists because governors bound the SPARQL paths ONLY — core constraint
+/// evaluation reads the IR directly and spends no evaluator budget, so a shapes
+/// graph with no SHACL-SPARQL in it validates under any budget, including a zero
+/// one. With core constraints alone the workload's `fuel` and
+/// `intermediate_cells` were structurally zero: two measurements that measured
+/// nothing, reported alongside real ones. Running one SPARQL query per focus node
+/// charges the governor, so those metrics now carry evidence.
+///
+/// Both shapes flag the same nodes, so `results` counts each violating node twice
+/// and still scales with the profile.
+const SHAPES_TTL: &str = r#"
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix ex: <https://example.org/> .
 
 ex:ProbeShape a sh:NodeShape ;
   sh:targetSubjectsOf ex:p ;
   sh:property [ sh:path ex:q ; sh:minCount 1 ] .
-";
+
+ex:ProbeSparqlShape a sh:NodeShape ;
+  sh:targetSubjectsOf ex:p ;
+  sh:sparql [
+    sh:select "SELECT $this WHERE { $this <https://example.org/p> ?o FILTER NOT EXISTS { $this <https://example.org/q> ?q } }" ;
+  ] .
+"#;
 
 fn shacl(profile: &Profile) -> Result<Vec<Metric>, String> {
     let dataset = keystone_base(profile.groups);
@@ -435,15 +454,30 @@ fn shacl(profile: &Profile) -> Result<Vec<Metric>, String> {
     )
     .map_err(|e| format!("validate: {e}"))?;
     match governed {
-        GovernedValidation::Complete { report, evidence } => Ok(vec![
-            ("conforms", u64::from(report.conforms)),
-            ("results", report.results.len() as u64),
-            ("fuel", evidence.consumed_in(ResourceDimension::Fuel)),
-            (
-                "intermediate_cells",
-                evidence.consumed_in(ResourceDimension::IntermediateCells),
-            ),
-        ]),
+        GovernedValidation::Complete { report, evidence } => {
+            let fuel = evidence.consumed_in(ResourceDimension::Fuel);
+            let cells = evidence.consumed_in(ResourceDimension::IntermediateCells);
+            // Governors bound the SPARQL paths only, so a shapes graph carrying no
+            // SHACL-SPARQL charges nothing and reports a budget it never spent. The
+            // shapes above include a SPARQL constraint precisely so these two read
+            // something; refuse rather than publish a measurement that measures
+            // nothing next to ones that do.
+            if fuel == 0 || cells == 0 {
+                return Err(format!(
+                    "metered validation reported {} fuel and {cells} intermediate cells over \
+                     {} results: a governor that charges nothing evidences no bound, so the \
+                     shapes must exercise a SPARQL path",
+                    fuel,
+                    report.results.len()
+                ));
+            }
+            Ok(vec![
+                ("conforms", u64::from(report.conforms)),
+                ("results", report.results.len() as u64),
+                ("fuel", fuel),
+                ("intermediate_cells", cells),
+            ])
+        }
         GovernedValidation::BudgetExhausted { tripped, .. } => Err(format!(
             "metered validation tripped {}: METERED must not bound",
             tripped.label()
@@ -615,6 +649,49 @@ fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
         ));
     }
     metrics.push(("single_graph_rows", rows));
+
+    // Graph-scoped eviction, exercised on the shipped surface rather than described.
+    // `retain_graph` drops every page the sealed per-stream postings prove holds nothing
+    // in the graph, so it is the eviction counterpart of the prediction above: the same
+    // metadata that says which pages a query WILL touch says which pages may be released
+    // without losing a row. Evidencing it needs all three legs — the eviction happened,
+    // it cost no materialization, and it changed no answer — because any one alone is
+    // satisfied by doing nothing.
+    let retained = paged.retain_graph(graph_id);
+    let retained_pages = retained.page_count() as u64;
+    if retained_pages >= profile.paged_pages as u64 {
+        return Err(format!(
+            "retaining the single-graph pages kept {retained_pages} of {} pages: an eviction \
+             that evicts nothing evidences no graph-scoped retention",
+            profile.paged_pages
+        ));
+    }
+    let retained_view = retained.query_view(PagedQueryLimits::UNBOUNDED);
+    let retained_answer = engine
+        .query_governed_fallible_view(
+            &retained_view,
+            SparqlRequest {
+                query: single_graph_query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
+        .map_err(|diagnostic| {
+            format!("the single-graph query failed after graph-scoped eviction: {diagnostic}")
+        })?;
+    let (retained_answer, _) = retained_answer.into_parts();
+    let retained_answers = solution_set(retained_answer, "the single-graph query after eviction")?;
+    if retained_answers != answers {
+        return Err(format!(
+            "graph-scoped eviction changed the single-graph answer: {} rows before against {} \
+             after, and the two answer sets are not identical",
+            answers.rows.len(),
+            retained_answers.rows.len()
+        ));
+    }
+    metrics.push(("single_graph_retained_pages", retained_pages));
 
     // Refusal pair at the measured boundary: one page fewer refuses, the exact
     // consumption completes. Both sides are executed, so a tightened budget cannot
