@@ -279,13 +279,16 @@ question a host can act on while reading the refusal is therefore: *do
 you want these two weighted differently, and is the score bounded? Then
 separate strata.*
 
-**The input protocol is validated against what each producer declared,
-not against one law applied to all of them.** A ranked producer states,
-where it is registered, how its rows are ordered and whether an item may
-repeat within one invocation. `fuse` is the consumer both declarations
-were written for, so both reach it — carried from the registry through
-the compiled unit and the executed stream rather than re-fetched at the
-end — and each is honoured on its own terms. A producer that declares its
+**The input protocol has one fixed rank law and one declared duplicate
+policy.** Ranks are 1-based, contiguous and ascending for every ranked
+stream there is, and `fuse` measures each row against the next rank it
+expects from that stream — a lower rank is `OutOfOrderRanks`, a higher one
+`NonContiguousRanks`. Nothing a producer may state at registration softens
+that. What a ranked producer does state, where it is registered, is
+whether an item may repeat within one invocation. `fuse` is the consumer
+that declaration was written for, so it reaches it — carried from the
+registry through the compiled unit and the executed stream rather than
+re-fetched at the end — and is honoured on its own terms. A producer that declares its
 repeats are the consumer's to remove is **de-duplicated**: one
 contribution per `(stratum, item)`, at the best rank the stream gave it,
 never counted twice. A producer that declares an item appears at most
@@ -297,8 +300,9 @@ Refusing the permissive declaration instead would be the mirror failure:
 a policy whose own definition names the consumer's obligation, rejected by
 the consumer for exercising it.
 
-The ordering declaration does **not** read the same way, and the reason is
-worth stating because this section once said the opposite.
+A rank claim read in contribution space does **not** read the same way,
+and the reason is worth stating because this section once said the
+opposite.
 
 A contribution that *rises* with rank is forbidden for every stream: the
 threshold over the stream heads would otherwise not be an upper bound and
@@ -317,9 +321,10 @@ depth)` alone.
 This section previously specified that a producer declaring every rank
 unambiguous was *refused* on that equality, and the admission waist
 refused the matching plan depth. Both refusals rejected correct, usable
-answers: a `StrictlyDescending` declaration is a claim about ranks, held
-against a quantity the producer supplies no term of. The declaration is
-therefore no longer read in contribution space at all.
+answers: an unambiguous-rank claim is a claim about ranks, and it was
+being held against a quantity the producer supplies no term of. Rank order
+is checked on the rank itself, where it is a single unconditional law, and
+is not read in contribution space at all.
 
 ### §5.1 The law's resolution
 

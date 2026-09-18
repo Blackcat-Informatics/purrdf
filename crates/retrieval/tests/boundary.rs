@@ -47,8 +47,8 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, NativeSparqlEngine, PfArgs, PfArity,
-    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankOrdering,
-    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+    PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryOptions, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
 mod common;
@@ -121,17 +121,18 @@ fn ranked(stratum_iri: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
         accepted_terms: accepted(patterns),
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
         mandatory,
     }
 }
 
 /// The contract every fixture producer here declares, and the one a hand-built
-/// stream in this file states: strictly descending ranks, no repeats. It is
-/// spelled once so the registered declaration above and the streams below cannot
-/// drift into describing two different promises.
-fn strict_unique() -> StreamContract {
+/// stream in this file states: no repeats. It is spelled once so the registered
+/// declaration above and the streams below cannot drift into describing two
+/// different promises. The contiguous, ascending ranks these streams emit are
+/// not part of it — that law holds for every stream and is checked rank by rank
+/// rather than declared.
+fn unique_items() -> StreamContract {
     StreamContract::new(DuplicatePolicy::Unique)
 }
 
@@ -391,7 +392,7 @@ impl RankedStream for ScriptedStream {
     }
 
     fn contract(&self) -> StreamContract {
-        strict_unique()
+        unique_items()
     }
 }
 
@@ -742,7 +743,7 @@ impl RankedStream for LazyStream {
     }
 
     fn contract(&self) -> StreamContract {
-        strict_unique()
+        unique_items()
     }
 }
 
@@ -1435,7 +1436,7 @@ fn the_exported_bridge_carries_an_executed_stream_into_fusion() {
     assert!(
         RankedStreamAdapter::new(
             RankedStreamImpl::new(vec![(1, Term::new("a"))]),
-            strict_unique(),
+            unique_items(),
             &elsewhere,
             &stratum("resume"),
         )
@@ -1557,7 +1558,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     let profile = profile(&[("resume", Fixed::ONE)], K);
     let mut adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(vec![(0, Term::new("a"))]),
-        strict_unique(),
+        unique_items(),
         &profile,
         &stratum("resume"),
     )
@@ -1577,7 +1578,7 @@ fn the_exported_bridge_reports_a_malformed_rank_rather_than_panicking() {
     // ordinary row carrying the profile's own contribution.
     let mut adapter = RankedStreamAdapter::new(
         RankedStreamImpl::new(vec![(1, Term::new("a"))]),
-        strict_unique(),
+        unique_items(),
         &profile,
         &stratum("resume"),
     )

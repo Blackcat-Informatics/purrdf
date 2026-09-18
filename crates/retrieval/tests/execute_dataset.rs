@@ -28,8 +28,8 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement, Volatility,
 };
 
 const K: u32 = 60;
@@ -163,19 +163,11 @@ fn producer(prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
 /// how the round-trip test can see that a candidate reached the query as a seed
 /// rather than merely being accepted by the planner.
 fn ranked(stratum: &str) -> RankedDeclaration {
-    declaring(
-        stratum,
-        RankOrdering::StrictlyDescending,
-        DuplicatePolicy::Unique,
-    )
+    declaring(stratum, DuplicatePolicy::Unique)
 }
 
-/// The same declaration, stating `ordering` and `duplicates` explicitly.
-fn declaring(
-    stratum: &str,
-    ordering: RankOrdering,
-    duplicates: DuplicatePolicy,
-) -> RankedDeclaration {
+/// The same declaration, stating `duplicates` explicitly.
+fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
     RankedDeclaration {
         stratum: kernel_iri(stratum),
         accepted_terms: vec![AcceptedTerm {
@@ -188,7 +180,6 @@ fn declaring(
         }],
         depth_placement: None,
         candidate_position: 0,
-        ordering,
         duplicates,
         mandatory: true,
     }
@@ -567,28 +558,25 @@ fn a_forced_failure_isolates_to_its_stratum() {
 
 /// **The producer's declaration reaches the consumer that was written for it.**
 ///
-/// The rank ordering and duplicate policy a host supplies at `register_ranked`
-/// decide what the fusion engine holds and what it refuses, and the fusion
-/// engine is three stages downstream of the registry. So the declaration is
-/// carried rather than re-fetched, on the same route the pinned plan identity
-/// takes: admission reads it off the registry the units are compiled against,
-/// the compiled unit carries it, the executed stream is tagged with it, and the
-/// exported bridge reports it through the protocol the engine reads.
+/// The duplicate policy a host supplies at `register_ranked` decides what the
+/// fusion engine holds and what it refuses, and the fusion engine is three
+/// stages downstream of the registry. So the declaration is carried rather than
+/// re-fetched, on the same route the pinned plan identity takes: admission reads
+/// it off the registry the units are compiled against, the compiled unit carries
+/// it, the executed stream is tagged with it, and the exported bridge reports it
+/// through the protocol the engine reads.
 ///
-/// This walks that route for both spellings of both halves, because a carry that
-/// happened to deliver one constant everywhere would look identical to one that
-/// delivered nothing.
+/// This walks that route for both spellings, because a carry that happened to
+/// deliver one constant everywhere would look identical to one that delivered
+/// nothing.
 #[test]
 fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
-    for (ordering, duplicates) in [
-        (RankOrdering::StrictlyDescending, DuplicatePolicy::Unique),
-        (RankOrdering::NonIncreasing, DuplicatePolicy::Allowed),
-    ] {
+    for duplicates in [DuplicatePolicy::Unique, DuplicatePolicy::Allowed] {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register_ranked(
             ex("pf/alpha"),
             producer("alpha/", 2),
-            declaring(&ex(STRATA[0]), ordering, duplicates),
+            declaring(&ex(STRATA[0]), duplicates),
         );
         // The second stratum keeps the other spelling throughout, so a carry
         // that overwrote every stratum with one contract would be caught here

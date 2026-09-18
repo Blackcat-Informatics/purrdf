@@ -119,17 +119,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `AdmissionError::DepthBeyondMonotoneRange`, the two refusals above, at the
   fusion boundary and at the admission waist respectively. The plan depth the
   second refused is now recorded as evidence on the compiled value instead.
-- **retrieval:** `StreamContract::ordering`. Its only reader in the workspace was
-  the removed check, and a two-valued declaration nothing consults is a knob with
-  no behaviour. `RankOrdering` remains on the registry declaration, where it is
-  still read.
+- **retrieval, sparql-eval:** The rank-ordering declaration, in both places it
+  stood: `StreamContract::ordering` on the consumer side and
+  `RankedDeclaration::ordering` with its `RankOrdering` enum on the producer
+  side. Its only reader in the workspace was the removed check, and a two-valued
+  declaration nothing consults is a knob with no behaviour. Rank order is one
+  law, not a choice: ranks are 1-based, contiguous and ascending for every ranked
+  stream, and fusion checks every row against the next rank it expects from that
+  stream -- a lower rank is `ProtocolError::OutOfOrderRanks`, a higher one
+  `ProtocolError::NonContiguousRanks`. Producers no longer state the field;
+  `TextSearchRelation::ranked_declaration` and
+  `EmbeddingKnnRelation::ranked_declaration` build one field fewer.
+
+  A registry's `content_fingerprint` covers a ranked declaration field by field,
+  so dropping that field changes the fingerprint of every registry holding a
+  ranked producer. A plan records the fingerprint it was admitted against, so
+  plans pinned under an earlier build no longer match a registry built by this
+  one and must be re-planned. Nothing else moved: a fusion profile's identity is
+  a function of the fusion law alone and is byte-for-byte unchanged.
 - **retrieval:** `FusionProfile::new`. It supplied a default decay rule while the
   same type documents that neither rule is a default, and the one it chose has a
   depth ceiling no weight can lift. Call sites name `with_decay` explicitly, which
   preserves every previously computed profile identity byte for byte.
 
-  All four removals are confined to `purrdf-retrieval`, which has not yet been
-  published, so no released API changes.
+  Every removal above except the ordering declaration is confined to
+  `purrdf-retrieval`, which has not yet been published, so touches no released
+  API. The ordering declaration reached `purrdf-sparql-eval`, so `RankOrdering`,
+  `RankedDeclaration::ordering` and the fingerprint bytes they contributed are
+  a breaking change there.
 
 ### Changed
 

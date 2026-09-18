@@ -82,11 +82,12 @@ enum Step {
     Fail(ProtocolError),
 }
 
-/// The contract most fixtures here declare: strictly descending contributions
-/// and no repeated item. It is the honest declaration for a scripted stream of
-/// distinct items at contiguous ranks, and it is what `register_ranked`'s own
-/// fixtures elsewhere in the crate state.
-fn strict_unique() -> StreamContract {
+/// The contract most fixtures here declare: no repeated item. It is the honest
+/// declaration for a scripted stream of distinct items, and it is what
+/// `register_ranked`'s own fixtures elsewhere in the crate state. The contiguous,
+/// ascending ranks those scripts emit are not part of it -- that law holds for
+/// every stream and is checked rank by rank rather than declared.
+fn unique_items() -> StreamContract {
     StreamContract::new(DuplicatePolicy::Unique)
 }
 
@@ -121,7 +122,7 @@ impl MockStream {
             drop_counter: Arc::new(AtomicUsize::new(0)),
             pull_counter: Arc::new(AtomicUsize::new(0)),
             plan_id: None,
-            contract: strict_unique(),
+            contract: unique_items(),
         }
     }
 
@@ -663,6 +664,110 @@ fn protocol_violations_are_typed() {
                 if matches!(**error, ProtocolError::ContributionMismatch { .. })
         ),
         "expected ContributionMismatch, got {result:?}"
+    );
+}
+
+// 7a. The one rank law, and the valid streams next door to each refusal.
+/// **The rank law is single, unconditional, and not over-applied.**
+///
+/// There is exactly one law about ranks -- 1-based, contiguous, ascending -- and
+/// no registration softens it, so a stream that steps backwards and a stream
+/// that skips are both refused whatever their producer declared. A refusal is a
+/// claim, though, and a refusal that also swallowed the nearest conforming
+/// stream would look identical from inside the error. So each violation is
+/// executed beside its neighbour: the same stratum, the same weight, the same
+/// item names, the same row count where the shape allows it, differing only in
+/// the one rank that breaks the law. The neighbour must still fuse, and fuse to
+/// every row it emitted.
+#[test]
+fn a_backwards_rank_and_a_skipped_rank_are_refused_while_their_valid_neighbours_fuse() {
+    let profile = profile(&[("text", Fixed::ONE)], K);
+    let weight = Fixed::ONE;
+
+    // The neighbour of the backwards stream: two items at 1 then 2, which is the
+    // law kept exactly.
+    let ascending = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![row(1, weight, K, "a"), row(2, weight, K, "b")],
+            exhausted(2),
+        ),
+    )];
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        ascending, &profile, TOP_K,
+    ))
+    .expect("ranks 1 then 2 keep the law and must fuse");
+    assert_eq!(
+        fused.rows.len(),
+        2,
+        "and every row the stream emitted reaches the answer"
+    );
+    assert_eq!(fused.rows[0].entity, Term::new("a"));
+    assert_eq!(fused.rows[1].entity, Term::new("b"));
+
+    // The violation: the second row repeats rank 1 instead of advancing to 2.
+    let backwards = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![row(1, weight, K, "a"), row(1, weight, K, "b")],
+            exhausted(2),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        backwards, &profile, TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::OutOfOrderRanks { expected: 2, got: 1 })
+        ),
+        "expected OutOfOrderRanks, got {result:?}"
+    );
+
+    // The neighbour of the skipping stream: three items at 1, 2, 3 -- the ranks
+    // the skipping stream would have had to emit to reach its own rank 3.
+    let contiguous = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![
+                row(1, weight, K, "a"),
+                row(2, weight, K, "b"),
+                row(3, weight, K, "c"),
+            ],
+            exhausted(3),
+        ),
+    )];
+    let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        contiguous, &profile, TOP_K,
+    ))
+    .expect("ranks 1, 2 then 3 keep the law and must fuse");
+    assert_eq!(
+        fused.rows.len(),
+        3,
+        "a deeper conforming stream is read to its end, not truncated at the \
+         depth the refused one stopped at"
+    );
+    assert_eq!(fused.rows[2].entity, Term::new("c"));
+
+    // The violation: rank 2 is never emitted, so rank 3 arrives one rank early.
+    let skipping = vec![(
+        stratum("text"),
+        MockStream::new(
+            vec![row(1, weight, K, "a"), row(3, weight, K, "c")],
+            exhausted(2),
+        ),
+    )];
+    let result = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
+        skipping, &profile, TOP_K,
+    ));
+    assert!(
+        matches!(
+            &result,
+            Err(FusionError::Protocol(error))
+                if matches!(**error, ProtocolError::NonContiguousRanks { gap: 1 })
+        ),
+        "expected NonContiguousRanks, got {result:?}"
     );
 }
 
@@ -1723,7 +1828,7 @@ fn a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one() {
                 ],
                 exhausted(2),
             )
-            .declaring(strict_unique()),
+            .declaring(unique_items()),
         ),
     ];
     let result = block_on(run_fuse(streams, &profile));
@@ -2033,7 +2138,7 @@ fn a_declared_allowed_stream_is_deduplicated_rather_than_refused() {
     };
     assert_eq!(
         rows_of(allowed_duplicates()),
-        rows_of(strict_unique()),
+        rows_of(unique_items()),
         "with no repeat to remove, the policy is invisible in the answer"
     );
 }
@@ -2102,7 +2207,7 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
     // `NonMonotoneContribution` remains as the typed guard on that invariant.
     let first_rank = contribution(Fixed::ONE, 1, K).expect("fits");
     let risen = Fixed::from_raw(first_rank.into_raw() + 1);
-    for contract in [strict_unique(), allowed_duplicates()] {
+    for contract in [unique_items(), allowed_duplicates()] {
         let heavy = crate::profile(&[("thin", Fixed::ONE)], K);
         let streams = vec![(
             stratum("thin"),

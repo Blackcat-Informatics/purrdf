@@ -362,32 +362,6 @@ impl TermPattern {
     }
 }
 
-/// A ranked producer's ordering guarantee over the rows of one invocation.
-///
-/// The evaluator already treats emission order as part of a relation's
-/// contract (see [`PfCursor`]); this declaration names the *rank* half of that
-/// contract so a fusion stage can rely on it without inspecting rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RankOrdering {
-    /// Rows are emitted in strictly descending score order under a declared
-    /// total tie-break, so every row has an unambiguous 1-based rank.
-    StrictlyDescending,
-    /// Rows are emitted in non-increasing score order; equal scores may appear
-    /// in any order, so ranks within a tie are interchangeable.
-    NonIncreasing,
-}
-
-impl RankOrdering {
-    /// The stable spelling used in the canonical description.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::StrictlyDescending => "strictly-descending",
-            Self::NonIncreasing => "non-increasing",
-        }
-    }
-}
-
 /// A ranked producer's duplicate handling within one invocation's stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DuplicatePolicy {
@@ -519,6 +493,22 @@ pub struct DepthPlacement {
 /// `Clone + PartialEq + Eq + Debug` and has a canonical description; there is
 /// deliberately no function pointer anywhere in this type. It is not `Hash`
 /// because [`Iri`] is not.
+///
+/// # The rank law is single and unconditional
+///
+/// A declaration says nothing about rank order because there is nothing to say:
+/// one law holds for every ranked producer without exception. The ranks of one
+/// invocation's rows are 1-based, contiguous and ascending — rank 1, then 2,
+/// then 3, with no gap, no repeat and no step backwards. A producer emits rows
+/// best-first and numbers them as it goes, and rows that a producer considers
+/// equally good still receive distinct consecutive ranks under whatever total
+/// tie-break it applies.
+///
+/// The law is enforced on the consuming side, per row, as the rows arrive: the
+/// fusion engine in `purrdf-retrieval` holds the next expected rank for every
+/// stream it reads and refuses a lower rank as `OutOfOrderRanks` and a higher
+/// one as `NonContiguousRanks`. Because it is checked rather than believed, it
+/// is not a field a registration can vary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RankedDeclaration {
     /// The caller-supplied stratum label these rows are ranked within. No
@@ -533,8 +523,6 @@ pub struct RankedDeclaration {
     pub depth_placement: Option<DepthPlacement>,
     /// The flattened argument position the ranked candidate is projected from.
     pub candidate_position: usize,
-    /// The producer's ordering guarantee.
-    pub ordering: RankOrdering,
     /// The producer's duplicate handling.
     pub duplicates: DuplicatePolicy,
     /// Whether a request that reaches this producer must actually be served by
@@ -557,7 +545,6 @@ impl RankedDeclaration {
         let mut out = String::new();
         out.push('r');
         push_canonical_field(&mut out, self.stratum.as_str());
-        push_canonical_field(&mut out, self.ordering.as_str());
         push_canonical_field(&mut out, self.duplicates.as_str());
         push_canonical_field(&mut out, &self.candidate_position.to_string());
         out.push(if self.mandatory { '1' } else { '0' });

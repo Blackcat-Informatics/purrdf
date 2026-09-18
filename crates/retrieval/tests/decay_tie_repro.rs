@@ -17,10 +17,11 @@
 //!
 //! # Two API deltas since the program was written
 //!
-//! `StreamContract::new` no longer takes a [`RankOrdering`]. The declaration was
-//! read in contribution space, where the producer supplies no term of the value,
-//! and that reading is what manufactured this refusal; ranks are held contiguous
-//! and ascending for every stream regardless. `FusionProfile::new` is now
+//! `StreamContract::new` no longer takes a rank-ordering declaration. That
+//! declaration was read in contribution space, where the producer supplies no
+//! term of the value, and that reading is what manufactured this refusal; the
+//! one rank law — contiguous, ascending — is held for every stream regardless,
+//! row by row as the ranks arrive. `FusionProfile::new` is now
 //! [`FusionProfile::with_decay`], which requires naming the decay rule rather
 //! than defaulting to one. Both are spelled out below so the program stays
 //! comparable to the report.

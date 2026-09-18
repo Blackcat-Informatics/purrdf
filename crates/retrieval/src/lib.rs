@@ -68,12 +68,16 @@
 //! its consumer must do; one that declared [`DuplicatePolicy::Unique`] is
 //! believed and costs no per-stream identity set at all.
 //!
-//! A producer's [`RankOrdering`] is deliberately *not* carried here. Its claim
-//! is about ranks, and ranks are held contiguous and ascending for every stream
-//! regardless of what was declared. The only quantity fusion can observe is the
-//! contribution, which it computes itself and refuses on mismatch, so the
-//! producer supplies no term of it; a declaration read in contribution space
-//! would refuse conforming streams for the consumer's own quantization.
+//! Rank order is not carried there, because it is not a per-producer variable.
+//! Every ranked stream owes its consumer the same law — 1-based, contiguous,
+//! ascending ranks — and [`FusionStream`] enforces it row by row against the
+//! next rank it expects from that stream, refusing a lower rank as
+//! [`ProtocolError::OutOfOrderRanks`] and a higher one as
+//! [`ProtocolError::NonContiguousRanks`]. The only other quantity fusion can
+//! observe is the contribution, which it computes itself and refuses on
+//! mismatch, so the producer supplies no term of it; a rank claim read in
+//! contribution space would instead refuse conforming streams for the
+//! consumer's own quantization.
 //!
 //! # Fusion is a law, not a knob
 //!
@@ -277,7 +281,7 @@ pub use purrdf_text::SCALE_DIGITS;
 // reason: `Plan::registry_instance_id` is a value a caller compares against a
 // live Registry.
 pub use purrdf_sparql_eval::RegistryId;
-// The two halves of a producer's declared stream contract. Re-exported because
-// `StreamContract` is built from them and a caller assembling a stream of its
-// own must be able to name them without depending on the evaluator crate.
-pub use purrdf_sparql_eval::{DuplicatePolicy, RankOrdering};
+// The producer's declared stream contract. Re-exported because `StreamContract`
+// is built from it and a caller assembling a stream of its own must be able to
+// name it without depending on the evaluator crate.
+pub use purrdf_sparql_eval::DuplicatePolicy;

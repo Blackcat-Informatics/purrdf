@@ -11,16 +11,21 @@
 //! completeness cleanly reports it through this channel; it never gets to return
 //! a plausible-looking answer that quietly omitted a row.
 //!
-//! # Validated against what the producer declared, not against one fixed law
+//! # One fixed rank law, and one declared duplicate policy
 //!
-//! Two of those checks are not absolute, because the registry does not state
-//! them absolutely. A ranked producer declares its rank ordering and its
-//! duplicate handling where it is registered
-//! ([`RankedDeclaration`]), and the consumer of its rows is this layer — so the
-//! consumer reads both and holds the stream to the promise it actually made.
-//! [`StreamContract`] is that pair, carried with the stream through
-//! [`RankedStream::contract`], and every refusal below that names an ordering or
-//! a repeat says which declaration it was measured against.
+//! The rank check is absolute. Ranks are 1-based, contiguous and ascending for
+//! every ranked stream there is, with no registration able to soften it, and the
+//! fusion engine measures every row against the next rank it expects from that
+//! stream ([`ProtocolError::OutOfOrderRanks`],
+//! [`ProtocolError::NonContiguousRanks`]).
+//!
+//! The duplicate check is the one that is not absolute, because the registry
+//! does not state it absolutely. A ranked producer declares its duplicate
+//! handling where it is registered ([`RankedDeclaration`]), and the consumer of
+//! its rows is this layer — so the consumer reads that declaration and holds the
+//! stream to the promise it actually made. [`StreamContract`] carries it with
+//! the stream through [`RankedStream::contract`], and the refusal below that
+//! names a repeat says which declaration it was measured against.
 
 use purrdf_sparql_eval::{DuplicatePolicy, RankedDeclaration};
 use purrdf_text::Fixed;
@@ -36,20 +41,28 @@ use crate::iri::Term;
 /// differs, so there is no honest "unstated" answer the way there is for a
 /// stream that descends from no plan ([`RankedStream::plan_id`]).
 ///
-/// # Why the ordering declaration is not carried here
+/// # Why rank order is not a term of the contract
 ///
-/// A producer also declares a [`RankOrdering`](purrdf_sparql_eval::RankOrdering),
-/// and fusion does not read it.
-/// That is not an oversight. The only quantity fusion can observe is the
-/// *contribution*, which it computes itself from `(decay rule, K, weight, rank)`
-/// and then refuses if the producer's copy disagrees
+/// Rank order is a law, not a promise a producer gets to phrase. Every ranked
+/// stream owes its consumer the same one: ranks are 1-based, contiguous and
+/// ascending, so rows arrive numbered 1, 2, 3 with no gap, no repeat and no step
+/// backwards, and rows a producer scores equally still take distinct
+/// consecutive ranks under whatever total tie-break it applies. Because the law
+/// is identical for every stream, there is nothing for a contract to carry and
+/// no variant a consumer could branch on.
+///
+/// It is enforced rather than believed, and enforced on the rank itself:
+/// [`FusionStream`](crate::FusionStream) holds the next rank it expects from
+/// each stream and checks every row against it, raising
+/// [`ProtocolError::OutOfOrderRanks`] below that rank and
+/// [`ProtocolError::NonContiguousRanks`] above it. The only other quantity
+/// fusion can observe is the *contribution*, which it computes itself from
+/// `(decay rule, K, weight, rank)` and refuses if the producer's copy disagrees
 /// ([`ProtocolError::ContributionMismatch`]); the producer supplies no term of
-/// it. Ranks are separately held contiguous and ascending for every stream, so
-/// the ordering claim is already enforced on the quantity it is actually about.
-/// Reading the declaration in contribution space instead refused conforming
-/// producers whenever fixed-point decay quantized two adjacent ranks to one
-/// value — a property of the profile's arithmetic and of the depth read, never
-/// of the stream.
+/// that either. Reading a rank claim in contribution space instead refused
+/// conforming producers whenever fixed-point decay quantized two adjacent ranks
+/// to one value — a property of the profile's arithmetic and of the depth read,
+/// never of the stream.
 ///
 /// # Why the contract travels with the stream
 ///
@@ -163,8 +176,8 @@ pub enum ProtocolError {
     /// must be monotonically non-increasing with rank, or the threshold that
     /// bounds fusion would not be an upper bound.
     ///
-    /// Raised for every stream, whatever ordering its producer declared: no
-    /// declaration admits a contribution that rises.
+    /// Raised for every stream without exception: nothing a producer may declare
+    /// admits a contribution that rises.
     ///
     /// # This is an invariant guard, not a producer diagnostic
     ///
@@ -299,8 +312,7 @@ pub trait RankedStream {
     /// receipt.
     async fn receipt(&mut self) -> Result<ProducerReceipt, ProtocolError>;
 
-    /// The two promises this stream makes about its rows: its rank ordering and
-    /// its duplicate handling.
+    /// The promise this stream makes about its rows: its duplicate handling.
     ///
     /// Read once by [`FusionStream::new`](crate::FusionStream::new), before any
     /// row is pulled, and then applied to every row of this stream. A producer

@@ -45,7 +45,7 @@
       }
     }
   ],
-  "registry_content_fingerprint": "http://example.org/pf/any\u00021,1\u0002stable\u0003ff:200\u0005r36:http://example.org/stratum/universal19:strictly-descending6:unique1:01;0;1:\u00013:any0;0;0;0:\u0004http://example.org/pf/iri\u00021,1\u0002stable\u0003ff:50\u0005r32:http://example.org/stratum/graph19:strictly-descending6:unique1:00;0;1:\u00013:iri0;0;0;1:\u00065:value1:10;\u0004http://example.org/pf/literal\u00021,1\u0002stable\u0003ff:100\u0005r31:http://example.org/stratum/text19:strictly-descending6:unique1:00;0;1:\u00017:literal0;12:en;123:http://example.org/body;1:\u00065:value1:10;\u0004http://example.org/pf/not-ranked\u00021,1\u0002stable\u0003ff:0\u0005n\u0004http://example.org/pf/quoted\u00021,1\u0002stable\u0003ff:25\u0005r33:http://example.org/stratum/quoted19:strictly-descending6:unique1:00;0;1:\u00016:triple0;0;0;1:\u00065:value1:10;\u0004",
+  "registry_content_fingerprint": "http://example.org/pf/any\u00021,1\u0002stable\u0003ff:200\u0005r36:http://example.org/stratum/universal6:unique1:01;0;1:\u00013:any0;0;0;0:\u0004http://example.org/pf/iri\u00021,1\u0002stable\u0003ff:50\u0005r32:http://example.org/stratum/graph6:unique1:00;0;1:\u00013:iri0;0;0;1:\u00065:value1:10;\u0004http://example.org/pf/literal\u00021,1\u0002stable\u0003ff:100\u0005r31:http://example.org/stratum/text6:unique1:00;0;1:\u00017:literal0;12:en;123:http://example.org/body;1:\u00065:value1:10;\u0004http://example.org/pf/not-ranked\u00021,1\u0002stable\u0003ff:0\u0005n\u0004http://example.org/pf/quoted\u00021,1\u0002stable\u0003ff:25\u0005r33:http://example.org/stratum/quoted6:unique1:00;0;1:\u00016:triple0;0;0;1:\u00065:value1:10;\u0004",
   "registry_instance_id": 0,
   "request_terms": [
     {

@@ -18,8 +18,8 @@ use purrdf_retrieval::{
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, DuplicatePolicy, EvalError, PfArgs, PfArity, PfCursor, PfRow,
-    PropertyFunction, PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet,
-    TermKind, TermPattern, TermPlacement, Volatility,
+    PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind,
+    TermPattern, TermPlacement, Volatility,
 };
 
 // ---------------------------------------------------------------------------
@@ -110,7 +110,6 @@ fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedD
         accepted_terms: accepted(patterns),
         depth_placement: None,
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
         mandatory,
     }
@@ -166,7 +165,6 @@ fn pair_registry() -> PropertyFunctionRegistry {
             ],
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         },
@@ -515,7 +513,6 @@ fn a_vector_term_the_only_acceptor_of_which_places_nothing_is_reported_not_bound
             }],
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         },
@@ -637,7 +634,6 @@ fn accepting_but_uninvocable_registry() -> PropertyFunctionRegistry {
             }],
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         },
@@ -872,7 +868,6 @@ fn an_interval_term_reaches_a_producer_that_declares_its_predicate() {
             }],
             depth_placement: None,
             candidate_position: 0,
-            ordering: RankOrdering::StrictlyDescending,
             duplicates: DuplicatePolicy::Unique,
             mandatory: false,
         },

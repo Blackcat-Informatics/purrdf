@@ -15,7 +15,7 @@ use std::sync::Arc;
 use purrdf_core::Iri;
 use purrdf_sparql_eval::{
     AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PropertyFunction,
-    PropertyFunctionRegistry, RankOrdering, RankedDeclaration, RequestFacet, TermKind, TermPattern,
+    PropertyFunctionRegistry, RankedDeclaration, RequestFacet, TermKind, TermPattern,
     TermPlacement,
 };
 
@@ -80,7 +80,6 @@ fn declaration() -> RankedDeclaration {
             datatype: EX_DEPTH_TYPE.to_owned(),
         }),
         candidate_position: 0,
-        ordering: RankOrdering::StrictlyDescending,
         duplicates: DuplicatePolicy::Unique,
         mandatory: true,
     }
@@ -516,13 +515,6 @@ fn canonical_description_is_injective_over_every_field() {
             "stratum",
             RankedDeclaration {
                 stratum: stratum(EX_STRATUM_B),
-                ..base.clone()
-            },
-        ),
-        (
-            "ordering",
-            RankedDeclaration {
-                ordering: RankOrdering::NonIncreasing,
                 ..base.clone()
             },
         ),
