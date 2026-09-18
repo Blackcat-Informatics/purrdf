@@ -121,6 +121,14 @@ pub enum CliError {
     /// Any other runtime failure — parse, serialize, pack integrity, or I/O
     /// (exit code 1).
     Runtime(String),
+    /// A downstream reader closed the pipe before the document finished.
+    ///
+    /// Not a failure: the standard Unix filter contract is to exit 0 silently when
+    /// the consumer stops reading. Carried as a variant rather than swallowed at the
+    /// write so the serializer still STOPS — the write that produced it failed, which
+    /// is what ends the emission early instead of formatting the rest of a document
+    /// nobody is reading.
+    DownstreamClosed,
 }
 
 impl CliError {
@@ -129,6 +137,7 @@ impl CliError {
         match self {
             Self::Usage(_) => 2,
             Self::Runtime(_) => 1,
+            Self::DownstreamClosed => 0,
         }
     }
 }
@@ -137,6 +146,9 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage(msg) | Self::Runtime(msg) => f.write_str(msg),
+            // Never printed: this variant exits 0 and reports nothing, which is the
+            // whole point of a filter whose reader stopped reading.
+            Self::DownstreamClosed => Ok(()),
         }
     }
 }

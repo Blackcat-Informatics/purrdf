@@ -31,8 +31,8 @@ use purrdf_core::{
     DatasetView, LossEntry, LossLedger, PackBuilder, dataset_from_view, pair_loss_ledger,
 };
 use purrdf_rdf::{
-    JsonLdSerializeOptions, NativeRdfFormat, SourceFormat, serialize_dataset_to_format,
-    serialize_dataset_to_format_with_jsonld_options,
+    JsonLdSerializeOptions, NativeRdfFormat, SerializeGraph, SerializeOptions, SourceFormat,
+    StatementLayer, serialize_dataset_to_writer_with,
 };
 
 use crate::error::CliError;
@@ -66,18 +66,160 @@ const NAMED_GRAPH_ROWS_DROPPED_CODE: &str = "named-graph-rows-dropped";
 /// downstream EPIPE, so that one error kind is treated as a clean success here; every
 /// other error (including on a file target) still propagates.
 pub(crate) fn write_out(out: &str, bytes: &[u8]) -> Result<(), CliError> {
-    if out == "-" {
-        let stdout = std::io::stdout();
-        let mut handle = stdout.lock();
-        if let Err(error) = handle.write_all(bytes).and_then(|()| handle.flush())
-            && error.kind() != std::io::ErrorKind::BrokenPipe
-        {
-            return Err(error.into());
-        }
-    } else {
-        std::fs::write(out, bytes)?;
+    let mut target = OutTarget::open(out)?;
+    match target.write_all(bytes) {
+        Ok(()) => target.finish(),
+        Err(error) => match target.abandon(error.into()) {
+            CliError::DownstreamClosed => Ok(()),
+            other => Err(other),
+        },
     }
-    Ok(())
+}
+
+/// Where a command's bytes go, as a writer a serializer can stream into.
+///
+/// The whole-buffer spelling above is this type with one `write_all`; the streaming
+/// one is the same type fed incrementally. Both therefore share one policy for the
+/// two things that differ between a pipe and a file — a downstream reader closing
+/// early, and what a failure leaves behind.
+pub(crate) enum OutTarget {
+    /// Standard output. `-` on the command line.
+    ///
+    /// `saw_hangup` records a downstream reader closing the pipe. The write still
+    /// FAILS when that happens, so the serializer stops within a row instead of
+    /// formatting the rest of a document nobody is reading — but the flag lets the
+    /// command exit 0, which is the filter contract. Accepting-and-discarding later
+    /// chunks would also exit 0 and would run `purrdf convert huge.nq | head -1` to
+    /// completion, which is the behaviour this avoids.
+    Stdout {
+        stdout: std::io::Stdout,
+        saw_hangup: bool,
+    },
+    /// A file, created-or-truncated exactly as `fs::write` did.
+    File {
+        file: std::fs::File,
+        path: std::path::PathBuf,
+        /// Whether a failure should unlink the target. Set only when the path was
+        /// verified a regular file that this open truncated — see `abandon`.
+        unlink_on_abandon: bool,
+    },
+}
+
+impl OutTarget {
+    /// Open `out` for writing (`-` is stdout).
+    pub(crate) fn open(out: &str) -> Result<Self, CliError> {
+        if out == "-" {
+            return Ok(Self::Stdout {
+                stdout: std::io::stdout(),
+                saw_hangup: false,
+            });
+        }
+        let path = std::path::PathBuf::from(out);
+        // `File::create` is what `fs::write` does: create or truncate, follow
+        // symlinks, keep existing permissions. The starting semantics are unchanged.
+        let file = std::fs::File::create(&path)?;
+        // Only a REGULAR file may be unlinked on failure. A FIFO, a device node or
+        // `/dev/stdout` would otherwise be removed by an error path, and a symlink
+        // would lose the LINK while its target kept the half-written bytes.
+        let unlink_on_abandon = file
+            .metadata()
+            .is_ok_and(|meta| meta.file_type().is_file());
+        Ok(Self::File {
+            file,
+            path,
+            unlink_on_abandon,
+        })
+    }
+
+    /// The writer a serializer streams into.
+    pub(crate) fn writer(&mut self) -> &mut dyn Write {
+        self
+    }
+
+    /// Whether a downstream reader closed the pipe during this write.
+    const fn hung_up(&self) -> bool {
+        matches!(self, Self::Stdout { saw_hangup: true, .. })
+    }
+
+    /// Flush and close.
+    ///
+    /// A downstream consumer that closes its end early — the ubiquitous
+    /// `purrdf … | head` idiom — makes the stdout write fail with `BrokenPipe`.
+    /// Standard Unix filters exit 0 silently on a downstream EPIPE, so that ONE
+    /// error kind on stdout is a clean success; every other kind, and every kind on
+    /// a file target, still propagates.
+    pub(crate) fn finish(mut self) -> Result<(), CliError> {
+        if self.hung_up() {
+            return Ok(());
+        }
+        match self.flush() {
+            Ok(()) => Ok(()),
+            Err(error)
+                if matches!(self, Self::Stdout { .. })
+                    && error.kind() == std::io::ErrorKind::BrokenPipe =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Abandon after a failure, returning the error to report.
+    ///
+    /// A file target is truncated when the write begins, so a mid-document failure
+    /// leaves a SHORT file — and a short N-Triples document still parses, silently
+    /// missing rows, which is the worst shape a failure can take here. The partial
+    /// file is therefore removed, and the message says so, because the caller's
+    /// previous contents are already gone either way.
+    pub(crate) fn abandon(self, error: CliError) -> CliError {
+        // A downstream reader that closed early did not fail: the serializer's write
+        // error is the MECHANISM that stopped it, not a fault to report.
+        if self.hung_up() {
+            return CliError::DownstreamClosed;
+        }
+        if let Self::File {
+            path,
+            unlink_on_abandon: true,
+            ..
+        } = self
+            && std::fs::remove_file(&path).is_ok()
+        {
+            return CliError::Runtime(format!(
+                "{error}; the partial output file `{}` was removed (its previous \
+                 contents were replaced when the write began)",
+                path.display()
+            ));
+        }
+        error
+    }
+}
+
+impl Write for OutTarget {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Stdout { stdout, saw_hangup } => match stdout.write(buf) {
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                    *saw_hangup = true;
+                    Err(error)
+                }
+                other => other,
+            },
+            Self::File { file, .. } => file.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Stdout { stdout, saw_hangup } => match stdout.flush() {
+                Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                    *saw_hangup = true;
+                    Err(error)
+                }
+                other => other,
+            },
+            Self::File { file, .. } => file.flush(),
+        }
+    }
 }
 
 /// Serialize `view` to `target` and write it to `out`, returning the loss ledger.
@@ -104,19 +246,38 @@ pub(crate) fn write_rdf<D: DatasetView>(
     validate_jsonld_options(target, jsonld_options)?;
     match target {
         SourceFormat::Native(format) => {
-            let outcome = if let Some(options) = jsonld_options {
-                serialize_dataset_to_format_with_jsonld_options(view, format, base, options)?
-            } else {
-                serialize_dataset_to_format(view, format, base)?
+            // Streamed: the document is written as it is produced rather than built
+            // whole and handed over. The loss ledger is unaffected — the drop counts
+            // come back in the report instead of the outcome, and mean the same.
+            let mut target = OutTarget::open(out)?;
+            let options = SerializeOptions {
+                selection: SerializeGraph::Dataset,
+                statement_layer: StatementLayer::PerFormatCapability,
+                jsonld_options,
             };
-            write_out(out, &outcome.bytes)?;
+            let report = match serialize_dataset_to_writer_with(
+                view,
+                format,
+                base,
+                &options,
+                target.writer(),
+            ) {
+                Ok(report) => report,
+                Err(diagnostic) => match target.abandon(diagnostic.into()) {
+                    // The reader went away; the document it asked for is complete
+                    // enough for it, and the command succeeded.
+                    CliError::DownstreamClosed => return Ok(LossLedger::new()),
+                    other => return Err(other),
+                },
+            };
+            target.finish()?;
             Ok(build_ledger(
                 src_codec,
                 format.loss_codec_name(),
                 &RealizedDrops {
-                    statement_rows: outcome.statement_rows_dropped,
-                    directional_literals: outcome.directional_literals_dropped,
-                    named_graph_rows: outcome.named_graph_rows_dropped,
+                    statement_rows: report.statement_rows_dropped,
+                    directional_literals: report.directional_literals_dropped,
+                    named_graph_rows: report.named_graph_rows_dropped,
                 },
             ))
         }
