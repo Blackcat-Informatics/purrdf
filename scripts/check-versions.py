@@ -165,10 +165,25 @@ def internal_pin_violations(meta: dict, version: str) -> list[str]:
     Scope: only path dependencies (intra-workspace) in the PUBLISHED graph
     (normal + build deps; dev-dependencies are stripped from published crates and
     legitimately carry no version). Renamed deps are handled via ``rename``.
+
+    A ``publish = false`` member has no published graph at all, so its own
+    requirements are out of scope for the same reason a dev-dependency is: no
+    manifest carrying them is ever uploaded, and a partial bump cannot wire a
+    published crate to a stale registry version through them. This is what lets
+    ``purrdf-envelope-probe`` — unpublishable, and a binary — take a NORMAL
+    dependency on the equally unpublishable ``purrdf-alloc-probe``, whose
+    workspace entry is deliberately versionless (see the header of
+    ``scripts/release-crates.sh``: giving it a version breaks every dependent's
+    publish). The other direction stays gated: a *publishable* crate that took a
+    normal dependency on a versionless path crate still fails here, which is the
+    break `cargo publish` would otherwise find only at upload time.
     """
     members = {pkg["name"] for pkg in meta["packages"]}
+    publishable = publishable_crates(meta)
     violations: list[str] = []
     for pkg in sorted(meta["packages"], key=lambda p: p["name"]):
+        if pkg["name"] not in publishable:
+            continue
         for dep in pkg["dependencies"]:
             if dep.get("path") is None or dep["name"] not in members:
                 continue

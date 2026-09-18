@@ -21,6 +21,10 @@ workspace = true
 purrdf-core.workspace = true
 
 [dev-dependencies]
+# The workspace's shared counting allocator, for the `ordered_json_alloc` bench
+# probe. Path-only and unpublished, so it is stripped from the packaged manifest;
+# std-only and dependency-free, so it is wasm32-clean and needs no target gate.
+purrdf-alloc-probe.workspace = true
 purrdf-rdf.workspace = true
 purrdf-sparql-eval.workspace = true
 

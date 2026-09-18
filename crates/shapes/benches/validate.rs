@@ -17,19 +17,35 @@
 //! by `sh:minLength`/`sh:maxLength`/`sh:nodeKind`/`sh:languageIn` — the arms that
 //! now read the interned value node's borrowed surface (length, kind, language)
 //! and the closed-permitted set's borrowed keys instead of materializing terms.
+//!
+//! # The probe lines, and why this target uses both measurement modes
+//!
+//! Interleaved with the criterion groups are `println!` probe lines a human
+//! reads when comparing two runs. They are measured with the workspace's shared
+//! counting allocator, and this is the one target that needs both of its
+//! windows in one process:
+//!
+//! * the validation, preparation, pattern and rule probes wrap code that fans
+//!   focus nodes out over `rayon` above `PARALLEL_MIN_FOCUS_NODES`, so they use
+//!   a [`WholeProcessWindow`]; a per-thread window would miss every worker and
+//!   report the parallel sizes as the cheapest in the sweep;
+//! * the schema-import, LinkML-import and slot-emission probes are
+//!   single-threaded, so they use a [`CurrentThreadWindow`], which keeps their
+//!   figures free of whatever criterion's own machinery is doing elsewhere.
+//!
+//! The whole-process ledger is armed only inside its windows, so the timed
+//! criterion measurements outside them pay one relaxed load per allocation.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf::loss::LossLedger;
 use purrdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
 use purrdf_shapes::engine::{
     __prepared_class_membership_view, PreparedValidator, parse_shapes, validate_graphs,
     validate_projected_dataset, validate_projected_dataset_with_focus_filter,
@@ -42,45 +58,6 @@ use purrdf_shapes::{
     import_json_schema, import_linkml,
 };
 use serde_json::{Map, Value, json};
-
-thread_local! {
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-    static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
-}
-
-static VALIDATION_COUNTING: AtomicBool = AtomicBool::new(false);
-static VALIDATION_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-static VALIDATION_ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
-
-struct CountingAllocator;
-
-// SAFETY: every operation forwards the original pointer/layout to the system
-// allocator; thread-local counters are observational only.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + layout.size() as u64));
-        if VALIDATION_COUNTING.load(Ordering::Relaxed) {
-            VALIDATION_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-            VALIDATION_ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
-        }
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + new_size as u64));
-        if VALIDATION_COUNTING.load(Ordering::Relaxed) {
-            VALIDATION_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-            VALIDATION_ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
-        }
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -147,23 +124,6 @@ struct MembershipFixture {
     root_class: TermId,
     focus_nodes: usize,
     variant: MembershipVariant,
-}
-
-struct ValidationCountGuard;
-
-impl ValidationCountGuard {
-    fn start() -> Self {
-        VALIDATION_ALLOCATIONS.store(0, Ordering::Relaxed);
-        VALIDATION_ALLOCATED_BYTES.store(0, Ordering::Relaxed);
-        VALIDATION_COUNTING.store(true, Ordering::Release);
-        Self
-    }
-}
-
-impl Drop for ValidationCountGuard {
-    fn drop(&mut self) {
-        VALIDATION_COUNTING.store(false, Ordering::Release);
-    }
 }
 
 /// Read every `corpus/<case>/{data.nt, shapes.ttl}` pair, sorted by case name.
@@ -503,11 +463,11 @@ fn validate_fixture(fixture: &ValidationFixture) {
 
 fn print_validation_probe(label: &str, fixture: &ValidationFixture) {
     validate_fixture(fixture);
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     validate_fixture(fixture);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     println!(
         "[shacl_focus_validation] case={label} focus_nodes={} quads={} terms={} threads={} elapsed_ns={} allocations={} allocated_bytes={}",
         fixture.focus_nodes,
@@ -515,8 +475,8 @@ fn print_validation_probe(label: &str, fixture: &ValidationFixture) {
         fixture.dataset.term_count(),
         rayon::current_num_threads(),
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
 }
 
@@ -593,17 +553,17 @@ fn validate_prepared_ids(prepared: &PreparedValidator, focus_ids: &[TermId]) {
 
 fn print_realtime_probe(prepared: &PreparedValidator, focus_ids: &[TermId]) {
     validate_prepared_ids(prepared, focus_ids);
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     validate_prepared_ids(prepared, focus_ids);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     println!(
         "[shacl_focus_realtime] requested_focus_nodes={} elapsed_ns={} allocations={} allocated_bytes={}",
         focus_ids.len(),
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
 }
 
@@ -611,7 +571,7 @@ fn bench_focus_realtime(c: &mut Criterion) {
     const DATASET_FOCUS_NODES: usize = 1_000_000;
 
     let fixture = core_focus_fixture(DATASET_FOCUS_NODES);
-    let preparation_guard = ValidationCountGuard::start();
+    let preparation_window = WholeProcessWindow::open();
     let preparation_started = Instant::now();
     let prepared = PreparedValidator::from_projected_dataset(
         Arc::clone(&fixture.dataset),
@@ -619,12 +579,12 @@ fn bench_focus_realtime(c: &mut Criterion) {
     )
     .expect("realtime benchmark preparation must succeed");
     let preparation_elapsed = preparation_started.elapsed();
-    drop(preparation_guard);
+    let measured = preparation_window.close();
     println!(
         "[shacl_focus_prepare] dataset_focus_nodes={DATASET_FOCUS_NODES} elapsed_ns={} allocations={} allocated_bytes={}",
         preparation_elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
     let all_focus_ids: Vec<_> = (0..*REALTIME_FOCUS_SIZES.last().expect("non-empty sizes"))
         .map(|index| {
@@ -675,11 +635,11 @@ fn bench_focus_realtime(c: &mut Criterion) {
 }
 
 fn print_membership_preparation_probe(fixture: &MembershipFixture) -> PreparedValidator {
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     let prepared = prepare_membership_fixture(fixture);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     let dimensions = prepared.__class_membership_dimensions();
     assert_membership_dimensions(fixture, dimensions);
     validate_prepared_ids(&prepared, &fixture.focus_ids[..1]);
@@ -696,8 +656,8 @@ fn print_membership_preparation_probe(fixture: &MembershipFixture) -> PreparedVa
         dimensions[4],
         dimensions[5],
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
     prepared
 }
@@ -708,19 +668,19 @@ fn print_membership_realtime_probe(
     focus_ids: &[TermId],
 ) {
     validate_prepared_ids(prepared, focus_ids);
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     validate_prepared_ids(prepared, focus_ids);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     println!(
         "[shacl_subclass_realtime] variant={} dataset_focus_nodes={} requested_focus_nodes={} elapsed_ns={} allocations={} allocated_bytes={}",
         fixture.variant.label(),
         fixture.focus_nodes,
         focus_ids.len(),
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
 }
 
@@ -793,19 +753,19 @@ fn print_membership_pattern_probe<D>(
         membership_pattern_count(view, subject, Some(fixture.rdf_type), object),
         expected_rows
     );
-    let guard = ValidationCountGuard::start();
+    let window = WholeProcessWindow::open();
     let started = Instant::now();
     let rows = membership_pattern_count(view, subject, Some(fixture.rdf_type), object);
     let elapsed = started.elapsed();
-    drop(guard);
+    let measured = window.close();
     assert_eq!(rows, expected_rows);
     println!(
         "[shacl_subclass_pattern] variant={} pattern={pattern} dataset_focus_nodes={} result_rows={rows} elapsed_ns={} allocations={} allocated_bytes={}",
         fixture.variant.label(),
         fixture.focus_nodes,
         elapsed.as_nanos(),
-        VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-        VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+        measured.allocations,
+        measured.requested_bytes,
     );
 }
 
@@ -911,18 +871,18 @@ fn bench_subclass_rule_rounds(c: &mut Criterion) {
     for variant in MembershipVariant::ALL {
         let fixture = membership_fixture(MEMBERSHIP_RULE_FOCUS_NODES, variant);
         run_membership_rules(&fixture, &shapes);
-        let guard = ValidationCountGuard::start();
+        let window = WholeProcessWindow::open();
         let started = Instant::now();
         run_membership_rules(&fixture, &shapes);
         let elapsed = started.elapsed();
-        drop(guard);
+        let measured = window.close();
         println!(
             "[shacl_subclass_rule_rounds] variant={} focus_nodes={} rounds=2 index_builds_per_round=1 elapsed_ns={} allocations={} allocated_bytes={}",
             variant.label(),
             fixture.focus_nodes,
             elapsed.as_nanos(),
-            VALIDATION_ALLOCATIONS.load(Ordering::Relaxed),
-            VALIDATION_ALLOCATED_BYTES.load(Ordering::Relaxed),
+            measured.allocations,
+            measured.requested_bytes,
         );
         group.bench_with_input(
             BenchmarkId::from_parameter(variant.label()),
@@ -1006,10 +966,6 @@ fn schema_import_fixture() -> String {
     .expect("benchmark schema serializes")
 }
 
-fn allocation_snapshot() -> (u64, u64) {
-    (ALLOCATIONS.with(Cell::get), ALLOCATED_BYTES.with(Cell::get))
-}
-
 fn linkml_import_fixture(config: &SchemaImportConfig) -> LinkmlDocument {
     let imported = import_json_schema(&schema_import_fixture(), config)
         .expect("benchmark source schema imports");
@@ -1039,15 +995,15 @@ fn bench_schema_import(c: &mut Criterion) {
     assert_eq!(warm.shapes.node_shapes.len(), IMPORT_CLASSES);
     drop(warm);
 
-    let before = allocation_snapshot();
+    let window = CurrentThreadWindow::open();
     let observed = import_json_schema(&schema, &config).expect("allocation probe imports");
-    let after = allocation_snapshot();
+    let measured = window.close();
     assert_eq!(observed.shapes.node_shapes.len(), IMPORT_CLASSES);
     println!(
         "[shacl_schema_import] classes={IMPORT_CLASSES} properties={} allocations={} allocated_bytes={}",
         IMPORT_CLASSES * IMPORT_PROPERTIES_PER_CLASS,
-        after.0 - before.0,
-        after.1 - before.1
+        measured.allocations,
+        measured.requested_bytes
     );
     black_box(observed);
 
@@ -1081,15 +1037,15 @@ fn bench_linkml_import(c: &mut Criterion) {
     assert_eq!(warm.shapes.node_shapes.len(), expected_shapes);
     drop(warm);
 
-    let before = allocation_snapshot();
+    let window = CurrentThreadWindow::open();
     let observed = import_linkml(&document, &config).expect("allocation probe imports");
-    let after = allocation_snapshot();
+    let measured = window.close();
     assert_eq!(observed.shapes.node_shapes.len(), expected_shapes);
     println!(
         "[shacl_linkml_import] source_classes={IMPORT_CLASSES} source_properties={} imported_shapes={expected_shapes} allocations={} allocated_bytes={}",
         IMPORT_CLASSES * IMPORT_PROPERTIES_PER_CLASS,
-        after.0 - before.0,
-        after.1 - before.1
+        measured.allocations,
+        measured.requested_bytes
     );
     black_box(observed);
 
@@ -1225,15 +1181,15 @@ fn bench_linkml_slot_emission(c: &mut Criterion) {
             assert_output(&warm);
             drop(warm);
 
-            let before = allocation_snapshot();
+            let window = CurrentThreadWindow::open();
             let observed = emit_linkml(&compiled, &config).expect("allocation probe emits");
-            let after = allocation_snapshot();
+            let measured = window.close();
             assert_output(&observed);
             println!(
                 "[linkml_slot_emission] mode={} slots={slots} renames={expected_renames} collisions={expected_collisions} allocations={} allocated_bytes={}",
                 mode.label(),
-                after.0 - before.0,
-                after.1 - before.1
+                measured.allocations,
+                measured.requested_bytes
             );
             black_box(observed);
 

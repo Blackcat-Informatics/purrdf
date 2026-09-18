@@ -12,72 +12,14 @@
 //! Usage: `envelope-probe [PROFILE] [--groups N]` — profile defaults to
 //! `smoke`; `--groups` overrides the resident scale for exploratory runs.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Instant;
 
+use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_envelope_probe::{Metric, PROFILES, Profile, WORKLOADS, profile, run};
-
-static LIVE_BYTES: AtomicI64 = AtomicI64::new(0);
-static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
-
-fn record_allocation(size: usize) {
-    let size = i64::try_from(size).unwrap_or(i64::MAX);
-    let live = LIVE_BYTES.fetch_add(size, Ordering::Relaxed) + size;
-    let mut peak = PEAK_BYTES.load(Ordering::Relaxed);
-    while live > peak {
-        match PEAK_BYTES.compare_exchange_weak(peak, live, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(current) => peak = current,
-        }
-    }
-}
-
-fn record_deallocation(size: usize) {
-    let size = i64::try_from(size).unwrap_or(i64::MAX);
-    LIVE_BYTES.fetch_sub(size, Ordering::Relaxed);
-}
-
-struct CountingAllocator;
-
-// SAFETY: delegates every operation to `System`, only adjusting counters.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: same contract as `System::alloc`.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        // SAFETY: same contract as `System::dealloc`.
-        unsafe { System.dealloc(pointer, layout) };
-        record_deallocation(layout.size());
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: same contract as `System::realloc`.
-        let grown = unsafe { System.realloc(pointer, layout, new_size) };
-        if !grown.is_null() {
-            record_deallocation(layout.size());
-            record_allocation(new_size);
-        }
-        grown
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-/// Resets the peak to the current live figure and returns the live baseline.
-fn reset_peak() -> i64 {
-    let live = LIVE_BYTES.load(Ordering::Relaxed);
-    PEAK_BYTES.store(live, Ordering::Relaxed);
-    live
-}
 
 /// Resident-set high-water mark in KiB from the OS, `0` where unsupported.
 /// Cross-checks the allocator's view; the delta between the two is itself a
@@ -195,12 +137,16 @@ fn main() -> ExitCode {
     let mut rows = Vec::with_capacity(WORKLOADS.len());
     let mut failed = false;
     for workload in WORKLOADS {
-        let baseline = reset_peak();
+        // The whole-process window: a workload that fans out over worker threads
+        // must be charged for what those threads allocate, or the envelope it
+        // reports is not the one the memory ceiling has to hold.
+        let window = WholeProcessWindow::open();
         let started = Instant::now();
         let status = run(workload, &active);
         let duration_ms = started.elapsed().as_millis();
-        let peak_bytes = PEAK_BYTES.load(Ordering::Relaxed) - baseline;
-        let retained_delta_bytes = LIVE_BYTES.load(Ordering::Relaxed) - baseline;
+        let measured = window.close();
+        let peak_bytes = measured.peak_working_bytes;
+        let retained_delta_bytes = measured.retained_bytes;
         failed |= status.is_err();
         rows.push(WorkloadRow {
             name: workload,

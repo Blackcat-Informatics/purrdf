@@ -15,12 +15,10 @@
 //! report cumulative traffic on the calling thread, not peak memory or a
 //! process-wide total; parallel full folds can allocate on other threads.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
-
 use ciborium::value::Value;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use ed25519_dalek::SigningKey;
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 
 use purrdf_gts::codec::encode_chain;
 use purrdf_gts::compact::{CompactionParams, DictPlan, DictStrategy, compact_streamable};
@@ -34,43 +32,8 @@ use purrdf_gts::writer::{
     Encrypt0Options, FrameOptions, SnapshotOptions, Writer, digest_string, snapshot_from_graph,
 };
 
-thread_local! {
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-    static ALLOCATED_BYTES: Cell<u64> = const { Cell::new(0) };
-}
-
-struct CountingAllocator;
-
-// SAFETY: every operation forwards the original pointer/layout to the system
-// allocator; the thread-local counters are observational only.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + layout.size() as u64));
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.with(|count| count.set(count.get() + 1));
-        ALLOCATED_BYTES.with(|bytes| bytes.set(bytes.get() + new_size as u64));
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
-
-fn allocation_snapshot() -> (u64, u64) {
-    (ALLOCATIONS.with(Cell::get), ALLOCATED_BYTES.with(Cell::get))
-}
-
-fn allocation_delta(before: (u64, u64), after: (u64, u64)) -> (u64, u64) {
-    (after.0 - before.0, after.1 - before.1)
-}
 
 const PAYLOAD_LEN: usize = 512 * 1024;
 const ROWS: usize = 2_000;
@@ -210,16 +173,16 @@ fn canonical_graph() -> Graph {
 /// per-blob metadata lookup. Report-only.
 fn bench_canonical_authoring(c: &mut Criterion) {
     let graph = canonical_graph();
-    let before = allocation_snapshot();
+    let window = CurrentThreadWindow::open();
     let bytes = Writer::deterministic(&graph, "bench")
         .expect("canonical author")
         .into_bytes();
-    let alloc = allocation_delta(before, allocation_snapshot());
+    let alloc = window.close();
     println!(
         "[gts_authoring] canonical author: {} bytes out; allocations={} bytes={}",
         bytes.len(),
-        alloc.0,
-        alloc.1
+        alloc.allocations,
+        alloc.requested_bytes
     );
 
     let mut group = c.benchmark_group("gts_authoring");
@@ -240,14 +203,14 @@ fn bench_mmr_root(c: &mut Criterion) {
     let frame_ids: Vec<Vec<u8>> = (0..MMR_FRAME_IDS)
         .map(|idx| seeded_payload(32, idx))
         .collect();
-    let before = allocation_snapshot();
+    let window = CurrentThreadWindow::open();
     let root = mmr::root(&frame_ids);
-    let alloc = allocation_delta(before, allocation_snapshot());
+    let alloc = window.close();
     println!(
         "[gts_mmr] root over {MMR_FRAME_IDS} frame ids: {} bytes; allocations={} bytes={}",
         root.len(),
-        alloc.0,
-        alloc.1
+        alloc.allocations,
+        alloc.requested_bytes
     );
 
     let mut group = c.benchmark_group("gts_mmr");
@@ -279,19 +242,22 @@ fn bench_rsyncable_zstd(c: &mut Criterion) {
 fn bench_snapshot_authoring(c: &mut Criterion) {
     let graph = graph_with_quads(ROWS);
     let payload = graph.snapshot_payload();
-    let before = allocation_snapshot();
+    let window = CurrentThreadWindow::open();
     let legacy = encode(&deterministic(&payload));
-    let legacy_alloc = allocation_delta(before, allocation_snapshot());
-    let before = allocation_snapshot();
+    let legacy_alloc = window.close();
+    let window = CurrentThreadWindow::open();
     let borrowed = canonical(&payload);
-    let borrowed_alloc = allocation_delta(before, allocation_snapshot());
+    let borrowed_alloc = window.close();
     assert_eq!(
         borrowed, legacy,
         "borrowed canonical bytes must match oracle"
     );
     println!(
         "[gts_authoring] canonical snapshot: recursive allocations={} bytes={}; borrowed allocations={} bytes={}",
-        legacy_alloc.0, legacy_alloc.1, borrowed_alloc.0, borrowed_alloc.1
+        legacy_alloc.allocations,
+        legacy_alloc.requested_bytes,
+        borrowed_alloc.allocations,
+        borrowed_alloc.requested_bytes
     );
 
     let mut group = c.benchmark_group("gts_authoring");
@@ -399,15 +365,15 @@ fn bench_reader_scaling(c: &mut Criterion) {
         for metadata in [false, true] {
             let data = many_blob_container(count, metadata);
             let label = if metadata { "metadata" } else { "plain" };
-            let before = allocation_snapshot();
+            let window = CurrentThreadWindow::open();
             let sink = read_blob_stream(&data, ReadOptions::new(true, None));
-            let allocated = allocation_delta(before, allocation_snapshot());
+            let allocated = window.close();
             assert_eq!((sink.blobs, sink.bytes), (count, count * 256));
             println!(
                 "[gts_reader] stream_{label}/{count}: encoded={} allocations={} allocated_bytes={}",
                 data.len(),
-                allocated.0,
-                allocated.1
+                allocated.allocations,
+                allocated.requested_bytes
             );
             group.bench_with_input(
                 BenchmarkId::new(format!("stream_{label}"), count),
@@ -421,16 +387,16 @@ fn bench_reader_scaling(c: &mut Criterion) {
                     });
                 },
             );
-            let before = allocation_snapshot();
+            let window = CurrentThreadWindow::open();
             let graph = read(&data, true, None);
-            let allocated = allocation_delta(before, allocation_snapshot());
+            let allocated = window.close();
             assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
             assert_eq!(graph.blobs.len(), count);
             println!(
                 "[gts_reader] fold_{label}/{count}: encoded={} allocations={} allocated_bytes={}",
                 data.len(),
-                allocated.0,
-                allocated.1
+                allocated.allocations,
+                allocated.requested_bytes
             );
             group.bench_with_input(
                 BenchmarkId::new(format!("fold_{label}"), count),
@@ -522,14 +488,14 @@ fn bench_reader_decryption(c: &mut Criterion) {
         );
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         group.throughput(Throughput::Bytes(length as u64));
-        let before = allocation_snapshot();
+        let window = CurrentThreadWindow::open();
         let opened = decrypt0(&envelope, resolve).unwrap();
         assert_eq!(opened, plaintext);
-        let allocated = allocation_delta(before, allocation_snapshot());
+        let allocated = window.close();
         println!(
             "[gts_decryption] standalone/{length}: allocations={} allocated_bytes={} returned_capacity={}",
-            allocated.0,
-            allocated.1,
+            allocated.allocations,
+            allocated.requested_bytes,
             opened.capacity()
         );
         drop(opened);
@@ -540,16 +506,16 @@ fn bench_reader_decryption(c: &mut Criterion) {
                 b.iter(|| black_box(decrypt0(black_box(data), resolve).unwrap()));
             },
         );
-        let before = allocation_snapshot();
+        let window = CurrentThreadWindow::open();
         let sink = read_blob_stream(
             &container,
             ReadOptions::new(true, None).with_content_key(&resolve),
         );
-        let allocated = allocation_delta(before, allocation_snapshot());
+        let allocated = window.close();
         assert_eq!((sink.blobs, sink.bytes), (1, length));
         println!(
             "[gts_decryption] stream/{length}: allocations={} allocated_bytes={}",
-            allocated.0, allocated.1
+            allocated.allocations, allocated.requested_bytes
         );
         group.bench_with_input(BenchmarkId::new("stream", length), &container, |b, data| {
             b.iter(|| {

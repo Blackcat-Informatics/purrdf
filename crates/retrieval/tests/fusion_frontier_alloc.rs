@@ -36,21 +36,21 @@
 //! disagree about the order of a block's worth of candidates and the frontier is
 //! genuinely populated — which the assertions below check before they measure.
 //!
-//! # The counter is thread-local
+//! # The window is per-thread
 //!
 //! `cargo test` runs a binary's tests concurrently on shared threads over one
-//! `#[global_allocator]`, so a process-global counter would be contaminated by a
-//! sibling test's allocations between two snapshots. A thread-local cell counts
-//! only the measuring thread.
+//! `#[global_allocator]`, so a whole-process counter would be contaminated by a
+//! sibling test's allocations between two snapshots. A [`CurrentThreadWindow`]
+//! counts only the measuring thread — which is the whole of this measurement,
+//! because `fuse` drives its streams on the polling thread and spawns nothing.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_retrieval::{
     DecayRule, DuplicatePolicy, Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus,
     ProtocolError, RankedStream, StreamContract, Term, TopK, contribution, fuse,
@@ -60,83 +60,8 @@ use purrdf_retrieval::{
 // The tracking allocator
 // ---------------------------------------------------------------------------
 
-thread_local! {
-    /// Live heap bytes requested on this thread through the global allocator.
-    static LIVE_BYTES: Cell<i64> = const { Cell::new(0) };
-    /// The high-water mark of [`LIVE_BYTES`] since the last reset.
-    static PEAK_BYTES: Cell<i64> = const { Cell::new(0) };
-}
-
-/// Widen a layout size, saturating rather than wrapping on a size no allocator
-/// could ever have served.
-fn to_i64(size: usize) -> i64 {
-    i64::try_from(size).unwrap_or(i64::MAX)
-}
-
-/// Record `size` bytes handed out, raising the high-water mark if it rose.
-fn record_allocation(size: usize) {
-    let _ = LIVE_BYTES.try_with(|live| {
-        let now = live.get().saturating_add(to_i64(size));
-        live.set(now);
-        let _ = PEAK_BYTES.try_with(|peak| {
-            if now > peak.get() {
-                peak.set(now);
-            }
-        });
-    });
-}
-
-/// Record `size` bytes returned.
-fn record_deallocation(size: usize) {
-    let _ = LIVE_BYTES.try_with(|live| live.set(live.get().saturating_sub(to_i64(size))));
-}
-
-/// A pass-through allocator that tracks live bytes on the current thread.
-struct TrackingAllocator;
-
-// SAFETY: every operation delegates to `System` with the caller's exact pointer
-// and layout; the thread-local accounting does not affect allocator ownership.
-unsafe impl GlobalAlloc for TrackingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: delegated with the caller's exact layout.
-        let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            record_allocation(layout.size());
-        }
-        pointer
-    }
-
-    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        record_deallocation(layout.size());
-        // SAFETY: delegated with the caller's exact pointer and layout.
-        unsafe { System.dealloc(pointer, layout) }
-    }
-
-    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: delegated with the caller's exact pointer, layout and size.
-        let resized = unsafe { System.realloc(pointer, layout, new_size) };
-        if !resized.is_null() {
-            record_deallocation(layout.size());
-            record_allocation(new_size);
-        }
-        resized
-    }
-}
-
 #[global_allocator]
-static GLOBAL: TrackingAllocator = TrackingAllocator;
-
-/// Pin the high-water mark to the current live bytes, returning that baseline.
-fn reset_peak() -> i64 {
-    let live = LIVE_BYTES.with(Cell::get);
-    PEAK_BYTES.with(|peak| peak.set(live));
-    live
-}
-
-/// Peak bytes allocated above `baseline` (the value [`reset_peak`] returned).
-fn peak_since(baseline: i64) -> i64 {
-    PEAK_BYTES.with(Cell::get).saturating_sub(baseline)
-}
+static GLOBAL: CountingAllocator = CountingAllocator;
 
 // ---------------------------------------------------------------------------
 // A single-threaded executor (the fixture streams never actually pend)
@@ -339,12 +264,12 @@ fn measure_rows_at_weight(
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, duplicates, &pulls, weight);
 
-    // The baseline is taken after the fixture is built, so what is measured is
-    // the fusion's own working set and not the fixture's.
-    let baseline = reset_peak();
+    // The window opens after the fixture is built, so what is measured is the
+    // fusion's own working set and not the fixture's.
+    let window = CurrentThreadWindow::open();
     let result = block_on(fuse::<LazyStream, Term>(streams, &profile, TopK::new(rows)))
         .expect("the fixture streams obey the protocol");
-    let peak_bytes = peak_since(baseline);
+    let peak_bytes = window.close().peak_working_bytes;
     let pulls = pulls.load(Ordering::SeqCst);
 
     assert_eq!(
