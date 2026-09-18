@@ -141,6 +141,32 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   plans pinned under an earlier build no longer match a registry built by this
   one and must be re-planned. Nothing else moved: a fusion profile's identity is
   a function of the fusion law alone and is byte-for-byte unchanged.
+- **retrieval:** `ProtocolError::NonMonotoneContribution`, and with it the
+  per-row ordering comparison that raised it. Contributions still must not rise
+  with rank -- the threshold summed over the stream heads is an upper bound only
+  while they do not -- but that has stopped being a fact a stream can get wrong
+  on its own. Fusion re-derives every row's contribution from the decay rule,
+  `K`, the stratum weight and the rank and refuses a disagreement as
+  `ProtocolError::ContributionMismatch`, over ranks already held contiguous and
+  ascending, and the profile's own curve never rises, because a profile refuses a
+  weight at or below zero both when it is constructed and when it is decoded from
+  canonical bytes. A rising value is therefore necessarily a value the profile
+  did not compute, and it is refused as the wrong number it is rather than
+  reported as a shape of the stream -- so nothing conforming or hostile reached
+  the removed variant, in either direction. Non-increase is now stated where it
+  is enforced, and proven where it is true: as a property of the decay rule's
+  arithmetic over the weights a profile admits.
+- **retrieval:** `FusionError::CeilingExceeded`, and the per-row comparison of a
+  candidate's running score against `FusionProfile::ceiling()`. The ceiling is
+  still the profile's admitted maximum and `ceiling()` still reports it; it is
+  now enforced by construction rather than by testing each sum against it. A
+  candidate receives at most one contribution per stratum, which fusion does
+  check, and `K >= 1` with a 1-based rank caps every reciprocal at one half, so
+  every contribution is at most half its stratum's weight and the largest sum a
+  fusion can reach is exactly half the ceiling. The one configuration whose raw
+  arithmetic lands on the ceiling exactly needs two contributions under a
+  one-stratum profile, so the contribution count refuses it first --
+  `CeilingExceeded` was never observed for it, or for anything else.
 - **retrieval:** `FusionProfile::new`. It supplied a default decay rule while the
   same type documents that neither rule is a default, and the one it chose has a
   depth ceiling no weight can lift. Call sites name `with_decay` explicitly, which

@@ -1407,13 +1407,23 @@ mod tests {
 
     /// Non-increase is a property of the decay rule, not a per-row observation.
     ///
-    /// The fusion engine refuses a contribution that rises with rank, because
-    /// the threshold over the stream heads would otherwise not be an upper bound
-    /// and certification would be unsound. That refusal is only ever reachable
-    /// by a producer supplying a value the profile did not compute — which is
-    /// rejected as the mismatch it is — so the invariant it relies on has to be
-    /// proven here, at its source, rather than sampled one adjacent pair at a
-    /// time by whatever streams happen to be fused.
+    /// Fusion needs contributions to be non-increasing with rank: the threshold
+    /// over the stream heads is an upper bound only while they are, and
+    /// certification would otherwise be unsound. The engine's one enforcement of
+    /// that is the re-derivation — a row's contribution must equal
+    /// `contribution_under(decay, weight, rank)` for its stratum's weight, at a
+    /// rank already held contiguous and ascending, or it is refused as
+    /// [`ProtocolError::ContributionMismatch`](crate::ProtocolError::ContributionMismatch).
+    /// Which makes non-increase entirely a property of *this* function, provable
+    /// only here, at its source, rather than sampled one adjacent pair at a time
+    /// by whatever streams happen to be fused.
+    ///
+    /// The weights below are all strictly positive, which is the whole domain: a
+    /// [`FusionProfile`](crate::FusionProfile) refuses a weight at or below zero
+    /// at construction and at decode, so no weight this function sees in fusion
+    /// is outside it. (A negative weight does rise with rank — the magnitude
+    /// shrinks toward zero from below — which is exactly why the profile refuses
+    /// one rather than leaving the fusion loop to discover it.)
     ///
     /// Both rules, across the full span where the arithmetic changes character:
     /// below the collision bound, across it, and far past it where every pair is

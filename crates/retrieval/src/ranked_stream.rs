@@ -6,10 +6,11 @@
 //! A stratum's producer emits its rows in rank order, one row at a time, and
 //! declares when it is done. Fusion is only sound if those declarations are
 //! true, so the boundary is validated: the fusion engine checks rank contiguity
-//! and monotonicity as rows arrive and compares each producer's terminal receipt
-//! against what it actually emitted. A producer that cannot describe its own
-//! completeness cleanly reports it through this channel; it never gets to return
-//! a plausible-looking answer that quietly omitted a row.
+//! and re-derives every contribution as rows arrive, and compares each
+//! producer's terminal receipt against what it actually emitted. A producer that
+//! cannot describe its own completeness cleanly reports it through this channel;
+//! it never gets to return a plausible-looking answer that quietly omitted a
+//! row.
 //!
 //! # One fixed rank law, and one declared duplicate policy
 //!
@@ -172,48 +173,39 @@ pub enum ProtocolError {
         item: String,
     },
 
-    /// A producer contribution rose from one rank to the next. Contributions
-    /// must be monotonically non-increasing with rank, or the threshold that
-    /// bounds fusion would not be an upper bound.
-    ///
-    /// Raised for every stream without exception: nothing a producer may declare
-    /// admits a contribution that rises.
-    ///
-    /// # This is an invariant guard, not a producer diagnostic
-    ///
-    /// A conforming stream cannot reach it, and neither can a hostile one. The
-    /// checked value has already been proven equal to the profile's own
-    /// `contribution_under(decay, weight, rank)`, over ranks already held
-    /// contiguous and ascending, and that function is non-increasing in the rank
-    /// for every rule and weight. A producer that supplies a rising value is
-    /// therefore supplying one the profile did not compute, and is refused as
-    /// the [`Self::ContributionMismatch`] that is — naming it an ordering fault
-    /// would blame the stream's shape for a wrong number.
-    ///
-    /// It is kept because the certification argument depends on non-increase:
-    /// the threshold over the stream heads is an upper bound only while it
-    /// holds. A dependency that load-bearing gets a named error at the point it
-    /// is relied on rather than an unstated assumption.
-    ///
-    /// Equality between adjacent ranks is **not** raised here and is not an
-    /// error. The contribution is the consumer's own function of the rank, so
-    /// two adjacent ranks carry one value exactly when the profile's fixed-point
-    /// decay has stopped separating them at that depth. The answer stays correct
-    /// and deterministic there — the declared tie-break is total — at a lower
-    /// rank resolution, which the fused trailer reports per stratum rather than
-    /// refusing.
-    #[error("stream contribution rose from {previous:?} to {got:?} with rank")]
-    NonMonotoneContribution {
-        /// The previous rank's contribution.
-        previous: Fixed,
-        /// The contribution that rose above it.
-        got: Fixed,
-    },
-
     /// A producer's contribution does not equal the profile's declared
     /// reciprocal-rank value for its stratum and rank. The fusion engine
     /// recomputes the contribution from the profile and refuses a mismatch
     /// rather than fuse a number the profile did not authorize.
+    ///
+    /// # Non-increase with rank is enforced here, and only here
+    ///
+    /// Fusion's certification argument depends on contributions being
+    /// monotonically non-increasing with rank: the threshold summed over the
+    /// stream heads is an upper bound only while they are. That law has no
+    /// separate check, because after this one there is nothing left to check.
+    /// Ranks reach the comparison already held contiguous and ascending
+    /// ([`Self::OutOfOrderRanks`], [`Self::NonContiguousRanks`]), the stratum's
+    /// weight is fixed for the whole stream, and
+    /// `reciprocal_rank::contribution_under(decay, weight, rank)` is
+    /// non-increasing in the rank for every rule and every weight a
+    /// [`FusionProfile`](crate::FusionProfile) admits — a profile refuses a
+    /// weight at or below zero, and the property is proven over the surviving
+    /// domain by
+    /// `reciprocal_rank::tests::every_decay_rule_is_non_increasing_in_the_rank`.
+    /// So a value that rises with rank is necessarily a value the profile did
+    /// not compute, and it is refused by this variant, as the wrong number it
+    /// is. A separate "your contribution rose" refusal would blame the stream's
+    /// shape for a wrong number, and nothing — conforming or hostile — could
+    /// ever reach it.
+    ///
+    /// Equality between adjacent ranks is **not** a violation. The contribution
+    /// is the consumer's own function of the rank, so two adjacent ranks carry
+    /// one value exactly when the profile's fixed-point decay has stopped
+    /// separating them at that depth. The answer stays correct and
+    /// deterministic there — the declared tie-break is total — at a lower rank
+    /// resolution, which the fused trailer reports per stratum rather than
+    /// refusing.
     #[error("stream contribution {got:?} does not match the profile's {expected:?}")]
     ContributionMismatch {
         /// The value the profile computes for the stratum and rank.
@@ -281,9 +273,11 @@ pub enum ProtocolError {
 /// the stream is exhausted; `receipt` then reports how it ended. Ranks are
 /// 1-based and contiguous. Contributions are the profile's reciprocal-rank
 /// values — a conforming producer computes them with
-/// [`contribution`](crate::contribution) — and must be monotonically
-/// non-increasing with rank. Fusion re-verifies both and refuses a stream that
-/// violates either.
+/// [`contribution`](crate::contribution). Fusion re-derives every one of them
+/// from `(decay rule, K, weight, rank)` and refuses a stream that supplies a
+/// different number ([`ProtocolError::ContributionMismatch`]), which is also
+/// what holds the sequence non-increasing with rank: the profile's own curve
+/// never rises, so a rising value is a value the profile did not compute.
 // The trait is consumed only by `FusionStream` in this crate; its futures are
 // awaited in the same task and never cross a thread boundary, so the `Send`
 // bound the lint wants to express would add nothing. Making it a required bound

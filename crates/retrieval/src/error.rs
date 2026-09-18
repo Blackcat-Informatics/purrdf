@@ -242,24 +242,6 @@ pub enum FusionError {
         max: u32,
     },
 
-    /// A candidate's accumulated score exceeded the profile's declared
-    /// ceiling.
-    ///
-    /// Checked immediately after the contribution that crossed the bound is
-    /// summed into the candidate's lower bound, so `score` is the exact sum
-    /// that first left the admitted range.
-    #[error(
-        "candidate {item} reached score {score:?}, exceeding the fusion profile's declared ceiling of {ceiling:?}"
-    )]
-    CeilingExceeded {
-        /// The candidate that exceeded the bound, as its canonical term text.
-        item: String,
-        /// The accumulated score reached.
-        score: purrdf_text::Fixed,
-        /// The profile's declared ceiling.
-        ceiling: purrdf_text::Fixed,
-    },
-
     /// No weight at all reaches the requested depth under this decay rule.
     ///
     /// This is a property of the rule's arithmetic, not a budget or a policy,

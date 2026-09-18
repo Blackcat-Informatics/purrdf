@@ -1115,6 +1115,83 @@ fn a_declared_contribution_maximum_must_match_the_stratum_count() {
     }
 }
 
+// 11c. Decoded bytes are held to the weight law, which is what makes the
+//      profile's contribution curve non-increasing for every stream fused.
+//
+// Fusion re-derives every row's contribution and refuses a disagreement, so a
+// stream cannot present a value that rises with rank *provided the profile's own
+// curve never rises*. That holds for a strictly positive weight and fails for a
+// negative one: the truncated rule multiplies a shrinking reciprocal by a
+// negative weight and the product climbs toward zero, so every adjacent pair
+// rises. `with_decay` refuses such a weight, and this test is the other door —
+// hand-built canonical bytes — held to the same law.
+
+/// The raw magnitude the negative-weight cases below use: one whole unit, so
+/// the truncated rule's reciprocal still carries it at both ranks compared.
+const NEGATIVE_WEIGHT_UNITS: i128 = 1_000_000_000_000;
+
+#[test]
+fn decoded_profile_bytes_are_held_to_the_positive_weight_law() {
+    // One stratum, so the weight is the last `i128` before the fixed tail:
+    // tie-break tag (1), contribution maximum (4), scale (4), rounding (1),
+    // item encoding (1).
+    const TAIL: usize = 1 + 4 + 4 + 1 + 1;
+    let smallest = Fixed::from_raw(1);
+    let bytes = profile(&[("text", smallest)], K).canonical_bytes();
+    let offset = bytes.len() - TAIL - 16;
+    assert_eq!(
+        i128::from_le_bytes(
+            bytes[offset..offset + 16]
+                .try_into()
+                .expect("sixteen bytes are sixteen bytes")
+        ),
+        1,
+        "the field this test rewrites is the stratum weight"
+    );
+
+    // The valid neighbour, and it is the *nearest* one: a single raw unit is the
+    // smallest weight a profile admits at all. It decodes, and the curve it
+    // decodes to never rises.
+    let decoded =
+        FusionProfile::from_canonical_bytes(&bytes).expect("the smallest positive weight decodes");
+    let mut previous = contribution_under(decoded.decay(), smallest, 1).expect("rank one fits");
+    for rank in 2..512 {
+        let current =
+            contribution_under(decoded.decay(), smallest, rank).expect("a 1-based rank fits");
+        assert!(
+            current <= previous,
+            "a decoded profile's curve rose from {previous:?} to {current:?} at rank {rank}"
+        );
+        previous = current;
+    }
+
+    // The invalid case. Zero and a negative raw unit are both refused, and the
+    // negative one is refused before anything can observe the rise it would
+    // otherwise produce at every rank.
+    for forged in [0_i128, -1, -NEGATIVE_WEIGHT_UNITS] {
+        let mut tampered = bytes.clone();
+        tampered[offset..offset + 16].copy_from_slice(&forged.to_le_bytes());
+        assert!(
+            matches!(
+                FusionProfile::from_canonical_bytes(&tampered),
+                Err(FusionError::NonPositiveWeight { .. })
+            ),
+            "canonical bytes declaring a weight of {forged} must be refused"
+        );
+    }
+
+    // What the refusal above is protecting: read directly, a negative weight's
+    // contribution rises with every rank, so a stream emitting exactly the value
+    // the profile computes would carry a rising sequence into fusion.
+    let negative = Fixed::from_raw(-NEGATIVE_WEIGHT_UNITS);
+    let decay = DecayRule::ReciprocalRank { k: K };
+    assert!(
+        contribution_under(decay, negative, 2).expect("rank two fits")
+            > contribution_under(decay, negative, 1).expect("rank one fits"),
+        "a negative weight is the case the profile refuses, and this is why"
+    );
+}
+
 // 12. Canonical profile bytes and fused output are target-independent.
 //
 // The bytes are asserted against a fixed digest captured on this target; the
@@ -1258,9 +1335,12 @@ fn a_candidate_in_every_stratum_fuses_rather_than_refusing() {
 //     ceiling itself. This fixture drives every stratum to that true maximum —
 //     equal max weight, `K = 1`, `rank = 1`, one contribution per stratum,
 //     one contribution per stratum — and proves the fused score lands,
-//     exactly, at `ceiling() / 2`. This is the valid neighbour of the ceiling
-//     check: even the most aggressive legitimate load the current decay rule
-//     can produce must still succeed, with real headroom to spare.
+//     exactly, at `ceiling() / 2`.
+//
+//     This is why the ceiling needs no runtime check and no refusal of its own:
+//     the most aggressive legitimate load the arithmetic can produce still stops
+//     at half of it, so a sum held to the contribution count is held below the
+//     ceiling for free. The property is asserted here rather than assumed.
 #[test]
 fn maximal_legitimate_score_stays_below_the_ceiling() {
     // Two. `Fixed::from_integer` takes the number a reader means; the
@@ -1303,20 +1383,21 @@ fn maximal_legitimate_score_stays_below_the_ceiling() {
     );
 }
 
-// 16. `CeilingExceeded` is a defensive invariant, not one reachable under
-//     today's sole decay rule: test 15 proves a valid contribution count can
-//     reach at most `ceiling() / 2`. The one configuration whose raw
-//     arithmetic *would* land exactly at `ceiling()` — two equal-weight,
-//     rank-1, `K = 1` contributions under a profile that weights one stratum,
-//     and therefore admits one contribution — is also the one configuration
-//     that already violates the contribution count, so the count check fires
-//     first and
-//     `CeilingExceeded` is never observed for it. This drives `FusionStream`
-//     directly (bypassing `fuse`'s duplicate-stratum guard) because reaching
-//     it needs two streams sharing one stratum tag, which `fuse` itself
-//     refuses before fusion ever begins.
+// 16. The contribution count is the refusal, at the one configuration whose raw
+//     arithmetic lands exactly on the declared ceiling.
+//
+//     Two equal-weight, rank-1, `K = 1` contributions under a profile that
+//     weights one stratum, and therefore admits one contribution: the sum is
+//     exactly `ceiling()`, and it is refused as
+//     `MaxContributionsExceeded` — because reaching that sum at all requires
+//     contributing twice under a one-stratum profile. Every configuration with a
+//     valid contribution count stops at `ceiling() / 2` (test 15), which is why
+//     the score has no second, ceiling-shaped refusal behind this one: nothing
+//     could reach it. This drives `FusionStream` directly (bypassing `fuse`'s
+//     duplicate-stratum guard) because getting here needs two streams sharing
+//     one stratum tag, which `fuse` itself refuses before fusion ever begins.
 #[test]
-fn ceiling_boundary_is_gated_by_the_contribution_count_check() {
+fn a_sum_landing_on_the_ceiling_is_refused_by_the_contribution_count() {
     // Two. `Fixed::from_integer` takes the number a reader means; the
     // neighbouring `Fixed::from_raw(2)` would be two raw units, `2 * 10^-12`.
     let weight = Fixed::from_integer(2).expect("two is representable");
@@ -2203,8 +2284,9 @@ fn the_contribution_law_no_longer_depends_on_a_declared_ordering() {
     // that "your contribution rose with rank" would blame the stream's shape for
     // a wrong number — the same conflation this test's subject was. Non-increase
     // of the profile's own curve is proven where it is true, as a property of
-    // `DecayRule` (`reciprocal_rank::tests::every_decay_rule_is_non_increasing_in_the_rank`);
-    // `NonMonotoneContribution` remains as the typed guard on that invariant.
+    // `DecayRule` (`reciprocal_rank::tests::every_decay_rule_is_non_increasing_in_the_rank`),
+    // and enforced where a stream meets it, by this re-derivation. There is no
+    // second, ordering-shaped refusal behind it: nothing could reach one.
     let first_rank = contribution(Fixed::ONE, 1, K).expect("fits");
     let risen = Fixed::from_raw(first_rank.into_raw() + 1);
     for contract in [unique_items(), allowed_duplicates()] {

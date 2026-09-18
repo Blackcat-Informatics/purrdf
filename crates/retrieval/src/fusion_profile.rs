@@ -533,6 +533,17 @@ impl FusionProfile {
 
     /// The admitted maximum fused score: the largest weight times the number of
     /// strata, which is the true bound on a candidate's sum.
+    ///
+    /// It is a bound the arithmetic already guarantees, so fusion enforces it by
+    /// construction rather than by testing each sum against it. A candidate
+    /// receives at most one contribution per stratum — that count is what fusion
+    /// checks, as
+    /// [`FusionError::MaxContributionsExceeded`](crate::FusionError::MaxContributionsExceeded)
+    /// — and `K >= 1` with a 1-based rank makes every reciprocal at most one
+    /// half, so every contribution is at most half its stratum's weight. The
+    /// largest sum a fusion can reach is therefore exactly half of this value,
+    /// never this value, whichever decay rule is in force. A runtime refusal for
+    /// crossing it would be a branch no profile and no stream could take.
     #[must_use]
     pub const fn ceiling(&self) -> Fixed {
         self.ceiling

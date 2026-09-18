@@ -366,10 +366,10 @@ pub struct FusionStream<S: RankedStream> {
     last_contribution: Vec<Option<Fixed>>,
     /// Per-stream count of adjacent ranks whose contributions were equal.
     ///
-    /// Counted on the comparison [`Self::check_ordering`] already performs, so
-    /// it costs one increment on a compare that happens either way. It is the
-    /// exact number of ranks this run could not separate — an observation, not
-    /// the profile's a-priori bound.
+    /// Counted by [`Self::count_collision`] against the previous row's
+    /// contribution, one equality compare per row. It is the exact number of
+    /// ranks this run could not separate — an observation, not the profile's
+    /// a-priori bound.
     collisions_observed: Vec<u64>,
     /// The identity set of every stream that declared
     /// [`DuplicatePolicy::Allowed`], and `None` for every stream that declared
@@ -467,9 +467,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// protocol; [`FusionError::MaxContributionsExceeded`] when a candidate is
     /// contributed to more times than there are strata — an invariant
     /// violation, reachable only from a hand-built stream set that repeats a
-    /// stratum; and
-    /// [`FusionError::CeilingExceeded`] when a candidate's accumulated score
-    /// leaves the profile's declared ceiling.
+    /// stratum.
     pub async fn next(&mut self) -> Result<Option<FusedRow>, FusionError> {
         self.ensure_initialized().await?;
         loop {
@@ -620,8 +618,8 @@ impl<S: RankedStream> FusionStream<S> {
     /// or the stream ends.
     ///
     /// Validation is the whole point of the boundary: rank contiguity, the
-    /// declared rank ordering, the profile's contribution value, the declared
-    /// duplicate handling, and a consistent terminal receipt. Every one of those
+    /// profile's contribution value, the declared duplicate handling, and a
+    /// consistent terminal receipt. Every one of those
     /// is checked on every row the producer emits — including a row this function
     /// then drops as a declared duplicate, because a dropped row is still a row
     /// the producer made claims about, and a claim nobody checks is a hole a
@@ -638,7 +636,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// once-per-stream check, which stays the exact refusal it was.
     ///
     /// The producer is still charged for it. The rank counter advances, the
-    /// monotone baseline advances, and `rows_pulled` counts it, so the terminal
+    /// collision baseline advances, and `rows_pulled` counts it, so the terminal
     /// receipt is still measured against every row the producer actually emitted
     /// ([`ProtocolError::ForgedReceipt`]).
     async fn fetch(&mut self, index: usize) -> Result<Option<Head>, FusionError> {
@@ -692,12 +690,12 @@ impl<S: RankedStream> FusionStream<S> {
                 .into());
             }
 
-            // Ordered after the re-derivation on purpose: the monotone check and
-            // the collision count are claims about the *profile's* value at this
-            // rank, so they must run on a value already proven to be that one. A
-            // forged contribution is rejected above as the mismatch it is,
-            // rather than reported as a shape of the decay curve.
-            self.check_ordering(index, producer_contribution)?;
+            // Ordered after the re-derivation on purpose: the collision count is
+            // a claim about the *profile's* value at this rank, so it must run
+            // on a value already proven to be that one. A forged contribution is
+            // rejected above as the mismatch it is, rather than counted as a
+            // shape of the decay curve.
+            self.count_collision(index, producer_contribution);
 
             self.last_contribution[index] = Some(producer_contribution);
             self.next_ranks[index] = rank + 1;
@@ -736,38 +734,29 @@ impl<S: RankedStream> FusionStream<S> {
         }
     }
 
-    /// Hold stream `index`'s contribution sequence to non-increase, and count
-    /// the adjacent ranks the profile's arithmetic can no longer separate.
+    /// Count the adjacent ranks the profile's arithmetic can no longer
+    /// separate.
     ///
-    /// A contribution that *rises* with rank is refused for every stream,
-    /// whatever ordering its producer declared, because the threshold over the
-    /// stream heads would otherwise not be an upper bound and the whole
-    /// certification argument would fail.
+    /// This measures; it refuses nothing, and there is nothing here left for it
+    /// to refuse. By the time a value reaches this function it has been proven
+    /// equal to `contribution_under(decay, weight, rank)` and the ranks that
+    /// produced it are contiguous and ascending, so the sequence is the
+    /// profile's own curve read left to right — and that curve never rises (see
+    /// [`ProtocolError::ContributionMismatch`], which is where a rising value is
+    /// actually caught, as the wrong number it is). A comparison for a rise here
+    /// would be a branch no input can take.
     ///
-    /// Equality is **measured, not refused**. By the time a value reaches here it
-    /// has been proven equal to `contribution_under(decay, weight, rank)`, and
-    /// the ranks that produced it are already contiguous and ascending — so an
-    /// equal adjacent pair carries no information about the producer at all. It
-    /// says the profile's fixed-point decay stopped separating those two ranks at
-    /// this depth, which is a property of `(decay rule, K, weight, depth)`.
-    /// Refusing it rejected conforming streams for the consumer's own
-    /// quantization. The count is reported per stratum in the fused trailer,
-    /// where it is an exact observation rather than a bound inferred from the
-    /// profile.
-    fn check_ordering(&mut self, index: usize, contribution: Fixed) -> Result<(), ProtocolError> {
-        let Some(previous) = self.last_contribution[index] else {
-            return Ok(());
-        };
-        if contribution > previous {
-            return Err(ProtocolError::NonMonotoneContribution {
-                previous,
-                got: contribution,
-            });
-        }
-        if contribution == previous {
+    /// Equality is **measured, not refused**. An equal adjacent pair carries no
+    /// information about the producer at all: it says the profile's fixed-point
+    /// decay stopped separating those two ranks at this depth, which is a
+    /// property of `(decay rule, K, weight, depth)`. Refusing it rejected
+    /// conforming streams for the consumer's own quantization. The count is
+    /// reported per stratum in the fused trailer, where it is an exact
+    /// observation rather than a bound inferred from the profile.
+    fn count_collision(&mut self, index: usize, contribution: Fixed) {
+        if self.last_contribution[index] == Some(contribution) {
             self.collisions_observed[index] += 1;
         }
-        Ok(())
     }
 
     /// Record a terminal receipt, refusing one the rows contradict.
@@ -1023,10 +1012,9 @@ impl<S: RankedStream> FusionStream<S> {
     ///
     /// [`FusionError::Overflow`] when the checked sum leaves the fixed-point
     /// range, [`FusionError::MaxContributionsExceeded`] when the candidate has
-    /// been contributed to once more than there are strata,
-    /// [`FusionError::CeilingExceeded`] when its accumulated score leaves the
-    /// profile's declared ceiling, and [`ProtocolError::DuplicateItem`] when
-    /// this stream would contribute to one frontier candidate twice.
+    /// been contributed to once more than there are strata, and
+    /// [`ProtocolError::DuplicateItem`] when this stream would contribute to one
+    /// frontier candidate twice.
     ///
     /// # Where a declared-`Unique` stream's promise is actually checked
     ///
@@ -1067,12 +1055,15 @@ impl<S: RankedStream> FusionStream<S> {
         // refused row then leaves the frontier exactly as it found it, instead
         // of a half-updated candidate no later call may read.
         //
-        // Both bounds are checked against the profile's own accessors, never
-        // recomputed, so a future change to either derivation cannot drift
-        // enforcement away from what the profile declares. The contribution
-        // bound is the profile's stratum count, so crossing it is not a budget
-        // a corpus spent — it says a stream named this candidate twice, or two
-        // streams were handed the same stratum tag.
+        // The bound is read from the profile's own accessor, never recomputed,
+        // so a future change to its derivation cannot drift enforcement away
+        // from what the profile declares. It is the profile's stratum count, so
+        // crossing it is not a budget a corpus spent — it says a stream named
+        // this candidate twice, or two streams were handed the same stratum
+        // tag. The profile's score ceiling needs no companion check: a
+        // contribution is at most half its stratum's weight, so a sum bounded by
+        // the count above is bounded by half the ceiling — see
+        // [`FusionProfile::ceiling`](crate::FusionProfile::ceiling).
         let existing = self.frontier.get(&head.item);
         let lower_bound = existing
             .map_or(Fixed::ZERO, |state| state.lower_bound)
@@ -1087,14 +1078,6 @@ impl<S: RankedStream> FusionStream<S> {
                 max: self.profile.max_contributions(),
             });
         }
-        if lower_bound > self.profile.ceiling() {
-            return Err(FusionError::CeilingExceeded {
-                item: head.item.as_str().to_owned(),
-                score: lower_bound,
-                ceiling: self.profile.ceiling(),
-            });
-        }
-
         match self.frontier.entry(head.item) {
             btree_map::Entry::Vacant(vacant) => {
                 // A candidate nobody has contributed to yet cannot collide, so
