@@ -1418,6 +1418,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-envelope-probe"
+version = "2.0.2"
+dependencies = [
+ "purrdf-core",
+ "purrdf-rdf",
+ "purrdf-shapes",
+ "purrdf-sparql-eval",
+]
+
+[[package]]
 name = "purrdf-events"
 version = "2.0.2"
 
