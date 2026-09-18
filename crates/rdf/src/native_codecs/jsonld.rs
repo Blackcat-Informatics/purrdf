@@ -308,8 +308,11 @@ impl RdfCodec for YamlLdCodec {
         // rebuilding the construction itself rather than redirecting its output. The
         // sink still earns its place here: the caller's buffer is the only one that
         // outlives the call, and this is the seam a streaming writer replaces.
-        out.push_str(&serialize_ser_graph_to_yamlld(graph, None)?);
-        Ok(())
+        // Emitted through the sink. The header and body are pushed separately, so
+        // the third whole-document copy the concatenation used to make is gone. The
+        // JSON→YAML reparse remains and is documented at `write_yaml`: it is what
+        // fixes the emitted key order, which is a frozen contract.
+        write_ser_graph_to_yamlld(graph, None, out)
     }
 }
 
@@ -416,27 +419,38 @@ fn serialize_ser_graph(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
     finish_json_output(out)
 }
 
-pub(crate) fn serialize_ser_graph_with_options(
+pub(crate) fn write_ser_graph_with_options(
     graph: &SerGraph,
     options: &JsonLdSerializeOptions,
-) -> Result<String, RdfDiagnostic> {
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
     let fold_lists = !matches!(options.mode(), JsonLdSerializeMode::Expanded);
     let carrier = build_carrier(graph, fold_lists)?;
     match options.mode() {
         JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
-            None => serialize_carrier_expanded(&carrier),
-            Some(context) => serialize_carrier_compacted(&carrier, &context),
+            None => write_carrier_expanded(&carrier, out),
+            Some(context) => write_carrier_compacted(&carrier, &context, out),
         },
         JsonLdSerializeMode::Context(context) => {
             let merged = context_with_base(context, graph)?;
-            serialize_carrier_compacted(&carrier, merged.as_ref().unwrap_or(context))
+            write_carrier_compacted(&carrier, merged.as_ref().unwrap_or(context), out)
         }
         JsonLdSerializeMode::Derived => {
             let context = derived::derive_context(&carrier)?;
             let merged = context_with_base(&context, graph)?;
-            serialize_carrier_compacted(&carrier, merged.as_ref().unwrap_or(&context))
+            write_carrier_compacted(&carrier, merged.as_ref().unwrap_or(&context), out)
         }
     }
+}
+
+/// The whole-`String` spelling of [`write_ser_graph_with_options`].
+pub(crate) fn serialize_ser_graph_with_options(
+    graph: &SerGraph,
+    options: &JsonLdSerializeOptions,
+) -> Result<String, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    write_ser_graph_with_options(graph, options, &mut out)?;
+    finish_json_output(out)
 }
 
 /// The one-entry `{"@base": …}` context a based graph is emitted through, or `None` when
@@ -501,14 +515,6 @@ fn write_carrier_compacted(
     carrier.write_compacted_json(&mut bounded, context)
 }
 
-/// The whole-`String` spelling of [`write_carrier_expanded`], for the entry points
-/// that hand a document back. It is the same writer over an in-memory sink.
-fn serialize_carrier_expanded(carrier: &CarrierDocument) -> Result<String, RdfDiagnostic> {
-    let mut out = TextSink::in_memory();
-    write_carrier_expanded(carrier, &mut out)?;
-    finish_json_output(out)
-}
-
 /// The whole-`String` spelling of [`write_carrier_compacted`].
 fn serialize_carrier_compacted(
     carrier: &CarrierDocument,
@@ -520,10 +526,10 @@ fn serialize_carrier_compacted(
 }
 
 fn finish_json_output(out: TextSink<'_>) -> Result<String, RdfDiagnostic> {
-    let bytes = out
+    let finished = out
         .finish()
         .map_err(|error| decode(format!("JSON-LD output: {error}")))?;
-    String::from_utf8(bytes)
+    String::from_utf8(finished.bytes)
         .map_err(|source| decode(format!("JSON-LD output is not UTF-8: {source}")))
 }
 
@@ -594,7 +600,9 @@ pub fn serialize_dataset_to_yamlld<D: DatasetView>(
         // base-carrying route is `serialize_dataset_to_format*`.
         None,
     )?;
-    serialize_ser_graph_to_yamlld(&graph, schema_url)
+    let mut out = TextSink::in_memory();
+    write_ser_graph_to_yamlld(&graph, schema_url, &mut out)?;
+    finish_json_output(out)
 }
 
 /// Serialize a dataset to deterministic YAML-LD under an explicitly selected mode.
@@ -635,39 +643,83 @@ pub fn serialize_dataset_to_yamlld_with_context<D: DatasetView>(
     )?;
     let carrier = build_carrier(&graph, true)?;
     let json = serialize_carrier_compacted(&carrier, context)?;
-    jsonld_to_yaml(&json, schema_url)
+    let mut out = TextSink::in_memory();
+    write_yaml(&json, schema_url, &mut out)?;
+    finish_json_output(out)
 }
 
 /// Serialize an already-materialized [`SerGraph`] to deterministic YAML-LD-star bytes —
 /// the graph-level core shared by [`serialize_dataset_to_yamlld`] and [`YamlLdCodec`].
-fn serialize_ser_graph_to_yamlld(
+fn write_ser_graph_to_yamlld(
     graph: &SerGraph,
     schema_url: Option<&str>,
-) -> Result<String, RdfDiagnostic> {
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
     let json = serialize_ser_graph(graph)?;
-    jsonld_to_yaml(&json, schema_url)
+    write_yaml(&json, schema_url, out)
 }
 
+pub(crate) fn write_ser_graph_to_yamlld_with_options(
+    graph: &SerGraph,
+    options: &JsonLdSerializeOptions,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let json = serialize_ser_graph_with_options(graph, options)?;
+    write_yaml(&json, options.yaml_schema_url(), out)
+}
+
+/// The whole-`String` spelling of [`write_ser_graph_to_yamlld_with_options`].
 pub(crate) fn serialize_ser_graph_to_yamlld_with_options(
     graph: &SerGraph,
     options: &JsonLdSerializeOptions,
 ) -> Result<String, RdfDiagnostic> {
-    let json = serialize_ser_graph_with_options(graph, options)?;
-    jsonld_to_yaml(&json, options.yaml_schema_url())
+    let mut out = TextSink::in_memory();
+    write_ser_graph_to_yamlld_with_options(graph, options, &mut out)?;
+    finish_json_output(out)
 }
 
-fn jsonld_to_yaml(json: &str, schema_url: Option<&str>) -> Result<String, RdfDiagnostic> {
+/// Emit the YAML-LD document for an already-serialized JSON-LD document.
+///
+/// The header and the body are pushed SEPARATELY rather than concatenated, which
+/// removes one whole-document copy: the previous shape built the body, built the
+/// header, and then allocated a third string holding both.
+///
+/// The JSON text is still reparsed into a `serde_json::Value` before conversion.
+/// That round trip is what fixes YAML key order — `serde_json`'s map is a
+/// `BTreeMap` here, so reparsing sorts — and the emitted order is a frozen contract,
+/// so it stays until the carrier itself can be shown to emit sorted keys directly.
+/// This is the one format whose intermediate document this change does NOT remove,
+/// and saying so is more useful than a sink that merely looks bounded.
+fn write_yaml(
+    json: &str,
+    schema_url: Option<&str>,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
     let value: Value =
         serde_json::from_str(json).map_err(|e| decode(format!("parse JSON-LD for YAML: {e}")))?;
-    let body =
-        serde_yaml::to_string(&value).map_err(|e| decode(format!("YAML-LD serialization: {e}")))?;
     let url = schema_url.unwrap_or(BUNDLED_SCHEMA_REF);
-    let header = format!(
-        "# yaml-language-server: $schema={url}\n\
-         # The default reference is the bundled purrdf.schema.json; pass an explicit\n\
-         # schema_url to point editors at a hosted copy.\n"
+    out.push_str("# yaml-language-server: $schema=");
+    out.push_str(url);
+    out.push_str(
+        "\n# The default reference is the bundled purrdf.schema.json; pass an explicit\n\
+         # schema_url to point editors at a hosted copy.\n",
     );
-    Ok(header + &body)
+    serde_yaml::to_writer(SinkIoWrite(out), &value)
+        .map_err(|e| decode(format!("YAML-LD serialization: {e}")))
+}
+
+/// Adapts a [`TextSink`] to `io::Write` for `serde_yaml`, which writes bytes.
+struct SinkIoWrite<'a, 'sink>(&'a mut TextSink<'sink>);
+
+impl IoWrite for SinkIoWrite<'_, '_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.push_bytes(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Build the deliberately empty JSON-LD `@context` for the byte-frozen legacy route.
@@ -2118,7 +2170,7 @@ mod carrier_law_tests {
             assert!(error.to_string().contains("exceeds 4 bytes"));
         }
         // The admitted bytes reached the sink; the refused byte did not.
-        assert_eq!(sink.finish().expect("in-memory never fails"), b"null");
+        assert_eq!(sink.finish().expect("in-memory never fails").bytes, b"null");
     }
 
     #[test]

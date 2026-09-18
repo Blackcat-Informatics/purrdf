@@ -55,6 +55,7 @@ use crate::{
     DatasetView, FastHasher, FastMap, RdfDiagnostic, RdfTextDirection, SerializeGraph, TermValue,
 };
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
+use purrdf_core::sink::{TextSink, WriterDrain};
 use purrdf_iri::BaseIri;
 
 /// The blank-node label alphabet the TARGET format's codec can legally emit —
@@ -227,6 +228,92 @@ pub fn serialize_dataset_with<D: DatasetView>(
     base_iri: Option<&str>,
     options: &SerializeOptions<'_>,
 ) -> Result<SerializeOutcome, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    let report = serialize_dataset_into_sink(dataset, format, base_iri, options, &mut out)?;
+    let finished = out
+        .finish()
+        .map_err(|error| RdfDiagnostic::error("native-codec-write", error.to_string()))?;
+    Ok(SerializeOutcome {
+        bytes: finished.bytes,
+        statement_rows_dropped: report.statement_rows_dropped,
+        directional_literals_dropped: report.directional_literals_dropped,
+        named_graph_rows_dropped: report.named_graph_rows_dropped,
+    })
+}
+
+/// Serialize a frozen dataset INTO `writer`, returning the counts.
+///
+/// The bounded-memory twin of [`serialize_dataset_with`], and the one the eager
+/// spelling is expressed through: peak residency tracks the working set rather than
+/// the size of the finished document. The bytes are identical — it is the same
+/// emitter, pointed at a different destination.
+///
+/// # What this bounds, and what it does not
+///
+/// It removes the finished document from the serializer's peak and nothing else.
+/// The `SerGraph` the emitter walks is proportional to the dataset by construction —
+/// the canonical sort that makes output backend-independent is defined over it —
+/// and three formats additionally hold a grouping index. JSON-LD and YAML-LD hold
+/// a carrier document, which compaction is defined over. None of that is constant
+/// memory and nothing here should be read as claiming it is.
+///
+/// # Errors
+///
+/// Every failure [`serialize_dataset_with`] reports, plus `native-codec-write` when
+/// `writer` fails. Note that a write failure or a per-term failure may leave a
+/// PREFIX of the document already written: a sink is not transactional, unlike the
+/// projection package sink. Format- and kind-level refusals are all decided before
+/// the first byte.
+pub fn serialize_dataset_to_writer_with<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    options: &SerializeOptions<'_>,
+    writer: &mut dyn Write,
+) -> Result<SerializeReport, RdfDiagnostic> {
+    let mut drain = WriterDrain(writer);
+    let mut out = TextSink::to_drain(&mut drain);
+    let report = serialize_dataset_into_sink(dataset, format, base_iri, options, &mut out)?;
+    let finished = out
+        .finish()
+        .map_err(|error| RdfDiagnostic::error("native-codec-write", error.to_string()))?;
+    Ok(SerializeReport {
+        bytes_written: finished.written,
+        ..report
+    })
+}
+
+/// [`serialize_dataset_to_writer_with`] at this crate's default options: the whole
+/// dataset, the statement layer carried where the format can express it.
+pub fn serialize_dataset_to_writer<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    writer: &mut dyn Write,
+) -> Result<SerializeReport, RdfDiagnostic> {
+    serialize_dataset_to_writer_with(
+        dataset,
+        format,
+        base_iri,
+        &SerializeOptions {
+            selection: SerializeGraph::Dataset,
+            statement_layer: StatementLayer::PerFormatCapability,
+            jsonld_options: None,
+        },
+        writer,
+    )
+}
+
+/// The ONE serialization body. Both spellings above are this function with a
+/// different destination, which is what makes their bytes equal by construction
+/// rather than by test.
+fn serialize_dataset_into_sink<D: DatasetView>(
+    dataset: &D,
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    options: &SerializeOptions<'_>,
+    out: &mut TextSink<'_>,
+) -> Result<SerializeReport, RdfDiagnostic> {
     if options.jsonld_options.is_some()
         && !matches!(format, NativeRdfFormat::JsonLd | NativeRdfFormat::YamlLd)
     {
@@ -270,18 +357,17 @@ pub fn serialize_dataset_with<D: DatasetView>(
         egress_base(format, base_iri)?,
     )?;
 
-    let bytes = match options.jsonld_options {
+    match options.jsonld_options {
         // Dispatch to the format's codec (the single `codec_for` chokepoint): the
         // line/Turtle family walks the shared `ser_model` writers, and RDF/XML, TriX and
         // HexTuples walk the SAME `SerGraph` through their in-repo emitters.
-        None => super::codec::serialize(super::codec::codec_for(format), &graph)?,
+        None => super::codec::codec_for(format).serialize_into(&graph, out)?,
         Some(configured) => match format {
             NativeRdfFormat::JsonLd => {
-                super::jsonld::serialize_ser_graph_with_options(&graph, configured)?.into_bytes()
+                super::jsonld::write_ser_graph_with_options(&graph, configured, out)?;
             }
             NativeRdfFormat::YamlLd => {
-                super::jsonld::serialize_ser_graph_to_yamlld_with_options(&graph, configured)?
-                    .into_bytes()
+                super::jsonld::write_ser_graph_to_yamlld_with_options(&graph, configured, out)?;
             }
             // Unreachable: the guard at the top of this function already refused
             // every other format. It is spelled out rather than left as a catch-all
@@ -292,7 +378,7 @@ pub fn serialize_dataset_with<D: DatasetView>(
             // the guard, so one condition keeps one wording.
             other => return Err(jsonld_options_unused(other)),
         },
-    };
+    }
 
     // A `Named` selection emits NO statement rows whatever the format can carry (the
     // filter in `build_ser_graph`), so rows the caller asked to emit still did not reach
@@ -315,8 +401,10 @@ pub fn serialize_dataset_with<D: DatasetView>(
         dataset.reifier_quads().count() + dataset.annotation_quads().count()
     };
 
-    Ok(SerializeOutcome {
-        bytes,
+    Ok(SerializeReport {
+        // The eager spelling replaces this from its own buffer; the streaming one
+        // from the sink's running total. Neither is derived from the other.
+        bytes_written: 0,
         statement_rows_dropped,
         directional_literals_dropped,
         named_graph_rows_dropped,
@@ -410,6 +498,25 @@ pub(crate) fn serialize_into<D: DatasetView, W: Write>(
     output
         .write_all(&bytes)
         .map_err(|e| RdfDiagnostic::error("native-codec-write", e.to_string()))
+}
+
+/// Every count a serialization produces, for the caller whose bytes went to a
+/// writer and who therefore has none handed back.
+///
+/// The byte-less twin of [`SerializeOutcome`]. The three drop counts are computed in
+/// the one serialization body and mean exactly what they mean there; `bytes_written`
+/// is what actually reached the destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "a serialization's drop counts are a loss report; discarding them is a silent drop"]
+pub struct SerializeReport {
+    /// Bytes handed to the destination. Meaningful only on `Ok`.
+    pub bytes_written: u64,
+    /// RDF-1.2 statement-layer rows the target has no surface for.
+    pub statement_rows_dropped: usize,
+    /// Object literals whose base direction the target cannot express.
+    pub directional_literals_dropped: usize,
+    /// Rows dropped because the target flattened a graph-scoped dataset.
+    pub named_graph_rows_dropped: usize,
 }
 
 /// Outcome of serializing an [`RdfDataset`](crate::RdfDataset) to a concrete RDF format through the

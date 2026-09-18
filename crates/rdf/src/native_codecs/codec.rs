@@ -83,23 +83,6 @@ pub(super) trait RdfCodec {
     ) -> Result<(), RdfDiagnostic>;
 }
 
-/// Serialize a first-party [`SerGraph`] to this format's bytes.
-///
-/// A FREE function over the seam rather than a provided trait method, so no codec
-/// can supply its own whole-document spelling. The eager path is
-/// [`serialize_into`](RdfCodec::serialize_into) pointed at an in-memory sink and
-/// nothing else, which is what makes "the streamed bytes equal the eager bytes" a
-/// property of there being one emitter rather than a claim a test has to establish.
-pub(super) fn serialize(
-    codec: &dyn RdfCodec,
-    graph: &SerGraph,
-) -> Result<Vec<u8>, RdfDiagnostic> {
-    let mut out = TextSink::in_memory();
-    codec.serialize_into(graph, &mut out)?;
-    out.finish()
-        .map_err(|error| RdfDiagnostic::error("native-codec-write", error.to_string()))
-}
-
 /// The shared implementor for the four line/Turtle-family formats, keyed by the wrapped
 /// variant. They parse through one `text_parse` front-end and serialize through the
 /// matching `ser_model` writer, so a SINGLE codec — not four — preserves that fusion.

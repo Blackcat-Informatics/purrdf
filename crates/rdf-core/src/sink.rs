@@ -282,6 +282,20 @@ impl<A: ByteDrain, B: ByteDrain> ByteDrain for Tee<A, B> {
     }
 }
 
+/// What a finished sink reports.
+///
+/// One terminal reporting both facts, rather than a byte count readable before the
+/// final window has been handed over — which would report zero for any document
+/// that never filled the window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finished {
+    /// The document, for an in-memory sink. Empty for a draining one: its bytes
+    /// went to the drain.
+    pub bytes: Vec<u8>,
+    /// Total bytes the sink accepted and delivered, whichever destination it had.
+    pub written: u64,
+}
+
 /// A bounded staging window over an optional [`ByteDrain`].
 ///
 /// See the module documentation for the memory bound this does and does not
@@ -407,7 +421,12 @@ impl<'a> TextSink<'a> {
         self.error.is_some()
     }
 
-    /// Bytes accepted before the first failure.
+    /// Bytes DELIVERED so far — those already handed to the drain.
+    ///
+    /// This deliberately excludes whatever is still staged, and is therefore a
+    /// progress signal rather than a total: a document smaller than the window
+    /// reports zero here right up until [`finish`](Self::finish) hands the window
+    /// over. Take the total from [`Finished::written`].
     #[must_use]
     pub const fn written(&self) -> u64 {
         self.written
@@ -424,7 +443,7 @@ impl<'a> TextSink<'a> {
     /// The FIRST [`DrainError`] the sink saw, whether it occurred here or at any
     /// earlier push.
     #[must_use = "a drain failure is reported only here; discarding this Result discards the failure"]
-    pub fn finish(mut self) -> Result<Vec<u8>, DrainError> {
+    pub fn finish(mut self) -> Result<Finished, DrainError> {
         if let Some(error) = self.error {
             return Err(error);
         }
@@ -434,9 +453,19 @@ impl<'a> TextSink<'a> {
                 self.written = self.written.saturating_add(self.staged.len() as u64);
                 self.staged.clear();
             }
-            return Ok(Vec::new());
+            return Ok(Finished {
+                bytes: Vec::new(),
+                written: self.written,
+            });
         }
-        Ok(self.staged)
+        // An in-memory sink never drains, so its running total is only known here.
+        // Reporting the document's length keeps `written` meaning the same thing —
+        // bytes of document produced — whichever destination the sink had.
+        let written = self.staged.len() as u64;
+        Ok(Finished {
+            bytes: self.staged,
+            written,
+        })
     }
 
     /// The slow path: the window cannot take `bytes` without crossing its bound.
@@ -568,8 +597,9 @@ mod tests {
                         "window reallocated for push_len {push_len}"
                     );
                 }
-                let rest = sink.finish().expect("recorder never fails");
-                assert!(rest.is_empty(), "a draining sink yields no document");
+                let finished = sink.finish().expect("recorder never fails");
+                assert_eq!(finished.bytes, [] as [u8; 0], "a draining sink yields no document");
+                assert_eq!(finished.written, (push_len * pushes) as u64);
                 assert_eq!(
                     recorder.total,
                     (push_len * pushes) as u64,
@@ -589,7 +619,7 @@ mod tests {
         for fragment in fragments {
             eager.push_str(fragment);
         }
-        let eager = eager.finish().expect("in-memory never fails");
+        let eager = eager.finish().expect("in-memory never fails").bytes;
 
         let mut collected: Vec<u8> = Vec::new();
         struct Collect<'a>(&'a mut Vec<u8>);
@@ -604,7 +634,7 @@ mod tests {
         for fragment in fragments {
             streamed.push_str(fragment);
         }
-        assert_eq!(streamed.finish().expect("collect never fails"), [] as [u8; 0]);
+        assert_eq!(streamed.finish().expect("collect never fails").bytes, [] as [u8; 0]);
 
         assert_eq!(eager, collected);
     }
@@ -618,7 +648,7 @@ mod tests {
         for fragment in fragments {
             eager.push_str(fragment);
         }
-        let document = eager.finish().expect("in-memory never fails");
+        let document = eager.finish().expect("in-memory never fails").bytes;
 
         let mut measure = Measure::new();
         {
@@ -626,7 +656,7 @@ mod tests {
             for fragment in fragments {
                 sink.push_str(fragment);
             }
-            assert_eq!(sink.finish().expect("measure never fails"), [] as [u8; 0]);
+            assert_eq!(sink.finish().expect("measure never fails").bytes, [] as [u8; 0]);
         }
         assert_eq!(measure.bytes(), document.len() as u64);
     }
@@ -662,7 +692,7 @@ mod tests {
             let mut tee = Tee(&mut measure_a, &mut measure_b);
             let mut sink = TextSink::to_drain(&mut tee);
             sink.push_str(&"t".repeat(150_000));
-            assert_eq!(sink.finish().expect("measures never fail"), [] as [u8; 0]);
+            assert_eq!(sink.finish().expect("measures never fail").bytes, [] as [u8; 0]);
         }
         assert_eq!(measure_a.bytes(), 150_000);
         assert_eq!(measure_b.bytes(), measure_a.bytes());
@@ -687,7 +717,7 @@ mod tests {
             sink.push_str(&"a".repeat(DRAIN_BUFFER_BYTES - 1));
             sink.push('\u{4e2d}');
             sink.push_bytes(b"tail");
-            assert_eq!(sink.finish().expect("collect never fails"), [] as [u8; 0]);
+            assert_eq!(sink.finish().expect("collect never fails").bytes, [] as [u8; 0]);
         }
         let mut expected = "a".repeat(DRAIN_BUFFER_BYTES - 1).into_bytes();
         expected.extend_from_slice("\u{4e2d}".as_bytes());
