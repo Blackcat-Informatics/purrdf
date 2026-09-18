@@ -354,6 +354,22 @@ pub(crate) fn class_width(decay: DecayRule, weight: Fixed, rank: u64) -> u64 {
 /// With `max_width` of one this therefore agrees exactly with
 /// [`monotone_depth`].
 ///
+/// The same truncation argument generalizes to any `max_width`. Suppose a run
+/// of mutually colliding ranks begins at `run_start`, and the first depth at
+/// which it would exceed the tolerance is `run_start + max_width` — that is,
+/// `run_start` through `run_start + max_width` is `max_width + 1` ranks
+/// sharing one contribution, one more than the tolerance allows. Truncating
+/// the read at some depth `D` inside that run never observes the ranks past
+/// `D`, so the class it puts `run_start` in has width exactly
+/// `D - run_start + 1`, not the run's full length. That stays within
+/// `max_width` for every `D` up to `run_start + max_width - 1`, and first
+/// exceeds it at `D = run_start + max_width`. So the deepest admissible depth
+/// is `run_start + max_width - 1`, the last rank before the run tips over —
+/// not `run_start`, which is what a conservative reader would guess and which
+/// understates the true bound by `max_width - 1`. At `max_width` of one the
+/// two expressions coincide, which is why that boundary case cannot by itself
+/// reveal an off-by-`max_width - 1` error in the general rule.
+///
 /// # Why this walks rather than bisects
 ///
 /// The class width is **not** monotone in the rank, so a binary search over
@@ -391,7 +407,7 @@ pub(crate) fn deepest_rank_within_width(decay: DecayRule, weight: Fixed, max_wid
         };
         if next == current {
             if rank + 1 - run_start + 1 > ceiling {
-                return run_start;
+                return rank;
             }
         } else {
             current = next;

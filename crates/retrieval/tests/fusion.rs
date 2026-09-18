@@ -2372,6 +2372,70 @@ fn first_collision_by_walking(decay: DecayRule, weight: Fixed, limit: u64) -> Op
     })
 }
 
+/// The deepest depth admissible at `max_width`, found by a walk that is
+/// independent of `deepest_rank_within_width`: it steps rank by rank,
+/// accumulating the length of the run of equal contributions it is inside,
+/// and applies the truncation rule directly. If a run beginning at
+/// `run_start` first reaches `max_width + 1` members at `run_start +
+/// max_width`, then reading no deeper than `run_start + max_width - 1` keeps
+/// every rank of that run inside the tolerance, and reading one rank further
+/// does not — so that is the truth this walk returns.
+fn deepest_rank_within_width_by_walking(
+    decay: DecayRule,
+    weight: Fixed,
+    max_width: u64,
+    limit: u64,
+) -> u64 {
+    let ceiling = max_width.max(1);
+    let mut run_start = 1_u64;
+    let mut current = contribution_under(decay, weight, 1).expect("fits");
+    let mut rank = 1_u64;
+    while rank < limit {
+        let next = contribution_under(decay, weight, rank + 1).expect("fits");
+        if next == current {
+            if rank + 1 - run_start + 1 > ceiling {
+                return run_start + ceiling - 1;
+            }
+        } else {
+            current = next;
+            run_start = rank + 1;
+        }
+        rank += 1;
+    }
+    limit
+}
+
+/// The width of `rank`'s indifference class as it would appear to a read
+/// that never looks past `depth_limit`: the run of equal contributions
+/// containing `rank`, clipped to `1..=depth_limit`.
+///
+/// This differs from `class_width` (which sees the whole unbounded
+/// sequence) precisely at the boundary `deepest_rank_within_width` cares
+/// about: a run that extends past `depth_limit` is only partially observed
+/// by a read truncated there, and this is what measures the part that was.
+fn truncated_class_width(decay: DecayRule, weight: Fixed, depth_limit: u64, rank: u64) -> u64 {
+    let target = contribution_under(decay, weight, rank).expect("fits");
+    let mut lo = rank;
+    while lo > 1 {
+        let prev = contribution_under(decay, weight, lo - 1).expect("fits");
+        if prev == target {
+            lo -= 1;
+        } else {
+            break;
+        }
+    }
+    let mut hi = rank;
+    while hi < depth_limit {
+        let next = contribution_under(decay, weight, hi + 1).expect("fits");
+        if next == target {
+            hi += 1;
+        } else {
+            break;
+        }
+    }
+    hi - lo + 1
+}
+
 #[test]
 fn a_strictly_descending_stream_fuses_past_the_decay_collision() {
     // The issue's own middle row: a weight of 1e6 raw units collides near rank
@@ -2901,19 +2965,101 @@ fn class_width_is_the_curve_the_bound_is_one_point_of() {
         "and the class widens with depth: {near} at the boundary, {far} deeper"
     );
 
-    // Which is exactly what `deepest_rank_within_width` inverts.
+    // Which is exactly what `deepest_rank_within_width` inverts. `>=` the
+    // separating bound is too weak a check: it passes for any understatement,
+    // which is exactly how this shipped. Pin it to the exact truth instead.
     let deepest = profile
         .deepest_rank_within_width(&stratum, near)
         .expect("weighted");
-    assert!(
-        deepest >= bound,
-        "tolerating a class of {near} must reach at least as deep as demanding one"
+    let expected_deepest = deepest_rank_within_width_by_walking(decay, weight, near, 10_000);
+    assert_eq!(
+        deepest, expected_deepest,
+        "tolerating a class of {near} must equal the independently walked depth"
     );
     assert_eq!(
         profile.deepest_rank_within_width(&stratum, 1),
         Some(bound),
         "a tolerance of one is the separating bound itself"
     );
+}
+
+#[test]
+fn deepest_rank_within_width_matches_an_independently_walked_truth_at_several_tolerances() {
+    // The magnitudes below were measured directly against this fixture (k=60,
+    // weight 1_000_000 raw units, truncated rule). They are pinned alongside an
+    // independent walk, not in place of it: the walk is what actually proves
+    // the arithmetic, the literal numbers just document what it produces here.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+    let profile = deep_profile(decay, weight);
+    let stratum = stratum("deep");
+
+    let cases = [(2_u64, 1382_u64), (3, 1712), (5, 2222), (10, 3144)];
+    for (max_width, measured) in cases {
+        let truth = deepest_rank_within_width_by_walking(decay, weight, max_width, 10_000);
+        assert_eq!(
+            truth, measured,
+            "the independent walk must reproduce the measured depth at max_width {max_width}"
+        );
+        let got = profile
+            .deepest_rank_within_width(&stratum, max_width)
+            .expect("weighted");
+        assert_eq!(
+            got, truth,
+            "deepest_rank_within_width must equal the independently walked depth at max_width {max_width}, not understate it"
+        );
+    }
+
+    // The width-one boundary is unaffected by the general rule: it is decided
+    // by the short-circuit that returns `monotone_depth` directly, and that
+    // path must still agree with the exact separating bound.
+    let bound = profile
+        .monotone_depth(&stratum)
+        .expect("weighted")
+        .rank()
+        .expect("saturates");
+    assert_eq!(
+        profile.deepest_rank_within_width(&stratum, 1),
+        Some(bound),
+        "max_width one must still agree exactly with monotone_depth"
+    );
+}
+
+#[test]
+fn deepest_rank_within_width_is_the_last_depth_the_offending_run_still_fits_in() {
+    // The boundary property the general rule exists to guarantee: truncating a
+    // read at the returned depth keeps every rank's class within tolerance, and
+    // reading one rank further breaks that for at least one rank. Both halves
+    // are asserted, per the repository's rule that a bound must be checked on
+    // both the refused side and the neighbouring valid side.
+    let decay = DecayRule::ReciprocalRank { k: K };
+    let weight = Fixed::from_raw(1_000_000);
+    let profile = deep_profile(decay, weight);
+    let stratum = stratum("deep");
+
+    for max_width in [2_u64, 3, 5, 10] {
+        let depth = profile
+            .deepest_rank_within_width(&stratum, max_width)
+            .expect("weighted");
+
+        for rank in 1..=depth {
+            let width = truncated_class_width(decay, weight, depth, rank);
+            assert!(
+                width <= max_width,
+                "max_width {max_width}: rank {rank} must sit in a class no wider than \
+                 {max_width} when the read is truncated at {depth}, got {width}"
+            );
+        }
+
+        let widths_one_deeper: Vec<u64> = (1..=depth + 1)
+            .map(|rank| truncated_class_width(decay, weight, depth + 1, rank))
+            .collect();
+        assert!(
+            widths_one_deeper.iter().any(|&width| width > max_width),
+            "max_width {max_width}: reading one rank past {depth} must push some rank's \
+             class past {max_width}, or {depth} was not actually the deepest admissible depth"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
