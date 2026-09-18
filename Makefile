@@ -12,7 +12,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -185,7 +185,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 24 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 25 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -301,7 +301,7 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
 			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
-			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
+			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
 			-p purrdf-geo -p purrdf-text -p purrdf-retrieval \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
@@ -360,9 +360,12 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 geo-determinism: ## Prove purrdf-geo's native and wasm32 answers are byte-identical (own gate, NOT part of `check`).
 	bash scripts/check-geo-determinism.sh
 
+hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are identical (own gate, NOT part of `check`).
+	bash scripts/check-hnsw-determinism.sh
+
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they
-	@# ANSWER the same way there, and for the two ranking surfaces that is the claim
+	@# ANSWER the same way there, and for the three ranking surfaces that is the claim
 	@# that matters. The embedding kNN surface ranks by binary64 arithmetic: a
 	@# reassociated sum or a fused multiply-add changes a last bit, two near-tied
 	@# neighbours swap, and the browser returns a different ANSWER than the host.

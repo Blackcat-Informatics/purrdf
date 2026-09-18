@@ -580,6 +580,83 @@ def program_regime_dts_claim() -> list[str]:
     return problems
 
 
+_HNSW_PROFILE = _REPO / "crates" / "hnsw" / "src" / "profile.rs"
+_HNSW_DESIGN = _REPO / "docs" / "design" / "purrdf-hnsw.md"
+
+# The sentence that introduces the quote in the design document. Named here because the
+# claim below fails if it cannot be found: a reworded introduction must not silently drop
+# the quote from this gate's reach.
+_EVIDENCE_ANCHOR = "The evidence string is exactly"
+
+
+def load_hnsw_loss_evidence() -> str:
+    """`purrdf_hnsw::profile::LOSS_EVIDENCE`, as the running code sees it.
+
+    The constant is written across three source lines with backslash continuations, so the
+    literal is reassembled the way rustc does — a continuation and the indentation following
+    it are removed — and the result is the exact byte string
+    ``guard::validate_guard`` compares a guard's revision against.
+    """
+    text = _read(_HNSW_PROFILE)
+    literal = re.search(
+        r'pub const LOSS_EVIDENCE: &str =\s*"([^"]*)";', text, re.DOTALL
+    )
+    if not literal:
+        raise SystemExit(
+            f"check-doc-claims: no `LOSS_EVIDENCE` string constant in "
+            f"{_HNSW_PROFILE.relative_to(_REPO)}; the approximation-evidence claim cannot "
+            f"be checked, so do not leave it unchecked"
+        )
+    body = literal.group(1)
+    joined = re.sub(r"\\\n\s*", "", body)
+    if "\\" in joined:
+        raise SystemExit(
+            f"check-doc-claims: `LOSS_EVIDENCE` carries an escape this reader does not "
+            f"reproduce ({joined!r}); the reassembled literal would not be the string the "
+            f"code compares against"
+        )
+    return joined
+
+
+def hnsw_loss_evidence_claim(evidence: str) -> list[str]:
+    """The design document must quote `LOSS_EVIDENCE` verbatim, not a superseded copy.
+
+    The approximation evidence is the one sentence the HNSW profile publishes about its own
+    quality, and it is load-bearing twice over: the guard digest commits it, and
+    ``validate_guard`` refuses any guard whose revision says something else. Two places
+    restate it — the crate's own test pin, which is checked on every run, and this design
+    document, which was not.
+
+    So it drifted, in the direction that always matters. The constant was corrected to say
+    where the evidence STOPS ("measured ... up to 50,000 rows, and UNMEASURED at the 10^6
+    scale this index exists for"); the design document kept publishing the earlier sentence,
+    which stated the favourable half and named no scale at all. The one paragraph a reader
+    consults for "what does this artifact promise" was the one paragraph still promising the
+    superseded thing.
+
+    Compared over reflowed text, because the document wraps the quote across lines and the
+    constant wraps it across source lines; neither wrap is part of the string.
+    """
+    problems: list[str] = []
+    text = _read(_HNSW_DESIGN)
+    rel = _HNSW_DESIGN.relative_to(_REPO)
+    flowed = _reflowed(text)
+    if _EVIDENCE_ANCHOR not in flowed:
+        problems.append(
+            f"{rel}: no {_EVIDENCE_ANCHOR!r} sentence found — the approximation-evidence "
+            f"quote was reworded or removed; update the anchor so the quote stays checked"
+        )
+    elif _reflowed(evidence) not in flowed:
+        problems.append(
+            f"{rel}: quotes an approximation evidence string that is not "
+            f"`profile::LOSS_EVIDENCE`. The constant reads {evidence!r}; the guard digest "
+            f"commits that sentence and `validate_guard` refuses a revision that says "
+            f"anything else, so a document quoting a different one describes an artifact "
+            f"this crate will not accept"
+        )
+    return problems
+
+
 # This script names both superseded fragment spellings and every banned overclaim in its
 # own docstrings and patterns, because that is where the bans are DEFINED. It is therefore
 # the one file both bans must skip: a ban that fails on its own definition is a ban nobody
@@ -5533,6 +5610,8 @@ def main(argv: list[str]) -> int:
     problems.extend(profile_count_claim())
     checked += 1
     problems.extend(program_regime_dts_claim())
+    checked += 1
+    problems.extend(hnsw_loss_evidence_claim(load_hnsw_loss_evidence()))
     checked += 1
     problems.extend(reasoning_session_hosts_claim())
     checked += 1

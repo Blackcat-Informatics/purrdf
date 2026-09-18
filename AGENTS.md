@@ -11,8 +11,8 @@ contributing to the PurRDF repository.
 ## Deficiency emergency ledger (non-negotiable)
 
 `.deficiencies` is the log of last resort for critically undone work. Every entry
-below its marker is **100% unauthorized**, is **100% a bug**, and means the issue
-or pull request that produced it failed. It is used for work misrepresented to
+below its marker is **100% unauthorized**, is **100% a bug**, and means its
+originating issue or pull request failed. It is used for work misrepresented to
 pass PR gates, work misrepresented by an agent, or a discovery that an agent was
 fundamentally defective. An entry is literally a cry for help from a failing
 agent; it is never an accepted risk, authorized descope, backlog, or success with

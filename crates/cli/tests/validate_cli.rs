@@ -1454,7 +1454,7 @@ fn shapes_graph_imports_are_folded_transitively_from_the_import_table() {
 
 /// WITHOUT `--import`, an unresolved `owl:imports` is REPORTED and the run proceeds.
 ///
-/// This is the issue's actual defect: the pre-fix behaviour was silence. It is deliberately a
+/// This is the actual defect: the pre-fix behaviour was silence. It is deliberately a
 /// diagnostic rather than a refusal — see the neighbouring-valid-case test below.
 #[test]
 fn an_unresolved_shapes_import_is_reported_rather_than_dropped_in_silence() {

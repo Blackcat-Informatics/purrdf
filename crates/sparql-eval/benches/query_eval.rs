@@ -319,7 +319,7 @@ SELECT (GROUP_CONCAT(?a; separator=\",\") AS ?ages) (MAX(?a) AS ?max) WHERE {
 /// **Catastrophe tripwire only — not a resolution instrument.** Cost model from
 /// the code, per `+`/`-`/`*`/`/` over two dataset-bound operands: operand
 /// extraction (lexical + datatype-IRI lookup, a full lexical re-parse, an intern
-/// probe) is the dominant cost; the `value_*` family dispatch this issue adds is
+/// probe) is the dominant cost; the `value_*` family dispatch added here is
 /// one compare-and-branch on an in-register discriminant — under 0.1% of one
 /// evaluation. This row, run whole-query with `sample_size(10)` on a possibly
 /// contended host, has percent-level sample variance, so it can resolve a

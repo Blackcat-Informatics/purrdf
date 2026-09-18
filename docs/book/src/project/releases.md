@@ -61,7 +61,7 @@ cargo lane:
 - every workspace crate version must match the tag version.
 
 After its initial record bootstrap, every version of every crate in the
-23-crate release set is published by that lane. Each existing crate record is locked on crates.io with *Require trusted
+24-crate release set is published by that lane. Each existing crate record is locked on crates.io with *Require trusted
 publishing* (`trustpub_only`), so an API token cannot publish a new version of
 any of them: crates.io answers with `403 Forbidden: New versions of this crate
 can only be published using Trusted Publishing`. A token has exactly one role

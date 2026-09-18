@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-hnsw"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic HNSW approximate nearest neighbor index for PurRDF"
+keywords = ["hnsw", "ann", "vector", "search", "deterministic"]
+categories = ["algorithms", "data-structures"]
+
+[dependencies]
+purrdf-core = { workspace = true }
+purrdf-sparql-eval = { workspace = true }
+# The XSD value space, for the relation's canonical `xsd:double` distances and its
+# `xsd:integer` neighbour count. A zero-dependency foundation crate, wasm-clean, and the
+# same value space the exact kNN relation formats through — so the approximate and exact
+# surfaces emit byte-identical distance literals.
+purrdf-xsd = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+# The conformance gate emits a machine-checkable receipt, and a receipt is JSON because
+# its whole purpose is to be read by something other than the process that wrote it. The
+# crate's runtime surface is untouched: a dev-dependency never reaches the wasm32 `--lib`
+# build, and the receipt schema (not serde) is what fixes the record's shape.
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+# Both benches are one-shot, report-only measurement harnesses rather than criterion
+# statistical targets, and deliberately so. The build-cost harness measures a build that
+# takes minutes to tens of minutes at the top scales; criterion's whole method is to
+# repeat a closure until the sampling distribution settles, which for a 10^6-row build
+# would mean hours per point and a measurement of the machine's thermal state rather than
+# the code. A harness that times one build per scale and prints it is the honest
+# instrument for this quantity. The recall harness needs p50/p99 percentiles, an
+# exact-rank distribution and visited-work counts — none of which are criterion's output.
+[[bench]]
+name = "build"
+harness = false
+
+[[bench]]
+name = "recall"
+harness = false
