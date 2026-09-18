@@ -730,9 +730,10 @@ const NAMED_GRAPH_SHARE: u64 = 6;
 ///
 /// The row's shape is drawn from [`ROW_MIX_PER_MILLE`] and dispatched over
 /// [`RowKind`], so the compiler proves every kind is written. One sixth of
-/// rows land in one of [`NAMED_GRAPHS`] named graphs; that share is drawn from
-/// its own stream tag, independent of the row kind, so (for example) literals
-/// appear inside named graphs at the same rate as they do corpus-wide.
+/// rows land in one of 16 named graphs (an internal spread, not a manifest
+/// field — see `NAMED_GRAPHS`); that share is drawn from its own stream tag,
+/// independent of the row kind, so (for example) literals appear inside named
+/// graphs at the same rate as they do corpus-wide.
 pub fn write_row(out: &mut String, spec: &CorpusSpec, slot: u64) {
     let seed = spec.seed;
     let kind = row_kind_of(seed, slot);

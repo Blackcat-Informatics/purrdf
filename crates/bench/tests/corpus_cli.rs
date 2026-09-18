@@ -679,6 +679,51 @@ fn help_short_flag_prints_usage_to_stdout_with_empty_stderr() {
     );
 }
 
+// `/dev/full` is a Linux-specific device that always reports ENOSPC on write, which is exactly
+// the failing-sink condition this test needs; it has no portable equivalent, so this regression
+// is gated to Linux rather than skipped everywhere else.
+#[cfg(target_os = "linux")]
+#[test]
+fn help_to_a_failing_sink_reports_failure_instead_of_panicking() {
+    use std::fs::OpenOptions;
+    use std::process::Stdio;
+
+    let sink = OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("/dev/full must be openable for writing on Linux");
+    let output = Command::new(BENCH)
+        .arg("--help")
+        .stdout(Stdio::from(sink))
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn bench-corpus");
+
+    // A panic exits 101 (and prints "panicked at" on stderr, by default). The checked-write
+    // path this branch must share with the manifest/row paths instead reports the write
+    // failure and returns ExitCode::FAILURE.
+    let code = output.status.code();
+    assert_ne!(
+        code,
+        Some(101),
+        "--help against a failing sink must not panic (exit 101); got {code:?}"
+    );
+    assert_eq!(
+        code,
+        Some(1),
+        "--help against a failing sink must exit with the shared write-failure code"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+    assert!(
+        stderr.contains("write failed"),
+        "stderr must carry the write-failure diagnostic, not a panic message; got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "stderr must not contain a panic message; got:\n{stderr}"
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // 7. Every generated row parses as strict N-Quads.
 // ---------------------------------------------------------------------------------------------

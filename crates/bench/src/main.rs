@@ -190,8 +190,9 @@ fn parse_args() -> Result<ParsedArgs, String> {
 }
 
 /// Writes `bytes` to `writer` and flushes, reporting any failure through the
-/// one error discipline shared by both the manifest and the row output
-/// paths: a message on stderr and [`ExitCode::FAILURE`] — never a panic.
+/// one error discipline shared by the usage (`--help`/`-h`), manifest, and
+/// row output paths: a message on stderr and [`ExitCode::FAILURE`] — never a
+/// panic.
 fn write_checked(writer: &mut impl std::io::Write, bytes: &[u8]) -> ExitCode {
     match writer.write_all(bytes).and_then(|()| writer.flush()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -205,8 +206,8 @@ fn write_checked(writer: &mut impl std::io::Write, bytes: &[u8]) -> ExitCode {
 fn main() -> ExitCode {
     let (spec, out_path, want_manifest) = match parse_args() {
         Ok(ParsedArgs::Help) => {
-            print!("{USAGE}");
-            return ExitCode::SUCCESS;
+            let mut stdout = std::io::stdout().lock();
+            return write_checked(&mut stdout, USAGE.as_bytes());
         }
         Ok(ParsedArgs::Run {
             spec,
