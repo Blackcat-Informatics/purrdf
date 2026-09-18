@@ -1115,3 +1115,213 @@ fn paged_named_graphs_match_a_single_merged_dataset() {
         "sanity: the expected three graphs are present"
     );
 }
+
+// ── `reifier_quads_in_graph` / `annotation_quads_in_graph` narrowing (Task 6b) ──
+
+/// Populate `b` with page A's content: a reifier row + an annotation row in a named
+/// graph `g_owns` that genuinely owns rows, a SECOND reifier row + annotation row in
+/// the DEFAULT graph, and a named graph `g_none` declared but carrying nothing.
+fn populate_graph_narrow_page_a(b: &mut RdfDatasetBuilder, g_owns: &TermValue, g_none: &TermValue) {
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o");
+    b.push_quad(s, p, o, None);
+
+    let triple1 = b.intern_triple(s, p, o);
+    let r1 = b.intern_iri("http://example.org/r1");
+    let g_owns_id = intern_value(b, g_owns);
+    b.push_reifier_in_graph(r1, triple1, Some(g_owns_id));
+    let conf = b.intern_iri("http://example.org/confidence");
+    let high = b.intern_iri("http://example.org/high");
+    b.push_annotation_in_graph(r1, conf, high, Some(g_owns_id));
+
+    let triple2 = b.intern_triple(o, p, s);
+    let r2 = b.intern_iri("http://example.org/r2");
+    b.push_reifier_in_graph(r2, triple2, None);
+    let source = b.intern_iri("http://example.org/source");
+    let doc = b.intern_iri("http://example.org/doc");
+    b.push_annotation_in_graph(r2, source, doc, None);
+
+    let g_none_id = intern_value(b, g_none);
+    b.declare_named_graph(g_none_id);
+}
+
+/// Populate `b` with page B's content: a reifier row + an annotation row in a
+/// DIFFERENT named graph `g_other`, so `g_owns`'s postings must not pick this page up,
+/// while `GraphMatch::Any` still must.
+fn populate_graph_narrow_page_b(b: &mut RdfDatasetBuilder, g_other: &TermValue) {
+    let a = b.intern_iri("http://example.org/a");
+    let bb = b.intern_iri("http://example.org/b");
+    let c = b.intern_iri("http://example.org/c");
+    let triple3 = b.intern_triple(a, bb, c);
+    let r3 = b.intern_iri("http://example.org/r3");
+    let g_other_id = intern_value(b, g_other);
+    b.push_reifier_in_graph(r3, triple3, Some(g_other_id));
+    let p3 = b.intern_iri("http://example.org/p3");
+    let o3 = b.intern_iri("http://example.org/o3");
+    b.push_annotation_in_graph(r3, p3, o3, Some(g_other_id));
+}
+
+/// Assert, for every graph constraint in `graphs`, that
+/// `reifier_quads_in_graph(g)`/`annotation_quads_in_graph(g)` yield EXACTLY
+/// `reifier_quads()`/`annotation_quads()` filtered by `g.matches(q.g)`, in the same
+/// order — the equivalence [`DatasetView::reifier_quads_in_graph`] and
+/// [`DatasetView::annotation_quads_in_graph`] document as their contract.
+fn assert_graph_narrow_matches_filter<V: DatasetView>(view: &V, graphs: &[GraphMatch<V::Id>]) {
+    for &g in graphs {
+        let expected_reifier: Vec<_> = view.reifier_quads().filter(|q| g.matches(q.g)).collect();
+        let actual_reifier: Vec<_> = view.reifier_quads_in_graph(g).collect();
+        assert_eq!(
+            actual_reifier, expected_reifier,
+            "reifier_quads_in_graph({g:?}) must equal reifier_quads().filter(|q| g.matches(q.g))"
+        );
+
+        let expected_annotation: Vec<_> =
+            view.annotation_quads().filter(|q| g.matches(q.g)).collect();
+        let actual_annotation: Vec<_> = view.annotation_quads_in_graph(g).collect();
+        assert_eq!(
+            actual_annotation, expected_annotation,
+            "annotation_quads_in_graph({g:?}) must equal \
+             annotation_quads().filter(|q| g.matches(q.g))"
+        );
+    }
+}
+
+/// Differential test: on a `PagedDataset`, a `PagedQueryView` over the SAME dataset,
+/// and a plain `RdfDataset` holding the same content merged into one builder,
+/// `reifier_quads_in_graph`/`annotation_quads_in_graph` must equal the corresponding
+/// whole-table stream filtered by `GraphMatch::matches`, for `Any`, `Default`, a graph
+/// that owns rows, and a graph that owns none — row order included, not just the set.
+#[test]
+fn reifier_and_annotation_quads_in_graph_match_the_filtered_whole_table_on_every_backend() {
+    let g_owns = iri("gOwns");
+    let g_none = iri("gNone");
+    let g_other = iri("gOther");
+
+    let page_a = {
+        let mut b = RdfDatasetBuilder::new();
+        populate_graph_narrow_page_a(&mut b, &g_owns, &g_none);
+        b.freeze().expect("page a freeze")
+    };
+    let page_b = {
+        let mut b = RdfDatasetBuilder::new();
+        populate_graph_narrow_page_b(&mut b, &g_other);
+        b.freeze().expect("page b freeze")
+    };
+
+    let provider = Arc::new(InMemoryPageProvider::new(vec![page_a, page_b]));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+    let query_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+    let g_owns_paged = paged.term_id_by_value(&g_owns).expect("gOwns interned");
+    let g_none_paged = paged.term_id_by_value(&g_none).expect("gNone interned");
+    let paged_graphs = [
+        GraphMatch::Any,
+        GraphMatch::Default,
+        GraphMatch::Named(g_owns_paged),
+        GraphMatch::Named(g_none_paged),
+    ];
+    assert_graph_narrow_matches_filter(&paged, &paged_graphs);
+    assert_graph_narrow_matches_filter(&query_view, &paged_graphs);
+
+    let single = {
+        let mut b = RdfDatasetBuilder::new();
+        populate_graph_narrow_page_a(&mut b, &g_owns, &g_none);
+        populate_graph_narrow_page_b(&mut b, &g_other);
+        b.freeze().expect("single freeze")
+    };
+    let g_owns_single = single.term_id_by_value(&g_owns).expect("gOwns interned");
+    let g_none_single = single.term_id_by_value(&g_none).expect("gNone interned");
+    let single_graphs = [
+        GraphMatch::Any,
+        GraphMatch::Default,
+        GraphMatch::Named(g_owns_single),
+        GraphMatch::Named(g_none_single),
+    ];
+    assert_graph_narrow_matches_filter(&*single, &single_graphs);
+
+    // Sanity: the fixture is not degenerate — `g_owns` genuinely owns rows and
+    // `g_none` genuinely owns none, on every backend.
+    assert_eq!(
+        paged
+            .reifier_quads_in_graph(GraphMatch::Named(g_owns_paged))
+            .count(),
+        1
+    );
+    assert_eq!(
+        paged
+            .reifier_quads_in_graph(GraphMatch::Named(g_none_paged))
+            .count(),
+        0
+    );
+    assert_eq!(
+        paged
+            .annotation_quads_in_graph(GraphMatch::Named(g_owns_paged))
+            .count(),
+        1
+    );
+    assert_eq!(
+        paged
+            .annotation_quads_in_graph(GraphMatch::Named(g_none_paged))
+            .count(),
+        0
+    );
+}
+
+/// Part A (Task 6): a page that mentions a reifier term ONLY in its base-quad table
+/// (role-agnostic term-table presence via `PageTranslation::to_local` alone would pass
+/// it) must be skipped by `reifier_quads_of` — never materialized — while a page that
+/// genuinely owns a reifier row for the same term is admitted and still yields it.
+#[test]
+fn reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owning_page() {
+    fn mentions_only_page() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let r = b.intern_iri("http://example.org/r");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        // `r` occurs here ONLY as a base-quad subject — no reifier row names it.
+        b.push_quad(r, p, o, None);
+        b.freeze().expect("mentions-only page freeze")
+    }
+    fn owning_page() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        b.push_reifier(r, triple);
+        b.freeze().expect("owning page freeze")
+    }
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(mentions_only_page),
+        Box::new(owning_page),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let r_global = paged.term_id_by_value(&iri("r")).expect("r interned");
+    let rows: Vec<_> = paged.reifier_quads_of(r_global).collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the owning page's genuine reifier row is yielded"
+    );
+    assert_eq!(
+        to_value(&paged, rows[0].o),
+        TermValue::Triple {
+            s: Box::new(iri("a")),
+            p: Box::new(iri("b")),
+            o: Box::new(iri("c")),
+        },
+        "the yielded row is the owning page's reifier binding"
+    );
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the mentions-only page (term-table presence, no reifier row) must never be \
+         materialized; only the owning page is"
+    );
+}

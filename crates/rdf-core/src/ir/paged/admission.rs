@@ -177,15 +177,33 @@ pub(crate) fn candidate_pages(
     page_count: u32,
     g: GraphMatch<GlobalTermId>,
 ) -> PageCandidates<'_> {
+    candidate_pages_for_stream(graph_index, page_count, g, PageStream::Base)
+}
+
+/// The `stream`-parametrized twin of [`candidate_pages`]: narrows to the graph
+/// index's posting list for `stream` in `Default`/`Named`, and falls back to every
+/// page for `Any`. Used by the paged
+/// [`DatasetView::reifier_quads_in_graph`](crate::dataset_view::DatasetView::reifier_quads_in_graph)
+/// and
+/// [`DatasetView::annotation_quads_in_graph`](crate::dataset_view::DatasetView::annotation_quads_in_graph)
+/// overrides to narrow by the REIFIER or ANNOTATION postings rather than the base-quad
+/// ones `candidate_pages` always uses.
+///
+/// Soundness: a page absent from `stream`'s posting list for `g` has zero rows of
+/// that stream in that graph (per [`GraphPageIndex::derive`], which only lists a page
+/// under a graph key for a stream when that page's own sealed summary reports a
+/// nonzero row count there), so it can contribute nothing.
+pub(crate) fn candidate_pages_for_stream(
+    graph_index: &GraphPageIndex,
+    page_count: u32,
+    g: GraphMatch<GlobalTermId>,
+    stream: PageStream,
+) -> PageCandidates<'_> {
     match g {
-        GraphMatch::Named(global_graph) => PageCandidates::Listed(
-            graph_index
-                .pages_for_named(global_graph, PageStream::Base)
-                .iter(),
-        ),
-        GraphMatch::Default => {
-            PageCandidates::Listed(graph_index.pages_for_default(PageStream::Base).iter())
+        GraphMatch::Named(global_graph) => {
+            PageCandidates::Listed(graph_index.pages_for_named(global_graph, stream).iter())
         }
+        GraphMatch::Default => PageCandidates::Listed(graph_index.pages_for_default(stream).iter()),
         GraphMatch::Any => PageCandidates::All(0..page_count),
     }
 }

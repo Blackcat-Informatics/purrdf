@@ -65,6 +65,7 @@ use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 use admission::PageAdmission;
 use graph_index::GraphPageIndex;
+use summary::PageStream;
 
 pub use provider::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
@@ -977,15 +978,19 @@ impl DatasetView for PagedDataset {
         &self,
         reifier: GlobalTermId,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        // Per-page narrowing, exactly like `annotations_of_with_graph`: a page whose
-        // translation lacks the reifier owns no row for it, so it is skipped BEFORE
-        // materialization; a page that has it addresses its contiguous run in `O(log n)`
-        // (`RdfDataset::reifier_quads_of`). Page order and within-page frozen order are
-        // both unchanged, so this is row-for-row identical to the trait default's filter
-        // over `reifier_quads`.
+        // Per-page narrowing, exactly like `annotations_of_with_graph`: a page is
+        // skipped BEFORE materialization unless its sealed `PageSummary` proves it
+        // owns at least one REIFIER row for this term (`reifier_rows(local) > 0`) —
+        // role-agnostic term-table presence (`to_local` alone) is not enough, because
+        // a page can mention a term only in its base-quad table and never as a
+        // reifier. A page that clears the check addresses its contiguous run in
+        // `O(log n)` (`RdfDataset::reifier_quads_of`). Page order and within-page
+        // frozen order are both unchanged, so this is row-for-row identical to the
+        // trait default's filter over `reifier_quads`.
         self.pages.iter().flat_map(move |slot| {
             slot.translation
                 .to_local(reifier)
+                .filter(|&local| slot.translation.summary().reifier_rows(local) > 0)
                 .into_iter()
                 .flat_map(move |local_reifier| {
                     let page = self
@@ -1012,11 +1017,14 @@ impl DatasetView for PagedDataset {
         &self,
         reifier: GlobalTermId,
     ) -> impl Iterator<Item = (GlobalTermId, GlobalTermId, Option<GlobalTermId>)> + '_ {
-        // A page whose translation lacks the reifier is skipped BEFORE materialization
-        // (empty inner iterator), exactly as in `quads_for_pattern`.
+        // A page is skipped BEFORE materialization (empty inner iterator) unless its
+        // sealed `PageSummary` proves it owns at least one ANNOTATION row for this
+        // term (`annotation_rows(local) > 0`) — see `reifier_quads_of` above for why
+        // mere `to_local` presence is not enough.
         self.pages.iter().flat_map(move |slot| {
             slot.translation
                 .to_local(reifier)
+                .filter(|&local| slot.translation.summary().annotation_rows(local) > 0)
                 .into_iter()
                 .flat_map(move |local_reifier| {
                     let page = self
@@ -1031,6 +1039,62 @@ impl DatasetView for PagedDataset {
                             )
                         })
                 })
+        })
+    }
+
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // An override, not a new obligation (see the trait's doc comment): narrows the
+        // candidate page set to the REIFIER stream's graph postings BEFORE any page is
+        // materialized, exactly as `quads_for_pattern` narrows on the base-quad
+        // postings. Soundness: a page absent from `g`'s reifier posting list has zero
+        // reifier rows in that graph (per `GraphPageIndex::derive`), so it can
+        // contribute nothing. A listed page may also hold reifier rows in OTHER
+        // graphs, so the per-row `g.matches` filter still runs after materialization —
+        // narrowing chooses pages, it does not replace the row predicate.
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        admission::candidate_pages_for_stream(
+            self.graph_index(),
+            page_count,
+            g,
+            PageStream::Reifier,
+        )
+        .flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.pages[index];
+            let page = self
+                .page(slot.id)
+                .expect("sealed page must re-materialize deterministically");
+            page.reifier_quads()
+                .map(move |q| map_quad_to_global(&slot.translation, q))
+                .filter(move |q| g.matches(q.g))
+        })
+    }
+
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // See `reifier_quads_in_graph` above: same narrowing, over the ANNOTATION
+        // stream's graph postings instead.
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        admission::candidate_pages_for_stream(
+            self.graph_index(),
+            page_count,
+            g,
+            PageStream::Annotation,
+        )
+        .flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.pages[index];
+            let page = self
+                .page(slot.id)
+                .expect("sealed page must re-materialize deterministically");
+            page.annotation_quads()
+                .map(move |q| map_quad_to_global(&slot.translation, q))
+                .filter(move |q| g.matches(q.g))
         })
     }
 

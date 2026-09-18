@@ -287,12 +287,6 @@ impl PageSummary {
     /// column. `0` if `term`'s index is out of range for this page.
     #[must_use]
     #[inline]
-    #[allow(
-        dead_code,
-        reason = "mirrors base_rows_as_subject/predicate/object's API shape for the reifier \
-                  stream; the page-admission law in admission.rs narrows only the base-quad \
-                  stream, so this accessor's only caller in this crate is this file's own test"
-    )]
     pub(crate) fn reifier_rows(&self, term: TermId) -> u64 {
         count_at(&self.reifier, term)
     }
@@ -301,13 +295,6 @@ impl PageSummary {
     /// column. `0` if `term`'s index is out of range for this page.
     #[must_use]
     #[inline]
-    #[allow(
-        dead_code,
-        reason = "mirrors base_rows_as_subject/predicate/object's API shape for the \
-                  annotation stream; the page-admission law in admission.rs narrows only the \
-                  base-quad stream, so this accessor's only caller in this crate is this \
-                  file's own test"
-    )]
     pub(crate) fn annotation_rows(&self, term: TermId) -> u64 {
         count_at(&self.annotation, term)
     }

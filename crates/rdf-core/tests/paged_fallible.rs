@@ -659,3 +659,65 @@ fn named_graphs_is_empty_after_a_sticky_failure() {
         "reading named_graphs on a healthy view must not itself request a page or fail it"
     );
 }
+
+/// A page whose ONE named graph carries ONE annotation row, for the
+/// `annotation_quads_in_graph` page-narrowing tests below.
+fn page_with_annotation_in_own_graph(i: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let reifier = builder.intern_iri(&format!("http://example.org/r{i}"));
+    let predicate = builder.intern_iri(&format!("http://example.org/p{i}"));
+    let object = builder.intern_iri(&format!("http://example.org/o{i}"));
+    let graph = builder.intern_iri(&format!("http://example.org/g{i}"));
+    builder.push_annotation_in_graph(reifier, predicate, object, Some(graph));
+    builder.freeze().expect("valid page")
+}
+
+/// `PagedQueryView::annotation_quads_in_graph(GraphMatch::Named(g0))` on a 4-page
+/// view — one named graph and one annotation row per page — must consume EXACTLY the
+/// one page whose graph-postings entry names it (`evidence.requested_pages ==
+/// [PageId(0)]`), going through `self.page` so the sticky-failure gate and the
+/// page/byte budget charging still apply. The neighbouring must-succeed case: the
+/// SAME shape of view under `GraphMatch::Any` still consumes every page and yields
+/// every row — narrowing by graph is not narrowing by accident.
+#[test]
+fn annotation_quads_in_graph_named_consumes_only_the_owning_page() {
+    let pages: Vec<Arc<RdfDataset>> = (0..4).map(page_with_annotation_in_own_graph).collect();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    let g0 = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g0"))
+        .expect("g0 interned at seal");
+
+    let named_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let named_row_count = named_view
+        .annotation_quads_in_graph(GraphMatch::Named(g0))
+        .count();
+    assert_eq!(
+        named_row_count, 1,
+        "only page 0's annotation row is in graph g0"
+    );
+    let named_evidence = ready_evidence(named_view.operation_status());
+    assert_eq!(
+        named_evidence.requested_pages,
+        vec![PageId(0)],
+        "GraphMatch::Named(g0) must request only the one page g0's postings name"
+    );
+    assert_eq!(named_evidence.consumed_pages, 1);
+
+    // Neighbouring must-succeed case: `GraphMatch::Any` still consumes every page and
+    // yields every row, on a FRESH view over the same dataset and limits.
+    let any_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let any_row_count = any_view.annotation_quads_in_graph(GraphMatch::Any).count();
+    assert_eq!(
+        any_row_count, 4,
+        "Any must yield every page's annotation row"
+    );
+    let any_evidence = ready_evidence(any_view.operation_status());
+    assert_eq!(
+        any_evidence.requested_pages,
+        vec![PageId(0), PageId(1), PageId(2), PageId(3)],
+        "GraphMatch::Any must still visit every page"
+    );
+    assert_eq!(any_evidence.consumed_pages, 4);
+}
