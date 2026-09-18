@@ -1,0 +1,17 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: aa830489ffaf380a52549f5ddc8f769cc02ed4df
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 334
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/334
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 45ad8bb741b03a724ad3276e43e171ff25f3b013
+GhpRsq-Head-Ref: paudley/333-fusion-refuses-valid-stream-on-decay-tie
+GhpRsq-Head-OID: aa830489ffaf380a52549f5ddc8f769cc02ed4df
+GhpRsq-Result-Tree: f3d90121c3f30df13bfc3b8527ffe71c63e9408f
+GhpRsq-Result-Commit: f9a88f71ea08d199069fa77113b0a78ab5d36a97
+GhpRsq-Parent-Hashes: aa830489ffaf380a52549f5ddc8f769cc02ed4df
+GhpRsq-Squash-Notes-SHA256: 14b70015c267fd98dc071ea52e95166b4049bc5293b7d46fef069f052275665d
