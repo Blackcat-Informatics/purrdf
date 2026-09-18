@@ -720,23 +720,29 @@ make scale-corpus SCALE_MODE=pipe | your-loader     # ordered whole run, nothing
 make scale-corpus SCALE_MODE=files SCALE_OUT=/mnt/big/corpus
 ```
 
-`SCALE_MODE=pipe` puts corpus bytes on standard output, and `make` also has a
-standard-output channel of its own: whenever `-w`/`--print-directory` is in
-effect, `make` writes `make: Entering directory '...'` (and a matching
-`Leaving directory` line) to standard output before the recipe runs. That flag
-can be inherited explicitly via a propagated `MAKEFLAGS`, but GNU make also
-turns it on **automatically** for any invocation it detects as a sub-make —
-i.e. whenever `MAKELEVEL` in the environment is already nonzero — regardless
-of what `MAKEFLAGS` says; the banner then reads `make[1]: Entering
-directory ...` (the bracketed number is the recursion depth). A `make`
-invoked *from inside another `make`'s recipe* is exactly this case. Piped into
-a loader, that banner arrives as a corrupt first line the loader cannot parse
-as a corpus row. A shell driving `make scale-corpus SCALE_MODE=pipe` directly
-has no pending `MAKEFLAGS`/`MAKELEVEL` and never sees this; a wrapper
-`Makefile` that shells out to this lane must call it with
-`--no-print-directory` (or `-s`) to keep the banner off the payload's stdout
-regardless of recursion depth, e.g.
-`$(MAKE) --no-print-directory scale-corpus SCALE_MODE=pipe | your-loader`.
+`SCALE_MODE=pipe` puts corpus bytes on standard output, so **nothing may share
+that stream**. The repository's `Makefile` sets `MAKEFLAGS +=
+--no-print-directory` at its top for exactly this reason, which makes the
+payload byte-exact at any recursion depth with **no cooperation required from
+the caller**: `$(MAKE) scale-corpus SCALE_MODE=pipe | your-loader` from inside
+another `Makefile` produces the same bytes as a plain shell invocation. The
+setting is repository-global, so every other target loses its directory banners
+too.
+
+The background, because the trap is easy to misdiagnose elsewhere: whenever
+`-w`/`--print-directory` is in effect, `make` writes `make: Entering directory
+'...'` (and a matching `Leaving directory` line) to standard output before the
+recipe runs. That flag can be inherited explicitly via a propagated
+`MAKEFLAGS`, but GNU make also turns it on **automatically** for any invocation
+it detects as a sub-make — i.e. whenever `MAKELEVEL` in the environment is
+already nonzero — regardless of what `MAKEFLAGS` says; the banner then reads
+`make[1]: Entering directory ...` (the bracketed number is the recursion depth).
+A real nested `$(MAKE)` shows an **empty `MAKEFLAGS` with `MAKELEVEL=1`**, and
+the banner appears anyway, so checking `MAKEFLAGS` and finding it clean proves
+nothing. Piped into a loader, that banner arrives as a corrupt first line the
+loader cannot parse as a corpus row. A wrapper around some *other* `Makefile`
+that lacks the global setting has to pass the flag itself, e.g.
+`$(MAKE) --no-print-directory some-lane | your-loader`.
 
 ### Parameters
 
@@ -752,6 +758,21 @@ Every knob is an overridable `make` variable, in the same style as `BENCH_ARGS`.
 | `SCALE_OUT` | *(unset)* | Output directory; **required** by `SCALE_MODE=files`, which refuses to run without it. |
 | `SCALE_SINK` | *(unset)* | Replaces the built-in digest sink in `stream` mode with any command that reads standard input. |
 | `SCALE_MANIFEST` | *(unset)* | Writes the manifest to this path instead of the mode's default destination. |
+
+Every knob above except `SCALE_SINK` is **passed through literally**. `make`
+hands each one to the lane script as environment bytes rather than
+interpolating it into a recipe line, so a path is used exactly as typed —
+spaces, `$`, backticks and quotes are all just characters in a filename, none
+of them is expanded, and no shell ever parses them. A path the lane cannot open
+is a hard failure that quotes the bytes it used; the lane never writes
+somewhere else and reports success. The same holds for the `LUBM_*` and
+`WATDIV_*` knobs below.
+
+`SCALE_SINK` is the one deliberate exception, because it **is** a command: it
+replaces the built-in digest sink and is therefore executed by a shell. It is
+syntax-checked once, before any shard runs, and a value that cannot be run
+fails the lane with a diagnostic naming `SCALE_SINK` rather than a bare shell
+error.
 
 ### What a capture records
 

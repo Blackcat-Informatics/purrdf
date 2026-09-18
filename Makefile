@@ -1,6 +1,25 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
+# REPOSITORY-GLOBAL: no `make: Entering directory '...'` banners, from ANY
+# target, at any recursion depth.
+#
+# This is here because `scale-corpus`'s headline idiom pipes make's STANDARD
+# OUTPUT into a loader (`make scale-corpus SCALE_MODE=pipe | your-loader`): on
+# that lane stdout is a PAYLOAD, and make's directory banner lands on the same
+# stream ahead of it as a corrupt first line the loader cannot parse. GNU make
+# turns `-w` on automatically whenever it detects a sub-make (a nonzero
+# inherited `MAKELEVEL`), so any wrapper that shells out to this lane inherits
+# the corruption without asking for it. Suppressing the banner HERE makes the
+# payload byte-exact with no cooperation required from the consumer; the
+# target-specific form (`scale-corpus: MAKEFLAGS += ...`) does not work, because
+# make emits the banner before target-specific variables apply.
+#
+# The trade, stated plainly: every other target loses its directory banners too.
+# Nothing in this file parses them, and the recipes that change directory say so
+# themselves.
+MAKEFLAGS += --no-print-directory
+
 # Match Cargo's effective target directory, including `build.target-dir` from
 # host/workspace configuration. An explicit environment or command-line value
 # bypasses discovery.
@@ -227,6 +246,36 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 bench: ## Run criterion benchmarks (report-only; never a gate).
 	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
 
+# HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
+#
+# A `make` recipe line is handed to `/bin/sh`, so a knob interpolated into one
+# gets a round of SHELL evaluation the operator never asked for. That is not
+# theoretical: `make scale-corpus 'SCALE_MANIFEST=/tmp/`touch /tmp/pwned`m.json'`
+# ran the backtick and then wrote the manifest to `/tmp/m.json` — a DIFFERENT
+# PATH than the one requested — and still exited 0. Quoting the interpolation
+# does not fix it: a double-quoted `sh` string still expands `` ` `` and `$`, and
+# a value containing a `"` becomes a raw `sh: unexpected EOF` instead of a lane
+# diagnostic. And `make` has a second expansion of its own — `$` in a
+# command-line variable value is `make`'s OWN variable syntax, so
+# `SCALE_MANIFEST=m$x.json` silently became `m.json`.
+#
+# `lane-env` closes both. `override X := $(value X)` freezes the bytes the
+# operator actually typed, before `make` expands anything in them; `export X`
+# hands exactly those bytes to the child's environment, where no shell parses
+# them. The lane scripts already read every one of these knobs from the
+# environment (`${SCALE_OUT:-}` and friends), so a path is now taken literally,
+# byte for byte, or the lane hard-fails saying which bytes it used.
+#
+# The one deliberate exception is `SCALE_SINK`, which is DOCUMENTED AS A COMMAND
+# and therefore must still reach a shell. It does so at exactly one place,
+# inside scripts/scale-corpus.sh, which syntax-checks it up front and fails with
+# a lane diagnostic if it cannot be run — never a bare `sh` error, never a
+# silent success.
+define lane-env
+override $(1) := $$(value $(1))
+export $(1)
+endef
+
 # The scale-corpus lane's knobs. Overridable exactly like BENCH_ARGS above:
 # `make scale-corpus SCALE_QUADS=10000000 SCALE_SHARDS=16`. The defaults are a
 # small streamed run because the profile's density rises with the entity index
@@ -243,11 +292,10 @@ SCALE_OUT ?=
 SCALE_SINK ?=
 SCALE_MANIFEST ?=
 
+$(foreach knob,SCALE_QUADS SCALE_IRIS SCALE_SEED SCALE_SHARDS SCALE_MODE SCALE_OUT SCALE_SINK SCALE_MANIFEST,$(eval $(call lane-env,$(knob))))
+
 scale-corpus: ## Generate the deterministic scale corpus across shards (streams and retains nothing by default; report-only, never a gate). See docs/BENCHMARKS.md.
-	@SCALE_QUADS=$(SCALE_QUADS) SCALE_IRIS=$(SCALE_IRIS) SCALE_SEED=$(SCALE_SEED) \
-	SCALE_SHARDS=$(SCALE_SHARDS) SCALE_MODE=$(SCALE_MODE) SCALE_OUT="$(SCALE_OUT)" \
-	SCALE_SINK="$(SCALE_SINK)" SCALE_MANIFEST="$(SCALE_MANIFEST)" \
-	bash scripts/scale-corpus.sh
+	@bash scripts/scale-corpus.sh
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
 	bash scripts/check-columnar-oracle.sh
@@ -346,11 +394,14 @@ LUBM_ENTAIL_SLICE ?= 3000
 LUBM_OUT ?= target/lubm
 LUBM_BIN ?=
 
+# Environment bytes, not a shell assignment prefix — see `lane-env` above. A
+# backtick in `LUBM_OUT` used to run and the lane then worked in a directory
+# nobody named. None of these knobs is a command, so none of them reaches a
+# shell at all.
+$(foreach knob,LUBM_UNIVERSITIES LUBM_SEED LUBM_INDEX LUBM_ONTO LUBM_DOC_BASE LUBM_ENTAIL_SLICE LUBM_OUT LUBM_BIN,$(eval $(call lane-env,$(knob))))
+
 lubm: ## Run the LUBM comparison workload end to end - acquire, generate, convert through the purrdf CLI, and run the 14 queries per entailment regime (report-only, never a gate). See docs/BENCHMARKS.md.
-	@LUBM_UNIVERSITIES=$(LUBM_UNIVERSITIES) LUBM_SEED=$(LUBM_SEED) LUBM_INDEX=$(LUBM_INDEX) \
-	LUBM_ONTO="$(LUBM_ONTO)" LUBM_DOC_BASE="$(LUBM_DOC_BASE)" \
-	LUBM_ENTAIL_SLICE=$(LUBM_ENTAIL_SLICE) LUBM_OUT="$(LUBM_OUT)" LUBM_BIN="$(LUBM_BIN)" \
-	bash scripts/lubm-lane.sh
+	@bash scripts/lubm-lane.sh
 
 # The WatDiv comparison lane's knobs, in the same style as LUBM_* above:
 # `make watdiv WATDIV_SEED=7`. The default dataset is upstream's frozen 10M output
@@ -369,10 +420,11 @@ WATDIV_SEED ?= 0
 WATDIV_OUT ?= target/watdiv
 WATDIV_BIN ?=
 
+# Environment bytes, not a shell assignment prefix — see `lane-env` above.
+$(foreach knob,WATDIV_SCALE WATDIV_SEED WATDIV_OUT WATDIV_BIN,$(eval $(call lane-env,$(knob))))
+
 watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen dataset, instantiate the 20 templates deterministically, load through the purrdf CLI, and run them (pure BGP, no entailment; report-only, never a gate). See docs/BENCHMARKS.md.
-	@WATDIV_SCALE=$(WATDIV_SCALE) WATDIV_SEED=$(WATDIV_SEED) \
-	WATDIV_OUT="$(WATDIV_OUT)" WATDIV_BIN="$(WATDIV_BIN)" \
-	bash scripts/watdiv-lane.sh
+	@bash scripts/watdiv-lane.sh
 
 # `purrdf-bench` is unpublished tooling rather than a release crate, and it is in
 # this list anyway: its library half documents itself as portable, and a

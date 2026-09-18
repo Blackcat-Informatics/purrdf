@@ -36,15 +36,22 @@
 #           the ordering; `stream` is the one that uses the cores.
 #
 #           TRAP for a wrapper `Makefile` that shells out to `make
-#           scale-corpus SCALE_MODE=pipe`: when `-w`/`--print-directory` is in
-#           the calling `make`'s inherited `MAKEFLAGS` (which happens
-#           automatically for a nested `make`), `make` itself writes
-#           `make: Entering directory '...'` to standard output before this
-#           script's payload does, corrupting the loader's first line. A
-#           plain shell invocation has no `-w` pending and never sees this;
-#           a wrapper must call `--no-print-directory` (or `-s`) to keep that
-#           banner off the pipe, e.g.
+#           scale-corpus SCALE_MODE=pipe`: GNU make turns `-w`/`--print-
+#           directory` on BY ITSELF for any invocation it detects as a
+#           sub-make, which it decides from a nonzero inherited `MAKELEVEL` --
+#           NOT from `MAKEFLAGS`. A nested `$(MAKE)` shows an EMPTY `MAKEFLAGS`
+#           and `MAKELEVEL=1`, and the banner appears anyway, so an operator who
+#           inspects `MAKEFLAGS`, finds it clean and concludes the pipe is safe
+#           has checked the wrong variable. `make` then writes `make[1]:
+#           Entering directory '...'` to standard output before this script's
+#           payload does, corrupting the loader's first line. A plain shell
+#           invocation has no recursion state at all and never sees this.
+#           THIS REPOSITORY'S `Makefile` SETS `MAKEFLAGS += --no-print-directory`
+#           AT ITS TOP so the payload is already clean at any `MAKELEVEL`; a
+#           wrapper around some OTHER `Makefile` has to pass
+#           `--no-print-directory` (or `-s`) itself, e.g.
 #           `$(MAKE) --no-print-directory scale-corpus SCALE_MODE=pipe | your-loader`.
+#           `docs/BENCHMARKS.md` states the same rule at length.
 #   files   opt-in materialization. Each shard is written to its own
 #           zero-padded, lexicographically sortable file, so `cat` of the
 #           sorted `*.nq` files reproduces a whole run byte for byte.
@@ -99,6 +106,25 @@ esac
 
 if [[ "${MODE}" == "files" && -z "${OUT}" ]]; then
   die "SCALE_MODE=files requires SCALE_OUT=<directory> — materializing a run is always explicit"
+fi
+
+# `SCALE_SINK` IS THE ONE PARAMETER THAT IS A COMMAND. Every other knob is a
+# path, a count or a keyword, and every one of them arrives here as environment
+# bytes that no shell ever parses — `make` `export`s them rather than
+# interpolating them into a recipe line, so a backtick or a `$` in a path is
+# just a character in a path. The sink is different by design: it is documented
+# as "any command that reads standard input", so it is EXECUTED, and this is the
+# single place that does it.
+#
+# Being the exception is not licence to fail badly. A sink that cannot even be
+# parsed is caught here, once, before a single shard runs, and reported as a
+# lane diagnostic — not as a bare `bash: -c: unexpected EOF` from inside a
+# backgrounded shard, and never as an exit-0 run that consumed nothing.
+if [[ -n "${SINK}" ]]; then
+  sink_parse_error="$(bash -n -c "${SINK}" 2>&1)" ||
+    die "SCALE_SINK is not a runnable shell command: ${sink_parse_error#bash: }
+  SCALE_SINK is executed as a command by design (it replaces the built-in digest
+  sink), so it must parse as one. Got: ${SINK}"
 fi
 
 # Resolve the binary through the build that produces it rather than through a
@@ -210,7 +236,12 @@ stream_shard() {
   local -a args
   mapfile -t args < <(shard_args "${index}")
   if [[ -n "${SINK}" ]]; then
-    "${BIN}" "${args[@]}" | bash -c "${SINK}" >"${tmp}/${index}.report"
+    # Named in the failure because a sink that parses but cannot RUN (a missing
+    # binary, a non-zero exit) otherwise surfaces only as a shard number.
+    "${BIN}" "${args[@]}" | bash -c "${SINK}" >"${tmp}/${index}.report" || {
+      echo "scale-corpus: SCALE_SINK failed for shard ${index} (command: ${SINK})" >&2
+      return 1
+    }
   else
     "${BIN}" "${args[@]}" | digest_sink >"${tmp}/${index}.report"
   fi
@@ -235,9 +266,25 @@ file_shard() {
 # `/dev/stdout` TRUNCATES when standard output is a regular file, so a run
 # redirected to a log would have overwritten everything printed before the
 # manifest with the manifest.
+#
+# `SCALE_MANIFEST` is taken LITERALLY — it is a path, not an expression, and
+# every character in it is part of the filename. An unopenable path is a lane
+# failure with the path quoted back verbatim, so an operator can see exactly
+# which bytes were used; the one thing this must never do is write somewhere
+# else and report success.
 emit_manifest() {
   if [[ -n "${MANIFEST_PATH}" ]]; then
-    whole_run_manifest >"${MANIFEST_PATH}"
+    # The write happens exactly once; its diagnostics are CAPTURED rather than
+    # discarded, so the redirection error (and anything the generator said) is
+    # reported inside the lane's own message instead of leaking as a bare shell
+    # line or, worse, being swallowed.
+    local write_error
+    if ! write_error="$({ whole_run_manifest >"${MANIFEST_PATH}"; } 2>&1)"; then
+      die "cannot write the manifest to SCALE_MANIFEST='${MANIFEST_PATH}'
+  ${write_error}
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Check that its parent directory exists and is writable."
+    fi
     echo "scale-corpus: manifest written to ${MANIFEST_PATH}" >&2
     return
   fi
