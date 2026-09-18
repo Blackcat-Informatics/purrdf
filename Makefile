@@ -244,9 +244,9 @@ SCALE_SINK ?=
 SCALE_MANIFEST ?=
 
 scale-corpus: ## Generate the deterministic scale corpus across shards (streams and retains nothing by default; report-only, never a gate). See docs/BENCHMARKS.md.
-	SCALE_QUADS=$(SCALE_QUADS) SCALE_IRIS=$(SCALE_IRIS) SCALE_SEED=$(SCALE_SEED) \
-	SCALE_SHARDS=$(SCALE_SHARDS) SCALE_MODE=$(SCALE_MODE) SCALE_OUT=$(SCALE_OUT) \
-	SCALE_SINK=$(SCALE_SINK) SCALE_MANIFEST=$(SCALE_MANIFEST) \
+	@SCALE_QUADS=$(SCALE_QUADS) SCALE_IRIS=$(SCALE_IRIS) SCALE_SEED=$(SCALE_SEED) \
+	SCALE_SHARDS=$(SCALE_SHARDS) SCALE_MODE=$(SCALE_MODE) SCALE_OUT="$(SCALE_OUT)" \
+	SCALE_SINK="$(SCALE_SINK)" SCALE_MANIFEST="$(SCALE_MANIFEST)" \
 	bash scripts/scale-corpus.sh
 
 columnar-oracle: ## Verify production Parquet files through the dev-only DuckDB oracle.
@@ -347,9 +347,9 @@ LUBM_OUT ?= target/lubm
 LUBM_BIN ?=
 
 lubm: ## Run the LUBM comparison workload end to end - acquire, generate, convert through the purrdf CLI, and run the 14 queries per entailment regime (report-only, never a gate). See docs/BENCHMARKS.md.
-	LUBM_UNIVERSITIES=$(LUBM_UNIVERSITIES) LUBM_SEED=$(LUBM_SEED) LUBM_INDEX=$(LUBM_INDEX) \
-	LUBM_ONTO=$(LUBM_ONTO) LUBM_DOC_BASE=$(LUBM_DOC_BASE) \
-	LUBM_ENTAIL_SLICE=$(LUBM_ENTAIL_SLICE) LUBM_OUT=$(LUBM_OUT) LUBM_BIN=$(LUBM_BIN) \
+	@LUBM_UNIVERSITIES=$(LUBM_UNIVERSITIES) LUBM_SEED=$(LUBM_SEED) LUBM_INDEX=$(LUBM_INDEX) \
+	LUBM_ONTO="$(LUBM_ONTO)" LUBM_DOC_BASE="$(LUBM_DOC_BASE)" \
+	LUBM_ENTAIL_SLICE=$(LUBM_ENTAIL_SLICE) LUBM_OUT="$(LUBM_OUT)" LUBM_BIN="$(LUBM_BIN)" \
 	bash scripts/lubm-lane.sh
 
 # The WatDiv comparison lane's knobs, in the same style as LUBM_* above:
@@ -370,8 +370,8 @@ WATDIV_OUT ?= target/watdiv
 WATDIV_BIN ?=
 
 watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen dataset, instantiate the 20 templates deterministically, load through the purrdf CLI, and run them (pure BGP, no entailment; report-only, never a gate). See docs/BENCHMARKS.md.
-	WATDIV_SCALE=$(WATDIV_SCALE) WATDIV_SEED=$(WATDIV_SEED) \
-	WATDIV_OUT=$(WATDIV_OUT) WATDIV_BIN=$(WATDIV_BIN) \
+	@WATDIV_SCALE=$(WATDIV_SCALE) WATDIV_SEED=$(WATDIV_SEED) \
+	WATDIV_OUT="$(WATDIV_OUT)" WATDIV_BIN="$(WATDIV_BIN)" \
 	bash scripts/watdiv-lane.sh
 
 # `purrdf-bench` is unpublished tooling rather than a release crate, and it is in

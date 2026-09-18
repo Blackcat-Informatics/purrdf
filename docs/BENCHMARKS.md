@@ -720,6 +720,24 @@ make scale-corpus SCALE_MODE=pipe | your-loader     # ordered whole run, nothing
 make scale-corpus SCALE_MODE=files SCALE_OUT=/mnt/big/corpus
 ```
 
+`SCALE_MODE=pipe` puts corpus bytes on standard output, and `make` also has a
+standard-output channel of its own: whenever `-w`/`--print-directory` is in
+effect, `make` writes `make: Entering directory '...'` (and a matching
+`Leaving directory` line) to standard output before the recipe runs. That flag
+can be inherited explicitly via a propagated `MAKEFLAGS`, but GNU make also
+turns it on **automatically** for any invocation it detects as a sub-make —
+i.e. whenever `MAKELEVEL` in the environment is already nonzero — regardless
+of what `MAKEFLAGS` says; the banner then reads `make[1]: Entering
+directory ...` (the bracketed number is the recursion depth). A `make`
+invoked *from inside another `make`'s recipe* is exactly this case. Piped into
+a loader, that banner arrives as a corrupt first line the loader cannot parse
+as a corpus row. A shell driving `make scale-corpus SCALE_MODE=pipe` directly
+has no pending `MAKEFLAGS`/`MAKELEVEL` and never sees this; a wrapper
+`Makefile` that shells out to this lane must call it with
+`--no-print-directory` (or `-s`) to keep the banner off the payload's stdout
+regardless of recursion depth, e.g.
+`$(MAKE) --no-print-directory scale-corpus SCALE_MODE=pipe | your-loader`.
+
 ### Parameters
 
 Every knob is an overridable `make` variable, in the same style as `BENCH_ARGS`.

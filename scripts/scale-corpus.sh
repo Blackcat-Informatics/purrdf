@@ -34,6 +34,17 @@
 #           corpus a single unsharded run would have produced. Ordered output
 #           cannot outrun its consumer, so this mode trades the concurrency for
 #           the ordering; `stream` is the one that uses the cores.
+#
+#           TRAP for a wrapper `Makefile` that shells out to `make
+#           scale-corpus SCALE_MODE=pipe`: when `-w`/`--print-directory` is in
+#           the calling `make`'s inherited `MAKEFLAGS` (which happens
+#           automatically for a nested `make`), `make` itself writes
+#           `make: Entering directory '...'` to standard output before this
+#           script's payload does, corrupting the loader's first line. A
+#           plain shell invocation has no `-w` pending and never sees this;
+#           a wrapper must call `--no-print-directory` (or `-s`) to keep that
+#           banner off the pipe, e.g.
+#           `$(MAKE) --no-print-directory scale-corpus SCALE_MODE=pipe | your-loader`.
 #   files   opt-in materialization. Each shard is written to its own
 #           zero-padded, lexicographically sortable file, so `cat` of the
 #           sorted `*.nq` files reproduces a whole run byte for byte.
