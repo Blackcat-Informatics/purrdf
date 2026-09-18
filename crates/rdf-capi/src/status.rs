@@ -40,6 +40,13 @@ pub enum PurrdfStatus {
     CursorExhausted = 9,
     /// A GTS container read/write operation failed.
     GtsError = 10,
+    /// The prepared-shapes-product admission boundary refused. The error carries a
+    /// named DIMENSION as well as a message — read it with
+    /// `purrdf_shapes_product_error_dimension`, because "these bytes are corrupt",
+    /// "this product is from another build" and "your configuration is not the one it
+    /// was prepared against" are three different actions and this one status cannot
+    /// distinguish them.
+    ShapesProductError = 11,
     /// A panic was caught at the FFI boundary (should never reach the caller in
     /// normal operation).
     Panic = 100,

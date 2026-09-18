@@ -21,7 +21,8 @@
 //! # Two passes, because a body may call a function
 //!
 //! Declarations are DISCOVERED first ([`Parser::discover_custom_functions`]) and
-//! their bodies installed afterwards ([`Parser::install_custom_function_bodies`]).
+//! their bodies parsed afterwards ([`Parser::parse_custom_function_bodies`]), then
+//! installed into the declarations by [`crate::shapes::link::link_shapes`].
 //! A body is a node expression that may call any declared function, including
 //! itself, so inlining it during discovery would not terminate; interning the
 //! declaration first means every call site — in a shape, in another function's body,
@@ -302,20 +303,27 @@ impl Parser<'_> {
         Ok((params, required))
     }
 
-    /// Parse and install every declared function's `sh:bodyExpression`.
+    /// Parse every declared function's `sh:bodyExpression`, keyed by function IRI.
     ///
     /// Runs after discovery, so a body that calls a function — itself included —
     /// resolves against the interned declarations.
+    ///
+    /// The bodies are RETURNED rather than installed: writing one into a
+    /// declaration's `OnceLock` is a linking step, and every linking step belongs to
+    /// [`crate::shapes::link::link_shapes`], which is where the same installation is
+    /// verified rather than assumed. The map is a `BTreeMap`, so it carries the
+    /// declaration table's own IRI order through to the installer.
     ///
     /// # Errors
     ///
     /// Hard-fails when a declaration carries no `sh:bodyExpression` or more than
     /// one, when the body does not parse as a node expression, or when the body
     /// references an argument key the declaration does not have.
-    pub(crate) fn install_custom_function_bodies(
+    pub(crate) fn parse_custom_function_bodies(
         &mut self,
         index: &CustomFnIndex,
-    ) -> Result<(), String> {
+    ) -> Result<BTreeMap<String, crate::expression::NodeExpr>, String> {
+        let mut parsed_bodies = BTreeMap::new();
         for func in index.iter() {
             let id = Term::NamedNode(func.iri.clone());
             let bodies = self.objects_of(&id, sh::BODY_EXPRESSION);
@@ -342,15 +350,18 @@ impl Parser<'_> {
                 )
             })?;
             check_body_args(func, &body)?;
-            if func.body.set(body).is_err() {
+            if parsed_bodies
+                .insert(func.iri.as_str().to_owned(), body)
+                .is_some()
+            {
                 return Err(format!(
                     "internal error: custom node-expression function <{}> already had a body \
-                     installed",
+                     parsed",
                     func.iri.as_str()
                 ));
             }
         }
-        Ok(())
+        Ok(parsed_bodies)
     }
 }
 

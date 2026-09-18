@@ -195,14 +195,23 @@ const BUCKET_SIZE: usize = 8;
 /// [`PackDict`]'s owned arena. Mirrors [`TermValue`]/[`TermRef`] but every id-carrying
 /// component (a literal's datatype, a triple term's `s`/`p`/`o`) is already a
 /// resolved unified [`PackTermId`].
-#[derive(Debug, Clone)]
-enum RawRecord {
+///
+/// **Borrowed, not owned.** Every string part is a `&str` aliasing the record bytes
+/// the caller is holding — either the bucket-data stream itself (a bucket's header
+/// record is contiguous there) or the reusable splice buffer a front-coded record is
+/// reassembled into. The record exists only long enough for [`push_entry`] to copy
+/// its strings ONCE into the dictionary's arena, which is the single copy the decoded
+/// form actually needs; materializing a `String` per field first would pay for that
+/// copy twice and allocate per term. This mirrors the borrowed `*Ref` readers the
+/// rest of the pack tree uses (see [`super::bits`]'s module docs).
+#[derive(Debug, Clone, Copy)]
+enum RawRecordRef<'a> {
     /// An IRI, by its full string.
-    Iri(String),
+    Iri(&'a str),
     /// A blank node, `(label, scope)`.
     Blank {
         /// The blank-node label.
-        label: String,
+        label: &'a str,
         /// The blank-node scope ordinal.
         scope: u32,
     },
@@ -210,12 +219,12 @@ enum RawRecord {
     /// base direction.
     Literal {
         /// The lexical form, byte-for-byte.
-        lexical: String,
+        lexical: &'a str,
         /// The datatype IRI's unified [`PackTermId`] (a dictionary entry in its own
         /// right).
         datatype: PackTermId,
         /// The (already-lowercased) language tag, if any.
-        language: Option<String>,
+        language: Option<&'a str>,
         /// The base direction byte: `0`=none, `1`=ltr, `2`=rtl.
         direction: u8,
     },
@@ -306,7 +315,10 @@ fn encode_record_into(
 /// Decode one self-terminating canonical byte-record from the START of `bytes`.
 /// Returns the decoded record and the number of leading bytes it consumed — `bytes`
 /// may carry trailing data after the record (the caller slices to that length).
-fn decode_record(bytes: &[u8]) -> Result<(RawRecord, usize), PackDictError> {
+///
+/// The returned record BORROWS `bytes`: no string is copied here, because the only
+/// copy the decoded dictionary needs is the one [`push_entry`] makes into its arena.
+fn decode_record(bytes: &[u8]) -> Result<(RawRecordRef<'_>, usize), PackDictError> {
     let tag = *bytes.first().ok_or(PackDictError::Truncated {
         needed: 1,
         found: 0,
@@ -315,14 +327,14 @@ fn decode_record(bytes: &[u8]) -> Result<(RawRecord, usize), PackDictError> {
     let record = match tag {
         TAG_IRI => {
             let s = read_len_prefixed_str(bytes, &mut pos)?;
-            RawRecord::Iri(s)
+            RawRecordRef::Iri(s)
         }
         TAG_BLANK => {
             let label = read_len_prefixed_str(bytes, &mut pos)?;
             let scope = read_varint(bytes, &mut pos)?;
             let scope = u32::try_from(scope)
                 .map_err(|_| PackDictError::Malformed("dict: blank scope exceeds u32"))?;
-            RawRecord::Blank { label, scope }
+            RawRecordRef::Blank { label, scope }
         }
         TAG_LITERAL => {
             let lexical = read_len_prefixed_str(bytes, &mut pos)?;
@@ -345,7 +357,7 @@ fn decode_record(bytes: &[u8]) -> Result<(RawRecord, usize), PackDictError> {
             if !matches!(direction, DIR_NONE | DIR_LTR | DIR_RTL) {
                 return Err(PackDictError::Malformed("dict: bad literal direction byte"));
             }
-            RawRecord::Literal {
+            RawRecordRef::Literal {
                 lexical,
                 datatype,
                 language,
@@ -356,7 +368,7 @@ fn decode_record(bytes: &[u8]) -> Result<(RawRecord, usize), PackDictError> {
             let s = read_varint(bytes, &mut pos)?;
             let p = read_varint(bytes, &mut pos)?;
             let o = read_varint(bytes, &mut pos)?;
-            RawRecord::Triple { s, p, o }
+            RawRecordRef::Triple { s, p, o }
         }
         _ => return Err(PackDictError::Malformed("dict: unknown term tag")),
     };
@@ -364,7 +376,8 @@ fn decode_record(bytes: &[u8]) -> Result<(RawRecord, usize), PackDictError> {
 }
 
 /// Read a `varint(len)` followed by `len` UTF-8 bytes, advancing `*pos` past both.
-fn read_len_prefixed_str(bytes: &[u8], pos: &mut usize) -> Result<String, PackDictError> {
+/// The returned `&str` aliases `bytes`; nothing is copied.
+fn read_len_prefixed_str<'a>(bytes: &'a [u8], pos: &mut usize) -> Result<&'a str, PackDictError> {
     let len = read_varint(bytes, pos)? as usize;
     let end = *pos + len;
     let slice = bytes.get(*pos..end).ok_or(PackDictError::Truncated {
@@ -372,8 +385,7 @@ fn read_len_prefixed_str(bytes: &[u8], pos: &mut usize) -> Result<String, PackDi
         found: bytes.len(),
     })?;
     let s = std::str::from_utf8(slice)
-        .map_err(|_| PackDictError::Malformed("dict: string is not valid utf-8"))?
-        .to_owned();
+        .map_err(|_| PackDictError::Malformed("dict: string is not valid utf-8"))?;
     *pos = end;
     Ok(s)
 }
@@ -446,22 +458,43 @@ fn decode_values(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError
     pos += offsets.serialized_len();
     let bucket_data = &bytes[pos..];
 
+    // One reserve for the whole decode instead of a doubling walk per section.
+    // `term_count` is UNTRUSTED header data, so it is clamped by the length of the
+    // bucket stream every term must occupy at least one byte of — a hostile header
+    // claiming 2^63 terms therefore reserves the buffer's own size and nothing more.
+    // The entry count is then exact for any buffer that actually decodes, and the
+    // arena's first extent is the compressed stream's length (a front-coded stream is
+    // normally SHORTER than the strings it reconstructs, so this is a floor that
+    // removes the early doublings rather than an over-reservation that is never used).
+    let reserve = usize::try_from(term_count)
+        .unwrap_or(usize::MAX)
+        .min(bucket_data.len());
+    dict.entries.reserve(reserve);
+    dict.arena.reserve(bucket_data.len());
+
+    // The two front-coding buffers, reused for every record of every bucket: `prev`
+    // holds the record the next suffix is spliced onto, `record` is the splice
+    // target, and they SWAP rather than reallocate. A bucket's header record is
+    // contiguous in `bucket_data` and is decoded straight out of it.
+    let mut prev: Vec<u8> = Vec::new();
+    let mut record: Vec<u8> = Vec::new();
+
     let mut term_idx = 0u64;
     for bucket_idx in 0..bucket_count as usize {
         let bucket_start = usize::try_from(offsets.get(bucket_idx))
             .map_err(|_| PackDictError::Malformed("dict: bucket offset exceeds usize"))?;
         let items_in_bucket = (term_count - term_idx).min(BUCKET_SIZE as u64) as usize;
         let mut cursor = bucket_start;
-        let mut prev_bytes: Vec<u8> = Vec::new();
         for j in 0..items_in_bucket {
             if j == 0 {
                 let slice = bucket_data
                     .get(cursor..)
                     .ok_or(PackDictError::Malformed("dict: bucket offset out of range"))?;
                 let (raw, consumed) = decode_record(slice)?;
-                prev_bytes = slice[..consumed].to_vec();
-                cursor += consumed;
                 push_entry(dict, raw)?;
+                prev.clear();
+                prev.extend_from_slice(&slice[..consumed]);
+                cursor += consumed;
             } else {
                 let mut p = cursor;
                 let shared_len = read_varint(bucket_data, &mut p)? as usize;
@@ -473,12 +506,11 @@ fn decode_values(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError
                         needed: suffix_end,
                         found: bucket_data.len(),
                     })?;
-                if shared_len > prev_bytes.len() {
-                    return Err(PackDictError::Malformed(
-                        "dict: front-coded shared-prefix length exceeds previous record",
-                    ));
-                }
-                let mut record = prev_bytes[..shared_len].to_vec();
+                let shared = prev.get(..shared_len).ok_or(PackDictError::Malformed(
+                    "dict: front-coded shared-prefix length exceeds previous record",
+                ))?;
+                record.clear();
+                record.extend_from_slice(shared);
                 record.extend_from_slice(suffix);
                 let (raw, consumed) = decode_record(&record)?;
                 if consumed != record.len() {
@@ -486,47 +518,59 @@ fn decode_values(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError
                         "dict: front-coded record has trailing garbage",
                     ));
                 }
-                prev_bytes = record;
-                cursor = suffix_end;
                 push_entry(dict, raw)?;
+                std::mem::swap(&mut prev, &mut record);
+                cursor = suffix_end;
             }
             term_idx += 1;
         }
     }
+    // A decoded dictionary is read for as long as its pack is open, so the arena's
+    // spare capacity is retained for that whole time. The reserve above is a floor
+    // rather than the answer (nothing can know the reconstructed string length before
+    // reconstructing it), so the buffer may have doubled past what it needed; one
+    // final fit trades one allocation for exact retention. The entry table needs no
+    // such fit: its length came from the header and was reserved exactly.
+    dict.arena.shrink_to_fit();
     Ok(term_idx)
 }
 
-/// Push a decoded [`RawRecord`] into `dict`'s owned arena/entry table as the NEXT
+/// Push a decoded [`RawRecordRef`] into `dict`'s owned arena/entry table as the NEXT
 /// unified id (the caller must call this in strict unified-id order).
-fn push_entry(dict: &mut PackDict, raw: RawRecord) -> Result<(), PackDictError> {
+///
+/// This is where a decoded string is copied — ONCE, straight from the record bytes
+/// into the arena. Only the [`PackDictError::RelativeIri`] refusal path owns a string,
+/// because that error quotes the offending record and the buffer it borrowed from is
+/// about to be reused.
+fn push_entry(dict: &mut PackDict, raw: RawRecordRef<'_>) -> Result<(), PackDictError> {
     let entry = match raw {
-        RawRecord::Iri(s) => {
+        RawRecordRef::Iri(s) => {
             // Pack bytes are a real ingress, not a trusted internal handoff: they may
             // have been written by another engine, an older version, or corrupted on
             // disk. Every decoded IRI is therefore validated exactly once, here, as it
             // enters the dictionary — the pack's own store-once boundary.
-            crate::ir::absolute::check_absolute(&s).map_err(|reason| {
+            crate::ir::absolute::check_absolute(s).map_err(|reason| {
                 PackDictError::RelativeIri {
-                    iri: s.clone(),
+                    iri: s.to_owned(),
                     reason,
                 }
             })?;
-            DictEntry::Iri(dict.push_str(&s)?)
+            DictEntry::Iri(dict.push_str(s)?)
         }
-        RawRecord::Blank { label, scope } => DictEntry::Blank {
-            label: dict.push_str(&label)?,
+        RawRecordRef::Blank { label, scope } => DictEntry::Blank {
+            label: dict.push_str(label)?,
             scope: BlankScope(scope),
         },
-        RawRecord::Literal {
+        RawRecordRef::Literal {
             lexical,
             datatype,
             language,
             direction,
         } => DictEntry::Literal {
-            lexical: dict.push_str(&lexical)?,
+            lexical: dict.push_str(lexical)?,
             datatype,
             language: match language {
-                Some(l) => Some(dict.push_str(&l)?),
+                Some(l) => Some(dict.push_str(l)?),
                 None => None,
             },
             direction: match direction {
@@ -535,7 +579,7 @@ fn push_entry(dict: &mut PackDict, raw: RawRecord) -> Result<(), PackDictError> 
                 _ => None,
             },
         },
-        RawRecord::Triple { s, p, o } => DictEntry::Triple { s, p, o },
+        RawRecordRef::Triple { s, p, o } => DictEntry::Triple { s, p, o },
     };
     dict.entries.push(entry);
     Ok(())
@@ -640,14 +684,7 @@ impl EncodedDict {
     /// [`PackDictError::Truncated`]/[`PackDictError::Malformed`] on a short buffer,
     /// an unsupported version tag, or a header whose own fields are inconsistent.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PackDictError> {
-        let version = *bytes.first().ok_or(PackDictError::Truncated {
-            needed: 1,
-            found: 0,
-        })?;
-        if version != DICT_FORMAT_VERSION {
-            return Err(PackDictError::Malformed("dict: unsupported format version"));
-        }
-        let values_bytes = bytes[1..].to_vec();
+        let values_bytes = strip_version(bytes)?.to_vec();
         let n_terms = peek_term_count(&values_bytes)?;
         Ok(Self {
             n_terms,
@@ -668,20 +705,42 @@ impl EncodedDict {
     /// entries outside strict canonical term order are also refused: normalizing or
     /// sorting decoded entries would invalidate ids referenced by other pack sections.
     pub fn decode(&self) -> Result<PackDict, PackDictError> {
-        let mut dict = PackDict {
-            arena: Vec::new(),
-            entries: Vec::new(),
-        };
-        let decoded = decode_values(&self.values_bytes, &mut dict)?;
-        if decoded != self.n_terms {
-            return Err(PackDictError::Malformed(
-                "dict: decoded term count disagrees with the header",
-            ));
-        }
-        dict.validate_references()?;
-        dict.validate_canonical_order()?;
-        Ok(dict)
+        decode_value_list(&self.values_bytes, self.n_terms)
     }
+}
+
+/// Check the leading version tag and return the value-list bytes behind it.
+fn strip_version(bytes: &[u8]) -> Result<&[u8], PackDictError> {
+    let version = *bytes.first().ok_or(PackDictError::Truncated {
+        needed: 1,
+        found: 0,
+    })?;
+    if version != DICT_FORMAT_VERSION {
+        return Err(PackDictError::Malformed("dict: unsupported format version"));
+    }
+    Ok(&bytes[1..])
+}
+
+/// Decode a PFC value list into an owned, validated [`PackDict`], cross-checking the
+/// record count against `expected_terms`.
+///
+/// The one decode body behind both [`EncodedDict::decode`] and [`PackDict::open`], so
+/// the owned-buffer route and the borrowed-buffer route cannot drift in what they
+/// validate.
+fn decode_value_list(values_bytes: &[u8], expected_terms: u64) -> Result<PackDict, PackDictError> {
+    let mut dict = PackDict {
+        arena: Vec::new(),
+        entries: Vec::new(),
+    };
+    let decoded = decode_values(values_bytes, &mut dict)?;
+    if decoded != expected_terms {
+        return Err(PackDictError::Malformed(
+            "dict: decoded term count disagrees with the header",
+        ));
+    }
+    dict.validate_references()?;
+    dict.validate_canonical_order()?;
+    Ok(dict)
 }
 
 /// Peek the value list's own leading `u64 term_count` header field without
@@ -853,12 +912,19 @@ impl PackDict {
     /// Parse and decode a dictionary from [`EncodedDict::to_bytes`]'s output in one
     /// step.
     ///
+    /// Decodes STRAIGHT OUT of `bytes`. The section is not copied into an
+    /// intermediate [`EncodedDict`] first: that owned buffer exists so a caller can
+    /// hold a not-yet-decoded dictionary, and a caller that is decoding right now has
+    /// no use for it — a pack opened over an mmap would otherwise pay a full copy of
+    /// its dictionary section for nothing.
+    ///
     /// # Errors
     ///
     /// [`PackDictError`] if the buffer is truncated, malformed, or contains an
     /// out-of-range internal id reference.
     pub fn open(bytes: &[u8]) -> Result<Self, PackDictError> {
-        EncodedDict::from_bytes(bytes)?.decode()
+        let values_bytes = strip_version(bytes)?;
+        decode_value_list(values_bytes, peek_term_count(values_bytes)?)
     }
 
     /// The total number of unified ids this dictionary mints — one per distinct
@@ -866,6 +932,16 @@ impl PackDict {
     #[must_use]
     pub fn n_terms(&self) -> u64 {
         self.entries.len() as u64
+    }
+
+    /// The decoded string arena's byte length: every IRI, blank label, lexical form
+    /// and language tag this dictionary holds, stored once each.
+    ///
+    /// The figure [`crate::DatasetView::term_bytes_hint`] reports for a pack-backed
+    /// view, so a materialization can size its own arena in one reservation.
+    #[must_use]
+    pub fn arena_len(&self) -> usize {
+        self.arena.len()
     }
 
     /// `true` iff at least one dictionary entry is an RDF 1.2 triple term (quoted
@@ -1179,6 +1255,15 @@ impl PackDict {
     /// terms (a "diamond" DAG) is expanded ONCE rather than exponentially. The pass is
     /// therefore `O(n_terms)` and cannot itself be a denial of service.
     fn validate_triple_terms_bounded(&self) -> Result<(), PackDictError> {
+        // A dictionary with no triple-term entry has no reference graph to walk: every
+        // entry is a leaf, so the traversal would visit each one, record depth 0, and
+        // conclude. The scan that establishes that is allocation-free, whereas the
+        // traversal's two memo vectors are not — and an RDF 1.1 pack (the common case)
+        // takes this arm. This is an early return, not a weakened check: the property
+        // being proven is a property OF triple terms.
+        if !self.has_triple_term() {
+            return Ok(());
+        }
         // Intrinsic nesting depth of each entry (`None` until computed); `on_path`
         // marks the entries on the current DFS path so a back-edge (a cycle) is caught
         // precisely rather than only as budget exhaustion.
@@ -1566,13 +1651,12 @@ mod tests {
             arena: Vec::new(),
             entries: Vec::new(),
         };
-        push_entry(&mut dict, RawRecord::Iri("http://example.org/a".to_owned()))
-            .expect("absolute IRI");
+        push_entry(&mut dict, RawRecordRef::Iri("http://example.org/a")).expect("absolute IRI");
         for _ in 0..MAX_TRIPLE_TERM_DEPTH {
             let child = dict.n_terms();
             push_entry(
                 &mut dict,
-                RawRecord::Triple {
+                RawRecordRef::Triple {
                     s: child,
                     p: child,
                     o: child,
@@ -1994,17 +2078,11 @@ mod tests {
     #[test]
     fn decoding_a_relative_iri_record_is_refused_with_the_shared_code() {
         for (record, code) in [
+            (RawRecordRef::Iri("notAbsolute"), "iri-relative-no-base"),
+            (RawRecordRef::Iri(""), "iri-relative-no-base"),
+            (RawRecordRef::Iri("/abs/path"), "iri-relative-no-base"),
             (
-                RawRecord::Iri("notAbsolute".to_owned()),
-                "iri-relative-no-base",
-            ),
-            (RawRecord::Iri(String::new()), "iri-relative-no-base"),
-            (
-                RawRecord::Iri("/abs/path".to_owned()),
-                "iri-relative-no-base",
-            ),
-            (
-                RawRecord::Iri("http://example.org/a b".to_owned()),
+                RawRecordRef::Iri("http://example.org/a b"),
                 "iri-disallowed-char",
             ),
         ] {
@@ -2033,8 +2111,8 @@ mod tests {
         };
         push_entry(
             &mut dict,
-            RawRecord::Blank {
-                label: "notAbsolute".to_owned(),
+            RawRecordRef::Blank {
+                label: "notAbsolute",
                 scope: 0,
             },
         )

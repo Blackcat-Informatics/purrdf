@@ -56,18 +56,25 @@ use purrdf_iri::{BaseScope, IriError};
 /// # Performance
 ///
 /// Call this **only on the miss path** of a store-once interner. It is O(len) in the
-/// IRI and allocates the parsed [`purrdf_iri::Iri`] once; interning an
-/// already-interned string must not reach it at all.
+/// IRI and, on the accepting path, allocates NOTHING; interning an already-interned
+/// string must not reach it at all.
 ///
 /// # Errors
 ///
 /// [`IriError`] as described above.
 pub(crate) fn check_absolute(iri: &str) -> Result<(), IriError> {
-    // `BaseScope::empty()` is a `Vec::new()` — no allocation — and its `resolve` is
+    // `BaseScope::empty()` is a `Vec::new()` — no allocation — and its resolution is
     // exactly the "no base is in scope" arm of RFC-3986 §5.1.4. Reusing it (rather
     // than re-spelling "parse, then test `has_scheme`") is what keeps this invariant
     // and the codecs' base handling provably the same rule.
-    BaseScope::empty().resolve(iri).map(drop)
+    //
+    // `check` rather than `resolve` because the interner keeps the IRI in its OWN
+    // arena and never reads the resolved value: `resolve` would build an owned
+    // `purrdf_iri::Iri` per distinct IRI purely to drop it, which on a pack restore
+    // is one allocation per dictionary IRI, paid twice (dictionary decode, then
+    // builder intern). `check` accepts and refuses identically — see its doc comment
+    // for why the absolute arm needs no resolved value.
+    BaseScope::empty().check(iri)
 }
 
 #[cfg(test)]

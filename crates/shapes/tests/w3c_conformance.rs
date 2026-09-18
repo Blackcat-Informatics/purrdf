@@ -4,14 +4,15 @@
 //! W3C SHACL conformance harness over the vendored `vectors/shacl` corpus
 //! (w3c/data-shapes test suite, `core/` + `sparql/`).
 //!
-//! The harness walks the `mf:` (test-manifest) tree starting at
-//! `vectors/shacl/manifest.ttl`: manifests `mf:include` sub-manifests and list
-//! `mf:entries` of type `sht:Validate`, whose `mf:action` names a
+//! Case discovery lives in [`shacl_corpora`], the one reader for this crate's two
+//! SHACL corpora: it walks the `mf:` (test-manifest) tree starting at
+//! `vectors/shacl/manifest.ttl`, where manifests `mf:include` sub-manifests and
+//! list `mf:entries` of type `sht:Validate`, whose `mf:action` names a
 //! `sht:shapesGraph` / `sht:dataGraph` (usually `<>` — the test file itself,
 //! which then contains data, shapes, manifest entry, AND the expected report in
-//! one graph, exactly as the upstream suite intends). Manifests are parsed with
-//! the workspace's own Turtle codec (`purrdf::parse_dataset`, dogfooding);
-//! relative IRIs resolve against each manifest's `file://` location.
+//! one graph, exactly as the upstream suite intends). This file is the GRADING
+//! half: it runs each discovered case through the engine and decides whether the
+//! produced report agrees with the manifest's.
 //!
 //! ## Comparison contract (caveats)
 //!
@@ -45,52 +46,12 @@
 //! Run with `--nocapture` for the per-manifest-section scoreboard:
 //! `cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture`
 
-use std::collections::{BTreeMap, BTreeSet};
+mod shacl_corpora;
+
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use purrdf::RdfDataset;
-use purrdf_shapes::data::{GraphFilter, native_quads};
-use purrdf_shapes::model::{rdf, sh};
-use purrdf_shapes::term::{NamedNode, Term};
-
-// ── Corpus location & vocabulary ──────────────────────────────────────────────
-
-const VECTORS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl");
-
-/// Exact number of `sht:Validate` entries the manifest tree must discover.
-/// Bump only when the vendored corpus itself changes (it is byte-frozen).
-///
-/// Note: the corpus ships 121 files with a `sht:Validate` entry in `core/` +
-/// `sparql/`, but upstream's `sparql/component/manifest.ttl` never
-/// `mf:include`s `nodeValidator-001.ttl`, so that subtree yields 120.
-/// The SHACL-AF seam at `af/` adds 9 more `sht:Validate` entries — 6 vendored
-/// from pySHACL's DASH tests and 3 first-party (no W3C SHACL-AF conformance
-/// suite exists; see `vectors/shacl/af/README.md`).
-const TOTAL_TESTS: usize = 129;
-
-mod mf {
-    pub(crate) const INCLUDE: &str =
-        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#include";
-    pub(crate) const ENTRIES: &str =
-        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#entries";
-    pub(crate) const ACTION: &str =
-        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#action";
-    pub(crate) const RESULT: &str =
-        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#result";
-}
-
-mod sht {
-    pub(crate) const VALIDATE: &str = "http://www.w3.org/ns/shacl-test#Validate";
-    pub(crate) const DATA_GRAPH: &str = "http://www.w3.org/ns/shacl-test#dataGraph";
-    pub(crate) const SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl-test#shapesGraph";
-    pub(crate) const FAILURE: &str = "http://www.w3.org/ns/shacl-test#Failure";
-}
-
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use shacl_corpora::{Expected, Multiset, W3C_TOTAL_CASES, W3cCase, file_iri, norm, w3c_cases};
 
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
@@ -105,259 +66,10 @@ const XFAIL: &[(&str, &str)] = &[
     // validation-only gaps are discovered.
 ];
 
-// ── Test-case model ───────────────────────────────────────────────────────────
-
-/// Comparison tuple: `(focus, path, value, component, severity)` — see the
-/// module header for the normalization rules.
-type Tuple = (String, Option<String>, Option<String>, String, String);
-
-/// Result multiset: tuple → occurrence count.
-type Multiset = BTreeMap<Tuple, usize>;
-
-enum Expected {
-    /// `mf:result sht:Failure` — the validator must reject the input.
-    Failure,
-    /// A full expected `sh:ValidationReport`.
-    Report { conforms: bool, results: Multiset },
-}
-
-struct TestCase {
-    /// Entry IRI relative to the corpus root, e.g. `core/node/and-001`.
-    id: String,
-    /// Manifest section, e.g. `core/node`.
-    section: String,
-    shapes_path: PathBuf,
-    data_path: PathBuf,
-    /// IRI supplied by `sht:shapesGraph` (often `<>` resolving to the test file),
-    /// used as the named graph for `$shapesGraph` pre-binding in SHACL-SPARQL.
-    shapes_graph_iri: Option<String>,
-    expected: Expected,
-}
-
-// ── Graph helpers ─────────────────────────────────────────────────────────────
-
-fn named(iri: &str) -> Term {
-    Term::NamedNode(NamedNode::new_unchecked(iri))
-}
-
-/// All objects of `(subject, predicate, ?)`.
-fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    native_quads(
-        g,
-        Some(subject),
-        Some(&named(predicate)),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| object)
-    .collect()
-}
-
-/// The first object of `(subject, predicate, ?)`, if any.
-fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
-    objects(g, subject, predicate).into_iter().next()
-}
-
-/// Walk an RDF collection (`rdf:first`/`rdf:rest`) into a vec, in list order.
-fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
-    let mut items = Vec::new();
-    let mut node = head.clone();
-    loop {
-        if matches!(&node, Term::NamedNode(n) if n.as_str() == RDF_NIL) {
-            break;
-        }
-        let Some(first) = object(g, &node, RDF_FIRST) else {
-            break; // malformed list — stop rather than loop
-        };
-        items.push(first);
-        match object(g, &node, RDF_REST) {
-            Some(rest) => node = rest,
-            None => break,
-        }
-    }
-    items
-}
-
-// ── IRI ↔ path mapping ────────────────────────────────────────────────────────
-
-fn file_iri(path: &Path) -> String {
-    format!("file://{}", path.display())
-}
-
-fn iri_to_path(iri: &str) -> PathBuf {
-    PathBuf::from(
-        iri.strip_prefix("file://")
-            .unwrap_or_else(|| panic!("expected a file:// IRI, got {iri}")),
-    )
-}
-
-// ── Manifest walking ──────────────────────────────────────────────────────────
-
-fn parse_turtle_file(path: &Path) -> Result<Arc<RdfDataset>, String> {
-    let text =
-        fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    purrdf::parse_dataset(text.as_bytes(), "text/turtle", Some(&file_iri(path)))
-        .map_err(|e| format!("cannot parse {}: {e}", path.display()))
-}
-
-/// Recursively collect `sht:Validate` test cases from `manifest_path`.
-fn collect_manifest(manifest_path: &Path, root: &Path, tests: &mut Vec<TestCase>) {
-    let dataset =
-        parse_turtle_file(manifest_path).unwrap_or_else(|e| panic!("manifest walk failed: {e}"));
-    let g = dataset;
-
-    // Sub-manifests: recurse in sorted order for a deterministic scoreboard.
-    let mut includes: Vec<PathBuf> = native_quads(
-        &g,
-        None,
-        Some(&named(mf::INCLUDE)),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| match object {
-        Term::NamedNode(n) => iri_to_path(n.as_str()),
-        other => panic!(
-            "{}: mf:include object must be an IRI, got {other}",
-            manifest_path.display()
-        ),
-    })
-    .collect();
-    includes.sort();
-    for include in includes {
-        collect_manifest(&include, root, tests);
-    }
-
-    // Entries: an RDF list, in list (document) order.
-    let entry_heads: Vec<Term> = native_quads(
-        &g,
-        None,
-        Some(&named(mf::ENTRIES)),
-        None,
-        GraphFilter::AnyGraph,
-    )
-    .into_iter()
-    .map(|(_, _, object)| object)
-    .collect();
-    for head in entry_heads {
-        for entry in list_items(&g, &head) {
-            if let Some(tc) = parse_entry(&g, &entry, manifest_path, root) {
-                tests.push(tc);
-            }
-        }
-    }
-}
-
-/// Parse one manifest entry into a [`TestCase`] (skipping non-`sht:Validate`).
-fn parse_entry(
-    g: &RdfDataset,
-    entry: &Term,
-    manifest_path: &Path,
-    root: &Path,
-) -> Option<TestCase> {
-    let is_validate = objects(g, entry, rdf::TYPE)
-        .iter()
-        .any(|t| matches!(t, Term::NamedNode(n) if n.as_str() == sht::VALIDATE));
-    if !is_validate {
-        return None;
-    }
-
-    let entry_iri = match entry {
-        Term::NamedNode(n) => n.as_str().to_owned(),
-        other => panic!(
-            "{}: sht:Validate entry must be an IRI, got {other}",
-            manifest_path.display()
-        ),
-    };
-    let root_iri = format!("{}/", file_iri(root));
-    let id = entry_iri
-        .strip_prefix(&root_iri)
-        .unwrap_or(&entry_iri)
-        .to_owned();
-    let section = id
-        .rsplit_once('/')
-        .map_or_else(String::new, |(dir, _)| dir.to_owned());
-
-    let action = object(g, entry, mf::ACTION)
-        .unwrap_or_else(|| panic!("{id}: sht:Validate entry has no mf:action"));
-    let graph_path = |pred: &str, role: &str| -> PathBuf {
-        match object(g, &action, pred) {
-            Some(Term::NamedNode(n)) => iri_to_path(n.as_str()),
-            other => panic!("{id}: mf:action has no IRI {role}, got {other:?}"),
-        }
-    };
-    let shapes_path = graph_path(sht::SHAPES_GRAPH, "sht:shapesGraph");
-    let data_path = graph_path(sht::DATA_GRAPH, "sht:dataGraph");
-
-    let shapes_graph_iri = object(g, &action, sht::SHAPES_GRAPH).and_then(|t| match t {
-        Term::NamedNode(n) => Some(n.as_str().to_owned()),
-        _ => None,
-    });
-
-    let result = object(g, entry, mf::RESULT)
-        .unwrap_or_else(|| panic!("{id}: sht:Validate entry has no mf:result"));
-    let expected = match &result {
-        Term::NamedNode(n) if n.as_str() == sht::FAILURE => Expected::Failure,
-        report_node => Expected::Report {
-            conforms: expected_conforms(g, report_node, &id),
-            results: expected_multiset(g, report_node),
-        },
-    };
-
-    Some(TestCase {
-        id,
-        section,
-        shapes_path,
-        data_path,
-        shapes_graph_iri,
-        expected,
-    })
-}
-
-/// Read the expected `sh:conforms` boolean off the expected-report node.
-fn expected_conforms(g: &RdfDataset, report_node: &Term, id: &str) -> bool {
-    match object(g, report_node, sh::CONFORMS) {
-        Some(Term::Literal(l)) => match l.value() {
-            "true" => true,
-            "false" => false,
-            other => panic!("{id}: unrecognized sh:conforms literal {other:?}"),
-        },
-        other => panic!("{id}: expected report has no sh:conforms literal, got {other:?}"),
-    }
-}
-
-/// Build the expected result multiset from the expected-report node.
-fn expected_multiset(g: &RdfDataset, report_node: &Term) -> Multiset {
-    let mut multiset = Multiset::new();
-    for result in objects(g, report_node, sh::RESULT) {
-        let focus = object(g, &result, sh::FOCUS_NODE).map_or_else(String::new, |t| norm(&t));
-        let path = object(g, &result, sh::RESULT_PATH).map(|t| norm(&t));
-        let value = object(g, &result, sh::VALUE).map(|t| norm(&t));
-        let component = object(g, &result, sh::SOURCE_CONSTRAINT_COMPONENT)
-            .map_or_else(String::new, |t| norm(&t));
-        let severity = object(g, &result, sh::RESULT_SEVERITY)
-            .map_or_else(|| format!("<{}>", sh::VIOLATION), |t| norm(&t));
-        *multiset
-            .entry((focus, path, value, component, severity))
-            .or_insert(0) += 1;
-    }
-    multiset
-}
-
-/// Normalize a term for comparison: blank nodes (incl. complex-path bnodes)
-/// collapse to `_:`; everything else uses the engine's canonical rendering.
-fn norm(t: &Term) -> String {
-    match t {
-        Term::BlankNode(_) => "_:".to_owned(),
-        other => other.to_string(),
-    }
-}
-
 // ── Running one case ──────────────────────────────────────────────────────────
 
 /// Load graphs, run the engine. `Err` carries the parse/validation error.
-fn validate_case(tc: &TestCase) -> Result<purrdf_shapes::report::ValidationReport, String> {
+fn validate_case(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport, String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
     let shapes_dataset = purrdf::parse_dataset(
@@ -379,7 +91,8 @@ fn validate_case(tc: &TestCase) -> Result<purrdf_shapes::report::ValidationRepor
     let data_dataset = if tc.data_path == tc.shapes_path {
         shapes_dataset
     } else {
-        parse_turtle_file(&tc.data_path).map_err(|e| format!("data graph parse error: {e}"))?
+        shacl_corpora::parse_turtle_file(&tc.data_path)
+            .map_err(|e| format!("data graph parse error: {e}"))?
     };
 
     purrdf_shapes::engine::validate_dataset_with_shapes_graph(
@@ -412,9 +125,7 @@ fn produced_multiset(report: &purrdf_shapes::report::ValidationReport) -> Multis
 /// residual evaluation failures as `Err` (no known panicking case remains);
 /// the guard stays as belt-and-braces so a regression reads as a FAIL with a
 /// message instead of a harness abort.
-fn validate_case_no_panic(
-    tc: &TestCase,
-) -> Result<purrdf_shapes::report::ValidationReport, String> {
+fn validate_case_no_panic(tc: &W3cCase) -> Result<purrdf_shapes::report::ValidationReport, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate_case(tc))).unwrap_or_else(
         |payload| {
             let msg = payload
@@ -428,7 +139,7 @@ fn validate_case_no_panic(
 }
 
 /// Run one test to a pass (`Ok`) / fail-with-reason (`Err`) verdict.
-fn run_case(tc: &TestCase) -> Result<(), String> {
+fn run_case(tc: &W3cCase) -> Result<(), String> {
     let outcome = validate_case_no_panic(tc);
     match (&tc.expected, outcome) {
         (Expected::Failure, Err(_)) => Ok(()),
@@ -469,121 +180,11 @@ fn multiset_diff(expected: &Multiset, produced: &Multiset) -> String {
     lines.join("\n")
 }
 
-/// Prove every `.ttl` under `af/` is REACHED by a manifest, so the corpus on disk
-/// and the corpus the harness runs are the same corpus.
-///
-/// `TOTAL_TESTS` alone cannot say this. Discovery under `af/` is by `mf:include`
-/// only — nothing reads the directory — so a case file added without a manifest
-/// entry runs nowhere, leaves the count untouched, and reddens nothing. It would
-/// look exactly like a case that passes. (The sibling rules harness has no such
-/// gap: it discovers by `read_dir`.) The byte-freeze manifest is not a backstop
-/// either, because refreshing it is the documented step for adding a case.
-///
-/// Both directions matter and both are checked: an unreferenced file, and a
-/// manifest that names a file that does not exist.
-fn af_case_files_are_all_reachable_from_a_manifest(af_root: &Path) {
-    let mut on_disk: BTreeSet<PathBuf> = BTreeSet::new();
-    let mut referenced: BTreeSet<PathBuf> = BTreeSet::new();
-    let mut manifests: Vec<PathBuf> = vec![af_root.join("manifest.ttl")];
-    let mut seen_manifests: BTreeSet<PathBuf> = BTreeSet::new();
-
-    // Every `.ttl` beneath `af/`, manifests included — except `af/rules/`, which
-    // is a different corpus with a different, already-tight discovery: the SHACL
-    // Rules harness (`crates/shapes/tests/rules_conformance.rs`) walks it with
-    // `read_dir` and asserts an exact `TOTAL_CASES`, so an unwired case there
-    // already fails. It has no manifest and must not be measured against one.
-    let mut dirs = vec![af_root.to_path_buf()];
-    while let Some(dir) = dirs.pop() {
-        if dir.file_name().is_some_and(|n| n == "rules") {
-            continue;
-        }
-        for entry in fs::read_dir(&dir).expect("af corpus directory must be readable") {
-            let path = entry.expect("af corpus entry must be readable").path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if path.extension().is_some_and(|e| e == "ttl") {
-                on_disk.insert(path);
-            }
-        }
-    }
-
-    // Every `mf:include` target, transitively.
-    while let Some(manifest) = manifests.pop() {
-        if !seen_manifests.insert(manifest.clone()) {
-            continue;
-        }
-        let text = fs::read_to_string(&manifest)
-            .unwrap_or_else(|e| panic!("manifest {} must be readable: {e}", manifest.display()));
-        let parent = manifest
-            .parent()
-            .expect("a manifest always has a parent directory")
-            .to_path_buf();
-        for line in text.lines() {
-            let Some(rest) = line.split("mf:include").nth(1) else {
-                continue;
-            };
-            let Some(open) = rest.find('<') else { continue };
-            let Some(close) = rest[open + 1..].find('>') else {
-                continue;
-            };
-            let target = parent.join(&rest[open + 1..open + 1 + close]);
-            let target = target.canonicalize().unwrap_or_else(|e| {
-                panic!(
-                    "manifest {} includes {}, which does not exist: {e}",
-                    manifest.display(),
-                    target.display()
-                )
-            });
-            referenced.insert(target.clone());
-            if target.file_name().is_some_and(|n| n == "manifest.ttl") {
-                manifests.push(target);
-            }
-        }
-    }
-    // A manifest is reached by being walked, not by being included.
-    referenced.extend(seen_manifests.iter().cloned());
-
-    let orphans: Vec<String> = on_disk
-        .iter()
-        .filter(|p| !referenced.contains(*p))
-        .map(|p| p.display().to_string())
-        .collect();
-    assert!(
-        orphans.is_empty(),
-        "these af/ case files are on disk but no manifest includes them, so they run \
-         nowhere and no gate would notice: {orphans:?}"
-    );
-}
-
 // ── The harness ───────────────────────────────────────────────────────────────
 
 #[test]
 fn w3c_shacl_conformance() {
-    let root = Path::new(VECTORS_DIR)
-        .canonicalize()
-        .expect("vectors/shacl corpus directory must exist");
-
-    let mut tests: Vec<TestCase> = Vec::new();
-    collect_manifest(&root.join("manifest.ttl"), &root, &mut tests);
-
-    // First-party AF (Advanced Features) seam: the vendored root manifest stays
-    // pristine (no mf:include is added to it), so future upstream AF manifests
-    // slot in at `af/manifest.ttl` and are discovered here without re-vendoring.
-    // Today this adds 9 SHACL-AF validation tests from expression/, function/,
-    // and target/ sub-manifests.
-    let af = root.join("af/manifest.ttl");
-    if af.exists() {
-        collect_manifest(&af, &root, &mut tests);
-        af_case_files_are_all_reachable_from_a_manifest(&root.join("af"));
-    }
-
-    assert_eq!(
-        tests.len(),
-        TOTAL_TESTS,
-        "discovered test count drifted — the vendored corpus is frozen, so this \
-         means the manifest walk changed; update TOTAL_TESTS only on a deliberate \
-         corpus re-vendor"
-    );
+    let tests = w3c_cases();
 
     let xfail: BTreeMap<&str, &str> = XFAIL.iter().copied().collect();
     assert_eq!(
@@ -661,7 +262,7 @@ fn w3c_shacl_conformance() {
     );
     assert_eq!(
         total_passed + total_xfailed,
-        TOTAL_TESTS,
+        W3C_TOTAL_CASES,
         "every discovered test must be a pass or a ledgered xfail"
     );
 }
