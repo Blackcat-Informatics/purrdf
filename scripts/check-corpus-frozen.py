@@ -36,11 +36,25 @@ from pathlib import Path
 # `GOVERNOR_CORPUS_DIGEST` a consumer pins), the vendored
 # W3C OWL 2 suite the entailment (DL-consistency) row grades against, and the
 # vendored W3C OWL 2 *entailment* suite (premise + conclusion pairs, plus the
-# 489-row upstream `census.tsv`) the OWL 2 RL row grades against — all declared
+# 489-row upstream `census.tsv`) the OWL 2 RL row grades against, the vendored
+# W3C RDF 1.2 syntax/eval corpus the native text codecs (Turtle / TriG /
+# N-Triples / N-Quads / RDF-XML) round-trip against — which is also where every
+# language-tag and base-direction negative vector lives — and the vendored W3C
+# SPARQL 1.1 and 1.2 suites the conformance matrix grades against — all declared
 # byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
 # in gmeow-gts and is intentionally not policed here; adding a new root is a
 # deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
 # until it appears here.)
+#
+# The roots name *vendored* trees, not their first-party parents. Freezing is
+# the claim "no one hand-edits this", and it is only true of a tree PurRDF
+# copies from upstream and never authors into. That is why the guarded SPARQL
+# entries are `suite/w3c-sparql11` and `suite/w3c-sparql12` rather than
+# `suite/`: the sibling `suite/purrdf-*` suites are first-party cases this
+# project writes as features land, and freezing them would make every added
+# conformance test demand a `--update` — turning the loud, reviewable
+# re-vendor act into routine noise and destroying the signal for the vendored
+# corpora that actually need it.
 GUARDED_ROOTS: dict[str, str] = {
     "vectors/rdf12-canon": "scripts/conformance-frozen/vectors-rdf12-canon.sha256",
     "vectors/sparql-governors": (
@@ -61,6 +75,15 @@ GUARDED_ROOTS: dict[str, str] = {
     ),
     "crates/sparql-conformance/entailment-suite/w3c-owl2-rl": (
         "scripts/conformance-frozen/sparql-conformance-w3c-owl2-rl.sha256"
+    ),
+    "crates/sparql-conformance/suite/w3c-sparql11": (
+        "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql11.sha256"
+    ),
+    "crates/sparql-conformance/suite/w3c-sparql12": (
+        "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql12.sha256"
+    ),
+    "crates/rdf/tests/corpus/w3c": (
+        "scripts/conformance-frozen/rdf-tests-corpus-w3c.sha256"
     ),
 }
 

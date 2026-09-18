@@ -71,6 +71,7 @@ use super::certificate::{DlCertificate, DlCompleteness, Verdict};
 use super::classify::ClassHierarchy;
 use super::module::ModuleMethod;
 use super::realize::Realization;
+use crate::digest_hex::hex;
 use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::proof::{
     CheckReport, DlProof, DlProofContext, DlProofError, MAX_NESTING, ProofAnswer, Reader,
@@ -1567,16 +1568,10 @@ pub(crate) fn receipt_of(
 }
 
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
-
-/// 32 bytes as 64 lowercase hex characters.
-fn hex(digest: [u8; 32]) -> String {
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push(char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is one hex digit"));
-        out.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is one hex digit"));
-    }
-    out
-}
+//
+// The hex renderer used to live here too, as its own `char::from_digit` loop; it is now
+// `crate::digest_hex::hex`, the one first-party renderer this crate's three digest-bearing
+// proof modules share (see that module's doc comment for why).
 
 /// Append a length-prefixed byte string.
 fn frame(out: &mut Vec<u8>, bytes: &[u8]) {
@@ -1844,6 +1839,48 @@ fn decode_text(reader: &mut Reader<'_>) -> Result<String, DlProofError> {
         .map_err(|_| malformed("a text field is not UTF-8"))
 }
 
+/// The language-tag grammar a tag read out of a proof's BYTES is held to.
+///
+/// [`ConcreteSyntaxLangtagBounded`](purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded)
+/// — the profile every native RDF codec, the SPARQL parser, the IR kernel's
+/// `RdfLiteral::validate_components` and the GTS reader already name. A decoded
+/// proof's terms go into a `TermValue` like any other, so a tag admitted here is
+/// a tag a serializer downstream has to be able to spell; naming any other
+/// profile would let this decoder mint a term the next stage refuses.
+const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
+    purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
+
+/// Take a literal's language tag, refusing one the RDF concrete-syntax grammar
+/// would not have lexed.
+///
+/// `ServiceProof::decode` is a public entrance taking **untrusted** bytes, and
+/// `language` was lifted straight out of them with nothing asked of it — while
+/// the base-direction ordinal decoded two lines below, from the same bytes, in
+/// the same literal, was already refused when it fell outside its closed space.
+/// That asymmetry is the whole defect: a proof that says `"x"@en us` was decoded
+/// into a `TermValue` no writer in the workspace can serialize, and one that says
+/// `direction: 7` was not.
+///
+/// The shape is this decoder's own, not a new one: a malformed field is a
+/// [`DlProofError::Malformed`] built by [`malformed`], exactly as "unknown
+/// base-direction ordinal", "unknown term kind" and "a text field is not UTF-8"
+/// already are, and the whole decode fails rather than carrying a damaged term
+/// forward. (A proof is a single verifiable object — unlike a GTS segment, it has
+/// no per-item diagnostic channel and no survivors to fold on.) The detail quotes
+/// `purrdf-iri`'s own `langtag-*` diagnostic code and the offending tag, so the
+/// refusal names the production that made it.
+fn decode_language(reader: &mut Reader<'_>) -> Result<String, DlProofError> {
+    let tag = decode_text(reader)?;
+    match purrdf_iri::langtag::parse_with(&tag, LANGTAG_PROFILE) {
+        Ok(_) => Ok(tag),
+        Err(error) => Err(malformed(&format!(
+            "a literal carries a language tag the RDF concrete-syntax grammar refuses \
+             ({code}): {tag:?}",
+            code = error.diagnostic_code()
+        ))),
+    }
+}
+
 /// Take a [`TermValue`], refusing one nested past [`MAX_NESTING`].
 fn decode_term(reader: &mut Reader<'_>) -> Result<TermValue, DlProofError> {
     decode_term_at(reader, 0)
@@ -1865,7 +1902,13 @@ fn decode_term_at(reader: &mut Reader<'_>, depth: usize) -> Result<TermValue, Dl
         }
         TERM_LITERAL => {
             let datatype = decode_text(reader)?;
-            let language = reader.flag()?.then(|| decode_text(reader)).transpose()?;
+            // Ask the grammar — see [`decode_language`] for why this field cannot
+            // be the one untrusted field in the literal that nothing judges.
+            let language = if reader.flag()? {
+                Some(decode_language(reader)?)
+            } else {
+                None
+            };
             let direction = match reader.byte()? {
                 0 => None,
                 1 => Some(purrdf_core::RdfTextDirection::Ltr),
@@ -4018,6 +4061,93 @@ mod tests {
             ServiceProof::decode(&bytes),
             Err(DlProofError::Malformed { .. })
         ));
+    }
+
+    /// A complete, valid `ClassSatisfiability` stream whose one question term is a
+    /// literal carrying `tag` — the smallest byte string that puts an untrusted
+    /// language tag through the public [`ServiceProof::decode`] entrance.
+    ///
+    /// Complete on purpose: it ends with an empty run list, an empty claim list
+    /// and an absent receipt, so `decode` runs to `is_exhausted` and the only
+    /// thing that can refuse it is the tag. A truncated stream would have made
+    /// the accept half unfalsifiable.
+    fn satisfiability_stream_tagged(tag: Option<&str>) -> Vec<u8> {
+        let mut bytes = forged_header(Service::ClassSatisfiability);
+        bytes.push(1); // a class-satisfiability question: one term follows.
+        bytes.push(TERM_LITERAL);
+        frame(&mut bytes, b"http://example.org/dt");
+        match tag {
+            Some(tag) => {
+                bytes.push(1);
+                frame(&mut bytes, tag.as_bytes());
+            }
+            None => bytes.push(0),
+        }
+        bytes.push(0); // no base direction
+        frame(&mut bytes, b"v"); // the lexical form
+        length(&mut bytes, 0); // no runs
+        length(&mut bytes, 0); // no claims
+        bytes.push(0); // no stop receipt
+        bytes
+    }
+
+    /// A literal's language tag is untrusted input like every other field of the
+    /// stream, and is judged like one.
+    ///
+    /// The asymmetry this closes: the base-direction ordinal decoded from the very
+    /// next byte of the very same literal was already refused when it fell outside
+    /// `ltr`/`rtl` (`an_unknown_service_proof_discriminant_is_rejected`'s "base
+    /// direction" case), while `language` was taken verbatim — so a forged proof
+    /// could put `"v"@en us` into a `TermValue` that no writer in this workspace
+    /// can serialize.
+    ///
+    /// Both halves, and the accept half is the load-bearing one: a proof whose
+    /// literal is tagged `x-purrdf-afrikaans`, `en-fr-jura` or `abcdefgh` is a
+    /// proof that must still decode, and so is one carrying no tag at all.
+    #[test]
+    fn a_service_proof_literal_is_held_to_the_language_tag_grammar() {
+        for tag in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "abcdefgh",
+            "en-x-cantbethislong",
+        ] {
+            ServiceProof::decode(&satisfiability_stream_tagged(Some(tag)))
+                .unwrap_or_else(|e| panic!("@{tag} is a tag a proof may carry: {e}"));
+        }
+        // An absent tag is not a malformed one.
+        ServiceProof::decode(&satisfiability_stream_tagged(None))
+            .expect("an untagged literal has no tag to judge");
+
+        for tag in [
+            "en us",
+            "1",
+            "9-9",
+            "123-456",
+            "en-",
+            "-",
+            "!!!",
+            "abcdefghi",
+            "",
+        ] {
+            let error = ServiceProof::decode(&satisfiability_stream_tagged(Some(tag)))
+                .err()
+                .unwrap_or_else(|| panic!("{tag:?} must not decode into a TermValue"));
+            let DlProofError::Malformed { detail } = &error else {
+                panic!("{tag:?} must be refused as malformed, got {error}");
+            };
+            assert!(
+                detail.contains("langtag-"),
+                "{tag:?} must quote the grammar's own diagnostic code, got: {detail}"
+            );
+        }
     }
 
     /// A term nested past the decoder's ceiling is REFUSED rather than recursed into until

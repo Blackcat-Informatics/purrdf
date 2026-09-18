@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "purrdf-envelope-probe"
+description = "The micro-hardware envelope probe: runs the fixed small-deployment workload set over the public PurRDF APIs and reports allocator peaks, accounted bytes, and governor evidence per profile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "benchmark", "memory"]
+categories = ["development-tools::profiling"]
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "envelope-probe"
+path = "src/main.rs"
+
+[dependencies]
+# The kernel: dataset builder, pack container, paged tier, governor and
+# accounting vocabulary the envelope is stated in.
+purrdf-core = { workspace = true }
+# Codecs for the round-trip workload, the GTS adapters, and the shared
+# deterministic keystone corpus generator (gts_fixtures).
+purrdf-rdf = { workspace = true }
+# Governed SPARQL evaluation: the engine, QueryGovernors, and the fallible
+# paged-view entry.
+purrdf-sparql-eval = { workspace = true }
+# SHACL validation workload (governed entry points).
+purrdf-shapes = { workspace = true }

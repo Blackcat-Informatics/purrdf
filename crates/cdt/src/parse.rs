@@ -53,6 +53,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use purrdf_iri::langtag;
+
 use crate::datatype::{
     CdtDatatype, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE,
     XSD_INTEGER,
@@ -62,6 +64,18 @@ use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, MAX_NESTING_DEPTH};
 use crate::render::canonical_key_lexical;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm, TextDirection};
 use crate::value::CdtValue;
+
+/// The acceptance language a `LANGTAG` inside a CDT lexical form is decided
+/// against.
+///
+/// [`langtag::Profile::ConcreteSyntaxLangtagBounded`]: the `LANGTAG` terminal
+/// the CDT grammar borrows verbatim from Turtle, plus the RFC 5646 §2.1
+/// eight-character subtag ceiling outside private use. A CDT literal embeds RDF
+/// terms in its own lexical form and those terms are serialized into ordinary
+/// RDF documents, so its acceptance language has to be the one every native
+/// codec in this workspace names — anything wider lets a `cdt:List` hold a
+/// literal that no serialization of it can be read back from.
+const LANGTAG_PROFILE: langtag::Profile = langtag::Profile::ConcreteSyntaxLangtagBounded;
 
 /// Parse a `cdt:List` lexical form.
 ///
@@ -826,57 +840,78 @@ impl<'a> Scanner<'a> {
 
     /// `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`, plus RDF 1.2's `'--' [a-zA-Z]+`
     /// base-direction suffix.
+    ///
+    /// Two jobs, and only the first is this function's own. **Finding the token's
+    /// extent** is: the tag runs to the first character that is neither
+    /// alphanumeric nor `-`, or to the `--` that opens the direction suffix,
+    /// whichever comes first. That boundary rule is what keeps `@en--ltr` a tag
+    /// plus a direction rather than a tag spelled `en--ltr`, and it is local to
+    /// this scanner because only this scanner knows where the surrounding CDT
+    /// literal continues.
+    ///
+    /// **Deciding whether the extent is a language tag** is not. That judgement
+    /// belongs to [`purrdf_iri::langtag`], the workspace's single owner of the
+    /// grammar, under [`LANGTAG_PROFILE`]. The hand-rolled scan that used to
+    /// decide it here was a fourth private transcription, and it was looser than
+    /// every codec that reads the datasets a CDT literal names: `@cantbethislong`
+    /// parsed here and is refused by N-Triples, so a `cdt:List` could hold a
+    /// literal no serialization of it could round-trip.
+    ///
+    /// Each refusal keeps its [`CdtError::BadLanguageTag`] shape and its `offset`;
+    /// `reason` now carries [`langtag::LanguageTagError::message`], which is a
+    /// `&'static str` and so fits the field exactly, naming the production that
+    /// refused instead of restating the terminal.
     fn parse_langtag(&mut self) -> Result<(String, Option<TextDirection>), CdtError> {
         let start = self.position;
         self.expect(b'@', "`@` opening a language tag")?;
-        let primary_start = self.position;
+        // The language tag ends where the `--` direction suffix begins; the suffix
+        // is a separate component of the term, not part of the tag.
+        let language_start = self.position;
+        while matches!(
+            self.peek(),
+            Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-')
+        ) && !self.starts_with("--")
+        {
+            self.bump();
+        }
+        let language_end = self.position;
+        let direction = self.parse_direction_suffix(start)?;
+        let language = &self.input[language_start..language_end];
+        if let Err(error) = langtag::parse_with(language, LANGTAG_PROFILE) {
+            return Err(CdtError::BadLanguageTag {
+                offset: start,
+                reason: error.message(),
+            });
+        }
+        Ok((language.to_string(), direction))
+    }
+
+    /// RDF 1.2's `'--' ('ltr' | 'rtl')` base-direction suffix, when one follows
+    /// the language tag; `Ok(None)` when none does.
+    ///
+    /// The suffix is a separate component of the term, so it is parsed apart
+    /// from the tag and never folded into it. It is also narrowed by prose
+    /// rather than by the terminal — RDF 1.2 admits `'--' [a-zA-Z]+` but fixes
+    /// the vocabulary at exactly `ltr` and `rtl`, lower case — so an unknown or
+    /// wrongly-cased suffix is an error here rather than a silently dropped
+    /// direction. `offset` is the whole tag's, matching every other refusal this
+    /// production makes.
+    fn parse_direction_suffix(&mut self, start: usize) -> Result<Option<TextDirection>, CdtError> {
+        if !self.starts_with("--") {
+            return Ok(None);
+        }
+        self.position += 2;
+        let token_start = self.position;
         while matches!(self.peek(), Some(b'a'..=b'z' | b'A'..=b'Z')) {
             self.bump();
         }
-        if self.position == primary_start {
-            return Err(CdtError::BadLanguageTag {
+        let token = &self.input[token_start..self.position];
+        TextDirection::from_str_token(token)
+            .map(Some)
+            .ok_or(CdtError::BadLanguageTag {
                 offset: start,
-                reason: "the primary subtag must be one or more letters",
-            });
-        }
-        let mut direction = None;
-        // The language tag ends where the `--` direction suffix begins; the suffix
-        // is a separate component of the term, not part of the tag.
-        let mut language_end = self.position;
-        loop {
-            if self.starts_with("--") {
-                self.position += 2;
-                let token_start = self.position;
-                while matches!(self.peek(), Some(b'a'..=b'z' | b'A'..=b'Z')) {
-                    self.bump();
-                }
-                let token = &self.input[token_start..self.position];
-                let Some(found) = TextDirection::from_str_token(token) else {
-                    return Err(CdtError::BadLanguageTag {
-                        offset: start,
-                        reason: "a base direction must be `ltr` or `rtl`",
-                    });
-                };
-                direction = Some(found);
-                break;
-            }
-            if self.peek() != Some(b'-') {
-                break;
-            }
-            self.bump();
-            let subtag_start = self.position;
-            while matches!(self.peek(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9')) {
-                self.bump();
-            }
-            if self.position == subtag_start {
-                return Err(CdtError::BadLanguageTag {
-                    offset: start,
-                    reason: "a subtag must be one or more letters or digits",
-                });
-            }
-            language_end = self.position;
-        }
-        Ok((self.input[start + 1..language_end].to_string(), direction))
+                reason: "a base direction must be `ltr` or `rtl`",
+            })
     }
 
     /// `NumericLiteral`, in all three of its SPARQL shapes and all three signs.

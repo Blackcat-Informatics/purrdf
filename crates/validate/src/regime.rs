@@ -1705,15 +1705,6 @@ fn parse_proof_service(name: &str) -> Result<Service, String> {
     }
 }
 
-/// `bytes` as lowercase hex.
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
 /// Parse lowercase hex back to bytes, refusing an odd length or a non-hex digit.
 fn unhex(text: &str) -> Result<Vec<u8>, String> {
     if !text.len().is_multiple_of(2) {
@@ -1795,7 +1786,7 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
     out.push('\n');
     let _ = writeln!(out, "service {}", proof_service_name(proof.service()));
     out.push_str("availability recorded\n");
-    let _ = writeln!(out, "input {}", hex(&proof.input()));
+    let _ = writeln!(out, "input {}", purrdf_core::hex::lower(&proof.input()));
     let _ = writeln!(out, "digest {}", proof.digest_hex());
     let _ = writeln!(
         out,
@@ -1827,7 +1818,7 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
     }
     let _ = writeln!(out, "bytes {}", bytes.len());
     for chunk in bytes.chunks(PROOF_BODY_BYTES_PER_LINE) {
-        let _ = writeln!(out, "body {}", hex(chunk));
+        let _ = writeln!(out, "body {}", purrdf_core::hex::lower(chunk));
     }
     out
 }
@@ -4224,7 +4215,7 @@ pub fn check_dl_proof(
     let _ = writeln!(out, "service {}", proof_service_name(term.service()));
     out.push_str("availability recorded\n");
     let _ = writeln!(out, "digest {}", term.digest_hex());
-    let _ = writeln!(out, "input {}", hex(&term.input()));
+    let _ = writeln!(out, "input {}", purrdf_core::hex::lower(&term.input()));
     let _ = writeln!(out, "runs {}", replay.runs());
     let _ = writeln!(out, "replayed {}", replay.replayed());
     let _ = writeln!(out, "claims {}", replay.claims());

@@ -68,8 +68,11 @@ sha3 = { workspace = true }
 # (hand-rolled, no serde). No oxigraph-family edge.
 purrdf-sparql-results = { workspace = true }
 # RFC-3986 IRI parsing/resolution, for the IRI()/URI() built-in's relative-reference
-# resolution against the query's base IRI (SPARQL 1.1 §17.4.2.6). Already a
-# wasm-clean foundation leaf the algebra parser depends on for the same purpose.
+# resolution against the query's base IRI (SPARQL 1.1 §17.4.2.6), AND the language-tag
+# grammar (`langtag`) the runtime tag constructors STRLANG/STRLANGDIR are held to — they
+# build a tag from a computed string into the scratch arena, so neither the query parser's
+# gate nor the dataset builder's can see them. Already a wasm-clean foundation leaf the
+# algebra parser depends on for both of the same purposes.
 purrdf-iri = { workspace = true }
 # Deterministic two-phase parallel evaluation primitives (`parallel` module):
 # fork-join per BGP/group row batch, reduced back in source order. Unconditional —

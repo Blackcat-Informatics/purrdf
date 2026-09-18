@@ -136,6 +136,9 @@ pub use skos::{
     SkosProjection, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, project_skos,
 };
 pub use term::{ProjectionDirection, ProjectionTerm};
+// Crate-internal: the one language-tag judgement shared by the projection term
+// builder and `VoidStaticValue`'s caller-config constructor.
+pub(crate) use term::validate_language_tag;
 pub use util::{
     escape_cypher_identifier, escape_cypher_string, escape_xml_attribute, escape_xml_text,
     stable_identifier, validate_absolute_iri,

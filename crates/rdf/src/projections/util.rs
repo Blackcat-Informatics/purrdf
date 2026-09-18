@@ -88,9 +88,12 @@ pub fn stable_identifier(prefix: &str, key: &[u8]) -> Result<String, ProjectionE
     let mut output = String::with_capacity(prefix.len() + 1 + digest.len() * 2);
     output.push_str(prefix);
     output.push('_');
-    for byte in digest {
-        let _ = write!(output, "{byte:02x}");
-    }
+    // The digest renders itself: `Output<Sha256>`'s `LowerHex` is the same
+    // zero-padded, lowercase, two-characters-per-byte rendering the hand-rolled
+    // loop produced, and writing it straight into `output` keeps the single
+    // allocation this function already reserved. (Infallible: `String`'s
+    // `fmt::Write` never returns an error.)
+    let _ = write!(output, "{digest:x}");
     Ok(output)
 }
 

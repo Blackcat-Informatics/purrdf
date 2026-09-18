@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use ciborium::value::Value;
+use purrdf_core::hex;
 use purrdf_gts::model::Graph;
 
 use crate::{
@@ -61,7 +62,7 @@ pub fn lookaside_from_graph(graph: &Graph) -> RdfLookaside {
         .opaque
         .iter()
         .map(|opaque| RdfOpaqueNodeRecord {
-            id: hex_bytes(&opaque.id),
+            id: hex::lower(&opaque.id),
             frame_type: opaque.frame_type.clone(),
             reason: opaque.reason.clone(),
             signature_status: opaque.sigstat.clone(),
@@ -72,7 +73,7 @@ pub fn lookaside_from_graph(graph: &Graph) -> RdfLookaside {
         .signatures
         .iter()
         .map(|signature| RdfSignatureRecord {
-            frame_id: hex_bytes(&signature.frame_id),
+            frame_id: hex::lower(&signature.frame_id),
             key_id: signature.kid.clone(),
             status: signature.status.clone(),
             has_cose: signature.cose.is_some(),
@@ -101,7 +102,7 @@ fn segment_records(graph: &Graph) -> Vec<RdfSegmentRecord> {
             let streamable = graph.segment_streamable.get(index);
             RdfSegmentRecord {
                 index,
-                head: graph.segment_heads.get(index).map(|head| hex_bytes(head)),
+                head: graph.segment_heads.get(index).map(|head| hex::lower(head)),
                 profile: graph.segment_profiles.get(index).cloned(),
                 claimed_streamable: streamable.is_some_and(|info| info.claimed),
                 covered: streamable.map_or(0, |info| info.covered),
@@ -149,7 +150,7 @@ fn blob_origin(graph: &Graph) -> Option<RdfBlobOrigin> {
         source_segments: graph
             .segment_heads
             .iter()
-            .map(|head| hex_bytes(head))
+            .map(|head| hex::lower(head))
             .collect(),
     })
 }
@@ -275,16 +276,6 @@ fn term_display(graph: &Graph, term_id: usize) -> String {
         .get(term_id)
         .and_then(|term| term.value.clone())
         .unwrap_or_else(|| format!("term#{term_id}"))
-}
-
-fn hex_bytes(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 /// Fold GTS bytes into a graph and fail if the reader produced diagnostics.

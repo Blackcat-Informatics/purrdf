@@ -14,7 +14,11 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["rdf", "rdf-12", "gts", "knowledge-graph", "diagnostics"]
 categories = ["parser-implementations", "encoding", "data-structures"]
-exclude = ["tests/corpus/w3c/**"]
+# The published package carries no tests: the harnesses read vendored fixture
+# trees (several under third-party W3C/BSD terms) that must not ship in the
+# crate, and a packaged test suite whose fixtures are absent would be worse
+# than none. Nothing downstream builds a dependency's tests.
+exclude = ["tests/**"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -53,9 +57,6 @@ csv = { workspace = true }
 # CSVW string/duration format validation. Already workspace-pinned and present in
 # the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
 regex = { workspace = true }
-# RFC 5646 well-formedness for every CSVW language-bearing metadata path.
-# Always-on, allocation-free, no_std, and wasm-clean.
-oxilangtag = { workspace = true }
 # Store-once interning on the native text-codec hot path (fixed-key hashing +
 # raw hash table indices into the owned term Vec), matching the purrdf-core
 # `ir::builder` pattern.

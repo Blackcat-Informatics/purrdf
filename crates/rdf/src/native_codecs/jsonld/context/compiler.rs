@@ -16,6 +16,12 @@ use super::{
     context_limit, validate_absolute_iri,
 };
 use crate::RdfDiagnostic;
+// The codec's one language-tag judgement, not a second copy of it: `expand.rs`
+// already holds every value-side `@language` to
+// `langtag::Profile::ConcreteSyntaxLangtagBounded`, and a context's `@language`
+// is written into every compacted document by `carrier.rs`, so the two have to
+// admit the same set or this codec emits a context it cannot read back.
+use crate::native_codecs::jsonld::expand::validate_context_language_tag;
 
 const KEYWORDS: &[&str] = &[
     "@base",
@@ -555,7 +561,14 @@ impl Compiler<'_> {
         if let Some(value) = object.get("@language") {
             active.default_language = match value {
                 Value::Null => None,
-                Value::String(language) => Some(language.to_ascii_lowercase()),
+                Value::String(language) => {
+                    // Ask the grammar, exactly as the value side does. The folded
+                    // tag is what is judged, because the folded tag is what the
+                    // context holds and what a compacted document would carry.
+                    let language = language.to_ascii_lowercase();
+                    validate_context_language_tag(&language, "@context @language")?;
+                    Some(language)
+                }
                 _ => {
                     return Err(context_error("JSON-LD @language must be a string or null"));
                 }
@@ -1410,7 +1423,14 @@ fn compile_language_mapping(
 ) -> Result<JsonLdNullable<String>, RdfDiagnostic> {
     match value {
         Value::Null => Ok(JsonLdNullable::Null),
-        Value::String(language) => Ok(JsonLdNullable::Value(language.to_ascii_lowercase())),
+        Value::String(language) => {
+            // The per-term half of the same gate; `carrier.rs` serializes a term
+            // definition's `@language` into a compacted document just as it does
+            // the default one.
+            let language = language.to_ascii_lowercase();
+            validate_context_language_tag(&language, &format!("term `{term}` @language"))?;
+            Ok(JsonLdNullable::Value(language))
+        }
         _ => Err(context_error(format!(
             "term `{term}` @language must be a string or null"
         ))),

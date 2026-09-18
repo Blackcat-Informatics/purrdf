@@ -706,12 +706,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
-name = "fixedbitset"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
-
-[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -869,12 +863,6 @@ name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
-
-[[package]]
-name = "hex"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "icu_collections"
@@ -1194,27 +1182,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "oxilangtag"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d3b4eb570abd4a1dcb062c31fd37b832264d9dc7292c3e69acfe926c87b063f"
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-
-[[package]]
-name = "petgraph"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
-dependencies = [
- "fixedbitset",
- "hashbrown 0.15.5",
- "indexmap",
-]
 
 [[package]]
 name = "pin-project-lite"
@@ -1405,7 +1376,6 @@ dependencies = [
  "csv",
  "hashbrown 0.15.5",
  "memmap2",
- "oxilangtag",
  "pretty_assertions",
  "proptest",
  "purrdf-cdt",
@@ -1449,6 +1419,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-envelope-probe"
+version = "2.0.2"
+dependencies = [
+ "purrdf-core",
+ "purrdf-rdf",
+ "purrdf-shapes",
+ "purrdf-sparql-eval",
+]
+
+[[package]]
 name = "purrdf-events"
 version = "2.0.2"
 
@@ -1482,6 +1462,7 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "purrdf-events",
+ "purrdf-iri",
  "rayon",
  "serde",
  "serde_json",
@@ -1550,7 +1531,6 @@ dependencies = [
  "ed25519-dalek",
  "hashbrown 0.15.5",
  "memchr",
- "oxilangtag",
  "pretty_assertions",
  "proc-macro2",
  "proptest",
@@ -1619,9 +1599,8 @@ name = "purrdf-slice"
 version = "2.0.2"
 dependencies = [
  "criterion",
- "hex",
  "insta",
- "petgraph",
+ "purrdf-core",
  "purrdf-iri",
  "purrdf-rdf",
  "purrdf-sparql-algebra",
@@ -2399,12 +2378,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "visual-hashing"
-version = "0.1.3"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89cff0f3901531f1ae5441b09b201b1e61698fba5a5625d44b6243c5b381a3e3"
-dependencies = [
- "blake3",
-]
+checksum = "5056c65a9a789c9c1156fbfab38df224d7b729089e3b075892136e8f3092166e"
 
 [[package]]
 name = "wait-timeout"

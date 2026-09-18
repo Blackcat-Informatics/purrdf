@@ -3,8 +3,6 @@
 
 //! Exact-byte, loss, backend, and insertion-order evidence for `okf-terms`.
 
-use std::fmt::Write as _;
-
 use purrdf_rdf::{
     PackBuilder, PackView, ProjectionConfig, ProjectionPackage, ProjectionProfile, SerializeGraph,
     parse_dataset, project_archive, project_okf_terms, serialize_dataset,
@@ -106,12 +104,10 @@ const LOSS_LEDGER: &str = r#"{
 "#;
 
 fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut output, byte| {
-            write!(output, "{byte:02x}").expect("writing to String cannot fail");
-            output
-        })
+    // The digest renders itself, the way `rdf12_canon_profile.rs` in this same
+    // test directory already spells it — one idiom for "SHA-256 as lowercase
+    // hex" across the suite rather than a per-file accumulate loop.
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 #[test]

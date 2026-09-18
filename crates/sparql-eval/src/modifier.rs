@@ -160,6 +160,21 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
         let mut row = smallvec::smallvec![None; width];
         for (i, cell) in binding.iter().enumerate() {
             if let Some(ground) = cell {
+                // The PLAIN door, deliberately: an unbound cell here is not the
+                // §17.2 unbound RESULT, it is `UNDEF`, which is compatible with
+                // every solution — so degrading a term to `None` would delete a
+                // constraint and answer with MORE rows, silently. A `VALUES`
+                // cell is an algebra ground term, never an extension-computed
+                // value, and every way one arrives is gated upstream: query text
+                // by the SPARQL parser, a hand-built `Query` by
+                // `purrdf_sparql_algebra`'s algebra validator (which
+                // `PreparedQuery::rewritten` runs, and which refuses an
+                // "invalid language tag in query algebra" on this same profile),
+                // a `SparqlRequest` pre-binding by `crate::substitute`'s ingress
+                // — the one door the validator cannot see, because substitution
+                // happens after admission — and a SEP-0007 Values-Insertion row
+                // by the fact that its cells are already-admitted solution terms
+                // being put back. See `ScratchInterner::intern`.
                 row[i] = Some(
                     ctx.scratch
                         .intern(ctx.dataset, ground_term_to_value(ground)),
@@ -1167,7 +1182,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             CountAccumulator::default,
             |acc, ()| acc.step(&[]),
         )?;
-        return Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)));
+        return Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)));
     }
 
     // Every built-in aggregate reaching here is `COUNT(?x)`/`SUM`/`AVG`/`MIN`/
@@ -1296,7 +1311,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             ));
         }
     };
-    Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)))
+    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
 }
 
 /// [`fold_builtin`]'s per-row step closure for every built-in whose argument
@@ -1513,7 +1528,12 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     drop(force_sequential);
 
     let value = crate::agg_fn::finish_contained(accumulator, iri)?;
-    Ok(value.map(|v| ctx.scratch.intern(ctx.dataset, v)))
+    // THE custom-aggregate seam. `AggregateAccumulator::finish` returns an
+    // `Option<TermValue>` with no constraint on the language string at all, and
+    // this is where that value would otherwise become a solution term. `and_then`
+    // routes a refused tag onto the same unbound answer an accumulator that
+    // returned `None` gets — see `ScratchInterner::intern_checked`.
+    Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
 }
 
 /// Whether an [`XsdValue`] belongs to the SPARQL numeric tower (integer / decimal /

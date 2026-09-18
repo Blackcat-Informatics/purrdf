@@ -41,9 +41,6 @@ purrdf-iri = { workspace = true }
 # with no edge back to the core, and stays wasm-clean.
 purrdf-cdt = { workspace = true }
 # Strict BCP 47 validation for canonical RDF language-tag target identities.
-# Parsing stays allocation-free and wasm-clean; canonical lowercase spelling is
-# enforced by the PURREMB target validator before the tag reaches this parser.
-oxilangtag = { workspace = true }
 # The permissive RDF 1.2 ingestion protocol: this crate provides
 # the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
 # `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate

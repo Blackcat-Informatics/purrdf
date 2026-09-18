@@ -551,7 +551,14 @@ fn eval_call_over<D: DatasetView + Sync>(
                 let value = values[slot]
                     .clone()
                     .ok_or_else(|| unbound_slot_internal(&call.iri))?;
-                row[column] = Some(ctx.scratch.intern(ctx.dataset, value));
+                // THE property-function seam: `PropertyFunction::eval` is a
+                // third-party trait whose emitted rows carry arbitrary
+                // `TermValue`s. A cell the interner refuses stays unbound rather
+                // than becoming a term no results writer can spell — the same
+                // answer `unify_row` above gives a row that disagrees, and the
+                // same one `RowIngest::intern_row` documents for a producer that
+                // miscounts its own columns.
+                row[column] = ctx.scratch.intern_checked(ctx.dataset, value);
             }
             rows.push(row);
         }

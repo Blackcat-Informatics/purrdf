@@ -79,12 +79,7 @@ impl PackDigest {
     /// The lowercase-hex rendering of the digest (64 chars).
     #[must_use]
     pub fn to_hex(&self) -> String {
-        let mut s = String::with_capacity(64);
-        for b in &self.0 {
-            use std::fmt::Write as _;
-            let _ = write!(s, "{b:02x}");
-        }
-        s
+        crate::hex::lower(&self.0)
     }
 }
 
