@@ -60,9 +60,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `StratumResolution` per stratum actually read -- where the profile stops
   separating ranks, how deep this run reached, and how many adjacent ranks its
   score could not separate, counted by direct observation rather than inferred.
-  The trailer also reports whether the last row in a top-k beat a rival it tied
-  with exactly, which is the case where the final place was settled by the
-  declared tie-break rather than by relevance.
+  The trailer also reports whether the last row in a top-k beat a *settled*
+  rival it tied with exactly, which is the case where the final place was
+  decided by the declared tie-break rather than by relevance. Only rivals
+  already final when that row was emitted are counted, so a `false` there means
+  "no settled rival tied with it" and not "the cut fell on a strict score
+  difference" -- settling every live rival would mean reading past the top-k,
+  which would move the ranks-pulled evidence in the same trailer.
 
   Both altitudes are readable from every entry point, and kept apart by name.
   `SearchResult::planned_resolution` carries the compiled plan's own map onto the

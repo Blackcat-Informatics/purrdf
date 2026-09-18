@@ -235,7 +235,7 @@ pub struct FusionTrailer {
     /// this one answers "what did fusion read from this stream", and a stream
     /// that never existed read nothing. Neither is an omission from the other.
     pub resolution: BTreeMap<Iri, StratumResolution>,
-    /// Whether the last row in the answer ties on score with the best candidate
+    /// Whether the last row in the answer ties on score with a *settled* rival
     /// left outside it.
     ///
     /// `true` means the top-k boundary was decided by the tie-break's later keys
@@ -245,8 +245,30 @@ pub struct FusionTrailer {
     /// actually feels, and neither [`StratumResolution::separation`] nor
     /// [`StratumResolution::ranks_pulled`] can reveal it.
     ///
-    /// `false` when the answer was not bounded by the top-k at all, when nothing
-    /// was excluded, or when the cut fell on a strict score difference.
+    /// # What `false` does and does not say
+    ///
+    /// The scan behind this flag counts only rivals that were already final when
+    /// the last row was emitted, because only a final rival has a settled score
+    /// to tie with — one that can still accumulate contributions is not yet tied
+    /// with anything.
+    ///
+    /// So from `false` a caller may conclude exactly this: **no settled rival
+    /// tied with the emitted row.** That covers the cases where the answer was
+    /// not bounded by the top-k at all and where nothing was excluded, and it
+    /// covers a cut that fell on a strict score difference.
+    ///
+    /// A caller may **not** conclude from `false` that the cut was decided on a
+    /// strict score difference. A rival still live at that moment could have
+    /// risen to exactly the emitted row's score had fusion read further; it is
+    /// not counted here, and `false` is not evidence it does not exist. `false`
+    /// is therefore not proof the final place was earned on relevance.
+    ///
+    /// This is what the field means, not a shortfall standing in for a stronger
+    /// one. Settling every live rival would require pulling at least one row
+    /// past the top-k, and how deep this fusion read is itself reported — as
+    /// [`StratumResolution::ranks_pulled`], in this same trailer. Reading
+    /// further to sharpen this field would falsify that one, so the flag is
+    /// defined over what the bounded read had already settled.
     pub cut_on_a_tie: bool,
 }
 

@@ -1284,10 +1284,15 @@ fn compile<'py>(
 /// reaching its planned depth, and that gap is the point: a depth a fusion never
 /// reached cost it nothing.
 ///
-/// `"cut_on_a_tie"` says whether the last row in the answer beat a rival it tied
-/// with exactly, so the final place was settled by the declared tie-break rather
-/// than by relevance. None of these is an error: past its separating depth a law
-/// still answers correctly and deterministically, only more coarsely.
+/// `"cut_on_a_tie"` says whether the last row in the answer beat a *settled*
+/// rival it tied with exactly, so the final place was settled by the declared
+/// tie-break rather than by relevance. Only rivals already final when that row
+/// was emitted are counted, so `False` means "no settled rival tied with it" and
+/// not "the cut was decided on a strict score difference" — a rival still live
+/// could have risen to the same score had fusion read past the top-k, and
+/// reading that far would move the `"ranks_pulled"` this same answer reports.
+/// None of these is an error: past its separating depth a law still answers
+/// correctly and deterministically, only more coarsely.
 /// `retrieval.weight_for_depth` says what a finer answer costs.
 ///
 /// `weights` maps a stratum IRI to its weight in raw fixed-point units, where

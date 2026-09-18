@@ -3560,6 +3560,17 @@ fn collided_golden_path() -> std::path::PathBuf {
 }
 
 async fn collided_fusion() -> FusionResult<Term> {
+    collided_fusion_at(TopK::new(8)).await
+}
+
+/// The collided fixture under a caller-chosen bound.
+///
+/// The bound is the only thing that varies between the golden below and the
+/// cut-on-a-tie pair after it: same weights, same decay, same two scripts, same
+/// four candidates on exactly equal scores. Every candidate here needs both
+/// streams read to the end before it can be certified, so the ranks pulled do
+/// not move with the bound either — which is what makes the pair one variable.
+async fn collided_fusion_at(top_k: TopK) -> FusionResult<Term> {
     // One thousand raw units is `10^-9`: ranks one and two already share a
     // contribution, so every row below is decided by the tie-break.
     let weight = Fixed::from_raw(1_000);
@@ -3595,7 +3606,7 @@ async fn collided_fusion() -> FusionResult<Term> {
             scripted(["delta", "gamma", "beta", "alpha"]),
         ),
     ];
-    purrdf_retrieval::fuse::<MockStream, Term>(streams, &profile, TopK::new(8))
+    purrdf_retrieval::fuse::<MockStream, Term>(streams, &profile, top_k)
         .await
         .expect("a collided fusion answers")
 }
@@ -3643,5 +3654,88 @@ fn the_collided_regime_has_a_byte_identical_golden() {
         expected,
         "collided fusion drifted from the golden; if the change is intended, update {}",
         collided_golden_path().display()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 25. The cut that fell on a tie
+//
+// The golden above fuses four candidates that land on exactly the same score,
+// but under a bound larger than the row count — so nothing is excluded and
+// `cut_on_a_tie` is false for want of a rival rather than because the last place
+// was earned. That leaves the flag's meaningful state unpinned: a trailer that
+// hard-coded it to `false` would satisfy every other test in this file.
+//
+// The pair below closes that with one variable. The same four tied candidates,
+// the same law and the same two scripts are fused twice, and only the bound
+// moves: once small enough to leave a tied rival outside, where the final place
+// is decided by the tie-break and the flag must be `true`, and once large enough
+// to exclude nothing, where it must be `false`. The `true` half pins its rows
+// and their order too, because a flag announcing a coarse cut is worth nothing
+// if the answer under it stopped being deterministic.
+// ---------------------------------------------------------------------------
+
+fn collided_cut_golden_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fusion/collided_cut.golden")
+}
+
+#[test]
+fn cut_on_a_tie_turns_on_the_bound_and_on_nothing_else() {
+    // The bound that excludes a tied rival.
+    let cut = block_on(collided_fusion_at(TopK::new(2)));
+
+    let scores: Vec<_> = cut.rows.iter().map(|row| row.score).collect();
+    assert_eq!(scores.len(), 2, "the bound holds this answer to two rows");
+    assert!(
+        scores.windows(2).all(|pair| pair[0] == pair[1]),
+        "every candidate in this fixture scores the same, so the emitted rows tie \
+         with each other and with the two left outside"
+    );
+    assert!(
+        cut.trailer.cut_on_a_tie,
+        "two settled rivals tie with the last emitted row on score, so only the \
+         declared tie-break separated them from it"
+    );
+
+    // Still deterministic where the score stopped deciding: best stratum rank
+    // ascending, then canonical term bytes. `alpha` and `delta` each hold a
+    // rank one and `alpha` sorts first; `beta` and `gamma` hold a rank two and
+    // are the rivals the cut fell on.
+    let emitted: Vec<&str> = cut.rows.iter().map(|row| row.entity.as_str()).collect();
+    assert_eq!(
+        emitted,
+        vec!["alpha", "delta"],
+        "the tie-break, not the score, decides which candidates are inside the bound"
+    );
+
+    let rendered = render_collided(&cut);
+    let expected = std::fs::read_to_string(collided_cut_golden_path())
+        .expect("the golden fixture is checked in");
+    assert_eq!(
+        rendered,
+        expected,
+        "the cut-on-a-tie fusion drifted from the golden; if the change is intended, update {}",
+        collided_cut_golden_path().display()
+    );
+
+    // The same stream under a bound that excludes nothing. One variable.
+    let whole = block_on(collided_fusion_at(TopK::new(8)));
+    assert_eq!(
+        whole.rows.len(),
+        4,
+        "this bound is larger than the fixture, so nothing is excluded"
+    );
+    assert!(
+        !whole.trailer.cut_on_a_tie,
+        "no rival was left outside to tie with, so the flag reports none"
+    );
+
+    // What the flag does *not* turn on: the evidence of how deep this fusion
+    // read is identical on both sides, because every candidate here needs both
+    // streams read to the end before it can be certified at all.
+    assert_eq!(
+        cut.trailer.resolution, whole.trailer.resolution,
+        "the two halves differ in their bound and in nothing else"
     );
 }
