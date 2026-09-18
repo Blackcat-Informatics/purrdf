@@ -101,12 +101,16 @@ use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{
-    DistanceMetric, EmbeddingView, TargetId, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
-    verify_embedding,
+    DistanceMetric, EmbeddingView, Iri, TargetId, TargetSetId, TermValue, VectorDtype,
+    VectorSpaceId, verify_embedding,
 };
 
 use crate::error::EvalError;
-use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction};
+use crate::property_fn::{
+    AcceptedTerm, DepthPlacement, DuplicatePolicy, PfArgs, PfArity, PfCursor, PfRow,
+    PropertyFunction, RankOrdering, RankedDeclaration, RequestFacet, TermKind, TermPattern,
+    TermPlacement,
+};
 use crate::user_fn::Volatility;
 
 pub use metric::{Bound, Bounded, Kernel, Ranked, Scalar, best, norm};
@@ -657,6 +661,98 @@ impl EmbeddingKnnRelation {
     #[must_use]
     pub fn space(&self) -> &EmbeddingSpace {
         &self.space
+    }
+
+    /// The flattened argument position of `?neighbour`, the retrieved term.
+    pub const NEIGHBOUR: usize = KNN_NEIGHBOUR;
+    /// The flattened argument position of `?query`, the seed term. Always an input.
+    pub const QUERY: usize = KNN_QUERY;
+    /// The flattened argument position of `k`, the neighbour count. Always an input.
+    pub const COUNT: usize = KNN_COUNT;
+    /// The flattened argument position of `?distance`.
+    pub const DISTANCE: usize = KNN_DISTANCE;
+
+    /// The ranked-retrieval declaration this relation can make, for a
+    /// **caller-supplied** stratum.
+    ///
+    /// A [`RankedDeclaration`] is configuration a host supplies at
+    /// [`register_ranked`](crate::PropertyFunctionRegistry::register_ranked), not
+    /// a property of this type. What this method adds is only that a host does
+    /// not have to hand-write the argument indices: they come from
+    /// [`Self::NEIGHBOUR`], [`Self::QUERY`] and [`Self::COUNT`], which are this
+    /// relation's own. Every field of the result is public, so a host that wants
+    /// a `mandatory` producer or a second accepted alternative edits it before
+    /// registering.
+    ///
+    /// Nothing is minted. `stratum` is the caller's IRI; `seed` is the caller's
+    /// statement of which RDF term kind its queries seed with; `depth_datatype`
+    /// is the caller's datatype IRI for the neighbour count.
+    ///
+    /// # The accepted term is a **seed**, not an embedding
+    ///
+    /// This relation searches *from a term it already holds a vector for*:
+    /// `?query` is looked up with [`EmbeddingSpace::row_of`]. So the request
+    /// shape it accepts is an entity seed — a term the caller already knows —
+    /// and `seed` says which kind of term that is, because a space's rows may be
+    /// IRIs, literals or triple terms and only the host knows which its queries
+    /// will name. A raw query embedding is a different question — "what is near
+    /// this point" rather than "what is near this thing" — and no producer here
+    /// accepts one.
+    ///
+    /// [`TermKind::Any`] and [`TermKind::Literal`] are available and are real
+    /// choices, with one consequence worth stating: either accepts a request
+    /// term carrying a raw query embedding, whose value placement demands a
+    /// datatype naming the embedding encoding the producer reads. The
+    /// declaration written here supplies none (a seed is rendered from the
+    /// caller's own term, which carries its own), so a request containing an
+    /// embedding makes this producer unplaceable and it is dropped from the plan
+    /// entirely, rather than serving the seed terms beside it. A host that wants
+    /// both questions answered declares two producers.
+    ///
+    /// # `k` is the per-stratum depth, and it is required
+    ///
+    /// `k` is an input at [`Self::COUNT`] in the relation's only access pattern
+    /// (`fbbf`): a call that leaves it free is refused, because an unbounded
+    /// generator cannot be admitted against a row ceiling. So the declaration
+    /// carries a [`DepthPlacement`] there, which is how the consumer's
+    /// per-stratum depth becomes this relation's `k`. `depth_datatype` is the
+    /// datatype that rendered integer carries; this crate reads `k` as an XSD
+    /// integer, so an `xsd:integer`-shaped datatype is what makes the invocation
+    /// answerable — and it comes from the caller rather than being invented
+    /// here.
+    ///
+    /// # Ordering and duplicates
+    ///
+    /// Rows are emitted nearest-first under the space's declared metric, ranked
+    /// exactly, with equal distances broken by ascending row number — a total
+    /// order, so every row has an unambiguous 1-based rank. Terms are distinct
+    /// within a space and a search returns distinct rows, so no item repeats.
+    #[must_use]
+    pub fn ranked_declaration(
+        &self,
+        stratum: Iri,
+        seed: TermKind,
+        depth_datatype: String,
+    ) -> RankedDeclaration {
+        RankedDeclaration {
+            stratum,
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(seed),
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: Self::QUERY,
+                    datatype: None,
+                }],
+            }],
+            depth_placement: Some(DepthPlacement {
+                position: Self::COUNT,
+                datatype: depth_datatype,
+            }),
+            candidate_position: Self::NEIGHBOUR,
+            ordering: RankOrdering::StrictlyDescending,
+            duplicates: DuplicatePolicy::Unique,
+            mandatory: false,
+        }
     }
 }
 

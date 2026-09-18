@@ -792,7 +792,7 @@ def _documented_surface() -> list[Path]:
 # three: crates.io, PyPI and npm.
 #
 # A field path is a bare tuple, and a tuple agrees with nothing on its own: re-pointed by
-# ONE LETTER — `("package", "descriptions")` — every `Cargo.toml` yields nothing, all 23
+# ONE LETTER — `("package", "descriptions")` — every `Cargo.toml` yields nothing, all 24
 # crates.io descriptions leave both the swept set and the reach arm, and the release-lane
 # cross-check below does not notice because it counts ENTRIES rather than what they read. So
 # each declared kind is required to yield, and to yield PROSE; see
@@ -887,7 +887,7 @@ def _check_registry_yield(harvest: dict[str, list[tuple[str, str]]]) -> None:
     The field path beside each manifest name in ``_REGISTRY_DESCRIPTION`` is a bare tuple,
     and until this check existed nothing compared it with the manifests it reads. Re-pointed
     by one letter — ``("package", "descriptions")`` — every ``Cargo.toml`` yielded nothing:
-    all 23 crates.io descriptions left the swept set AND the reach arm in one edit, with
+    all 24 crates.io descriptions left the swept set AND the reach arm in one edit, with
     every gate green, because the release-lane cross-check counts declared ENTRIES rather
     than what they read and the emptiness test below only fired when all three kinds went
     dark at once.

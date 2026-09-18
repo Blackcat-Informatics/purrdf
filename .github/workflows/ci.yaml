@@ -227,7 +227,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 24 publishable crates with rustdoc lints promoted
+      # Document exactly the 25 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -317,6 +317,7 @@ jobs:
             -p purrdf-entail \
             -p purrdf-geo \
             -p purrdf-text \
+            -p purrdf-retrieval \
             -p purrdf-validate \
             -p purrdf \
             -p purrdf-wasm

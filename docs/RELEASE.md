@@ -91,6 +91,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-sparql-eval`
 - `purrdf-hnsw`
 - `purrdf-text`
+- `purrdf-retrieval`
 - `purrdf-rdf`
 - `purrdf-markdown`
 - `purrdf-json`
@@ -170,29 +171,36 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-hnsw`
+### Outstanding bootstrap: `purrdf-hnsw` and `purrdf-retrieval`
 
-One crate is in the release set above with no crates.io record yet:
-`purrdf-hnsw` is the **thirteenth** in publish order. It follows
-`purrdf-sparql-eval`, `purrdf-core` and `purrdf-xsd`, its workspace
-dependencies, and precedes `purrdf-text`. `PURRDF_UNBOOTSTRAPPED_CRATES` in
-[`scripts/release-crates.sh`](../scripts/release-crates.sh) names it; the
-ledger is held to the registry in both directions by the preflight. The entry
-leaves once its record exists. No crate in the release set depends on
-`purrdf-hnsw`, so the lane publishes the twelve crates ahead of it, skips it
-visibly, and continues through every later crate; only `purrdf-hnsw` itself
-waits for the token step described in
+Two crates are in the release set above without a crates.io record yet.
+`purrdf-hnsw` is the **thirteenth** in publish order and `purrdf-retrieval` the
+**fifteenth**. Each record must be created by a token publish (a
+create-new-crate publish is the only thing an API token does in this process —
+every existing record is locked to Trusted Publishing) and Trusted Publishing
+configured on it from the section above, before a `rust-v*` tag can publish the
+set. `PURRDF_UNBOOTSTRAPPED_CRATES` in
+[`scripts/release-crates.sh`](../scripts/release-crates.sh) names both, and the
+registry preflight verifies the ledger in both directions before packaging. An
+entry leaves once its record exists.
+
+Neither is depended on by another crate in the release set, so the lane
+publishes the crates ahead of each, skips it visibly, and continues through
+every later crate; only the two themselves wait for the token step described in
 [New crates: set up publishing before tagging](#new-crates-set-up-publishing-before-tagging).
+
+Before publishing, every crate in the release set must have the Trusted
+Publisher configuration above and the *Require trusted publishing* lock.
 
 `purrdf-markdown` and `purrdf-json` have **0.0.0** bootstrap records, created by
 token publication solely to configure Trusted Publishing. Those versions
 expose no runtime API; their functional release is **2.0.0**. With the records
-and publisher settings established, the trusted release lane publishes all 24
-crates in dependency order. The 0.0.0
-versions can be yanked after the functional release, retaining the crate
-records and publisher settings.
+and publisher settings established, the trusted release lane publishes the
+already-bootstrapped crates in dependency order. The 0.0.0 versions can be
+yanked after the functional release, retaining the crate records and publisher
+settings.
 
-The three crates that once had no crates.io record — `purrdf-cdt`,
+The crates that previously had no crates.io record — `purrdf-cdt`,
 `purrdf-text`, `purrdf-geo` — were bootstrapped during the 0.13.0 release:
 `purrdf-cdt` by a token publish at 0.13.0 once its dependencies were up, and
 `purrdf-text`/`purrdf-geo` as `0.0.0-bootstrap` placeholder records (their
@@ -283,9 +291,11 @@ git push origin rust-v0.1.5
 
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
-not locked to Trusted Publishing (see [bootstrap status](#outstanding-bootstrap-purrdf-hnsw)).
-Every release crate the ledger does not name must have its record and lock
-before packaging. The lane publishes crates in dependency order and skips any
+not locked to Trusted Publishing (see
+[bootstrap status](#outstanding-bootstrap-purrdf-hnsw-purrdf-retrieval)).
+The ledger names `purrdf-hnsw` and `purrdf-retrieval`, so every other release
+crate must have its record and lock before packaging. The lane publishes crates
+in dependency order and skips any
 crate/version already present on crates.io. A partially completed release
 resumes with `gh run rerun <run-id>`.
 

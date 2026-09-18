@@ -50,6 +50,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-sparql-eval
   purrdf-hnsw
   purrdf-text
+  purrdf-retrieval
   purrdf-rdf
   purrdf-markdown
   purrdf-json
@@ -85,4 +86,5 @@ PURRDF_RELEASE_CRATES=(
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_UNBOOTSTRAPPED_CRATES=(
   purrdf-hnsw
+  purrdf-retrieval
 )

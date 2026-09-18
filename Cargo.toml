@@ -23,6 +23,7 @@ members = [
     "crates/rdf-core",
     "crates/rdf-events",
     "crates/rdf-wasm",
+    "crates/retrieval",
     "crates/shapes",
     "crates/shex",
     "crates/slice",
@@ -75,6 +76,7 @@ purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
 purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }
 purrdf-rdf = { path = "crates/rdf", version = "2.0.2" }
+purrdf-retrieval = { path = "crates/retrieval", version = "2.0.2" }
 purrdf-shapes = { path = "crates/shapes", version = "2.0.2" }
 purrdf-shex = { path = "crates/shex", version = "2.0.2" }
 purrdf-slice = { path = "crates/slice", version = "2.0.2" }
@@ -160,6 +162,10 @@ serde_json = "1"
 # Maintained continuation of the archived serde_yaml 0.9 (same API; the
 # `serde_yaml` name is kept at use sites via this package rename).
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
+# Derive-based structured error types for `purrdf-retrieval`'s plan layer. A
+# proc-macro, so it expands at compile time and adds nothing to the wasm or
+# runtime path.
+thiserror = "2"
 # digest-0.10 family, matching sha2/md-5.
 sha1 = { version = "0.10", default-features = false }
 sha2 = { version = "0.10", default-features = false }

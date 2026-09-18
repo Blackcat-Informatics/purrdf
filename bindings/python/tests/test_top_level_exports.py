@@ -4,7 +4,8 @@
 
 `purrdf` must present the RDF surface at its root and every other engine as a
 top-level submodule (`purrdf.shapes`, `purrdf.shex`, `purrdf.entail`,
-`purrdf.slice`, `purrdf.gts`) so no caller ever reaches into `purrdf_native`.
+`purrdf.retrieval`, `purrdf.slice`, `purrdf.gts`) so no caller ever reaches into
+`purrdf_native`.
 Both `import purrdf.<engine>` and attribute access must resolve, and the public
 compat/shadow code must never name `purrdf_native`.
 """
@@ -20,6 +21,7 @@ _ENGINES = [
     "purrdf.shapes",
     "purrdf.shex",
     "purrdf.entail",
+    "purrdf.retrieval",
     "purrdf.slice",
     "purrdf.gts",
 ]
@@ -39,6 +41,7 @@ def test_attribute_access_matches_import() -> None:
     assert importlib.import_module("purrdf.shapes") is purrdf.shapes
     assert importlib.import_module("purrdf.shex") is purrdf.shex
     assert importlib.import_module("purrdf.entail") is purrdf.entail
+    assert importlib.import_module("purrdf.retrieval") is purrdf.retrieval
     assert importlib.import_module("purrdf.slice") is purrdf.slice
     assert importlib.import_module("purrdf.gts") is purrdf.gts
 

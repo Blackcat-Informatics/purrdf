@@ -75,6 +75,13 @@ caller-supplied configuration.
   1.2 literals with exact fixed-point BM25 ranking and no floating point, so
   the same query ranks identically natively and on wasm32; reached from SPARQL
   as property functions under the caller's IRIs.
+- **Ranked retrieval** — `purrdf::retrieval`: the composition layer over those
+  ranked producers. One request is planned against what each producer declares
+  it accepts, admitted and compiled into per-stratum SPARQL, executed, and fused
+  into one ordered answer under an exact, content-addressed law — with every
+  row's per-stratum provenance, every producer's own status, and every request
+  term that reached nothing carried in the answer. Producers, strata and weights
+  are caller-supplied; nothing is defaulted.
 - **GeoSPARQL 1.1** — `purrdf::geo`: exact, float-free WKT/GeoJSON geometry,
   every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM, the
   `geof:` family on the scalar seam and spatial-relation rewrite on the
@@ -192,6 +199,7 @@ let schema = purrdf::shex::parse_shexc(
 | `entail` | [`purrdf-entail`](https://crates.io/crates/purrdf-entail) (Simple / RDF / RDFS / OWL-RL / D / OWL-Direct / RIF) |
 | `geo` | [`purrdf-geo`](https://crates.io/crates/purrdf-geo) (GeoSPARQL 1.1: exact WKT/GeoJSON geometry, the `geof:` family, query rewrite) |
 | `text` | [`purrdf-text`](https://crates.io/crates/purrdf-text) (inverted index, exact fixed-point BM25 ranking) |
+| `retrieval` | [`purrdf-retrieval`](https://crates.io/crates/purrdf-retrieval) (plan → compile → execute → fuse over the ranked producers) |
 | `validate` | [`purrdf-validate`](https://crates.io/crates/purrdf-validate) (SARIF 2.1.0 boundary) |
 | `markdown` | [`purrdf-markdown`](https://crates.io/crates/purrdf-markdown) (structural Markdown slicer under the shipped specification) |
 | `datalog` | [`purrdf-datalog`](https://crates.io/crates/purrdf-datalog) (the semi-naive engine `entail`'s public types carry) |

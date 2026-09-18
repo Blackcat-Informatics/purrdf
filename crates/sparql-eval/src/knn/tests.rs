@@ -1724,3 +1724,101 @@ fn a_matryoshka_space_is_searched_over_its_effective_prefix_not_its_stored_row()
          assertion above a test"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The ranked declaration
+// ---------------------------------------------------------------------------
+
+/// The declaration a host registers this relation with. Every position comes
+/// from the relation's own constants, and every IRI in it comes from the caller.
+#[test]
+fn the_ranked_declaration_places_the_seed_and_binds_k_as_the_depth() {
+    let relation = EmbeddingKnnRelation::new(Arc::new(space(
+        &DistanceMetric::SquaredEuclidean,
+        &points(),
+    )));
+    let stratum =
+        purrdf_core::parse_iri("https://example.org/stratum/knn").expect("fixture stratum");
+    let integer = "http://www.w3.org/2001/XMLSchema#integer".to_owned();
+
+    let declaration = relation.ranked_declaration(stratum.clone(), TermKind::Iri, integer.clone());
+
+    assert_eq!(declaration.stratum, stratum, "the stratum is the caller's");
+    assert_eq!(
+        declaration.candidate_position,
+        EmbeddingKnnRelation::NEIGHBOUR
+    );
+    assert!(
+        !declaration.mandatory,
+        "coverage policy is the host's, and the helper claims none"
+    );
+    assert_eq!(
+        declaration.accepted_terms,
+        vec![AcceptedTerm {
+            // A seed term, not an embedding: the search starts from a term this
+            // space already holds a vector for.
+            pattern: TermPattern::of_kind(TermKind::Iri),
+            placements: vec![TermPlacement {
+                facet: RequestFacet::Value,
+                position: EmbeddingKnnRelation::QUERY,
+                datatype: None,
+            }],
+        }]
+    );
+    assert_eq!(
+        declaration.depth_placement,
+        Some(DepthPlacement {
+            // `k` is an input in the only declared mode, so the consumer's
+            // per-stratum depth has to land here or the call is refused.
+            position: EmbeddingKnnRelation::COUNT,
+            datatype: integer,
+        })
+    );
+
+    // The positions are the relation's own, not a second spelling of them.
+    assert_eq!(EmbeddingKnnRelation::NEIGHBOUR, KNN_NEIGHBOUR);
+    assert_eq!(EmbeddingKnnRelation::QUERY, KNN_QUERY);
+    assert_eq!(EmbeddingKnnRelation::COUNT, KNN_COUNT);
+    assert_eq!(EmbeddingKnnRelation::DISTANCE, KNN_DISTANCE);
+
+    // The seed kind is the caller's statement, so a space of literals declares
+    // a literal seed rather than inheriting the IRI above.
+    assert_eq!(
+        relation
+            .ranked_declaration(
+                purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
+                TermKind::Literal,
+                "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+            )
+            .accepted_terms[0]
+            .pattern,
+        TermPattern::of_kind(TermKind::Literal)
+    );
+}
+
+/// The declaration is answerable: rendering the depth into position 2 with the
+/// caller's datatype produces exactly the invocation the relation accepts, and
+/// the relation returns that many neighbours.
+#[test]
+fn the_declared_depth_placement_yields_an_invocation_the_relation_answers() {
+    let relation = EmbeddingKnnRelation::new(Arc::new(space(
+        &DistanceMetric::SquaredEuclidean,
+        &points(),
+    )));
+    let declaration = relation.ranked_declaration(
+        purrdf_core::parse_iri("https://example.org/stratum/knn").expect("stratum"),
+        TermKind::Iri,
+        "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+    );
+    let depth = declaration.depth_placement.expect("a depth placement");
+
+    let mut bound: Vec<Option<TermValue>> = vec![None; 4];
+    bound[declaration.accepted_terms[0].placements[0].position] = Some(iri("a"));
+    bound[depth.position] = Some(TermValue::typed_literal("2", &depth.datatype));
+
+    assert_eq!(
+        order(&invoke(&relation, &bound, None).expect("the declared invocation is answered")),
+        vec!["a".to_owned(), "b".to_owned()],
+        "the depth rendered through the declaration IS k"
+    );
+}

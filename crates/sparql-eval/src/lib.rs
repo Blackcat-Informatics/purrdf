@@ -188,9 +188,16 @@ pub use purrdf_sparql_algebra::ParserOptions;
 // relation into the engine without naming the module path.
 pub use knn::{EmbeddingKnnRelation, EmbeddingSpace, Kernel, KnnGuard, Ranked};
 pub use property_fn::{
-    MemoryRelation, PfArgs, PfArity, PfCursor, PfDescriptor, PfMode, PfRow, PropertyFunction,
-    PropertyFunctionRegistry,
+    AcceptedTerm, DepthPlacement, DuplicatePolicy, MemoryRelation, PfArgs, PfArity, PfCursor,
+    PfDescriptor, PfMode, PfRow, PropertyFunction, PropertyFunctionRegistry, RankOrdering,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement,
 };
+// The registry instance identity, re-exported alongside the registry that mints
+// it: a composition layer must be able to tell two independently built registries
+// apart even when they declare identically (`PropertyFunctionRegistry::instance_id`),
+// and `content_fingerprint`'s exclusion of this id only makes sense if the id is
+// nameable on its own.
+pub use registry_id::RegistryId;
 // The path-witness seam: the step definition and traversal envelope a host configures, the
 // frozen snapshot they are compiled into, and the two relations that bind walks over it —
 // every derivation, or one shortest witness per endpoint. Re-exported for the same reason
