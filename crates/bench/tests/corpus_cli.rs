@@ -699,9 +699,9 @@ fn help_to_a_failing_sink_reports_failure_instead_of_panicking() {
         .output()
         .expect("spawn bench-corpus");
 
-    // A panic exits 101 (and prints "panicked at" on stderr, by default). The checked-write
-    // path this branch must share with the manifest/row paths instead reports the write
-    // failure and returns ExitCode::FAILURE.
+    // A panic exits 101 (and prints "panicked at" on stderr, by default). Usage, manifest and
+    // row output all write through one checked path, so a failed write reports the error and
+    // returns ExitCode::FAILURE instead of panicking at 101.
     let code = output.status.code();
     assert_ne!(
         code,
