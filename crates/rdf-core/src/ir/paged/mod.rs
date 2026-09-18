@@ -752,6 +752,51 @@ impl PagedDataset {
         &self.graph_index
     }
 
+    /// The ascending [`PageId`]s the page-admission law
+    /// ([`admission::admit_pattern`]) admits for the global `(s, p, o, g)` pattern —
+    /// the pre-execution footprint of that pattern, computed entirely from sealed
+    /// [`PageSummary`](summary::PageSummary) metadata. Materializes NOTHING.
+    ///
+    /// This is the prediction that pairs with [`PagedQueryEvidence::requested_pages`]:
+    /// a query run over [`PagedQueryLimits::UNBOUNDED`] against the same pattern on
+    /// the same snapshot requests exactly this page set (in this ascending order),
+    /// because both this method and `quads_for_pattern`/`PagedQueryView::quads_for_pattern`
+    /// apply the identical `admit_pattern` law to the identical candidate page set
+    /// before any materialization. The admission law is SOUND but not COMPLETE (see
+    /// the [`admission` module docs](admission)): an admitted page may still yield
+    /// zero matching rows once actually scanned, so this is an upper bound on rows
+    /// touched, not a promise every listed page contributes a row.
+    #[must_use]
+    pub fn pages_for_pattern(
+        &self,
+        s: Option<GlobalTermId>,
+        p: Option<GlobalTermId>,
+        o: Option<GlobalTermId>,
+        g: GraphMatch<GlobalTermId>,
+    ) -> Vec<PageId> {
+        let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
+        admission::candidate_pages(self.graph_index(), page_count, g)
+            .filter(|&page_id| {
+                let index = usize::try_from(page_id.0).expect("page id fits usize");
+                let slot = &self.pages[index];
+                matches!(
+                    admission::admit_pattern(&slot.translation, s, p, o, g),
+                    PageAdmission::Admit(_)
+                )
+            })
+            .collect()
+    }
+
+    /// The ascending [`PageId`]s owning at least one base-quad row in named graph
+    /// `g`, computed from the dataset-level [`GraphPageIndex`] alone (itself derived
+    /// from sealed per-page [`PageSummary`](summary::PageSummary) metadata).
+    /// Materializes NOTHING. Equivalent to (and implemented via)
+    /// `pages_for_pattern(None, None, None, GraphMatch::Named(g))`.
+    #[must_use]
+    pub fn pages_for_graph(&self, g: GlobalTermId) -> Vec<PageId> {
+        self.pages_for_pattern(None, None, None, GraphMatch::Named(g))
+    }
+
     /// The cached, fallible per-page getter: fast-path the resident [`OnceLock`],
     /// otherwise re-materialize through the provider and cache it. Deterministic per
     /// the [`PageProvider`] contract.
@@ -928,11 +973,21 @@ impl DatasetView for PagedDataset {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> usize {
-        // The Merge-scope summation: Σ over admitted pages of each page's own
-        // O(log n) estimate on the pattern translated to that page's local id space.
-        // The candidate page set narrows on the graph axis exactly as in
-        // `quads_for_pattern`; the materialization policy (every admitted page is
-        // materialized here) is unchanged.
+        // The Merge-scope summation: Σ over admitted pages of
+        // `admission::estimate_admitted_page`'s minimum-axis count, read from that
+        // page's sealed `PageSummary` alone — NO page is materialized, here or
+        // transitively. The candidate page set narrows on the graph axis exactly as
+        // in `quads_for_pattern`.
+        //
+        // This is a pure function of `(snapshot, pattern)`: it never depends on
+        // whether a page happens to be resident. A residency-dependent estimate
+        // would make plan choice — and therefore the `requested_pages` evidence
+        // sequence a G-clause treats as proof of what a query actually touched —
+        // depend on incidental cache state rather than on the snapshot and the
+        // pattern alone, so two runs of the identical query against the identical
+        // snapshot could pick different plans. For a pattern with exactly one bound
+        // axis the per-page contribution is EXACT (see `estimate_admitted_page`),
+        // not merely an upper bound.
         let page_count = u32::try_from(self.pages.len()).expect("page count fits u32");
         let mut total = 0usize;
         for page_id in admission::candidate_pages(self.graph_index(), page_count, g) {
@@ -943,10 +998,12 @@ impl DatasetView for PagedDataset {
             else {
                 continue;
             };
-            let page = self
-                .page(slot.id)
-                .expect("sealed page must re-materialize deterministically");
-            total += page.cardinality_estimate(local.s, local.p, local.o, local.g);
+            let estimate = admission::estimate_admitted_page(
+                slot.translation.summary(),
+                local,
+                slot.quad_count,
+            );
+            total = total.saturating_add(estimate);
         }
         total
     }

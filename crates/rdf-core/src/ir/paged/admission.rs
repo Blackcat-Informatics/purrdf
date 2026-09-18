@@ -36,7 +36,7 @@ use crate::ir::{GlobalTermId, TermId};
 
 use super::graph_index::GraphPageIndex;
 use super::provider::PageId;
-use super::summary::PageStream;
+use super::summary::{PageStream, PageSummary};
 use super::translation::PageTranslation;
 
 /// A global `(s, p, o, g)` pattern translated into ONE page's LOCAL [`TermId`]
@@ -143,6 +143,53 @@ pub(crate) fn admit_pattern(
         o: local_o,
         g: local_g,
     })
+}
+
+/// The ONE cardinality rule for an ADMITTED page, shared verbatim by both
+/// `DatasetView::cardinality_estimate` overrides
+/// ([`PagedDataset`](super::PagedDataset)'s and
+/// [`PagedQueryView`](super::query::PagedQueryView)'s), from `local` (the pattern
+/// already translated to this page's local id space, as returned by
+/// [`admit_pattern`]) and `quad_count` (this page's sealed total base-quad count).
+///
+/// For each axis actually bound in `local` — subject, predicate, object, or a
+/// named/default graph — the corresponding [`PageSummary`] count is the EXACT number
+/// of this page's base-quad rows with that term in that position (or in that graph).
+/// A row satisfying the full `(s, p, o, g)` conjunction must satisfy every bound axis
+/// individually, so the true match count on this page can never exceed the smallest
+/// of those per-axis counts; taking the minimum is therefore itself exact, not merely
+/// an upper bound, whenever exactly one axis is bound, and a sound (possibly loose)
+/// bound when several are. When NO axis is bound at all (`GraphMatch::Any` and no
+/// `s`/`p`/`o`), there is nothing to minimize over, so the estimate is the page's own
+/// sealed `quad_count` — never a materialization.
+///
+/// This reads only sealed [`PageSummary`] state, so the result is a pure function of
+/// `(summary, local, quad_count)` — never of whether the page happens to be resident
+/// in any cache. See the [module docs](self) for why counts (not mere presence) make
+/// each per-axis bound exact.
+#[must_use]
+pub(crate) fn estimate_admitted_page(
+    summary: &PageSummary,
+    local: LocalPattern,
+    quad_count: usize,
+) -> usize {
+    let axis_counts = [
+        local.s.map(|s| summary.base_rows_as_subject(s)),
+        local.p.map(|p| summary.base_rows_as_predicate(p)),
+        local.o.map(|o| summary.base_rows_as_object(o)),
+        match local.g {
+            GraphMatch::Any => None,
+            GraphMatch::Default => Some(summary.default_rows(PageStream::Base)),
+            GraphMatch::Named(g) => Some(summary.graph_rows(g, PageStream::Base)),
+        },
+    ];
+    axis_counts
+        .into_iter()
+        .flatten()
+        .min()
+        .map_or(quad_count, |count| {
+            usize::try_from(count).unwrap_or(usize::MAX)
+        })
 }
 
 /// A zero-allocation cursor over the candidate `PageId`s for one graph constraint:

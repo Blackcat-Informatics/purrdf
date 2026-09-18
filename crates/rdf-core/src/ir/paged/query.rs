@@ -679,11 +679,22 @@ impl DatasetView for PagedQueryView<'_> {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> usize {
-        // Candidate narrowing mirrors `quads_for_pattern`; the materialization policy
-        // below is unchanged by this task — an admitted page's estimate is read from an
-        // ALREADY-cached materialization if one exists, and the sealed quad count
-        // (never a fresh materialization) otherwise, so planning still never spends this
-        // operation's page/byte budget.
+        // Candidate narrowing mirrors `quads_for_pattern`. The estimate is read
+        // ENTIRELY from sealed `PageSummary` metadata via
+        // `admission::estimate_admitted_page` — deliberately NOT from this
+        // operation's page cache (`self.pages[index].materialization`), so the
+        // result never depends on whether this operation has already admitted the
+        // page. A residency-dependent estimate would let plan choice — and hence
+        // the `requested_pages` sequence a G-clause treats as evidence of what a
+        // query actually touched — depend on incidental cache warmth rather than on
+        // the snapshot and the pattern alone, so two runs of the identical query
+        // against the identical snapshot could pick different plans (and the SAME
+        // operation could see its own plan choice shift mid-evaluation as pages
+        // warm up). Planning therefore still never materializes a page or spends
+        // this operation's page/byte budget: the sealed `quad_count` fallback (no
+        // axis bound) and the per-axis `PageSummary` counts (one or more axes
+        // bound) are both seal-time metadata, never a fresh materialization. For a
+        // pattern with exactly one bound axis the per-page contribution is EXACT.
         let page_count = u32::try_from(self.dataset.pages.len()).expect("page count fits u32");
         let mut total = 0_usize;
         for page_id in admission::candidate_pages(self.dataset.graph_index(), page_count, g) {
@@ -694,17 +705,11 @@ impl DatasetView for PagedQueryView<'_> {
             else {
                 continue;
             };
-            let estimate = self.pages[index]
-                .materialization
-                .get()
-                .and_then(|result| result.as_ref().ok())
-                .map_or(slot.quad_count, |page| {
-                    page.cardinality_estimate(local.s, local.p, local.o, local.g)
-                });
-            // Planning must not materialize provider pages: doing so would consume
-            // operation budgets and make requested-page evidence depend on whether
-            // the evaluator's BGP-order cache is warm. The sealed quad count is a
-            // valid upper bound until this operation has already admitted the page.
+            let estimate = admission::estimate_admitted_page(
+                slot.translation.summary(),
+                local,
+                slot.quad_count,
+            );
             total = total.saturating_add(estimate);
         }
         total

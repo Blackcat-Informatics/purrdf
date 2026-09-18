@@ -399,6 +399,163 @@ fn cross_page_cost_model_is_per_page_sum() {
 }
 
 #[test]
+fn cardinality_estimate_materializes_no_page() {
+    // Two pages, both carrying predicate `p`: the estimate must read only sealed
+    // `PageSummary` metadata, on BOTH `cardinality_estimate` surfaces — `PagedDataset`
+    // (planning before any query view exists) and `PagedQueryView` (planning inside
+    // one fallible operation).
+    let p = iri("p");
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(|| build_page(&[(iri("a0"), iri("p"), iri("o0"))])),
+        Box::new(|| build_page(&[(iri("a1"), iri("p"), iri("o1"))])),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let p_id = paged.term_id_by_value(&p).expect("p interned");
+
+    // The seal pass materialized each page exactly once; that is the only charge the
+    // whole test should ever record.
+    let hits_after_seal = provider.hits();
+    assert_eq!(
+        hits_after_seal,
+        paged.page_count(),
+        "seal pass pulls each page once"
+    );
+
+    // Surface 1: `PagedDataset::cardinality_estimate` — used by planning before any
+    // query view is constructed.
+    let dataset_estimate = paged.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    assert_eq!(dataset_estimate, 2, "one matching row per page");
+    assert_eq!(
+        provider.hits(),
+        hits_after_seal,
+        "PagedDataset::cardinality_estimate must materialize no page"
+    );
+
+    // Surface 2: `PagedQueryView::cardinality_estimate` — used by planning inside a
+    // fallible operation, before any pattern has been read through that operation.
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let view_estimate = view.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    assert_eq!(view_estimate, 2, "one matching row per page");
+    assert_eq!(
+        provider.hits(),
+        hits_after_seal,
+        "PagedQueryView::cardinality_estimate must materialize no page"
+    );
+    assert!(
+        matches!(view.operation_status(), ViewOperationStatus::Ready { .. }),
+        "estimating must not touch operational state"
+    );
+}
+
+#[test]
+fn cardinality_estimate_is_residency_independent() {
+    // Page 0 carries two `p` rows, page 1 carries one — both pages are candidates for
+    // (?, p, ?, Any).
+    let p = iri("p");
+    let page0 = build_page(&[
+        (iri("a0"), p.clone(), iri("o0")),
+        (iri("a1"), p.clone(), iri("o1")),
+    ]);
+    let page1 = build_page(&[(iri("b0"), p.clone(), iri("o2"))]);
+    let provider = Arc::new(InMemoryPageProvider::new(vec![page0, page1]));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+    let p_id = paged.term_id_by_value(&p).expect("p interned");
+
+    // Surface 1: `PagedDataset` — its own per-page `OnceLock` cache starts cold.
+    let cold_dataset_estimate = paged.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    // Force both pages resident through a real pattern read.
+    let row_count = paged
+        .quads_for_pattern(None, Some(p_id), None, GraphMatch::Any)
+        .count();
+    assert_eq!(row_count, 3, "sanity: three rows across both pages");
+    let warm_dataset_estimate = paged.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    assert_eq!(
+        cold_dataset_estimate, warm_dataset_estimate,
+        "PagedDataset::cardinality_estimate must not depend on page residency"
+    );
+
+    // Surface 2: `PagedQueryView` — its per-OPERATION cache starts cold.
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let cold_view_estimate = view.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    let view_row_count = view
+        .quads_for_pattern(None, Some(p_id), None, GraphMatch::Any)
+        .count();
+    assert_eq!(view_row_count, 3, "sanity: three rows across both pages");
+    let warm_view_estimate = view.cardinality_estimate(None, Some(p_id), None, GraphMatch::Any);
+    assert_eq!(
+        cold_view_estimate, warm_view_estimate,
+        "PagedQueryView::cardinality_estimate must not depend on operation-cache residency"
+    );
+    assert_eq!(
+        cold_dataset_estimate, cold_view_estimate,
+        "both surfaces apply the identical rule"
+    );
+}
+
+#[test]
+fn pages_for_pattern_predicts_actual_consumption() {
+    // Four pages. Only pages 0 and 3 can possibly match `(?, p, ?, Named(g))`:
+    // - page 0: `p` in graph `g` — admits on both axes.
+    // - page 1: `q` (not `p`) in graph `g` — the graph axis owns a row, but the
+    //   predicate axis proves it cannot match.
+    // - page 2: `p` in a DIFFERENT graph `h` — the predicate axis owns a row, but the
+    //   graph axis proves it cannot match (and the graph-index posting list for `g`
+    //   never lists it as a candidate at all).
+    // - page 3: `p` in graph `g` — admits on both axes.
+    let g = "http://example.org/g";
+    let h = "http://example.org/h";
+    let build_named = |subject: &str, predicate: &str, object: &str, graph: &str| {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(&format!("http://example.org/{subject}"));
+        let p = b.intern_iri(&format!("http://example.org/{predicate}"));
+        let o = b.intern_iri(&format!("http://example.org/{object}"));
+        let graph = b.intern_iri(graph);
+        b.push_quad(s, p, o, Some(graph));
+        b.freeze().expect("page freeze")
+    };
+    let pages = vec![
+        build_named("a0", "p", "o0", g),
+        build_named("b0", "q", "o1", g),
+        build_named("c0", "p", "o2", h),
+        build_named("d0", "p", "o3", g),
+    ];
+
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+    let p_id = paged.term_id_by_value(&iri("p")).expect("p interned");
+    let g_id = paged.term_id_by_value(&iri("g")).expect("g interned");
+
+    let predicted = paged.pages_for_pattern(None, Some(p_id), None, GraphMatch::Named(g_id));
+    assert_eq!(
+        predicted,
+        vec![PageId(0), PageId(3)],
+        "only the pages genuinely admitting both axes are predicted"
+    );
+
+    // The actual consumption: the same pattern, run through a fresh fallible
+    // operation under an UNBOUNDED budget, read to exhaustion.
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let row_count = view
+        .quads_for_pattern(None, Some(p_id), None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(
+        row_count, 2,
+        "sanity: pages 0 and 3 each contribute one row"
+    );
+    let evidence = match view.operation_status() {
+        ViewOperationStatus::Ready { evidence } => evidence,
+        ViewOperationStatus::Failed { error, .. } => {
+            panic!("expected a ready operation, got: {error}")
+        }
+    };
+    assert_eq!(
+        evidence.requested_pages, predicted,
+        "pages_for_pattern predicts exactly the pages the query actually consumed"
+    );
+}
+
+#[test]
 fn reifier_and_annotation_views_compose_across_pages() {
     // Page A: a base triple, its reifier binding `r rdf:reifies <<(s p o)>>`, and one
     // annotation on `r`. This page surfaces quoted_triples + reifiers + annotations.
