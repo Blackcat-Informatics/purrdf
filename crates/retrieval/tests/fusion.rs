@@ -2682,9 +2682,9 @@ fn truncated_class_width(decay: DecayRule, weight: Fixed, depth_limit: u64, rank
 
 #[test]
 fn a_strictly_descending_stream_fuses_past_the_decay_collision() {
-    // The issue's own middle row: a weight of 1e6 raw units collides near rank
-    // 972, well inside a 1400-row stream, and every one of those rows is well
-    // formed in every respect a producer controls.
+    // The middle of the three weights this file pins: 1e6 raw units collides at
+    // rank 972, well inside a 1400-row stream, and every one of those rows is
+    // well formed in every respect a producer controls.
     let decay = DecayRule::ReciprocalRank { k: K };
     let weight = Fixed::from_raw(1_000_000);
     let profile = deep_profile(decay, weight);
@@ -2695,7 +2695,7 @@ fn a_strictly_descending_stream_fuses_past_the_decay_collision() {
         .expect("this fixture must collide inside the stream it fuses");
     assert_eq!(
         collision, 972,
-        "the issue's measured collision rank for this weight"
+        "the measured collision rank for this weight"
     );
 
     let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
@@ -2738,7 +2738,7 @@ fn a_strictly_descending_stream_fuses_past_the_decay_collision() {
 
 #[test]
 fn a_small_top_k_certifies_early_and_never_reaches_the_collision() {
-    // The trap this issue records, pinned as a positive test rather than left as
+    // The trap a small bound sets, pinned as a positive test rather than left as
     // a warning. The identical stream and profile as the test above, bounded at
     // five: fusion certifies the top five and never pulls to the collision, so a
     // regression test written this way reports a false all-clear.
@@ -2769,9 +2769,10 @@ fn a_small_top_k_certifies_early_and_never_reaches_the_collision() {
 
 #[test]
 fn two_ranks_fuse_at_the_weight_that_used_to_refuse_them() {
-    // The issue's first row: one thousand raw units collides immediately, so the
-    // shortest possible stream already carries a repeated contribution. This is
-    // the exact case that was refused as `RepeatedContribution` at rank two.
+    // The lightest of the three weights: one thousand raw units collides
+    // immediately, so the shortest possible stream already carries a repeated
+    // contribution. This is the exact case that was refused as
+    // `RepeatedContribution` at rank two.
     let decay = DecayRule::ReciprocalRank { k: K };
     let weight = Fixed::from_raw(1_000);
     let profile = deep_profile(decay, weight);
@@ -2779,7 +2780,7 @@ fn two_ranks_fuse_at_the_weight_that_used_to_refuse_them() {
     let first = contribution_under(decay, weight, 1).expect("fits");
     let second = contribution_under(decay, weight, 2).expect("fits");
     assert_eq!(first, second, "1000/61 and 1000/62 both truncate to 16");
-    assert_eq!(first.into_raw(), 16, "the issue's measured value");
+    assert_eq!(first.into_raw(), 16, "the measured value at this weight");
 
     let fused = block_on(purrdf_retrieval::fuse::<MockStream, Term>(
         vec![(stratum("deep"), deep_stream(decay, weight, 2))],
@@ -2796,10 +2797,10 @@ fn two_ranks_fuse_at_the_weight_that_used_to_refuse_them() {
 }
 
 #[test]
-fn the_issue_measurement_table_fuses_at_every_weight() {
-    // The issue's table, end to end. The three weights differ only in how soon
-    // the decay stops separating ranks; none of them is a protocol violation and
-    // all three answer. The first two used to be refused.
+fn every_weight_in_the_measurement_table_fuses() {
+    // All three weights, end to end. They differ only in how soon the decay
+    // stops separating ranks; none of them is a protocol violation and all three
+    // answer. The two lighter ones used to be refused.
     let decay = DecayRule::ReciprocalRank { k: K };
     for raw in [1_000_i128, 1_000_000, 100_000_000] {
         let weight = Fixed::from_raw(raw);
@@ -2826,9 +2827,9 @@ fn the_issue_measurement_table_fuses_at_every_weight() {
 
 #[test]
 fn both_decay_rules_fuse_past_their_own_collision() {
-    // The issue exercises only the truncated rule. The weighted rule has its own
-    // boundary, near `sqrt(w_raw) - k` rather than near `sqrt(S)`, and the same
-    // law applies there: a collision is quantization, not a violation.
+    // The tests above exercise only the truncated rule. The weighted rule has
+    // its own boundary, near `sqrt(w_raw) - k` rather than near `sqrt(S)`, and
+    // the same law applies there: a collision is quantization, not a violation.
     let weight = Fixed::from_raw(1_000_000);
     for decay in [
         DecayRule::ReciprocalRank { k: K },
@@ -3009,10 +3010,11 @@ fn an_empty_stream_reports_zero_ranks_pulled() {
 #[test]
 fn the_resolution_map_keys_every_weighted_stream_including_one_that_yielded_nothing() {
     // The key set, pinned exactly. Two weighted strata, one of which returns
-    // nothing: both are keyed, because `separation` is the plan's resolution for
-    // a stratum whether or not rows arrived and `ranks_pulled` of zero is how a
-    // caller learns none did. An absent key would have to be told apart from a
-    // stratum the profile never weighted, which is a different fact entirely.
+    // nothing: both are keyed, because `separation` is the resolution recorded
+    // for a stratum whether or not rows arrived and `ranks_pulled` of zero is
+    // how a caller learns none did. An absent key would have to be told apart
+    // from a stratum the profile never weighted, which is a different fact
+    // entirely.
     let profile = profile(&[("dense", Fixed::ONE), ("barren", Fixed::ONE)], K);
     let streams = vec![
         (
@@ -3256,12 +3258,12 @@ const DEEPEST_PLAN_DEPTH: u64 = u32::MAX as u64;
 
 #[test]
 fn weight_for_depth_answers_at_the_deepest_depth_a_plan_can_record_and_refuses_past_it() {
-    // THE PAIR, one step apart, on BOTH rules. The limit here is the plan's
-    // 32-bit depth field, and the refusal past it must say so: the folded rule's
-    // arithmetic has not run out of anything at `u32::MAX + 1` — it answers at
-    // `u32::MAX` — so reporting this as the rule saturating would be the same
-    // defect as refusing a valid stream for a property of the consumer's own
-    // internal clamp.
+    // THE PAIR, one step apart, on BOTH rules. The limit here is the 32-bit
+    // depth field a plan carries, and the refusal past it must say so: the
+    // folded rule's arithmetic has not run out of anything at `u32::MAX + 1` —
+    // it answers at `u32::MAX` — so reporting this as the rule saturating would
+    // be the same defect as refusing a valid stream for a property of the
+    // consumer's own internal clamp.
     let folded = DecayRule::WeightedReciprocalRank { k: K };
     let weight = folded
         .weight_for_depth(DEEPEST_PLAN_DEPTH)
@@ -3279,10 +3281,10 @@ fn weight_for_depth_answers_at_the_deepest_depth_a_plan_can_record_and_refuses_p
         other => panic!("expected DepthBeyondPlanRange one past the plan's range, got {other:?}"),
     }
 
-    // The truncated rule saturates long before the plan's range runs out, so at
-    // `u32::MAX` it refuses as saturation — and one step further it refuses for
-    // the range instead, because that is the first fact about the request that
-    // is wrong, and it is wrong whatever the rule.
+    // The truncated rule saturates long before the range a plan can record runs
+    // out, so at `u32::MAX` it refuses as saturation — and one step further it
+    // refuses for the range instead, because that is the first fact about the
+    // request that is wrong, and it is wrong whatever the rule.
     let truncated = DecayRule::ReciprocalRank { k: K };
     match truncated.weight_for_depth(DEEPEST_PLAN_DEPTH) {
         Err(FusionError::DepthUnreachable { saturates_at, .. }) => assert!(
@@ -3326,10 +3328,10 @@ fn the_plan_range_refusal_and_the_saturation_refusal_are_different_variants() {
     );
 
     // And the rendered sentences must not claim each other's fact. The range
-    // refusal names the plan's encoding and never says the rule stopped
-    // separating; `MonotoneDepth::SeparatesBeyondAnyPlan` documents itself as
-    // "there is no bound to report", so a refusal rendering it would assert
-    // saturation and its absence in one sentence.
+    // refusal names the depth encoding a plan carries and never says the rule
+    // stopped separating; `MonotoneDepth::SeparatesBeyondAnyPlan` documents
+    // itself as "there is no bound to report", so a refusal rendering it would
+    // assert saturation and its absence in one sentence.
     let rendered = out_of_range.to_string();
     assert!(
         rendered.contains("32-bit") && rendered.contains("plan"),
@@ -3371,8 +3373,8 @@ fn weight_for_depth_refuses_a_depth_of_zero_and_answers_a_depth_of_one() {
 
 #[test]
 fn the_truncated_rule_saturates_where_no_weight_can_lift_it() {
-    // The issue's unit-weight extrapolation, asserted symbolically rather than
-    // by enumerating a million rows. The inner truncation is a ceiling: raising
+    // Where a unit weight runs out, asserted symbolically rather than by
+    // enumerating a million rows. The inner truncation is a ceiling: raising
     // the weight far above one buys no depth at all under this rule, which is
     // why `weight_for_depth` has a wall to report and why a caller that needs
     // more depth must change the rule rather than the weight.

@@ -1,21 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! **The reported reproduction, kept runnable.**
+//! **The decay-tie reproduction, kept runnable.**
 //!
 //! The defect: fusion refused a well-formed producer stream because the
 //! profile's own fixed-point decay gave two adjacent ranks one contribution.
 //! The stream's ranks were strictly increasing, contiguous and unique, and its
 //! declared contract was truthful; nothing the producer controlled was wrong.
 //!
-//! This file is the reported program, kept as assertions rather than as printed
-//! lines so the behaviour it measures cannot quietly regress. It drives the same
-//! public surface the report did — [`RankedStreamAdapter`] over
+//! This file keeps that reproduction as assertions rather than as printed
+//! lines, so the behaviour it measures cannot quietly regress. It reaches the
+//! defect through the public surface — [`RankedStreamAdapter`] over
 //! [`RankedStreamImpl`], fused through [`fuse`] — which is the documented seam
 //! for stopping and resuming between stages, and a different path from the
 //! hand-built streams `fusion.rs` uses.
 //!
-//! # Two API deltas since the program was written
+//! # Two API changes that removed the cause
 //!
 //! `StreamContract::new` no longer takes a rank-ordering declaration. That
 //! declaration was read in contribution space, where the producer supplies no
@@ -23,8 +23,8 @@
 //! one rank law — contiguous, ascending — is held for every stream regardless,
 //! row by row as the ranks arrive. `FusionProfile::new` is now
 //! [`FusionProfile::with_decay`], which requires naming the decay rule rather
-//! than defaulting to one. Both are spelled out below so the program stays
-//! comparable to the report.
+//! than defaulting to one. Both are spelled out below, so this file also shows
+//! the current spelling of a stream and a profile end to end.
 //!
 //! # What each case is for
 //!
@@ -32,8 +32,8 @@
 //! were always fine and must stay that way — they are the neighbouring valid
 //! cases that catch a fix which merely moved the boundary. The fifth is the
 //! trap: a small row bound certifies early, never pulls to the collision, and
-//! reports a false all-clear, which is how a first attempt at a regression test
-//! for this defect passed while the defect was still present.
+//! reports a false all-clear, which is how a regression test written that way
+//! passes while the defect is still present.
 
 use std::collections::BTreeMap;
 use std::future::Future;

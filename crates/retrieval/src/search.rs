@@ -135,9 +135,10 @@
 //! caller cannot stop between the two to read the compiled bundle: it carries
 //! the waist's own map forward as [`SearchResult::planned_resolution`],
 //! unchanged and unmerged. The answer therefore holds both altitudes at once —
-//! what the plan's depths were going to cost, and what the rows actually pulled
-//! cost ([`FusionTrailer::resolution`]) — and a caller comparing them is
-//! comparing the estimate with the outcome rather than reading one number twice.
+//! what the depths a plan records were going to cost, and what the rows
+//! actually pulled cost ([`FusionTrailer::resolution`]) — and a caller
+//! comparing them is comparing the estimate with the outcome rather than
+//! reading one number twice.
 //!
 //! One case is still a refusal: when the profile weights *none* of the strata
 //! the plan reached, there is no answer to keep working. The plan and the
@@ -334,7 +335,7 @@ pub enum SearchError {
 ///
 /// The answer reports rank resolution twice, and deliberately:
 /// [`SearchResult::planned_resolution`] is the admission waist's estimate of
-/// what the plan's depths would cost under `profile`, and
+/// what the depths this plan records would cost under `profile`, and
 /// [`FusionTrailer::resolution`] on [`SearchResult::trailer`] is what the rows
 /// this run actually pulled did cost. A caller that only wants the first does
 /// not have to run a search at all — [`compile`](crate::compile) against an

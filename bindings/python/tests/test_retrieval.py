@@ -477,11 +477,11 @@ def test_compile_refuses_part_of_a_fusion_law_and_accepts_the_whole_one() -> Non
 def test_an_answer_reports_planned_and_observed_resolution_apart() -> None:
     """Both altitudes are on the answer, under names that cannot be confused.
 
-    ``planned_resolution`` is what the admission waist said the plan's depths
-    would cost; ``observed_resolution`` is what the rows this run really pulled
-    did cost. They disagree here exactly as they should: a three-document corpus
-    exhausts after a handful of ranks, while the plan reserved the depth the
-    producer declared it could fill, and a depth nothing reached cost nothing.
+    ``planned_resolution`` is what the admission waist said the depths this plan
+    records would cost; ``observed_resolution`` is what the rows this run really
+    pulled did cost. They disagree here exactly as they should: a three-document
+    corpus exhausts after a handful of ranks, while the plan reserved the depth
+    the producer declared it could fill, and a depth nothing reached cost nothing.
     """
     request = [_lexical("quick fox", NOTE)]
     answer = retrieval.search(
@@ -993,8 +993,8 @@ def test_a_depth_that_outruns_every_plan_is_reported_as_saturation() -> None:
     )
 
     # And the third entry point, handed a REQUESTED depth rather than measuring
-    # one, refuses at the identical boundary as a limit of the plan's depth
-    # encoding -- with the neighbouring in-range depth still priced.
+    # one, refuses at the identical boundary as a limit of the depth encoding a
+    # plan carries -- with the neighbouring in-range depth still priced.
     with pytest.raises(ValueError, match="deeper than a plan can record"):
         retrieval.weight_for_depth(PLAN_DEPTH_LIMIT + 1, 60, decay=FOLDED)
     assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED) > 0

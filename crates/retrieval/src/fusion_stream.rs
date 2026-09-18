@@ -176,7 +176,7 @@ pub struct FusedRow {
 /// What one stratum's rank resolution actually cost this fusion.
 ///
 /// [`PlannedResolution`](crate::PlannedResolution) answers the same question at
-/// the waist, from the plan's recorded depth, before anything runs. This answers
+/// the waist, from the depth a plan records, before anything runs. This answers
 /// it from the rows that were really pulled. They differ whenever a top-k
 /// certified early — and that gap is the point, because a bound a fusion never
 /// reached cost it nothing.
@@ -242,7 +242,7 @@ pub struct FusionTrailer {
     /// weights — *including* one that ended without emitting a row, which is
     /// reported with [`StratumResolution::ranks_pulled`] of zero. That is the
     /// more useful answer than omitting it: [`StratumResolution::separation`] is
-    /// the plan's resolution for that stratum whether or not rows arrived, and
+    /// the resolution recorded for that stratum whether or not rows arrived, and
     /// the caller learns none arrived from the zero rather than from an absent
     /// key it would have to interpret.
     ///

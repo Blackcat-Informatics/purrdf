@@ -217,10 +217,10 @@ pub fn contribution_under(
 /// ways, and conflating them is the one mistake this constant invites. A
 /// *measured* range that reaches it is reported as [`MonotoneDepth`]'s
 /// saturating case, because there is no bound inside the expressible range to
-/// report. A *requested* depth above it is refused as a limit of the plan's
-/// depth encoding ([`FusionError::DepthBeyondPlanRange`]) — never as the decay
-/// rule running out of separation, which is a different fact about a different
-/// thing and which the rule's arithmetic may well not have done.
+/// report. A *requested* depth above it is refused as a limit of the depth
+/// encoding a plan carries ([`FusionError::DepthBeyondPlanRange`]) — never as
+/// the decay rule running out of separation, which is a different fact about a
+/// different thing and which the rule's arithmetic may well not have done.
 const MAX_DEPTH: u64 = u32::MAX as u64;
 
 /// How deep a profile's contributions still tell adjacent ranks apart.
@@ -1112,10 +1112,10 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
 ///   reach the guard with a measured depth of one and report saturation for a
 ///   rule that was never evaluated.
 /// * [`FusionError::Overflow`] is carried by the signature but cannot be
-///   provoked once `depth` is inside the plan's range: the sufficient weight is
-///   then at most `(u32::MAX + u32::MAX)²`, far inside an `i128`. The checked
-///   steps that would raise it are kept so that widening that range cannot
-///   silently wrap instead.
+///   provoked once `depth` is inside the range a plan can record: the
+///   sufficient weight is then at most `(u32::MAX + u32::MAX)²`, far inside an
+///   `i128`. The checked steps that would raise it are kept so that widening
+///   that range cannot silently wrap instead.
 ///
 /// # Why it is not bisected
 ///
@@ -1181,10 +1181,10 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
     if depth == 0 {
         return Err(FusionError::InvalidRank { rank: depth });
     }
-    // Deeper than any plan can record. This refusal is about the plan's depth
-    // encoding and nothing else — it is *not* the decay rule giving out, and
-    // under the folded rule the arithmetic below would in fact answer — so it is
-    // its own refusal, naming that encoding as the limit.
+    // Deeper than any plan can record. This refusal is about the depth encoding
+    // a plan carries and nothing else — it is *not* the decay rule giving out,
+    // and under the folded rule the arithmetic below would in fact answer — so
+    // it is its own refusal, naming that encoding as the limit.
     if depth > MAX_DEPTH {
         return Err(FusionError::DepthBeyondPlanRange {
             depth,
@@ -2083,7 +2083,7 @@ mod tests {
     /// identical boundary. They agree by law rather than by which one was
     /// called: a *measured* range that reaches the ceiling is the saturating
     /// case of a typed quantity, and a *requested* depth past it is refused as
-    /// a limit of the plan's depth encoding.
+    /// a limit of the depth encoding a plan carries.
     #[test]
     fn a_tolerated_depth_that_saturates_is_reported_as_saturation_and_not_as_a_number() {
         let decay = folded(60);
@@ -2141,9 +2141,9 @@ mod tests {
         );
 
         // And the entry point that is handed a *requested* depth rather than
-        // measuring one refuses at the same boundary, as a limit of the plan's
-        // depth encoding — with the neighbouring in-range depth still priced,
-        // so the refusal is about the depth and nothing else.
+        // measuring one refuses at the same boundary, as a limit of the depth
+        // encoding a plan carries — with the neighbouring in-range depth still
+        // priced, so the refusal is about the depth and nothing else.
         assert!(
             matches!(
                 minimum_weight_for_depth(decay, MAX_DEPTH + 1),

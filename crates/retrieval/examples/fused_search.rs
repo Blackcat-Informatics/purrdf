@@ -440,10 +440,10 @@ fn report(result: &SearchResult) {
         println!("  {}: {rendered}", short(stratum));
     }
 
-    // What the plan's depths were going to cost in rank resolution, as the
-    // admission waist measured them before a single row was read. A host that
-    // wants this and nothing else never has to run the search at all: `compile`
-    // against an environment naming the profile answers it on its own.
+    // What the depths this plan records were going to cost in rank resolution,
+    // as the admission waist measured them before a single row was read. A host
+    // that wants this and nothing else never has to run the search at all:
+    // `compile` against an environment naming the profile answers it on its own.
     println!("\nplanned rank resolution (known before anything ran)");
     for (stratum, planned) in &result.planned_resolution {
         let separation = planned.separation.rank().map_or_else(
