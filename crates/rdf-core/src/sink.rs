@@ -129,6 +129,67 @@ impl fmt::Display for DrainError {
     }
 }
 
+/// An infallible append target for text fragments.
+///
+/// Implemented by [`String`] and by [`TextSink`]. Emitters take this as a GENERIC
+/// bound and monomorphize, so shared writer code costs no indirect call and a
+/// caller that already holds a whole document — a sort comparator rendering a key
+/// into reusable scratch, say — keeps using a plain `String` at full speed.
+///
+/// That is the division of labour that makes one emitter serve both spellings. The
+/// object-safe boundary sits ABOVE these writers, at the codec seam, where dispatch
+/// happens once per document rather than once per fragment; below it, everything is
+/// generic. Neither mechanism is right at both altitudes.
+///
+/// Note the absence of any read-back, rewind, or length accessor. An emitter
+/// written against this trait cannot inspect or retract what it has emitted, which
+/// is what makes it safe to point at a sink that has already drained.
+pub trait TextOut: fmt::Write {
+    /// Append `text`.
+    fn push_str(&mut self, text: &str);
+
+    /// Append one character.
+    fn push(&mut self, ch: char);
+
+    /// Whether the destination has failed and is discarding further fragments.
+    ///
+    /// Emitters poll this at their innermost loop so a dead drain costs one
+    /// fragment of formatting rather than a whole document. Always `false` for an
+    /// in-memory target, which cannot fail.
+    fn failed(&self) -> bool {
+        false
+    }
+}
+
+impl TextOut for String {
+    #[inline]
+    fn push_str(&mut self, text: &str) {
+        Self::push_str(self, text);
+    }
+
+    #[inline]
+    fn push(&mut self, ch: char) {
+        Self::push(self, ch);
+    }
+}
+
+impl TextOut for TextSink<'_> {
+    #[inline]
+    fn push_str(&mut self, text: &str) {
+        Self::push_str(self, text);
+    }
+
+    #[inline]
+    fn push(&mut self, ch: char) {
+        Self::push(self, ch);
+    }
+
+    #[inline]
+    fn failed(&self) -> bool {
+        Self::failed(self)
+    }
+}
+
 /// Where a full staging window goes.
 ///
 /// Called once per [`DRAIN_BUFFER_BYTES`] (or once per oversized fragment), so a

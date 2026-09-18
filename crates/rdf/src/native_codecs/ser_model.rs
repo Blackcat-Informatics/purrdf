@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 
 use purrdf_core::iri_escape::is_iriref_escape_required;
+use purrdf_core::sink::TextOut;
 use purrdf_iri::BaseIri;
 
 use crate::{FastHasher, FastMap, RdfDiagnostic};
@@ -364,7 +365,7 @@ fn escape_scan<'a>(
 /// grammar delimiters). Byte-identical to `write!(out, "\\u{:04X}", v)` for
 /// `v <= 0xFF`, without the `fmt` machinery.
 #[inline]
-fn push_uchar_00(out: &mut String, v: u32) {
+fn push_uchar_00<W: TextOut + ?Sized>(out: &mut W, v: u32) {
     debug_assert!(v <= 0xFF);
     out.push_str("\\u00");
     out.push(HEX_UPPER[((v >> 4) & 0xF) as usize] as char);
@@ -491,7 +492,7 @@ pub(super) fn spell_iri<'a>(iri: &'a str, base: Option<&BaseIri>) -> Cow<'a, str
 
 /// Append an `IRIREF` token — `<…>` around the escaped reference — spelling the IRI
 /// against `base` per [`spell_iri`].
-fn write_iri_ref(out: &mut String, iri: &str, base: Option<&BaseIri>) {
+fn write_iri_ref<W: TextOut + ?Sized>(out: &mut W, iri: &str, base: Option<&BaseIri>) {
     out.push('<');
     out.push_str(&escape_iri(&spell_iri(iri, base)));
     out.push('>');
@@ -529,26 +530,24 @@ fn write_iri_ref(out: &mut String, iri: &str, base: Option<&BaseIri>) {
 ///
 /// `ix` is the caller's one-per-document [`ReifierIndex`]: quoted-triple terms resolve
 /// through it rather than through a scan of the reifier table per term.
-fn write_term(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String) {
+fn write_term<W: TextOut + ?Sized>(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut W) {
     write_term_in(g, ix, tid, out, g.base());
 }
 
 /// Append one term's N-Triples surface to `out` with every IRI spelled ABSOLUTELY,
 /// whatever base the graph carries. This is the canonical-ordering key (see
 /// [`SerGraph::sort_canonical`]), never an output spelling.
-fn write_term_absolute(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String) {
+fn write_term_absolute<W: TextOut + ?Sized>(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut W) {
     write_term_in(g, ix, tid, out, None);
 }
 
-fn write_term_in(
+fn write_term_in<W: TextOut + ?Sized>(
     g: &SerGraph,
     ix: &ReifierIndex,
     tid: usize,
-    out: &mut String,
+    out: &mut W,
     base: Option<&BaseIri>,
 ) {
-    use std::fmt::Write as _;
-
     let t = &g.terms[tid];
     match t.kind {
         SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), base),
@@ -605,7 +604,7 @@ fn write_term_in(
 /// `format!`ed the result to add a trailing newline, copying the whole document a
 /// second time. Peak was therefore about twice the output on top of one live `String`
 /// per quad; Turtle paid a third copy by wrapping this function's result.
-pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
+pub(crate) fn write_nquads<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
     // One reifier index per document: every quoted-triple term below resolves through
     // it in O(1) instead of scanning the reifier table.
     let ix = g.reifier_index();
@@ -652,7 +651,12 @@ pub(crate) fn write_nquads(g: &SerGraph, out: &mut String) {
 }
 
 /// Close one N-Quads statement: the optional graph name, the `.`, and the line break.
-fn write_graph_terminator(g: &SerGraph, ix: &ReifierIndex, gname: Option<usize>, out: &mut String) {
+fn write_graph_terminator<W: TextOut + ?Sized>(
+    g: &SerGraph,
+    ix: &ReifierIndex,
+    gname: Option<usize>,
+    out: &mut W,
+) {
     if let Some(gv) = gname {
         out.push(' ');
         write_term(g, ix, gv, out);
@@ -666,7 +670,7 @@ fn write_graph_terminator(g: &SerGraph, ix: &ReifierIndex, gname: Option<usize>,
 /// The directive's own IRI is written ABSOLUTELY — it is what every later reference
 /// resolves against, so relativizing it against itself would produce `<>`, which resolves
 /// to the base only if a base is already in force.
-fn write_base_directive(g: &SerGraph, out: &mut String) {
+fn write_base_directive<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
     let Some(base) = g.base() else {
         return;
     };
@@ -692,7 +696,10 @@ fn ensure_default_graph_projection(g: &SerGraph, format: &str) -> Result<(), Rdf
 }
 
 /// Serialise a [`SerGraph`] to N-Triples text (default graph only).
-pub(crate) fn write_ntriples(g: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+pub(crate) fn write_ntriples<W: TextOut + ?Sized>(
+    g: &SerGraph,
+    out: &mut W,
+) -> Result<(), RdfDiagnostic> {
     ensure_default_graph_projection(g, "N-Triples")?;
     write_nquads(g, out);
     Ok(())
@@ -708,7 +715,10 @@ pub(crate) fn write_ntriples(g: &SerGraph, out: &mut String) -> Result<(), RdfDi
 /// N-Triples and N-Quads reach that same function with `base: None` — their registry rows
 /// say they cannot express a base — so the directive-less syntaxes stay absolute for free
 /// rather than by a check repeated per writer.
-pub(crate) fn write_turtle(g: &SerGraph, out: &mut String) -> Result<(), RdfDiagnostic> {
+pub(crate) fn write_turtle<W: TextOut + ?Sized>(
+    g: &SerGraph,
+    out: &mut W,
+) -> Result<(), RdfDiagnostic> {
     ensure_default_graph_projection(g, "Turtle")?;
 
     // Decided BEFORE the header is written, not after. The previous shape emitted the
@@ -765,9 +775,7 @@ pub(crate) fn emits_any_statement(g: &SerGraph) -> bool {
 /// It also mirrors [`write_term`]'s unguarded recursion, and rests on the same
 /// invariant: a [`SerGraph`]'s term table terminates because every producer of one
 /// guarantees it.
-fn write_trig_term(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String) {
-    use std::fmt::Write as _;
-
+fn write_trig_term<W: TextOut + ?Sized>(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut W) {
     let t = &g.terms[tid];
     match t.kind {
         SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => out.push_str("rdf:reifies"),
@@ -814,7 +822,7 @@ fn write_trig_term(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut String
 }
 
 /// Close the open `GRAPH { … }` block, if one is open.
-fn close_graph(out: &mut String, open_graph: &mut Option<String>) {
+fn close_graph<W: TextOut + ?Sized>(out: &mut W, open_graph: &mut Option<String>) {
     if open_graph.take().is_some() {
         out.push_str("}\n");
     }
@@ -831,8 +839,8 @@ fn close_graph(out: &mut String, open_graph: &mut Option<String>) {
 /// compared as TEXT against the open block (the comparison the writer has always made),
 /// and copied out only when a new block opens — one allocation per graph change rather
 /// than one per statement.
-fn begin_statement(
-    out: &mut String,
+fn begin_statement<W: TextOut + ?Sized>(
+    out: &mut W,
     open_graph: &mut Option<String>,
     scratch: &mut String,
     graph: &SerGraph,
@@ -862,7 +870,7 @@ fn begin_statement(
 /// result to add a trailing newline, copying it again. Writing each line followed by
 /// its own newline produces exactly those bytes: a join with `"\n"` plus one trailing
 /// `"\n"` is the same sequence as one `"\n"` after each line.
-pub(crate) fn write_trig(g: &SerGraph, out: &mut String) {
+pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
     // The same predicate Turtle uses. The previous guard tested `reifiers.is_empty()`,
     // which counts self-reifier sentinel rows that this writer then skips — so a graph
     // holding only sentinels emitted a bare `@base`/`@prefix` header here while Turtle
@@ -932,7 +940,6 @@ pub(crate) fn write_trig(g: &SerGraph, out: &mut String) {
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use std::fmt::Write as _;
 
     // Collect-into-a-`String` shims. Production has no such function any more: every
     // caller reaches the writers through `RdfCodec::serialize_into` and supplies its own
@@ -1038,6 +1045,99 @@ mod tests {
         }
         g.quads = rows.iter().map(|&(s, p, o)| (s, p, o, None)).collect();
         g
+    }
+
+    /// The writers emit the same bytes into a `String` and into a draining
+    /// `TextSink`, because they are ONE writer generic over its append target.
+    ///
+    /// This is the property the whole incremental path rests on, and it is
+    /// structural rather than coincidental: there is no second emitter to drift.
+    /// The drain collects what actually LEFT the sink rather than what it still
+    /// had staged, and the fixture is large enough to cross the window many times,
+    /// so a writer that cached, re-read, or retracted its output would diverge
+    /// here even though it looks correct against a `String`.
+    #[test]
+    fn every_writer_emits_the_same_bytes_into_a_string_and_into_a_drain() {
+        /// Collects every drained window.
+        struct Collect(Vec<u8>);
+        impl purrdf_core::sink::ByteDrain for Collect {
+            fn drain(&mut self, chunk: &[u8]) -> Result<(), purrdf_core::sink::DrainError> {
+                self.0.extend_from_slice(chunk);
+                Ok(())
+            }
+        }
+
+        /// Run one writer both ways and compare. `write` is called twice with
+        /// different append targets and nothing else differs.
+        fn both_ways(name: &str, eager: &str, drained: &Collect) {
+            assert!(!eager.is_empty(), "{name} fixture must emit something");
+            assert_eq!(
+                eager.as_bytes(),
+                drained.0.as_slice(),
+                "{name} diverged between a String and a drain"
+            );
+        }
+
+        // Long IRIs and repeated rows, so the document crosses the drain window.
+        let iris: Vec<String> = (0..6)
+            .map(|i| format!("https://example.org/{i}/{}", "segment-".repeat(400)))
+            .collect();
+        let refs: Vec<&str> = iris.iter().map(String::as_str).collect();
+        let mut g = graph_of(&refs, &[]);
+        for i in 0..200_u32 {
+            let slot = if i % 3 == 0 { None } else { Some(3 + (i as usize % 2)) };
+            g.quads.push((0, 1, 2, slot));
+        }
+        g.sort_canonical();
+
+        // N-Quads and TriG carry named graphs; TriG additionally opens, closes and
+        // reopens blocks across the window.
+        let mut eager = String::new();
+        write_nquads(&g, &mut eager);
+        let mut collect = Collect(Vec::new());
+        {
+            let mut sink = purrdf_core::sink::TextSink::to_drain(&mut collect);
+            write_nquads(&g, &mut sink);
+            sink.finish().expect("collecting drain never fails");
+        }
+        both_ways("nquads", &eager, &collect);
+
+        let mut eager = String::new();
+        write_trig(&g, &mut eager);
+        let mut collect = Collect(Vec::new());
+        {
+            let mut sink = purrdf_core::sink::TextSink::to_drain(&mut collect);
+            write_trig(&g, &mut sink);
+            sink.finish().expect("collecting drain never fails");
+        }
+        both_ways("trig", &eager, &collect);
+
+        // N-Triples and Turtle are default-graph-only.
+        let mut flat = graph_of(&refs, &[]);
+        for _ in 0..200 {
+            flat.quads.push((0, 1, 2, None));
+        }
+        flat.sort_canonical();
+
+        let mut eager = String::new();
+        write_ntriples(&flat, &mut eager).expect("default-graph projection");
+        let mut collect = Collect(Vec::new());
+        {
+            let mut sink = purrdf_core::sink::TextSink::to_drain(&mut collect);
+            write_ntriples(&flat, &mut sink).expect("default-graph projection");
+            sink.finish().expect("collecting drain never fails");
+        }
+        both_ways("ntriples", &eager, &collect);
+
+        let mut eager = String::new();
+        write_turtle(&flat, &mut eager).expect("default-graph projection");
+        let mut collect = Collect(Vec::new());
+        {
+            let mut sink = purrdf_core::sink::TextSink::to_drain(&mut collect);
+            write_turtle(&flat, &mut sink).expect("default-graph projection");
+            sink.finish().expect("collecting drain never fails");
+        }
+        both_ways("turtle", &eager, &collect);
     }
 
     /// A graph carrying ONLY self-reifier sentinel rows — an inline quoted-triple term
@@ -1385,6 +1485,7 @@ mod tests {
     /// The pre-optimization per-char `escape_iri`, frozen verbatim as a test oracle:
     /// the scan-first implementation must match it byte-for-byte on every input.
     fn escape_iri_oracle(iri: &str) -> String {
+        use std::fmt::Write as _;
         let mut out = String::with_capacity(iri.len());
         for ch in iri.chars() {
             match ch {
@@ -1402,6 +1503,7 @@ mod tests {
 
     /// The pre-optimization per-char `escape_literal`, frozen verbatim as a test oracle.
     fn escape_literal_oracle(lex: &str) -> String {
+        use std::fmt::Write as _;
         let mut out = String::with_capacity(lex.len());
         for ch in lex.chars() {
             match ch {
