@@ -119,13 +119,16 @@
 //!
 //! `search` holds both the plan and the law it is about to fuse under, which is
 //! the one point in the pipeline where the two meet before any row is read. So
-//! it re-forms the admission environment around that law: a per-stratum depth is
-//! then admitted against the profile's own arithmetic as well as against the
-//! registry's row bound (see
-//! [`AdmissionError::DepthBeyondMonotoneRange`](crate::AdmissionError::DepthBeyondMonotoneRange)).
-//! The plan is unchanged and the planner still never sees a profile — the
-//! coupling is checked where it becomes knowable, not carried through a stage
-//! that must not know it.
+//! it re-forms the admission environment around that law, and each stratum's
+//! planned depth is measured against the rank resolution that law actually
+//! delivers — recorded as
+//! [`PlannedResolution`](crate::PlannedResolution), alongside the registry's row
+//! bound, which remains a refusal because a depth the registry cannot fill is a
+//! depth no arithmetic can supply. Resolution is not: a plan read past the depth
+//! its profile still separates answers correctly and deterministically, more
+//! coarsely, so it is reported rather than refused. The plan is unchanged and the
+//! planner still never sees a profile — the coupling is measured where it becomes
+//! knowable, not carried through a stage that must not know it.
 //!
 //! One case is still a refusal: when the profile weights *none* of the strata
 //! the plan reached, there is no answer to keep working. The plan and the

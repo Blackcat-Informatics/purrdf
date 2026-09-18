@@ -188,8 +188,9 @@ detail.** Evaluating `recip` first and applying the weight afterwards
 rounds twice, and the inner rounding is a ceiling the weight cannot
 lift: `trunc(S / D)` with `S = 10^12` stops strictly decreasing once
 `D² > S`, so under that rule *every* weight at or above one shares one
-monotone range ending near a million ranks, and a stratum that must be
-read deeper than that cannot be. Folding the weight into the numerator
+monotone range ending near a million ranks, and a stratum read deeper
+than that answers at a coarser rank resolution rather than being
+refused. Folding the weight into the numerator
 computes the same quantity with one exactly-rounded division —
 `trunc(w_raw / D)`, where a weight's raw integer is already `w · S` —
 and its monotone range runs to about `10^6 · sqrt(w)`. Both are §5 laws;
@@ -296,16 +297,65 @@ Refusing the permissive declaration instead would be the mirror failure:
 a policy whose own definition names the consumer's obligation, rejected by
 the consumer for exercising it.
 
-The ordering declaration reads the same way. Both spellings forbid a
-contribution that rises with rank — the threshold over the stream heads
-would otherwise not be an upper bound and certification would be unsound
-— and they differ exactly on equality. A producer that declared its ranks
-may tie is admitted when two adjacent ranks carry one contribution; one
-that declared every rank unambiguous is refused, because that equality is
-precisely the condition under which the fused sum can no longer separate
-those ranks. It is the same claim the monotone-depth dimension above
-refuses at admission, held one layer lower against a stream that reached
-fusion without passing the waist.
+The ordering declaration does **not** read the same way, and the reason is
+worth stating because this section once said the opposite.
+
+A contribution that *rises* with rank is forbidden for every stream: the
+threshold over the stream heads would otherwise not be an upper bound and
+certification would be unsound. Equality between adjacent ranks is a
+different thing entirely, and it is not the producer's to declare. The
+contribution is computed by the consumer from the decay rule, `K`, the
+stratum weight and the rank; it is re-derived on arrival and refused on
+mismatch; and the producer's own score never crosses the seam at all,
+because `execute` assigns rank by emission order and discards it. Ranks
+are separately held contiguous and ascending for every stream. So two
+adjacent ranks carrying one contribution says nothing about the producer —
+it says the profile's fixed-point arithmetic has stopped separating those
+ranks at that depth, which is a property of `(decay rule, K, weight,
+depth)` alone.
+
+This section previously specified that a producer declaring every rank
+unambiguous was *refused* on that equality, and the admission waist
+refused the matching plan depth. Both refusals rejected correct, usable
+answers: a `StrictlyDescending` declaration is a claim about ranks, held
+against a quantity the producer supplies no term of. The declaration is
+therefore no longer read in contribution space at all.
+
+### §5.1 The law's resolution
+
+The arithmetic has a **resolution**, and past the point where it runs out
+the answer degrades in exactly one way. Adjacent ranks fall into
+*indifference classes* — maximal runs of ranks carrying one contribution —
+and the class width at a depth is the layer's resolution there. A width of
+one means the fused score alone orders that rank. A width of `w` means `w`
+consecutive ranks are indistinguishable by score, and their relative order
+falls through to the declared tie-break's later keys: best stratum rank
+ascending, then canonical term bytes. That key is **total**, so the answer
+remains a pure function of its inputs at every depth. It is never wrong;
+it is coarser.
+
+The two decay rules differ in how resolution scales with weight, and the
+difference is not a matter of degree. `ReciprocalRank` truncates the
+reciprocal *before* applying the weight, so once `trunc(S / D)` and
+`trunc(S / (D + 1))` coincide the two ranks have already merged at the
+point the weight arrives: no weight can part them, and the rule saturates
+near `D = sqrt(S) = 10^6` for every weight at or above one.
+`WeightedReciprocalRank` folds the weight into the numerator as one
+exactly-rounded division and has no such ceiling; its range runs to
+roughly `10^6 · sqrt(w)`. Read in reverse this is a design calculus rather
+than a limit — name the depth, get the weight — and it is exposed as one.
+
+Because none of this is a defect, none of it is a refusal. It is
+**measured and reported** at all three altitudes: the profile answers for
+the law before a plan is written, the compiled plan carries each stratum's
+planned depth against the depth that law separates, and the fused trailer
+reports what the answer in hand actually cost — how deep each stream was
+read, how many adjacent ranks the score could not tell apart (observed on
+the comparison, not inferred from the bound), and whether the final place
+in a top-k was settled by the tie-break rather than by relevance. The one
+refusal retained is exact rather than conservative: asking for a depth no
+weight can reach under the truncated rule is refused, and the saturation
+rank is reported with it.
 
 ## 6. Producer status survives fusion — the only place it can die
 
@@ -440,10 +490,13 @@ as questions a shipped design record still asks.
    binds earlier. Beyond that depth nothing errors and nothing becomes
    nondeterministic — the declared tie-break is total — but the fused
    score stops separating ranks, so the sum across strata stops being
-   rank-weighted. The bound is therefore an admitted dimension rather than
-   a footnote: a per-stratum depth beyond it is refused at the admission
-   waist whenever the environment names the profile the answer will be
-   fused under.
+   rank-weighted. The bound is therefore a reported dimension rather than
+   a footnote: the profile answers for it before a plan is written, the
+   compiled plan records each stratum's planned depth against it, and the
+   fused trailer reports how deep the answer in hand was actually read and
+   how many adjacent ranks its score could not separate. It is not a
+   refusal — a coarser answer is still a correct one, and §5.1 is where
+   that reading is set out.
 3. **The request lattice is closed, and stays closed.** The modalities a
    request can name are not bounded by the producers that happen to exist
    in-tree — producers are caller-supplied configuration, and a registry

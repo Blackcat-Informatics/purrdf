@@ -10,6 +10,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **retrieval:** A new publishable crate, `purrdf-retrieval`: the composition
+  layer over the ranked property-function producers. One request becomes one
+  answer across them through four stages -- a pure planner returning an
+  inspectable `Plan` with a canonical BLAKE3 identity, a semantic admission waist
+  that emits independently executable SPARQL per stratum, an executor that
+  isolates each stratum's failure in its own status, and an exact fixed-point
+  reciprocal-rank fusion over a verified ranked-stream protocol. Producers,
+  strata and weights are caller-supplied configuration with no fabricated
+  default. Reachable three ways: the crate directly, `purrdf::retrieval` on the
+  umbrella, and `purrdf_native.retrieval` from Python.
+- **retrieval:** A resolution algebra on the fusion law.
+  `FusionProfile::class_width` reports how many consecutive ranks a profile
+  cannot tell apart at a given depth, `deepest_rank_within_width` inverts it, and
+  `DecayRule::weight_for_depth` inverts the whole relation -- name the depth, get
+  the smallest weight that buys it, bisected against the exact first-collision
+  rank so it never overstates. `MonotoneDepth` spells the saturation point as a
+  distinct case so it cannot be mistaken for a measured depth. The same surface
+  is exposed to Python as `retrieval.weight_for_depth` and
+  `retrieval.class_width`.
+- **retrieval:** Rank-resolution evidence on the answer. `CompiledRetrieval`
+  carries a `PlannedResolution` per weighted stratum, so the cost of a planned
+  depth is knowable before executing anything, and `FusionTrailer` carries a
+  `StratumResolution` per stratum actually read -- where the profile stops
+  separating ranks, how deep this run reached, and how many adjacent ranks its
+  score could not separate, counted by direct observation rather than inferred.
+  The trailer also reports whether the last row in a top-k beat a rival it tied
+  with exactly, which is the case where the final place was settled by the
+  declared tie-break rather than by relevance.
 - **hnsw:** A new publishable crate, `purrdf-hnsw`: a deterministic HNSW
   approximate nearest-neighbour index over a PURREMB embedding matrix, registered
   on the evaluator's property-function seam under a caller-supplied predicate IRI.
@@ -29,6 +57,41 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   PURREMB stores matrices at either width, and widening `f32` at load costs twice
   the resident memory while changing no arithmetic; the kernels now accept either
   width and widen per component inside the fold.
+
+### Fixed
+
+- **retrieval:** Fusion no longer refuses a well-formed producer stream when the
+  profile's own fixed-point decay gives two adjacent ranks one contribution. A
+  producer's ordering declaration is a claim about **ranks**, and the check was
+  applied to **contributions** -- a value the consumer computes from the decay
+  rule, `K`, the stratum weight and the rank, re-derives on arrival and refuses
+  on mismatch, and which the producer supplies no term of. Ranks are separately
+  held contiguous and ascending for every stream, so an equal adjacent pair only
+  ever meant the arithmetic had stopped separating those ranks at that depth. A
+  conforming stream read deep enough was rejected for the consumer's own
+  quantization: at a weight of `10^-6` this began at rank 973, and no weight at
+  all postpones it past about a million ranks under the truncated rule. The
+  condition is now measured and reported rather than refused; past that depth the
+  declared tie-break is total, so the answer stays correct and deterministic at a
+  coarser rank resolution.
+
+### Removed
+
+- **retrieval:** `ProtocolError::RepeatedContribution` and
+  `AdmissionError::DepthBeyondMonotoneRange`, the two refusals above, at the
+  fusion boundary and at the admission waist respectively. The plan depth the
+  second refused is now recorded as evidence on the compiled value instead.
+- **retrieval:** `StreamContract::ordering`. Its only reader in the workspace was
+  the removed check, and a two-valued declaration nothing consults is a knob with
+  no behaviour. `RankOrdering` remains on the registry declaration, where it is
+  still read.
+- **retrieval:** `FusionProfile::new`. It supplied a default decay rule while the
+  same type documents that neither rule is a default, and the one it chose has a
+  depth ceiling no weight can lift. Call sites name `with_decay` explicitly, which
+  preserves every previously computed profile identity byte for byte.
+
+  All four removals are confined to `purrdf-retrieval`, which has not yet been
+  published, so no released API changes.
 
 ### Changed
 
