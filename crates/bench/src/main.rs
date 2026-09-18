@@ -20,13 +20,11 @@ use purrdf_bench::{CorpusSpec, manifest, write_row};
 const FLUSH_EVERY_BYTES: usize = 1 << 20;
 
 fn parse_args() -> Result<(CorpusSpec, Option<String>, bool), String> {
-    let mut spec = CorpusSpec {
-        seed: 0x5EED_CAFE,
-        quads: 0,
-        iris: 0,
-        shard: 0,
-        shards: 1,
-    };
+    let mut seed = 0x5EED_CAFEu64;
+    let mut quads = 0u64;
+    let mut iris = 0u64;
+    let mut shard = 0u64;
+    let mut shards = 1u64;
     let mut out = None;
     let mut want_manifest = false;
     let mut arguments = std::env::args().skip(1);
@@ -38,22 +36,18 @@ fn parse_args() -> Result<(CorpusSpec, Option<String>, bool), String> {
                 .ok_or_else(|| format!("{name} requires an unsigned integer"))
         };
         match argument.as_str() {
-            "--seed" => spec.seed = take("--seed")?,
-            "--quads" => spec.quads = take("--quads")?,
-            "--iris" => spec.iris = take("--iris")?,
-            "--shard" => spec.shard = take("--shard")?,
-            "--shards" => spec.shards = take("--shards")?,
+            "--seed" => seed = take("--seed")?,
+            "--quads" => quads = take("--quads")?,
+            "--iris" => iris = take("--iris")?,
+            "--shard" => shard = take("--shard")?,
+            "--shards" => shards = take("--shards")?,
             "--out" => out = arguments.next(),
             "--manifest" => want_manifest = true,
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
-    if spec.quads == 0 || spec.iris == 0 {
-        return Err("--quads and --iris are required and must be positive".into());
-    }
-    if spec.shards == 0 || spec.shard >= spec.shards {
-        return Err("--shard must be < --shards, and --shards positive".into());
-    }
+    let spec =
+        CorpusSpec::new(seed, quads, iris, shard, shards).map_err(|error| error.to_string())?;
     Ok((spec, out, want_manifest))
 }
 

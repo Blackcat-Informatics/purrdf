@@ -30,25 +30,135 @@ use core::fmt::Write as _;
 ///
 /// Two specs that compare equal generate byte-identical corpora on every
 /// target; the manifest digests exactly these fields.
+///
+/// The fields are private and only reachable through [`CorpusSpec::new`],
+/// which is the sole home of the spec's invariants: `quads`, `iris`, and
+/// `shards` are positive, and `shard < shards`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CorpusSpec {
     /// Seed folded into every derivation.
-    pub seed: u64,
+    seed: u64,
     /// Total quads across all shards.
-    pub quads: u64,
+    quads: u64,
     /// Distinct-IRI target: entity IRIs are minted from indexes `0..iris`.
-    pub iris: u64,
+    iris: u64,
     /// This shard's zero-based index.
-    pub shard: u64,
+    shard: u64,
     /// Total shard count (`1` = whole corpus in one run).
-    pub shards: u64,
+    shards: u64,
+}
+
+/// Why a [`CorpusSpec::new`] call was rejected.
+///
+/// This is the one place the spec's invariants are named; every rejection
+/// reason a caller can hit is a variant here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecError {
+    /// `quads` was zero: a corpus must emit at least one row.
+    ZeroQuads,
+    /// `iris` was zero: every slot would draw entity index `0`, collapsing
+    /// the corpus to a single subject instead of an entity space.
+    ZeroIris,
+    /// `shards` was zero: shard math divides by the shard count.
+    ZeroShards,
+    /// `shard` was not less than `shards`: this shard owns no slots.
+    ShardOutOfRange {
+        /// The requested shard index.
+        shard: u64,
+        /// The total shard count it must be less than.
+        shards: u64,
+    },
+}
+
+impl core::fmt::Display for SpecError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ZeroQuads => f.write_str("quads must be positive"),
+            Self::ZeroIris => f.write_str("iris must be positive"),
+            Self::ZeroShards => f.write_str("shards must be positive"),
+            Self::ShardOutOfRange { shard, shards } => {
+                write!(f, "shard {shard} must be less than shards {shards}")
+            }
+        }
+    }
 }
 
 impl CorpusSpec {
+    /// Builds a validated corpus specification.
+    ///
+    /// This is the only constructor and the one place the spec's invariants
+    /// are enforced: every other method may assume a `CorpusSpec` in hand is
+    /// valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SpecError`] if `quads`, `iris`, or `shards` is zero, or if
+    /// `shard` is not strictly less than `shards`.
+    pub const fn new(
+        seed: u64,
+        quads: u64,
+        iris: u64,
+        shard: u64,
+        shards: u64,
+    ) -> Result<Self, SpecError> {
+        if quads == 0 {
+            return Err(SpecError::ZeroQuads);
+        }
+        if iris == 0 {
+            return Err(SpecError::ZeroIris);
+        }
+        if shards == 0 {
+            return Err(SpecError::ZeroShards);
+        }
+        if shard >= shards {
+            return Err(SpecError::ShardOutOfRange { shard, shards });
+        }
+        Ok(Self {
+            seed,
+            quads,
+            iris,
+            shard,
+            shards,
+        })
+    }
+
+    /// Seed folded into every derivation.
+    #[must_use]
+    pub const fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// Total quads across all shards.
+    #[must_use]
+    pub const fn quads(&self) -> u64 {
+        self.quads
+    }
+
+    /// Distinct-IRI target: entity IRIs are minted from indexes `0..iris`.
+    #[must_use]
+    pub const fn iris(&self) -> u64 {
+        self.iris
+    }
+
+    /// This shard's zero-based index.
+    #[must_use]
+    pub const fn shard(&self) -> u64 {
+        self.shard
+    }
+
+    /// Total shard count (`1` = whole corpus in one run).
+    #[must_use]
+    pub const fn shards(&self) -> u64 {
+        self.shards
+    }
+
     /// The half-open quad-index range this shard emits.
     ///
     /// Shards partition `0..quads` contiguously; the last shard absorbs the
     /// remainder, and every boundary is a pure function of the spec.
+    /// Infallible by construction: [`CorpusSpec::new`] guarantees
+    /// `shards > 0` and `shard < shards`, so this can never divide by zero
+    /// or observe `shard >= shards`.
     #[must_use]
     pub const fn shard_range(&self) -> (u64, u64) {
         let base = self.quads / self.shards;
@@ -259,15 +369,13 @@ pub fn manifest(spec: &CorpusSpec) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CORPUS_PROFILE_ID, CorpusSpec, class_of, write_entity_iri, write_row};
+    use super::{CORPUS_PROFILE_ID, CorpusSpec, SpecError, class_of, write_entity_iri, write_row};
 
-    const SPEC: CorpusSpec = CorpusSpec {
-        seed: 0x5EED_CAFE,
-        quads: 2_000,
-        iris: 1_000,
-        shard: 0,
-        shards: 1,
-    };
+    const SEED: u64 = 0x5EED_CAFE;
+
+    fn spec() -> CorpusSpec {
+        CorpusSpec::new(SEED, 2_000, 1_000, 0, 1).expect("fixture spec must be valid")
+    }
 
     fn corpus(spec: &CorpusSpec) -> String {
         let (start, end) = spec.shard_range();
@@ -280,22 +388,19 @@ mod tests {
 
     #[test]
     fn generation_is_deterministic_and_shard_concat_equals_whole() {
-        let whole = corpus(&SPEC);
-        assert_eq!(whole, corpus(&SPEC), "two runs must be byte-identical");
+        let whole = corpus(&spec());
+        assert_eq!(whole, corpus(&spec()), "two runs must be byte-identical");
         let mut stitched = String::new();
         for shard in 0..3 {
-            stitched.push_str(&corpus(&CorpusSpec {
-                shard,
-                shards: 3,
-                ..SPEC
-            }));
+            let sharded = CorpusSpec::new(SEED, 2_000, 1_000, shard, 3).expect("valid shard spec");
+            stitched.push_str(&corpus(&sharded));
         }
         assert_eq!(whole, stitched, "shard concatenation must equal one run");
     }
 
     #[test]
     fn every_row_parses_as_strict_nquads() {
-        let text = corpus(&SPEC);
+        let text = corpus(&spec());
         let dataset = purrdf_rdf::parse_dataset(text.as_bytes(), "application/n-quads", None)
             .expect("generated corpus must satisfy the strict reader");
         assert!(dataset.rdf_row_count() > 0);
@@ -305,21 +410,113 @@ mod tests {
     fn class_mix_is_exercised_and_indexed_minting_is_stable() {
         let mut seen = [false; 5];
         for entity in 0..2_000 {
-            seen[class_of(SPEC.seed, entity)] = true;
+            seen[class_of(SEED, entity)] = true;
         }
         assert_eq!(seen, [true; 5], "every class must appear");
         let mut a = String::new();
         let mut b = String::new();
-        write_entity_iri(&mut a, SPEC.seed, 42);
-        write_entity_iri(&mut b, SPEC.seed, 42);
+        write_entity_iri(&mut a, SEED, 42);
+        write_entity_iri(&mut b, SEED, 42);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn new_rejects_zero_quads() {
+        assert_eq!(
+            CorpusSpec::new(SEED, 0, 1_000, 0, 1),
+            Err(SpecError::ZeroQuads)
+        );
+        // Neighbouring valid input: the smallest positive quad count.
+        assert!(CorpusSpec::new(SEED, 1, 1, 0, 1).is_ok());
+    }
+
+    #[test]
+    fn new_rejects_zero_iris() {
+        assert_eq!(
+            CorpusSpec::new(SEED, 2_000, 0, 0, 1),
+            Err(SpecError::ZeroIris)
+        );
+        // Neighbouring valid input: the smallest positive IRI target.
+        assert!(CorpusSpec::new(SEED, 2_000, 1_000, 0, 1).is_ok());
+    }
+
+    #[test]
+    fn new_rejects_zero_shards() {
+        assert_eq!(
+            CorpusSpec::new(SEED, 2_000, 1_000, 0, 0),
+            Err(SpecError::ZeroShards)
+        );
+        // Neighbouring valid input: one shard (the whole corpus).
+        assert!(CorpusSpec::new(SEED, 2_000, 1_000, 0, 1).is_ok());
+    }
+
+    #[test]
+    fn new_rejects_shard_at_or_past_shards() {
+        assert_eq!(
+            CorpusSpec::new(SEED, 2_000, 1_000, 7, 7),
+            Err(SpecError::ShardOutOfRange {
+                shard: 7,
+                shards: 7
+            }),
+            "shard == shards must be rejected"
+        );
+        assert_eq!(
+            CorpusSpec::new(SEED, 2_000, 1_000, 8, 7),
+            Err(SpecError::ShardOutOfRange {
+                shard: 8,
+                shards: 7
+            }),
+            "shard > shards must be rejected"
+        );
+        // Neighbouring valid input: the last legal shard index, and shards
+        // that legitimately outnumber quads.
+        assert!(CorpusSpec::new(SEED, 2_000, 1_000, 6, 7).is_ok());
+        assert!(CorpusSpec::new(SEED, 3, 10, 7, 8).is_ok());
+    }
+
+    #[test]
+    fn shard_range_covers_shards_equal_one() {
+        let spec = CorpusSpec::new(SEED, 2_000, 1_000, 0, 1).expect("valid spec");
+        assert_eq!(spec.shard_range(), (0, 2_000));
+    }
+
+    #[test]
+    fn shard_range_last_shard_absorbs_the_remainder() {
+        let spec = CorpusSpec::new(SEED, 50_000, 1_000, 6, 7).expect("valid spec");
+        assert_eq!(spec.shard_range(), (42_852, 50_000));
+    }
+
+    #[test]
+    fn shard_range_stitches_exactly_when_shards_outnumber_quads() {
+        let quads = 3u64;
+        let shards = 8u64;
+        let mut covered = Vec::new();
+        for shard in 0..shards {
+            let spec = CorpusSpec::new(SEED, quads, 1_000, shard, shards).expect("valid spec");
+            let (start, end) = spec.shard_range();
+            assert!(start <= end, "range must not invert");
+            covered.push((start, end));
+        }
+        // No gap and no overlap: consecutive ranges must be contiguous.
+        for window in covered.windows(2) {
+            assert_eq!(
+                window[0].1, window[1].0,
+                "shard ranges must stitch with no gap and no overlap"
+            );
+        }
+        assert_eq!(covered[0].0, 0, "first shard starts at 0");
+        assert_eq!(
+            covered.last().copied().map(|(_, end)| end),
+            Some(quads),
+            "last shard ends at quads"
+        );
     }
 
     #[test]
     fn golden_digest_pins_the_profile() {
         // A change to any derivation is a NEW corpus profile: bump
         // CORPUS_PROFILE_ID and re-pin, never silently regenerate.
-        let text = corpus(&SPEC);
+        let text = corpus(&spec());
         assert_eq!(
             text.lines().count(),
             2_000,
