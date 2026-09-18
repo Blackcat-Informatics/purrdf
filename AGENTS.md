@@ -58,6 +58,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
 | `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
+| `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
 
 ## 2. Hard constraints (violating these fails CI or review)
 
@@ -231,9 +232,9 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (24 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Four members never reach
-crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`, and
-`purrdf-python` (PyPI via maturin instead).
+is single-sourced in `[workspace.package]`. Five members never reach
+crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,
+`purrdf-envelope-probe`, and `purrdf-python` (PyPI via maturin instead).
 
 ## 7. Provenance
 
