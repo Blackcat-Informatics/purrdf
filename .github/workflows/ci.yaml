@@ -56,6 +56,12 @@ jobs:
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 
+      - name: Check the banned-dependency gate can still fail
+        run: python3 scripts/check-banned-deps.py --self-test
+
+      - name: Check no replaced dependency re-entered the lock
+        run: python3 scripts/check-banned-deps.py
+
       - name: Check vendored-corpus byte-freeze
         run: python3 scripts/check-corpus-frozen.py
 

@@ -531,7 +531,12 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// otherwise return a stale, wrong-row value from this cache.
     /// [`Self::in_substituted_exists`] flags exactly that window so `const_atom`
     /// bypasses this cache while it is set.
-    pub(crate) const_atom_cache: DetHashMap<usize, SolutionTerm<D::Id>>,
+    /// The memoized value is `Option<SolutionTerm>` because the intern itself is:
+    /// a constant atom whose language tag the grammar refuses is unbound, and
+    /// that verdict is as constant as the term would have been (the SPARQL
+    /// parser and `crate::scratch` name the same profile), so it is memoized on
+    /// equal footing rather than recomputed per row.
+    pub(crate) const_atom_cache: DetHashMap<usize, Option<SolutionTerm<D::Id>>>,
     /// Per-query memo of the parsed XSD value of a dataset literal, keyed by its
     /// `TermId`. `FILTER`/comparison hot paths (`compare`/`equal`/`ebv_term`) parse
     /// the same `Existing(TermId)` literal's lexical form via `parse_by_iri` on

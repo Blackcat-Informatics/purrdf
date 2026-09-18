@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::package::validate_artifact_path;
 use super::super::{ProjectionArtifactSink, ProjectionError, ProjectionLimits};
-use super::carrier_util::LpgTextWriter;
+use super::carrier_util::{LpgTextWriter, render_hex_blocks};
 use super::model::LpgGraph;
 
 const PROGRESS_RECORD_STRIDE: usize = 4_096;
@@ -397,16 +397,7 @@ where
     }
 
     pub(super) fn push_hex(&mut self, value: &[u8]) -> Result<(), ProjectionError> {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut chunk = [0u8; 8_192];
-        for source in value.chunks(chunk.len() / 2) {
-            for (index, byte) in source.iter().copied().enumerate() {
-                chunk[index * 2] = HEX[usize::from(byte >> 4)];
-                chunk[index * 2 + 1] = HEX[usize::from(byte & 0x0f)];
-            }
-            self.write_bytes(&chunk[..source.len() * 2])?;
-        }
-        Ok(())
+        render_hex_blocks(value, |block| self.write_bytes(block))
     }
 
     pub(super) fn write_bytes(&mut self, mut chunk: &[u8]) -> Result<(), ProjectionError> {

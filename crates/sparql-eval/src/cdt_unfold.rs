@@ -334,6 +334,13 @@ fn index_term(index: usize) -> TermValue {
 /// whatever the row already held in place. A produced binding is JOINED against
 /// an existing one — see the module docs' note on a pre-bound target — so the
 /// answer is `false` exactly when the two disagree.
+///
+/// "Exactly when" is load-bearing: `false` drops the whole row, so a produced
+/// binding that simply cannot be made — a member whose language tag the grammar
+/// refuses — is `true` with the column left unbound, the same answer a `null`
+/// gets. See the comment at the [`ScratchInterner::intern_checked`] call.
+///
+/// [`ScratchInterner::intern_checked`]: crate::scratch::ScratchInterner::intern_checked
 fn bind<D: DatasetView + Sync>(
     row: &mut Solution<D::Id>,
     column: Option<usize>,
@@ -343,12 +350,128 @@ fn bind<D: DatasetView + Sync>(
     let (Some(column), Some(value)) = (column, value) else {
         return true;
     };
-    let term = ctx.scratch.intern(ctx.dataset, value);
+    // A produced binding the interner refuses is a binding to something that is
+    // not an RDF term — an `UNFOLD` member lifted out of a composite literal's
+    // lexical form carrying an ungrammatical language tag.
+    //
+    // It costs its own binding and NOTHING else, which is why this is `true` and
+    // not `false`. `false` drops the whole row at the call site, and in the map
+    // form `expansion` yields `(key, value)` through two calls to this function:
+    // an ungrammatical tag in the VALUE would have taken the perfectly good KEY
+    // binding down with it, which is the silent-drop bug wearing a refusal's
+    // clothes. The neighbour two lines up is the precedent and it is exact — a
+    // `null` map value is "this entry has no value", returns `true`, and leaves
+    // the companion column unbound while the row survives. An unbound column is
+    // also what SPARQL 1.1 §17.2 specifies for an expression error, and it is
+    // what `crate::expr::eval_str_lang` already returns for the same garbage.
+    //
+    // `false` remains reserved for its one meaning: a produced binding that
+    // DISAGREES with one the row already holds, below — a genuine non-match.
+    let Some(term) = ctx.scratch.intern_checked(ctx.dataset, value) else {
+        return true;
+    };
     match row[column] {
         None => {
             row[column] = Some(term);
             true
         }
         Some(existing) => existing == term,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_core::RdfDatasetBuilder;
+
+    use super::*;
+
+    /// `"purr"@tag`, as a value the interner has to judge.
+    fn tagged(tag: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: "purr".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+            language: Some(tag.to_owned()),
+            direction: None,
+        }
+    }
+
+    /// A refused member costs its own binding and nothing else.
+    ///
+    /// Driven at [`bind`] rather than through query text because that is the only
+    /// place the distinction exists. Upstream, `purrdf-cdt`'s own `LANGTAG` scan
+    /// judges on the same profile, so a bad tag in a composite's lexical form
+    /// makes the composite ill-formed and never reaches here (pinned by
+    /// `tests/cdt_fold_unfold_e2e.rs`). This is therefore an INVARIANT test, not
+    /// a reproduction: `bind`'s `false` is documented to mean "the produced
+    /// binding disagrees with one the row already holds", and returning it for a
+    /// refused tag broke that — in the map form `expansion` yields `(key, value)`
+    /// through two calls, so a refused VALUE erased a perfectly good KEY.
+    #[test]
+    fn a_refused_tag_costs_its_own_binding_and_nothing_else() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&*dataset);
+        let mut row: Solution<_> = smallvec::smallvec![None; 2];
+
+        assert!(bind(
+            &mut row,
+            Some(0),
+            Some(TermValue::iri("https://example.org/k")),
+            &mut ctx
+        ));
+        assert!(
+            bind(&mut row, Some(1), Some(tagged("en us")), &mut ctx),
+            "a refused tag must not drop the row — `false` here erases the key"
+        );
+        assert!(row[0].is_some(), "the key keeps its binding");
+        assert!(row[1].is_none(), "only the refused column is unbound");
+    }
+
+    /// The over-refusal mirror, at the same door: a tag real data carries binds.
+    #[test]
+    fn every_tag_the_grammar_admits_still_binds() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&*dataset);
+        for tag in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "abcdefgh",
+            "en-x-cantbethislong",
+        ] {
+            let mut row: Solution<_> = smallvec::smallvec![None; 1];
+            assert!(bind(&mut row, Some(0), Some(tagged(tag)), &mut ctx));
+            assert!(row[0].is_some(), "{tag} must still bind");
+        }
+    }
+
+    /// And `false` keeps its one meaning: a produced binding that DISAGREES with
+    /// one the row already holds. Without this the fix above would read as
+    /// "`bind` never fails", which is not what changed.
+    #[test]
+    fn a_disagreeing_pre_bound_target_is_still_a_non_match() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&*dataset);
+        let mut row: Solution<_> = smallvec::smallvec![None; 1];
+        assert!(bind(
+            &mut row,
+            Some(0),
+            Some(TermValue::iri("https://example.org/a")),
+            &mut ctx
+        ));
+        assert!(
+            !bind(
+                &mut row,
+                Some(0),
+                Some(TermValue::iri("https://example.org/b")),
+                &mut ctx
+            ),
+            "two disagreeing bindings for one column is a non-match"
+        );
     }
 }

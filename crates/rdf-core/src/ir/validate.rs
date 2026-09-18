@@ -12,6 +12,11 @@
 //!   name MUST be an IRI or a blank node (never a literal or a triple term); a
 //!   subject MUST NOT be a literal. Triple terms may appear only in object position
 //!   (and recursively as the components of another triple term).
+//! - **Literal admissibility:** the first literal the interner refused (see
+//!   [`RdfLiteral::validate_components`](crate::RdfLiteral::validate_components))
+//!   — a datatype that disagrees with the language and base direction, or a
+//!   language tag the BCP 47 grammar does not accept. The refusal keeps its
+//!   originating diagnostic code, so a malformed tag reports `langtag-*`.
 //! - **ID-reference validity:** every `TermId` referenced by any quad / reifier /
 //!   annotation is `< term_count()`.
 //! - **Triple-term acyclicity (C0.3):** the `Triple{s,p,o}` nesting graph is acyclic
@@ -38,8 +43,8 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
     //    every positional check below would report a downstream symptom of it.
     require_absolute_iris(builder)?;
-    if let Some(message) = builder.invalid_literal() {
-        return Err(diag("rdf-ir-literal-shape", message.to_owned()));
+    if let Some((code, message)) = builder.invalid_literal() {
+        return Err(diag(code, message.to_owned()));
     }
 
     // 1. Every interned triple term references in-range ids, has an IRI predicate

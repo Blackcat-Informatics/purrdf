@@ -154,7 +154,13 @@ impl GovernedRowIngest {
         let mut row: Solution<D::Id> = smallvec::smallvec![None; self.width];
         for (i, cell) in cells.into_iter().enumerate().take(self.width) {
             if let Some(value) = cell {
-                row[i] = Some(ctx.scratch.intern(ctx.dataset, value));
+                // THE producer seam — a third-party `ServiceResolver`'s rows
+                // reach the arena here, so it is the CHECKED door, not the plain
+                // `intern`. It returns `None` for a value carrying a language
+                // tag the grammar refuses, and this
+                // function's contract already is that "missing cells stay
+                // unbound": a cell no writer could spell is exactly such a cell.
+                row[i] = ctx.scratch.intern_checked(ctx.dataset, value);
             }
         }
         row

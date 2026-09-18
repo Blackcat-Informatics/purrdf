@@ -54,6 +54,7 @@ use std::sync::Arc;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
 use crate::plan::Executable;
+use crate::resolve_fol::hex_lower;
 use crate::seminaive::{
     EvalError, MAX_JOIN_STEPS, MAX_STORED_FACTS, MAX_TERM_ARENA_BYTES, compile,
 };
@@ -258,16 +259,7 @@ impl ContractHash {
 
     /// The digest as 64 lowercase hex characters.
     pub fn to_hex(&self) -> String {
-        let mut out = String::with_capacity(64);
-        for byte in self.digest {
-            out.push(
-                char::from_digit(u32::from(byte >> 4), 16).expect("a nibble is one hex digit"),
-            );
-            out.push(
-                char::from_digit(u32::from(byte & 0x0f), 16).expect("a nibble is one hex digit"),
-            );
-        }
-        out
+        hex_lower(&self.digest)
     }
 }
 

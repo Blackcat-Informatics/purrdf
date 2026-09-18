@@ -44,6 +44,24 @@ test("DataFactory builds RDF/JS terms", () => {
   assert.equal(lang.datatype.value, RDF_LANG_STRING);
 });
 
+// The JS binding was the one of three that admitted any string as a language
+// tag: the C ABI and Python both refuse a non-tag at their literal constructor,
+// while `factory.literal("x", "en us")` returned a Literal and only failed at a
+// later freeze or serializer, at a call site that never saw the string. Both
+// halves are driven, because refusing `@x-purrdf-afrikaans` or `@en-fr-jura` —
+// tags real data carries — would be the worse bug.
+test("literal() refuses a non-tag where the caller named it", () => {
+  const f = new DataFactory();
+  for (const tag of ["en", "en-US", "x-purrdf-afrikaans", "en-fr-jura", "abcdefgh"]) {
+    assert.equal(f.literal("v", tag).language, tag.toLowerCase());
+    assert.equal(f.directionalLiteral("v", tag, "ltr").language, tag.toLowerCase());
+  }
+  for (const tag of ["en us", "1", "9-9", "en-", "-", "!!!", "abcdefghi"]) {
+    assert.throws(() => f.literal("v", tag));
+    assert.throws(() => f.directionalLiteral("v", tag, "ltr"));
+  }
+});
+
 test("polymorphic literal(value, datatype) dispatches to a typed literal", () => {
   const f = new DataFactory();
   const xsdInteger = f.namedNode(XSD_INTEGER);

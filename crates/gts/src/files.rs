@@ -11,6 +11,12 @@ use std::path::{Path, PathBuf};
 use ciborium::value::Value;
 
 use crate::model::{Graph, Quad, Term, TermKind};
+// This crate's one lowercase-hex renderer, shared with `compact`, `openpgp`,
+// `reader` and the rest of the container. It is deliberately NOT
+// `purrdf_core::hex::lower` (the renderer the IR-side crates share): the GTS
+// container engine does not depend on the IR kernel, and inverting that layering
+// to save four lines would make every GTS consumer pull `purrdf-core` in.
+use crate::wire::hex;
 use crate::writer::{Writer, WriterOptions, digest_string};
 
 const FILES_NS: &str = "https://w3id.org/gts/files#";
@@ -1481,14 +1487,6 @@ fn suppressed_blob_digests(graph: &Graph) -> HashSet<String> {
         }
     }
     out
-}
-
-fn hex(data: &[u8]) -> String {
-    use std::fmt::Write as _;
-    data.iter().fold(String::new(), |mut out, b| {
-        let _ = write!(out, "{b:02x}");
-        out
-    })
 }
 
 /// Extract FileEntry quads from a folded graph into dest.

@@ -97,7 +97,7 @@ fn list_get<D: DatasetView + Sync>(
         return Ok(None);
     }
     match members.into_iter().nth(idx as usize) {
-        Some(value) => Ok(Some(intern(ctx, value))),
+        Some(value) => Ok(intern(ctx, value)),
         None => Ok(None),
     }
 }
@@ -158,7 +158,7 @@ fn list_slice<D: DatasetView + Sync>(
     let hi = end.clamp(lo, len); // also enforces hi >= lo → inverted ranges are empty
     let slice: Vec<TermValue> = members[lo as usize..hi as usize].to_vec();
     let value = materialize_list(ctx, slice);
-    Ok(Some(intern(ctx, value)))
+    Ok(intern(ctx, value))
 }
 
 /// `listConcat(listA, listB)` → a fresh `rdf:List` of A's members followed by
@@ -176,7 +176,7 @@ fn list_concat<D: DatasetView + Sync>(
     };
     left.extend(right);
     let value = materialize_list(ctx, left);
-    Ok(Some(intern(ctx, value)))
+    Ok(intern(ctx, value))
 }
 
 /// Invent a fresh `rdf:List` carrying `members` in order, returning its head term.
@@ -242,11 +242,46 @@ fn as_index(value: &TermValue) -> Option<i64> {
 }
 
 /// Intern a value to a solution term (promoting to an existing dataset id).
+///
+/// [`None`] when the value carries a language tag the grammar refuses. The list
+/// functions are expressions, so that refusal is SPARQL 1.1 §17.2's unbound
+/// result — see
+/// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked).
+///
+/// # This gate is vacuous here today, and is kept anyway
+///
+/// Be honest about what this module handles: unlike `crate::cdt_fn` and
+/// `crate::cdt_unfold`, these six functions do **not** lift members out of a
+/// composite literal's lexical form. They walk an `rdf:List` — `head`, `rdf:first`,
+/// `rdf:rest` — so every member is a term that was already admitted by
+/// `RdfLiteral::validate_components` on its way into the [`RdfDataset`], and
+/// re-judging it cannot change the verdict. `listSlice`/`listConcat` re-`intern`
+/// members they read from that same walk, and the cells they mint are blank
+/// nodes, which carry no tag at all.
+///
+/// It stays because it costs a scan of a field that is [`None`] in the common
+/// case and because [`walk_list`] reads from the per-query CONSTRUCTED buffer as
+/// well as from the frozen dataset — one cheap door rather than two doors whose
+/// difference has to be re-derived every time that buffer gains a writer. A gate
+/// that is vacuous is not the same as a gate that is wrong; claiming it caught
+/// something here would be.
+///
+/// [`RdfDataset`]: purrdf_core::RdfDataset
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
+) -> Option<SolutionTerm<D::Id>> {
+    ctx.scratch.intern_checked(ctx.dataset, value)
+}
+
+/// Intern a typed (no-language) literal. Infallible: there is no tag to judge.
+fn typed_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    lexical: &str,
+    datatype: &str,
 ) -> SolutionTerm<D::Id> {
-    ctx.scratch.intern(ctx.dataset, value)
+    ctx.scratch
+        .intern_datatyped(ctx.dataset, lexical.to_owned(), datatype.to_owned())
 }
 
 /// Intern an `xsd:integer` literal.
@@ -254,26 +289,16 @@ fn integer_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: i64,
 ) -> SolutionTerm<D::Id> {
-    intern(ctx, typed(&value.to_string(), XSD_INTEGER))
+    typed_term(ctx, &value.to_string(), XSD_INTEGER)
 }
 
 /// Intern an `xsd:boolean` literal.
 fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, b: bool) -> SolutionTerm<D::Id> {
-    intern(ctx, typed(if b { "true" } else { "false" }, XSD_BOOLEAN))
+    typed_term(ctx, if b { "true" } else { "false" }, XSD_BOOLEAN)
 }
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-
-/// Build a typed (no-language) literal value.
-fn typed(lexical: &str, datatype: &str) -> TermValue {
-    TermValue::Literal {
-        lexical_form: lexical.to_owned(),
-        datatype: datatype.to_owned(),
-        language: None,
-        direction: None,
-    }
-}
 
 /// Walk an `rdf:List` from `head`, returning its member values in order.
 ///

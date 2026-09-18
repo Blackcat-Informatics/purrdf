@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# `make cnschema-probe` reproduces the pinned cnSchema 4.0 round-trip evidence:
+# fetch the pinned export by digest, canonicalize it (RDFC-1.0), re-import the
+# canonical N-Quads, canonicalize again, and assert the source SHA-256, the
+# canonical-N-Quads SHA-256 (identical on both legs), and the exact quad count
+# all still match the constants pinned in scripts/cnschema-probe.py. Without a
+# job running it, those three constants can only rot silently: a change to the
+# canonicalizer, the JSON-LD expansion, or the N-Quads serializer that moves
+# CANONICAL_SHA256 would go unnoticed until someone ran the command by hand.
+#
+# This does NOT run on pull_request or push. The probe's own docstring calls it
+# "release evidence, not a CI gate": it fetches over the network once and builds
+# the CLI, so putting it on the per-push path would add ~30+ minutes of
+# network-dependent work to every PR and let an upstream network flake redden an
+# unrelated change. `schedule` gives it a regular run so drift is still caught
+# promptly; `workflow_dispatch` makes it runnable on demand (e.g. right after a
+# canonicalizer change, to re-derive the pinned constants deliberately).
+#
+# Not added to release-cargo.yaml either: that lane is tag-triggered and
+# irreversible past its publish step, and gating a release on a fresh network
+# fetch of a third-party export is a new external failure mode a release should
+# not carry. If cnSchema round-trip evidence needs to gate a release someday,
+# that is a separate, deliberate decision — not a side effect of wiring the
+# probe into CI at all.
+name: cnSchema round-trip probe
+
+on:
+  schedule:
+    # Wednesdays 03:23 UTC. Off the hour and off Benchmarks' Sunday 04:17 UTC
+    # slot, because scheduled workflows queue on shared runners and the top of
+    # the hour (or another workflow's slot) is where everyone else's cron is.
+    - cron: "23 3 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cnschema-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      # `make cnschema-probe` runs the script's own --self-test first (offline,
+      # exercises both failure paths) and then the real probe (fetches the
+      # pinned export by digest, builds purrdf-cli, and asserts the source
+      # digest, the canonical N-Quads digest on both legs, and the quad count).
+      # No `|| true`, `continue-on-error`, or pipe swallows the exit code here:
+      # a digest or count mismatch fails the step, which fails the job, which
+      # fails the workflow run.
+      #
+      # A red run here means one of two things: an intentional canonicalizer /
+      # JSON-LD expansion / N-Quads serializer change that must re-derive and
+      # update SOURCE_SHA256 / CANONICAL_SHA256 / QUAD_COUNT in
+      # scripts/cnschema-probe.py, or a real regression in one of them. Either
+      # way, look at the specific digest/count the script reports as expected
+      # vs. actual before touching the pins.
+      - name: Reproduce the pinned cnSchema 4.0 round-trip evidence
+        run: make cnschema-probe

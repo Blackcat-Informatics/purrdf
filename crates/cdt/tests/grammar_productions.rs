@@ -598,3 +598,100 @@ fn canonical_form_always_spells_shorthands_explicitly() {
           null]"
     );
 }
+
+// ── `LANGTAG` is decided by the workspace's owner, not by this scanner ────────
+
+/// A one-element list whose element is a literal carrying the tag under test.
+fn tagged_list(tag: &str) -> Result<CdtValue, CdtError> {
+    parse_list(&format!("[\"x\"@{tag}]"))
+}
+
+/// The refusal side: a tag this scanner used to accept and every RDF codec in
+/// the workspace refuses.
+///
+/// A CDT literal embeds RDF terms in its own lexical form, and those terms are
+/// serialized into ordinary RDF documents. `@cantbethislong` — a bare
+/// fourteen-character subtag — is required to be refused by the N-Triples
+/// negative-syntax corpus, so a `cdt:List` that held it was a value no
+/// serialization of it could be read back from.
+///
+/// The refusal keeps its [`CdtError::BadLanguageTag`] shape and its `offset`;
+/// what is new is that `reason` names the production that bit.
+#[test]
+fn a_subtag_over_the_length_ceiling_is_refused_in_a_cdt_literal() {
+    let error = tagged_list("cantbethislong")
+        .expect_err("a bare fourteen-character subtag is over the §2.1 ceiling");
+    let CdtError::BadLanguageTag { offset, reason } = error else {
+        panic!("the error type is unchanged: {error:?}");
+    };
+    // `["x"@…` — the `@` sits at byte 4, which is where the tag starts, and the
+    // offset is the tag's rather than the whole list's.
+    assert_eq!(offset, 4, "the byte offset is unchanged");
+    assert_eq!(reason, "language-tag subtag longer than 8 characters");
+}
+
+/// The acceptance side, which is the half that catches an over-refusal.
+///
+/// Row one is the neighbour one character inside the ceiling, row two moves the
+/// same over-long subtag behind the `x` marker where the ceiling does not
+/// apply, and the rest are the tags this workspace's fixtures, the approved W3C
+/// corpora (`en-fr-jura`, `fr-be-fbcl`, neither of which has an RFC 5646
+/// reading) and downstream projects publish. The tag must come back verbatim:
+/// a scanner that re-cased or truncated it would change the literal's identity.
+#[test]
+fn every_tag_the_workspace_writes_still_parses_in_a_cdt_literal() {
+    for tag in [
+        "abcdefgh",
+        "en-x-cantbethislong",
+        "en",
+        "en-US",
+        "zh-Hans-CN",
+        "i-enochian",
+        "de-CH-x-phonebk",
+        "en-fr-jura",
+        "fr-be-fbcl",
+        "x-purrdf-english",
+        "x-purrdf-afrikaans",
+        "x-gmeow-english",
+        "x-gmeow-norwegiannynorsk",
+    ] {
+        let value = tagged_list(tag).unwrap_or_else(|error| {
+            panic!("`@{tag}` is written by this workspace and must still parse: {error}")
+        });
+        assert_eq!(
+            items(&value),
+            [CdtTerm::Literal(CdtLiteral::lang("x", tag))],
+            "`@{tag}` must be carried through verbatim"
+        );
+    }
+}
+
+/// The terminal's own refusals, unchanged in verdict, and the direction suffix
+/// still split off the tag rather than folded into it — the boundary rule is
+/// this scanner's own job and the swap must not have moved it.
+#[test]
+fn the_langtag_terminals_own_refusals_still_bite_in_a_cdt_literal() {
+    for tag in ["1", "9-9", "en-", "en--US", "\u{65e5}\u{672c}\u{8a9e}"] {
+        assert!(
+            matches!(tagged_list(tag), Err(CdtError::BadLanguageTag { .. })),
+            "`@{tag}` is not a language tag"
+        );
+    }
+    // The over-long subtag is refused behind the direction suffix too, which is
+    // the case that proves the tag is validated after the suffix is split off
+    // rather than before.
+    assert!(matches!(
+        tagged_list("cantbethislong--ltr"),
+        Err(CdtError::BadLanguageTag { .. })
+    ));
+    // …and its in-bound neighbour still carries both components.
+    let value = tagged_list("en-GB--rtl").expect("a tag inside the ceiling, plus a direction");
+    assert_eq!(
+        items(&value),
+        [CdtTerm::Literal(CdtLiteral::dir_lang(
+            "x",
+            "en-GB",
+            TextDirection::Rtl
+        ))]
+    );
+}

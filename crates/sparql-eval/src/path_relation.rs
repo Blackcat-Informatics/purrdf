@@ -346,8 +346,6 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
 
-use core::fmt::Write as _;
-
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, GraphMatch, TermValue};
 use sha2::{Digest, Sha256};
@@ -1196,11 +1194,7 @@ fn edge_set_digest(edges: &[(TermValue, TermValue, TermValue)]) -> [u8; 32] {
 
 /// Render bytes as lowercase hex, the one spelling this module renders a digest in.
 fn render_hex(bytes: &[u8]) -> String {
-    let mut rendered = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        write!(rendered, "{byte:02x}").expect("formatting into a String cannot fail");
-    }
-    rendered
+    purrdf_core::hex::lower(bytes)
 }
 
 /// The dense index of `value` within an already-sorted, deduplicated table it is known to
