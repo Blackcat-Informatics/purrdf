@@ -32,7 +32,7 @@ There are two benchmark layers:
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the criterion numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 67 `[[bench]]`
+They live under `crates/*/benches/`. The workspace registers 69 `[[bench]]`
 targets in total; this section and the inventory table below document 22 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
@@ -110,7 +110,7 @@ Additional benches are run package-by-package, e.g.
 
 ### Native criterion benchmark inventory
 
-This table documents 22 of the 67 `[[bench]]` targets registered across the
+This table documents 22 of the 69 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row

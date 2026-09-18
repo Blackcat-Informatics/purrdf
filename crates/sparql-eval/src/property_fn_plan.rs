@@ -47,7 +47,7 @@ use crate::convert::literal_to_value;
 use crate::error::EvalError;
 use crate::expr::xsd_of;
 use crate::modifier::is_numeric_xsd;
-use crate::property_fn::{PfArity, PropertyFunctionRegistry};
+use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
 use crate::registry_id::append_framed_part;
 
 /// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
@@ -1118,6 +1118,16 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 /// still be treated as two distinct configurations — sharing a cache entry between them
 /// would be silent only until one relation actually depended on sequential evaluation.
 ///
+/// # The content half is [`content_fingerprint`], rendered
+///
+/// Everything after the instance id is [`content_fingerprint`]'s digest in hex, not a
+/// second walk over the same declarations. One fold means the two tiers can never come
+/// to disagree about which declared fields matter: a field added to the durable digest
+/// is, in the same edit, a field this fingerprint separates plans on. It also makes the
+/// join unambiguous by construction — a hex digest is a fixed-width alphabet that cannot
+/// contain the delimiter, so no registry's declarations can forge the boundary between
+/// the two halves.
+///
 /// Derived from [`PropertyFunctionRegistry::describe`], which is already IRI-sorted, so
 /// the content half of the fingerprint is a pure function of the registry's contents
 /// rather than of its construction order (the instance id half is, by construction, a
@@ -1140,26 +1150,10 @@ pub(crate) fn registry_fingerprint(
     if relations.is_empty() {
         return Ok(String::new());
     }
-    let registry = relations;
     let mut out = String::new();
-    out.push_str(&registry.instance_id().stable_encoding().to_string());
+    out.push_str(&relations.instance_id().stable_encoding().to_string());
     out.push('\u{5}');
-    for descriptor in registry.describe()? {
-        out.push_str(&descriptor.iri);
-        out.push('\u{2}');
-        out.push_str(&descriptor.subject_arity.to_string());
-        out.push(',');
-        out.push_str(&descriptor.object_arity.to_string());
-        out.push('\u{2}');
-        out.push_str(descriptor.volatility.label());
-        for mode in &descriptor.modes {
-            out.push('\u{3}');
-            out.push_str(&mode.code);
-            out.push(':');
-            out.push_str(&mode.rows_per_invocation.to_string());
-        }
-        out.push('\u{4}');
-    }
+    out.push_str(&content_fingerprint(relations)?.to_hex());
     Ok(out)
 }
 
@@ -1170,11 +1164,17 @@ pub(crate) fn registry_fingerprint(
 /// collide, and a caller binding both would be unable to tell which it had).
 const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/property-function-registry";
 
-/// A **content-only** fingerprint of `relations`: the identical declared descriptor
-/// fields `registry_fingerprint` folds — every registered IRI's subject and object
-/// arity, its declared volatility, and its declared modes with their row bounds,
-/// IRI-sorted — with the registry's instance id **omitted**, digested as a
-/// [`ContentDigest`].
+/// A **content-only** fingerprint of `relations`: every registered IRI's subject
+/// and object arity, its declared volatility, its declared modes with their row
+/// bounds, and its ranked-retrieval declaration, IRI-sorted — with the registry's
+/// instance id **omitted**, digested as a [`ContentDigest`].
+///
+/// This is the one fold of a property-function registry's declarations in this
+/// crate. [`registry_fingerprint`] renders it in hex behind the instance id rather
+/// than walking the descriptors a second time, and
+/// [`PropertyFunctionRegistry::content_fingerprint`] hands hosts the same hex, so
+/// "which declared fields make two registries different?" has exactly one answer
+/// and cannot drift into two.
 ///
 /// # Why a second fingerprint rather than a change to the first
 ///
@@ -1194,8 +1194,8 @@ const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/property-function-registry";
 /// # What it binds, and what it deliberately does not
 ///
 /// It binds **declarations**, not implementations. Two independently built
-/// registries that declare the same IRIs with the same arities, volatilities and
-/// modes produce the same digest even when their
+/// registries that declare the same IRIs with the same arities, volatilities,
+/// modes and ranked-retrieval declarations produce the same digest even when their
 /// [`PropertyFunction`](crate::property_fn::PropertyFunction) implementations return
 /// entirely different rows — exactly the hole the instance id closes in-process, and
 /// one no content-derived value can close, because a trait object exposes no content
@@ -1263,6 +1263,23 @@ pub fn content_fingerprint(
                 &mode.rows_per_invocation.to_be_bytes(),
             );
         }
+        // The ranked-retrieval declaration the host supplied at registration. A
+        // producer's participation in fusion is a declaration exactly as arity,
+        // volatility and modes are: it decides whether a request can draw ranked
+        // candidates from this IRI at all, and under which stratum, ordering and
+        // duplicate guarantee they arrive. A relation registered without one
+        // contributes the fixed `NOT_RANKED_CANONICAL` description rather than
+        // nothing, so a producer that does not fuse still occupies the field and
+        // cannot be confused with one whose declaration was simply not read.
+        append_framed_part(
+            &mut bytes,
+            "ranked",
+            match descriptor.ranked.as_ref() {
+                None => NOT_RANKED_CANONICAL.to_owned(),
+                Some(declaration) => declaration.canonical_description(),
+            }
+            .as_bytes(),
+        );
     }
     Ok(ContentDigest::of(&bytes))
 }

@@ -21,6 +21,7 @@
 //! | [`datalog`] | [`purrdf_datalog`] (the semi-naive engine [`entail`]'s public types carry) |
 //! | [`geo`] | [`purrdf_geo`] (GeoSPARQL 1.1 geometry, `geof:` functions, query rewrite) |
 //! | [`text`] | [`purrdf_text`] (deterministic full-text search over RDF 1.2 literals) |
+//! | [`retrieval`] | [`purrdf_retrieval`] (the composition layer over the ranked producers) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
 //! | [`json`] | [`purrdf_json`] (byte-identical ordered JSON codec) |
 //! | [`markdown`] | [`purrdf_markdown`] (structural Markdown slicer under the shipped specification) |
@@ -177,6 +178,14 @@ pub mod sparql {
     // errors explicitly; every error *type* (`ParseError`, `EvalError`,
     // `Error`) is still re-exported at this module's root by the globs above.
     pub use purrdf_sparql_algebra::error;
+    // Both crates also expose a `TermPattern`: the algebra's parser-level term
+    // pattern, and the evaluator's declarative *ranked-retrieval* pattern (what
+    // request terms a ranked property function accepts, as declared at
+    // registration). The bare name stays bound to the longer-standing parser
+    // type; the retrieval pattern is reachable under a distinct alias so the
+    // two are never confused.
+    pub use purrdf_sparql_algebra::TermPattern;
+    pub use purrdf_sparql_eval::TermPattern as RetrievalTermPattern;
 }
 
 /// XSD datatype value spaces and operations.
@@ -247,6 +256,35 @@ pub mod geo {
 /// caller registers on [`sparql`]'s property-function seam under its own IRIs.
 pub mod text {
     pub use purrdf_text::*;
+}
+
+/// The composition layer over the ranked producers ([`purrdf_retrieval`]): one
+/// request planned, admitted, executed and fused into one ordered answer across
+/// every ranked relation a caller registered on [`sparql`]'s property-function
+/// seam.
+///
+/// This module completes a seam the umbrella already carried half of. A producer
+/// declares what it accepts with [`sparql::RetrievalTermPattern`], which is
+/// re-exported at the umbrella root of that module; the layer that reads those
+/// declarations — plans against them ([`retrieval::plan`],
+/// [`retrieval::Plan`], [`retrieval::PlanId`]), admits and compiles the plan
+/// ([`retrieval::compile`]), runs the units ([`retrieval::execute`]) and fuses
+/// the ranked streams under an exact, content-addressed law
+/// ([`retrieval::fuse`], [`retrieval::FusionProfile`]) — is here, so a consumer
+/// that registers a ranked relation can also compose the answer without adding a
+/// second dependency.
+///
+/// [`retrieval::search`] is those four stages run as one, and the answer it
+/// returns ([`retrieval::SearchResult`]) carries what each stage knew: the
+/// per-stratum provenance of every fused row, every applicable producer's own
+/// status, and every request term that reached no producer at all
+/// ([`retrieval::UnservedTerm`], [`retrieval::UnservedReason`]).
+///
+/// Producers, strata and weights are caller-supplied configuration throughout.
+/// There is no default registry, no built-in producer and no fabricated
+/// namespace — PurRDF mints no vocabulary here either.
+pub mod retrieval {
+    pub use purrdf_retrieval::*;
 }
 
 /// The SARIF 2.1.0 reporting boundary ([`purrdf_validate`]): validate a
@@ -355,6 +393,166 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(0, 1)],
             "the one document holding the needle is its partition's rank one"
+        );
+    }
+
+    /// The `retrieval` module is reachable from the facade and answers, so the
+    /// module map's completeness claim covers the composition layer too.
+    ///
+    /// The whole ladder runs through the umbrella alone — the index, the ranked
+    /// registration, the request, the fusion law and `search` itself — because a
+    /// re-export that compiles while exposing nothing composable is exactly the
+    /// failure this catches. The umbrella already handed out the capability type
+    /// a producer declares with (`sparql::RetrievalTermPattern`); this proves the
+    /// consuming half is reachable from the same dependency.
+    #[test]
+    fn facade_exposes_the_retrieval_ladder() {
+        use std::collections::BTreeMap;
+        use std::future::Future;
+        use std::sync::Arc;
+        use std::task::{Context, Poll, Wake, Waker};
+
+        /// The ladder's futures are awaited in one task and never cross a thread
+        /// boundary, so a parking waker is the whole runtime they need.
+        fn block_on<F: Future>(future: F) -> F::Output {
+            struct ParkWaker(std::thread::Thread);
+            impl Wake for ParkWaker {
+                fn wake(self: Arc<Self>) {
+                    self.0.unpark();
+                }
+            }
+            let waker = Waker::from(Arc::new(ParkWaker(std::thread::current())));
+            let mut context = Context::from_waker(&waker);
+            let mut future = Box::pin(future);
+            loop {
+                match future.as_mut().poll(&mut context) {
+                    Poll::Ready(output) => return output,
+                    Poll::Pending => std::thread::park(),
+                }
+            }
+        }
+
+        /// A provider that reports nothing: the producer declares a finite row
+        /// bound from its own frozen index, so there is no unbounded declaration
+        /// for a cardinality to bound.
+        struct NoStatistics;
+        impl retrieval::Statistics for NoStatistics {
+            fn source(&self) -> &'static str {
+                "facade-statistics"
+            }
+            fn revision(&self) -> &'static str {
+                "r1"
+            }
+            fn cardinality(&self, _predicate: &retrieval::Iri) -> Option<u64> {
+                None
+            }
+            fn selectivity_ppm(
+                &self,
+                _subject: &retrieval::Iri,
+                _term: &retrieval::RequestTerm,
+            ) -> Option<u64> {
+                None
+            }
+        }
+
+        const NOTE: &str = "https://example.org/note";
+        const PRODUCER: &str = "https://example.org/pf/search";
+        const STRATUM: &str = "https://example.org/stratum/lexical";
+
+        let mut builder = RdfDatasetBuilder::new();
+        let note = builder.intern_iri(NOTE);
+        for (local, text) in [("a", "the quick brown fox"), ("b", "a quick red fox")] {
+            let subject = builder.intern_iri(&format!("https://example.org/{local}"));
+            let literal = builder.intern_literal(RdfLiteral::simple(text));
+            builder.push_quad(subject, note, literal, None);
+        }
+        let dataset = builder.freeze().expect("the facade fixture validates");
+
+        let config =
+            text::TextIndexConfig::new(vec![TermValue::iri(NOTE)], text::GraphSelector::Any)
+                .expect("one IRI predicate is a well-formed configuration");
+        let index =
+            text::TextIndex::from_dataset(&*dataset, &config).expect("the facade index builds");
+
+        let mut registry = sparql::PropertyFunctionRegistry::new();
+        let relation = text::TextSearchRelation::new(Arc::new(index));
+        let declaration = relation
+            .ranked_declaration(
+                iri::parse(STRATUM).expect("the fixture stratum IRI is valid"),
+                Some(NOTE.to_owned()),
+            )
+            .expect("a single-partition index declares a ranked order");
+        registry.register_ranked(PRODUCER, Arc::new(relation), declaration);
+
+        let stratum = retrieval::Iri::parse(STRATUM).expect("the fixture stratum IRI is valid");
+        let mut weights = BTreeMap::new();
+        weights.insert(stratum.clone(), retrieval::Fixed::ONE);
+        let profile = retrieval::FusionProfile::new(weights, 60)
+            .expect("the fixture fusion profile is valid");
+
+        let request =
+            retrieval::RetrievalRequest::from_terms(vec![retrieval::RequestTerm::Lexical {
+                text: "quick fox".to_owned(),
+                language: None,
+                predicate: Some(
+                    retrieval::Iri::parse(NOTE).expect("the fixture predicate is valid"),
+                ),
+            }]);
+        let statistics = NoStatistics;
+        let environment = retrieval::AdmissionEnvironment {
+            registry: &registry,
+            statistics: &statistics,
+            fusion_profile: None,
+        };
+
+        let result = block_on(retrieval::search(
+            &request,
+            &registry,
+            &statistics,
+            &*dataset,
+            &environment,
+            &profile,
+            retrieval::TopK::new(4),
+        ))
+        .expect("the facade composes the ladder");
+
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.entity.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            vec![
+                "<https://example.org/a>".to_owned(),
+                "<https://example.org/b>".to_owned(),
+            ],
+            "both documents hold the needle's terms, ranked by the real index"
+        );
+        assert_eq!(
+            result.rows[0]
+                .contributions
+                .iter()
+                .map(|(stratum, rank, _)| (stratum.as_str().to_owned(), *rank))
+                .collect::<Vec<_>>(),
+            vec![(STRATUM.to_owned(), 1)],
+            "the top row carries the host's own stratum as its provenance"
+        );
+        assert_eq!(
+            result.trailer.statuses.get(&stratum),
+            Some(&retrieval::ProducerStatus::Exhausted { rows_emitted: 2 }),
+            "the producer's own terminal status reaches the answer"
+        );
+        assert!(
+            result.unserved_terms.is_empty(),
+            "every request term reached a producer"
+        );
+        assert_eq!(result.profile_id, profile.id());
+        assert_eq!(
+            result.plan_id,
+            retrieval::plan(&request, &registry, &statistics)
+                .expect("the request plans")
+                .id(),
+            "the answer names the plan a caller can re-derive"
         );
     }
 

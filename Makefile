@@ -185,7 +185,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 23 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 24 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -303,7 +303,7 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
-			-p purrdf-geo -p purrdf-text \
+			-p purrdf-geo -p purrdf-text -p purrdf-retrieval \
 			-p purrdf-validate -p purrdf -p purrdf-wasm; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
@@ -368,7 +368,10 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# neighbours swap, and the browser returns a different ANSWER than the host.
 	@# `purrdf-text` ranks by BM25, which needs a natural logarithm — the same hazard
 	@# in the other direction, and the reason its arithmetic is exact i128 fixed point
-	@# with a fixed-iteration integer `ln` instead of a libm call. So this lane
+	@# with a fixed-iteration integer `ln` instead of a libm call. `purrdf-retrieval`
+	@# then FUSES those ranked lists: a fused score is a sum of truncated reciprocals,
+	@# and a last bit moved anywhere in that sum swaps two near-tied candidates, so the
+	@# composition needs the same executed proof its inputs do. So this lane
 	@# compiles the tagged tests to wasm32 and runs them in Node, against the same
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
@@ -401,6 +404,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-text --test wasm_determinism \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-retrieval --test wasm_determinism \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-json --test roundtrip \

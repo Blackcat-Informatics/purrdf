@@ -58,7 +58,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::{DatasetView, GraphMatch, TermValue};
+use purrdf_core::{DatasetView, GraphMatch, Iri, TermValue};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
@@ -281,6 +281,338 @@ pub trait PfCursor {
     fn take_work(&mut self) -> u64 {
         0
     }
+}
+
+// ---------------------------------------------------------------------------
+// Ranked-retrieval declarations
+// ---------------------------------------------------------------------------
+
+/// The kind of RDF term a [`TermPattern`] accepts.
+///
+/// This is a closed, declarative classification, not a predicate function: a
+/// consumer matches an incoming request term against it by a lookup over data,
+/// which is what makes a capability declaration serializable and stable across
+/// processes. `Any` is the explicit "no kind restriction" declaration and is
+/// deliberately distinct from a wildcard implementation — callers read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TermKind {
+    /// Any term kind is accepted.
+    Any,
+    /// An IRI term.
+    Iri,
+    /// A blank-node term.
+    Blank,
+    /// A literal term.
+    Literal,
+    /// A quoted triple term (RDF 1.2).
+    Triple,
+}
+
+impl TermKind {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Iri => "iri",
+            Self::Blank => "blank",
+            Self::Literal => "literal",
+            Self::Triple => "triple",
+        }
+    }
+}
+
+/// One declarative shape of request term a ranked producer accepts.
+///
+/// A pattern is matched by field equality over an incoming term's kind,
+/// datatype IRI, language tag, and (for an associated predicate) IRI. There is
+/// no function pointer here by construction: function pointers cannot be
+/// serialized, cannot be compared for equality, and are not a stable
+/// description of accepted request language.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TermPattern {
+    /// The term kind this pattern accepts.
+    pub kind: TermKind,
+    /// If set, the literal datatype IRI the term must carry.
+    pub datatype: Option<String>,
+    /// If set, the literal language tag the term must carry.
+    pub language: Option<String>,
+    /// If set, the predicate IRI the term's triple must carry.
+    pub predicate: Option<String>,
+}
+
+impl TermPattern {
+    /// A pattern accepting any term of `kind`, with no further constraint.
+    #[must_use]
+    pub const fn of_kind(kind: TermKind) -> Self {
+        Self {
+            kind,
+            datatype: None,
+            language: None,
+            predicate: None,
+        }
+    }
+
+    /// Append this pattern's canonical, injective description to `out`.
+    fn push_canonical(&self, out: &mut String) {
+        push_canonical_field(out, self.kind.as_str());
+        push_canonical_option(out, self.datatype.as_deref());
+        push_canonical_option(out, self.language.as_deref());
+        push_canonical_option(out, self.predicate.as_deref());
+    }
+}
+
+/// A ranked producer's ordering guarantee over the rows of one invocation.
+///
+/// The evaluator already treats emission order as part of a relation's
+/// contract (see [`PfCursor`]); this declaration names the *rank* half of that
+/// contract so a fusion stage can rely on it without inspecting rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RankOrdering {
+    /// Rows are emitted in strictly descending score order under a declared
+    /// total tie-break, so every row has an unambiguous 1-based rank.
+    StrictlyDescending,
+    /// Rows are emitted in non-increasing score order; equal scores may appear
+    /// in any order, so ranks within a tie are interchangeable.
+    NonIncreasing,
+}
+
+impl RankOrdering {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StrictlyDescending => "strictly-descending",
+            Self::NonIncreasing => "non-increasing",
+        }
+    }
+}
+
+/// A ranked producer's duplicate handling within one invocation's stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DuplicatePolicy {
+    /// An item appears at most once in the stream.
+    Unique,
+    /// The stream may repeat an item; a consumer must de-duplicate.
+    Allowed,
+}
+
+impl DuplicatePolicy {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unique => "unique",
+            Self::Allowed => "allowed",
+        }
+    }
+}
+
+/// The canonical description of "this relation does not participate in ranked
+/// retrieval" — the one byte a non-ranked producer contributes to a registry's
+/// content fingerprint, named once so the ranked and non-ranked spellings can
+/// never drift apart.
+pub(crate) const NOT_RANKED_CANONICAL: &str = "n";
+
+/// Which facet of a request term a placement renders into an argument position.
+///
+/// A request term is not always one value at the call site. A lexical search
+/// for an English needle is a needle *and* a language tag, and a producer that
+/// takes them in two different argument positions needs both rendered, or the
+/// position left free answers a narrower question than the caller asked — the
+/// silent widening this enum exists to make impossible to express by accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RequestFacet {
+    /// The term's own value — the needle, the vector, the IRI.
+    Value,
+    /// The term's language tag.
+    Language,
+    /// The predicate IRI the term is associated with.
+    Predicate,
+    /// The maximum distance the term's match may lie at.
+    MaxDistance,
+    /// The inclusive lower endpoint of a term that names an interval.
+    ///
+    /// An interval is two constants, not one, so it cannot ride in
+    /// [`Self::Value`]: a producer that received only one endpoint would answer
+    /// a strictly wider question than the caller asked, which is the silent
+    /// widening this enum exists to make impossible to express by accident.
+    LowerBound,
+    /// The inclusive upper endpoint of a term that names an interval.
+    UpperBound,
+}
+
+impl RequestFacet {
+    /// The stable spelling used in the canonical description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::Language => "language",
+            Self::Predicate => "predicate",
+            Self::MaxDistance => "max-distance",
+            Self::LowerBound => "lower-bound",
+            Self::UpperBound => "upper-bound",
+        }
+    }
+}
+
+/// Where one facet of an accepted request term binds, and how it is rendered.
+///
+/// `position` is a **flattened** argument position in the sense [`PfArity`]
+/// documents: the subject-side arguments first, in written order, then the
+/// object-side arguments, 0-based across both.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TermPlacement {
+    /// The facet of the request term this position receives.
+    pub facet: RequestFacet,
+    /// The flattened argument position the facet is rendered into.
+    pub position: usize,
+    /// If set, the literal datatype IRI the rendered value carries. No
+    /// vocabulary is minted here: an absent datatype is an absent datatype, and
+    /// a producer that needs one says which.
+    pub datatype: Option<String>,
+}
+
+/// One accepted request-term shape, with where its facets bind.
+///
+/// The pattern is the *matching* half — which incoming terms this producer will
+/// take — and the placements are the *rendering* half — where each facet of a
+/// matched term goes. They are paired rather than carried as two lists, so a
+/// reader cannot mis-align a placement with the shape it renders.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AcceptedTerm {
+    /// The declarative shape of request term this entry accepts.
+    pub pattern: TermPattern,
+    /// Where each facet of a matched term binds, in the order the producer
+    /// declared them. The order is identity-bearing and is never sorted.
+    pub placements: Vec<TermPlacement>,
+}
+
+/// Where a producer takes its per-stratum depth as an argument, if it does.
+///
+/// Some producers are bounded by the consumer's `LIMIT`; others take the depth
+/// as an argument and are *refused* at prepare time when it is left free,
+/// because an unbounded generator cannot be admitted against a row ceiling. A
+/// declaration says which, rather than leaving a consumer to guess.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DepthPlacement {
+    /// The flattened argument position the depth is rendered into.
+    pub position: usize,
+    /// The literal datatype IRI the rendered depth carries. Required, not
+    /// optional: a fabricated default would be a minted vocabulary IRI.
+    pub datatype: String,
+}
+
+/// A producer's ranked-retrieval declaration, supplied at registration.
+///
+/// This is caller-supplied configuration about a relation, not a property *of*
+/// the relation's Rust type: the same generic relation can be wired up as a
+/// ranked producer in one host and as an ordinary row source in another, and
+/// only the host wiring it knows which. So it is supplied where the producer is
+/// registered ([`PropertyFunctionRegistry::register_ranked`]) and read back by
+/// IRI ([`PropertyFunctionRegistry::ranked_declaration`]), and every relation
+/// that has nothing to do with ranked retrieval says nothing at all.
+///
+/// Every field is owned, declarative data, so the whole value is
+/// `Clone + PartialEq + Eq + Debug` and has a canonical description; there is
+/// deliberately no function pointer anywhere in this type. It is not `Hash`
+/// because [`Iri`] is not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankedDeclaration {
+    /// The caller-supplied stratum label these rows are ranked within. No
+    /// vocabulary is minted here; the caller names its own strata.
+    pub stratum: Iri,
+    /// The request-term shapes this producer accepts, each with the positions
+    /// its facets render into. Matching is a lookup over these declarations,
+    /// never inference. Caller order is identity-bearing.
+    pub accepted_terms: Vec<AcceptedTerm>,
+    /// Where the per-stratum depth binds, or `None` when this producer is
+    /// bounded by the consumer's row ceiling instead of by an argument.
+    pub depth_placement: Option<DepthPlacement>,
+    /// The flattened argument position the ranked candidate is projected from.
+    pub candidate_position: usize,
+    /// The producer's ordering guarantee.
+    pub ordering: RankOrdering,
+    /// The producer's duplicate handling.
+    pub duplicates: DuplicatePolicy,
+    /// Whether a request that reaches this producer must actually be served by
+    /// it. Declared by the host, never inferred by a consumer: admission
+    /// enforces whatever the registry declared and adds nothing of its own.
+    pub mandatory: bool,
+}
+
+impl RankedDeclaration {
+    /// A canonical, injective, length-framed description of this declaration.
+    ///
+    /// A pure function of the value: it does not depend on registration order,
+    /// on iteration order, or on the host that built it. Every string is
+    /// length-prefixed and every optional string carries an explicit
+    /// present/absent byte, so an absent field and an empty one stay
+    /// distinguishable; every list is preceded by its own length, so a reader
+    /// knows exactly how many elements to consume.
+    #[must_use]
+    pub fn canonical_description(&self) -> String {
+        let mut out = String::new();
+        out.push('r');
+        push_canonical_field(&mut out, self.stratum.as_str());
+        push_canonical_field(&mut out, self.ordering.as_str());
+        push_canonical_field(&mut out, self.duplicates.as_str());
+        push_canonical_field(&mut out, &self.candidate_position.to_string());
+        out.push(if self.mandatory { '1' } else { '0' });
+        out.push(';');
+        match self.depth_placement.as_ref() {
+            None => out.push('0'),
+            Some(depth) => {
+                out.push('1');
+                push_canonical_field(&mut out, &depth.position.to_string());
+                push_canonical_field(&mut out, &depth.datatype);
+            }
+        }
+        out.push(';');
+        out.push_str(&self.accepted_terms.len().to_string());
+        out.push(':');
+        for term in &self.accepted_terms {
+            out.push('\u{1}');
+            term.pattern.push_canonical(&mut out);
+            out.push_str(&term.placements.len().to_string());
+            out.push(':');
+            for placement in &term.placements {
+                out.push('\u{6}');
+                push_canonical_field(&mut out, placement.facet.as_str());
+                push_canonical_field(&mut out, &placement.position.to_string());
+                push_canonical_option(&mut out, placement.datatype.as_deref());
+            }
+        }
+        out
+    }
+
+    /// Every placement of every accepted term, in declaration order.
+    fn placements(&self) -> impl Iterator<Item = &TermPlacement> {
+        self.accepted_terms
+            .iter()
+            .flat_map(|term| term.placements.iter())
+    }
+}
+
+/// Append a length-framed canonical field to `out`.
+fn push_canonical_field(out: &mut String, value: &str) {
+    out.push_str(&value.len().to_string());
+    out.push(':');
+    out.push_str(value);
+}
+
+/// Append a present/absent discriminant and, when present, a framed value.
+fn push_canonical_option(out: &mut String, value: Option<&str>) {
+    match value {
+        None => out.push('0'),
+        Some(value) => {
+            out.push('1');
+            push_canonical_field(out, value);
+        }
+    }
+    out.push(';');
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +868,12 @@ pub struct PfDescriptor {
     /// The declared access patterns, in the order the relation returns them, each
     /// with its declared row bound.
     pub modes: Vec<PfMode>,
+    /// The ranked declaration the host supplied for this IRI at registration
+    /// ([`PropertyFunctionRegistry::register_ranked`]), or `None` when the
+    /// relation was registered without one — which is what "does not
+    /// participate in ranked retrieval" looks like when the declaration lives
+    /// beside the registry rather than on the relation trait.
+    pub ranked: Option<RankedDeclaration>,
 }
 
 /// A caller-injected table of property functions, keyed by predicate IRI.
@@ -575,6 +913,15 @@ pub struct PfDescriptor {
 pub struct PropertyFunctionRegistry {
     id: crate::registry_id::RegistryId,
     relations: DetHashMap<String, Arc<dyn PropertyFunction>>,
+    /// The ranked declarations supplied at registration, keyed by the same IRI
+    /// as `relations`. A side table rather than a field of the relation,
+    /// because a producer's participation in ranked retrieval is host wiring,
+    /// not a property of the relation's Rust type.
+    ///
+    /// Never iterated: every ordered surface reads it **by key** while
+    /// iterating the already-sorted `relations`, so a fixed-key hash map's
+    /// iteration order can never reach an output.
+    ranked: DetHashMap<String, RankedDeclaration>,
 }
 
 impl core::fmt::Debug for PropertyFunctionRegistry {
@@ -585,9 +932,12 @@ impl core::fmt::Debug for PropertyFunctionRegistry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut iris: Vec<&str> = self.relations.keys().map(String::as_str).collect();
         iris.sort_unstable();
+        let mut ranked: Vec<&str> = self.ranked.keys().map(String::as_str).collect();
+        ranked.sort_unstable();
         f.debug_struct("PropertyFunctionRegistry")
             .field("id", &self.id)
             .field("relations", &iris)
+            .field("ranked", &ranked)
             .finish()
     }
 }
@@ -614,6 +964,7 @@ impl PropertyFunctionRegistry {
     pub const EMPTY: Self = Self {
         id: crate::registry_id::RegistryId::EMPTY,
         relations: DetHashMap::with_hasher(crate::DetHasher::new()),
+        ranked: DetHashMap::with_hasher(crate::DetHasher::new()),
     };
 
     /// Register `relation` under `iri`.
@@ -623,14 +974,82 @@ impl PropertyFunctionRegistry {
     /// Panics if `iri` is already registered — see the type's docs for why a relation
     /// may not be silently shadowed.
     pub fn register(&mut self, iri: impl Into<String>, relation: Arc<dyn PropertyFunction>) {
-        let iri = iri.into();
+        self.insert(iri.into(), relation, None);
+    }
+
+    /// Register `relation` under `iri` as a ranked producer described by `decl`.
+    ///
+    /// The declaration is stored beside the relation, keyed by the same IRI, and
+    /// read back with [`Self::ranked_declaration`]. Registering with this method
+    /// and registering with [`Self::register`] are the same registration in every
+    /// other respect: the relation resolves, describes and evaluates identically.
+    ///
+    /// # Panics
+    ///
+    /// Panics, leaving the registry untouched, if:
+    ///
+    /// * `iri` is already registered — the same refusal, and the same message,
+    ///   [`Self::register`] raises.
+    /// * `decl.candidate_position` is not a position `relation` declares.
+    /// * any placement of any accepted term binds outside `relation`'s positions.
+    /// * `decl.depth_placement` binds outside `relation`'s positions.
+    /// * `decl.depth_placement` and a term placement target the same position —
+    ///   one position renders one value.
+    /// * `decl.candidate_position` is also a placement or depth target: a
+    ///   position filled with a constant cannot also be the projected candidate.
+    /// * `decl.stratum` is already claimed by another registered producer — one
+    ///   stratum carries one producer, because a rank means something only inside
+    ///   the list that assigned it. The panic message carries the whole argument:
+    ///   the two exits a host splits such a configuration through, and the third
+    ///   configuration that shares a scoring law and still belongs at the second
+    ///   exit, because a differential weight over a bounded score can act only in
+    ///   rank space.
+    ///
+    /// A declaration that cannot be rendered is host misconfiguration, and like a
+    /// duplicate registration it is caught where it is committed rather than at
+    /// the first query that reaches it.
+    pub fn register_ranked(
+        &mut self,
+        iri: impl Into<String>,
+        relation: Arc<dyn PropertyFunction>,
+        decl: RankedDeclaration,
+    ) {
+        self.insert(iri.into(), relation, Some(decl));
+    }
+
+    /// The one path both registration methods take, so the duplicate-IRI refusal
+    /// and the order the two tables are written in cannot drift apart.
+    ///
+    /// `relations` is written LAST: a declaration that fails validation panics
+    /// before anything is inserted, leaving the registry exactly as it was.
+    fn insert(
+        &mut self,
+        iri: String,
+        relation: Arc<dyn PropertyFunction>,
+        decl: Option<RankedDeclaration>,
+    ) {
         assert!(
             !self.relations.contains_key(&iri),
             "IRI <{iri}> is already registered as a property function; a relation may not be \
              silently shadowed, because both spellings of the call are identical and the only \
              observable difference is which rows the query returns"
         );
+        if let Some(decl) = decl {
+            validate_declaration(&iri, &decl, relation.arity());
+            assert_stratum_unclaimed(&iri, &decl, &self.ranked);
+            self.ranked.insert(iri.clone(), decl);
+        }
         self.relations.insert(iri, relation);
+    }
+
+    /// The ranked declaration supplied for `iri` at registration, if any.
+    ///
+    /// `None` is the whole of "this relation does not participate in ranked
+    /// retrieval": a relation registered with [`Self::register`] declares
+    /// nothing, and nothing is what a consumer reads back.
+    #[must_use]
+    pub fn ranked_declaration(&self, iri: &str) -> Option<&RankedDeclaration> {
+        self.ranked.get(iri)
     }
 
     /// Resolve a predicate IRI to its registered relation, if any.
@@ -657,8 +1076,77 @@ impl PropertyFunctionRegistry {
     /// module and so cannot reach the private `id` field directly. See the type's
     /// docs' "Instance identity" section for why this exists and why `Clone`
     /// inherits rather than re-mints it.
-    pub(crate) const fn instance_id(&self) -> crate::registry_id::RegistryId {
+    ///
+    /// Public because the distinction between instance identity and declared
+    /// contents is exactly what a composition layer over the registry seam needs:
+    /// two registries that describe themselves identically (same IRIs, arities,
+    /// volatilities, modes, row bounds) but were built independently MUST remain
+    /// distinguishable, and [`Self::content_fingerprint`] deliberately cannot tell
+    /// them apart. A host that needs "are these the same registry instance?"
+    /// compares [`RegistryId`](crate::registry_id::RegistryId) values; a host that
+    /// needs "do these registries declare the same shape?" compares
+    /// [`Self::content_fingerprint`] values.
+    pub const fn instance_id(&self) -> crate::registry_id::RegistryId {
         self.id
+    }
+
+    /// A durable, instance-independent fingerprint of this registry's *declared*
+    /// contents: every registered IRI's subject/object arity, its declared
+    /// volatility, each declared mode with its row bound, and its ranked-retrieval
+    /// declaration, IRI-sorted — rendered as the lowercase hex of a SHA-256 digest.
+    ///
+    /// # Durable and cross-process, unlike [`Self::instance_id`]
+    ///
+    /// The instance id is ephemeral — a per-process counter, meaningful only while
+    /// the process that minted it is alive (see
+    /// [`RegistryId`](crate::registry_id::RegistryId)'s docs). This method
+    /// deliberately **excludes** it, so two independently constructed registries
+    /// that declare the same relations under the same IRIs produce the *identical*
+    /// fingerprint, here or in another process. That is what makes it usable as a
+    /// durable identity — to compare a registry a caller built against one decoded
+    /// from a persisted configuration, or to address a registry's declared shape in
+    /// a cache key that outlives the process.
+    ///
+    /// # What it does and does not capture
+    ///
+    /// This is a pure function of [`Self::describe`]'s output, which is already
+    /// IRI-sorted, so it does not depend on registration order. It captures the
+    /// declarations a plan's rewrite and an execution's parallel-safety depend on,
+    /// plus the ranked-retrieval declaration that decides whether a request may
+    /// draw fused candidates from an IRI at all. It does **not** capture which
+    /// trait-object implementation answers an IRI — two registries registering the
+    /// same IRI to different implementations with identical declarations share a
+    /// content fingerprint by design, and only
+    /// `property_fn_plan::registry_fingerprint` (which folds the instance id in
+    /// ahead of this content digest, and is what the plan cache and governed
+    /// receipts use) can tell them apart.
+    ///
+    /// # Compare it, do not parse it
+    ///
+    /// The value is a digest rendering, not a description: it answers "do these two
+    /// registries declare the same shape?" by equality and nothing else. Nothing in
+    /// it can be read back, and a caller must not try — the declared contents are
+    /// available in structured form from [`Self::describe`], which is what this
+    /// digests.
+    ///
+    /// # The empty registry
+    ///
+    /// A registry with no relations is not special-cased: it digests the
+    /// property-function domain separator alone, so the canonical [`Self::EMPTY`]
+    /// and a freshly built [`Self::new`] registry fingerprint identically (they are
+    /// observationally interchangeable; see
+    /// [`RegistryId`](crate::registry_id::RegistryId)). The value is a fixed
+    /// constant rather than an empty string, which is what lets a consumer
+    /// distinguish "this registry declares nothing" from "no fingerprint was
+    /// recorded".
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Function`] if any registered relation's declaration methods
+    /// panic — [`Self::describe`]'s own failure, propagated unchanged. Never
+    /// raised for an empty registry, which has no declaration to read.
+    pub fn content_fingerprint(&self) -> Result<String, EvalError> {
+        Ok(crate::property_fn_plan::content_fingerprint(self)?.to_hex())
     }
 
     /// Describe every registered relation, sorted by IRI.
@@ -697,10 +1185,190 @@ impl PropertyFunctionRegistry {
                 object_arity: arity.object,
                 volatility,
                 modes: described_modes,
+                // Read BY KEY out of the side table while iterating `relations`,
+                // never by iterating `ranked`: the fixed-key map's order stays
+                // unobservable, and the output is sorted by IRI below.
+                ranked: self.ranked.get(iri).cloned(),
             });
         }
         out.sort_by(|a, b| a.iri.cmp(&b.iri));
         Ok(out)
+    }
+}
+
+/// Refuse a stratum some already-registered producer serves: one stratum carries
+/// one producer.
+///
+/// # Why a second producer under one stratum has no meaning to fall back on
+///
+/// A rank is meaningful only inside the list that assigned it. Merging two ranked
+/// lists needs either a comparable score — which a rank is not, and which no
+/// projection back out of a rank recovers — or a fusion rule, and the fusion rule is
+/// precisely what a consumer of these declarations *is*. Two producers under one
+/// stratum have neither, so their rows can only be concatenated, and concatenation
+/// is wrong in three visible ways at once: the second producer's best row is ranked
+/// below every row of the first and decays as though it lost to rows it never
+/// competed with; a candidate both produce arrives twice in one list, which an
+/// honest `Unique` declaration says cannot happen; and a first producer that fills
+/// the stratum's depth leaves the second contributing nothing at all.
+///
+/// # Every configuration splits cleanly, which is why this refuses
+///
+/// Co-stratum ranks are well defined iff the two producers' ranks are comparable;
+/// ranks are comparable iff the producers share a scoring law; and producers sharing
+/// a scoring law can merge internally, by their own scores, below this seam. So the
+/// concatenation case is the empty set between two exits, and the message names
+/// **both** of them:
+///
+/// * **same scoring law, and no weighting the score cannot itself carry** —
+///   shards, per-language segments, a partitioned index — merge inside ONE
+///   producer, which owns the comparability its own scores already have;
+/// * **different scoring laws** — separate strata, where the fusion sum across them
+///   is the design rather than an accident.
+///
+/// Naming only the second exit would be a defect rather than a shorter message.
+/// A summing reciprocal-rank fusion treats each stratum as a summand, so a candidate
+/// surfacing in two shards-recast-as-strata collects two contributions where the
+/// host meant one family's worth — a quiet score distortion recommended by the
+/// refusal itself.
+///
+/// # The first exit takes two things, not one
+///
+/// "Do they share a scoring law" is the wrong test on its own, because it routes a
+/// third configuration to the wrong exit. The first exit requires **both** that the
+/// two producers' scores are comparable **and** that whatever weighting the host
+/// intends between them can ride *inside* the score. Two producers over one
+/// embedding space — a heading class and a body class, say — satisfy the first and
+/// can fail the second: same formula, same space, directly comparable scores, but if
+/// the host means one class to **outweigh** the other and the shared score is a
+/// *bounded* metric (a cosine distance in `[0, 2]`, lower-better), the merge cannot
+/// carry that weight.
+///
+/// Merging and sorting by `d / w`, a heading beats a body hit iff
+/// `d_h / w_h < d_c / w_c`, which rearranges to a required similarity edge of
+/// `(1 - s_c)(1 - w_h / w_c)`. At `w_h / w_c = 0.5` that edge is `0.45` against a
+/// body similarity of `0.1`, `0.05` against `0.9`, `0.0005` against `0.999`, and
+/// exactly zero against a perfect match. It **decays to zero as matches approach
+/// perfect** — which is where the top-k contest is decided — and is largest for the
+/// worst matches, so weighting a bounded score penalises bad matches hardest, which
+/// is backwards. An unbounded score is untouched by this: BM25F's field weights are
+/// natively a multiplicative weight the score carries at every magnitude, so that
+/// case really does belong at the first exit.
+///
+/// Nor is the margin the whole of it. For a weighted threshold `s'`, the expected
+/// number of competitors outranking a hit is `n · (1 - F(s'))` — **linear in corpus
+/// size** — so no fixed weight ratio survives corpus growth even away from the
+/// boundary. The conclusion is structural rather than a tuning problem.
+///
+/// The failure is silent if the message does not say so: a host takes the first exit
+/// in good faith, loses its class weighting, and an unweighted merge still returns a
+/// plausible ranking. So the message asks the question a host can answer while
+/// reading it — *do you want these two weighted differently, and is the score
+/// bounded?* — and routes that answer to **separate strata** despite the shared law,
+/// where the weight acts in rank space, which is what a stratum is.
+///
+/// # Why scanning the side table keeps its iteration order unobservable
+///
+/// `ranked` is a fixed-key hash map whose iteration order is deliberately not an
+/// output anywhere, and this is the one place it is walked. It stays unobservable,
+/// because the invariant this function establishes holds by induction: at most ONE
+/// registered declaration can name any given stratum, so a search with at most one
+/// match yields the same match in every order. Nothing is written before the scan,
+/// so a refused registration leaves the registry exactly as it was — the discipline
+/// [`PropertyFunctionRegistry::insert`] applies to the duplicate-IRI refusal.
+///
+/// # Panics
+///
+/// Panics if another registered producer already declares `decl.stratum`.
+fn assert_stratum_unclaimed(
+    iri: &str,
+    decl: &RankedDeclaration,
+    ranked: &DetHashMap<String, RankedDeclaration>,
+) {
+    let claimed = ranked
+        .iter()
+        .find(|(_, declared)| declared.stratum == decl.stratum);
+    let Some((holder, _)) = claimed else {
+        return;
+    };
+    panic!(
+        "ranked declaration for <{iri}> claims stratum <{}>, which the registered producer \
+         <{holder}> already serves; one stratum carries one producer, because a rank is \
+         meaningful only inside the list that assigned it and two lists concatenated rank the \
+         second producer's best row below every row of the first. Merging takes TWO things, \
+         not one: scores that are already comparable, AND a weighting that can ride inside the \
+         score. Shards, per-language segments, a partitioned index with no weight standing \
+         between them have both — merge them inside ONE producer, which owns that \
+         comparability. If they score by different laws, give each its own stratum, where the \
+         fusion sum across strata is the design rather than an accident. Ask the second \
+         question even when the law is shared: do you want these two weighted differently, and \
+         is the score bounded (a cosine distance in [0,2], say)? Then separate strata as well \
+         — weighting a bounded score buys an edge of only (1 - s)(1 - w_low/w_high), largest \
+         for the worst matches and zero for a perfect one, which is exactly where the top-k \
+         contest is decided, so such a weight can act only in rank space, and rank space is \
+         what a stratum is. Only an unbounded score — BM25F-style field weights — carries a \
+         differential weight through a merge",
+        decl.stratum
+    );
+}
+
+/// Check that `decl` can actually be rendered against a relation of `arity`.
+///
+/// Every failure here is host misconfiguration committed at registration, so it
+/// panics and names the offending value rather than deferring to the first query
+/// that tries to render the declaration and finds it cannot.
+///
+/// # Panics
+///
+/// See [`PropertyFunctionRegistry::register_ranked`] for the full list.
+fn validate_declaration(iri: &str, decl: &RankedDeclaration, arity: PfArity) {
+    let total = arity.total();
+    assert!(
+        decl.candidate_position < total,
+        "ranked declaration for <{iri}> projects its candidate from position {} but the relation \
+         declares only {total} argument position(s) ({arity})",
+        decl.candidate_position
+    );
+    for placement in decl.placements() {
+        assert!(
+            placement.position < total,
+            "ranked declaration for <{iri}> binds the {} facet of an accepted term at position {} \
+             but the relation declares only {total} argument position(s) ({arity})",
+            placement.facet.as_str(),
+            placement.position
+        );
+        assert!(
+            placement.position != decl.candidate_position,
+            "ranked declaration for <{iri}> binds the {} facet of an accepted term at position {} \
+             and also projects its candidate from there; a position filled with a request value \
+             cannot also be the projected candidate",
+            placement.facet.as_str(),
+            placement.position
+        );
+    }
+    if let Some(depth) = decl.depth_placement.as_ref() {
+        assert!(
+            depth.position < total,
+            "ranked declaration for <{iri}> binds its per-stratum depth at position {} but the \
+             relation declares only {total} argument position(s) ({arity})",
+            depth.position
+        );
+        assert!(
+            depth.position != decl.candidate_position,
+            "ranked declaration for <{iri}> binds its per-stratum depth at position {} and also \
+             projects its candidate from there; a position filled with a request value cannot \
+             also be the projected candidate",
+            depth.position
+        );
+        for placement in decl.placements() {
+            assert!(
+                placement.position != depth.position,
+                "ranked declaration for <{iri}> binds both its per-stratum depth and the {} facet \
+                 of an accepted term at position {}; one argument position renders one value",
+                placement.facet.as_str(),
+                depth.position
+            );
+        }
     }
 }
 

@@ -8,7 +8,8 @@ legacy `import purrdf` returns the exact submodule object — same pyclasses.
 
 It also mirrors the Rust `purrdf` umbrella crate's module layout — the RDF surface
 at the root, and every other engine under a stable top-level submodule
-(`purrdf.shapes`, `purrdf.shex`, `purrdf.entail`, `purrdf.slice`, `purrdf.gts`) —
+(`purrdf.shapes`, `purrdf.shex`, `purrdf.entail`, `purrdf.retrieval`,
+`purrdf.slice`, `purrdf.gts`) —
 so **no caller ever reaches into `purrdf_native`**. Each submodule is both
 attached as an attribute (`purrdf.shapes.validate(...)`) and registered in
 `sys.modules` (so `import purrdf.shapes` resolves too).
@@ -28,6 +29,7 @@ from types import ModuleType
 
 from .purrdf_native import entail as _entail
 from .purrdf_native import rdf as _module
+from .purrdf_native import retrieval as _retrieval
 from .purrdf_native import shacl as _shacl
 from .purrdf_native import shex as _shex
 from .purrdf_native import slice as _slice
@@ -50,8 +52,9 @@ _module.__package__ = __name__
 # ── Top-level submodules mirroring the Rust umbrella crate ───────────────────────
 #
 # The Rust `purrdf` crate carries SHACL as the `shapes` module, ShEx as `shex`,
-# entailment regimes as `entail`, slice tooling as `slice`, and the GTS container
-# engine as `gts`. Present the same shape here. `shapes` is the canonical name
+# entailment regimes as `entail`, the ranked-retrieval composition layer as
+# `retrieval`, slice tooling as `slice`, and the GTS container engine as `gts`.
+# Present the same shape here. `shapes` is the canonical name
 # (Rust parity); `shacl` is kept as a back-compat alias for the native
 # submodule's own name.
 _gts = ModuleType(f"{__name__}.gts")
@@ -104,6 +107,7 @@ _module.shapes = _shacl
 _module.shacl = _shacl  # back-compat alias for the native submodule name
 _module.shex = _shex
 _module.entail = _entail
+_module.retrieval = _retrieval
 _module.slice = _slice
 _module.gts = _gts
 
@@ -114,5 +118,6 @@ sys.modules[f"{__name__}.shapes"] = _shacl
 sys.modules[f"{__name__}.shacl"] = _shacl
 sys.modules[f"{__name__}.shex"] = _shex
 sys.modules[f"{__name__}.entail"] = _entail
+sys.modules[f"{__name__}.retrieval"] = _retrieval
 sys.modules[f"{__name__}.slice"] = _slice
 sys.modules[f"{__name__}.gts"] = _gts

@@ -57,31 +57,38 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 ///    `out_named_graph_rows_dropped` **before** `out_error`, so a `0.6.0` host passes
 ///    its `PurrdfError **` into a `size_t *` slot.
 ///
-/// `0.7.0` is unreleased, so a consumer recompiles against this header exactly once
-/// for all four; splitting them would break the same consumer four times for one
-/// reason. A FIFTH incompatible change made after `0.7.0` ships must bump again — the
-/// ledger here is what makes that judgement possible.
+/// Those four were bundled into one bump rather than split across four, so a consumer
+/// recompiled once for all of them; splitting would have broken the same consumer four
+/// times for one reason.
 ///
-/// # Additive changes that rode `0.7.0` without moving it
+/// # `0.7.0` → `0.8.0`: eight added symbols and an appended status
 ///
-/// The prepared-shapes-product surface added eight exported symbols —
+/// The prepared-shapes-product surface exports eight new entry points —
 /// `purrdf_shapes_product_encode`, `_open`, `_admit`, `_admit_expecting`, `_rebuild`,
-/// `_rebuild_expecting`, `_certify` and `_error_dimension` — and APPENDED
-/// `PurrdfStatus::ShapesProductError = 11`. None of them is in the incompatible set
-/// enumerated on [`PURRDF_ABI_MAJOR`]: no existing prototype was retyped, reordered,
-/// removed, or given a parameter, and no discriminant was renumbered. A host compiled
-/// against the previous header calls every function it called before, with the same
-/// arguments, and receives the same values — it simply cannot see the new ones, which
-/// is what "additive" means and why the version does not move for it.
+/// `_rebuild_expecting`, `_certify` and `_error_dimension` — and APPENDS
+/// `PurrdfStatus::ShapesProductError = 11`.
 ///
-/// They are recorded here anyway, because this ledger is the only place the fifth-change
-/// judgement above can be made from, and a reader counting incompatible changes needs to
-/// see what was considered and excluded rather than inferring it from silence. The
-/// appended status is the one worth a second look: appending is sound, but RENUMBERING
-/// a status is invisible to `tests/abi_signatures.rs` — that snapshot compares
-/// prototypes and never sees an enumerator's value move — so the discriminants are
-/// pinned separately by `the_status_enum_is_append_only` in `tests/abi.rs`.
-pub const PURRDF_ABI_MINOR: u32 = 7;
+/// Every one of those is additive: no existing prototype was retyped, reordered,
+/// removed or given a parameter, and no discriminant was renumbered. A host built
+/// against `0.7.0` calls everything it called before, with the same arguments, and gets
+/// the same values back.
+///
+/// It bumps anyway, and the reason is the sentence at the top of this comment rather
+/// than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
+/// `2.0.0`, `2.0.1` and `2.0.2` libraries, which export eight fewer symbols than this
+/// one does. Leaving the triple still would mean two different shippable libraries
+/// answering `purrdf_abi_version` identically while exporting different surfaces, so a
+/// host that compiled against this header and loaded the older library would be told
+/// they agree and would then fail at symbol resolution. The minor exists precisely to
+/// make that question answerable, and a number that cannot distinguish two shipped
+/// libraries is not answering it. Additive changes are cheap for the CONSUMER, not free
+/// for the VERSION.
+///
+/// One of them is worth a second look regardless: appending a status is sound, but
+/// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
+/// and never sees an enumerator's value move. The discriminants are therefore pinned
+/// separately, by `the_status_enum_is_append_only` in `tests/abi.rs`.
+pub const PURRDF_ABI_MINOR: u32 = 8;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

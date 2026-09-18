@@ -1,0 +1,120 @@
+{
+  "producer_bindings": [
+    {
+      "producer": "http://example.org/pf/any",
+      "request_terms": [],
+      "stratum": "http://example.org/stratum/universal"
+    },
+    {
+      "producer": "http://example.org/pf/iri",
+      "request_terms": [
+        2
+      ],
+      "stratum": "http://example.org/stratum/graph"
+    },
+    {
+      "producer": "http://example.org/pf/literal",
+      "request_terms": [
+        0
+      ],
+      "stratum": "http://example.org/stratum/text"
+    }
+  ],
+  "producer_decisions": [
+    {
+      "Selected": {
+        "producer": "http://example.org/pf/any",
+        "stratum": "http://example.org/stratum/universal"
+      }
+    },
+    {
+      "Selected": {
+        "producer": "http://example.org/pf/iri",
+        "stratum": "http://example.org/stratum/graph"
+      }
+    },
+    {
+      "Selected": {
+        "producer": "http://example.org/pf/literal",
+        "stratum": "http://example.org/stratum/text"
+      }
+    },
+    {
+      "Rejected": {
+        "producer": "http://example.org/pf/not-ranked",
+        "reason": "NotRanked"
+      }
+    },
+    {
+      "Rejected": {
+        "producer": "http://example.org/pf/quoted",
+        "reason": "NoAcceptedTerm"
+      }
+    }
+  ],
+  "registry_content_fingerprint": "6bb4737d16aa61b397696a637775311ee8868e4dcee8da95566bd61a164ea41b",
+  "registry_instance_id": 0,
+  "request_terms": [
+    {
+      "Lexical": {
+        "language": "en",
+        "predicate": "http://example.org/body",
+        "text": "quick brown fox"
+      }
+    },
+    {
+      "Vector": {
+        "embedding": [
+          0.25,
+          -1.5,
+          3.0
+        ],
+        "index_hint": "hint",
+        "metric": "Cosine"
+      }
+    },
+    {
+      "EntitySeed": {
+        "entity": "<http://example.org/seed>"
+      }
+    }
+  ],
+  "statistics_snapshot": {
+    "entries": [
+      {
+        "cardinality": 500,
+        "selectivity_ppm": 500000,
+        "subject": "http://example.org/body"
+      },
+      {
+        "cardinality": 50,
+        "selectivity_ppm": null,
+        "subject": "http://example.org/stratum/graph"
+      },
+      {
+        "cardinality": 100,
+        "selectivity_ppm": null,
+        "subject": "http://example.org/stratum/text"
+      },
+      {
+        "cardinality": 1000,
+        "selectivity_ppm": null,
+        "subject": "http://example.org/stratum/universal"
+      }
+    ],
+    "revision": "r1",
+    "source": "example-statistics"
+  },
+  "stratum_depths": {
+    "http://example.org/stratum/graph": 50,
+    "http://example.org/stratum/text": 100,
+    "http://example.org/stratum/universal": 200
+  },
+  "unserved_terms": [
+    {
+      "reason": "AcceptedWithoutPlacement",
+      "request_term": 1
+    }
+  ],
+  "version": 2
+}

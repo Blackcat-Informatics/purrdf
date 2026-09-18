@@ -683,6 +683,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-geo`](./crates/geo/) | GeoSPARQL 1.1: exact, float-free WKT and GeoJSON geometry, the `geof:` function family over the scalar seam, and feature-level query rewrite over the property-function seam — all under caller-supplied IRIs. |
 | [`purrdf-datalog`](./crates/datalog/) | The fixpoint substrate beneath the chase: a columnar relation store and a deterministic semi-naive evaluator over the DL-clause IR. Re-exported by the umbrella as `purrdf::datalog`, because the entailment surface carries its types. |
 | [`purrdf-text`](./crates/text/) | Deterministic full-text search over RDF 1.2 literals: an in-memory inverted index and exact fixed-point BM25 ranking, reached from SPARQL through caller-supplied property-function IRIs. |
+| [`purrdf-retrieval`](./crates/retrieval/) | The composition layer over the ranked producers: one request planned, admitted, executed and fused into one ordered answer across every ranked relation a caller registered on the property-function seam. Pure-data plans with a canonical BLAKE3 identity, an exact content-addressed fusion law, per-row per-stratum provenance and per-term unserved evidence; producers, strata and weights are caller-supplied and nothing is defaulted. Re-exported by the umbrella as `purrdf::retrieval`. |
 | [`purrdf-validate`](./crates/validate/) | The shared host boundary: SARIF 2.1.0 diagnostics and the entailment-regime string surface the Python/wasm/C bindings call. |
 | [`purrdf-markdown`](./crates/markdown/) | Structural Markdown-to-RDF 1.2 codec under a shipped specification ([SPEC](./crates/markdown/SPEC.md)): a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans and concordance citations, under a caller-supplied vocabulary and a content-addressed profile — and the graph decodes back to the document byte for byte, proven against its own source digest. Re-exported by the umbrella as `purrdf::markdown`. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
@@ -714,7 +715,8 @@ for drift. Built with cargo-c: `make capi-build`.
 - **Design notes** — why the sibling engines outside `purrdf-core` answer identically on every
   target: [full-text scoring](./docs/design/purrdf-text-scoring.md),
   [GeoSPARQL exactness](./docs/design/purrdf-geo-exactness.md),
-  [embedding kNN](./docs/design/purrdf-embedding-knn.md).
+  [embedding kNN](./docs/design/purrdf-embedding-knn.md),
+  [the retrieval ladder](./docs/design/purrdf-retrieval-ladder.md).
 
 ## Fast by measurement, not by assertion
 

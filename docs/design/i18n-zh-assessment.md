@@ -547,7 +547,7 @@ bilingual file would double the sentence count it has to find.
 
 ### 4.3 Registry READMEs
 
-crates.io reads exactly one file per crate (`readme = "README.md"` in all 23
+crates.io reads exactly one file per crate (`readme = "README.md"` in all 24
 publishable manifests), PyPI reads exactly one (`readme = "README.md"` in
 `pyproject.toml`), and npm renders the package's `README.md`. **None of the
 three registries supports a per-language README.** The realistic move is a
