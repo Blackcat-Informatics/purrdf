@@ -784,6 +784,42 @@ impl DatasetView for PagedQueryView<'_> {
                 })
         })
     }
+
+    fn named_graphs(&self) -> impl Iterator<Item = GlobalTermId> + '_ {
+        // O(1) charge, no page materialized on a healthy view: `GraphPageIndex::keys`
+        // is already every named graph any page knows about (declared-empty graphs
+        // included), ascending by `GlobalTermId` and deduplicated, folded from each
+        // page's sealed `PageSummary` alone.
+        //
+        // Order: ascending `GlobalTermId`, which is INTERN order — page-arrival order,
+        // then within-page local order — not canonical `TermValue` order. The two
+        // coincide only after `compact()` (clause G2). This matches what the trait
+        // default already produced here (it collected the same ids into a
+        // `BTreeSet<Self::Id>`), so this override changes MEMBERSHIP, not order.
+        //
+        // Membership is a deliberate fix, not a side effect: SPARQL 1.1 §8.3 and §18.6
+        // range `GRAPH ?g` over every named graph in the active dataset, including ones
+        // with no matching triples. The default derives graphs only from `quads()`, so
+        // it misses a graph a page declares but leaves empty, or one named only by a
+        // reifier or annotation side-table row. Each page's own
+        // `RdfDataset::named_graphs()` already unions declared graphs with the graph
+        // slots of quads, reifiers, and annotations; this override brings the composed
+        // paged surface into line with that per-page answer, and with
+        // `RdfDataset`/`CompositeDatasetView`.
+        //
+        // The sticky-failure gate still applies: every other egress on this type funnels
+        // through `PagedQueryView::page`, which yields nothing once `self.failed()` is
+        // true, so a terminal operational error must not let this metadata-only path
+        // keep yielding graph ids. `graph_index()` reads no page and cannot itself fail,
+        // so the gate is applied explicitly here rather than by `page`.
+        let live = !self.failed();
+        self.dataset
+            .graph_index()
+            .keys()
+            .iter()
+            .copied()
+            .take(if live { usize::MAX } else { 0 })
+    }
 }
 
 #[cfg(test)]

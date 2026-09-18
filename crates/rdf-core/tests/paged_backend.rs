@@ -19,10 +19,11 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageFault,
-    PageFaultKind, PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset,
-    PagedFreezeError, PagedQuadTable, RdfDataset, RdfDatasetBuilder, RdfLiteral, StopCause, TermId,
-    TermRef, TermValue, render_canonical_turtle,
+    CountingDemandProvider, DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
+    PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PageProvider,
+    PagedDataset, PagedFreezeError, PagedQuadTable, PagedQueryLimits, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, StopCause, TermId, TermRef, TermValue, ViewOperationStatus,
+    render_canonical_turtle,
 };
 
 // The standard RDF Collection vocabulary (crate-internal constants are not public;
@@ -965,4 +966,152 @@ fn paged_dataset_is_send_sync() {
     assert_send_sync::<Arc<dyn PageProvider>>();
     assert_send_sync::<CountingDemandProvider>();
     assert_send_sync::<InMemoryPageProvider>();
+}
+
+/// Build a 3-page `PagedDataset` whose named-graph membership can ONLY be recovered
+/// completely by consulting each page's declared-graph list and side tables, not just
+/// its base quads:
+/// * page 0 — a base quad in named graph `gA`.
+/// * page 1 — graph `gEmpty` declared but carrying no rows at all (a page-local
+///   `RdfDatasetBuilder::declare_named_graph` with no quad/reifier/annotation in it).
+/// * page 2 — graph `gReifierOnly` named ONLY by a reifier side-table row's graph slot
+///   (no base quad ever names it).
+fn named_graphs_fixture() -> (Vec<Arc<RdfDataset>>, TermValue, TermValue, TermValue) {
+    let ga = iri("gA");
+    let g_empty = iri("gEmpty");
+    let g_reifier_only = iri("gReifierOnly");
+
+    let page0 = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s0");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o0");
+        let ga_id = intern_value(&mut b, &ga);
+        b.push_quad(s, p, o, Some(ga_id));
+        b.freeze().expect("page0 freeze")
+    };
+    let page1 = {
+        let mut b = RdfDatasetBuilder::new();
+        let g_empty_id = intern_value(&mut b, &g_empty);
+        b.declare_named_graph(g_empty_id);
+        b.freeze().expect("page1 freeze")
+    };
+    let page2 = {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        let g_reifier_only_id = intern_value(&mut b, &g_reifier_only);
+        b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id));
+        b.freeze().expect("page2 freeze")
+    };
+
+    (vec![page0, page1, page2], ga, g_empty, g_reifier_only)
+}
+
+/// `DatasetView::named_graphs` on a `PagedQueryView` charges ZERO pages: the answer
+/// comes entirely from `GraphPageIndex::keys`, which is folded from each page's
+/// already-sealed `PageSummary`, never from a materialized page. The set it returns
+/// must also be COMPLETE — it must include a declared-empty graph and a graph named
+/// only by a reifier row, not just graphs with base quads.
+#[test]
+fn named_graphs_costs_no_pages() {
+    let (pages, ga, g_empty, g_reifier_only) = named_graphs_fixture();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    // A zero/zero budget: any real page materialization would fail immediately.
+    let view = paged.query_view(PagedQueryLimits::new(0, 0));
+
+    let ids: Vec<_> = DatasetView::named_graphs(&view).collect();
+    assert!(
+        ids.is_sorted(),
+        "named_graphs must yield ascending GlobalTermId order"
+    );
+    let values: std::collections::BTreeSet<String> = ids
+        .iter()
+        .map(|&id| format!("{:?}", to_value(&view, id)))
+        .collect();
+    assert_eq!(
+        values,
+        std::collections::BTreeSet::from([
+            format!("{ga:?}"),
+            format!("{g_empty:?}"),
+            format!("{g_reifier_only:?}"),
+        ]),
+        "named_graphs must include the declared-empty graph and the reifier-only graph"
+    );
+
+    match view.operation_status() {
+        ViewOperationStatus::Ready { evidence } => {
+            assert_eq!(
+                evidence.requested_pages,
+                Vec::new(),
+                "reading graph metadata must request no page"
+            );
+            assert_eq!(
+                evidence.consumed_pages, 0,
+                "reading graph metadata must consume no page"
+            );
+        }
+        ViewOperationStatus::Failed { error, .. } => {
+            panic!("named_graphs must not fail a zero-budget view: {error}")
+        }
+    }
+}
+
+/// The paged `named_graphs()` set, resolved to `TermValue`s, must equal the
+/// `named_graphs()` set of a single merged `RdfDataset` built from the SAME content
+/// (declared-empty graph and reifier-only graph included) — the parity this override
+/// exists to restore between the paged surfaces and `RdfDataset`.
+#[test]
+fn paged_named_graphs_match_a_single_merged_dataset() {
+    let (pages, ga, g_empty, g_reifier_only) = named_graphs_fixture();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    let paged_values: std::collections::BTreeSet<String> = paged
+        .named_graphs()
+        .map(|id| format!("{:?}", to_value(&paged, id)))
+        .collect();
+
+    // The single merged reference dataset: same quad, same declared-empty graph, same
+    // reifier-only graph, built directly (not derived from the pages).
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/s0");
+    let p = b.intern_iri("http://example.org/p");
+    let o = b.intern_iri("http://example.org/o0");
+    let ga_id = intern_value(&mut b, &ga);
+    b.push_quad(s, p, o, Some(ga_id));
+    let g_empty_id = intern_value(&mut b, &g_empty);
+    b.declare_named_graph(g_empty_id);
+    let a = b.intern_iri("http://example.org/a");
+    let bb = b.intern_iri("http://example.org/b");
+    let c = b.intern_iri("http://example.org/c");
+    let triple = b.intern_triple(a, bb, c);
+    let r = b.intern_iri("http://example.org/r");
+    let g_reifier_only_id = intern_value(&mut b, &g_reifier_only);
+    b.push_reifier_in_graph(r, triple, Some(g_reifier_only_id));
+    let single = b.freeze().expect("single dataset freeze");
+
+    let single_values: std::collections::BTreeSet<String> = single
+        .named_graphs()
+        .map(|id| format!("{:?}", to_value(&*single, id)))
+        .collect();
+
+    assert_eq!(
+        paged_values, single_values,
+        "paged named_graphs() must match a single merged RdfDataset's named_graphs()"
+    );
+    assert_eq!(
+        paged_values,
+        std::collections::BTreeSet::from([
+            format!("{ga:?}"),
+            format!("{g_empty:?}"),
+            format!("{g_reifier_only:?}"),
+        ]),
+        "sanity: the expected three graphs are present"
+    );
 }

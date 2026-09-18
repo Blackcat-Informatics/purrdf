@@ -578,3 +578,84 @@ fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_wor
          materialization work"
     );
 }
+
+/// A page with one base quad asserted in a named graph, for the `named_graphs`
+/// sticky-failure test below (`page` above only ever writes the default graph).
+fn page_in_named_graph(subject: &str, object: &str, graph: &str) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
+    let predicate = builder.intern_iri("http://example.org/p");
+    let object = builder.intern_iri(&format!("http://example.org/{object}"));
+    let graph = builder.intern_iri(&format!("http://example.org/{graph}"));
+    builder.push_quad(subject, predicate, object, Some(graph));
+    builder.freeze().expect("valid page")
+}
+
+/// `DatasetView::named_graphs` on `PagedQueryView` MUST respect the sticky-failure
+/// gate every other egress on this type honours: once the view's first operational
+/// error has latched, `named_graphs()` yields nothing, even though the answer is
+/// metadata read from `GraphPageIndex` and would otherwise cost nothing. The
+/// neighbouring positive case proves the gate is not simply starving every view: a
+/// HEALTHY view at the identical resource limits still yields the full named-graph
+/// set.
+#[test]
+fn named_graphs_is_empty_after_a_sticky_failure() {
+    let generation = PageGeneration(9);
+    let pages = vec![page_in_named_graph("s0", "o0", "gA")];
+    let provider = Arc::new(InMemoryPageProvider::with_byte_lengths(
+        pages.into_iter().map(|p| (p, 10)).collect(),
+        generation,
+    ));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    // A zero page budget: any pattern read that must materialize a page trips a
+    // terminal PageBudgetExceeded error, which latches for the rest of the view.
+    let failed = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert_eq!(
+        failed
+            .quads_for_pattern(None, None, None, GraphMatch::Any)
+            .count(),
+        0,
+        "the zero-page budget refuses the only page"
+    );
+    assert!(
+        matches!(
+            failed.operation_status(),
+            ViewOperationStatus::Failed {
+                error: PagedQueryError::PageBudgetExceeded { .. },
+                ..
+            }
+        ),
+        "the forced pattern read must have latched a terminal error"
+    );
+    assert_eq!(
+        DatasetView::named_graphs(&failed).count(),
+        0,
+        "named_graphs must yield nothing once the view has failed, even though the \
+         answer is metadata that would otherwise cost no page"
+    );
+
+    // The positive neighbour: a FRESH view at the SAME limits that never attempts a
+    // pattern read never fails, and named_graphs still returns the full set — the
+    // gate above is not simply starving every view of this dataset.
+    let healthy = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert!(
+        matches!(
+            healthy.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ),
+        "a view that never requests a page must stay Ready"
+    );
+    assert_eq!(
+        DatasetView::named_graphs(&healthy).count(),
+        1,
+        "a healthy view must still see the one named graph, at zero page cost"
+    );
+    assert!(
+        matches!(
+            healthy.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ),
+        "reading named_graphs on a healthy view must not itself request a page or fail it"
+    );
+}

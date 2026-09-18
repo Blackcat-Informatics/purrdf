@@ -111,12 +111,6 @@ impl GraphPageIndex {
     /// deduplicated (declared-empty graphs included) — the composed
     /// `named_graphs()` answer.
     #[inline]
-    #[allow(
-        dead_code,
-        reason = "the page-admission law (admission.rs) narrows candidate pages via \
-                  pages_for_named/pages_for_default, never by enumerating keys; this \
-                  accessor's only caller in this crate is this file's own test"
-    )]
     pub(crate) fn keys(&self) -> &[GlobalTermId] {
         &self.keys
     }

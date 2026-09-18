@@ -1033,4 +1033,28 @@ impl DatasetView for PagedDataset {
                 })
         })
     }
+
+    fn named_graphs(&self) -> impl Iterator<Item = GlobalTermId> + '_ {
+        // O(1) charge, no page materialized: `GraphPageIndex::keys` is already every
+        // named graph any page knows about (declared-empty graphs included), ascending
+        // by `GlobalTermId` and deduplicated, folded from each page's sealed
+        // `PageSummary` alone.
+        //
+        // Order: ascending `GlobalTermId`, which is INTERN order — page-arrival order,
+        // then within-page local order — not canonical `TermValue` order. The two
+        // coincide only after `compact()` (clause G2). This matches what the trait
+        // default already produced here (it collected the same ids into a
+        // `BTreeSet<Self::Id>`), so this override changes MEMBERSHIP, not order.
+        //
+        // Membership is a deliberate fix, not a side effect: SPARQL 1.1 §8.3 and §18.6
+        // range `GRAPH ?g` over every named graph in the active dataset, including ones
+        // with no matching triples. The default derives graphs only from `quads()`, so
+        // it misses a graph a page declares but leaves empty, or one named only by a
+        // reifier or annotation side-table row. Each page's own
+        // `RdfDataset::named_graphs()` already unions declared graphs with the graph
+        // slots of quads, reifiers, and annotations; this override brings the composed
+        // paged surface into line with that per-page answer, and with
+        // `RdfDataset`/`CompositeDatasetView`.
+        self.graph_index().keys().iter().copied()
+    }
 }
