@@ -106,37 +106,37 @@ pub fn to_json(
 
 /// Write the full SRJ document (base object + optional provenance extension).
 ///
-/// The base object is written first, then — when `provenance` is non-empty AND
-/// `namespace` is supplied — the `namespace.prefix`-keyed member is inserted
-/// just before the document's final closing `}` so the resulting object stays
-/// valid for all three result kinds. Either condition failing means no
-/// extension is written at all (PurRDF mints no vocabulary IRIs of its own).
+/// The base object's members are written first WITHOUT their enclosing `}`, then —
+/// when `provenance` is non-empty AND `namespace` is supplied — the
+/// `namespace.prefix`-keyed member, and finally the one closing brace. Either
+/// condition failing means no extension is written at all (PurRDF mints no
+/// vocabulary IRIs of its own).
+///
+/// The brace is emitted here rather than by the base writers and retracted with
+/// `pop` when an extension follows. The bytes are identical either way — every
+/// base branch ended in exactly the root `}`, so withholding it and appending it
+/// here reproduces the same sequence from the same producers — but a rewind is not
+/// available to an incremental sink that may already have drained the brace
+/// downstream. The former `Error::Internal` guard checked that the branch just
+/// called had ended with `}`; that is now a property of the split rather than a
+/// runtime assertion, so the arm is gone.
 fn write_srj(
     result: &SparqlResult,
     provenance: &ResultProvenance,
     namespace: Option<&ProvenanceNamespace>,
     out: &mut String,
 ) -> Result<(), Error> {
-    write_base(result, out)?;
+    write_base_body(result, out)?;
 
-    if provenance.is_empty() {
-        return Ok(());
+    if !provenance.is_empty()
+        && let Some(namespace) = namespace
+    {
+        out.push(',');
+        json_string(namespace.prefix(), out);
+        out.push(':');
+        write_provenance_body(result, provenance, namespace, out);
     }
-    let Some(namespace) = namespace else {
-        return Ok(());
-    };
 
-    // Remove the trailing `}` of the base object, append the additive member,
-    // then re-close. The base writers always end the object with `}`.
-    if out.pop() != Some('}') {
-        return Err(Error::Internal(
-            "SRJ base object did not end with a closing brace".to_string(),
-        ));
-    }
-    out.push(',');
-    json_string(namespace.prefix(), out);
-    out.push(':');
-    write_provenance_body(result, provenance, namespace, out);
     out.push('}');
     Ok(())
 }
@@ -144,12 +144,11 @@ fn write_srj(
 /// Write the pure-W3C SRJ object (no provenance extension at the top level). This
 /// is the byte-identity contract with the legacy rdf-capi emitter, save for the
 /// `Graph` branch and the additive per-literal SPARQL 1.2 `"its:dir"` key.
-fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
+fn write_base_body(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
     match result {
         SparqlResult::Boolean(value) => {
             out.push_str("{\"head\":{},\"boolean\":");
             out.push_str(if *value { "true" } else { "false" });
-            out.push('}');
         }
         SparqlResult::Solutions {
             variables, rows, ..
@@ -190,7 +189,8 @@ fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
                 }
                 out.push('}');
             }
-            out.push_str("]}}");
+            // `]}` closes `bindings` and `results`; the root `}` is `write_srj`'s.
+            out.push_str("]}");
         }
         SparqlResult::Graph(graph) => {
             // Wasm-clean deviation from rdf-capi: render N-Quads directly from
@@ -200,7 +200,6 @@ fn write_base(result: &SparqlResult, out: &mut String) -> Result<(), Error> {
             let nq = dataset_to_nquads(graph.as_ref());
             out.push_str("{\"graph\":");
             json_string(&nq, out);
-            out.push('}');
         }
     }
     Ok(())
