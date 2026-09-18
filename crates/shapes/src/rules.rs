@@ -73,7 +73,7 @@ use std::sync::Arc;
 use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 use purrdf_sparql_algebra::{Query, TermPattern, TriplePattern};
 
-use crate::constraints::conforms;
+use crate::constraints::conforms_with_plan;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
 use crate::engine::{FocusNode, ValidationPlan, resolve_focus_nodes};
 use crate::expression::{NodeExpr, RecursionGuard, eval_node_expr};
@@ -770,10 +770,11 @@ fn triple_rule_producer(
     conditions: &[Shape],
     rule_id: &str,
 ) -> Result<Vec<[Term; 3]>, String> {
-    let focus_nodes = focus_nodes(data, shape)?;
+    let plan = rule_plan(data, shape, conditions);
+    let focus_nodes = focus_nodes(data, shape, &plan)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
-        if !conditions_hold(data, focus, conditions)? {
+        if !conditions_hold(data, focus, conditions, &plan)? {
             continue;
         }
         let mut guard = RecursionGuard::new();
@@ -813,10 +814,11 @@ fn sparql_rule_producer(
     rule_id: &str,
     shapes_graph_iri: Option<&str>,
 ) -> Result<Vec<[Term; 3]>, String> {
-    let focus_nodes = focus_nodes(data, shape)?;
+    let plan = rule_plan(data, shape, conditions);
+    let focus_nodes = focus_nodes(data, shape, &plan)?;
     let mut out: Vec<[Term; 3]> = Vec::new();
     for focus in &focus_nodes {
-        if !conditions_hold(data, focus, conditions)? {
+        if !conditions_hold(data, focus, conditions, &plan)? {
             continue;
         }
         let subs = [("this".to_owned(), focus.to_term_value())];
@@ -867,10 +869,23 @@ fn sparql_rule_producer(
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
+/// The one dataset binding a rule firing needs: the classes of the rule's own
+/// shape AND of every `sh:condition` shape it will check, resolved once.
+///
+/// Both uses are per-firing invariants — the targets are resolved once and the
+/// conditions are then checked against the SAME shapes for every focus node — so
+/// building the plan here is what keeps the class walk off the per-focus path.
+fn rule_plan(data: &ShaclData, shape: &Shape, conditions: &[Shape]) -> ValidationPlan {
+    ValidationPlan::from_shape_iter(data.core_view(), std::iter::once(shape).chain(conditions))
+}
+
 /// Resolve the focus nodes of `shape` against the current dataset.
-fn focus_nodes(data: &ShaclData, shape: &Shape) -> Result<Vec<Term>, String> {
-    let plan = ValidationPlan::for_shape(data.core_view(), shape);
-    resolve_focus_nodes(data, &shape.targets, &plan)
+fn focus_nodes(
+    data: &ShaclData,
+    shape: &Shape,
+    plan: &ValidationPlan,
+) -> Result<Vec<Term>, String> {
+    resolve_focus_nodes(data, &shape.targets, plan)
         .map(|nodes| nodes.into_iter().map(FocusNode::into_term).collect())
 }
 
@@ -882,9 +897,14 @@ fn focus_nodes(data: &ShaclData, shape: &Shape) -> Result<Vec<Term>, String> {
 /// non-conforming one stops the rule. An error from the conformance check itself
 /// propagates rather than being read as "the condition did not hold" — a rule must
 /// never fire, or decline to fire, on a verdict that was not computed.
-fn conditions_hold(data: &ShaclData, focus: &Term, conditions: &[Shape]) -> Result<bool, String> {
+fn conditions_hold(
+    data: &ShaclData,
+    focus: &Term,
+    conditions: &[Shape],
+    plan: &ValidationPlan,
+) -> Result<bool, String> {
     for shape in conditions {
-        if !conforms(data, focus, shape)? {
+        if !conforms_with_plan(data, focus, shape, plan)? {
             return Ok(false);
         }
     }

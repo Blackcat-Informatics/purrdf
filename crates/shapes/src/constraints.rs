@@ -400,18 +400,43 @@ fn eval_closed(
 /// Returns `true` iff the focus node produces zero validation results against
 /// the shape (i.e., it fully conforms).
 ///
+/// This convenience entry point builds a [`ValidationPlan`] for `shape` on every
+/// call — the whole cycle-aware class walk, plus one interning probe per class.
+/// A caller that checks MANY focus nodes against the same shape should build the
+/// plan once and drive [`conforms_with_plan`] instead; `rules` does exactly that
+/// for its `sh:condition` checks.
+///
 /// # Errors
 ///
 /// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
 /// (see [`validate_shape`]).
 pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, String> {
     let plan = ValidationPlan::for_shape(store.core_view(), shape);
+    conforms_with_plan(store, focus, shape, &plan)
+}
+
+/// [`conforms`] against a plan the caller already built.
+///
+/// `plan` must cover `shape` — i.e. it was built from a shape iterator that
+/// included it — or an `sh:class` / `sh:targetClass` this evaluation reaches will
+/// be absent from the catalog and reported as the plan defect it is.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a constraint fails to evaluate (see
+/// [`validate_shape`]).
+pub(crate) fn conforms_with_plan(
+    store: &ShaclData,
+    focus: &Term,
+    shape: &Shape,
+    plan: &ValidationPlan,
+) -> Result<bool, String> {
     conforms_with_id_depth(
         store,
         focus,
         resolve_id(store.core_view(), focus),
         shape,
-        &plan,
+        plan,
         0,
     )
 }
@@ -854,7 +879,10 @@ fn eval_constraint(
 
         // ── Class (per value node; honors asserted rdfs:subClassOf, §4.2.5) ────
         Constraint::Class(class_iri) => {
-            let class_id = plan.class_id(class_iri);
+            // `None` = the data graph interns no term for this class, so no value
+            // node can be an instance of it and every one of them violates. That
+            // is a real verdict, not a failure to compute one.
+            let class_id = plan.class_id(class_iri)?;
             let mut results = Vec::new();
             let focus = focus_node;
             for vn in value_nodes {
@@ -1826,6 +1854,10 @@ fn eval_constraint(
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             let next_depth = depth.saturating_add(1);
             for value_node in value_nodes {
+                // Preserve the interned identity before materializing the term, so
+                // the conformance re-entry below does not pay a reverse hash probe
+                // to recover what the value node already knew.
+                let value_id = value_node.as_id(ds);
                 let value_node = value_node.to_term(ds);
                 let produced =
                     crate::expression::eval_node_expr(store, &value_node, expr, &mut guard)
@@ -1842,10 +1874,25 @@ fn eval_constraint(
                     // A failing conformance check is a FAILURE the spec requires be
                     // produced, so it propagates rather than counting as "does not
                     // conform".
-                    let conforms = conforms_with_depth(store, &value_node, shape, next_depth)
-                        .map_err(|e| {
-                            format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
-                        })?;
+                    //
+                    // The AMBIENT plan is threaded through, exactly as every other
+                    // recursive arm does: rebuilding one here would run the whole
+                    // cycle-aware class walk — a cloned `NamedNode` set, a sort, a
+                    // map and one interning probe per class — once per value node
+                    // per produced shape. The plan covers the shapes this index
+                    // resolves to because the class-planning walk enters the index
+                    // itself (`ClassScan::walk_shape_index`).
+                    let conforms = conforms_with_id_depth(
+                        store,
+                        &value_node,
+                        value_id,
+                        shape,
+                        plan,
+                        next_depth,
+                    )
+                    .map_err(|e| {
+                        format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
+                    })?;
                     if !conforms {
                         let mut r = result!(
                             sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,

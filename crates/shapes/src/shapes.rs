@@ -1532,7 +1532,14 @@ impl<'s> Parser<'s> {
         }
         let mut reifier_shapes = Vec::new();
         for node in reifier_shape_nodes {
-            reifier_shapes.push(self.parse_node_shape(node)?);
+            // A reifier shape is a SHAPE, and a shape carrying `sh:path` is a
+            // property shape whose constraints scope to that path's value nodes —
+            // here, the reifier's. Parsing it as a node shape would drop the path
+            // and re-read the constraints against the reifier itself, which is a
+            // SILENT DROP rather than a wrong answer: `sh:minCount 1` over the one
+            // value node `$this` always holds, so the reifier shape would check
+            // nothing and every reifier would pass.
+            reifier_shapes.push(self.parse_inline_shape(node)?);
         }
 
         Ok(PropertyShape {

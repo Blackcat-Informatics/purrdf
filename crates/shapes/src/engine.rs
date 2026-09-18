@@ -97,7 +97,7 @@ impl ValidationPlan {
         Self::from_shape_iter(ds, std::iter::once(shape))
     }
 
-    fn from_shape_iter<'a>(
+    pub(crate) fn from_shape_iter<'a>(
         ds: &impl ShaclRead,
         shapes: impl IntoIterator<Item = &'a Shape>,
     ) -> Self {
@@ -112,13 +112,32 @@ impl ValidationPlan {
         Self { classes, class_ids }
     }
 
+    /// The dataset identity of a planned class.
+    ///
+    /// The two negative answers are DIFFERENT conditions and are deliberately
+    /// spelled differently, because conflating them would turn an ordinary shapes
+    /// graph into a refusal:
+    ///
+    /// * `Ok(None)` — the class IS planned, but this DATA GRAPH interns no term
+    ///   for it. Entirely normal: a shapes graph may name a class the data never
+    ///   mentions. Every caller reads it as "nothing is an instance", which is the
+    ///   right answer, and it must never become an error.
+    /// * `Err(_)` — the class is absent from the CATALOG, so the class-planning
+    ///   walk failed to reach a class the evaluator went on to ask about. That is
+    ///   a defect in the walk, never in the caller's data. It was an `expect`,
+    ///   i.e. a panic — and a panic ABORTS across the PyO3 and C ABI boundaries,
+    ///   where a host has no frame to catch it. Loud means an error.
     #[inline]
-    pub(crate) fn class_id(&self, class: &NamedNode) -> Option<TermId> {
-        self.class_ids[*self
-            .classes
-            .indices
-            .get(class)
-            .expect("every reachable sh:class and sh:targetClass is planned")]
+    pub(crate) fn class_id(&self, class: &NamedNode) -> Result<Option<TermId>, String> {
+        let position = self.classes.indices.get(class).ok_or_else(|| {
+            format!(
+                "internal validation-plan defect: the class <{}> is reached during evaluation but \
+                 was never collected by the class-planning walk, so its dataset identity was \
+                 never resolved",
+                class.as_str()
+            )
+        })?;
+        Ok(self.class_ids[*position])
     }
 }
 
@@ -219,6 +238,42 @@ struct ClassScan {
     /// names the same classes at every call site, so once is enough — and once is
     /// also all a cyclic body can be given.
     walked_bodies: FastSet<String>,
+    /// The `sh:nodeByExpression` / `shnex:conformsToShape` shape indexes already
+    /// walked, by the address of the shared `OnceLock` cell.
+    ///
+    /// A shapes graph has exactly one such index, shared by `Arc` across every
+    /// constraint that resolves against it — including the constraints of the
+    /// shapes the index itself holds. Walking it a second time from one of those
+    /// would not terminate, so it is entered once per scan.
+    walked_indexes: Vec<usize>,
+}
+
+impl ClassScan {
+    /// Walk every shape a `sh:nodeByExpression` / `shnex:conformsToShape` index can
+    /// resolve to, once per scan.
+    ///
+    /// These shapes are reachable ONLY through the index — the expression computes
+    /// the shape IRI, and the lookup happens per value node at validation time — so
+    /// a scan that did not enter the index would leave their `sh:class` IRIs
+    /// unplanned while the evaluator went on to ask [`ValidationPlan::class_id`]
+    /// about them. That is the gap the totality claim used to assert rather than
+    /// hold.
+    fn walk_shape_index(&mut self, index: &Arc<std::sync::OnceLock<FastMap<String, Shape>>>) {
+        let cell = Arc::as_ptr(index).addr();
+        if self.walked_indexes.contains(&cell) {
+            return;
+        }
+        self.walked_indexes.push(cell);
+        // An unfilled index resolves nothing: the constraint refuses loudly at
+        // evaluation rather than silently conforming, so there is no shape here
+        // whose classes could go unplanned.
+        let Some(shapes) = index.get() else {
+            return;
+        };
+        for shape in shapes.values() {
+            collect_shape_classes(shape, self);
+        }
+    }
 }
 
 fn collect_shape_classes(shape: &Shape, scan: &mut ClassScan) {
@@ -275,8 +330,19 @@ fn collect_constraints_classes(constraints: &[Constraint], scan: &mut ClassScan)
                     collect_shape_classes(sibling, scan);
                 }
             }
-            Constraint::Expression { expr, .. } | Constraint::NodeByExpression { expr, .. } => {
+            Constraint::Expression { expr, .. } => {
                 collect_expression_classes(expr, scan);
+            }
+            // `sh:nodeByExpression` (Node Expressions §7.2) judges each value node
+            // against shapes the expression NAMES BY IRI, resolved per value node
+            // against the shared shape index. The expression walk below reaches the
+            // IRI-producing computation, never the shapes it lands on, so the index
+            // has to be entered here or a plan built for a single shape — the one
+            // `conforms` and `conforms_with_depth` build — would leave the resolved
+            // shape's `sh:class` unplanned.
+            Constraint::NodeByExpression { expr, shapes, .. } => {
+                collect_expression_classes(expr, scan);
+                scan.walk_shape_index(shapes);
             }
             Constraint::Datatype(_)
             | Constraint::NodeKind(_)
@@ -341,10 +407,16 @@ fn collect_expression_classes(expr: &NodeExpr, scan: &mut ClassScan) {
                 // collected here or they would go unresolved in the plan.
                 ShapeArg::Named(shape) => collect_shape_classes(shape, scan),
                 // A COMPUTED one resolves, at evaluation, to a shape out of the
-                // shapes graph's own top-level index — and every shape in that
-                // index is walked by this scan already, from the shape list. What
-                // does need collecting is the expression that computes the IRI.
-                ShapeArg::Computed { expr, .. } => collect_expression_classes(expr, scan),
+                // shapes graph's own top-level index. That index is walked here
+                // rather than assumed already covered: the assumption holds only
+                // for a plan built over the WHOLE shape list, and the single-shape
+                // plans `conforms` / `conforms_with_depth` build are exactly the
+                // ones that would come up short. The expression computing the IRI
+                // is walked for the same reason every other operand is.
+                ShapeArg::Computed { expr, shapes } => {
+                    collect_expression_classes(expr, scan);
+                    scan.walk_shape_index(shapes);
+                }
             }
         }
         NodeExpr::Remove { nodes, remove } => {
@@ -420,11 +492,13 @@ fn instances_of_class(
     data: &ShaclData,
     class_iri: &NamedNode,
     plan: &ValidationPlan,
-) -> Vec<TermId> {
-    let Some(class) = plan.class_id(class_iri) else {
-        return Vec::new();
+) -> Result<Vec<TermId>, String> {
+    // A class the data graph never names has no instances — an ordinary empty
+    // target, not a failure.
+    let Some(class) = plan.class_id(class_iri)? else {
+        return Ok(Vec::new());
     };
-    data.class_view().instances_of(class).collect()
+    Ok(data.class_view().instances_of(class).collect())
 }
 
 /// A resolved focus node carrying its already-known interned identity.
@@ -468,11 +542,11 @@ pub(crate) fn resolve_focus_nodes(
 
     for target in targets {
         let ids = match target {
-            Target::Class(class_iri) => Some(instances_of_class(data, class_iri, plan)),
+            Target::Class(class_iri) => Some(instances_of_class(data, class_iri, plan)?),
             Target::SubjectsOf(pred) => Some(subjects_of(ds, pred)),
             Target::ObjectsOf(pred) => Some(objects_of(ds, pred)),
             Target::ImplicitClass(Term::NamedNode(class)) => {
-                Some(instances_of_class(data, class, plan))
+                Some(instances_of_class(data, class, plan)?)
             }
             Target::ImplicitClass(_) => Some(Vec::new()),
             Target::Node(_) | Target::Sparql { .. } => None,
@@ -543,12 +617,14 @@ impl PreparedTargets {
         for target in &shape.targets {
             match target {
                 Target::Class(class) => {
-                    if let Some(class) = plan.class_id(class) {
+                    // `None` = the data graph names no such class, so the target
+                    // set is empty; that is not a preparation failure.
+                    if let Some(class) = plan.class_id(class)? {
                         prepared.target_class_ids.insert(class);
                     }
                 }
                 Target::ImplicitClass(Term::NamedNode(class)) => {
-                    if let Some(class) = plan.class_id(class) {
+                    if let Some(class) = plan.class_id(class)? {
                         prepared.target_class_ids.insert(class);
                     }
                 }
@@ -2582,15 +2658,58 @@ mod tests {
         assert_eq!(plan.class_ids.len(), 3);
         assert!(
             plan.class_id(&NamedNode::from("http://example.org/ns#Root"))
+                .expect("ex:Root is planned")
                 .is_some()
         );
         assert!(
             plan.class_id(&NamedNode::from("http://example.org/ns#Value"))
+                .expect("ex:Value is planned")
                 .is_some()
         );
+        // Planned but absent from the DATA graph: a soft `None`, never an error.
         assert!(
             plan.class_id(&NamedNode::from("http://example.org/ns#Nested"))
+                .expect("ex:Nested is planned even though the data never names it")
                 .is_none()
+        );
+    }
+
+    /// The two "no id" answers are different conditions and must stay apart.
+    ///
+    /// A class the walk never collected is a defect in the PLAN, and it is
+    /// reported as an error — it used to be an `expect`, and a panic aborts
+    /// across the PyO3 and C ABI boundaries. A class the walk DID collect but the
+    /// data graph never names is ordinary and stays a soft `None`, because a
+    /// shapes graph is entitled to name a class its data lacks.
+    #[test]
+    fn an_unplanned_class_errors_while_a_planned_one_absent_from_the_data_stays_none() {
+        let shapes_ttl = format!(
+            r"{PREFIXES}
+            ex:PlannedShape a sh:NodeShape ;
+                sh:targetClass ex:Root ;
+                sh:property [ sh:path ex:member ; sh:class ex:Ghost ] .
+            "
+        );
+        let data = load_data_nt(
+            "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Root> .\n",
+        );
+        let shapes = load_shapes_ttl(&shapes_ttl);
+        let plan = ValidationPlan::for_shapes(data.as_ref(), &shapes);
+
+        // Planned, but the data graph interns no such class term.
+        assert_eq!(
+            plan.class_id(&NamedNode::from("http://example.org/ns#Ghost")),
+            Ok(None),
+            "a planned class the data never names is a soft None, not a refusal"
+        );
+
+        // Never collected by the walk at all.
+        let error = plan
+            .class_id(&NamedNode::from("http://example.org/ns#NotInTheCatalog"))
+            .expect_err("a class outside the catalog is a plan defect");
+        assert!(
+            error.contains("NotInTheCatalog") && error.contains("class-planning walk"),
+            "the error must name the class and the walk that missed it, got: {error}"
         );
     }
 
