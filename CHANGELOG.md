@@ -24,8 +24,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `FusionProfile::class_width` reports how many consecutive ranks a profile
   cannot tell apart at a given depth, `deepest_rank_within_width` inverts it, and
   `DecayRule::weight_for_depth` inverts the whole relation -- name the depth, get
-  the smallest weight that buys it, bisected against the exact first-collision
-  rank so it never overstates. `MonotoneDepth` spells the saturation point as a
+  the smallest weight that buys it. Reaching a depth is not monotone in the
+  weight, so the answer is not bisected: each adjacent-rank constraint names the
+  next weight that could satisfy it, and the search walks those candidates
+  without ever skipping one, so the weight it returns is the true minimum rather
+  than whichever side of an oscillation a probe happened to land on.
+  `MonotoneDepth` spells the saturation point as a
   distinct case so it cannot be mistaken for a measured depth. The same surface
   is exposed to Python as `retrieval.weight_for_depth` and
   `retrieval.class_width`.

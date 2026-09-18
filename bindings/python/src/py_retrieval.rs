@@ -1115,7 +1115,12 @@ fn search<'py>(
 ///
 /// The design calculus read in the direction a profile author needs: name the
 /// depth you must read to, get the weight that buys it. The answer is the true
-/// minimum rather than a safe over-estimate.
+/// minimum rather than a safe over-estimate: whether a weight reaches a depth
+/// oscillates from one raw unit to the next, so the search walks the exact
+/// candidate weights each adjacent-rank constraint admits instead of bisecting a
+/// predicate that is not monotone. Weights are read as ratios, and an
+/// over-estimate here would silently re-scale the stratum's share of every fused
+/// score.
 ///
 /// Raises `ValueError` when no weight reaches that depth. Under the default
 /// truncated rule that is a real wall and not a budget: the reciprocal is

@@ -45,6 +45,14 @@ use crate::fusion_profile::DecayRule;
 /// `10^SCALE_DIGITS` — the scale of a [`Fixed`]'s raw integer.
 const SCALE_RAW: i128 = 10_i128.pow(SCALE_DIGITS);
 
+/// The same scale as a `u64`, for the reciprocal divisions.
+///
+/// `10^12` is a third of the way into a `u64` and a denominator is under `2^33`,
+/// so `S / D` is a narrow division. It is the innermost operation of the weight
+/// search, where it runs hundreds of millions of times, and a `u128` divide
+/// there is a software routine rather than an instruction.
+const SCALE_NARROW: u64 = 10_u64.pow(SCALE_DIGITS);
+
 /// `K + rank` as a `u128`, or the typed refusal for an unusable operand.
 ///
 /// Widened before it is summed so neither operand can wrap, and returned as a
@@ -394,65 +402,437 @@ pub(crate) fn deepest_rank_within_width(decay: DecayRule, weight: Fixed, max_wid
     MAX_DEPTH
 }
 
+/// What one adjacent-rank constraint says about one candidate weight.
+///
+/// A profile reaches depth `D` exactly when every constraint in the range holds,
+/// so the search below is an intersection over these, and the middle variant is
+/// what makes that intersection cheap to walk: a failing constraint does not
+/// merely say "no", it says where the next weight that could say "yes" is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Separation {
+    /// The two ranks already carry distinct contributions at this weight.
+    Holds,
+    /// They collide here, and this is the **next** weight that can separate
+    /// them: strictly heavier than the one probed, with every weight in between
+    /// ruled out by the same algebra that ruled this one out.
+    NextWeight(i128),
+    /// They collide at every weight. Only [`DecayRule::ReciprocalRank`] can say
+    /// this, and it is the rule's real saturation rather than a shortfall in the
+    /// search.
+    Impossible,
+}
+
+/// Whether `weight` separates the adjacent ranks whose denominators are
+/// `denominator` and `denominator + 1`, and if not, where to look next.
+///
+/// # The algebra, one rule at a time
+///
+/// Write `S` for [`SCALE_RAW`], `w` for the weight's raw integer and `a` for the
+/// smaller denominator.
+///
+/// **Folded** ([`DecayRule::WeightedReciprocalRank`]) contributes
+/// `trunc(w / a)`, so the pair separates iff `⌊w/a⌋ > ⌊w/(a + 1)⌋`. Writing
+/// `w = q·a + s`, that is `w < q·(a + 1)`, i.e. `s < q` — one division to
+/// decide. Restated over `w`, the constraint holds exactly on the union of
+/// intervals `[m·a, m·(a + 1) − 1]` for integer `m ≥ 1`, which are disjoint and
+/// increasing. A failing `w` therefore sits strictly above the interval for
+/// `m = ⌊w/(a + 1)⌋` and strictly below the next one, so `(m + 1)·a` is the next
+/// satisfying weight and nothing between the two is skipped.
+///
+/// **Truncated** ([`DecayRule::ReciprocalRank`]) contributes
+/// `trunc(w·I / S)` with `I = ⌊S/a⌋`, and `I` does not depend on the weight. If
+/// `I` repeats at `a + 1` the two contributions are equal for *every* weight,
+/// which is [`Separation::Impossible`]. Otherwise the pair collides exactly when
+/// `⌊w·I₁/S⌋ = ⌊w·I₂/S⌋ = m`, and since `⌊w·I₁/S⌋` is non-decreasing in `w` and
+/// bounds `⌊w·I₂/S⌋` from above, no weight below `⌈(m + 1)·S / I₁⌉` can lift
+/// either side off `m`. That ceiling is the next candidate.
+///
+/// Both next-candidate formulas are strictly greater than the weight probed,
+/// which is what makes the search terminate.
+fn separation_at(decay: DecayRule, weight: i128, denominator: u64) -> Separation {
+    match decay {
+        DecayRule::WeightedReciprocalRank { .. } => {
+            let narrow = i128::from(denominator);
+            let quotient = weight / narrow;
+            if weight % narrow < quotient {
+                Separation::Holds
+            } else {
+                Separation::NextWeight((weight / (narrow + 1) + 1) * narrow)
+            }
+        }
+        DecayRule::ReciprocalRank { .. } => {
+            // Both `S` and a denominator fit a `u64` — the scale is `10^12` and
+            // a denominator is under `2^33` — so the two reciprocals are narrow
+            // divisions rather than wide ones. That is the sweep's inner loop.
+            let here = i128::from(SCALE_NARROW / denominator);
+            let beyond = i128::from(SCALE_NARROW / (denominator + 1));
+            if here == beyond {
+                return Separation::Impossible;
+            }
+            // The exact gap between the two contributions is `w·(I₁ − I₂)/S`,
+            // and `trunc(x) > trunc(y)` whenever `x ≥ y + 1`, so a gap of a
+            // whole unit settles the pair without the two truncations below.
+            // This is the common case away from the saturation point, and
+            // taking it early is what keeps the sweep affordable at depths near
+            // a million.
+            if weight * (here - beyond) >= SCALE_RAW {
+                return Separation::Holds;
+            }
+            let level = weight * here / SCALE_RAW;
+            if level > weight * beyond / SCALE_RAW {
+                Separation::Holds
+            } else {
+                // ⌈(level + 1)·S / here⌉, formed without leaving the integers.
+                let target = (level + 1) * SCALE_RAW;
+                Separation::NextWeight((target + here - 1) / here)
+            }
+        }
+    }
+}
+
+/// How far below its ideal value [`contribution`] truncates at `denominator`,
+/// for a weight `shortfall` raw units below one.
+///
+/// With `w = S − f` and `I = ⌊S/D⌋`, the contribution is
+/// `⌊w·I/S⌋ = I − ⌈f·I/S⌉` — an exact integer identity, because
+/// `⌊−x⌋ = −⌈x⌉`. This returns that second term, and it is the whole reason the
+/// truncated rule's sweep is affordable.
+///
+/// `I` is non-increasing in the denominator and `f` is not negative, so the
+/// shortfall is non-increasing too. Adjacent ranks therefore separate exactly
+/// when `I` falls by more than the shortfall does, and wherever the shortfall is
+/// **flat** across a stretch of denominators every pair in that stretch
+/// separates — one comparison clears the whole stretch instead of one probe per
+/// rank. Near the saturation point that is hundreds of thousands of ranks
+/// cleared by two divisions.
+fn shortfall_at(shortfall: i128, denominator: u64) -> i128 {
+    let reciprocal = i128::from(SCALE_NARROW / denominator);
+    // ⌈f·I / S⌉, formed without leaving the integers. `f ≤ S` and `I ≤ S/2`, so
+    // the product stays far inside an `i128`.
+    (shortfall * reciprocal + SCALE_RAW - 1) / SCALE_RAW
+}
+
+/// What one sweep of the constraints over a weight found.
+///
+/// Three outcomes and not two: "nothing failed" is the answer, "something
+/// failed" carries where to look next, and "something can never hold" is the
+/// truncated rule's saturation rather than either of those.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lap {
+    /// Every constraint in the range separates its pair of ranks at this weight.
+    Separated,
+    /// At least one did not, and this is the heaviest next candidate any of them
+    /// named — the lightest weight above this one that could satisfy all of them.
+    Advance(i128),
+    /// A pair in the range collides at every weight there is.
+    Unreachable,
+}
+
+impl From<Option<i128>> for Lap {
+    fn from(heaviest: Option<i128>) -> Self {
+        heaviest.map_or(Self::Separated, Self::Advance)
+    }
+}
+
+/// What one sweep of the constraints in `[floor, widest]` found at `weight`.
+///
+/// # Why the heaviest and not the first
+///
+/// Every weight that reaches the depth satisfies every constraint, so it is at
+/// or above each failing constraint's next candidate, and therefore at or above
+/// their maximum. Jumping to the maximum skips no solution and covers far more
+/// ground per lap than jumping to whichever constraint the sweep met first.
+///
+/// # Why the truncated rule sometimes steps rather than scans
+///
+/// Under [`DecayRule::ReciprocalRank`] a flat stretch of [`shortfall_at`] is a
+/// stretch of ranks that all separate, so the sweep can jump from one step of
+/// the shortfall to the next and probe only those, and each jump is closed form
+/// rather than a search: the shortfall first falls below `h` at the denominator
+/// where `I(D)` first falls to `⌊(h − 1)·S / f⌋`, which inverts to
+/// `D = ⌊S / (that + 1)⌋ + 1`. Near the saturation point that is a couple of
+/// dozen probes in place of three hundred thousand.
+///
+/// Far from it the shortfall steps at nearly every rank and the jumps cost more
+/// than they save, so the count of steps — `shortfall_at(floor) −
+/// shortfall_at(widest + 1)`, one subtraction — picks between the two sweeps.
+/// The choice is an accelerator either way: both probe every rank that can fail.
+///
+/// The stepping sweep reads distinctness off `I(D) > I(D + 1)` alone, which is
+/// the saturation condition the caller has already established for this whole
+/// range by checking that a weight of one reaches the depth. Under
+/// [`DecayRule::WeightedReciprocalRank`] no such shortcut is needed: that rule's
+/// closed-form guarantee is exact, so the range it leaves open is short.
+fn sweep(decay: DecayRule, weight: i128, floor: u64, widest: u64) -> Lap {
+    let mut heaviest: Option<i128> = None;
+    let probe =
+        |cursor: u64, heaviest: &mut Option<i128>| match separation_at(decay, weight, cursor) {
+            Separation::Holds => true,
+            Separation::Impossible => false,
+            Separation::NextWeight(next) => {
+                *heaviest = Some(heaviest.map_or(next, |far: i128| far.max(next)));
+                true
+            }
+        };
+
+    let span = i128::from(widest - floor + 1);
+    // The folded rule has no shortfall to step on, and the truncated rule only
+    // gains by stepping when the shortfall steps less often than once a rank.
+    let by_shortfall = match decay {
+        DecayRule::ReciprocalRank { .. } => {
+            let shortfall = SCALE_RAW - weight;
+            let settled = shortfall_at(shortfall, widest + 1);
+            let steps = shortfall_at(shortfall, floor) - settled;
+            (steps < span).then_some((shortfall, settled))
+        }
+        DecayRule::WeightedReciprocalRank { .. } => None,
+    };
+    let Some((shortfall, settled)) = by_shortfall else {
+        for cursor in floor..=widest {
+            if !probe(cursor, &mut heaviest) {
+                return Lap::Unreachable;
+            }
+        }
+        return Lap::from(heaviest);
+    };
+
+    let mut cursor = floor;
+    while cursor <= widest {
+        let here = shortfall_at(shortfall, cursor);
+        if here == settled {
+            // The shortfall is flat from here to the end of the range, so every
+            // remaining pair separates.
+            break;
+        }
+        // The first denominator whose shortfall has fallen below `here`. It is
+        // strictly past `cursor` — `cursor`'s own shortfall is `here` — and at
+        // or before `widest + 1`, because the shortfall is `settled` there and
+        // `settled` is below `here`.
+        let reach = SCALE_RAW / ((here - 1) * SCALE_RAW / shortfall + 1) + 1;
+        // Every pair from `cursor` up to the one before that denominator spans a
+        // flat shortfall and so separates. The pair at the denominator just
+        // before it is the one that steps, and the only one in the stretch that
+        // has to be probed. The clamp restates the bound above rather than
+        // relaxing it, and keeps the walk total.
+        let stepped = u64::try_from(reach - 1).unwrap_or(widest).min(widest);
+        if !probe(stepped, &mut heaviest) {
+            return Lap::Unreachable;
+        }
+        cursor = stepped + 1;
+    }
+    Lap::from(heaviest)
+}
+
+/// A weight **below** which no profile separates every adjacent pair of ranks
+/// with denominators in `[narrowest, widest]`, proven by counting rather than by
+/// probing.
+///
+/// # The count
+///
+/// Write `F(a)` for the contribution at denominator `a`. Separating every pair
+/// from `p` to `q` means `F` drops by at least one at each of the `q − p + 1`
+/// steps, so `F(p) − F(q + 1) ≥ q − p + 1`. Both ends are truncations of a known
+/// real quantity — `F(p) ≤ ideal(p)` and `F(q + 1) > ideal(q + 1) − 1` — so that
+/// count turns into a straight inequality on the weight:
+///
+/// * truncated: `w·(I(p) − I(q + 1)) ≥ S·(q − p) + 1`, with `I(a) = ⌊S/a⌋`;
+/// * folded: `w·(q + 1 − p) ≥ p·((q + 1)·(q − p) + 1)`.
+///
+/// Every `p` yields a valid bound and the strongest one is wanted, so several
+/// are tried. The optimum sits near `q − sqrt(q)` — far enough down for the
+/// accumulated drop to bite, near enough that the interval's own reciprocal
+/// curvature has not overtaken it — and a window of a few multiples of `sqrt(q)`
+/// around that point brackets it. Missing the very best `p` costs speed and
+/// nothing else: the search that follows is exact from **any** valid lower
+/// bound, so this is an accelerator and never an answer.
+///
+/// That matters at depth. Near the truncated rule's saturation point the true
+/// minimum sits within a part in twenty thousand of a weight of one, and walking
+/// up to it from a single raw unit takes millions of candidate steps. The bound
+/// removes the great majority of them without probing a single rank.
+fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i128 {
+    // `sqrt` of a quantity under 2^33, so the window is under a million wide
+    // even at the deepest expressible plan. The root is found with the same
+    // bisection the rest of the file uses rather than by a cast.
+    let root = largest_rank_satisfying(|probe| {
+        probe
+            .checked_mul(probe)
+            .is_some_and(|square| square <= widest)
+    });
+    let from = widest.saturating_sub(root * 8 + 16).max(narrowest);
+    let beyond = i128::from(widest) + 1;
+    let outermost = SCALE_RAW / beyond;
+    let mut bound: i128 = 1;
+    for p in from..widest {
+        let steps = i128::from(widest - p);
+        let narrow = i128::from(p);
+        let candidate = match decay {
+            DecayRule::ReciprocalRank { .. } => {
+                let gap = SCALE_RAW / narrow - outermost;
+                if gap <= 0 {
+                    continue;
+                }
+                SCALE_RAW * steps / gap + 1
+            }
+            DecayRule::WeightedReciprocalRank { .. } => {
+                let numerator = narrow * (beyond * steps + 1);
+                let divisor = beyond - narrow;
+                (numerator + divisor - 1) / divisor
+            }
+        };
+        bound = bound.max(candidate);
+    }
+    bound
+}
+
 /// The smallest weight whose contributions still separate every adjacent pair
 /// of ranks up to `depth` under `decay`.
 ///
 /// # Errors
 ///
-/// [`FusionError::DepthUnreachable`] when **no** weight achieves `depth`, which
-/// under [`DecayRule::ReciprocalRank`] is a real condition rather than a
-/// conservative one. That rule truncates the reciprocal *before* applying the
-/// weight: once `trunc(S / D) == trunc(S / (D + 1))` the two ranks are equal at
-/// the point the weight is applied, so every weight maps them to one value and
-/// the depth is unreachable by construction. The saturation rank is therefore
-/// exact, and is reported.
+/// * [`FusionError::DepthUnreachable`] when **no** weight achieves `depth`,
+///   which under [`DecayRule::ReciprocalRank`] is a real condition rather than a
+///   conservative one. That rule truncates the reciprocal *before* applying the
+///   weight: once `trunc(S / D) == trunc(S / (D + 1))` the two ranks are equal
+///   at the point the weight is applied, so every weight maps them to one value
+///   and the depth is unreachable by construction. The saturation rank is
+///   therefore exact, and is reported.
+/// * [`FusionError::Overflow`] when the depth itself is so large that the
+///   sufficient weight bounding the search leaves the fixed-point range.
 ///
-/// The answer is the true minimum, found by bisecting on
-/// [`monotone_depth`] — which is itself exact — rather than by inverting a
-/// closed form. The closed-form guarantees are sufficient conditions, so
-/// inverting one would name a heavier weight than the profile actually needs
-/// and read as a requirement rather than the recommendation it was.
+/// # Why it is not bisected
+///
+/// "Does this weight reach `depth`" is **not** monotone in the weight, so a
+/// binary search over it is unsound and silently over-reports. Under the folded
+/// rule at `K = 60` the raw weight 62 reaches depth two and 63 does not; under
+/// the truncated rule 62 does and 63 does not. The predicate flips on single raw
+/// units all the way up, so bisection lands on whichever side of an oscillation
+/// its probes happened to sample — at depth two under the truncated rule it
+/// answers 2868 against a true minimum of 62, a factor of forty-six. Weights are
+/// read as *ratios*, so over-quoting one silently re-scales that stratum's share
+/// of every fused score: an over-estimate here is a wrong answer, not a safe one.
+///
+/// # How the true minimum is found instead
+///
+/// Reaching `depth` is the conjunction of one constraint per adjacent rank pair,
+/// and [`separation_at`] answers each one in a couple of divisions — and when it
+/// fails, names the next weight that could possibly satisfy *that* constraint,
+/// skipping only weights it has ruled out. So the search walks:
+///
+/// 1. Start at [`heaviest_counting_bound`], the heaviest weight proven too light
+///    without probing anything.
+/// 2. Sweep the whole constraint range once. The closed-form guarantee
+///    ([`truncated_guarantee`], [`weighted_guarantee`]) already settles every
+///    rank below its boundary, so only the tail above it is probed. A lap with
+///    nothing failing is the answer.
+/// 3. Otherwise advance to the **heaviest** candidate the lap named. Every
+///    solution above the current weight satisfies every failing constraint, so
+///    it is at or above each of their candidates, and therefore at or above
+///    their maximum. Taking the first candidate instead would be equally
+///    correct and far slower: the strides would be whichever constraint the
+///    sweep met first rather than the longest one the whole lap proved.
+///
+/// Because neither the bound nor any candidate ever skips a satisfying weight,
+/// the first weight that completes a lap is the global minimum.
+///
+/// # What it costs
+///
+/// Three things bound the work, and none of them is the range of weights. The
+/// walk starts at the counting bound rather than at a single raw unit, which
+/// removes the great majority of the candidate steps. A lap probes only the tail
+/// the closed-form guarantee leaves open, and that tail shrinks as the weight
+/// grows. And under the truncated rule the lap can skip whole stretches of that
+/// tail at a time — see [`sweep`].
+///
+/// Ordinary depths therefore settle in a few laps over a few ranks each. The
+/// expensive case is the deepest depth the truncated rule can express: its
+/// answer sits within a part in twenty thousand of a weight of one, so the
+/// candidate steps between the bound and it are correspondingly fine and there
+/// are a great many of them.
 pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<Fixed, FusionError> {
-    let reaches = |raw: i128| monotone_depth(decay, Fixed::from_raw(raw)) >= depth;
+    // The lightest weight there is. With fewer than two ranks to order there is
+    // no adjacent pair and therefore no constraint, so it is already the answer.
+    let lightest = Fixed::from_raw(1);
+    let Some(constraints) = depth.checked_sub(1).filter(|count| *count > 0) else {
+        return Ok(lightest);
+    };
 
-    // A weight known to work, which is also the bisection's upper end. Under the
-    // weighted rule the guarantee `D · (D + 1) <= w_raw` inverts directly; under
-    // the truncated rule the inner truncation caps what any weight can buy, and
-    // a weight of exactly one already separates wherever the bare reciprocal
-    // does — so if one does not reach `depth`, nothing does.
+    // A weight known to reach `depth`, which bounds the walk. Under the folded
+    // rule constraint `a` fails only on `w ∈ [m·(a + 1), (m + 1)·a − 1]` for some
+    // `m ≤ a − 1`, so the heaviest failing weight is `a² − 1` and `(K + depth)²`
+    // clears every constraint in the range at once. Under the truncated rule the
+    // inner truncation caps what any weight can buy: at a weight of exactly one
+    // the contribution is `⌊S/a⌋` itself, which separates wherever the bare
+    // reciprocal does, and no heavier weight can recover a distinction the
+    // reciprocal has already lost — so if one does not reach `depth`, nothing
+    // does.
     let sufficient = match decay {
         DecayRule::ReciprocalRank { .. } => SCALE_RAW,
         DecayRule::WeightedReciprocalRank { k } => {
-            let denominator = u128::from(k)
+            let widest = u128::from(k)
                 .checked_add(u128::from(depth))
                 .ok_or(FusionError::Overflow)?;
-            let product = denominator
-                .checked_mul(denominator.checked_add(1).ok_or(FusionError::Overflow)?)
-                .ok_or(FusionError::Overflow)?;
-            i128::try_from(product).map_err(|_| FusionError::Overflow)?
+            let square = widest.checked_mul(widest).ok_or(FusionError::Overflow)?;
+            i128::try_from(square).map_err(|_| FusionError::Overflow)?
         }
     };
-    if !reaches(sufficient) {
-        return Err(FusionError::DepthUnreachable {
-            depth,
-            saturates_at: MonotoneDepth::from_rank(monotone_depth(
-                decay,
-                Fixed::from_raw(sufficient),
-            )),
-        });
+    let unreachable = || FusionError::DepthUnreachable {
+        depth,
+        saturates_at: MonotoneDepth::from_rank(monotone_depth(decay, Fixed::from_raw(sufficient))),
+    };
+    if monotone_depth(decay, Fixed::from_raw(sufficient)) < depth {
+        return Err(unreachable());
     }
 
-    let mut low: i128 = 1;
-    let mut high = sufficient;
-    while low < high {
-        let mid = low + (high - low) / 2;
-        if reaches(mid) {
-            high = mid;
-        } else {
-            low = mid + 1;
+    // `depth` is at or below `MAX_DEPTH` here — the check above refuses anything
+    // deeper, because the bound itself saturates there — so the widest
+    // denominator is under 2^33 and the sweep's cursor arithmetic is exact.
+    let k = decay.k();
+    let narrowest = u64::from(k) + 1;
+    let widest = u64::from(k) + constraints;
+
+    // Ranks the closed-form guarantee already settles need no probe at all, and
+    // as the weight grows that becomes almost the whole range. The guarantee is
+    // non-decreasing in the weight, so a value read at a lighter weight stays
+    // true at a heavier one — it only leaves a longer tail than it has to. It is
+    // therefore re-read when the weight has doubled rather than every lap: at
+    // most a handful of times over a walk, instead of once per candidate.
+    let settled = |weight: i128| {
+        let magnitude = weight.unsigned_abs();
+        match decay {
+            DecayRule::ReciprocalRank { .. } => truncated_guarantee(magnitude, k),
+            DecayRule::WeightedReciprocalRank { .. } => weighted_guarantee(magnitude, k),
+        }
+    };
+
+    let mut weight = heaviest_counting_bound(decay, narrowest, widest).max(1);
+    let mut guaranteed = settled(weight);
+    let mut stale_above = weight.saturating_mul(2);
+    while weight <= sufficient {
+        if weight >= stale_above {
+            guaranteed = settled(weight);
+            stale_above = weight.saturating_mul(2);
+        }
+        if guaranteed >= constraints {
+            return Ok(Fixed::from_raw(weight));
+        }
+        // The tail the guarantee leaves open: ranks `guaranteed + 1 ..=
+        // constraints`, which are the denominators below `widest` by that many.
+        let floor = widest - (constraints - guaranteed) + 1;
+        match sweep(decay, weight, floor, widest) {
+            Lap::Separated => return Ok(Fixed::from_raw(weight)),
+            Lap::Unreachable => return Err(unreachable()),
+            Lap::Advance(next) => {
+                debug_assert!(next > weight, "a candidate must advance the search");
+                weight = next;
+            }
         }
     }
-    Ok(Fixed::from_raw(low))
+    // Unreachable: `sufficient` satisfies every constraint in the range and no
+    // step skips a satisfying weight, so the lap completes at or below it. The
+    // bound is honoured rather than asserted, and `sufficient` is a correct if
+    // not minimal answer, so the walk cannot run away.
+    Ok(Fixed::from_raw(sufficient))
 }
 
 /// The largest rank in `0..=MAX_DEPTH` for which `guarantees` holds, or zero
@@ -528,8 +908,8 @@ fn weighted_guarantee(weight_raw: u128, k: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_DEPTH, contribution, contribution_under, monotone_depth, weighted_contribution,
-        weighted_guarantee,
+        MAX_DEPTH, contribution, contribution_under, minimum_weight_for_depth, monotone_depth,
+        shortfall_at, weighted_contribution, weighted_guarantee,
     };
     use crate::fusion_profile::DecayRule;
     use purrdf_text::{Fixed, SCALE_DIGITS};
@@ -901,6 +1281,112 @@ mod tests {
                     );
                     previous = current;
                 }
+            }
+        }
+    }
+
+    /// The identity the truncated rule's sweep skips on, asserted rather than
+    /// trusted: `⌊w·I/S⌋ = I − ⌈(S − w)·I/S⌉` exactly, for every weight the
+    /// search can hold and across the whole span of denominators.
+    ///
+    /// Everything the skip claims rests on this. If it ever stopped holding, a
+    /// flat shortfall would no longer mean a separated stretch of ranks and the
+    /// sweep would step straight past a collision.
+    #[test]
+    fn the_shortfall_is_exactly_what_the_contribution_loses() {
+        for weight_raw in [1_i128, 2, 1_000, 999_983, SCALE / 2, SCALE - 1, SCALE] {
+            let shortfall = SCALE - weight_raw;
+            for denominator in [2_u64, 3, 61, 1_000, 999_983, 1_000_000, 1_048_577] {
+                let reciprocal = SCALE / i128::from(denominator);
+                assert_eq!(
+                    weight_raw * reciprocal / SCALE,
+                    reciprocal - shortfall_at(shortfall, denominator),
+                    "weight raw {weight_raw} at denominator {denominator}"
+                );
+            }
+        }
+    }
+
+    /// A flat shortfall across a stretch of denominators means every adjacent
+    /// pair in that stretch separates — the lemma the sweep skips whole blocks
+    /// on, checked directly against the rule's own arithmetic.
+    #[test]
+    fn a_flat_shortfall_spans_only_separated_ranks() {
+        let k = 60_u32;
+        // The third weight is the true minimum for the truncated rule's deepest
+        // expressible depth, and its shortfall only flattens out where that
+        // depth actually binds — so each fixture is walked where its own
+        // arithmetic is interesting rather than all of them from rank one.
+        for (weight_raw, from) in [
+            (SCALE - 1, 1_u64),
+            (SCALE - 97, 1),
+            (SCALE - 44_559_030, 700_000),
+        ] {
+            let weight = Fixed::from_raw(weight_raw);
+            let shortfall = SCALE - weight_raw;
+            let mut flat = 0_u64;
+            for rank in from..from + 4_000 {
+                let here = shortfall_at(shortfall, u64::from(k) + rank);
+                let next = shortfall_at(shortfall, u64::from(k) + rank + 1);
+                if here != next {
+                    continue;
+                }
+                flat += 1;
+                assert!(
+                    value(weight, rank, k) > value(weight, rank + 1, k),
+                    "weight raw {weight_raw}: ranks {rank} and {} share a flat shortfall \
+                     and must therefore separate",
+                    rank + 1
+                );
+            }
+            assert!(flat > 0, "weight raw {weight_raw} must exercise the lemma");
+        }
+    }
+
+    /// The minimum weight, checked against an exhaustive search over every
+    /// lighter weight, at smoothing constants and depths small enough to walk.
+    ///
+    /// Both rules, and both of the sweeps the truncated rule chooses between —
+    /// the accelerators are only allowed to change how long the answer takes.
+    #[test]
+    fn the_minimum_weight_agrees_with_an_exhaustive_search() {
+        for k in [1_u32, 2, 7, 60] {
+            for depth in [2_u64, 3, 5, 9, 17, 40] {
+                for decay in [
+                    DecayRule::ReciprocalRank { k },
+                    DecayRule::WeightedReciprocalRank { k },
+                ] {
+                    let named = minimum_weight_for_depth(decay, depth)
+                        .expect("these depths are reachable under both rules");
+                    let expected = (1..=named.into_raw())
+                        .find(|raw| monotone_depth(decay, Fixed::from_raw(*raw)) >= depth)
+                        .expect("the named weight itself reaches the depth");
+                    assert_eq!(
+                        named.into_raw(),
+                        expected,
+                        "{decay:?} depth {depth}: the lightest weight that reaches it is \
+                         {expected}, not {}",
+                        named.into_raw()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A depth of one and a depth of none have no adjacent pair to separate, so
+    /// the lightest representable weight already answers them.
+    #[test]
+    fn a_depth_with_no_adjacent_pair_costs_the_lightest_weight() {
+        for decay in [
+            DecayRule::ReciprocalRank { k: 60 },
+            DecayRule::WeightedReciprocalRank { k: 60 },
+        ] {
+            for depth in [0_u64, 1] {
+                assert_eq!(
+                    minimum_weight_for_depth(decay, depth).expect("nothing to separate"),
+                    Fixed::from_raw(1),
+                    "{decay:?} depth {depth}"
+                );
             }
         }
     }

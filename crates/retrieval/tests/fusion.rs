@@ -2684,11 +2684,23 @@ fn fusion_past_the_collision_is_deterministic() {
 // once two adjacent ranks collide there they are equal for every weight.
 // ---------------------------------------------------------------------------
 
+/// Whether `candidate` separates every adjacent pair of ranks up to `depth`,
+/// recomputed from the published contribution rather than from the search.
+fn reaches_depth(decay: DecayRule, candidate: Fixed, depth: u64) -> bool {
+    (1..depth).all(|rank| {
+        let here = contribution_under(decay, candidate, rank).expect("fits");
+        let next = contribution_under(decay, candidate, rank + 1).expect("fits");
+        here > next
+    })
+}
+
 #[test]
-fn weight_for_depth_names_the_smallest_weight_that_reaches_it() {
-    // THE VALID CASE, both rules. What comes back must actually work, and the
-    // weight one raw unit below it must not — that pair is what "smallest"
-    // means, and asserting only the first would pass for any over-estimate.
+fn weight_for_depth_names_a_weight_that_reaches_it() {
+    // THE VALID CASE, both rules and across the range where the arithmetic
+    // changes character. Minimality is asserted separately and exhaustively,
+    // because checking only the neighbour below proves nothing here: the
+    // predicate oscillates on single raw units, so *some* lighter weight fails
+    // no matter how badly the answer overstates.
     for decay in [
         DecayRule::ReciprocalRank { k: K },
         DecayRule::WeightedReciprocalRank { k: K },
@@ -2697,25 +2709,68 @@ fn weight_for_depth_names_the_smallest_weight_that_reaches_it() {
             let weight = decay
                 .weight_for_depth(depth)
                 .unwrap_or_else(|error| panic!("{decay:?} depth {depth}: {error:?}"));
-
-            let reaches = |candidate: Fixed| {
-                (1..depth).all(|rank| {
-                    let here = contribution_under(decay, candidate, rank).expect("fits");
-                    let next = contribution_under(decay, candidate, rank + 1).expect("fits");
-                    here > next
-                })
-            };
             assert!(
-                reaches(weight),
+                reaches_depth(decay, weight, depth),
                 "{decay:?}: the weight it named must separate every rank up to {depth}"
             );
-            let lighter = Fixed::from_raw(weight.into_raw() - 1);
-            assert!(
-                !reaches(lighter),
-                "{decay:?}: one raw unit lighter must fail, or {weight:?} is not minimal \
-                 and the answer overstates what depth {depth} costs"
-            );
         }
+    }
+}
+
+#[test]
+fn no_weight_lighter_than_the_one_named_reaches_the_depth() {
+    // THE MINIMALITY CLAIM, checked by enumerating every lighter weight rather
+    // than by sampling one. The answers here are in the tens and the low
+    // thousands, so the whole domain below them is walkable, and an answer that
+    // overstated by even one raw unit would be caught.
+    //
+    // Weights are read as ratios, so an over-quoted weight silently re-scales
+    // that stratum's share of every fused score. That makes an over-estimate a
+    // wrong answer and not a safe one, which is why this is exhaustive.
+    for decay in [
+        DecayRule::ReciprocalRank { k: K },
+        DecayRule::WeightedReciprocalRank { k: K },
+    ] {
+        for depth in [2_u64, 10] {
+            let weight = decay
+                .weight_for_depth(depth)
+                .unwrap_or_else(|error| panic!("{decay:?} depth {depth}: {error:?}"));
+            for raw in 1..weight.into_raw() {
+                assert!(
+                    !reaches_depth(decay, Fixed::from_raw(raw), depth),
+                    "{decay:?}: raw weight {raw} reaches depth {depth}, so {weight:?} is not \
+                     the minimum and the answer overstates what that depth costs"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn reaching_a_depth_is_not_monotone_in_the_weight() {
+    // The witnesses that make a bisection over `weight_for_depth`'s predicate
+    // unsound, named so that reintroducing one fails loudly here rather than
+    // silently over-reporting. Under both rules the minimum weight for depth two
+    // is immediately followed by a *heavier* weight that does not reach it.
+    for (decay, minimum) in [
+        (DecayRule::ReciprocalRank { k: K }, 62_i128),
+        (DecayRule::WeightedReciprocalRank { k: K }, 61_i128),
+    ] {
+        assert_eq!(
+            decay.weight_for_depth(2).expect("depth two is reachable"),
+            Fixed::from_raw(minimum),
+            "{decay:?}: the minimum weight for depth two is the witness's lighter half"
+        );
+        assert!(
+            reaches_depth(decay, Fixed::from_raw(minimum), 2),
+            "{decay:?}: raw {minimum} must reach depth two"
+        );
+        assert!(
+            !reaches_depth(decay, Fixed::from_raw(minimum + 1), 2),
+            "{decay:?}: raw {} must NOT reach depth two — that inversion is what a \
+             binary search over the predicate would straddle",
+            minimum + 1
+        );
     }
 }
 
@@ -2732,11 +2787,23 @@ fn weight_for_depth_refuses_only_where_no_weight_can_reach() {
         .rank()
         .expect("the truncated rule always saturates inside the expressible range");
 
-    // The neighbour that must still succeed: the deepest reachable rank.
+    // The neighbour that must still succeed: the deepest reachable rank. What
+    // comes back is checked against the profile's own measured bound rather
+    // than merely for being positive — an over-quoted weight would pass that
+    // weaker assertion, and so would a weight that does not in fact reach the
+    // depth it was asked for.
     let weight = decay
         .weight_for_depth(saturation)
         .expect("the saturation depth itself is reachable");
     assert!(weight.into_raw() > 0);
+    assert_eq!(
+        deep_profile(decay, weight)
+            .monotone_depth(&stratum("deep"))
+            .expect("weighted")
+            .rank(),
+        Some(saturation),
+        "the weight named for the saturation depth must reach exactly it"
+    );
 
     // And one rank past it, which no weight reaches.
     match decay.weight_for_depth(saturation + 1) {

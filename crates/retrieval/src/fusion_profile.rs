@@ -90,8 +90,12 @@ impl DecayRule {
     /// profile, read its [`FusionProfile::monotone_depth`] and adjust, a caller
     /// that knows how deep it must read asks for the weight that buys it.
     ///
-    /// The answer is the true minimum, not a sufficient over-estimate: it is
-    /// bisected against the exact first-collision rank, so it never names a
+    /// The answer is the true minimum, not a sufficient over-estimate, and it is
+    /// **not** bisected: whether a weight reaches a depth is not monotone in the
+    /// weight, so a binary search over it would land on whichever side of an
+    /// oscillation its probes happened to sample. Instead each adjacent-rank
+    /// constraint names the next weight that could satisfy it, and the search
+    /// walks those candidates without ever skipping one — so it never names a
     /// heavier weight than the arithmetic actually requires. Remember that
     /// weights are read as **ratios**, so raising one stratum to reach a depth
     /// changes its share of every fused score — this reports what the depth
