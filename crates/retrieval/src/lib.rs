@@ -247,7 +247,9 @@ pub use error::{FusionError, PlanError};
 pub use execute::{ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, execute};
 pub use fuse::{FusionResult, TopK, fuse};
 pub use fusion_profile::{DecayRule, FusionProfile, TieBreak};
-pub use fusion_stream::{CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus};
+pub use fusion_stream::{
+    CandidateId, FusedRow, FusionStream, FusionTrailer, ProducerStatus, StratumResolution,
+};
 pub use id::{
     FUSION_PROFILE_ID_BYTES, FUSION_PROFILE_ID_DOMAIN, FUSION_PROFILE_VERSION, FusionProfileId,
     PLAN_ID_BYTES, PLAN_ID_DOMAIN, PLAN_VERSION, PlanId,

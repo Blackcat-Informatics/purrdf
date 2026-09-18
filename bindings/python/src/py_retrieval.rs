@@ -937,6 +937,21 @@ fn search_dict<'py>(py: Python<'py>, result: &SearchResult) -> PyResult<Bound<'p
     }
     out.set_item("statuses", statuses)?;
 
+    // What the answer cost in rank resolution, per stratum it was actually read
+    // from. `separates_to` is `None` when the profile's contributions never
+    // collide inside any expressible depth — a saturation, deliberately not a
+    // very large number a caller could mistake for a measurement.
+    let resolution = PyDict::new(py);
+    for (stratum, measured) in &result.trailer.resolution {
+        let entry = PyDict::new(py);
+        entry.set_item("separates_to", measured.separation.rank())?;
+        entry.set_item("ranks_pulled", measured.ranks_pulled)?;
+        entry.set_item("collisions_observed", measured.collisions_observed)?;
+        resolution.set_item(stratum.as_str(), entry)?;
+    }
+    out.set_item("resolution", resolution)?;
+    out.set_item("cut_on_a_tie", result.trailer.cut_on_a_tie)?;
+
     out.set_item(
         "unserved_terms",
         unserved_list(py, result.unserved_terms.clone())?,
@@ -1034,6 +1049,17 @@ fn compile<'py>(
 /// `"unweighted_strata"` the profile declined to score, and the `"plan_id"` /
 /// `"profile_id"` pair that names exactly which plan and which law produced it.
 ///
+/// It also carries what the answer cost in rank resolution. `"resolution"` maps
+/// each stratum actually read to its `"separates_to"` depth (`None` when this
+/// law never stops separating inside an expressible depth), the
+/// `"ranks_pulled"` this run reached, and the `"collisions_observed"` — adjacent
+/// ranks the fused score could not tell apart, counted by observation rather
+/// than inferred. `"cut_on_a_tie"` says whether the last row in the answer beat
+/// a rival it tied with exactly, so the final place was settled by the declared
+/// tie-break rather than by relevance. None of these is an error: past its
+/// separating depth a law still answers correctly and deterministically, only
+/// more coarsely. `retrieval.weight_for_depth` says what a finer answer costs.
+///
 /// `weights` maps a stratum IRI to its weight in raw fixed-point units, where
 /// `retrieval.SCALE` is one whole unit; see this module's own documentation for
 /// why every weight in one dict must be written in the same spelling.
@@ -1084,6 +1110,53 @@ fn search<'py>(
     search_dict(py, &result)
 }
 
+/// The smallest stratum weight, in raw fixed-point units, that still separates
+/// every adjacent pair of ranks up to `depth`.
+///
+/// The design calculus read in the direction a profile author needs: name the
+/// depth you must read to, get the weight that buys it. The answer is the true
+/// minimum rather than a safe over-estimate.
+///
+/// Raises `ValueError` when no weight reaches that depth. Under the default
+/// truncated rule that is a real wall and not a budget: the reciprocal is
+/// rounded before the weight is applied, so once two adjacent ranks collide
+/// there, no weight can part them again.
+///
+/// Remember that weights are read as *ratios*. Raising one stratum to reach a
+/// depth changes its share of every fused score; this reports what the depth
+/// costs, not whether to pay it.
+#[pyfunction]
+fn weight_for_depth(depth: u64, k: u32) -> PyResult<i128> {
+    DecayRule::ReciprocalRank { k }
+        .weight_for_depth(depth)
+        .map(Fixed::into_raw)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// How many consecutive ranks around `rank` a weight of `weight_raw` cannot tell
+/// apart.
+///
+/// One means the rank is still separated from both neighbours by score alone. A
+/// width of `w` means `w` consecutive ranks share a contribution, so their order
+/// in the answer is settled by the declared tie-break rather than by relevance.
+///
+/// This is the resolution curve, not the single point where it first exceeds
+/// one: knowing a depth is coarse by four ranks rather than ten thousand is the
+/// difference between an answer that is usable and one that is not.
+#[pyfunction]
+fn class_width(weight_raw: i128, k: u32, rank: u64) -> PyResult<u64> {
+    let stratum = Iri::parse("https://example.org/stratum/probe")
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let profile = FusionProfile::with_decay(
+        BTreeMap::from([(stratum.clone(), Fixed::from_raw(weight_raw))]),
+        DecayRule::ReciprocalRank { k },
+    )
+    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    profile
+        .class_width(&stratum, rank)
+        .ok_or_else(|| PyValueError::new_err("the probe stratum is weighted"))
+}
+
 /// Register the `purrdf-retrieval` surface on a Python module. Called by the
 /// unified `purrdf_native` cdylib to populate the `purrdf_native.retrieval`
 /// submodule.
@@ -1093,6 +1166,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(plan, m)?)?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(search, m)?)?;
+    m.add_function(wrap_pyfunction!(weight_for_depth, m)?)?;
+    m.add_function(wrap_pyfunction!(class_width, m)?)?;
     Ok(())
 }
 
