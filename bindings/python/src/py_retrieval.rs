@@ -1122,10 +1122,14 @@ fn search<'py>(
 /// over-estimate here would silently re-scale the stratum's share of every fused
 /// score.
 ///
-/// Raises `ValueError` when no weight reaches that depth. Under the default
-/// truncated rule that is a real wall and not a budget: the reciprocal is
-/// rounded before the weight is applied, so once two adjacent ranks collide
-/// there, no weight can part them again.
+/// Raises `ValueError` for three distinct reasons, and the message says which.
+/// A `depth` of zero names no rank to separate, so it is rejected rather than
+/// answered. A `depth` past `2**32 - 1` is deeper than a plan can record — a
+/// plan carries a per-stratum depth as a 32-bit rank — which is a limit of that
+/// encoding and not of the arithmetic. And no weight at all reaches the depth,
+/// which under this truncated rule is a real wall and not a budget: the
+/// reciprocal is rounded before the weight is applied, so once two adjacent
+/// ranks collide there, no weight can part them again.
 ///
 /// Remember that weights are read as *ratios*. Raising one stratum to reach a
 /// depth changes its share of every fused score; this reports what the depth

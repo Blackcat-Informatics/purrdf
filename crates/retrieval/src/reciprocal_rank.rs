@@ -155,11 +155,17 @@ pub fn contribution_under(
     }
 }
 
-/// The largest depth this crate will ever be asked about.
+/// The deepest depth a plan is able to express.
 ///
-/// A plan records a per-stratum depth as a `u32`, so a monotone range at or
-/// above that value cannot be exceeded by any depth a plan can carry and there
-/// is nothing further to compute. It is a saturation point, not a policy.
+/// A plan records a per-stratum depth as a `u32`, so nothing downstream can
+/// carry a depth above this. It bounds what this file computes in two distinct
+/// ways, and conflating them is the one mistake this constant invites. A
+/// *measured* range that reaches it is reported as [`MonotoneDepth`]'s
+/// saturating case, because there is no bound inside the expressible range to
+/// report. A *requested* depth above it is refused as a limit of the plan's
+/// depth encoding ([`FusionError::DepthBeyondPlanRange`]) — never as the decay
+/// rule running out of separation, which is a different fact about a different
+/// thing and which the rule's arithmetic may well not have done.
 const MAX_DEPTH: u64 = u32::MAX as u64;
 
 /// How deep a profile's contributions still tell adjacent ranks apart.
@@ -706,15 +712,29 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
 ///
 /// # Errors
 ///
-/// * [`FusionError::DepthUnreachable`] when **no** weight achieves `depth`,
-///   which under [`DecayRule::ReciprocalRank`] is a real condition rather than a
-///   conservative one. That rule truncates the reciprocal *before* applying the
-///   weight: once `trunc(S / D) == trunc(S / (D + 1))` the two ranks are equal
-///   at the point the weight is applied, so every weight maps them to one value
-///   and the depth is unreachable by construction. The saturation rank is
-///   therefore exact, and is reported.
-/// * [`FusionError::Overflow`] when the depth itself is so large that the
-///   sufficient weight bounding the search leaves the fixed-point range.
+/// * [`FusionError::InvalidRank`] when `depth == 0`. A depth counts 1-based
+///   ranks read from rank one, so zero names no rank and there is nothing for a
+///   weight to separate; answering the lightest weight there is would be a
+///   vacuous answer dressed as a real one.
+/// * [`FusionError::DepthBeyondPlanRange`] when `depth` exceeds [`MAX_DEPTH`],
+///   the deepest depth a plan's `u32` depth field can carry. This is a property
+///   of that encoding and **not** of the rule: under
+///   [`DecayRule::WeightedReciprocalRank`] a heavy enough weight separates ranks
+///   well past this point, and the refusal says so rather than claiming the
+///   arithmetic gave out.
+/// * [`FusionError::DepthUnreachable`] when **no** weight achieves a `depth`
+///   that is inside that range, which under [`DecayRule::ReciprocalRank`] is a
+///   real condition rather than a conservative one. That rule truncates the
+///   reciprocal *before* applying the weight: once
+///   `trunc(S / D) == trunc(S / (D + 1))` the two ranks are equal at the point
+///   the weight is applied, so every weight maps them to one value and the depth
+///   is unreachable by construction. The saturation rank is therefore exact, and
+///   is reported.
+/// * [`FusionError::Overflow`] is carried by the signature but cannot be
+///   provoked once `depth` is inside the plan's range: the sufficient weight is
+///   then at most `(u32::MAX + u32::MAX)²`, far inside an `i128`. The checked
+///   steps that would raise it are kept so that widening that range cannot
+///   silently wrap instead.
 ///
 /// # Why it is not bisected
 ///
@@ -766,6 +786,23 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
 /// candidate steps between the bound and it are correspondingly fine and there
 /// are a great many of them.
 pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<Fixed, FusionError> {
+    // Zero is not a depth. The `u64` signature admits it, and answering it with
+    // the lightest weight there is would be a vacuous answer wearing the shape
+    // of a real one: nothing was separated, because no rank was named.
+    if depth == 0 {
+        return Err(FusionError::InvalidRank { rank: depth });
+    }
+    // Deeper than any plan can record. This refusal is about the plan's depth
+    // encoding and nothing else — it is *not* the decay rule giving out, and
+    // under the folded rule the arithmetic below would in fact answer — so it is
+    // its own refusal, naming that encoding as the limit.
+    if depth > MAX_DEPTH {
+        return Err(FusionError::DepthBeyondPlanRange {
+            depth,
+            limit: MAX_DEPTH,
+        });
+    }
+
     // The lightest weight there is. With fewer than two ranks to order there is
     // no adjacent pair and therefore no constraint, so it is already the answer.
     let lightest = Fixed::from_raw(1);
@@ -792,17 +829,22 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
             i128::try_from(square).map_err(|_| FusionError::Overflow)?
         }
     };
+    // How deep the rule separates at all, measured once. `depth` is inside the
+    // plan's range, so a value below it is a real rank the rule reached and
+    // stopped at — never the saturating case, which is only ever at or above
+    // `MAX_DEPTH`. That is what makes it honest to report as an exact number.
+    let separates_to = monotone_depth(decay, Fixed::from_raw(sufficient));
     let unreachable = || FusionError::DepthUnreachable {
         depth,
-        saturates_at: MonotoneDepth::from_rank(monotone_depth(decay, Fixed::from_raw(sufficient))),
+        saturates_at: separates_to,
     };
-    if monotone_depth(decay, Fixed::from_raw(sufficient)) < depth {
+    if separates_to < depth {
         return Err(unreachable());
     }
 
-    // `depth` is at or below `MAX_DEPTH` here — the check above refuses anything
-    // deeper, because the bound itself saturates there — so the widest
-    // denominator is under 2^33 and the sweep's cursor arithmetic is exact.
+    // `depth` is at or below `MAX_DEPTH` here — the range check above refuses
+    // anything deeper — so the widest denominator is under 2^33 and the sweep's
+    // cursor arithmetic is exact.
     let k = decay.k();
     let narrowest = u64::from(k) + 1;
     let widest = u64::from(k) + constraints;
@@ -837,6 +879,14 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
         let floor = widest - (constraints - guaranteed) + 1;
         match sweep(decay, weight, floor, widest) {
             Lap::Separated => return Ok(Fixed::from_raw(weight)),
+            // Retained rather than reachable. Under the truncated rule a lap
+            // reports this only where `trunc(S / a) == trunc(S / (a + 1))`, and
+            // that is exactly where a unit weight — which is `sufficient` for
+            // that rule — already collides, so `separates_to` would have been
+            // below `depth` and the guard above would have refused first. The
+            // arm is kept so that changing `sufficient`, the guard, or the
+            // sweep's range cannot turn a genuine saturation into a wrong
+            // answer, and it names the same exact rank the guard would have.
             Lap::Unreachable => return Err(unreachable()),
             Lap::Advance(next) => {
                 debug_assert!(next > weight, "a candidate must advance the search");
@@ -927,6 +977,7 @@ mod tests {
         MAX_DEPTH, contribution, contribution_under, minimum_weight_for_depth, monotone_depth,
         shortfall_at, weighted_contribution, weighted_guarantee,
     };
+    use crate::error::FusionError;
     use crate::fusion_profile::DecayRule;
     use purrdf_text::{Fixed, SCALE_DIGITS};
 
@@ -1389,21 +1440,59 @@ mod tests {
         }
     }
 
-    /// A depth of one and a depth of none have no adjacent pair to separate, so
-    /// the lightest representable weight already answers them.
+    /// A depth of one has no adjacent pair to separate, so the lightest
+    /// representable weight already answers it — while a depth of none names no
+    /// rank at all and is refused rather than answered vacuously. The two sit in
+    /// one test because they are one step apart and the refusal is only honest
+    /// if its neighbour still succeeds.
     #[test]
-    fn a_depth_with_no_adjacent_pair_costs_the_lightest_weight() {
+    fn a_depth_of_one_costs_the_lightest_weight_and_a_depth_of_none_is_refused() {
         for decay in [
             DecayRule::ReciprocalRank { k: 60 },
             DecayRule::WeightedReciprocalRank { k: 60 },
         ] {
-            for depth in [0_u64, 1] {
-                assert_eq!(
-                    minimum_weight_for_depth(decay, depth).expect("nothing to separate"),
-                    Fixed::from_raw(1),
-                    "{decay:?} depth {depth}"
-                );
-            }
+            assert_eq!(
+                minimum_weight_for_depth(decay, 1).expect("nothing to separate"),
+                Fixed::from_raw(1),
+                "{decay:?} depth 1"
+            );
+            assert!(
+                matches!(
+                    minimum_weight_for_depth(decay, 0),
+                    Err(FusionError::InvalidRank { rank: 0 })
+                ),
+                "{decay:?}: a depth of zero names no rank and must be refused"
+            );
         }
+    }
+
+    /// The plan's depth encoding and the rule's saturation are different facts,
+    /// refused by different variants. The pair is one step apart: the deepest
+    /// depth a plan can record is priced under the folded rule, and one past it
+    /// is refused for the encoding rather than for the arithmetic.
+    #[test]
+    fn the_deepest_expressible_depth_is_priced_and_one_past_it_is_a_plan_range_refusal() {
+        let folded = DecayRule::WeightedReciprocalRank { k: 60 };
+        assert!(
+            minimum_weight_for_depth(folded, MAX_DEPTH).is_ok(),
+            "the folded rule separates to the deepest depth a plan can record"
+        );
+        assert!(
+            matches!(
+                minimum_weight_for_depth(folded, MAX_DEPTH + 1),
+                Err(FusionError::DepthBeyondPlanRange {
+                    limit: MAX_DEPTH,
+                    ..
+                })
+            ),
+            "one past the plan's range is a range refusal, not a saturation report"
+        );
+        assert!(
+            matches!(
+                minimum_weight_for_depth(DecayRule::ReciprocalRank { k: 60 }, MAX_DEPTH),
+                Err(FusionError::DepthUnreachable { .. })
+            ),
+            "the truncated rule saturates well inside the plan's range"
+        );
     }
 }

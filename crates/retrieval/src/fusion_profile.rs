@@ -103,13 +103,26 @@ impl DecayRule {
     ///
     /// # Errors
     ///
+    /// Three refusals, and they are three different facts.
+    ///
+    /// [`FusionError::InvalidRank`] when `depth` is zero. A depth counts 1-based
+    /// ranks read from rank one, so zero names no rank to separate.
+    ///
     /// [`FusionError::DepthUnreachable`] when no weight reaches `depth`. Under
     /// [`Self::ReciprocalRank`] that is a real wall and not a conservative one:
     /// the reciprocal is truncated before the weight is applied, so once two
     /// adjacent ranks collide there they are equal for every weight. The error
     /// carries the exact rank where the rule saturates.
-    /// [`Self::WeightedReciprocalRank`] has no such wall — its reachable depth
-    /// grows with the weight — so it refuses only on overflow.
+    /// [`Self::WeightedReciprocalRank`] has no such wall at all — its reachable
+    /// depth grows with the weight — so it never raises this.
+    ///
+    /// [`FusionError::DepthBeyondPlanRange`] when `depth` is deeper than a plan
+    /// can record, which a plan does as a `u32`. This is the only refusal
+    /// [`Self::WeightedReciprocalRank`] makes, and it is a limit of that
+    /// encoding rather than of the rule: the folded arithmetic separates ranks
+    /// past `u32::MAX` given a heavy enough weight, and at `u32::MAX` itself it
+    /// answers. Nothing downstream could carry a deeper depth, so quoting a
+    /// weight for one would price a plan that cannot be written.
     pub fn weight_for_depth(self, depth: u64) -> Result<Fixed, FusionError> {
         minimum_weight_for_depth(self, depth)
     }

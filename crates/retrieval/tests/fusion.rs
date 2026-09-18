@@ -2876,9 +2876,130 @@ fn weight_for_depth_refuses_only_where_no_weight_can_reach() {
             saturates_at,
         }) => {
             assert_eq!(depth, saturation + 1);
-            assert_eq!(saturates_at, MonotoneDepth::SeparatesTo(saturation));
+            assert_eq!(
+                saturates_at, saturation,
+                "the rank reported must be the exact measured saturation, not a bound"
+            );
         }
         other => panic!("expected DepthUnreachable past saturation, got {other:?}"),
+    }
+}
+
+/// The deepest per-stratum depth a plan's `u32` depth field can record.
+const DEEPEST_PLAN_DEPTH: u64 = u32::MAX as u64;
+
+#[test]
+fn weight_for_depth_answers_at_the_deepest_depth_a_plan_can_record_and_refuses_past_it() {
+    // THE PAIR, one step apart, on BOTH rules. The limit here is the plan's
+    // 32-bit depth field, and the refusal past it must say so: the folded rule's
+    // arithmetic has not run out of anything at `u32::MAX + 1` — it answers at
+    // `u32::MAX` — so reporting this as the rule saturating would be the same
+    // defect as refusing a valid stream for a property of the consumer's own
+    // internal clamp.
+    let folded = DecayRule::WeightedReciprocalRank { k: K };
+    let weight = folded
+        .weight_for_depth(DEEPEST_PLAN_DEPTH)
+        .expect("the deepest expressible depth is reachable under the folded rule");
+    assert!(
+        weight.into_raw() > 0,
+        "a depth a plan can record must be priced, not refused"
+    );
+
+    match folded.weight_for_depth(DEEPEST_PLAN_DEPTH + 1) {
+        Err(FusionError::DepthBeyondPlanRange { depth, limit }) => {
+            assert_eq!(depth, DEEPEST_PLAN_DEPTH + 1);
+            assert_eq!(limit, DEEPEST_PLAN_DEPTH);
+        }
+        other => panic!("expected DepthBeyondPlanRange one past the plan's range, got {other:?}"),
+    }
+
+    // The truncated rule saturates long before the plan's range runs out, so at
+    // `u32::MAX` it refuses as saturation — and one step further it refuses for
+    // the range instead, because that is the first fact about the request that
+    // is wrong, and it is wrong whatever the rule.
+    let truncated = DecayRule::ReciprocalRank { k: K };
+    match truncated.weight_for_depth(DEEPEST_PLAN_DEPTH) {
+        Err(FusionError::DepthUnreachable { saturates_at, .. }) => assert!(
+            saturates_at < DEEPEST_PLAN_DEPTH,
+            "a saturation report must name a rank the rule actually reached, got {saturates_at}"
+        ),
+        other => {
+            panic!("expected the truncated rule to saturate well inside the range, got {other:?}")
+        }
+    }
+    match truncated.weight_for_depth(DEEPEST_PLAN_DEPTH + 1) {
+        Err(FusionError::DepthBeyondPlanRange { depth, limit }) => {
+            assert_eq!(depth, DEEPEST_PLAN_DEPTH + 1);
+            assert_eq!(limit, DEEPEST_PLAN_DEPTH);
+        }
+        other => panic!("expected DepthBeyondPlanRange one past the plan's range, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_plan_range_refusal_and_the_saturation_refusal_are_different_variants() {
+    // The two are different facts: one says the decay rule stopped separating,
+    // the other says no plan could record the answer even if it were priced.
+    // Collapsing them back into one variant would make the message assert
+    // saturation where none occurred, so the distinction is pinned here.
+    let truncated = DecayRule::ReciprocalRank { k: K };
+    let saturated = truncated
+        .weight_for_depth(DEEPEST_PLAN_DEPTH)
+        .expect_err("the truncated rule cannot reach the plan's deepest depth");
+    let out_of_range = DecayRule::WeightedReciprocalRank { k: K }
+        .weight_for_depth(DEEPEST_PLAN_DEPTH + 1)
+        .expect_err("no plan can record a depth past its 32-bit field");
+
+    assert!(
+        matches!(saturated, FusionError::DepthUnreachable { .. }),
+        "the rule giving out is reported as saturation, got {saturated:?}"
+    );
+    assert!(
+        matches!(out_of_range, FusionError::DepthBeyondPlanRange { .. }),
+        "the plan's encoding giving out is reported as a range, got {out_of_range:?}"
+    );
+
+    // And the rendered sentences must not claim each other's fact. The range
+    // refusal names the plan's encoding and never says the rule stopped
+    // separating; `MonotoneDepth::SeparatesBeyondAnyPlan` documents itself as
+    // "there is no bound to report", so a refusal rendering it would assert
+    // saturation and its absence in one sentence.
+    let rendered = out_of_range.to_string();
+    assert!(
+        rendered.contains("32-bit") && rendered.contains("plan"),
+        "the range refusal must name the plan's depth encoding: {rendered}"
+    );
+    assert!(
+        !rendered.contains("separat") && !rendered.contains("SeparatesBeyondAnyPlan"),
+        "the range refusal must not claim the rule stopped separating: {rendered}"
+    );
+    assert!(
+        saturated.to_string().contains("separates to depth"),
+        "the saturation refusal must report the depth it does reach: {saturated}"
+    );
+}
+
+#[test]
+fn weight_for_depth_refuses_a_depth_of_zero_and_answers_a_depth_of_one() {
+    // THE PAIR, one step apart. Zero is not a depth: a depth counts 1-based
+    // ranks from rank one, so zero names no rank at all and the old answer —
+    // the lightest weight there is — was vacuous rather than small. One rank is
+    // a real depth with no adjacent pair to separate, so it is answered.
+    for decay in [
+        DecayRule::ReciprocalRank { k: K },
+        DecayRule::WeightedReciprocalRank { k: K },
+    ] {
+        match decay.weight_for_depth(0) {
+            Err(FusionError::InvalidRank { rank }) => assert_eq!(rank, 0),
+            other => panic!("{decay:?}: expected a depth of zero to be refused, got {other:?}"),
+        }
+        assert_eq!(
+            decay
+                .weight_for_depth(1)
+                .expect("a single rank is a real depth"),
+            Fixed::from_raw(1),
+            "{decay:?}: one rank has no adjacent pair, so the lightest weight there is buys it"
+        );
     }
 }
 

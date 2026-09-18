@@ -145,10 +145,18 @@ pub enum FusionError {
         k: u32,
     },
 
-    /// A contribution was asked for at rank zero. Ranks are 1-based.
+    /// A contribution was asked for at rank zero, or a depth of zero was asked
+    /// to be reached.
+    ///
+    /// Ranks are 1-based, and a depth is a count of them read from rank one, so
+    /// zero names no rank under either reading. The two share this variant
+    /// because they are the same fact about the same 1-based axis; a depth-zero
+    /// request is rejected rather than answered vacuously, which is what
+    /// returning the lightest weight there is would be.
     #[error("rank must be at least 1, got {rank}")]
     InvalidRank {
-        /// The rejected rank.
+        /// The rejected rank, or the rejected depth expressed as the rank it
+        /// would have to reach.
         rank: u64,
     },
 
@@ -269,14 +277,44 @@ pub enum FusionError {
     /// separating range still produces a correct, deterministic result at a
     /// coarser rank resolution. It is only a refusal to claim a depth the
     /// arithmetic cannot deliver.
+    ///
+    /// `saturates_at` is always a measured rank and never a saturating case
+    /// standing in for one: the rule was observed to stop separating, so there
+    /// is an exact rank to report, and it is strictly below the depth asked
+    /// for — that is what makes this refusal different from the one below. A
+    /// depth that no *plan* can carry is a different fact and carries a
+    /// different variant ([`DepthBeyondPlanRange`](Self::DepthBeyondPlanRange)),
+    /// because nothing about the rule's arithmetic failed there.
     #[error(
-        "no weight separates ranks to depth {depth} under this decay rule; it stops separating at {saturates_at:?}"
+        "no weight separates ranks to depth {depth} under this decay rule; it separates to depth {saturates_at} and no further"
     )]
     DepthUnreachable {
         /// The depth that was asked for.
         depth: u64,
-        /// Where this rule stops separating adjacent ranks, at any weight.
-        saturates_at: crate::reciprocal_rank::MonotoneDepth,
+        /// The exact 1-based depth this rule separates every adjacent pair
+        /// within, at any weight. The pair immediately past it carries one
+        /// contribution whatever weight is applied.
+        saturates_at: u64,
+    },
+
+    /// The requested depth is deeper than a plan is able to record.
+    ///
+    /// A plan carries a per-stratum depth as a `u32`, so `limit` is the deepest
+    /// depth anything downstream can name. This is a limit of that encoding and
+    /// says nothing about the decay rule: under
+    /// [`DecayRule::WeightedReciprocalRank`](crate::DecayRule::WeightedReciprocalRank)
+    /// the arithmetic separates ranks well past this point given a heavy enough
+    /// weight, and a weight quoted for such a depth would buy a depth no plan
+    /// could ever ask for. It is therefore refused as a range, never reported as
+    /// the rule saturating ([`DepthUnreachable`](Self::DepthUnreachable)).
+    #[error(
+        "depth {depth} is deeper than a plan can record; a plan carries a per-stratum depth as a 32-bit rank, so {limit} is the deepest expressible depth"
+    )]
+    DepthBeyondPlanRange {
+        /// The depth that was asked for.
+        depth: u64,
+        /// The deepest depth a plan's 32-bit depth field can carry.
+        limit: u64,
     },
 }
 

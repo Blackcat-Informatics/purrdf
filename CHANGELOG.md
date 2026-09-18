@@ -33,6 +33,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   distinct case so it cannot be mistaken for a measured depth. The same surface
   is exposed to Python as `retrieval.weight_for_depth` and
   `retrieval.class_width`.
+
+  Its three refusals are three separate facts and carry three separate variants.
+  `FusionError::DepthUnreachable` means the decay rule itself stopped separating
+  adjacent ranks at any weight, and it reports the exact depth it does reach --
+  only the truncated rule can raise it. `FusionError::DepthBeyondPlanRange`
+  means the depth is deeper than a plan can record, a plan carrying a
+  per-stratum depth as a 32-bit rank; that is a limit of the encoding and not of
+  the arithmetic, so the message names the encoding and the folded rule still
+  answers at the deepest depth a plan can hold. A depth of zero names no rank
+  and is refused as `FusionError::InvalidRank` rather than answered with the
+  lightest weight there is.
 - **retrieval:** Rank-resolution evidence on the answer. `CompiledRetrieval`
   carries a `PlannedResolution` per weighted stratum, so the cost of a planned
   depth is knowable before executing anything, and `FusionTrailer` carries a
