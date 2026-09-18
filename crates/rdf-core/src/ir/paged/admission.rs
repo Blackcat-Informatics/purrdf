@@ -340,6 +340,37 @@ mod tests {
     }
 
     #[test]
+    fn named_graph_bound_skips_a_term_known_only_as_a_subject_and_admits_a_graph_the_page_owns_rows_in()
+     {
+        // This is the exact scenario the module docs warn about: `g` occurs on this
+        // page ONLY as a base-quad SUBJECT (in named graph `g1`) — never as a graph
+        // name — so a role-agnostic term-table presence check (`to_local` alone)
+        // would wrongly pass it. The page owns no row IN graph `g` itself.
+        let mut builder = RdfDatasetBuilder::new();
+        let g = builder.intern_iri("http://example.org/g");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_iri("http://example.org/o");
+        let g1 = builder.intern_iri("http://example.org/g1");
+        builder.push_quad(g, p, o, Some(g1));
+        let page = builder.freeze().expect("page freezes");
+        let mut dict = GlobalDictionary::new();
+        let translation = PageTranslation::build(&page, &mut dict);
+
+        let global_g = translation.to_global(g);
+        let global_g1 = translation.to_global(g1);
+
+        assert_eq!(
+            admit_pattern(&translation, None, None, None, GraphMatch::Named(global_g)),
+            PageAdmission::Skip(SkipReason::NamedGraph)
+        );
+        // Neighbouring valid case: `g1` genuinely owns a base row on this page.
+        assert!(matches!(
+            admit_pattern(&translation, None, None, None, GraphMatch::Named(global_g1)),
+            PageAdmission::Admit(_)
+        ));
+    }
+
+    #[test]
     fn named_graph_bound_skips_when_page_owns_no_rows_in_it_and_admits_when_it_does() {
         let mut builder = RdfDatasetBuilder::new();
         let a = builder.intern_iri("http://example.org/a");

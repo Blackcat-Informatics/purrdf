@@ -120,6 +120,96 @@ fn inclusive_limits_and_cache_accounting_are_exact() {
     assert_eq!(evidence.consumed_bytes, 0);
 }
 
+/// Row: page budget (Task 9a). A single-page dataset that owns the only page a
+/// graph-selective query needs: a ZERO page budget refuses it (the owning page is the
+/// very first request, and the budget is already exhausted), while a budget of
+/// EXACTLY ONE completes it on a fresh view — the inclusive ceiling admitting the
+/// one page the query genuinely needs.
+#[test]
+fn page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it() {
+    let pages = vec![page_in_named_graph("s", "o", "g")];
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal page");
+    let g_id = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g"))
+        .expect("g interned at seal");
+
+    let refused = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert_eq!(
+        refused
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        0,
+        "a zero page budget refuses the one page this graph-selective query needs"
+    );
+    assert_eq!(
+        failed_status(refused.operation_status()).0,
+        PagedQueryError::PageBudgetExceeded {
+            page: PageId(0),
+            limit: 0,
+            consumed: 0,
+        }
+    );
+
+    // Neighbouring valid case: budget 1 completes the identical query on a fresh view.
+    let admitted = paged.query_view(PagedQueryLimits::new(1, u64::MAX));
+    let row_count = admitted
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(row_count, 1, "budget 1 completes the one-graph query");
+    assert_eq!(
+        ready_evidence(admitted.operation_status()).consumed_pages,
+        1
+    );
+}
+
+/// Row: byte budget (Task 9a). A single-page dataset with an explicit deterministic
+/// byte charge: a budget ONE BYTE below that charge refuses the one-graph query,
+/// while a budget EXACTLY EQUAL to it completes the query — the inclusive ceiling
+/// documented on [`PagedQueryLimits`].
+#[test]
+fn byte_budget_below_the_owning_page_charge_refuses_and_exact_equality_admits() {
+    const CHARGE: u64 = 42;
+    let page = page_in_named_graph("s", "o", "g");
+    let provider = Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(page, CHARGE)],
+        PageGeneration::INITIAL,
+    ));
+    let paged = PagedDataset::from_provider(provider).expect("seal page");
+    let g_id = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g"))
+        .expect("g interned at seal");
+
+    let refused = paged.query_view(PagedQueryLimits::new(u64::MAX, CHARGE - 1));
+    assert_eq!(
+        refused
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        0,
+        "one byte below the owning page's charge refuses"
+    );
+    assert_eq!(
+        failed_status(refused.operation_status()).0,
+        PagedQueryError::ByteBudgetExceeded {
+            page: PageId(0),
+            limit: CHARGE - 1,
+            consumed: 0,
+            page_bytes: CHARGE,
+        }
+    );
+
+    // Neighbouring valid case: EXACTLY the page's charge admits (inclusive ceiling).
+    let admitted = paged.query_view(PagedQueryLimits::new(u64::MAX, CHARGE));
+    let row_count = admitted
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(row_count, 1, "a budget exactly equal to the charge admits");
+    assert_eq!(
+        ready_evidence(admitted.operation_status()).consumed_bytes,
+        CHARGE
+    );
+}
+
 struct FailAfterSealProvider {
     page: Arc<RdfDataset>,
     calls: AtomicUsize,

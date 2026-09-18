@@ -1688,3 +1688,163 @@ fn reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owni
          materialized; only the owning page is"
     );
 }
+
+/// The `annotation` row's mirror of `reifier_quads_of_skips_a_page_that_only_mentions_the_term_and_admits_the_owning_page`
+/// above: a page that mentions a reifier term ONLY in the REIFIER side table's own
+/// reifier column (role-agnostic term-table presence via `PageTranslation::to_local`
+/// alone would pass it) must be skipped by `annotations_of_with_graph` — never
+/// materialized — while a page that genuinely owns an ANNOTATION row for the same
+/// term is admitted and still yields it.
+#[test]
+fn annotations_of_with_graph_skips_a_page_that_only_mentions_the_term_in_the_reifier_table_and_admits_the_owning_page()
+ {
+    fn reifier_only_page() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let bb = b.intern_iri("http://example.org/b");
+        let c = b.intern_iri("http://example.org/c");
+        let triple = b.intern_triple(a, bb, c);
+        let r = b.intern_iri("http://example.org/r");
+        // `r` occurs here ONLY as the reifier table's reifier column — no annotation
+        // row names it.
+        b.push_reifier(r, triple);
+        b.freeze().expect("reifier-only page freeze")
+    }
+    fn owning_page() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let r = b.intern_iri("http://example.org/r");
+        let conf = b.intern_iri("http://example.org/confidence");
+        let high = b.intern_iri("http://example.org/high");
+        b.push_annotation(r, conf, high);
+        b.freeze().expect("owning page freeze")
+    }
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(reifier_only_page),
+        Box::new(owning_page),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let r_global = paged.term_id_by_value(&iri("r")).expect("r interned");
+    let rows: Vec<_> = paged.annotations_of_with_graph(r_global).collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the owning page's genuine annotation row is yielded"
+    );
+    assert_eq!(
+        (to_value(&paged, rows[0].0), to_value(&paged, rows[0].1)),
+        (iri("confidence"), iri("high")),
+        "the yielded row is the owning page's annotation"
+    );
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the reifier-only page (term-table presence via the reifier column, no \
+         annotation row) must never be materialized; only the owning page is"
+    );
+}
+
+// ── Row: `Named(g)` — cross-page (Task 9a) ──────────────────────────────────────
+
+/// The cross-page half of the `Named(g)` refusal row: a page that DECLARES `<g>`
+/// empty must be skipped for `<g>` (never materialized), while a DIFFERENT page that
+/// genuinely owns base rows in `<g>` is admitted and its rows are still yielded — the
+/// admission law is applied per page, so one page's empty declaration must never
+/// suppress another page's real content.
+#[test]
+fn named_graph_query_skips_the_page_that_declares_it_empty_and_admits_the_page_that_owns_rows_elsewhere()
+ {
+    let g = iri("g");
+    let declares_empty_page = {
+        let mut b = RdfDatasetBuilder::new();
+        let g_id = intern_value(&mut b, &g);
+        b.declare_named_graph(g_id);
+        b.freeze().expect("declares-empty page freeze")
+    };
+    let owns_rows_page = {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        let g_id = intern_value(&mut b, &g);
+        b.push_quad(s, p, o, Some(g_id));
+        b.freeze().expect("owns-rows page freeze")
+    };
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(move || declares_empty_page.clone()),
+        Box::new(move || owns_rows_page.clone()),
+    ]));
+    let paged =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let hits_after_construction = provider.hits();
+
+    let g_id = paged.term_id_by_value(&g).expect("g interned");
+    let predicted = paged.pages_for_pattern(None, None, None, GraphMatch::Named(g_id));
+    assert_eq!(
+        predicted,
+        vec![PageId(1)],
+        "only the page that genuinely owns rows in g is predicted"
+    );
+
+    let row_count = paged
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(row_count, 1, "the owning page's one row is yielded");
+    assert_eq!(
+        provider.hits(),
+        hits_after_construction + 1,
+        "the page that only DECLARES g empty must never be materialized; only the \
+         owning page is"
+    );
+}
+
+// ── Row: `Named(g)` side table (Task 9a) ────────────────────────────────────────
+
+/// The side-table half of the `Named(g)` refusal row: a page whose ONLY content in
+/// graph `<g>` is a reifier row (no base quad ever names `<g>`) must be skipped by
+/// `quads_for_pattern` on that graph — the admission law checks the BASE-quad graph
+/// count, not the reifier one. The neighbouring valid case: that same reifier row is
+/// STILL yielded by `reifier_quads()`, which is never graph-pruned at all.
+#[test]
+fn named_graph_side_table_only_content_is_skipped_by_quads_for_pattern_but_still_yielded_by_reifier_quads()
+ {
+    let mut b = RdfDatasetBuilder::new();
+    let a = b.intern_iri("http://example.org/a");
+    let bb = b.intern_iri("http://example.org/b");
+    let c = b.intern_iri("http://example.org/c");
+    let triple = b.intern_triple(a, bb, c);
+    let r = b.intern_iri("http://example.org/r");
+    let g = b.intern_iri("http://example.org/gReifierOnly");
+    b.push_reifier_in_graph(r, triple, Some(g));
+    let page = b.freeze().expect("page freeze");
+
+    let provider = Arc::new(InMemoryPageProvider::new(vec![page]));
+    let paged = PagedDataset::from_provider(provider).expect("seal page");
+    let g_id = paged
+        .term_id_by_value(&iri("gReifierOnly"))
+        .expect("g interned");
+
+    assert_eq!(
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        0,
+        "no base quad exists in gReifierOnly: quads_for_pattern must yield nothing"
+    );
+
+    let reifier_rows: Vec<_> = paged.reifier_quads().collect();
+    assert_eq!(
+        reifier_rows.len(),
+        1,
+        "reifier_quads() is never graph-pruned: the reifier row still surfaces"
+    );
+    assert_eq!(
+        reifier_rows[0].g,
+        Some(g_id),
+        "the surfaced reifier row's graph slot is gReifierOnly"
+    );
+}
