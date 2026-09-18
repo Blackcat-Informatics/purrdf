@@ -18,6 +18,8 @@ use crate::ir::{GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 
 use super::admission::{self, PageAdmission};
 use super::summary::PageStream;
+#[cfg(debug_assertions)]
+use super::summary::PageSummary;
 use super::{
     PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagedDataset,
     map_quad_to_global,
@@ -542,6 +544,31 @@ impl<'dataset> PagedQueryView<'dataset> {
                     message: format!("term value changed at local index {local_index}"),
                 });
             }
+        }
+        // Debug-only full certification: re-derive the WHOLE `PageSummary` from the
+        // materialized page and assert it equals the one sealed for this slot. The
+        // checks above only ever catch OVER-reporting (a page admitted for nothing,
+        // which is harmless): a page the pruning law skips on an under-reporting
+        // summary is never requested at all, so nothing on this admit path — however
+        // thorough — can ever observe that direction (see
+        // `PagedFreezeError::SummaryDrift` and `PagedDataset::verify_parts`, the only
+        // thing that can). This assertion exists purely to catch a broken-invariant
+        // BUG in this crate's own seal/admission machinery on every already-exercised
+        // test and conformance query, at zero cost in a release build: `make check`
+        // compiles with `debug-assertions = on` at opt-level 3 (see `AGENTS.md`
+        // section 4), so this full re-derive runs across the entire fallible-query
+        // test surface for free, while a release build never pays the O(page size)
+        // cost on this hot admission path.
+        #[cfg(debug_assertions)]
+        {
+            let fresh = PageSummary::seal(&materialization.dataset);
+            assert_eq!(
+                &fresh,
+                slot.translation.summary(),
+                "page {}: materialized content's re-derived PageSummary disagrees with the \
+                 summary it was sealed with",
+                id.0
+            );
         }
         Ok(())
     }

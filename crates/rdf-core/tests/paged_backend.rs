@@ -17,6 +17,7 @@
 //!    distribution equals the independently-computed per-page sum.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_core::{
     CountingDemandProvider, DatasetView, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
@@ -942,6 +943,211 @@ fn from_parts_reconstitutes_without_materializing_pages() {
         counting.hits() > 0,
         "reads materialize pages lazily after construction"
     );
+}
+
+// ── verify_parts: certifying a warm-restart index against summary drift ─────────
+
+/// A single-page fixture with two variants sharing everything the CHEAP admission
+/// checks compare — term count, quad count, the deterministic reference byte
+/// charge, and capabilities — but disagreeing on which named graph one quad lands
+/// in:
+///
+/// - `honest`: `alice knows bob` AND `bob knows carol` both in graph `g1`;
+///   `g2` is declared but carries zero rows.
+/// - `drifted`: `alice knows bob` stays in `g1`; `bob knows carol` moves to `g2`.
+///
+/// Both variants intern the identical six terms (`alice`, `bob`, `carol`, `knows`,
+/// `g1`, `g2`) and carry two base quads, so `term_count`, `quad_count`, the
+/// logical byte charge (a pure function of the term table and total row counts),
+/// and `capabilities` (`named_graphs: true` either way) are all identical between
+/// them — the existing O(1)/O(term_count) admission checks cannot tell them apart.
+/// Only the PER-GRAPH row split differs: `g1`/`g2` base rows are `(2, 0)` honest
+/// versus `(1, 1)` drifted, which is exactly the shape `PageSummary` tracks and the
+/// graph-pruning index is built from.
+fn graph_drift_fixture() -> (Arc<RdfDataset>, Arc<RdfDataset>, TermValue, TermValue) {
+    let g1 = iri("g1");
+    let g2 = iri("g2");
+
+    let honest = {
+        let mut b = RdfDatasetBuilder::new();
+        let alice = b.intern_iri("http://example.org/alice");
+        let bob = b.intern_iri("http://example.org/bob");
+        let carol = b.intern_iri("http://example.org/carol");
+        let knows = b.intern_iri("http://example.org/knows");
+        let g1_id = intern_value(&mut b, &g1);
+        let g2_id = intern_value(&mut b, &g2);
+        b.push_quad(alice, knows, bob, Some(g1_id));
+        b.push_quad(bob, knows, carol, Some(g1_id));
+        b.declare_named_graph(g2_id);
+        b.freeze().expect("honest page freeze")
+    };
+
+    let drifted = {
+        let mut b = RdfDatasetBuilder::new();
+        let alice = b.intern_iri("http://example.org/alice");
+        let bob = b.intern_iri("http://example.org/bob");
+        let carol = b.intern_iri("http://example.org/carol");
+        let knows = b.intern_iri("http://example.org/knows");
+        let g1_id = intern_value(&mut b, &g1);
+        let g2_id = intern_value(&mut b, &g2);
+        b.push_quad(alice, knows, bob, Some(g1_id));
+        // Moved from g1 (honest) to g2: same terms, same quad, different graph.
+        b.push_quad(bob, knows, carol, Some(g2_id));
+        b.freeze().expect("drifted page freeze")
+    };
+
+    (honest, drifted, g1, g2)
+}
+
+/// Materializes the HONEST fixture content on the first call and the DRIFTED
+/// content on every later call — modeling a persisted backend whose stored bytes
+/// were correct when a warm-restart index was originally sealed, but have since
+/// drifted underneath it. Used to certify [`PagedDataset::verify_parts`], which is
+/// the only thing that re-materializes a page regardless of what pruning would
+/// have decided.
+struct GraphDriftProvider {
+    honest: Arc<RdfDataset>,
+    drifted: Arc<RdfDataset>,
+    generation: PageGeneration,
+    calls: AtomicUsize,
+}
+
+impl PageProvider for GraphDriftProvider {
+    fn page_count(&self) -> usize {
+        1
+    }
+
+    fn generation(&self) -> PageGeneration {
+        self.generation
+    }
+
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
+        if page != PageId(0) {
+            return Err(PageFault::provider(page, "page out of range"));
+        }
+        let call = self.calls.fetch_add(1, Ordering::Relaxed);
+        let dataset = if call == 0 {
+            self.honest.clone()
+        } else {
+            self.drifted.clone()
+        };
+        // The deterministic reference charge is a pure function of the term table
+        // and total row counts, both identical between the two variants, so this
+        // never itself trips the cheap byte-charge check.
+        Ok(PageMaterialization::in_memory(dataset, self.generation))
+    }
+}
+
+/// `to_parts` → `from_parts` → `verify_parts()` over an HONEST provider (content
+/// never drifts) must certify cleanly: this is the ordinary warm-restart case
+/// `verify_parts` exists to let a caller prove, once, out of band.
+#[test]
+fn verify_parts_accepts_an_honest_warm_restart() {
+    let (honest, _drifted, _g1, _g2) = graph_drift_fixture();
+    let generation = PageGeneration(3);
+    let provider = Arc::new(InMemoryPageProvider::with_generation(
+        vec![honest],
+        generation,
+    ));
+    let eager = PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>)
+        .expect("seal honest page");
+    let (dictionary, sealed_generation, parts) = eager.to_parts();
+
+    let warm = PagedDataset::from_parts(
+        dictionary,
+        provider as Arc<dyn PageProvider>,
+        sealed_generation,
+        parts,
+    )
+    .expect("matching warm snapshot");
+
+    warm.verify_parts()
+        .expect("an honest warm restart must certify cleanly");
+}
+
+/// `to_parts` → `from_parts` → `verify_parts()` over the drifting provider must
+/// name the exact page whose materialized content no longer matches the summary
+/// it was sealed with. This is the failure mode no admission-time check can ever
+/// observe: `PagedDataset::from_provider`'s own seal pass reads the page ONCE (the
+/// honest content, call 0) to build the summary the warm-restart metadata then
+/// carries forward unchanged, and ordinary reads only re-materialize pages the
+/// pruning law actually admits — `verify_parts` is the only path that reads every
+/// page unconditionally and can therefore witness the drift.
+#[test]
+fn verify_parts_rejects_a_summary_that_disagrees_with_page_content() {
+    let (honest, drifted, _g1, _g2) = graph_drift_fixture();
+    let generation = PageGeneration(3);
+    let provider = Arc::new(GraphDriftProvider {
+        honest,
+        drifted,
+        generation,
+        calls: AtomicUsize::new(0),
+    });
+    let eager = PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>)
+        .expect("seal honest page (call 0)");
+    let (dictionary, sealed_generation, parts) = eager.to_parts();
+
+    let warm = PagedDataset::from_parts(
+        dictionary,
+        provider as Arc<dyn PageProvider>,
+        sealed_generation,
+        parts,
+    )
+    .expect("matching warm snapshot");
+
+    let error = warm
+        .verify_parts()
+        .expect_err("drifted content must not certify");
+    match error {
+        PagedFreezeError::SummaryDrift {
+            page: PageId(0), ..
+        } => {}
+        other => panic!("expected a typed summary-drift error naming page 0, got: {other}"),
+    }
+}
+
+/// The neighbouring valid case the repo's over-refusal rule requires: the SAME
+/// fixture, served HONESTLY (content never drifts), must still complete ordinary
+/// reads and return exactly the right rows — the debug-only full-summary
+/// re-derive added to the hot admission path (`PagedDataset::page`) must never
+/// refuse, nor alter the result of, a legitimate page.
+#[test]
+fn graph_drift_fixture_with_an_honest_provider_still_returns_the_right_rows() {
+    let (honest, _drifted, g1, g2) = graph_drift_fixture();
+    let provider = Arc::new(InMemoryPageProvider::new(vec![honest]));
+    let paged = PagedDataset::from_provider(provider).expect("seal honest page");
+
+    let g1_id = paged.term_id_by_value(&g1).expect("g1 interned");
+    let g2_id = paged.term_id_by_value(&g2).expect("g2 interned");
+
+    let mut g1_rows: Vec<_> = paged
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g1_id))
+        .map(|q| (to_value(&paged, q.s), to_value(&paged, q.o)))
+        .collect();
+    g1_rows.sort_by_key(row_key_pair);
+    assert_eq!(
+        g1_rows,
+        vec![(iri("alice"), iri("bob")), (iri("bob"), iri("carol")),],
+        "g1 genuinely owns both base rows"
+    );
+
+    assert!(
+        paged
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g2_id))
+            .next()
+            .is_none(),
+        "g2 is declared but owns no base rows"
+    );
+
+    paged
+        .verify_parts()
+        .expect("an honest, undecomposed dataset must also certify cleanly");
+}
+
+/// A deterministic sort key for a `(TermValue, TermValue)` pair (mirrors `row_key`
+/// for the single-value case).
+fn row_key_pair(pair: &(TermValue, TermValue)) -> String {
+    format!("{pair:?}")
 }
 
 struct MismatchedGenerationProvider {

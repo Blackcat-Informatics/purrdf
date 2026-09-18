@@ -65,7 +65,7 @@ use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
 use admission::PageAdmission;
 use graph_index::GraphPageIndex;
-use summary::PageStream;
+use summary::{PageStream, PageSummary};
 
 pub use provider::{
     CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind, PageGeneration, PageId,
@@ -129,6 +129,22 @@ pub enum PagedFreezeError {
     /// seal refuses rather than collapse the duplicate. Boxed to keep the enum (and
     /// therefore the seal `Result`) small.
     QuadOverlap(Box<PagedQuadOverlap>),
+    /// A page's freshly re-derived [`PageSummary`] disagrees with the one it was
+    /// sealed with — its materialized content has drifted since certification.
+    ///
+    /// The pruning law ([`admission::admit_pattern`], [`GraphPageIndex`]) trusts the
+    /// sealed summary to authorize SKIPPING a page without materializing it. An
+    /// UNDER-reporting drift (the sealed summary claims fewer rows, in fewer places,
+    /// than the page actually holds) is exactly the direction no materialization-time
+    /// check can ever observe, because a page the pruning law skips is never
+    /// materialized in the first place — only [`PagedDataset::verify_parts`], which
+    /// materializes every page unconditionally, can reach it. Raised only there.
+    SummaryDrift {
+        /// The page whose materialized content no longer matches its sealed summary.
+        page: PageId,
+        /// Diagnostic detail describing the disagreement.
+        message: String,
+    },
 }
 
 /// Which composed quad stream a [`PagedFreezeError::QuadOverlap`] refusal came from.
@@ -211,6 +227,11 @@ impl std::fmt::Display for PagedFreezeError {
                 o.object,
                 o.graph
             ),
+            Self::SummaryDrift { page, message } => write!(
+                f,
+                "page {}'s materialized content disagrees with its sealed summary: {message}",
+                page.0
+            ),
         }
     }
 }
@@ -221,7 +242,8 @@ impl std::error::Error for PagedFreezeError {
             Self::Page(fault) => Some(fault),
             Self::GenerationMismatch { .. }
             | Self::PageCountMismatch { .. }
-            | Self::QuadOverlap(_) => None,
+            | Self::QuadOverlap(_)
+            | Self::SummaryDrift { .. } => None,
         }
     }
 }
@@ -849,11 +871,90 @@ impl PagedDataset {
                 "page capabilities changed after sealing",
             ));
         }
+        // Debug-only full certification: re-derive the WHOLE `PageSummary` from the
+        // materialized page and assert it equals the one sealed for this slot. The
+        // O(1) checks above only ever catch OVER-reporting (a page admitted for
+        // nothing, which is harmless): a page the pruning law skips on an
+        // under-reporting summary is never materialized at all, so no check that
+        // runs here — on the admit path — can ever observe that direction (see
+        // `PagedFreezeError::SummaryDrift` and `verify_parts`, the only thing that
+        // can). This assertion exists purely to catch a broken-invariant BUG in this
+        // crate's own seal/admission machinery on every already-exercised test and
+        // conformance page, at zero cost in a release build: `make check` compiles
+        // with `debug-assertions = on` at opt-level 3 (see `AGENTS.md` section 4), so
+        // this full re-derive runs across the entire test surface for free, while a
+        // release build — which never sets `debug_assertions` — never pays the
+        // O(page size) cost on this hot admission path.
+        #[cfg(debug_assertions)]
+        {
+            let fresh = PageSummary::seal(&materialization.dataset);
+            assert_eq!(
+                &fresh,
+                slot.translation.summary(),
+                "page {}: materialized content's re-derived PageSummary disagrees with the \
+                 summary it was sealed with",
+                id.0
+            );
+        }
         let _ = slot.resident.set(materialization.dataset);
         Ok(slot
             .resident
             .get()
             .expect("resident cell set immediately above"))
+    }
+
+    /// Materialize EVERY page through the provider and certify each one's freshly
+    /// re-derived [`PageSummary`] against the summary it was sealed with — the
+    /// explicitly-paid, cold certification pass.
+    ///
+    /// The pruning law never materializes a page it decides to skip, so an
+    /// UNDER-reporting sealed summary (one that claims fewer rows, or rows in fewer
+    /// graphs, than the page actually holds) can silently authorize skipping a page
+    /// that in fact holds matching rows — the worst failure mode in this codebase,
+    /// because the short answer still comes wrapped in a completeness certificate.
+    /// Nothing on the admission or query path can ever observe that direction: a
+    /// skipped page is never read. `verify_parts` is the only thing that can, because
+    /// it reads every page regardless of what any pruning decision would have done.
+    ///
+    /// Call this once, out of band, when a consumer reloads a persisted warm-restart
+    /// index via [`from_parts`](Self::from_parts) and wants to prove the reloaded
+    /// index is honest before trusting its pruning — rather than paying an
+    /// `O(all pages)` scan on every ordinary restart. Contrast with
+    /// [`from_provider`](Self::from_provider), which already certifies every page's
+    /// summary AS it seals (each page is materialized once there specifically to
+    /// build its summary), so a dataset built that way never needs this pass.
+    ///
+    /// # Errors
+    ///
+    /// [`PagedFreezeError::Page`] if the provider cannot materialize a page;
+    /// [`PagedFreezeError::GenerationMismatch`] if a materialization reports a
+    /// different generation than this dataset's certified one; or
+    /// [`PagedFreezeError::SummaryDrift`], naming the first page whose freshly
+    /// re-derived summary disagrees with the one it was sealed with.
+    pub fn verify_parts(&self) -> Result<(), PagedFreezeError> {
+        for slot in &self.pages {
+            let materialization = self.provider.materialize(slot.id)?;
+            if materialization.generation != self.generation {
+                return Err(PagedFreezeError::GenerationMismatch {
+                    expected: self.generation,
+                    actual: materialization.generation,
+                });
+            }
+            let fresh = PageSummary::seal(&materialization.dataset);
+            if &fresh != slot.translation.summary() {
+                return Err(PagedFreezeError::SummaryDrift {
+                    page: slot.id,
+                    message: format!(
+                        "page {}: the summary sealed at construction time does not match the \
+                         summary re-derived from the page's current materialized content — a \
+                         pruning decision trusting the sealed summary could skip or misroute \
+                         rows this page actually holds",
+                        slot.id.0
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 }
 
